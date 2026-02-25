@@ -32,10 +32,10 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     base_img = p["img_dir"] / cfg.image.cache_name
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
     if base_img.exists() and not cfg.image.redownload:
-        log.info("Base image cached: %s", base_img)
+        log.info("Base image cached: {}", base_img)
         return base_img
     if dry_run:
-        log.info("DRYRUN: curl -L --fail -o %s %s", base_img, url)
+        log.info("DRYRUN: curl -L --fail -o {} {}", base_img, url)
         return base_img
     ensure_dir(p["img_dir"])
     run_cmd(["mkdir", "-p", str(p["img_dir"])], sudo=True, check=True, capture=True)
@@ -45,7 +45,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         check=True,
         capture=True,
     )
-    log.info("Downloaded base image: %s", base_img)
+    log.info("Downloaded base image: {}", base_img)
     return base_img
 
 
@@ -56,7 +56,7 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if run_cmd(["getent", "group", "kvm"], check=False, capture=True).code != 0:
         grp = "libvirt-qemu"
     if dry_run:
-        log.info("DRYRUN: chown/chmod %s for qemu access (group=%s)", base_root, grp)
+        log.info("DRYRUN: chown/chmod {} for qemu access (group={})", base_root, grp)
         return
     run_cmd(["mkdir", "-p", str(base_root)], sudo=True, check=True, capture=True)
     run_cmd(
@@ -154,7 +154,7 @@ local-hostname: {cfg.vm.name}
 """
 
     if dry_run:
-        log.info("DRYRUN: write cloud-init + cloud-localds %s", seed_iso)
+        log.info("DRYRUN: write cloud-init + cloud-localds {}", seed_iso)
         return {"user_data": user_data, "meta_data": meta_data, "seed_iso": seed_iso}
 
     run_cmd(["mkdir", "-p", str(ci_dir)], sudo=True, check=True, capture=True)
@@ -187,15 +187,15 @@ def _ensure_disk(
     vm_disk = p["img_dir"] / f"{cfg.vm.name}.qcow2"
     if vm_disk.exists() and recreate:
         if dry_run:
-            log.info("DRYRUN: rm -f %s", vm_disk)
+            log.info("DRYRUN: rm -f {}", vm_disk)
         else:
             run_cmd(["rm", "-f", str(vm_disk)], sudo=True, check=True, capture=True)
     if vm_disk.exists():
-        log.info("VM disk exists: %s", vm_disk)
+        log.info("VM disk exists: {}", vm_disk)
         return vm_disk
     if dry_run:
         log.info(
-            "DRYRUN: qemu-img create -f qcow2 -F qcow2 -b %s %s %sG",
+            "DRYRUN: qemu-img create -f qcow2 -F qcow2 -b {} {} {}G",
             base_img,
             vm_disk,
             cfg.vm.disk_gb,
@@ -235,7 +235,7 @@ def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
 def create_or_start_vm(
     cfg: AgentVMConfig, *, dry_run: bool = False, recreate: bool = False
 ) -> None:
-    log.debug("Creating or starting VM %s", cfg.vm.name)
+    log.debug("Creating or starting VM {}", cfg.vm.name)
     cfg = cfg.expanded_paths()
     base_img = fetch_image(cfg, dry_run=dry_run)
     ci = _write_cloud_init(cfg, dry_run=dry_run)
@@ -245,7 +245,7 @@ def create_or_start_vm(
     if vm_exists(cfg, dry_run=dry_run):
         if recreate:
             if dry_run:
-                log.info("DRYRUN: virsh destroy/undefine %s", cfg.vm.name)
+                log.info("DRYRUN: virsh destroy/undefine {}", cfg.vm.name)
             else:
                 run_cmd(
                     ["virsh", "destroy", cfg.vm.name],
@@ -277,15 +277,15 @@ def create_or_start_vm(
                 .lower()
             )
             if "running" in st:
-                log.info("VM already running: %s", cfg.vm.name)
+                log.info("VM already running: {}", cfg.vm.name)
                 return
             if dry_run:
-                log.info("DRYRUN: virsh start %s", cfg.vm.name)
+                log.info("DRYRUN: virsh start {}", cfg.vm.name)
                 return
             run_cmd(
                 ["virsh", "start", cfg.vm.name], sudo=True, check=True, capture=True
             )
-            log.info("VM started: %s", cfg.vm.name)
+            log.info("VM started: {}", cfg.vm.name)
             return
 
     extra = []
@@ -325,10 +325,10 @@ def create_or_start_vm(
         *extra,
     ]
     if dry_run:
-        log.info("DRYRUN: %s", " ".join(cmd))
+        log.info("DRYRUN: {}", " ".join(cmd))
         return
     run_cmd(cmd, sudo=True, check=True, capture=True)
-    log.info("VM created: %s", cfg.vm.name)
+    log.info("VM created: {}", cfg.vm.name)
 
 
 def _mac_for_vm(cfg: AgentVMConfig) -> str:
@@ -362,7 +362,7 @@ def wait_for_ip(
     p = _paths(cfg, dry_run=dry_run)
     ip_file = p["ip_file"]
     if dry_run:
-        log.info("DRYRUN: wait for IP and write %s", ip_file)
+        log.info("DRYRUN: wait for IP and write {}", ip_file)
         return "0.0.0.0"
     ensure_dir(p["state_dir"])
     mac = _mac_for_vm(cfg)
@@ -407,7 +407,7 @@ def wait_for_ip(
                     break
         if ip:
             ip_file.write_text(ip + "\n", encoding="utf-8")
-            log.info("VM IP: %s (saved to %s)", ip, ip_file)
+            log.info("VM IP: {} (saved to {})", ip, ip_file)
             return ip
         time.sleep(2)
     raise TimeoutError(
@@ -418,7 +418,7 @@ def wait_for_ip(
 def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     name = cfg.vm.name
     if dry_run:
-        log.info("DRYRUN: virsh destroy/undefine %s", name)
+        log.info("DRYRUN: virsh destroy/undefine {}", name)
         return
     run_cmd(["virsh", "destroy", name], sudo=True, check=False, capture=True)
     run_cmd(
@@ -428,7 +428,7 @@ def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         capture=True,
     )
     run_cmd(["virsh", "undefine", name], sudo=True, check=False, capture=True)
-    log.info("VM removed: %s", name)
+    log.info("VM removed: {}", name)
 
 
 def vm_status(cfg: AgentVMConfig) -> str:
@@ -494,7 +494,7 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         remote,
     ]
     if dry_run:
-        log.info("DRYRUN: %s", " ".join(cmd))
+        log.info("DRYRUN: {}", " ".join(cmd))
         return
     run_cmd(cmd, sudo=False, check=True, capture=True)
     log.info("Provisioning complete.")

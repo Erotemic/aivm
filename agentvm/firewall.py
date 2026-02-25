@@ -51,13 +51,13 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     script = _nft_script(cfg)
     table = cfg.firewall.table
     if dry_run:
-        log.info("DRYRUN: nft -f - <<EOF\\n%s\\nEOF", script.rstrip())
+        log.info("DRYRUN: nft -f - <<EOF\\n{}\\nEOF", script.rstrip())
         return
     run_cmd(
         ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
     )
     run_cmd(["nft", "-f", "-"], sudo=True, check=True, capture=True, input_text=script)
-    log.info("Firewall rules applied (table=inet %s).", table)
+    log.info("Firewall rules applied (table=inet {}).", table)
 
 
 def firewall_status(cfg: AgentVMConfig) -> str:
@@ -71,9 +71,9 @@ def firewall_status(cfg: AgentVMConfig) -> str:
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     table = cfg.firewall.table
     if dry_run:
-        log.info("DRYRUN: nft delete table inet %s", table)
+        log.info("DRYRUN: nft delete table inet {}", table)
         return
     run_cmd(
         ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
     )
-    log.info("Firewall removed (table=inet %s).", table)
+    log.info("Firewall removed (table=inet {}).", table)
