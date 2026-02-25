@@ -29,14 +29,14 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
     # TODO: make our logger have timestamps, level, and location info for debug mode.
     logger.remove()  # Remove default handler
     effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
-    print(f'effective_verbosity={effective_verbosity}')
+    print(f"effective_verbosity={effective_verbosity}")
     level = "WARNING"
     if effective_verbosity == 1:
         level = "INFO"
     elif effective_verbosity >= 2:
         level = "DEBUG"
     logger.add(sys.stderr, level=level, format="{level}: {message}")
-    log.debug('setup logging')
+    log.debug("setup logging")
 
 
 def _cfg_path(p: str | None) -> Path:

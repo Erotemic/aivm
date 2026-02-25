@@ -50,7 +50,9 @@ def ensure_network(
         exists = False
     else:
         exists = (
-            run_cmd(["virsh", "net-info", name], check=False, capture=True, sudo=True).code
+            run_cmd(
+                ["virsh", "net-info", name], check=False, capture=True, sudo=True
+            ).code
             == 0
         )
     if exists and not recreate:
