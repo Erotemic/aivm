@@ -14,8 +14,7 @@ Features:
 ## Install
 
 ```bash
-pip install .
-# or: pipx install .
+uv pip install .
 ```
 
 ## Quickstart
