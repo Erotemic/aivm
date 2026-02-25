@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentvm"
+version = "0.1.0"
+description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [{name="AgentVM contributors"}]
+keywords = ["kvm", "libvirt", "vm", "sandbox", "agents", "vscode", "ssh", "virtiofs"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+agentvm = "agentvm.cli:main"
+
+[tool.setuptools]
+packages = ["agentvm"]
