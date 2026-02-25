@@ -11,10 +11,13 @@ from .util import run_cmd, which, expand
 
 log = logging.getLogger("agentvm")
 
+
 def detect_ssh_identity() -> tuple[str, str]:
     if which("ssh"):
         try:
-            res = run_cmd(["ssh", "-G", "unknown@doesnt.exist"], check=True, capture=True)
+            res = run_cmd(
+                ["ssh", "-G", "unknown@doesnt.exist"], check=True, capture=True
+            )
             for line in res.stdout.splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 2 and parts[0].lower() == "identityfile":
@@ -31,6 +34,7 @@ def detect_ssh_identity() -> tuple[str, str]:
             return p, pub if os.path.exists(pub) else ""
     return "", ""
 
+
 def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
     res = run_cmd(["ip", "-4", "route", "show"], check=True, capture=True)
     nets: list[ipaddress.IPv4Network] = []
@@ -43,6 +47,7 @@ def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
                 continue
     return nets
 
+
 def pick_free_subnet(preferred: list[str]) -> str:
     routes = existing_ipv4_routes()
     for cidr in preferred:
@@ -50,6 +55,7 @@ def pick_free_subnet(preferred: list[str]) -> str:
         if not any(cand.overlaps(r) for r in routes):
             return cidr
     return preferred[0]
+
 
 def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
     ident, pub = detect_ssh_identity()

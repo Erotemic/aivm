@@ -6,7 +6,10 @@ from pathlib import Path
 
 from .util import expand
 
-DEFAULT_UBUNTU_NOBLE_IMG_URL = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+DEFAULT_UBUNTU_NOBLE_IMG_URL = (
+    "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+)
+
 
 @dataclass
 class NetworkConfig:
@@ -17,28 +20,33 @@ class NetworkConfig:
     dhcp_start: str = "10.77.0.100"
     dhcp_end: str = "10.77.0.200"
 
+
 @dataclass
 class FirewallConfig:
     enabled: bool = True
     table: str = "agentvm_sandbox"
-    block_cidrs: list[str] = field(default_factory=lambda: [
-        "0.0.0.0/8",
-        "10.0.0.0/8",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "224.0.0.0/4",
-        "240.0.0.0/4",
-    ])
+    block_cidrs: list[str] = field(
+        default_factory=lambda: [
+            "0.0.0.0/8",
+            "10.0.0.0/8",
+            "100.64.0.0/10",
+            "127.0.0.0/8",
+            "169.254.0.0/16",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "224.0.0.0/4",
+            "240.0.0.0/4",
+        ]
+    )
     extra_block_cidrs: list[str] = field(default_factory=list)
+
 
 @dataclass
 class ImageConfig:
     ubuntu_img_url: str = DEFAULT_UBUNTU_NOBLE_IMG_URL
     cache_name: str = "noble-base.img"
     redownload: bool = False
+
 
 @dataclass
 class VMConfig:
@@ -50,6 +58,7 @@ class VMConfig:
     allow_password_login: bool = False
     password: str = "agent"
 
+
 @dataclass
 class ShareConfig:
     enabled: bool = False
@@ -58,13 +67,25 @@ class ShareConfig:
     mount_opts: str = "nodev,nosuid,noexec"
     tag: str = "hostcode"
 
+
 @dataclass
 class ProvisionConfig:
     enabled: bool = True
     install_docker: bool = True
-    packages: list[str] = field(default_factory=lambda: [
-        "git", "jq", "ripgrep", "fd-find", "tmux", "htop", "unzip", "ca-certificates", "curl"
-    ])
+    packages: list[str] = field(
+        default_factory=lambda: [
+            "git",
+            "jq",
+            "ripgrep",
+            "fd-find",
+            "tmux",
+            "htop",
+            "unzip",
+            "ca-certificates",
+            "curl",
+        ]
+    )
+
 
 @dataclass
 class PathsConfig:
@@ -72,6 +93,7 @@ class PathsConfig:
     state_dir: str = "~/.cache/agentvm"
     ssh_identity_file: str = ""
     ssh_pubkey_path: str = ""
+
 
 @dataclass
 class AgentVMConfig:
@@ -87,13 +109,19 @@ class AgentVMConfig:
         c = AgentVMConfig(**asdict(self))  # type: ignore[arg-type]
         c.paths.base_dir = expand(c.paths.base_dir)
         c.paths.state_dir = expand(c.paths.state_dir)
-        c.paths.ssh_identity_file = expand(c.paths.ssh_identity_file) if c.paths.ssh_identity_file else ""
-        c.paths.ssh_pubkey_path = expand(c.paths.ssh_pubkey_path) if c.paths.ssh_pubkey_path else ""
+        c.paths.ssh_identity_file = (
+            expand(c.paths.ssh_identity_file) if c.paths.ssh_identity_file else ""
+        )
+        c.paths.ssh_pubkey_path = (
+            expand(c.paths.ssh_pubkey_path) if c.paths.ssh_pubkey_path else ""
+        )
         c.share.host_src = expand(c.share.host_src) if c.share.host_src else ""
         return c
 
+
 def _toml_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
+
 
 def dump_toml(cfg: AgentVMConfig) -> str:
     d = asdict(cfg)
@@ -113,10 +141,19 @@ def dump_toml(cfg: AgentVMConfig) -> str:
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
+
 def load(path: Path) -> AgentVMConfig:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     cfg = AgentVMConfig()
-    for section in ("vm","network","firewall","image","share","provision","paths"):
+    for section in (
+        "vm",
+        "network",
+        "firewall",
+        "image",
+        "share",
+        "provision",
+        "paths",
+    ):
         if section in raw and isinstance(raw[section], dict):
             sec = raw[section]
             obj = getattr(cfg, section)
@@ -124,6 +161,7 @@ def load(path: Path) -> AgentVMConfig:
                 if hasattr(obj, k):
                     setattr(obj, k, v)
     return cfg
+
 
 def save(path: Path, cfg: AgentVMConfig) -> None:
     path.write_text(dump_toml(cfg), encoding="utf-8")

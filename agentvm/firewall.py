@@ -7,6 +7,7 @@ from .util import run_cmd
 
 log = logging.getLogger("agentvm")
 
+
 def _nft_script(cfg: AgentVMConfig) -> str:
     table = cfg.firewall.table
     br = cfg.network.bridge
@@ -21,7 +22,7 @@ def _nft_script(cfg: AgentVMConfig) -> str:
         seen.add(b)
         blocks2.append(b)
     block_set = ", ".join(blocks2)
-    return f\"\"\"\
+    return f"""
 table inet {table} {{
   chain input {{
     type filter hook input priority 0; policy accept;
@@ -39,7 +40,8 @@ table inet {table} {{
     iifname "{br}" accept
   }}
 }}
-\"\"\"
+"""
+
 
 def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if not cfg.firewall.enabled:
@@ -50,19 +52,27 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if dry_run:
         log.info("DRYRUN: nft -f - <<EOF\\n%s\\nEOF", script.rstrip())
         return
-    run_cmd(["nft","delete","table","inet",table], sudo=True, check=False, capture=True)
-    run_cmd(["nft","-f","-"], sudo=True, check=True, capture=True, input_text=script)
+    run_cmd(
+        ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
+    )
+    run_cmd(["nft", "-f", "-"], sudo=True, check=True, capture=True, input_text=script)
     log.info("Firewall rules applied (table=inet %s).", table)
+
 
 def firewall_status(cfg: AgentVMConfig) -> str:
     table = cfg.firewall.table
-    res = run_cmd(["nft","list","table","inet",table], sudo=True, check=False, capture=True)
+    res = run_cmd(
+        ["nft", "list", "table", "inet", table], sudo=True, check=False, capture=True
+    )
     return res.stdout + (res.stderr or "")
+
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     table = cfg.firewall.table
     if dry_run:
         log.info("DRYRUN: nft delete table inet %s", table)
         return
-    run_cmd(["nft","delete","table","inet",table], sudo=True, check=False, capture=True)
+    run_cmd(
+        ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
+    )
     log.info("Firewall removed (table=inet %s).", table)

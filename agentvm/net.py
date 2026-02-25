@@ -9,9 +9,10 @@ from .util import run_cmd
 
 log = logging.getLogger("agentvm")
 
+
 def _route_overlap(target_cidr: str) -> str | None:
     target = ipaddress.ip_network(target_cidr, strict=False)  # type: ignore[arg-type]
-    res = run_cmd(["ip","-4","route","show"], check=True, capture=True)
+    res = run_cmd(["ip", "-4", "route", "show"], check=True, capture=True)
     for line in res.stdout.splitlines():
         tok = line.split()[0]
         if "/" in tok:
@@ -23,7 +24,10 @@ def _route_overlap(target_cidr: str) -> str | None:
                 return str(n)
     return None
 
-def ensure_network(cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool = False) -> None:
+
+def ensure_network(
+    cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool = False
+) -> None:
     name = cfg.network.name
     bridge = cfg.network.bridge
     subnet = cfg.network.subnet_cidr
@@ -36,9 +40,14 @@ def ensure_network(cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool 
 
     overlap = _route_overlap(subnet)
     if overlap:
-        raise RuntimeError(f"NET_SUBNET_CIDR {subnet} overlaps existing route {overlap}. Pick a different subnet.")
+        raise RuntimeError(
+            f"NET_SUBNET_CIDR {subnet} overlaps existing route {overlap}. Pick a different subnet."
+        )
 
-    exists = run_cmd(["virsh","net-info",name], check=False, capture=True, sudo=True).code == 0
+    exists = (
+        run_cmd(["virsh", "net-info", name], check=False, capture=True, sudo=True).code
+        == 0
+    )
     if exists and not recreate:
         log.info("Network exists: %s", name)
         return
@@ -46,10 +55,14 @@ def ensure_network(cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool 
         if dry_run:
             log.info("DRYRUN: virsh net-destroy %s; virsh net-undefine %s", name, name)
         else:
-            run_cmd(["virsh","net-destroy",name], sudo=True, check=False, capture=True)
-            run_cmd(["virsh","net-undefine",name], sudo=True, check=False, capture=True)
+            run_cmd(
+                ["virsh", "net-destroy", name], sudo=True, check=False, capture=True
+            )
+            run_cmd(
+                ["virsh", "net-undefine", name], sudo=True, check=False, capture=True
+            )
 
-    xml = f\"\"\"<network>
+    xml = f"""<network>
   <name>{name}</name>
   <forward mode='nat'/>
   <bridge name='{bridge}' stp='on' delay='0'/>
@@ -59,7 +72,7 @@ def ensure_network(cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool 
     </dhcp>
   </ip>
 </network>
-\"\"\"
+"""
     if dry_run:
         log.info("DRYRUN: define network %s on %s (bridge=%s)", name, subnet, bridge)
         return
@@ -67,22 +80,24 @@ def ensure_network(cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool 
     with tempfile.NamedTemporaryFile("w", delete=False) as f:
         f.write(xml)
         tmp = f.name
-    run_cmd(["virsh","net-define",tmp], sudo=True, check=True, capture=True)
-    run_cmd(["virsh","net-autostart",name], sudo=True, check=True, capture=True)
-    run_cmd(["virsh","net-start",name], sudo=True, check=True, capture=True)
+    run_cmd(["virsh", "net-define", tmp], sudo=True, check=True, capture=True)
+    run_cmd(["virsh", "net-autostart", name], sudo=True, check=True, capture=True)
+    run_cmd(["virsh", "net-start", name], sudo=True, check=True, capture=True)
     log.info("Network ready: %s (bridge=%s)", name, bridge)
+
 
 def network_status(cfg: AgentVMConfig) -> str:
     name = cfg.network.name
-    info = run_cmd(["virsh","net-info",name], sudo=True, check=False, capture=True)
-    dump = run_cmd(["virsh","net-dumpxml",name], sudo=True, check=False, capture=True)
+    info = run_cmd(["virsh", "net-info", name], sudo=True, check=False, capture=True)
+    dump = run_cmd(["virsh", "net-dumpxml", name], sudo=True, check=False, capture=True)
     return info.stdout + "\n" + dump.stdout
+
 
 def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     name = cfg.network.name
     if dry_run:
         log.info("DRYRUN: virsh net-destroy %s; virsh net-undefine %s", name, name)
         return
-    run_cmd(["virsh","net-destroy",name], sudo=True, check=False, capture=True)
-    run_cmd(["virsh","net-undefine",name], sudo=True, check=False, capture=True)
+    run_cmd(["virsh", "net-destroy", name], sudo=True, check=False, capture=True)
+    run_cmd(["virsh", "net-undefine", name], sudo=True, check=False, capture=True)
     log.info("Network removed: %s", name)

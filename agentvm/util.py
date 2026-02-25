@@ -11,20 +11,26 @@ import logging
 
 log = logging.getLogger("agentvm")
 
+
 @dataclass(frozen=True)
 class CmdResult:
     code: int
     stdout: str
     stderr: str
 
+
 class CmdError(RuntimeError):
     def __init__(self, cmd: Sequence[str] | str, result: CmdResult):
         self.cmd = cmd
         self.result = result
-        super().__init__(f"Command failed (code={result.code}): {cmd}\n{result.stderr}".strip())
+        super().__init__(
+            f"Command failed (code={result.code}): {cmd}\n{result.stderr}".strip()
+        )
+
 
 def shell_join(cmd: Sequence[str]) -> str:
     return " ".join(shlex.quote(c) for c in cmd)
+
 
 def run_cmd(
     cmd: Sequence[str],
@@ -51,12 +57,16 @@ def run_cmd(
         raise CmdError(cmd, res)
     return res
 
+
 def which(cmd: str) -> Optional[str]:
     from shutil import which as _which
+
     return _which(cmd)
+
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
 
 def expand(path: str) -> str:
     return os.path.expandvars(os.path.expanduser(path))
