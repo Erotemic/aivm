@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import ipaddress
 import tempfile
-import logging
+
+from loguru import logger
 
 from .config import AgentVMConfig
 from .util import run_cmd
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
 def _route_overlap(target_cidr: str) -> str | None:
@@ -28,6 +29,7 @@ def _route_overlap(target_cidr: str) -> str | None:
 def ensure_network(
     cfg: AgentVMConfig, *, recreate: bool = False, dry_run: bool = False
 ) -> None:
+    log.debug("Ensuring libvirt network %s exists", cfg.network.name)
     name = cfg.network.name
     bridge = cfg.network.bridge
     subnet = cfg.network.subnet_cidr
@@ -44,10 +46,13 @@ def ensure_network(
             f"NET_SUBNET_CIDR {subnet} overlaps existing route {overlap}. Pick a different subnet."
         )
 
-    exists = (
-        run_cmd(["virsh", "net-info", name], check=False, capture=True, sudo=True).code
-        == 0
-    )
+    if dry_run:
+        exists = False
+    else:
+        exists = (
+            run_cmd(["virsh", "net-info", name], check=False, capture=True, sudo=True).code
+            == 0
+        )
     if exists and not recreate:
         log.info("Network exists: %s", name)
         return

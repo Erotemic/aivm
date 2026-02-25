@@ -1,25 +1,21 @@
 from __future__ import annotations
-
-import os
 import time
 from pathlib import Path
-import logging
+
+from loguru import logger
 
 from .config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
 from .util import run_cmd, ensure_dir
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
-def _paths(cfg: AgentVMConfig) -> dict[str, Path]:
+def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     cfg = cfg.expanded_paths()
     base_dir = Path(cfg.paths.base_dir) / cfg.vm.name
     img_dir = base_dir / "images"
     ci_dir = base_dir / "cloud-init"
     state_dir = Path(cfg.paths.state_dir) / cfg.vm.name
-    ensure_dir(img_dir)
-    ensure_dir(ci_dir)
-    ensure_dir(state_dir)
     return {
         "base_dir": base_dir,
         "img_dir": img_dir,
@@ -31,7 +27,8 @@ def _paths(cfg: AgentVMConfig) -> dict[str, Path]:
 
 
 def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
-    p = _paths(cfg)
+    log.debug("Fetching Ubuntu cloud image")
+    p = _paths(cfg, dry_run=dry_run)
     base_img = p["img_dir"] / cfg.image.cache_name
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
     if base_img.exists() and not cfg.image.redownload:
@@ -40,6 +37,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     if dry_run:
         log.info("DRYRUN: curl -L --fail -o %s %s", base_img, url)
         return base_img
+    ensure_dir(p["img_dir"])
     run_cmd(["mkdir", "-p", str(p["img_dir"])], sudo=True, check=True, capture=True)
     run_cmd(
         ["curl", "-L", "--fail", "-o", str(base_img), url],
@@ -79,7 +77,7 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
 def _write_cloud_init(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     cfg = cfg.expanded_paths()
-    p = _paths(cfg)
+    p = _paths(cfg, dry_run=dry_run)
     ci_dir = p["ci_dir"]
     user_data = ci_dir / "user-data"
     meta_data = ci_dir / "meta-data"
@@ -159,6 +157,7 @@ local-hostname: {cfg.vm.name}
         log.info("DRYRUN: write cloud-init + cloud-localds %s", seed_iso)
         return {"user_data": user_data, "meta_data": meta_data, "seed_iso": seed_iso}
 
+    run_cmd(["mkdir", "-p", str(ci_dir)], sudo=True, check=True, capture=True)
     _ensure_qemu_access(cfg, dry_run=False)
     run_cmd(
         ["bash", "-lc", f"cat > {user_data} <<'EOF'\n{cloud}\nEOF"],
@@ -184,7 +183,7 @@ local-hostname: {cfg.vm.name}
 def _ensure_disk(
     cfg: AgentVMConfig, base_img: Path, *, dry_run: bool = False, recreate: bool = False
 ) -> Path:
-    p = _paths(cfg)
+    p = _paths(cfg, dry_run=dry_run)
     vm_disk = p["img_dir"] / f"{cfg.vm.name}.qcow2"
     if vm_disk.exists() and recreate:
         if dry_run:
@@ -222,7 +221,9 @@ def _ensure_disk(
     return vm_disk
 
 
-def vm_exists(cfg: AgentVMConfig) -> bool:
+def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
+    if dry_run:
+        return False
     return (
         run_cmd(
             ["virsh", "dominfo", cfg.vm.name], sudo=True, check=False, capture=True
@@ -234,13 +235,14 @@ def vm_exists(cfg: AgentVMConfig) -> bool:
 def create_or_start_vm(
     cfg: AgentVMConfig, *, dry_run: bool = False, recreate: bool = False
 ) -> None:
+    log.debug("Creating or starting VM %s", cfg.vm.name)
     cfg = cfg.expanded_paths()
     base_img = fetch_image(cfg, dry_run=dry_run)
     ci = _write_cloud_init(cfg, dry_run=dry_run)
     vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
     seed_iso = ci["seed_iso"]
 
-    if vm_exists(cfg):
+    if vm_exists(cfg, dry_run=dry_run):
         if recreate:
             if dry_run:
                 log.info("DRYRUN: virsh destroy/undefine %s", cfg.vm.name)
@@ -346,7 +348,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
 
 
 def get_ip_cached(cfg: AgentVMConfig) -> str | None:
-    p = _paths(cfg)
+    p = _paths(cfg, dry_run=False)
     ip_file = p["ip_file"]
     if ip_file.exists():
         return ip_file.read_text(encoding="utf-8").strip() or None
@@ -356,11 +358,13 @@ def get_ip_cached(cfg: AgentVMConfig) -> str | None:
 def wait_for_ip(
     cfg: AgentVMConfig, *, timeout_s: int = 360, dry_run: bool = False
 ) -> str:
-    p = _paths(cfg)
+    log.debug("Waiting for VM IP via DHCP lease")
+    p = _paths(cfg, dry_run=dry_run)
     ip_file = p["ip_file"]
     if dry_run:
         log.info("DRYRUN: wait for IP and write %s", ip_file)
         return "0.0.0.0"
+    ensure_dir(p["state_dir"])
     mac = _mac_for_vm(cfg)
     if not mac:
         log.warning(
@@ -454,11 +458,15 @@ def ssh_config(cfg: AgentVMConfig) -> str:
 
 
 def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    log.debug("Provisioning VM with developer tools")
     if not cfg.provision.enabled:
         log.info("Provision disabled; skipping.")
         return
     cfg = cfg.expanded_paths()
-    ip = get_ip_cached(cfg) or wait_for_ip(cfg, timeout_s=360, dry_run=dry_run)
+    if dry_run:
+        ip = "0.0.0.0"
+    else:
+        ip = get_ip_cached(cfg) or wait_for_ip(cfg, timeout_s=360, dry_run=False)
     ident = cfg.paths.ssh_identity_file
     if not ident:
         raise RuntimeError(

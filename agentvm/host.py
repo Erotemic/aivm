@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import logging
+from loguru import logger
 
 from .util import run_cmd, which
 
-log = logging.getLogger("agentvm")
+log = logger
 
 REQUIRED_CMDS = [
     "virsh",

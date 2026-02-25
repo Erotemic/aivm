@@ -4,15 +4,16 @@ import ipaddress
 import os
 from pathlib import Path
 
-import logging
+from loguru import logger
 
 from .config import AgentVMConfig
 from .util import run_cmd, which, expand
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
 def detect_ssh_identity() -> tuple[str, str]:
+    log.debug('detecting detect_ssh_identity')
     if which("ssh"):
         try:
             res = run_cmd(
@@ -36,6 +37,7 @@ def detect_ssh_identity() -> tuple[str, str]:
 
 
 def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
+    log.debug('introspecting existing_ipv4_routes')
     res = run_cmd(["ip", "-4", "route", "show"], check=True, capture=True)
     nets: list[ipaddress.IPv4Network] = []
     for line in res.stdout.splitlines():

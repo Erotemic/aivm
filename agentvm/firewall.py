@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
+from loguru import logger
 
 from .config import AgentVMConfig
 from .util import run_cmd
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
 def _nft_script(cfg: AgentVMConfig) -> str:
@@ -44,6 +44,7 @@ table inet {table} {{
 
 
 def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    log.debug("Applying nftables firewall rules")
     if not cfg.firewall.enabled:
         log.info("Firewall disabled in config; skipping.")
         return

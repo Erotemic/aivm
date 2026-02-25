@@ -16,6 +16,9 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
 ]
+dependencies = [
+  "loguru",
+]
 
 [project.scripts]
 agentvm = "agentvm.cli:main"

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 import textwrap
+
+from loguru import logger
 
 from .config import AgentVMConfig, load, save
 from .detect import auto_defaults
@@ -21,16 +22,21 @@ from .vm import (
     fetch_image,
 )
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
-def _setup_logging(verbosity: int) -> None:
-    level = logging.WARNING
-    if verbosity == 1:
-        level = logging.INFO
-    elif verbosity >= 2:
-        level = logging.DEBUG
-    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
+    # TODO: make our logger have timestamps, level, and location info for debug mode.
+    logger.remove()  # Remove default handler
+    effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
+    print(f'effective_verbosity={effective_verbosity}')
+    level = "WARNING"
+    if effective_verbosity == 1:
+        level = "INFO"
+    elif effective_verbosity >= 2:
+        level = "DEBUG"
+    logger.add(sys.stderr, level=level, format="{level}: {message}")
+    log.debug('setup logging')
 
 
 def _cfg_path(p: str | None) -> Path:
@@ -189,13 +195,19 @@ def cmd_apply(args: argparse.Namespace) -> int:
     if args.interactive:
         cmd_plan(argparse.Namespace(config=args.config))
         print()
+    log.debug("Ensuring network is set up")
     ensure_network(cfg, recreate=False, dry_run=args.dry_run)
     if cfg.firewall.enabled:
+        log.debug("Applying firewall rules")
         apply_firewall(cfg, dry_run=args.dry_run)
+    log.debug("Fetching Ubuntu image")
     fetch_image(cfg, dry_run=args.dry_run)
+    log.debug("Creating or starting VM")
     create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
+    log.debug("Waiting for VM IP address")
     wait_for_ip(cfg, timeout_s=360, dry_run=args.dry_run)
     if cfg.provision.enabled:
+        log.debug("Provisioning VM with tools")
         provision(cfg, dry_run=args.dry_run)
     if args.interactive:
         print("\nSSH config for VS Code:")
@@ -330,12 +342,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    _setup_logging(args.verbose)
+    try:
+        cfg = _load_cfg(args)
+        verbosity = cfg.verbosity
+    except FileNotFoundError:
+        verbosity = 1
+    _setup_logging(args.verbose, verbosity)
     try:
         rc = args.func(args)
     except Exception as ex:
+        print(f"ERROR: {ex}", file=sys.stderr)
         if args.verbose and args.verbose >= 2:
             raise
-        print(f"ERROR: {ex}", file=sys.stderr)
+        raise
         sys.exit(2)
     sys.exit(rc)

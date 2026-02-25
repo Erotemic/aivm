@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
-import logging
+from loguru import logger
 
-log = logging.getLogger("agentvm")
+log = logger
 
 
 @dataclass(frozen=True)
@@ -42,9 +42,11 @@ def run_cmd(
     input_text: Optional[str] = None,
     env: Optional[dict[str, str]] = None,
 ) -> CmdResult:
+    original_cmd = cmd
     if sudo and os.geteuid() != 0:
         cmd = ["sudo", *cmd]
-    log.debug("RUN: %s", shell_join(cmd))
+        log.info("Running with sudo: {}", shell_join(original_cmd))
+    log.debug("RUN: {}", shell_join(cmd))
     p = subprocess.run(
         cmd,
         input=input_text if input_text is not None else None,

@@ -104,19 +104,19 @@ class AgentVMConfig:
     share: ShareConfig = field(default_factory=ShareConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
+    verbosity: int = 1
 
     def expanded_paths(self) -> "AgentVMConfig":
-        c = AgentVMConfig(**asdict(self))  # type: ignore[arg-type]
-        c.paths.base_dir = expand(c.paths.base_dir)
-        c.paths.state_dir = expand(c.paths.state_dir)
-        c.paths.ssh_identity_file = (
-            expand(c.paths.ssh_identity_file) if c.paths.ssh_identity_file else ""
+        self.paths.base_dir = expand(self.paths.base_dir)
+        self.paths.state_dir = expand(self.paths.state_dir)
+        self.paths.ssh_identity_file = (
+            expand(self.paths.ssh_identity_file) if self.paths.ssh_identity_file else ""
         )
-        c.paths.ssh_pubkey_path = (
-            expand(c.paths.ssh_pubkey_path) if c.paths.ssh_pubkey_path else ""
+        self.paths.ssh_pubkey_path = (
+            expand(self.paths.ssh_pubkey_path) if self.paths.ssh_pubkey_path else ""
         )
-        c.share.host_src = expand(c.share.host_src) if c.share.host_src else ""
-        return c
+        self.share.host_src = expand(self.share.host_src) if self.share.host_src else ""
+        return self
 
 
 def _toml_escape(s: str) -> str:
@@ -127,18 +127,22 @@ def dump_toml(cfg: AgentVMConfig) -> str:
     d = asdict(cfg)
     lines: list[str] = []
     for section, body in d.items():
-        lines.append(f"[{section}]")
-        for k, v in body.items():
-            if isinstance(v, bool):
-                lines.append(f"{k} = {'true' if v else 'false'}")
-            elif isinstance(v, int):
-                lines.append(f"{k} = {v}")
-            elif isinstance(v, list):
-                parts = [f'"{_toml_escape(str(item))}"' for item in v]
-                lines.append(f"{k} = [{', '.join(parts)}]")
-            else:
-                lines.append(f'{k} = "{_toml_escape(str(v))}"')
-        lines.append("")
+        if isinstance(body, dict):
+            lines.append(f"[{section}]")
+            for k, v in body.items():
+                if isinstance(v, bool):
+                    lines.append(f"{k} = {'true' if v else 'false'}")
+                elif isinstance(v, int):
+                    lines.append(f"{k} = {v}")
+                elif isinstance(v, list):
+                    parts = [f'"{_toml_escape(str(item))}"' for item in v]
+                    lines.append(f"{k} = [{', '.join(parts)}]")
+                else:
+                    lines.append(f'{k} = "{_toml_escape(str(v))}"')
+            lines.append("")
+        elif section == "verbosity" and body != 1:
+            lines.append(f"{section} = {body}")
+            lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -160,6 +164,8 @@ def load(path: Path) -> AgentVMConfig:
             for k, v in sec.items():
                 if hasattr(obj, k):
                     setattr(obj, k, v)
+    if "verbosity" in raw:
+        cfg.verbosity = raw["verbosity"]
     return cfg
 
 
