@@ -557,12 +557,15 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     log.info("Provisioning complete.")
 
 
-def vm_has_share(cfg: AgentVMConfig) -> bool:
+def vm_has_share(cfg: AgentVMConfig, *, use_sudo: bool = True) -> bool:
     cfg = cfg.expanded_paths()
     if not cfg.share.enabled or not cfg.share.host_src:
         return False
     xml = run_cmd(
-        ["virsh", "dumpxml", cfg.vm.name], sudo=True, check=False, capture=True
+        ["virsh", "-c", "qemu:///system", "dumpxml", cfg.vm.name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
     )
     if xml.code != 0 or not xml.stdout.strip():
         return False
@@ -582,10 +585,15 @@ def vm_has_share(cfg: AgentVMConfig) -> bool:
     return False
 
 
-def vm_share_mappings(cfg: AgentVMConfig) -> list[tuple[str, str]]:
+def vm_share_mappings(
+    cfg: AgentVMConfig, *, use_sudo: bool = True
+) -> list[tuple[str, str]]:
     """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
     xml = run_cmd(
-        ["virsh", "dumpxml", cfg.vm.name], sudo=True, check=False, capture=True
+        ["virsh", "-c", "qemu:///system", "dumpxml", cfg.vm.name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
     )
     if xml.code != 0 or not xml.stdout.strip():
         return []

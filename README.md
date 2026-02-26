@@ -26,6 +26,7 @@ Repo-local config flow:
 ```bash
 agentvm init --config .agentvm.toml
 agentvm plan --config .agentvm.toml
+agentvm host doctor
 agentvm status --config .agentvm.toml
 agentvm status --config .agentvm.toml --detail
 agentvm apply --config .agentvm.toml --interactive
@@ -36,10 +37,14 @@ No-local-init flow (recommended UX for new repos):
 ```bash
 agentvm code .
 agentvm status
+agentvm status --sudo   # optional deeper privileged checks
 ```
 
 `agentvm code .` auto-selects a VM from directory metadata/global registry (prompts if ambiguous), auto-attaches the folder if needed, then opens VS Code.
 `agentvm status` also resolves from directory metadata/global registry when there is no local `.agentvm.toml` (or use `--vm`).
+By default `status` avoids sudo and reports limited checks; use `status --sudo` for privileged network/firewall/libvirt/image checks.
+Privileged host actions now prompt for confirmation before sudo blocks; use `--yes` to auto-approve in scripted/non-interactive flows.
+`agentvm code .` first performs non-sudo probes and only asks for sudo when it can confirm privileged actions are needed.
 
 Then connect with VS Code Remote-SSH using:
 
@@ -62,6 +67,7 @@ List managed resources:
 
 ```bash
 agentvm list
+agentvm vm list
 agentvm list --section vms
 agentvm list --section networks
 agentvm list --section folders
@@ -115,8 +121,9 @@ When `[sync].enabled=true`, `agentvm vm code ...` will sync those paths before l
 ### Command groups
 
 ```bash
-agentvm net --help
-agentvm fw --help
+agentvm host --help
+agentvm host net --help
+agentvm host fw --help
 agentvm vm --help
 ```
 

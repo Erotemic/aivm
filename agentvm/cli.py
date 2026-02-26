@@ -4,6 +4,7 @@ import sys
 import textwrap
 import re
 import hashlib
+import os
 from pathlib import Path
 
 import scriptconfig as scfg
@@ -52,6 +53,7 @@ class _BaseCommand(scfg.DataConfig):
 
     config = scfg.Value(None, help="Path to config TOML (default: .agentvm.toml).")
     verbose = scfg.Value(0, short_alias=["v"], isflag='counter', help="Increase verbosity (-v, -vv).")
+    yes = scfg.Value(False, isflag=True, help="Auto-approve privileged host operations (sudo).")
 
 
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
@@ -157,6 +159,21 @@ def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
     return str(host_src)
 
 
+def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
+    if yes or os.geteuid() == 0:
+        return
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Privileged host operations require confirmation, but stdin is not interactive. "
+            "Re-run with --yes."
+        )
+    print("About to run privileged host operations via sudo:")
+    print(f"  {purpose}")
+    ans = input("Continue? [y/N]: ").strip().lower()
+    if ans not in {"y", "yes"}:
+        raise RuntimeError("Aborted by user.")
+
+
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
     max_len = 36
     raw = re.sub(r"[^A-Za-z0-9_.-]+", "-", host_src.name or "hostcode").strip("-")
@@ -182,6 +199,19 @@ def _ensure_share_tag_len(cfg: AgentVMConfig, host_src: Path, existing_tags: set
     if tag and len(tag) <= 36:
         return
     cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
+
+
+def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
+    res = run_cmd(
+        ["virsh", "-c", "qemu:///system", "domstate", vm_name],
+        sudo=False,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        return None
+    state = (res.stdout or "").strip().lower()
+    return "running" in state
 
 
 def _status_line(ok: bool | None, label: str, detail: str = "") -> str:
@@ -231,11 +261,20 @@ def _parse_sync_paths_arg(paths_arg: str) -> list[str]:
     return [p for p in items if p]
 
 
-def _check_network(cfg: AgentVMConfig) -> tuple[bool, str]:
+def _check_network(cfg: AgentVMConfig, *, use_sudo: bool) -> tuple[bool | None, str]:
     info = run_cmd(
-        ["virsh", "net-info", cfg.network.name], sudo=True, check=False, capture=True
+        ["virsh", "-c", "qemu:///system", "net-info", cfg.network.name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
     )
     if info.code != 0:
+        raw_detail = (info.stderr or info.stdout or "").strip()
+        detail = raw_detail.lower()
+        if "permission denied" in detail or "authentication failed" in detail:
+            return None, f"{cfg.network.name} unavailable (run status --sudo for privileged checks)"
+        if not use_sudo:
+            return None, f"{cfg.network.name} probe inconclusive without sudo ({raw_detail or 'unknown error'})"
         return False, f"{cfg.network.name} not defined"
     active = "active: yes" in info.stdout.lower()
     autostart = "autostart: yes" in info.stdout.lower()
@@ -244,33 +283,50 @@ def _check_network(cfg: AgentVMConfig) -> tuple[bool, str]:
     return False, f"{cfg.network.name} defined but inactive"
 
 
-def _check_firewall(cfg: AgentVMConfig) -> tuple[bool | None, str]:
+def _check_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> tuple[bool | None, str]:
     if not cfg.firewall.enabled:
         return None, "disabled in config"
     res = run_cmd(
         ["nft", "list", "table", "inet", cfg.firewall.table],
-        sudo=True,
+        sudo=use_sudo,
         check=False,
         capture=True,
     )
     if res.code == 0:
         return True, f"table inet {cfg.firewall.table} present"
+    detail = (res.stderr or res.stdout or "").strip().lower()
+    if "operation not permitted" in detail or "permission denied" in detail:
+        return None, f"requires privileges (run status --sudo for firewall checks)"
     return False, f"table inet {cfg.firewall.table} missing"
 
 
-def _sudo_file_exists(path: Path) -> bool:
+def _file_exists(path: Path, *, use_sudo: bool) -> bool:
     return (
-        run_cmd(["test", "-f", str(path)], sudo=True, check=False, capture=True).code
+        run_cmd(["test", "-f", str(path)], sudo=use_sudo, check=False, capture=True).code
         == 0
     )
 
 
-def _check_vm_state(cfg: AgentVMConfig) -> tuple[bool, bool, str]:
-    dom = run_cmd(["virsh", "dominfo", cfg.vm.name], sudo=True, check=False, capture=True)
+def _check_vm_state(cfg: AgentVMConfig, *, use_sudo: bool) -> tuple[bool | None, bool, str]:
+    dom = run_cmd(
+        ["virsh", "-c", "qemu:///system", "dominfo", cfg.vm.name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
     if dom.code != 0:
+        raw_detail = (dom.stderr or dom.stdout or "").strip()
+        detail = raw_detail.lower()
+        if "permission denied" in detail or "authentication failed" in detail:
+            return None, False, f"{cfg.vm.name} unavailable (run status --sudo for privileged checks)"
+        if not use_sudo:
+            return None, False, f"{cfg.vm.name} probe inconclusive without sudo ({raw_detail or 'unknown error'})"
         return False, False, f"{cfg.vm.name} not defined"
     state = run_cmd(
-        ["virsh", "domstate", cfg.vm.name], sudo=True, check=False, capture=True
+        ["virsh", "-c", "qemu:///system", "domstate", cfg.vm.name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
     ).stdout.strip()
     return ("running" in state.lower(), True, f"{cfg.vm.name} state={state}")
 
@@ -338,7 +394,13 @@ def _check_provisioned(cfg: AgentVMConfig, ip: str) -> tuple[bool | None, str, s
     return False, "one or more configured packages missing", diag
 
 
-def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> str:
+def _render_status(
+    cfg: AgentVMConfig,
+    path: Path,
+    *,
+    detail: bool = False,
+    use_sudo: bool = False,
+) -> str:
     lines: list[str] = ["🧭 AgentVM Status", f"📄 Config: {path}", ""]
     done = 0
     total = 0
@@ -352,32 +414,38 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
         host_detail += f" (optional missing: {', '.join(missing_opt)})"
     lines.append(_status_line(host_ok, "Host dependencies", host_detail))
 
-    net_ok, net_detail = _check_network(cfg)
-    total += 1
-    done += int(net_ok)
+    net_ok, net_detail = _check_network(cfg, use_sudo=use_sudo)
+    if net_ok is not None:
+        total += 1
+        done += int(net_ok)
     lines.append(_status_line(net_ok, "Libvirt network", net_detail))
 
-    fw_ok, fw_detail = _check_firewall(cfg)
+    fw_ok, fw_detail = _check_firewall(cfg, use_sudo=use_sudo)
     if fw_ok is not None:
         total += 1
         done += int(fw_ok)
     lines.append(_status_line(fw_ok, "Firewall", fw_detail))
 
     base_img = Path(cfg.paths.base_dir) / cfg.vm.name / "images" / cfg.image.cache_name
-    img_ok = _sudo_file_exists(base_img)
-    total += 1
-    done += int(img_ok)
-    lines.append(_status_line(img_ok, "Base image cache", str(base_img)))
+    img_ok = _file_exists(base_img, use_sudo=use_sudo)
+    if use_sudo:
+        total += 1
+        done += int(img_ok)
+        lines.append(_status_line(img_ok, "Base image cache", str(base_img)))
+    else:
+        lines.append(_status_line(None, "Base image cache", f"skipped without --sudo ({base_img})"))
 
-    vm_ok, vm_defined, vm_detail = _check_vm_state(cfg)
-    total += 1
-    done += int(vm_ok)
+    vm_ok, vm_defined, vm_detail = _check_vm_state(cfg, use_sudo=use_sudo)
+    if vm_ok is not None:
+        total += 1
+        done += int(vm_ok)
     lines.append(_status_line(vm_ok, "VM state", vm_detail))
 
     ip = get_ip_cached(cfg)
-    ip_ok = bool(ip) and vm_defined
-    total += 1
-    done += int(ip_ok)
+    ip_ok = bool(ip) and bool(vm_defined)
+    if vm_ok is not None:
+        total += 1
+        done += int(ip_ok)
     if ip and not vm_defined:
         lines.append(_status_line(False, "Cached VM IP", f"{ip} (stale: VM not defined)"))
         ip = None
@@ -387,13 +455,13 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
     ssh_ok = False
     ssh_detail = "VM/IP not ready"
     ssh_diag = ""
-    if vm_ok and ip:
+    if vm_ok is True and ip:
         ssh_ok, ssh_detail, ssh_diag = _check_ssh_ready(cfg, ip)
     total += 1
     done += int(ssh_ok)
     lines.append(_status_line(ssh_ok, "SSH readiness", ssh_detail))
 
-    if vm_ok and ip and ssh_ok:
+    if vm_ok is True and ip and ssh_ok:
         prov_ok, prov_detail, prov_diag = _check_provisioned(cfg, ip)
     else:
         prov_ok, prov_detail = (
@@ -409,6 +477,8 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
 
     lines.append("")
     lines.append(f"📊 Progress: {done}/{total} checks complete")
+    if not use_sudo:
+        lines.append("ℹ️ Some privileged checks are skipped/limited without --sudo.")
 
     if detail:
         lines.append("")
@@ -420,10 +490,16 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
         lines.append("")
 
         net_info = run_cmd(
-            ["virsh", "net-info", cfg.network.name], sudo=True, check=False, capture=True
+            ["virsh", "-c", "qemu:///system", "net-info", cfg.network.name],
+            sudo=use_sudo,
+            check=False,
+            capture=True,
         )
         net_xml = run_cmd(
-            ["virsh", "net-dumpxml", cfg.network.name], sudo=True, check=False, capture=True
+            ["virsh", "-c", "qemu:///system", "net-dumpxml", cfg.network.name],
+            sudo=use_sudo,
+            check=False,
+            capture=True,
         )
         lines.append(f"Network ({cfg.network.name})")
         lines.append("```text")
@@ -439,7 +515,7 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
         if cfg.firewall.enabled:
             fw_raw = run_cmd(
                 ["nft", "list", "table", "inet", cfg.firewall.table],
-                sudo=True,
+                sudo=use_sudo,
                 check=False,
                 capture=True,
             )
@@ -453,7 +529,7 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
         lines.append("Image")
         img_stat = run_cmd(
             ["bash", "-lc", f"ls -lh {base_img} 2>&1"],
-            sudo=True,
+            sudo=use_sudo,
             check=False,
             capture=True,
         )
@@ -464,13 +540,13 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
 
         lines.append(f"VM ({cfg.vm.name})")
         for cmd in (
-            ["virsh", "dominfo", cfg.vm.name],
-            ["virsh", "domstate", cfg.vm.name],
-            ["virsh", "domiflist", cfg.vm.name],
-            ["virsh", "domifaddr", cfg.vm.name],
-            ["virsh", "net-dhcp-leases", cfg.network.name],
+            ["virsh", "-c", "qemu:///system", "dominfo", cfg.vm.name],
+            ["virsh", "-c", "qemu:///system", "domstate", cfg.vm.name],
+            ["virsh", "-c", "qemu:///system", "domiflist", cfg.vm.name],
+            ["virsh", "-c", "qemu:///system", "domifaddr", cfg.vm.name],
+            ["virsh", "-c", "qemu:///system", "net-dhcp-leases", cfg.network.name],
         ):
-            vm_raw = run_cmd(cmd, sudo=True, check=False, capture=True)
+            vm_raw = run_cmd(cmd, sudo=use_sudo, check=False, capture=True)
             lines.append(f"`{' '.join(cmd)}`")
             lines.append("```text")
             lines.append(_clip((vm_raw.stdout + "\n" + vm_raw.stderr).strip() or "(no output)"))
@@ -505,13 +581,13 @@ def _render_status(cfg: AgentVMConfig, path: Path, *, detail: bool = False) -> s
 
         next_steps: list[str] = []
         if missing:
-            next_steps.append("agentvm host_install_deps --config .agentvm.toml")
+            next_steps.append("agentvm host install_deps --config .agentvm.toml")
         if not net_ok:
-            next_steps.append("agentvm net create --config .agentvm.toml")
+            next_steps.append("agentvm host net create --config .agentvm.toml")
         if cfg.firewall.enabled and fw_ok is not True:
-            next_steps.append("agentvm fw apply --config .agentvm.toml")
+            next_steps.append("agentvm host fw apply --config .agentvm.toml")
         if not img_ok:
-            next_steps.append("agentvm image_fetch --config .agentvm.toml")
+            next_steps.append("agentvm host image_fetch --config .agentvm.toml")
         if not vm_ok:
             next_steps.append("agentvm vm up --config .agentvm.toml")
         if vm_ok and not ip:
@@ -564,15 +640,15 @@ class PlanCLI(_BaseCommand):
         Suggested flow:
 
         1. 🔎 Preflight checks
-           agentvm doctor --config {path}
+           agentvm host doctor --config {path}
            agentvm status --config {path}
            agentvm status --config {path} --detail
         2. 🌐 Host network
-           agentvm net create --config {path}
+           agentvm host net create --config {path}
         3. 🔥 Optional firewall isolation (recommended)
-           agentvm fw apply --config {path}
+           agentvm host fw apply --config {path}
         4. 📦 Base image
-           agentvm image_fetch --config {path}
+           agentvm host image_fetch --config {path}
         5. 🖥️ VM lifecycle
            agentvm vm up --config {path}
            agentvm vm wait_ip --config {path}
@@ -598,7 +674,7 @@ class DoctorCLI(_BaseCommand):
         missing, missing_opt = check_commands()
         if missing:
             print("❌ Missing required commands:", ", ".join(missing))
-            print("💡 On Debian/Ubuntu you can run: agentvm host_install_deps")
+            print("💡 On Debian/Ubuntu you can run: agentvm host install_deps")
             return 2
         if missing_opt:
             print("➖ Missing optional commands:", ", ".join(missing_opt))
@@ -611,10 +687,11 @@ class HostInstallDepsCLI(_BaseCommand):
 
     @classmethod
     def main(cls, argv=True, **kwargs):
-        cls.cli(argv=argv, data=kwargs)
+        args = cls.cli(argv=argv, data=kwargs)
         if not host_is_debian_like():
             print("❌ Host not detected as Debian/Ubuntu. Install dependencies manually.", file=sys.stderr)
             return 2
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Install host dependencies with apt/libvirt tooling.")
         install_deps_debian(assume_yes=True)
         print("✅ Installed host dependencies (best effort).")
         return 0
@@ -630,6 +707,10 @@ class NetCreateCLI(_BaseCommand):
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         cfg = _load_cfg(args.config)
+        _confirm_sudo_block(
+            yes=bool(args.yes),
+            purpose=f"Create/update libvirt network '{cfg.network.name}'.",
+        )
         ensure_network(cfg, recreate=args.recreate, dry_run=args.dry_run)
         return 0
 
@@ -640,6 +721,7 @@ class NetStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Inspect libvirt network status via virsh.")
         print(network_status(_load_cfg(args.config)))
         return 0
 
@@ -652,6 +734,7 @@ class NetDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Destroy/undefine libvirt network.")
         destroy_network(_load_cfg(args.config), dry_run=args.dry_run)
         return 0
 
@@ -664,6 +747,7 @@ class FirewallApplyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Apply nftables firewall rules.")
         apply_firewall(_load_cfg(args.config), dry_run=args.dry_run)
         return 0
 
@@ -674,6 +758,7 @@ class FirewallStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Read nftables firewall status.")
         print(firewall_status(_load_cfg(args.config)))
         return 0
 
@@ -686,6 +771,7 @@ class FirewallRemoveCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Remove nftables firewall rules.")
         remove_firewall(_load_cfg(args.config), dry_run=args.dry_run)
         return 0
 
@@ -698,6 +784,7 @@ class ImageFetchCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Download/cache base image under libvirt-managed storage.")
         print(str(fetch_image(_load_cfg(args.config), dry_run=args.dry_run)))
         return 0
 
@@ -712,6 +799,10 @@ class VMUpCLI(_BaseCommand):
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = _load_cfg_with_path(args.config)
+        _confirm_sudo_block(
+            yes=bool(args.yes),
+            purpose=f"Create/start/redefine VM '{cfg.vm.name}' and libvirt resources.",
+        )
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=args.recreate)
         if not args.dry_run:
             _record_vm(cfg, cfg_path)
@@ -727,6 +818,7 @@ class VMWaitIPCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Query VM networking state via virsh to resolve VM IP.")
         print(wait_for_ip(_load_cfg(args.config), timeout_s=args.timeout, dry_run=args.dry_run))
         return 0
 
@@ -737,6 +829,7 @@ class VMStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Inspect VM state via virsh.")
         print(vm_status(_load_cfg(args.config)))
         return 0
 
@@ -749,6 +842,7 @@ class VMDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Destroy/undefine VM and attached storage.")
         destroy_vm(_load_cfg(args.config), dry_run=args.dry_run)
         return 0
 
@@ -771,6 +865,7 @@ class VMProvisionCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Query VM networking state before SSH provisioning.")
         provision(_load_cfg(args.config), dry_run=args.dry_run)
         return 0
 
@@ -799,6 +894,7 @@ class VMSyncSettingsCLI(_BaseCommand):
         if args.dry_run:
             ip = "0.0.0.0"
         else:
+            _confirm_sudo_block(yes=bool(args.yes), purpose="Query VM networking state before settings sync.")
             ip = get_ip_cached(cfg) or wait_for_ip(cfg, timeout_s=360, dry_run=False)
             wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
         chosen_paths = _parse_sync_paths_arg(args.paths) if args.paths else None
@@ -942,15 +1038,47 @@ class VMCodeCLI(_BaseCommand):
         cfg.share.host_src = str(host_src)
         cfg.share.guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
         _ensure_share_tag_len(cfg, host_src, set())
+        requested_src = str(Path(cfg.share.host_src).resolve())
 
-        ensure_network(cfg, recreate=False, dry_run=args.dry_run)
+        def _has_share_in_mappings(mappings: list[tuple[str, str]]) -> bool:
+            return any(src == requested_src and tag == cfg.share.tag for src, tag in mappings)
+
+        cached_ip = get_ip_cached(cfg) if not args.dry_run else None
+        cached_ssh_ok = False
+        if cached_ip:
+            cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
+        vm_reachable = bool(cached_ssh_ok)
+
+        net_probe, _ = _check_network(cfg, use_sudo=False)
+        # Only escalate when we can confirm network is not ready.
+        need_network_ensure = (net_probe is False) and not vm_reachable
+        if need_network_ensure:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Ensure libvirt network '{cfg.network.name}'.",
+            )
+            ensure_network(cfg, recreate=False, dry_run=args.dry_run)
+
+        need_firewall_apply = False
         if cfg.firewall.enabled and args.ensure_firewall:
+            fw_probe, _ = _check_firewall(cfg, use_sudo=False)
+            # Avoid unnecessary sudo prompt: only apply when we can confirm it's missing.
+            need_firewall_apply = (fw_probe is False) and not vm_reachable
+        if need_firewall_apply:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Apply/update firewall table '{cfg.firewall.table}'.",
+            )
             apply_firewall(cfg, dry_run=args.dry_run)
 
         recreate = False
-        if not args.dry_run and vm_exists(cfg):
-            mappings = vm_share_mappings(cfg)
-            requested_src = str(Path(cfg.share.host_src).resolve())
+        vm_running = _probe_vm_running_nonsudo(cfg.vm.name) if not args.dry_run else None
+        mappings: list[tuple[str, str]] = []
+        has_share = False
+        if vm_running is None and cached_ssh_ok:
+            vm_running = True
+        if not args.dry_run and vm_running is True:
+            mappings = vm_share_mappings(cfg, use_sudo=False)
             existing_tags = {tag for _, tag in mappings if tag}
             _ensure_share_tag_len(cfg, host_src, existing_tags)
             # Reuse existing tag if this source is already defined on the VM.
@@ -959,21 +1087,42 @@ class VMCodeCLI(_BaseCommand):
                     cfg.share.tag = tag
                     break
             # Avoid tag collisions if the default tag is already bound to a different source.
-            if not vm_has_share(cfg):
+            has_share = _has_share_in_mappings(mappings)
+            if not has_share:
                 for src, tag in mappings:
                     if tag == cfg.share.tag and src != requested_src:
                         cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
                         break
+                has_share = _has_share_in_mappings(mappings)
 
-        if not args.dry_run and vm_exists(cfg) and not vm_has_share(cfg):
+        need_vm_start_or_create = args.dry_run or (vm_running is not True)
+        if need_vm_start_or_create:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
+            )
+            create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
+            vm_running = True if args.dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
+            if not args.dry_run and vm_running is True:
+                mappings = vm_share_mappings(cfg, use_sudo=False)
+                has_share = _has_share_in_mappings(mappings)
+
+        if not args.dry_run and vm_running is True and not has_share:
             if args.recreate_if_needed:
                 recreate = True
             else:
                 try:
+                    _confirm_sudo_block(
+                        yes=bool(args.yes),
+                        purpose=(
+                            f"Attach this folder to VM '{cfg.vm.name}' "
+                            "(only remaining privileged action)."
+                        ),
+                    )
                     attach_vm_share(cfg, dry_run=False)
+                    has_share = True
                 except Exception as ex:
-                    current_maps = vm_share_mappings(cfg)
-                    requested_src = str(Path(cfg.share.host_src).resolve())
+                    current_maps = mappings or vm_share_mappings(cfg, use_sudo=False)
                     requested_tag = cfg.share.tag
                     if current_maps:
                         found = "\n".join(
@@ -994,7 +1143,12 @@ class VMCodeCLI(_BaseCommand):
                         "  - Or use a VM already defined with this share mapping."
                     )
 
-        create_or_start_vm(cfg, dry_run=args.dry_run, recreate=recreate)
+        if recreate:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Recreate VM '{cfg.vm.name}' to apply new share mapping.",
+            )
+            create_or_start_vm(cfg, dry_run=args.dry_run, recreate=True)
 
         if args.dry_run:
             print(f"DRYRUN: would open {cfg.share.guest_dst} in VS Code via host {cfg.vm.name}")
@@ -1007,8 +1161,18 @@ class VMCodeCLI(_BaseCommand):
             force=bool(args.force),
         )
 
-        ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
-        wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+        ip = cached_ip if cached_ip else get_ip_cached(cfg)
+        if ip:
+            ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        else:
+            ssh_ok = False
+        if not ssh_ok:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose="Query VM network state via virsh to discover VM IP.",
+            )
+            ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
+            wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
         ensure_share_mounted(cfg, ip, dry_run=False)
 
         do_sync = bool(args.sync_settings or cfg.sync.enabled)
@@ -1088,6 +1252,10 @@ class VMAttachCLI(_BaseCommand):
 
         save(cfg_path, cfg)
         if vm_exists(cfg):
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Inspect VM '{cfg.vm.name}' share mappings and attach folder if needed.",
+            )
             mappings = vm_share_mappings(cfg)
             requested_src = str(Path(cfg.share.host_src).resolve())
             existing_tags = {tag for _, tag in mappings if tag}
@@ -1139,17 +1307,25 @@ class ApplyCLI(_BaseCommand):
             PlanCLI.main(argv=False, config=args.config, verbose=args.verbose)
             print()
         log.debug("Ensuring network is set up")
+        _confirm_sudo_block(
+            yes=bool(args.yes),
+            purpose=f"Create/update libvirt network '{cfg.network.name}'.",
+        )
         ensure_network(cfg, recreate=False, dry_run=args.dry_run)
         if cfg.firewall.enabled:
             log.debug("Applying firewall rules")
+            _confirm_sudo_block(yes=bool(args.yes), purpose="Apply nftables firewall rules.")
             apply_firewall(cfg, dry_run=args.dry_run)
         log.debug("Fetching Ubuntu image")
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Download/cache VM base image.")
         fetch_image(cfg, dry_run=args.dry_run)
         log.debug("Creating or starting VM")
+        _confirm_sudo_block(yes=bool(args.yes), purpose=f"Create/start VM '{cfg.vm.name}'.")
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
         if not args.dry_run:
             _record_vm(cfg, cfg_path)
         log.debug("Waiting for VM IP address")
+        _confirm_sudo_block(yes=bool(args.yes), purpose="Query VM networking state via virsh.")
         wait_for_ip(cfg, timeout_s=360, dry_run=args.dry_run)
         if cfg.provision.enabled:
             log.debug("Provisioning VM with tools")
@@ -1227,8 +1403,22 @@ class ListCLI(_BaseCommand):
         return 0
 
 
+class VMListCLI(ListCLI):
+    """List managed VM records (VM-focused view)."""
+
+    section = scfg.Value(
+        "vms",
+        help="One of: all, vms, networks, folders (default: vms).",
+    )
+
+
 class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
+    sudo = scfg.Value(
+        False,
+        isflag=True,
+        help="Run privileged status checks (virsh/nft/image) with sudo.",
+    )
     vm = scfg.Value(
         "",
         help="Optional VM name override (mainly when no local config file is present).",
@@ -1250,7 +1440,12 @@ class StatusCLI(_BaseCommand):
                 vm_opt=args.vm,
                 host_src=Path.cwd(),
             )
-        print(_render_status(cfg, path, detail=args.detail))
+        if args.sudo:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'.",
+            )
+        print(_render_status(cfg, path, detail=args.detail, use_sudo=bool(args.sudo)))
         return 0
 
 
@@ -1270,9 +1465,20 @@ class FirewallModalCLI(scfg.ModalCLI):
     remove = FirewallRemoveCLI
 
 
+class HostModalCLI(scfg.ModalCLI):
+    """Host preparation and host-level operations."""
+
+    doctor = DoctorCLI
+    install_deps = HostInstallDepsCLI
+    image_fetch = ImageFetchCLI
+    net = NetModalCLI
+    fw = FirewallModalCLI
+
+
 class VMModalCLI(scfg.ModalCLI):
     """VM lifecycle subcommands."""
 
+    list = VMListCLI
     up = VMUpCLI
     wait_ip = VMWaitIPCLI
     status = VMStatusCLI
@@ -1289,11 +1495,11 @@ class AgentVMModalCLI(scfg.ModalCLI):
 
     Common flows:
       agentvm init --config .agentvm.toml
-      agentvm doctor --config .agentvm.toml
+      agentvm host doctor --config .agentvm.toml
       agentvm status --config .agentvm.toml
-      agentvm net create --config .agentvm.toml
-      agentvm fw apply --config .agentvm.toml
-      agentvm image_fetch --config .agentvm.toml
+      agentvm host net create --config .agentvm.toml
+      agentvm host fw apply --config .agentvm.toml
+      agentvm host image_fetch --config .agentvm.toml
       agentvm vm up --config .agentvm.toml
       agentvm vm wait_ip --config .agentvm.toml
       agentvm vm ssh_config --config .agentvm.toml
@@ -1310,14 +1516,10 @@ class AgentVMModalCLI(scfg.ModalCLI):
     """
     init = InitCLI
     plan = PlanCLI
-    doctor = DoctorCLI
-    host_install_deps = HostInstallDepsCLI
-    net = NetModalCLI
-    fw = FirewallModalCLI
-    vm = VMModalCLI
+    host = HostModalCLI
     code = CodeCLI
     attach = AttachCLI
-    image_fetch = ImageFetchCLI
+    vm = VMModalCLI
     apply = ApplyCLI
     list = ListCLI
     status = StatusCLI
