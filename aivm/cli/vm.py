@@ -759,7 +759,7 @@ def _prepare_attached_session(
     )
 
     net_probe, _ = _check_network(cfg, use_sudo=False)
-    need_network_ensure = net_probe is False
+    need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
     if need_network_ensure:
         _confirm_sudo_block(
             yes=bool(yes),
@@ -768,7 +768,7 @@ def _prepare_attached_session(
         ensure_network(cfg, recreate=False, dry_run=dry_run)
 
     need_firewall_apply = False
-    if cfg.firewall.enabled and ensure_firewall_opt:
+    if cfg.firewall.enabled and ensure_firewall_opt and (not cached_ssh_ok):
         fw_probe, _ = _check_firewall(cfg, use_sudo=False)
         if fw_probe is None:
             _confirm_sudo_block(
