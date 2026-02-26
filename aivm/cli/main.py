@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-
 import scriptconfig as scfg
 from loguru import logger
 
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
-from ..registry import load_registry, registry_path
+from ..store import find_vm, load_store, store_path
 from ..status import (
     clip as _clip_text,
     render_global_status,
@@ -114,8 +112,8 @@ class ListCLI(_BaseCommand):
                 f'--section must be one of: {", ".join(sorted(allowed))}'
             )
 
-        reg_path = registry_path()
-        reg = load_registry(reg_path)
+        reg_path = _cfg_path(args.config)
+        reg = load_store(reg_path)
 
         if want in {'all', 'vms'}:
             print('Managed VMs')
@@ -123,12 +121,10 @@ class ListCLI(_BaseCommand):
                 print('  (none)')
             else:
                 for vm in sorted(reg.vms, key=lambda x: x.name):
-                    cfg_ok = Path(vm.config_path).expanduser().exists()
-                    cfg_state = 'ok' if cfg_ok else 'missing'
                     print(
                         f'  - {vm.name} | network={vm.network_name} '
                         f'| strict_firewall={"yes" if vm.strict_firewall else "no"} '
-                        f'| config={vm.config_path} ({cfg_state})'
+                        f'| store={reg_path}'
                     )
 
         if want in {'all', 'networks'}:
@@ -167,7 +163,7 @@ class ListCLI(_BaseCommand):
                         f'| mode={att.mode} | guest_dst={att.guest_dst or "(default)"}'
                     )
         print('')
-        print(f'Registry: {reg_path}')
+        print(f'Config store: {reg_path}')
         return 0
 
 
@@ -181,7 +177,7 @@ class StatusCLI(_BaseCommand):
     )
     vm = scfg.Value(
         '',
-        help='Optional VM name override (mainly when no local config file is present).',
+        help='Optional VM name override.',
     )
     detail = scfg.Value(
         False,
@@ -257,7 +253,11 @@ def main(argv: list[str] | None = None) -> None:
         if config_value is not None:
             verbosity = _load_cfg(config_value).verbosity
         elif _cfg_path(None).exists():
-            verbosity = _load_cfg(None).verbosity
+            reg = load_store(_cfg_path(None))
+            if reg.active_vm:
+                rec = find_vm(reg, reg.active_vm)
+                if rec is not None:
+                    verbosity = rec.cfg.verbosity
     except Exception:
         verbosity = 1
 

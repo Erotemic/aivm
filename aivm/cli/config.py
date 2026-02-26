@@ -9,79 +9,89 @@ from pathlib import Path
 
 import scriptconfig as scfg
 
-from ..config import AgentVMConfig, dump_toml, load, save
+from ..config import AgentVMConfig, dump_toml
 from ..detect import auto_defaults
-from ..registry import (
-    DIR_METADATA_FILE,
+from ..store import (
     find_attachment,
     find_vm,
-    load_registry,
-    read_dir_metadata,
-    registry_path,
-    save_registry,
+    load_store,
+    save_store,
     upsert_vm,
-    vm_global_config_path,
 )
 from ..runtime import virsh_system_cmd
-from ..util import ensure_dir, run_cmd, which
+from ..util import run_cmd, which
 from ._common import (
     _BaseCommand,
     _cfg_path,
     _confirm_sudo_block,
-    _record_vm,
-    _resolve_cfg_fallback,
+    _load_cfg_with_path,
     _resolve_cfg_for_code,
 )
 
 
 class InitCLI(_BaseCommand):
-    """Initialize a new config file with auto-detected defaults."""
+    """Initialize global config store with one VM definition."""
 
-    force = scfg.Value(False, isflag=True, help='Overwrite existing config.')
+    force = scfg.Value(
+        False,
+        isflag=True,
+        help='Overwrite existing VM definition if the same name already exists.',
+    )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         path = _cfg_path(args.config)
+        reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
-        if path.exists() and not args.force:
+        exists = find_vm(reg, cfg.vm.name) is not None
+        if exists and not args.force:
             print(
-                f'Refusing to overwrite existing config: {path}',
+                f"VM '{cfg.vm.name}' already exists in config store: {path}",
                 file=sys.stderr,
             )
-            print('Use --force to overwrite.', file=sys.stderr)
+            print('Use --force to overwrite this VM definition.', file=sys.stderr)
             return 2
-        save(path, cfg)
-        reg_path = _record_vm(cfg, path)
-        print(f'Wrote config: {path}')
-        print(f'Registered VM in global registry: {reg_path}')
+        upsert_vm(reg, cfg)
+        save_store(reg, path)
+        print(f'Updated config store: {path}')
+        print(f'Active VM: {cfg.vm.name}')
         return 0
 
 
 class ConfigShowCLI(_BaseCommand):
-    """Show the resolved config content."""
+    """Show resolved VM config content."""
 
     vm = scfg.Value(
         '',
-        help='Optional VM name override when no local config file is present.',
+        help='Optional VM name override.',
     )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, path = _resolve_cfg_fallback(args.config, vm_opt=args.vm)
-        print(f'# Config: {path}')
+        path = _cfg_path(args.config)
+        vm_name = str(args.vm or '').strip()
+        if not vm_name:
+            if path.exists():
+                print(path.read_text(encoding='utf-8'), end='')
+            else:
+                store = load_store(path)
+                save_store(store, path)
+                print(path.read_text(encoding='utf-8'), end='')
+            return 0
+        cfg, _ = _load_cfg_with_path(
+            args.config, vm_opt=vm_name, host_src=Path.cwd()
+        )
+        print(f'# Store: {path}')
+        print(f'# VM: {cfg.vm.name}')
         print(dump_toml(cfg), end='')
         return 0
 
 
 class ConfigEditCLI(_BaseCommand):
-    """Edit the resolved config file in $EDITOR."""
+    """Edit global config store in $EDITOR."""
 
-    vm = scfg.Value(
-        '',
-        help='Optional VM name override when no local config file is present.',
-    )
     editor = scfg.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
@@ -90,9 +100,10 @@ class ConfigEditCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, path = _resolve_cfg_fallback(args.config, vm_opt=args.vm)
-        # Persist hydrated/defaulted values before opening an editor.
-        save(path, cfg)
+        path = _cfg_path(args.config)
+        if not path.exists():
+            reg = load_store(path)
+            save_store(reg, path)
         editor_cmd = (
             args.editor.strip()
             if str(args.editor or '').strip()
@@ -108,32 +119,18 @@ class ConfigEditCLI(_BaseCommand):
 
 
 class ConfigPathCLI(_BaseCommand):
-    """Show in-scope config and metadata paths for current/target directory."""
+    """Show config store path and resolved VM selection context."""
 
-    vm = scfg.Value(
-        '',
-        help='Optional VM name override for showing VM-global config path.',
-    )
-    host_src = scfg.Value(
-        '.',
-        help='Host directory scope to inspect (default: current directory).',
-    )
+    vm = scfg.Value('', help='Optional VM name override.')
+    host_src = scfg.Value('.', help='Host directory scope to inspect.')
 
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         host_src = Path(args.host_src).resolve()
-        local_cfg = host_src / '.aivm.toml'
-        meta_path = host_src / DIR_METADATA_FILE
-        reg_path = registry_path()
-        reg = load_registry(reg_path)
+        store = _cfg_path(args.config)
+        reg = load_store(store)
         att = find_attachment(reg, host_src)
-        meta = read_dir_metadata(host_src)
-        meta_vm = (
-            str(meta.get('vm_name', '')).strip()
-            if isinstance(meta, dict)
-            else ''
-        )
         resolved_cfg_path: Path | None = None
         resolved_vm = ''
         resolve_error = ''
@@ -147,66 +144,30 @@ class ConfigPathCLI(_BaseCommand):
         except Exception as ex:
             resolve_error = str(ex)
 
-        vm_name = str(args.vm or '').strip() or resolved_vm or meta_vm
-        if not vm_name and att is not None:
-            vm_name = att.vm_name
-
         print('🧭 AIVM Config Paths')
         print(f'cwd = {host_src}')
-        print(
-            f'local_config = {local_cfg} '
-            f'({"exists" if local_cfg.exists() else "missing"})'
-        )
-        print(
-            f'dir_metadata = {meta_path} '
-            f'({"exists" if meta_path.exists() else "missing"})'
-        )
-        if meta_vm:
-            print(f'dir_metadata_vm = {meta_vm}')
-        print(
-            f'registry = {reg_path} '
-            f'({"exists" if reg_path.exists() else "missing"})'
-        )
+        print(f'config_store = {store} ({"exists" if store.exists() else "missing"})')
+        print(f'active_vm = {reg.active_vm or "(unset)"}')
         if att is not None:
-            print(f'registry_attachment_vm = {att.vm_name}')
-        if vm_name:
-            vm_cfg = vm_global_config_path(vm_name)
-            print(
-                f'vm_global_config = {vm_cfg} '
-                f'({"exists" if vm_cfg.exists() else "missing"})'
-            )
-            rec = find_vm(reg, vm_name)
-            if rec is not None:
-                if rec.config_path:
-                    p = Path(rec.config_path).expanduser()
-                    print(
-                        f'registry_vm_config = {p} '
-                        f'({"exists" if p.exists() else "missing"})'
-                    )
-                if rec.global_config_path:
-                    p = Path(rec.global_config_path).expanduser()
-                    print(
-                        f'registry_vm_global_config = {p} '
-                        f'({"exists" if p.exists() else "missing"})'
-                    )
+            print(f'attachment_vm = {att.vm_name}')
         if resolved_cfg_path is not None:
-            print(f'resolved_config = {resolved_cfg_path}')
+            print(f'resolved_store = {resolved_cfg_path}')
             if resolved_vm:
                 print(f'resolved_vm = {resolved_vm}')
         else:
-            print('resolved_config = (unresolved)')
+            print('resolved_vm = (unresolved)')
             if resolve_error:
                 print(f'resolution_error = {resolve_error}')
         return 0
 
 
 class ConfigDiscoverCLI(_BaseCommand):
-    """Discover existing libvirt VMs and register them in aivm config registry."""
+    """Discover existing libvirt VMs and add them to config store."""
 
     dry_run = scfg.Value(
         False,
         isflag=True,
-        help='Print actions without writing config/registry.',
+        help='Print actions without writing config store.',
     )
 
     @classmethod
@@ -235,11 +196,11 @@ class ConfigDiscoverCLI(_BaseCommand):
         vm_names = [
             n.strip() for n in names_res.stdout.splitlines() if n.strip()
         ]
-        reg = load_registry()
+        store = _cfg_path(args.config)
+        reg = load_store(store)
         managed_seen = 0
         added = 0
         updated = 0
-        created_cfg = 0
         skipped_unmanaged = 0
         for vm_name in vm_names:
             rec = find_vm(reg, vm_name)
@@ -249,68 +210,34 @@ class ConfigDiscoverCLI(_BaseCommand):
             ):
                 skipped_unmanaged += 1
                 continue
-            cfg_path = vm_global_config_path(vm_name)
-            cfg = None
             if rec is not None:
                 managed_seen += 1
-                candidates = []
-                if rec.config_path:
-                    candidates.append(Path(rec.config_path).expanduser())
-                if rec.global_config_path:
-                    candidates.append(Path(rec.global_config_path).expanduser())
-                for p in candidates:
-                    if p.exists():
-                        try:
-                            cfg = load(p).expanded_paths()
-                            break
-                        except Exception:
-                            continue
-            if cfg is None:
+                cfg = rec.cfg.expanded_paths()
+            else:
                 cfg = AgentVMConfig().expanded_paths()
                 cfg.vm.name = vm_name
-                cfg.network.name = str(vm_info.get('network', 'unknown'))
-                created_cfg += 1
-            else:
-                cfg.vm.name = vm_name
-                if not cfg.network.name:
-                    cfg.network.name = str(vm_info.get('network', 'unknown'))
-
+            if not cfg.network.name:
+                cfg.network.name = str(vm_info.get('network', 'aivm-net'))
+            upsert_vm(reg, cfg)
             if rec is None:
                 added += 1
             else:
                 updated += 1
-            if not args.dry_run:
-                ensure_dir(cfg_path.parent)
-                save(cfg_path, cfg)
-                upsert_vm(reg, cfg, cfg_path, global_cfg_path=cfg_path)
 
-        reg_path = registry_path()
         if not args.dry_run:
-            save_registry(reg)
+            save_store(reg, store)
 
         print(f'Discovered VMs: {len(vm_names)}')
         print(f'  already_managed_seen: {managed_seen}')
         print(f'  added: {added}')
         print(f'  updated: {updated}')
         print(f'  skipped_unmanaged: {skipped_unmanaged}')
-        print(f'  created_config_files: {created_cfg}')
-        print(f'Registry: {reg_path}')
-        print('')
-        print('Security caveats:')
-        print(
-            '  - Discovery trusts local libvirt state only; ownership/provenance of VMs is not verified.'
-        )
-        print(
-            '  - Imported configs may not reflect actual firewall isolation policy for each VM/network.'
-        )
-        print(
-            '  - Imported share mappings and SSH settings may expose host paths or credentials; review before use.'
-        )
+        print(f'Config store: {store}')
         return 0
 
 
 class ConfigModalCLI(scfg.ModalCLI):
-    """Config file management commands."""
+    """Config store management commands."""
 
     init = InitCLI
     discover = ConfigDiscoverCLI
@@ -407,5 +334,5 @@ def _prompt_import_discovered_vm(
             print(f'    - ... ({len(shares) - 5} more)')
     else:
         print('  shares: none detected')
-    ans = input('Add this VM to aivm registry/config? [y/N]: ').strip().lower()
+    ans = input('Add this VM to aivm config store? [y/N]: ').strip().lower()
     return ans in {'y', 'yes'}

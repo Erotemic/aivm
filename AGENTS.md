@@ -49,6 +49,6 @@ challenges). This is not a changelog.  Write at a high level for future
 maintainers: enough context for someone to pick up where you left off.
 
 - Format: Each entry starts with `## YYYY-MM-DD HH:MM:SS -ZZZZ` (local time).
-- Must include: substantive entry about your state of mind / reflections, uncertainties/risks, tradeoffs, what might break, what you're confident about.
+- Must include: what you were working on, a substantive entry about your state of mind / reflections, uncertainties/risks, tradeoffs, what might break, what you're confident about.
 - May include: what happened, rationale, testing notes, next steps, open questions.
 - Rules: Prefer append-only. You may edit only the most recent entry *during the same session* (use timestamp + context to judge); never modify the timestamp line; once a new session starts, create a new entry. Never modify older entries. Avoid large diffs; reference files/modules/issues instead.

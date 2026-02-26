@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .config import AgentVMConfig
 from .host import check_commands
-from .registry import load_registry, registry_path
+from .store import load_store, store_path
 from .runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from .util import run_cmd
 from .vm import get_ip_cached, vm_share_mappings
@@ -487,9 +487,9 @@ def render_global_status() -> str:
         host_detail += f' (optional missing: {", ".join(missing_opt)})'
     lines.append(status_line(host_ok, 'Host dependencies', host_detail))
 
-    reg_path = registry_path()
-    reg = load_registry(reg_path)
-    lines.append(status_line(True, 'Registry', str(reg_path)))
+    reg_path = store_path()
+    reg = load_store(reg_path)
+    lines.append(status_line(True, 'Config store', str(reg_path)))
     lines.append('')
     lines.append('📦 Managed Resources')
     lines.append(f'- VMs: {len(reg.vms)}')
@@ -502,6 +502,6 @@ def render_global_status() -> str:
     lines.append('')
     lines.append('ℹ️ No in-scope VM config found for this directory.')
     lines.append(
-        'Use `aivm config init --config .aivm.toml` or `aivm status --vm <name>`.'
+        'Use `aivm config init` or `aivm status --vm <name>`.'
     )
     return '\n'.join(lines)

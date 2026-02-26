@@ -7,17 +7,15 @@ from pathlib import Path
 
 import scriptconfig as scfg
 
-from ..config import AgentVMConfig, save
+from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
-from ..registry import (
+from ..store import (
     find_vm,
-    load_registry,
-    save_registry,
+    load_store,
+    save_store,
     upsert_attachment,
     upsert_vm,
-    vm_global_config_path,
-    write_dir_metadata,
 )
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..status import (
@@ -152,7 +150,7 @@ class VMProvisionCLI(_BaseCommand):
 
     vm = scfg.Value(
         '',
-        help='Optional VM name override when no local config file is present.',
+        help='Optional VM name override.',
     )
     dry_run = scfg.Value(
         False, isflag=True, help='Print actions without running.'
@@ -241,7 +239,7 @@ class VMCodeCLI(_BaseCommand):
     )
     vm = scfg.Value(
         '',
-        help='VM name override for selecting config from global registry.',
+        help='VM name override.',
     )
     guest_dst = scfg.Value(
         '',
@@ -339,7 +337,7 @@ class VMCodeCLI(_BaseCommand):
         )
         print(f'SSH entry updated in {ssh_cfg}')
         print(
-            f'Folder registered in {session.reg_path} and {session.meta_path}'
+            f'Folder registered in {session.reg_path}'
         )
         return 0
 
@@ -353,7 +351,7 @@ class VMSSHCLI(_BaseCommand):
     )
     vm = scfg.Value(
         '',
-        help='VM name override for selecting config from global registry.',
+        help='VM name override.',
     )
     guest_dst = scfg.Value(
         '',
@@ -417,7 +415,7 @@ class VMSSHCLI(_BaseCommand):
         )
         print(f'Connected to {cfg.vm.user}@{ip} in {cfg.share.guest_dst}')
         print(
-            f'Folder registered in {session.reg_path} and {session.meta_path}'
+            f'Folder registered in {session.reg_path}'
         )
         return 0
 
@@ -425,7 +423,7 @@ class VMSSHCLI(_BaseCommand):
 class VMAttachCLI(_BaseCommand):
     """Attach/register a host directory to an existing managed VM."""
 
-    vm = scfg.Value('', help='Optional VM name in global registry.')
+    vm = scfg.Value('', help='Optional VM name override.')
     host_src = scfg.Value('.', help='Host directory to attach.')
     guest_dst = scfg.Value('', help='Guest mount path override.')
     force = scfg.Value(
@@ -447,9 +445,9 @@ class VMAttachCLI(_BaseCommand):
             )
 
         if args.config:
-            cfg, cfg_path = _load_cfg_with_path(args.config)
+            cfg, cfg_path = _load_cfg_with_path(args.config, vm_opt=args.vm)
         elif args.vm:
-            cfg, cfg_path = _select_cfg_for_vm_name(args.vm, reason='--vm')
+            cfg, cfg_path = _load_cfg_with_path(None, vm_opt=args.vm)
         else:
             cfg, cfg_path = _resolve_cfg_for_code(
                 config_opt=None,
@@ -468,7 +466,7 @@ class VMAttachCLI(_BaseCommand):
             )
             return 0
 
-        save(cfg_path, cfg)
+        _record_vm(cfg, cfg_path)
         if vm_exists(cfg):
             _confirm_sudo_block(
                 yes=bool(args.yes),
@@ -491,17 +489,16 @@ class VMAttachCLI(_BaseCommand):
                         break
                 if not vm_has_share(cfg):
                     attach_vm_share(cfg, dry_run=False)
-                    save(cfg_path, cfg)
-        reg_path, meta_path = _record_attachment(
+                    _record_vm(cfg, cfg_path)
+        reg_path = _record_attachment(
             cfg,
             cfg_path,
             host_src=host_src,
             force=bool(args.force),
         )
         print(f'Attached {host_src} to VM {cfg.vm.name} (shared mode)')
-        print(f'Updated config: {cfg_path}')
-        print(f'Updated registry: {reg_path}')
-        print(f'Updated directory metadata: {meta_path}')
+        print(f'Updated config store: {cfg_path}')
+        print(f'Updated attachments: {reg_path}')
         return 0
 
 
@@ -693,45 +690,8 @@ def _check_provisioned(
 def _select_cfg_for_vm_name(
     vm_name: str, *, reason: str
 ) -> tuple[AgentVMConfig, Path]:
-    reg = load_registry()
-    rec = find_vm(reg, vm_name)
-    if rec is None:
-        raise RuntimeError(
-            f'VM not found in global registry ({reason}): {vm_name}'
-        )
-    candidates: list[Path] = []
-    if rec.config_path:
-        candidates.append(Path(rec.config_path).expanduser())
-    if rec.global_config_path:
-        candidates.append(Path(rec.global_config_path).expanduser())
-    # Backward-compatible fallback for older registry entries.
-    candidates.append(vm_global_config_path(vm_name))
-
-    seen: set[str] = set()
-    for cfg_path in candidates:
-        key = str(cfg_path)
-        if key in seen:
-            continue
-        seen.add(key)
-        if cfg_path.exists():
-            cfg, _ = _load_cfg_with_path(
-                str(cfg_path),
-                hydrate_runtime_defaults=True,
-                persist_runtime_defaults=True,
-            )
-            # Self-heal registry/global snapshot for older entries.
-            gpath = vm_global_config_path(vm_name)
-            ensure_dir(gpath.parent)
-            save(gpath, cfg)
-            upsert_vm(reg, cfg, cfg_path, global_cfg_path=gpath)
-            save_registry(reg)
-            return cfg, cfg_path
-
-    raise RuntimeError(
-        f'No usable config file found for VM {vm_name}. '
-        f'Tried: {", ".join(str(p) for p in candidates)}. '
-        'Re-register it with `aivm config init` or `aivm vm up`.'
-    )
+    del reason
+    return _load_cfg_with_path(None, vm_opt=vm_name)
 
 
 def _record_attachment(
@@ -740,9 +700,9 @@ def _record_attachment(
     *,
     host_src: Path,
     force: bool = False,
-) -> tuple[Path, Path]:
-    reg = load_registry()
-    upsert_vm(reg, cfg, cfg_path)
+) -> Path:
+    reg = load_store(cfg_path)
+    upsert_vm(reg, cfg)
     upsert_attachment(
         reg,
         host_path=host_src,
@@ -752,14 +712,7 @@ def _record_attachment(
         tag=cfg.share.tag,
         force=force,
     )
-    reg_path = save_registry(reg)
-    meta_path = write_dir_metadata(
-        host_src,
-        vm_name=cfg.vm.name,
-        config_path=str(cfg_path.resolve()),
-        mode='shared',
-    )
-    return reg_path, meta_path
+    return save_store(reg, cfg_path)
 
 
 def _prepare_attached_session(
@@ -935,7 +888,7 @@ def _prepare_attached_session(
             meta_path=None,
         )
 
-    reg_path, meta_path = _record_attachment(
+    reg_path = _record_attachment(
         cfg,
         cfg_path,
         host_src=host_src,
@@ -963,5 +916,5 @@ def _prepare_attached_session(
         host_src=host_src,
         ip=ip,
         reg_path=reg_path,
-        meta_path=meta_path,
+        meta_path=None,
     )

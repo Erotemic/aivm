@@ -30,7 +30,7 @@ Features:
 * Optional virtiofs host directory share (explicit break in default isolation model)
 * Optional provisioning inside VM (docker + dev tools)
 * Optional host settings sync into VM user profile (git/vscode shell config, etc.)
-* Global VM/folder registry and per-directory metadata for attachment tracking
+* Single global config store with compose-style VM and attachment entries
 
 Install
 -------
@@ -42,20 +42,20 @@ Install
 Quickstart
 ----------
 
-Repo-local config flow:
+Config-store flow:
 
 .. code-block:: bash
 
-   aivm config init --config .aivm.toml
+   aivm config init
    aivm config discover
    aivm config show
    aivm config edit
-   aivm help plan --config .aivm.toml
+   aivm help plan
    aivm help tree
    aivm host doctor
-   aivm status --config .aivm.toml
-   aivm status --config .aivm.toml --detail
-   aivm apply --config .aivm.toml --interactive
+   aivm status
+   aivm status --detail
+   aivm apply --interactive
 
 No-local-init flow (recommended UX for new repos):
 
@@ -65,13 +65,11 @@ No-local-init flow (recommended UX for new repos):
    aivm status
    aivm status --sudo   # optional deeper privileged checks
 
-``aivm code .`` auto-selects a VM from directory metadata/global registry
-(prompts if ambiguous), auto-attaches the folder if needed, then opens VS Code.
-``aivm status`` also resolves from directory metadata/global registry when there
-is no local ``.aivm.toml`` (or use ``--vm``).
-Global registry/config metadata is stored in a user config appdir
-(``ub.Path.appdir(type='config')`` when available), with per-VM configs
-under ``vms/<name>.config``.
+``aivm code .`` auto-selects a VM from the global config store
+(``active_vm`` / attachment lookup / prompt if ambiguous), auto-attaches the
+folder if needed, then opens VS Code.
+Global config metadata is stored in a user config appdir
+(``~/.config/aivm/config.toml``).
 By default ``status`` avoids sudo and reports limited checks; use
 ``status --sudo`` for privileged network/firewall/libvirt/image checks.
 Privileged host actions prompt for confirmation before sudo blocks; use ``--yes``
@@ -83,7 +81,7 @@ Then connect with VS Code Remote-SSH using:
 
 .. code-block:: bash
 
-   aivm vm ssh_config --config .aivm.toml
+   aivm vm ssh_config
 
 Or do it in one step (share current project directory and launch VS Code in the VM):
 
@@ -92,7 +90,7 @@ Or do it in one step (share current project directory and launch VS Code in the 
    # top-level shortcut (works in a new repo with no local init)
    aivm code . --sync_settings
    # equivalent vm-group form
-   aivm vm code --config .aivm.toml --host_src . --sync_settings
+   aivm vm code --host_src . --sync_settings
    # shorthand positional host folder
    aivm vm code . --sync_settings
 
@@ -123,7 +121,7 @@ Attach a folder to a managed VM (shared mode):
 By default, attached folders mount to the same absolute path inside the VM as
 on the host. Use ``--guest_dst`` to override.
 When possible, ``aivm code .`` live-attaches new shares to existing VMs
-(``--live --config`` when running, ``--config`` when stopped) instead of
+(``--live`` when running) instead of
 requiring recreation.
 If a VM fails to start because its libvirt XML references a missing virtiofs
 host path, ``aivm code .`` now auto-recreates that VM definition with the
@@ -136,13 +134,13 @@ Sync selected user settings/files into the VM:
 
 .. code-block:: bash
 
-   aivm vm sync_settings --config .aivm.toml
+   aivm vm sync_settings
 
 Override what to sync ad hoc:
 
 .. code-block:: bash
 
-   aivm vm sync-settings --config .aivm.toml \
+   aivm vm sync-settings \
      --paths "~/.gitconfig,~/.config/Code/User/settings.json,~/.tmux.conf"
 
 You can set defaults in config:
