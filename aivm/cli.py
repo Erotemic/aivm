@@ -308,7 +308,7 @@ def _clip(text: str, *, max_lines: int = 60) -> str:
     lines = (text or "").strip().splitlines()
     if len(lines) <= max_lines:
         return "\n".join(lines)
-    keep = lines[:max_lines]
+    keep: list[str] = list(lines[:max_lines])
     keep.append(f"... ({len(lines) - max_lines} more lines)")
     return "\n".join(keep)
 
@@ -1463,6 +1463,8 @@ class VMCodeCLI(_BaseCommand):
             )
             ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
             wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+        if not ip:
+            raise RuntimeError("Could not resolve VM IP address.")
         ensure_share_mounted(cfg, ip, dry_run=False)
 
         do_sync = bool(args.sync_settings or cfg.sync.enabled)
@@ -1697,6 +1699,8 @@ class VMSSHCLI(_BaseCommand):
             )
             ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
             wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+        if not ip:
+            raise RuntimeError("Could not resolve VM IP address.")
         ensure_share_mounted(cfg, ip, dry_run=False)
 
         ident = cfg.paths.ssh_identity_file

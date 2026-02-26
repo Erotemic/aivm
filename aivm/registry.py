@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import tomllib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import ubelt as ub
 
 from .config import AgentVMConfig
 
@@ -38,12 +37,16 @@ class GlobalRegistry:
 
 
 def registry_path() -> Path:
-    root = ub.Path.appdir("aivm").ensuredir()
+    base = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    root = Path(base) / "aivm"
+    root.mkdir(parents=True, exist_ok=True)
     return Path(root) / "registry.toml"
 
 
 def vm_global_config_path(vm_name: str) -> Path:
-    root = ub.Path.appdir("aivm").ensuredir()
+    base = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    root = Path(base) / "aivm"
+    root.mkdir(parents=True, exist_ok=True)
     return Path(root) / "vms" / f"{vm_name}.toml"
 
 

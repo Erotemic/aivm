@@ -18,7 +18,6 @@ classifiers = [
 dependencies = [
   "loguru",
   "scriptconfig>=0.9.0",
-  "ubelt",
 ]
 
 [project.optional-dependencies]

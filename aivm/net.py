@@ -12,7 +12,7 @@ log = logger
 
 
 def _route_overlap(target_cidr: str) -> str | None:
-    target = ipaddress.ip_network(target_cidr, strict=False)  # type: ignore[arg-type]
+    target = ipaddress.ip_network(target_cidr, strict=False)
     if which("ip") is None:
         log.warning("ip command not found; skipping route overlap check")
         return None
@@ -25,7 +25,7 @@ def _route_overlap(target_cidr: str) -> str | None:
         tok = line.split()[0]
         if "/" in tok:
             try:
-                n = ipaddress.ip_network(tok, strict=False)  # type: ignore[arg-type]
+                n = ipaddress.ip_network(tok, strict=False)
             except Exception:
                 continue
             if target.overlaps(n) and str(n) != str(target):

@@ -353,7 +353,12 @@ jobs:
         $GPG_EXECUTABLE --list-keys || true
         $GPG_EXECUTABLE --list-keys  || echo "first invocation of gpg creates directories and returns 1"
         $GPG_EXECUTABLE --list-keys
-        VERSION=$(python -c "import setup; print(setup.VERSION)")
+        VERSION=$(python -c "if 1:
+            import pathlib
+            import tomllib
+            text = pathlib.Path('pyproject.toml').read_text('utf-8')
+            print(tomllib.loads(text)['project']['version'])
+            ")
         python -m pip install pip uv -U
         python -m pip install packaging twine -U
         python -m pip install urllib3 requests[security]
@@ -429,7 +434,12 @@ jobs:
         $GPG_EXECUTABLE --list-keys || true
         $GPG_EXECUTABLE --list-keys  || echo "first invocation of gpg creates directories and returns 1"
         $GPG_EXECUTABLE --list-keys
-        VERSION=$(python -c "import setup; print(setup.VERSION)")
+        VERSION=$(python -c "if 1:
+            import pathlib
+            import tomllib
+            text = pathlib.Path('pyproject.toml').read_text('utf-8')
+            print(tomllib.loads(text)['project']['version'])
+            ")
         python -m pip install pip uv -U
         python -m pip install packaging twine -U
         python -m pip install urllib3 requests[security]
@@ -485,7 +495,12 @@ jobs:
     - name: Tag Release Commit
       if: (startsWith(github.event.ref, 'refs/heads/release'))
       run: |-
-        export VERSION=$(python -c "import setup; print(setup.VERSION)")
+        export VERSION=$(python -c "if 1:
+            import pathlib
+            import tomllib
+            text = pathlib.Path('pyproject.toml').read_text('utf-8')
+            print(tomllib.loads(text)['project']['version'])
+            ")
         git tag "v$VERSION"
         git push origin "v$VERSION"
     - uses: softprops/action-gh-release@v1

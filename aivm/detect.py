@@ -66,7 +66,7 @@ def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
         tok = line.split()[0]
         if "/" in tok:
             try:
-                nets.append(ipaddress.ip_network(tok, strict=False))  # type: ignore[arg-type]
+                nets.append(ipaddress.ip_network(tok, strict=False))
             except Exception:
                 continue
     return nets
@@ -75,7 +75,7 @@ def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
 def pick_free_subnet(preferred: list[str]) -> str:
     routes = existing_ipv4_routes()
     for cidr in preferred:
-        cand = ipaddress.ip_network(cidr, strict=False)  # type: ignore[arg-type]
+        cand = ipaddress.ip_network(cidr, strict=False)
         if not any(cand.overlaps(r) for r in routes):
             return cidr
     return preferred[0]
@@ -102,7 +102,7 @@ def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
     ]
     subnet = pick_free_subnet(preferred)
     cfg.network.subnet_cidr = subnet
-    net = ipaddress.ip_network(subnet, strict=False)  # type: ignore[arg-type]
+    net = ipaddress.ip_network(subnet, strict=False)
     base = int(net.network_address)
     cfg.network.gateway_ip = str(ipaddress.IPv4Address(base + 1))
     cfg.network.dhcp_start = str(ipaddress.IPv4Address(base + 100))
