@@ -209,6 +209,9 @@ def _resolve_cfg_for_code(
     vm_opt: str,
     host_src: Path,
 ) -> tuple[AgentVMConfig, Path]:
+    # Import lazily to avoid circular import: cli.vm imports cli._common.
+    from .vm import _select_cfg_for_vm_name
+
     if config_opt is not None:
         return _load_cfg_with_path(config_opt)
 
