@@ -7,9 +7,9 @@ from pathlib import Path
 
 from loguru import logger
 
-from .config import AgentVMConfig
-from .runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
-from .util import run_cmd
+from ..config import AgentVMConfig
+from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..util import run_cmd
 
 log = logger
 

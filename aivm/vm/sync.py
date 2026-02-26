@@ -5,10 +5,10 @@ from pathlib import Path
 
 from loguru import logger
 
-from .config import AgentVMConfig
-from .results import SyncSettingsResult
-from .runtime import require_ssh_identity, ssh_base_args
-from .util import run_cmd
+from ..config import AgentVMConfig
+from ..results import SyncSettingsResult
+from ..runtime import require_ssh_identity, ssh_base_args
+from ..util import run_cmd
 
 log = logger
 

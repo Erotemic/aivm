@@ -1,14 +1,6 @@
-"""Compatibility facade for VM operations.
-
-Implementation is split across focused modules:
-- vm_lifecycle: image/bootstrap/lifecycle/ssh readiness/provisioning
-- vm_share: virtiofs share discovery/attach/mount
-- vm_sync: host settings synchronization into guest
-"""
-
 from __future__ import annotations
 
-from .vm_lifecycle import (  # noqa: F401
+from .lifecycle import (
     _ensure_disk,
     _ensure_qemu_access,
     _mac_for_vm,
@@ -27,13 +19,8 @@ from .vm_lifecycle import (  # noqa: F401
     wait_for_ip,
     wait_for_ssh,
 )
-from .vm_share import (  # noqa: F401
-    attach_vm_share,
-    ensure_share_mounted,
-    vm_has_share,
-    vm_share_mappings,
-)
-from .vm_sync import sync_settings  # noqa: F401
+from .share import attach_vm_share, ensure_share_mounted, vm_has_share, vm_share_mappings
+from .sync import sync_settings
 
 __all__ = [
     "_ensure_disk",

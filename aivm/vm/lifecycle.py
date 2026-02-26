@@ -5,9 +5,9 @@ from pathlib import Path
 
 from loguru import logger
 
-from .config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
-from .runtime import require_ssh_identity, ssh_base_args
-from .util import ensure_dir, run_cmd
+from ..config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
+from ..runtime import require_ssh_identity, ssh_base_args
+from ..util import ensure_dir, run_cmd
 
 log = logger
 

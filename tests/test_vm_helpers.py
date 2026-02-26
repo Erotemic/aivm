@@ -14,7 +14,7 @@ def test_mac_for_vm_parsing(monkeypatch) -> None:
  vnet0       network   default    virtio   52:54:00:12:34:56
 """
     monkeypatch.setattr(
-        "aivm.vm_lifecycle.run_cmd", lambda *a, **k: CmdResult(0, stdout, "")
+        "aivm.vm.lifecycle.run_cmd", lambda *a, **k: CmdResult(0, stdout, "")
     )
     cfg = AgentVMConfig()
     assert _mac_for_vm(cfg) == "52:54:00:12:34:56"
@@ -51,7 +51,7 @@ def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
   </devices>
 </domain>
 """
-    monkeypatch.setattr("aivm.vm_share.run_cmd", lambda *a, **k: CmdResult(0, xml, ""))
+    monkeypatch.setattr("aivm.vm.share.run_cmd", lambda *a, **k: CmdResult(0, xml, ""))
     assert vm_has_share(cfg, use_sudo=False) is True
     assert vm_share_mappings(cfg, use_sudo=False) == [
         (str(source.resolve()), "hostcode-src"),

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aivm.cli import (
+from aivm.cli._common import (
     _auto_share_tag_for_path,
     _count_verbose,
     _normalize_argv,
