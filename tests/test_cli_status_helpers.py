@@ -7,23 +7,23 @@ from aivm.util import CmdResult
 
 def test_check_network_parsing_and_permission(monkeypatch) -> None:
     cfg = AgentVMConfig()
-    cfg.network.name = "aivm-net"
+    cfg.network.name = 'aivm-net'
 
     monkeypatch.setattr(
-        "aivm.status.run_cmd",
-        lambda *a, **k: CmdResult(1, "", "permission denied"),
+        'aivm.status.run_cmd',
+        lambda *a, **k: CmdResult(1, '', 'permission denied'),
     )
     ok, detail = _check_network(cfg, use_sudo=False)
     assert ok is None
-    assert "status --sudo" in detail
+    assert 'status --sudo' in detail
 
     monkeypatch.setattr(
-        "aivm.status.run_cmd",
-        lambda *a, **k: CmdResult(0, "Active: yes\nAutostart: no\n", ""),
+        'aivm.status.run_cmd',
+        lambda *a, **k: CmdResult(0, 'Active: yes\nAutostart: no\n', ''),
     )
     ok, detail = _check_network(cfg, use_sudo=True)
     assert ok is True
-    assert "autostart=no" in detail
+    assert 'autostart=no' in detail
 
 
 def test_check_firewall_branches(monkeypatch) -> None:
@@ -31,46 +31,48 @@ def test_check_firewall_branches(monkeypatch) -> None:
     cfg.firewall.enabled = False
     ok, detail = _check_firewall(cfg, use_sudo=False)
     assert ok is None
-    assert "disabled" in detail
+    assert 'disabled' in detail
 
     cfg.firewall.enabled = True
     monkeypatch.setattr(
-        "aivm.status.run_cmd",
-        lambda *a, **k: CmdResult(1, "", "operation not permitted"),
+        'aivm.status.run_cmd',
+        lambda *a, **k: CmdResult(1, '', 'operation not permitted'),
     )
     ok, detail = _check_firewall(cfg, use_sudo=False)
     assert ok is None
-    assert "status --sudo" in detail
+    assert 'status --sudo' in detail
 
-    monkeypatch.setattr("aivm.status.run_cmd", lambda *a, **k: CmdResult(0, "", ""))
+    monkeypatch.setattr(
+        'aivm.status.run_cmd', lambda *a, **k: CmdResult(0, '', '')
+    )
     ok, detail = _check_firewall(cfg, use_sudo=True)
     assert ok is True
-    assert "present" in detail
+    assert 'present' in detail
 
 
 def test_check_vm_state_branches(monkeypatch) -> None:
     cfg = AgentVMConfig()
 
     monkeypatch.setattr(
-        "aivm.status.run_cmd",
-        lambda *a, **k: CmdResult(1, "", "authentication failed"),
+        'aivm.status.run_cmd',
+        lambda *a, **k: CmdResult(1, '', 'authentication failed'),
     )
     ok, defined, detail = _check_vm_state(cfg, use_sudo=False)
     assert ok is None
     assert defined is False
-    assert "status --sudo" in detail
+    assert 'status --sudo' in detail
 
     calls = []
 
     def fake_run_cmd(cmd, **kwargs):
         calls.append(cmd)
-        if cmd[3] == "dominfo":
-            return CmdResult(0, "ok", "")
-        return CmdResult(0, "running", "")
+        if cmd[3] == 'dominfo':
+            return CmdResult(0, 'ok', '')
+        return CmdResult(0, 'running', '')
 
-    monkeypatch.setattr("aivm.status.run_cmd", fake_run_cmd)
+    monkeypatch.setattr('aivm.status.run_cmd', fake_run_cmd)
     ok, defined, detail = _check_vm_state(cfg, use_sudo=True)
     assert ok is True
     assert defined is True
-    assert "state=running" in detail
+    assert 'state=running' in detail
     assert len(calls) == 2

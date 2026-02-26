@@ -14,6 +14,7 @@ from ._common import (
 from .firewall import FirewallModalCLI
 from .net import NetModalCLI
 
+
 class DoctorCLI(_BaseCommand):
     """Check host prerequisites and list missing required tools."""
 
@@ -22,13 +23,14 @@ class DoctorCLI(_BaseCommand):
         cls.cli(argv=argv, data=kwargs)
         missing, missing_opt = check_commands()
         if missing:
-            print("❌ Missing required commands:", ", ".join(missing))
-            print("💡 On Debian/Ubuntu you can run: aivm host install_deps")
+            print('❌ Missing required commands:', ', '.join(missing))
+            print('💡 On Debian/Ubuntu you can run: aivm host install_deps')
             return 2
         if missing_opt:
-            print("➖ Missing optional commands:", ", ".join(missing_opt))
-        print("✅ Required host commands are present.")
+            print('➖ Missing optional commands:', ', '.join(missing_opt))
+        print('✅ Required host commands are present.')
         return 0
+
 
 class HostInstallDepsCLI(_BaseCommand):
     """Install required host dependencies on Debian/Ubuntu."""
@@ -38,22 +40,25 @@ class HostInstallDepsCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         if not host_is_debian_like():
             print(
-                "❌ Host not detected as Debian/Ubuntu. Install dependencies manually.",
+                '❌ Host not detected as Debian/Ubuntu. Install dependencies manually.',
                 file=sys.stderr,
             )
             return 2
         _confirm_sudo_block(
             yes=bool(args.yes),
-            purpose="Install host dependencies with apt/libvirt tooling.",
+            purpose='Install host dependencies with apt/libvirt tooling.',
         )
         install_deps_debian(assume_yes=True)
-        print("✅ Installed host dependencies (best effort).")
+        print('✅ Installed host dependencies (best effort).')
         return 0
+
 
 class ImageFetchCLI(_BaseCommand):
     """Download/cache the configured Ubuntu base image."""
 
-    dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
+    dry_run = scfg.Value(
+        False, isflag=True, help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
@@ -61,10 +66,11 @@ class ImageFetchCLI(_BaseCommand):
         cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(
             yes=bool(args.yes),
-            purpose="Download/cache base image under libvirt-managed storage.",
+            purpose='Download/cache base image under libvirt-managed storage.',
         )
         print(str(fetch_image(cfg, dry_run=args.dry_run)))
         return 0
+
 
 class HostModalCLI(scfg.ModalCLI):
     """Host preparation and host-level operations."""

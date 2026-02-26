@@ -24,12 +24,12 @@ class CmdError(RuntimeError):
         self.cmd = cmd
         self.result = result
         super().__init__(
-            f"Command failed (code={result.code}): {cmd}\n{result.stderr}".strip()
+            f'Command failed (code={result.code}): {cmd}\n{result.stderr}'.strip()
         )
 
 
 def shell_join(cmd: Sequence[str]) -> str:
-    return " ".join(shlex.quote(c) for c in cmd)
+    return ' '.join(shlex.quote(c) for c in cmd)
 
 
 def run_cmd(
@@ -45,9 +45,9 @@ def run_cmd(
     original_cmd = cmd
     if sudo and os.geteuid() != 0:
         # Non-interactive sudo: fail fast if password/TTY is required.
-        cmd = ["sudo", "-n", *cmd]
-        log.debug("Running with sudo: {}", shell_join(original_cmd))
-    log.debug("RUN: {}", shell_join(cmd))
+        cmd = ['sudo', '-n', *cmd]
+        log.debug('Running with sudo: {}', shell_join(original_cmd))
+    log.debug('RUN: {}', shell_join(cmd))
     p = subprocess.run(
         cmd,
         input=input_text if input_text is not None else None,
@@ -55,10 +55,10 @@ def run_cmd(
         text=text,
         env=env,
     )
-    res = CmdResult(p.returncode, p.stdout or "", p.stderr or "")
+    res = CmdResult(p.returncode, p.stdout or '', p.stderr or '')
     if check and p.returncode != 0:
         log.error(
-            "Command failed code={} cmd={} stderr={} stdout={}",
+            'Command failed code={} cmd={} stderr={} stdout={}',
             p.returncode,
             shell_join(cmd),
             res.stderr.strip(),
@@ -66,7 +66,7 @@ def run_cmd(
         )
         raise CmdError(cmd, res)
     if p.returncode == 0:
-        log.debug("Command ok code=0 cmd={}", shell_join(cmd))
+        log.debug('Command ok code=0 cmd={}', shell_join(cmd))
     return res
 
 

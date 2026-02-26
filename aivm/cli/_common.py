@@ -65,17 +65,22 @@ log = logger
 class _BaseCommand(scfg.DataConfig):
     """Base options shared by all commands."""
 
-    config = scfg.Value(None, help="Path to config TOML (default: .aivm.toml).")
+    config = scfg.Value(None, help='Path to config TOML (default: .aivm.toml).')
     verbose = scfg.Value(
-        0, short_alias=["v"], isflag="counter", help="Increase verbosity (-v, -vv)."
+        0,
+        short_alias=['v'],
+        isflag='counter',
+        help='Increase verbosity (-v, -vv).',
     )
     yes = scfg.Value(
-        False, isflag=True, help="Auto-approve privileged host operations (sudo)."
+        False,
+        isflag=True,
+        help='Auto-approve privileged host operations (sudo).',
     )
 
 
 def _cfg_path(p: str | None) -> Path:
-    return Path(p or ".aivm.toml").resolve()
+    return Path(p or '.aivm.toml').resolve()
 
 
 def _load_cfg(config_path: str | None) -> AgentVMConfig:
@@ -95,7 +100,10 @@ def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
             except Exception:
                 gcfg = None
             if gcfg is not None:
-                if not cfg.paths.ssh_identity_file and gcfg.paths.ssh_identity_file:
+                if (
+                    not cfg.paths.ssh_identity_file
+                    and gcfg.paths.ssh_identity_file
+                ):
                     cfg.paths.ssh_identity_file = gcfg.paths.ssh_identity_file
                     changed = True
                 if not cfg.paths.ssh_pubkey_path and gcfg.paths.ssh_pubkey_path:
@@ -111,10 +119,10 @@ def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
         changed = True
     if changed:
         log.debug(
-            "Hydrated runtime defaults for vm={} ssh_identity_file={} ssh_pubkey_path={}",
+            'Hydrated runtime defaults for vm={} ssh_identity_file={} ssh_pubkey_path={}',
             cfg.vm.name,
-            cfg.paths.ssh_identity_file or "(empty)",
-            cfg.paths.ssh_pubkey_path or "(empty)",
+            cfg.paths.ssh_identity_file or '(empty)',
+            cfg.paths.ssh_pubkey_path or '(empty)',
         )
     return changed
 
@@ -128,9 +136,9 @@ def _load_cfg_with_path(
     path = _cfg_path(config_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Config not found: {path}. "
-            f"Run: aivm config init --config {path} "
-            "or use global selection commands like `aivm code .` / `aivm list`."
+            f'Config not found: {path}. '
+            f'Run: aivm config init --config {path} '
+            'or use global selection commands like `aivm code .` / `aivm list`.'
         )
     cfg = load(path).expanded_paths()
     changed = False
@@ -142,12 +150,14 @@ def _load_cfg_with_path(
 
 
 def _resolve_cfg_fallback(
-    config_opt: str | None, *, vm_opt: str = ""
+    config_opt: str | None, *, vm_opt: str = ''
 ) -> tuple[AgentVMConfig, Path]:
     """Resolve config from explicit/local path, else directory metadata/global registry."""
     if config_opt is not None or _cfg_path(None).exists():
         return _load_cfg_with_path(config_opt)
-    return _resolve_cfg_for_code(config_opt=None, vm_opt=vm_opt, host_src=Path.cwd())
+    return _resolve_cfg_for_code(
+        config_opt=None, vm_opt=vm_opt, host_src=Path.cwd()
+    )
 
 
 def _record_vm(cfg: AgentVMConfig, cfg_path: Path) -> Path:
@@ -162,20 +172,20 @@ def _record_vm(cfg: AgentVMConfig, cfg_path: Path) -> Path:
 def _choose_vm_interactive(options: list[str], *, reason: str) -> str:
     if not sys.stdin.isatty():
         raise RuntimeError(
-            f"VM selection is ambiguous ({reason}). Re-run with --vm or --config."
+            f'VM selection is ambiguous ({reason}). Re-run with --vm or --config.'
         )
-    print(f"Multiple VMs match ({reason}). Select one:")
+    print(f'Multiple VMs match ({reason}). Select one:')
     for idx, item in enumerate(options, start=1):
-        print(f"  {idx}. {item}")
+        print(f'  {idx}. {item}')
     while True:
-        raw = input("Select VM number: ").strip()
+        raw = input('Select VM number: ').strip()
         if not raw.isdigit():
-            print("Please enter a number.")
+            print('Please enter a number.')
             continue
         choice = int(raw)
         if 1 <= choice <= len(options):
             return options[choice - 1]
-        print(f"Please enter a number between 1 and {len(options)}.")
+        print(f'Please enter a number between 1 and {len(options)}.')
 
 
 def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
@@ -183,14 +193,14 @@ def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
         return
     if not sys.stdin.isatty():
         raise RuntimeError(
-            "Privileged host operations require confirmation, but stdin is not interactive. "
-            "Re-run with --yes."
+            'Privileged host operations require confirmation, but stdin is not interactive. '
+            'Re-run with --yes.'
         )
-    print("About to run privileged host operations via sudo:")
-    print(f"  {purpose}")
-    ans = input("Continue? [y/N]: ").strip().lower()
-    if ans not in {"y", "yes"}:
-        raise RuntimeError("Aborted by user.")
+    print('About to run privileged host operations via sudo:')
+    print(f'  {purpose}')
+    ans = input('Continue? [y/N]: ').strip().lower()
+    if ans not in {'y', 'yes'}:
+        raise RuntimeError('Aborted by user.')
 
 
 def _resolve_cfg_for_code(
@@ -207,17 +217,21 @@ def _resolve_cfg_for_code(
         return _load_cfg_with_path(None)
 
     if vm_opt:
-        return _select_cfg_for_vm_name(vm_opt, reason="--vm")
+        return _select_cfg_for_vm_name(vm_opt, reason='--vm')
 
     reg = load_registry()
     meta = read_dir_metadata(host_src)
-    meta_vm = str(meta.get("vm_name", "")).strip() if isinstance(meta, dict) else ""
+    meta_vm = (
+        str(meta.get('vm_name', '')).strip() if isinstance(meta, dict) else ''
+    )
     if meta_vm:
-        return _select_cfg_for_vm_name(meta_vm, reason="directory metadata")
+        return _select_cfg_for_vm_name(meta_vm, reason='directory metadata')
 
     att = find_attachment(reg, host_src)
     if att is not None:
-        return _select_cfg_for_vm_name(att.vm_name, reason="existing attachment")
+        return _select_cfg_for_vm_name(
+            att.vm_name, reason='existing attachment'
+        )
 
     valid: list = []
     for r in reg.vms:
@@ -231,17 +245,17 @@ def _resolve_cfg_for_code(
             valid.append(r)
     if not valid:
         raise RuntimeError(
-            "No usable VM config found. Pass --config, run `aivm config init`, or register a VM."
+            'No usable VM config found. Pass --config, run `aivm config init`, or register a VM.'
         )
     if len(valid) == 1:
         only = valid[0]
-        return _select_cfg_for_vm_name(only.name, reason="single registered VM")
+        return _select_cfg_for_vm_name(only.name, reason='single registered VM')
 
     chosen = _choose_vm_interactive(
         [r.name for r in sorted(valid, key=lambda x: x.name)],
-        reason=f"{len(valid)} registered VMs",
+        reason=f'{len(valid)} registered VMs',
     )
-    return _select_cfg_for_vm_name(chosen, reason="interactive choice")
+    return _select_cfg_for_vm_name(chosen, reason='interactive choice')
 
 
 @dataclass
@@ -252,4 +266,6 @@ class PreparedSession:
     ip: str | None
     reg_path: Path | None
     meta_path: Path | None
-__all__ = [name for name in globals() if not name.startswith("__")]
+
+
+__all__ = [name for name in globals() if not name.startswith('__')]

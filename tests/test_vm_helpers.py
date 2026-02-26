@@ -14,29 +14,29 @@ def test_mac_for_vm_parsing(monkeypatch) -> None:
  vnet0       network   default    virtio   52:54:00:12:34:56
 """
     monkeypatch.setattr(
-        "aivm.vm.lifecycle.run_cmd", lambda *a, **k: CmdResult(0, stdout, "")
+        'aivm.vm.lifecycle.run_cmd', lambda *a, **k: CmdResult(0, stdout, '')
     )
     cfg = AgentVMConfig()
-    assert _mac_for_vm(cfg) == "52:54:00:12:34:56"
+    assert _mac_for_vm(cfg) == '52:54:00:12:34:56'
 
 
 def test_get_ip_cached(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
-    cfg.vm.name = "vmx"
+    cfg.vm.name = 'vmx'
     cfg.paths.state_dir = str(tmp_path)
-    ip_dir = tmp_path / "vmx"
+    ip_dir = tmp_path / 'vmx'
     ip_dir.mkdir()
-    (ip_dir / "vmx.ip").write_text("10.77.0.123\n", encoding="utf-8")
-    assert get_ip_cached(cfg) == "10.77.0.123"
+    (ip_dir / 'vmx.ip').write_text('10.77.0.123\n', encoding='utf-8')
+    assert get_ip_cached(cfg) == '10.77.0.123'
 
 
 def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
-    source = tmp_path / "src"
+    source = tmp_path / 'src'
     source.mkdir()
     cfg = AgentVMConfig()
     cfg.share.enabled = True
     cfg.share.host_src = str(source)
-    cfg.share.tag = "hostcode-src"
+    cfg.share.tag = 'hostcode-src'
     xml = f"""
 <domain>
   <devices>
@@ -51,9 +51,11 @@ def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
   </devices>
 </domain>
 """
-    monkeypatch.setattr("aivm.vm.share.run_cmd", lambda *a, **k: CmdResult(0, xml, ""))
+    monkeypatch.setattr(
+        'aivm.vm.share.run_cmd', lambda *a, **k: CmdResult(0, xml, '')
+    )
     assert vm_has_share(cfg, use_sudo=False) is True
     assert vm_share_mappings(cfg, use_sudo=False) == [
-        (str(source.resolve()), "hostcode-src"),
-        ("/opt/other", "other"),
+        (str(source.resolve()), 'hostcode-src'),
+        ('/opt/other', 'other'),
     ]

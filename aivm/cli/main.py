@@ -43,9 +43,11 @@ class ApplyCLI(_BaseCommand):
     """Run the full setup workflow from network to provisioning."""
 
     interactive = scfg.Value(
-        False, isflag=True, help="Print plan and SSH config at the end."
+        False, isflag=True, help='Print plan and SSH config at the end.'
     )
-    dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
+    dry_run = scfg.Value(
+        False, isflag=True, help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
@@ -56,38 +58,40 @@ class ApplyCLI(_BaseCommand):
 
             PlanCLI.main(argv=False, config=args.config, verbose=args.verbose)
             print()
-        log.debug("Ensuring network is set up")
+        log.debug('Ensuring network is set up')
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/update libvirt network '{cfg.network.name}'.",
         )
         ensure_network(cfg, recreate=False, dry_run=args.dry_run)
         if cfg.firewall.enabled:
-            log.debug("Applying firewall rules")
+            log.debug('Applying firewall rules')
             _confirm_sudo_block(
-                yes=bool(args.yes), purpose="Apply nftables firewall rules."
+                yes=bool(args.yes), purpose='Apply nftables firewall rules.'
             )
             apply_firewall(cfg, dry_run=args.dry_run)
-        log.debug("Fetching Ubuntu image")
-        _confirm_sudo_block(yes=bool(args.yes), purpose="Download/cache VM base image.")
+        log.debug('Fetching Ubuntu image')
+        _confirm_sudo_block(
+            yes=bool(args.yes), purpose='Download/cache VM base image.'
+        )
         fetch_image(cfg, dry_run=args.dry_run)
-        log.debug("Creating or starting VM")
+        log.debug('Creating or starting VM')
         _confirm_sudo_block(
             yes=bool(args.yes), purpose=f"Create/start VM '{cfg.vm.name}'."
         )
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
         if not args.dry_run:
             _record_vm(cfg, cfg_path)
-        log.debug("Waiting for VM IP address")
+        log.debug('Waiting for VM IP address')
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose="Query VM networking state via virsh."
+            yes=bool(args.yes), purpose='Query VM networking state via virsh.'
         )
         wait_for_ip(cfg, timeout_s=360, dry_run=args.dry_run)
         if cfg.provision.enabled:
-            log.debug("Provisioning VM with tools")
+            log.debug('Provisioning VM with tools')
             provision(cfg, dry_run=args.dry_run)
         if args.interactive:
-            print("\nSSH config for VS Code:")
+            print('\nSSH config for VS Code:')
             print(mk_ssh_config(cfg))
         return 0
 
@@ -96,72 +100,74 @@ class ListCLI(_BaseCommand):
     """List managed VMs, managed networks, and attached host folders."""
 
     section = scfg.Value(
-        "all",
-        help="One of: all, vms, networks, folders.",
+        'all',
+        help='One of: all, vms, networks, folders.',
     )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        want = str(args.section or "all").strip().lower()
-        allowed = {"all", "vms", "networks", "folders"}
+        want = str(args.section or 'all').strip().lower()
+        allowed = {'all', 'vms', 'networks', 'folders'}
         if want not in allowed:
             raise RuntimeError(
-                f"--section must be one of: {', '.join(sorted(allowed))}"
+                f'--section must be one of: {", ".join(sorted(allowed))}'
             )
 
         reg_path = registry_path()
         reg = load_registry(reg_path)
 
-        if want in {"all", "vms"}:
-            print("Managed VMs")
+        if want in {'all', 'vms'}:
+            print('Managed VMs')
             if not reg.vms:
-                print("  (none)")
+                print('  (none)')
             else:
                 for vm in sorted(reg.vms, key=lambda x: x.name):
                     cfg_ok = Path(vm.config_path).expanduser().exists()
-                    cfg_state = "ok" if cfg_ok else "missing"
+                    cfg_state = 'ok' if cfg_ok else 'missing'
                     print(
-                        f"  - {vm.name} | network={vm.network_name} "
-                        f"| strict_firewall={'yes' if vm.strict_firewall else 'no'} "
-                        f"| config={vm.config_path} ({cfg_state})"
+                        f'  - {vm.name} | network={vm.network_name} '
+                        f'| strict_firewall={"yes" if vm.strict_firewall else "no"} '
+                        f'| config={vm.config_path} ({cfg_state})'
                     )
 
-        if want in {"all", "networks"}:
-            if want == "all":
-                print("")
-            print("Managed Networks")
+        if want in {'all', 'networks'}:
+            if want == 'all':
+                print('')
+            print('Managed Networks')
             by_name: dict[str, bool] = {}
             for vm in reg.vms:
                 strict = bool(vm.strict_firewall)
                 if vm.network_name not in by_name:
                     by_name[vm.network_name] = strict
                 else:
-                    by_name[vm.network_name] = by_name[vm.network_name] or strict
+                    by_name[vm.network_name] = (
+                        by_name[vm.network_name] or strict
+                    )
             if not by_name:
-                print("  (none)")
+                print('  (none)')
             else:
                 for name in sorted(by_name):
                     print(
-                        f"  - {name} | strict_firewall={'yes' if by_name[name] else 'no'}"
+                        f'  - {name} | strict_firewall={"yes" if by_name[name] else "no"}'
                     )
 
-        if want in {"all", "folders"}:
-            if want == "all":
-                print("")
-            print("Attached Folders")
+        if want in {'all', 'folders'}:
+            if want == 'all':
+                print('')
+            print('Attached Folders')
             if not reg.attachments:
-                print("  (none)")
+                print('  (none)')
             else:
                 for att in sorted(
                     reg.attachments, key=lambda x: (x.vm_name, x.host_path)
                 ):
                     print(
-                        f"  - {att.host_path} | vm={att.vm_name} "
-                        f"| mode={att.mode} | guest_dst={att.guest_dst or '(default)'}"
+                        f'  - {att.host_path} | vm={att.vm_name} '
+                        f'| mode={att.mode} | guest_dst={att.guest_dst or "(default)"}'
                     )
-        print("")
-        print(f"Registry: {reg_path}")
+        print('')
+        print(f'Registry: {reg_path}')
         return 0
 
 
@@ -171,16 +177,16 @@ class StatusCLI(_BaseCommand):
     sudo = scfg.Value(
         False,
         isflag=True,
-        help="Run privileged status checks (virsh/nft/image) with sudo.",
+        help='Run privileged status checks (virsh/nft/image) with sudo.',
     )
     vm = scfg.Value(
-        "",
-        help="Optional VM name override (mainly when no local config file is present).",
+        '',
+        help='Optional VM name override (mainly when no local config file is present).',
     )
     detail = scfg.Value(
         False,
         isflag=True,
-        help="Include raw diagnostics (virsh/nft/ssh probe outputs).",
+        help='Include raw diagnostics (virsh/nft/ssh probe outputs).',
     )
 
     @classmethod
@@ -208,7 +214,11 @@ class StatusCLI(_BaseCommand):
                 yes=bool(args.yes),
                 purpose=f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'.",
             )
-        print(_render_status(cfg, path, detail=args.detail, use_sudo=bool(args.sudo)))
+        print(
+            _render_status(
+                cfg, path, detail=args.detail, use_sudo=bool(args.sudo)
+            )
+        )
         return 0
 
 
@@ -233,14 +243,14 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
     argv = _normalize_argv(argv)
-    if "--config" in argv:
+    if '--config' in argv:
         try:
-            config_value = argv[argv.index("--config") + 1]
+            config_value = argv[argv.index('--config') + 1]
         except IndexError:
             pass
-    elif "-c" in argv:
+    elif '-c' in argv:
         try:
-            config_value = argv[argv.index("-c") + 1]
+            config_value = argv[argv.index('-c') + 1]
         except IndexError:
             pass
     try:
@@ -257,21 +267,24 @@ def main(argv: list[str] | None = None) -> None:
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
     except Exception as ex:
-        print(f"ERROR: {ex}", file=sys.stderr)
-        log.error("Unhandled aivm error: {}", ex)
+        print(f'ERROR: {ex}', file=sys.stderr)
+        log.error('Unhandled aivm error: {}', ex)
         sys.exit(2)
 
-    if any(flag in argv for flag in ("-h", "--help")):
+    if any(flag in argv for flag in ('-h', '--help')):
         sys.exit(0)
     if isinstance(rc, int):
         sys.exit(rc)
     sys.exit(0)
 
-def _status_line(ok: bool | None, label: str, detail: str = "") -> str:
+
+def _status_line(ok: bool | None, label: str, detail: str = '') -> str:
     return status_line(ok, label, detail)
+
 
 def _clip(text: str, *, max_lines: int = 60) -> str:
     return _clip_text(text, max_lines=max_lines)
+
 
 def _render_status(
     cfg: AgentVMConfig,
@@ -282,6 +295,7 @@ def _render_status(
 ) -> str:
     return render_status(cfg, path, detail=detail, use_sudo=use_sudo)
 
+
 def _render_global_status() -> str:
     return render_global_status()
 
@@ -289,61 +303,63 @@ def _render_global_status() -> str:
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
     logger.remove()
     effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
-    level = "WARNING"
+    level = 'WARNING'
     if effective_verbosity == 1:
-        level = "INFO"
+        level = 'INFO'
     elif effective_verbosity >= 2:
-        level = "DEBUG"
+        level = 'DEBUG'
     logger.add(
         sys.stderr,
         level=level,
         colorize=False,
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+        format='{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}',
     )
     log.debug(
-        "Logging configured at {} (effective_verbosity={})", level, effective_verbosity
+        'Logging configured at {} (effective_verbosity={})',
+        level,
+        effective_verbosity,
     )
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
     """Normalize accepted hyphenated spellings to scriptconfig command names."""
-    if len(argv) >= 1 and argv[0] == "init":
-        return ["config", "init", *argv[1:]]
-    if len(argv) >= 1 and argv[0] == "attach":
-        if len(argv) >= 2 and not argv[1].startswith("-"):
-            return ["attach", "--host_src", argv[1], *argv[2:]]
+    if len(argv) >= 1 and argv[0] == 'init':
+        return ['config', 'init', *argv[1:]]
+    if len(argv) >= 1 and argv[0] == 'attach':
+        if len(argv) >= 2 and not argv[1].startswith('-'):
+            return ['attach', '--host_src', argv[1], *argv[2:]]
         return argv
-    if len(argv) >= 1 and argv[0] == "code":
-        if len(argv) >= 2 and not argv[1].startswith("-"):
-            return ["code", "--host_src", argv[1], *argv[2:]]
+    if len(argv) >= 1 and argv[0] == 'code':
+        if len(argv) >= 2 and not argv[1].startswith('-'):
+            return ['code', '--host_src', argv[1], *argv[2:]]
         return argv
-    if len(argv) >= 1 and argv[0] == "ssh":
-        if len(argv) >= 2 and not argv[1].startswith("-"):
-            return ["ssh", "--host_src", argv[1], *argv[2:]]
+    if len(argv) >= 1 and argv[0] == 'ssh':
+        if len(argv) >= 2 and not argv[1].startswith('-'):
+            return ['ssh', '--host_src', argv[1], *argv[2:]]
         return argv
-    if len(argv) >= 1 and argv[0] == "ls":
-        return ["list", *argv[1:]]
-    if len(argv) >= 2 and argv[0] == "vm":
-        if argv[1] == "wait-ip":
-            return [argv[0], "wait_ip", *argv[2:]]
-        if argv[1] == "ssh-config":
-            return [argv[0], "ssh_config", *argv[2:]]
-        if argv[1] == "ssh" and len(argv) >= 3 and not argv[2].startswith("-"):
-            return [argv[0], "ssh", "--host_src", argv[2], *argv[3:]]
-        if argv[1] == "sync-settings":
-            return [argv[0], "sync_settings", *argv[2:]]
-        if argv[1] == "code" and len(argv) >= 3 and not argv[2].startswith("-"):
-            return [argv[0], "code", "--host_src", argv[2], *argv[3:]]
+    if len(argv) >= 1 and argv[0] == 'ls':
+        return ['list', *argv[1:]]
+    if len(argv) >= 2 and argv[0] == 'vm':
+        if argv[1] == 'wait-ip':
+            return [argv[0], 'wait_ip', *argv[2:]]
+        if argv[1] == 'ssh-config':
+            return [argv[0], 'ssh_config', *argv[2:]]
+        if argv[1] == 'ssh' and len(argv) >= 3 and not argv[2].startswith('-'):
+            return [argv[0], 'ssh', '--host_src', argv[2], *argv[3:]]
+        if argv[1] == 'sync-settings':
+            return [argv[0], 'sync_settings', *argv[2:]]
+        if argv[1] == 'code' and len(argv) >= 3 and not argv[2].startswith('-'):
+            return [argv[0], 'code', '--host_src', argv[2], *argv[3:]]
     return argv
 
 
 def _count_verbose(argv: list[str]) -> int:
     count = 0
     for item in argv:
-        if item == "--verbose":
+        if item == '--verbose':
             count += 1
-        elif item.startswith("-") and not item.startswith("--"):
+        elif item.startswith('-') and not item.startswith('--'):
             short = item[1:]
-            if short and set(short) <= {"v"}:
+            if short and set(short) <= {'v'}:
                 count += len(short)
     return count

@@ -12,8 +12,8 @@ class SyncSettingsResult:
 
     def as_dict(self) -> dict[str, list[str]]:
         return {
-            "copied": list(self.copied),
-            "skipped_missing": list(self.skipped_missing),
-            "skipped_exists": list(self.skipped_exists),
-            "failed": list(self.failed),
+            'copied': list(self.copied),
+            'skipped_missing': list(self.skipped_missing),
+            'skipped_exists': list(self.skipped_exists),
+            'failed': list(self.failed),
         }

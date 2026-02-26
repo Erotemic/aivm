@@ -8,10 +8,10 @@ from aivm.config import AgentVMConfig, dump_toml, load, save
 def test_dump_load_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'my "vm"'
-    cfg.share.host_src = "~/code/${USER}/proj"
-    cfg.sync.paths = ["~/.gitconfig", '/tmp/"quoted".txt']
+    cfg.share.host_src = '~/code/${USER}/proj'
+    cfg.sync.paths = ['~/.gitconfig', '/tmp/"quoted".txt']
     cfg.verbosity = 3
-    fpath = tmp_path / ".aivm.toml"
+    fpath = tmp_path / '.aivm.toml'
     save(fpath, cfg)
 
     cfg2 = load(fpath)
@@ -24,14 +24,14 @@ def test_dump_load_roundtrip(tmp_path: Path) -> None:
 def test_dump_toml_verbosity_default_omitted() -> None:
     cfg = AgentVMConfig()
     text = dump_toml(cfg)
-    assert "verbosity =" not in text
+    assert 'verbosity =' not in text
 
 
 def test_expanded_paths_expands_env(monkeypatch) -> None:
-    monkeypatch.setenv("AIVM_TEST_DIR", "/tmp/aivm-x")
+    monkeypatch.setenv('AIVM_TEST_DIR', '/tmp/aivm-x')
     cfg = AgentVMConfig()
-    cfg.paths.state_dir = "$AIVM_TEST_DIR/state"
-    cfg.share.host_src = "$AIVM_TEST_DIR/src"
+    cfg.paths.state_dir = '$AIVM_TEST_DIR/state'
+    cfg.share.host_src = '$AIVM_TEST_DIR/src'
     out = cfg.expanded_paths()
-    assert out.paths.state_dir == "/tmp/aivm-x/state"
-    assert out.share.host_src == "/tmp/aivm-x/src"
+    assert out.paths.state_dir == '/tmp/aivm-x/state'
+    assert out.share.host_src == '/tmp/aivm-x/src'

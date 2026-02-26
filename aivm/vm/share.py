@@ -19,7 +19,7 @@ def vm_has_share(cfg: AgentVMConfig, *, use_sudo: bool = True) -> bool:
     if not cfg.share.enabled or not cfg.share.host_src:
         return False
     xml = run_cmd(
-        virsh_system_cmd("dumpxml", cfg.vm.name),
+        virsh_system_cmd('dumpxml', cfg.vm.name),
         sudo=use_sudo,
         check=False,
         capture=True,
@@ -32,11 +32,11 @@ def vm_has_share(cfg: AgentVMConfig, *, use_sudo: bool = True) -> bool:
         return False
     want_src = str(Path(cfg.share.host_src).resolve())
     want_tag = cfg.share.tag
-    for fs in root.findall(".//devices/filesystem"):
-        src = fs.find("source")
-        tgt = fs.find("target")
-        src_dir = src.attrib.get("dir", "") if src is not None else ""
-        tgt_dir = tgt.attrib.get("dir", "") if tgt is not None else ""
+    for fs in root.findall('.//devices/filesystem'):
+        src = fs.find('source')
+        tgt = fs.find('target')
+        src_dir = src.attrib.get('dir', '') if src is not None else ''
+        tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir == want_src and tgt_dir == want_tag:
             return True
     return False
@@ -47,7 +47,7 @@ def vm_share_mappings(
 ) -> list[tuple[str, str]]:
     """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
     xml = run_cmd(
-        virsh_system_cmd("dumpxml", cfg.vm.name),
+        virsh_system_cmd('dumpxml', cfg.vm.name),
         sudo=use_sudo,
         check=False,
         capture=True,
@@ -59,11 +59,11 @@ def vm_share_mappings(
     except Exception:
         return []
     mappings: list[tuple[str, str]] = []
-    for fs in root.findall(".//devices/filesystem"):
-        src = fs.find("source")
-        tgt = fs.find("target")
-        src_dir = src.attrib.get("dir", "") if src is not None else ""
-        tgt_dir = tgt.attrib.get("dir", "") if tgt is not None else ""
+    for fs in root.findall('.//devices/filesystem'):
+        src = fs.find('source')
+        tgt = fs.find('target')
+        src_dir = src.attrib.get('dir', '') if src is not None else ''
+        tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir or tgt_dir:
             mappings.append((src_dir, tgt_dir))
     return mappings
@@ -73,13 +73,17 @@ def attach_vm_share(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Attach a virtiofs share mapping to an existing VM definition."""
     cfg = cfg.expanded_paths()
     if not cfg.share.enabled or not cfg.share.host_src:
-        raise RuntimeError("Share is not enabled/configured.")
+        raise RuntimeError('Share is not enabled/configured.')
     source_dir = str(Path(cfg.share.host_src).resolve())
     tag = cfg.share.tag
     if not tag:
-        raise RuntimeError("Share tag is empty; cannot attach filesystem mapping.")
+        raise RuntimeError(
+            'Share tag is empty; cannot attach filesystem mapping.'
+        )
     if dry_run:
-        log.info("DRYRUN: attach virtiofs share source={} tag={}", source_dir, tag)
+        log.info(
+            'DRYRUN: attach virtiofs share source={} tag={}', source_dir, tag
+        )
         return
     xml = f"""<filesystem type='mount' accessmode='passthrough'>
   <driver type='virtiofs'/>
@@ -87,45 +91,50 @@ def attach_vm_share(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
   <target dir='{tag}'/>
 </filesystem>
 """
-    with tempfile.NamedTemporaryFile("w", delete=False) as f:
+    with tempfile.NamedTemporaryFile('w', delete=False) as f:
         f.write(xml)
         tmp = f.name
     state = (
         run_cmd(
-            ["virsh", "domstate", cfg.vm.name], sudo=True, check=False, capture=True
+            ['virsh', 'domstate', cfg.vm.name],
+            sudo=True,
+            check=False,
+            capture=True,
         )
         .stdout.strip()
         .lower()
     )
-    is_running = "running" in state
+    is_running = 'running' in state
     attach_cmd = (
-        ["virsh", "attach-device", cfg.vm.name, tmp, "--live", "--config"]
+        ['virsh', 'attach-device', cfg.vm.name, tmp, '--live', '--config']
         if is_running
-        else ["virsh", "attach-device", cfg.vm.name, tmp, "--config"]
+        else ['virsh', 'attach-device', cfg.vm.name, tmp, '--config']
     )
     run_cmd(attach_cmd, sudo=True, check=True, capture=True)
 
 
-def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) -> None:
+def ensure_share_mounted(
+    cfg: AgentVMConfig, ip: str, *, dry_run: bool = False
+) -> None:
     cfg = cfg.expanded_paths()
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     if not cfg.share.enabled or not cfg.share.host_src:
-        raise RuntimeError("Share is not enabled/configured.")
+        raise RuntimeError('Share is not enabled/configured.')
     guest_dst = cfg.share.guest_dst
     tag = cfg.share.tag
     remote = (
-        "set -euo pipefail; "
-        f"sudo mkdir -p {shlex.quote(guest_dst)}; "
-        f"mountpoint -q {shlex.quote(guest_dst)} || "
-        f"sudo mount -t virtiofs {shlex.quote(tag)} {shlex.quote(guest_dst)}"
+        'set -euo pipefail; '
+        f'sudo mkdir -p {shlex.quote(guest_dst)}; '
+        f'mountpoint -q {shlex.quote(guest_dst)} || '
+        f'sudo mount -t virtiofs {shlex.quote(tag)} {shlex.quote(guest_dst)}'
     )
     cmd = [
-        "ssh",
-        *ssh_base_args(ident, strict_host_key_checking="accept-new"),
-        f"{cfg.vm.user}@{ip}",
+        'ssh',
+        *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+        f'{cfg.vm.user}@{ip}',
         remote,
     ]
     if dry_run:
-        log.info("DRYRUN: {}", " ".join(cmd))
+        log.info('DRYRUN: {}', ' '.join(cmd))
         return
     run_cmd(cmd, sudo=False, check=True, capture=True)

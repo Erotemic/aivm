@@ -37,51 +37,56 @@ def sync_settings(
             continue
         try:
             rel = src_abs.relative_to(host_home)
-            remote_path = f"$HOME/{rel.as_posix()}"
+            remote_path = f'$HOME/{rel.as_posix()}'
         except ValueError:
-            remote_path = f"$HOME/.aivm-sync/{src_abs.name}"
+            remote_path = f'$HOME/.aivm-sync/{src_abs.name}'
 
         remote_parent = (
-            f"$HOME/{Path(remote_path.replace('$HOME/', '')).parent.as_posix()}"
+            f'$HOME/{Path(remote_path.replace("$HOME/", "")).parent.as_posix()}'
         )
         check_cmd = [
-            "ssh",
-            *ssh_base_args(ident, strict_host_key_checking="accept-new"),
-            f"{cfg.vm.user}@{ip}",
-            f"test -e {shlex.quote(remote_path)}",
+            'ssh',
+            *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+            f'{cfg.vm.user}@{ip}',
+            f'test -e {shlex.quote(remote_path)}',
         ]
         if not overwrite and not dry_run:
-            exists = run_cmd(check_cmd, sudo=False, check=False, capture=True).code == 0
+            exists = (
+                run_cmd(check_cmd, sudo=False, check=False, capture=True).code
+                == 0
+            )
             if exists:
-                result.skipped_exists.append(f"{src_abs} -> {remote_path}")
+                result.skipped_exists.append(f'{src_abs} -> {remote_path}')
                 continue
 
         mkdir_cmd = [
-            "ssh",
-            *ssh_base_args(ident, strict_host_key_checking="accept-new"),
-            f"{cfg.vm.user}@{ip}",
-            f"mkdir -p {shlex.quote(remote_parent)}",
+            'ssh',
+            *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+            f'{cfg.vm.user}@{ip}',
+            f'mkdir -p {shlex.quote(remote_parent)}',
         ]
         scp_cmd = [
-            "scp",
-            "-r",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-i",
+            'scp',
+            '-r',
+            '-o',
+            'StrictHostKeyChecking=accept-new',
+            '-i',
             ident,
             str(src_abs),
-            f"{cfg.vm.user}@{ip}:{remote_parent}/",
+            f'{cfg.vm.user}@{ip}:{remote_parent}/',
         ]
         if dry_run:
-            log.info("DRYRUN: {}", " ".join(mkdir_cmd))
-            log.info("DRYRUN: {}", " ".join(scp_cmd))
-            result.copied.append(f"{src_abs} -> {remote_path}")
+            log.info('DRYRUN: {}', ' '.join(mkdir_cmd))
+            log.info('DRYRUN: {}', ' '.join(scp_cmd))
+            result.copied.append(f'{src_abs} -> {remote_path}')
             continue
         run_cmd(mkdir_cmd, sudo=False, check=True, capture=True)
         res = run_cmd(scp_cmd, sudo=False, check=False, capture=True)
         if res.code == 0:
-            result.copied.append(f"{src_abs} -> {remote_path}")
+            result.copied.append(f'{src_abs} -> {remote_path}')
         else:
-            result.failed.append(f"{src_abs} -> {remote_path}: {res.stderr.strip()}")
+            result.failed.append(
+                f'{src_abs} -> {remote_path}: {res.stderr.strip()}'
+            )
 
     return result
