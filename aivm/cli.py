@@ -832,9 +832,7 @@ def _short_help_line(cls: type) -> str:
     return doc.splitlines()[0].strip()
 
 
-def _render_command_tree(
-    modal_cls: type[scfg.ModalCLI], prefix: str = "aivm"
-) -> str:
+def _render_command_tree(modal_cls: type[scfg.ModalCLI], prefix: str = "aivm") -> str:
     root_help = _short_help_line(modal_cls)
     root_line = f"{prefix} - {root_help}" if root_help else prefix
     lines: list[str] = [root_line]
@@ -2070,6 +2068,7 @@ class AgentVMModalCLI(scfg.ModalCLI):
     Tips:
       Use `aivm <group> --help` for grouped commands (`config`, `help`, `host`, `vm`).
     """
+
     config = ConfigModalCLI
     help = HelpModalCLI
     host = HostModalCLI
