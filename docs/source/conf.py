@@ -8,7 +8,7 @@ Notes:
 
     pip install sphinx sphinx-autobuild sphinx_rtd_theme sphinxcontrib-napoleon
 
-    cd ~/code/agentvm
+    cd ~/code/aivm
     mkdir -p docs
     cd docs
 
@@ -17,9 +17,9 @@ Notes:
     # need to edit the conf.py
 
     # Remove any old auto docs folder and regenerate it.
-    rm -rf ~/code/agentvm/docs/source/auto
-    cd ~/code/agentvm/docs
-    sphinx-apidoc --private --separate --force --output-dir ~/code/agentvm/docs/source/auto ~/code/agentvm/aivm
+    rm -rf ~/code/aivm/docs/source/auto
+    cd ~/code/aivm/docs
+    sphinx-apidoc --private --separate --force --output-dir ~/code/aivm/docs/source/auto ~/code/aivm/aivm
     git add source/auto/*.rst
 
     # Note: the module should importable before running this
@@ -190,15 +190,7 @@ napoleon_use_ivar = True
 
 autodoc_inherit_docstrings = False
 
-# Hack for geowatch, todo configure
-autosummary_mock_imports = [
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_24_and_lt_4_xx',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_22_and_lt_4_24',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_21_and_lt_4_22',
-    'geowatch.tasks.fusion.datamodules.temporal_sampling.affinity_sampling',
-    'geowatch.tasks.depth_pcd.model',
-    'geowatch.tasks.cold.export_change_map',
-]
+autosummary_mock_imports = []
 
 autodoc_default_options = {  # Document callable classes
     'special-members': '__call__'

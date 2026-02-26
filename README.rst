@@ -13,7 +13,7 @@ The aivm Module
 
 
 +---------------+---------------------------------------+
-| Read the Docs | http://aivm.readthedocs.io/en/latest/ |
+| Read the Docs | https://aivm.readthedocs.io/en/latest/ |
 +---------------+---------------------------------------+
 | Pypi          | https://pypi.org/project/aivm         |
 +---------------+---------------------------------------+
@@ -168,6 +168,7 @@ Command Groups
 
    aivm config --help
    aivm host --help
+   aivm host image_fetch --help
    aivm help --help
    aivm host net --help
    aivm host fw --help
@@ -189,7 +190,7 @@ Notes
     :target: https://pypistats.org/packages/aivm
 
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/aivm/badge/?version=latest
-    :target: http://aivm.readthedocs.io/en/latest/
+    :target: https://aivm.readthedocs.io/en/latest/
 
 .. |GithubActions| image:: https://github.com/Erotemic/aivm/actions/workflows/tests.yml/badge.svg
     :target: https://github.com/Erotemic/aivm/actions?query=branch%3Amain

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "aivm"
 version = "0.2.0"
 description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
-readme = "README.md"
+readme = "README.rst"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 keywords = ["kvm", "libvirt", "vm", "sandbox", "agents", "vscode", "ssh", "virtiofs"]
