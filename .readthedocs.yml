@@ -3,7 +3,7 @@
 # See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
 #
 # See Also:
-# https://readthedocs.org/dashboard/agentvm/advanced/
+# https://readthedocs.org/dashboard/aivm/advanced/
 
 # Required
 version: 2
