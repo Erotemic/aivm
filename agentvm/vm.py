@@ -1,5 +1,7 @@
 from __future__ import annotations
+import shlex
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from loguru import logger
@@ -8,6 +10,18 @@ from .config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
 from .util import run_cmd, ensure_dir
 
 log = logger
+
+
+def _sudo_path_exists(path: Path) -> bool:
+    return run_cmd(
+        ["test", "-e", str(path)], sudo=True, check=False, capture=True
+    ).code == 0
+
+
+def _sudo_file_exists(path: Path) -> bool:
+    return run_cmd(
+        ["test", "-f", str(path)], sudo=True, check=False, capture=True
+    ).code == 0
 
 
 def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
@@ -31,21 +45,22 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     p = _paths(cfg, dry_run=dry_run)
     base_img = p["img_dir"] / cfg.image.cache_name
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
-    if base_img.exists() and not cfg.image.redownload:
-        log.info("Base image cached: %s", base_img)
+    if _sudo_file_exists(base_img) and not cfg.image.redownload:
+        log.info("Base image cached: {}", base_img)
         return base_img
     if dry_run:
-        log.info("DRYRUN: curl -L --fail -o %s %s", base_img, url)
+        log.info("DRYRUN: curl -L --fail -o {} {}", base_img, url)
         return base_img
-    ensure_dir(p["img_dir"])
+    _ensure_qemu_access(cfg, dry_run=False)
     run_cmd(["mkdir", "-p", str(p["img_dir"])], sudo=True, check=True, capture=True)
+    log.info("Downloading base image to {} (showing progress)", base_img)
     run_cmd(
-        ["curl", "-L", "--fail", "-o", str(base_img), url],
+        ["curl", "-L", "--fail", "--progress-bar", "-o", str(base_img), url],
         sudo=True,
         check=True,
-        capture=True,
+        capture=False,
     )
-    log.info("Downloaded base image: %s", base_img)
+    log.info("Downloaded base image: {}", base_img)
     return base_img
 
 
@@ -56,7 +71,7 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if run_cmd(["getent", "group", "kvm"], check=False, capture=True).code != 0:
         grp = "libvirt-qemu"
     if dry_run:
-        log.info("DRYRUN: chown/chmod %s for qemu access (group=%s)", base_root, grp)
+        log.info("DRYRUN: chown/chmod {} for qemu access (group={})", base_root, grp)
         return
     run_cmd(["mkdir", "-p", str(base_root)], sudo=True, check=True, capture=True)
     run_cmd(
@@ -154,7 +169,7 @@ local-hostname: {cfg.vm.name}
 """
 
     if dry_run:
-        log.info("DRYRUN: write cloud-init + cloud-localds %s", seed_iso)
+        log.info("DRYRUN: write cloud-init + cloud-localds {}", seed_iso)
         return {"user_data": user_data, "meta_data": meta_data, "seed_iso": seed_iso}
 
     run_cmd(["mkdir", "-p", str(ci_dir)], sudo=True, check=True, capture=True)
@@ -185,17 +200,17 @@ def _ensure_disk(
 ) -> Path:
     p = _paths(cfg, dry_run=dry_run)
     vm_disk = p["img_dir"] / f"{cfg.vm.name}.qcow2"
-    if vm_disk.exists() and recreate:
+    if _sudo_path_exists(vm_disk) and recreate:
         if dry_run:
-            log.info("DRYRUN: rm -f %s", vm_disk)
+            log.info("DRYRUN: rm -f {}", vm_disk)
         else:
             run_cmd(["rm", "-f", str(vm_disk)], sudo=True, check=True, capture=True)
-    if vm_disk.exists():
-        log.info("VM disk exists: %s", vm_disk)
+    if _sudo_path_exists(vm_disk):
+        log.info("VM disk exists: {}", vm_disk)
         return vm_disk
     if dry_run:
         log.info(
-            "DRYRUN: qemu-img create -f qcow2 -F qcow2 -b %s %s %sG",
+            "DRYRUN: qemu-img create -f qcow2 -F qcow2 -b {} {} {}G",
             base_img,
             vm_disk,
             cfg.vm.disk_gb,
@@ -235,7 +250,7 @@ def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
 def create_or_start_vm(
     cfg: AgentVMConfig, *, dry_run: bool = False, recreate: bool = False
 ) -> None:
-    log.debug("Creating or starting VM %s", cfg.vm.name)
+    log.debug("Creating or starting VM {}", cfg.vm.name)
     cfg = cfg.expanded_paths()
     base_img = fetch_image(cfg, dry_run=dry_run)
     ci = _write_cloud_init(cfg, dry_run=dry_run)
@@ -245,7 +260,7 @@ def create_or_start_vm(
     if vm_exists(cfg, dry_run=dry_run):
         if recreate:
             if dry_run:
-                log.info("DRYRUN: virsh destroy/undefine %s", cfg.vm.name)
+                log.info("DRYRUN: virsh destroy/undefine {}", cfg.vm.name)
             else:
                 run_cmd(
                     ["virsh", "destroy", cfg.vm.name],
@@ -277,15 +292,15 @@ def create_or_start_vm(
                 .lower()
             )
             if "running" in st:
-                log.info("VM already running: %s", cfg.vm.name)
+                log.info("VM already running: {}", cfg.vm.name)
                 return
             if dry_run:
-                log.info("DRYRUN: virsh start %s", cfg.vm.name)
+                log.info("DRYRUN: virsh start {}", cfg.vm.name)
                 return
             run_cmd(
                 ["virsh", "start", cfg.vm.name], sudo=True, check=True, capture=True
             )
-            log.info("VM started: %s", cfg.vm.name)
+            log.info("VM started: {}", cfg.vm.name)
             return
 
     extra = []
@@ -325,10 +340,10 @@ def create_or_start_vm(
         *extra,
     ]
     if dry_run:
-        log.info("DRYRUN: %s", " ".join(cmd))
+        log.info("DRYRUN: {}", " ".join(cmd))
         return
     run_cmd(cmd, sudo=True, check=True, capture=True)
-    log.info("VM created: %s", cfg.vm.name)
+    log.info("VM created: {}", cfg.vm.name)
 
 
 def _mac_for_vm(cfg: AgentVMConfig) -> str:
@@ -362,7 +377,7 @@ def wait_for_ip(
     p = _paths(cfg, dry_run=dry_run)
     ip_file = p["ip_file"]
     if dry_run:
-        log.info("DRYRUN: wait for IP and write %s", ip_file)
+        log.info("DRYRUN: wait for IP and write {}", ip_file)
         return "0.0.0.0"
     ensure_dir(p["state_dir"])
     mac = _mac_for_vm(cfg)
@@ -407,7 +422,7 @@ def wait_for_ip(
                     break
         if ip:
             ip_file.write_text(ip + "\n", encoding="utf-8")
-            log.info("VM IP: %s (saved to %s)", ip, ip_file)
+            log.info("VM IP: {} (saved to {})", ip, ip_file)
             return ip
         time.sleep(2)
     raise TimeoutError(
@@ -418,7 +433,7 @@ def wait_for_ip(
 def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     name = cfg.vm.name
     if dry_run:
-        log.info("DRYRUN: virsh destroy/undefine %s", name)
+        log.info("DRYRUN: virsh destroy/undefine {}", name)
         return
     run_cmd(["virsh", "destroy", name], sudo=True, check=False, capture=True)
     run_cmd(
@@ -428,7 +443,7 @@ def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         capture=True,
     )
     run_cmd(["virsh", "undefine", name], sudo=True, check=False, capture=True)
-    log.info("VM removed: %s", name)
+    log.info("VM removed: {}", name)
 
 
 def vm_status(cfg: AgentVMConfig) -> str:
@@ -455,6 +470,45 @@ def ssh_config(cfg: AgentVMConfig) -> str:
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 """
+
+
+def wait_for_ssh(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    timeout_s: int = 300,
+    dry_run: bool = False,
+) -> None:
+    cfg = cfg.expanded_paths()
+    ident = cfg.paths.ssh_identity_file
+    if not ident:
+        raise RuntimeError(
+            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+        )
+    if dry_run:
+        log.info("DRYRUN: wait for SSH on {}@{}", cfg.vm.user, ip)
+        return
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        cmd = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=3",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            ident,
+            f"{cfg.vm.user}@{ip}",
+            "true",
+        ]
+        res = run_cmd(cmd, sudo=False, check=False, capture=True)
+        if res.code == 0:
+            log.info("SSH is ready on {}", ip)
+            return
+        time.sleep(2)
+    raise TimeoutError(f"Timed out waiting for SSH on {ip}:22")
 
 
 def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
@@ -494,7 +548,66 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         remote,
     ]
     if dry_run:
-        log.info("DRYRUN: %s", " ".join(cmd))
+        log.info("DRYRUN: {}", " ".join(cmd))
+        return
+    wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+    log.info("Running provisioning apt installs (showing progress)")
+    run_cmd(cmd, sudo=False, check=True, capture=False)
+    log.info("Provisioning complete.")
+
+
+def vm_has_share(cfg: AgentVMConfig) -> bool:
+    cfg = cfg.expanded_paths()
+    if not cfg.share.enabled or not cfg.share.host_src:
+        return False
+    xml = run_cmd(
+        ["virsh", "dumpxml", cfg.vm.name], sudo=True, check=False, capture=True
+    )
+    if xml.code != 0 or not xml.stdout.strip():
+        return False
+    try:
+        root = ET.fromstring(xml.stdout)
+    except Exception:
+        return False
+    want_src = str(Path(cfg.share.host_src).resolve())
+    want_tag = cfg.share.tag
+    for fs in root.findall(".//devices/filesystem"):
+        src = fs.find("source")
+        tgt = fs.find("target")
+        src_dir = src.attrib.get("dir", "") if src is not None else ""
+        tgt_dir = tgt.attrib.get("dir", "") if tgt is not None else ""
+        if src_dir == want_src and tgt_dir == want_tag:
+            return True
+    return False
+
+
+def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) -> None:
+    cfg = cfg.expanded_paths()
+    ident = cfg.paths.ssh_identity_file
+    if not ident:
+        raise RuntimeError(
+            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+        )
+    if not cfg.share.enabled or not cfg.share.host_src:
+        raise RuntimeError("Share is not enabled/configured.")
+    guest_dst = cfg.share.guest_dst
+    tag = cfg.share.tag
+    remote = (
+        "set -euo pipefail; "
+        f"sudo mkdir -p {shlex.quote(guest_dst)}; "
+        f"mountpoint -q {shlex.quote(guest_dst)} || "
+        f"sudo mount -t virtiofs {shlex.quote(tag)} {shlex.quote(guest_dst)}"
+    )
+    cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-i",
+        ident,
+        f"{cfg.vm.user}@{ip}",
+        remote,
+    ]
+    if dry_run:
+        log.info("DRYRUN: {}", " ".join(cmd))
         return
     run_cmd(cmd, sudo=False, check=True, capture=True)
-    log.info("Provisioning complete.")

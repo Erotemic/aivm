@@ -38,7 +38,14 @@ def detect_ssh_identity() -> tuple[str, str]:
 
 def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
     log.debug("introspecting existing_ipv4_routes")
-    res = run_cmd(["ip", "-4", "route", "show"], check=True, capture=True)
+    if which("ip") is None:
+        log.warning("ip command not found; skipping route introspection")
+        return []
+    try:
+        res = run_cmd(["ip", "-4", "route", "show"], check=True, capture=True)
+    except Exception as ex:
+        log.warning("Failed to inspect host routes: {}", ex)
+        return []
     nets: list[ipaddress.IPv4Network] = []
     for line in res.stdout.splitlines():
         tok = line.split()[0]

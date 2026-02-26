@@ -45,7 +45,7 @@ def run_cmd(
     original_cmd = cmd
     if sudo and os.geteuid() != 0:
         cmd = ["sudo", *cmd]
-        log.info("Running with sudo: {}", shell_join(original_cmd))
+        log.debug("Running with sudo: {}", shell_join(original_cmd))
     log.debug("RUN: {}", shell_join(cmd))
     p = subprocess.run(
         cmd,
@@ -56,7 +56,16 @@ def run_cmd(
     )
     res = CmdResult(p.returncode, p.stdout or "", p.stderr or "")
     if check and p.returncode != 0:
+        log.error(
+            "Command failed code={} cmd={} stderr={} stdout={}",
+            p.returncode,
+            shell_join(cmd),
+            res.stderr.strip(),
+            res.stdout.strip(),
+        )
         raise CmdError(cmd, res)
+    if p.returncode == 0:
+        log.debug("Command ok code=0 cmd={}", shell_join(cmd))
     return res
 
 

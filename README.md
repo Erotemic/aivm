@@ -22,15 +22,31 @@ uv pip install .
 In your repo directory (recommended):
 
 ```bash
-agentvm --config .agentvm.toml init
-agentvm --config .agentvm.toml plan
-agentvm --config .agentvm.toml apply --interactive
+agentvm init --config .agentvm.toml
+agentvm plan --config .agentvm.toml
+agentvm status --config .agentvm.toml
+agentvm status --config .agentvm.toml --detail
+agentvm apply --config .agentvm.toml --interactive
 ```
 
 Then connect with VS Code Remote-SSH using:
 
 ```bash
-agentvm vm ssh-config --config .agentvm.toml
+agentvm vm ssh_config --config .agentvm.toml
+```
+
+Or do it in one step (share current project directory and launch VS Code in the VM):
+
+```bash
+agentvm vm code --config .agentvm.toml --host_src .
+```
+
+### Command groups
+
+```bash
+agentvm net --help
+agentvm fw --help
+agentvm vm --help
 ```
 
 ## Notes
@@ -38,3 +54,4 @@ agentvm vm ssh-config --config .agentvm.toml
 - This tool assumes **Linux + libvirt**. It focuses on Debian/Ubuntu hosts for dependency installation.
 - NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want “internet-only” access.
 - virtiofs sharing is optional; it’s powerful, but it intentionally exposes that host directory to the VM.
+- `agentvm vm code` requires VS Code's `code` CLI and the Remote - SSH extension.
