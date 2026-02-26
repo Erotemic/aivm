@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
+import pytest
+
+from aivm.cli._common import _confirm_external_file_update
 from aivm.cli.main import _count_verbose, _normalize_argv
 from aivm.cli.vm import _auto_share_tag_for_path, _parse_sync_paths_arg
 
@@ -34,3 +38,37 @@ def test_auto_share_tag_collision() -> None:
     assert tag1 != ''
     assert tag2 != tag1
     assert len(tag2) <= 36
+
+
+def test_confirm_external_file_update_yes_noninteractive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    _confirm_external_file_update(
+        yes=True,
+        path=Path('/tmp/ssh-config'),
+        purpose='Update SSH entry',
+    )
+
+
+def test_confirm_external_file_update_requires_yes_noninteractive(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    with pytest.raises(RuntimeError, match='Re-run with --yes'):
+        _confirm_external_file_update(
+            yes=False,
+            path=Path('/tmp/ssh-config'),
+            purpose='Update SSH entry',
+        )
+
+
+def test_confirm_external_file_update_abort(monkeypatch) -> None:
+    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr(builtins, 'input', lambda _: 'n')
+    with pytest.raises(RuntimeError, match='Aborted by user'):
+        _confirm_external_file_update(
+            yes=False,
+            path=Path('/tmp/ssh-config'),
+            purpose='Update SSH entry',
+        )

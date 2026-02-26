@@ -46,6 +46,7 @@ from ._common import (
     PreparedSession,
     _BaseCommand,
     _cfg_path,
+    _confirm_external_file_update,
     _confirm_sudo_block,
     _load_cfg,
     _load_cfg_with_path,
@@ -318,7 +319,9 @@ class VMCodeCLI(_BaseCommand):
                     + '\n'.join(sync_result.failed)
                 )
 
-        ssh_cfg = _upsert_ssh_config_entry(cfg, dry_run=False)
+        ssh_cfg = _upsert_ssh_config_entry(
+            cfg, dry_run=False, yes=bool(args.yes)
+        )
 
         if which('code') is None:
             raise RuntimeError(
@@ -599,7 +602,7 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
 
 
 def _upsert_ssh_config_entry(
-    cfg: AgentVMConfig, *, dry_run: bool = False
+    cfg: AgentVMConfig, *, dry_run: bool = False, yes: bool = False
 ) -> Path:
     cfg = cfg.expanded_paths()
     ssh_dir = Path.home() / '.ssh'
@@ -617,6 +620,11 @@ def _upsert_ssh_config_entry(
             ssh_cfg,
         )
         return ssh_cfg
+    _confirm_external_file_update(
+        yes=bool(yes),
+        path=ssh_cfg,
+        purpose=f"Update SSH config entry for host '{block_name}'.",
+    )
     ensure_dir(ssh_dir)
     existing = ssh_cfg.read_text(encoding='utf-8') if ssh_cfg.exists() else ''
     pattern = re.compile(

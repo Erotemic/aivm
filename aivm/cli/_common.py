@@ -41,7 +41,7 @@ class _BaseCommand(scfg.DataConfig):
     yes = scfg.Value(
         False,
         isflag=True,
-        help='Auto-approve privileged host operations (sudo).',
+        help='Auto-approve interactive confirmations.',
     )
 
 
@@ -200,6 +200,24 @@ def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
     if not _SUDO_VALIDATED:
         run_cmd(['sudo', '-v'], sudo=False, check=True, capture=False)
         _SUDO_VALIDATED = True
+
+
+def _confirm_external_file_update(
+    *, yes: bool, path: Path, purpose: str
+) -> None:
+    if yes:
+        return
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            'External host file updates require confirmation, but stdin is not interactive. '
+            'Re-run with --yes.'
+        )
+    print('About to update a host file not managed by aivm:')
+    print(f'  {path}')
+    print(f'  {purpose}')
+    ans = input('Continue? [y/N]: ').strip().lower()
+    if ans not in {'y', 'yes'}:
+        raise RuntimeError('Aborted by user.')
 
 
 def _resolve_cfg_for_code(
