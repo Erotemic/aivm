@@ -3,17 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from aivm.cli import AgentVMModalCLI
-from aivm.config import AgentVMConfig, save
+from aivm.config import AgentVMConfig
+from aivm.store import Store, save_store, upsert_vm
 
 
 def _write_cfg(tmp_path: Path) -> Path:
-    cfg_path = tmp_path / '.aivm.toml'
+    cfg_path = tmp_path / 'config.toml'
     cfg = AgentVMConfig()
     cfg.paths.base_dir = str(tmp_path / 'libvirt')
     cfg.paths.state_dir = str(tmp_path / 'state')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.paths.ssh_pubkey_path = str(tmp_path / 'id_ed25519.pub')
-    save(cfg_path, cfg)
+    store = Store()
+    upsert_vm(store, cfg)
+    save_store(store, cfg_path)
     return cfg_path
 
 
