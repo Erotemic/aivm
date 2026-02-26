@@ -21,6 +21,15 @@ dependencies = [
   "ubelt",
 ]
 
+[project.optional-dependencies]
+tests = [
+  "coverage>=6.1.1",
+  "pytest>=6.2.5",
+  "pytest-cov>=3.0.0",
+  "pytest-timeout>=1.4.2",
+  "xdoctest>=1.1.5",
+]
+
 [project.urls]
 Homepage = "https://github.com/Erotemic/aivm"
 
@@ -60,7 +69,7 @@ mod_name = "aivm"
 repo_name = "aivm"
 pkg_name = "aivm"
 rel_mod_parent_dpath = "."
-os = [ "linux", "osx", "win",]
+os = [ "linux" ]
 min_python = "3.11"
 version = "0.0.1"
 url = "https://github.com/Erotemic/aivm"

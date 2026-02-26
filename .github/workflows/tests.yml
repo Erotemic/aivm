@@ -164,41 +164,11 @@ jobs:
           os: ubuntu-latest
           arch: auto
           uv-resolution: lowest-direct
-        - python-version: '3.11'
-          install-extras: tests
-          os: macOS-latest
-          arch: auto
-          uv-resolution: lowest-direct
-        - python-version: '3.11'
-          install-extras: tests
-          os: windows-latest
-          arch: auto
-          uv-resolution: lowest-direct
         - python-version: '3.14'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
           uv-resolution: lowest-direct
-        - python-version: '3.14'
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: lowest-direct
-        - python-version: '3.14'
-          install-extras: tests,optional
-          os: windows-latest
-          arch: auto
-          uv-resolution: lowest-direct
-        - python-version: '3.14'
-          install-extras: tests
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.14'
-          install-extras: tests
-          os: windows-latest
-          arch: auto
-          uv-resolution: highest
         - python-version: '3.11'
           install-extras: tests,optional
           os: ubuntu-latest
@@ -222,66 +192,11 @@ jobs:
         - python-version: pypy-3.9
           install-extras: tests,optional
           os: ubuntu-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.11'
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.12'
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.13'
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.14'
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: pypy-3.9
-          install-extras: tests,optional
-          os: macOS-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.11'
-          install-extras: tests,optional
-          os: windows-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.12'
-          install-extras: tests,optional
-          os: windows-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.13'
-          install-extras: tests,optional
-          os: windows-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: '3.14'
-          install-extras: tests,optional
-          os: windows-latest
-          arch: auto
-          uv-resolution: highest
-        - python-version: pypy-3.9
-          install-extras: tests,optional
-          os: windows-latest
           arch: auto
           uv-resolution: highest
     steps:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
-    - name: Enable MSVC 64bit
-      uses: ilammy/msvc-dev-cmd@v1
-      if: ${{ startsWith(matrix.os, 'windows-') }}
-      with:
-        arch: ${{ contains(matrix.os, 'arm') && 'arm64' || 'x64' }}
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3.7.0
       if: runner.os == 'Linux' && matrix.arch != 'auto'
@@ -297,9 +212,6 @@ jobs:
         pattern: wheels-*
         merge-multiple: true
         path: wheelhouse
-    - name: Set macOS deployment target (arm64)
-      if: runner.os == 'macOS'
-      run: echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
     - name: Install wheel ${{ matrix.install-extras }}
       shell: bash
       env:
