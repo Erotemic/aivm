@@ -46,8 +46,8 @@ def run_cmd(
     if sudo and os.geteuid() != 0:
         # Non-interactive sudo: fail fast if password/TTY is required.
         cmd = ['sudo', '-n', *cmd]
-        log.debug('Running with sudo: {}', shell_join(original_cmd))
-    log.debug('RUN: {}', shell_join(cmd))
+        log.opt(depth=1).debug('Running with sudo: {}', shell_join(original_cmd))
+    log.opt(depth=1).debug('RUN: {}', shell_join(cmd))
     p = subprocess.run(
         cmd,
         input=input_text if input_text is not None else None,
@@ -57,7 +57,7 @@ def run_cmd(
     )
     res = CmdResult(p.returncode, p.stdout or '', p.stderr or '')
     if check and p.returncode != 0:
-        log.error(
+        log.opt(depth=1).error(
             'Command failed code={} cmd={} stderr={} stdout={}',
             p.returncode,
             shell_join(cmd),
@@ -66,7 +66,7 @@ def run_cmd(
         )
         raise CmdError(cmd, res)
     if p.returncode == 0:
-        log.debug('Command ok code=0 cmd={}', shell_join(cmd))
+        log.opt(depth=1).debug('Command ok code=0 cmd={}', shell_join(cmd))
     return res
 
 

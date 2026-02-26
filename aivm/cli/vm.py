@@ -27,7 +27,7 @@ from ..status import (
     probe_ssh_ready,
     probe_vm_state,
 )
-from ..util import ensure_dir, run_cmd, which
+from ..util import CmdError, ensure_dir, run_cmd, which
 from ..vm import (
     attach_vm_share,
     create_or_start_vm,
@@ -640,6 +640,14 @@ def _parse_sync_paths_arg(paths_arg: str) -> list[str]:
     return [p for p in items if p]
 
 
+def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
+    text = str(ex)
+    if isinstance(ex, CmdError):
+        text = f'{ex.result.stderr}\n{ex.result.stdout}\n{text}'
+    m = re.search(r"virtiofs export directory '([^']+)' does not exist", text)
+    return m.group(1) if m else None
+
+
 def _check_network(
     cfg: AgentVMConfig, *, use_sudo: bool
 ) -> tuple[bool | None, str]:
@@ -796,10 +804,9 @@ def _prepare_attached_session(
     vm_running_probe = (
         _probe_vm_running_nonsudo(cfg.vm.name) if not dry_run else None
     )
-    vm_reachable = bool(cached_ssh_ok) or (vm_running_probe is True)
 
     net_probe, _ = _check_network(cfg, use_sudo=False)
-    need_network_ensure = (net_probe is False) and not vm_reachable
+    need_network_ensure = net_probe is False
     if need_network_ensure:
         _confirm_sudo_block(
             yes=bool(yes),
@@ -810,7 +817,13 @@ def _prepare_attached_session(
     need_firewall_apply = False
     if cfg.firewall.enabled and ensure_firewall_opt:
         fw_probe, _ = _check_firewall(cfg, use_sudo=False)
-        need_firewall_apply = (fw_probe is False) and not vm_reachable
+        if fw_probe is None:
+            _confirm_sudo_block(
+                yes=bool(yes),
+                purpose=f"Inspect firewall table '{cfg.firewall.table}'.",
+            )
+            fw_probe, _ = _check_firewall(cfg, use_sudo=True)
+        need_firewall_apply = fw_probe is not True
     if need_firewall_apply:
         _confirm_sudo_block(
             yes=bool(yes),
@@ -848,7 +861,23 @@ def _prepare_attached_session(
             yes=bool(yes),
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
         )
-        create_or_start_vm(cfg, dry_run=dry_run, recreate=False)
+        try:
+            create_or_start_vm(cfg, dry_run=dry_run, recreate=False)
+        except Exception as ex:
+            missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
+            if not dry_run and missing_virtiofs_dir is not None:
+                log.warning(
+                    'VM {} has stale virtiofs source {}; recreating VM definition',
+                    cfg.vm.name,
+                    missing_virtiofs_dir,
+                )
+                _confirm_sudo_block(
+                    yes=bool(yes),
+                    purpose=f"Recreate VM '{cfg.vm.name}' to repair stale virtiofs mapping.",
+                )
+                create_or_start_vm(cfg, dry_run=False, recreate=True)
+            else:
+                raise
         vm_running = True if dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
         if not dry_run and vm_running is True:
             mappings = vm_share_mappings(cfg, use_sudo=False)

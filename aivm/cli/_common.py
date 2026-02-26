@@ -61,6 +61,8 @@ from ..vm import (
 
 log = logger
 
+_SUDO_VALIDATED = False
+
 
 class _BaseCommand(scfg.DataConfig):
     """Base options shared by all commands."""
@@ -189,7 +191,15 @@ def _choose_vm_interactive(options: list[str], *, reason: str) -> str:
 
 
 def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
+    global _SUDO_VALIDATED
     if yes or os.geteuid() == 0:
+        if (
+            not _SUDO_VALIDATED
+            and os.geteuid() != 0
+            and sys.stdin.isatty()
+        ):
+            run_cmd(['sudo', '-v'], sudo=False, check=True, capture=False)
+            _SUDO_VALIDATED = True
         return
     if not sys.stdin.isatty():
         raise RuntimeError(
@@ -201,6 +211,9 @@ def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
     ans = input('Continue? [y/N]: ').strip().lower()
     if ans not in {'y', 'yes'}:
         raise RuntimeError('Aborted by user.')
+    if not _SUDO_VALIDATED:
+        run_cmd(['sudo', '-v'], sudo=False, check=True, capture=False)
+        _SUDO_VALIDATED = True
 
 
 def _resolve_cfg_for_code(

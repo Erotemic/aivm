@@ -125,6 +125,9 @@ on the host. Use ``--guest_dst`` to override.
 When possible, ``aivm code .`` live-attaches new shares to existing VMs
 (``--live --config`` when running, ``--config`` when stopped) instead of
 requiring recreation.
+If a VM fails to start because its libvirt XML references a missing virtiofs
+host path, ``aivm code .`` now auto-recreates that VM definition with the
+current requested share path.
 
 Make VM Feel Like Your Host
 ---------------------------
