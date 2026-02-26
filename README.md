@@ -25,7 +25,8 @@ Repo-local config flow:
 
 ```bash
 agentvm init --config .agentvm.toml
-agentvm plan --config .agentvm.toml
+agentvm help plan --config .agentvm.toml
+agentvm help tree
 agentvm host doctor
 agentvm status --config .agentvm.toml
 agentvm status --config .agentvm.toml --detail
@@ -61,6 +62,12 @@ agentvm code . --sync_settings
 agentvm vm code --config .agentvm.toml --host_src . --sync_settings
 # shorthand positional host folder
 agentvm vm code . --sync_settings
+```
+
+Open an interactive SSH shell in the mapped guest directory:
+
+```bash
+agentvm vm ssh .
 ```
 
 List managed resources:
@@ -122,6 +129,7 @@ When `[sync].enabled=true`, `agentvm vm code ...` will sync those paths before l
 
 ```bash
 agentvm host --help
+agentvm help --help
 agentvm host net --help
 agentvm host fw --help
 agentvm vm --help
