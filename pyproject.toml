@@ -78,6 +78,7 @@ author_email = "erotemic@gmail.com"
 description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
 license = "Apache 2"
 dev_status = "planning"
+ci_pypy_versions = []
 remote_host = "github.com"
 remote_group = "Erotemic"
 use_setup_py = false
