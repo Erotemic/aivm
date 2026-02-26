@@ -41,3 +41,13 @@ Uncertainties/risks: migration for existing users is manual and currently extern
 Tradeoffs and what might break: this intentionally drops backward compatibility and local metadata support, reducing complexity but breaking old workflows that relied on `.aivm.toml` or `.aivm-dir.toml`. The compose-like embedded VM config in TOML triple-quoted strings optimizes simplicity and reuse of existing config serializer, but is not as elegant as fully normalized nested TOML structures and may be harder to hand-edit carefully.
 
 What I am confident about: core code compiles, imports cleanly, and tests pass (`36 passed`). CLI smoke checks for config init/path/list with custom `--config` store path are working. The project is now aligned with a single-source-of-truth state model, which should make future iteration on VM selection and attachment UX much cleaner.
+
+## 2026-02-26 20:33:15 +0000
+
+Worked on tightening confirmation boundaries around user-owned files by gating `~/.ssh/config` edits in the `aivm vm code` path behind an interactive prompt unless `--yes` is supplied. Added a dedicated helper (`_confirm_external_file_update`) in `aivm/cli/_common.py`, wired it into `_upsert_ssh_config_entry` in `aivm/cli/vm.py`, and adjusted shared `--yes` help text to reflect broader confirmation semantics.
+
+State of mind / reflection: this was a small but important policy-consistency change; I wanted the behavior to mirror the existing sudo confirmation UX without over-coupling file-edit confirmation to privileged-operation logic. The clearest tradeoff was adding one more interactive checkpoint for `vm code` users who are not using `--yes`, but that aligns with explicit-consent expectations for modifying unmanaged files.
+
+Uncertainties / risks: there may be other code paths (now or later) that touch user-owned files and should also use the same helper; those would need a follow-up audit. Behavior in non-interactive environments now intentionally fails fast unless `--yes` is set, which is correct for safety but could surprise scripts that relied on implicit writes.
+
+What might break: workflows that call `aivm vm code` in non-interactive sessions without `--yes` will now error before writing SSH config. Confident this is intended behavior and matches the safety contract. Added targeted unit tests in `tests/test_cli_helpers.py` for `--yes` bypass, non-interactive refusal, and explicit abort response.
