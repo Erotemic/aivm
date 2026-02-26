@@ -1,11 +1,38 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import scriptconfig as scfg
 from loguru import logger
 
-from ._common import *  # noqa: F401,F403
+from ..config import AgentVMConfig
+from ..firewall import apply_firewall
+from ..net import ensure_network
+from ..registry import load_registry, registry_path
+from ..status import (
+    clip as _clip_text,
+    render_global_status,
+    render_status,
+    status_line,
+)
+from ..vm import (
+    create_or_start_vm,
+    fetch_image,
+    provision,
+    ssh_config as mk_ssh_config,
+    wait_for_ip,
+)
+from ._common import (
+    _BaseCommand,
+    _cfg_path,
+    _confirm_sudo_block,
+    _load_cfg,
+    _load_cfg_with_path,
+    _record_vm,
+    _resolve_cfg_for_code,
+    log,
+)
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
 from .host import HostModalCLI

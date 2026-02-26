@@ -1,6 +1,37 @@
 from __future__ import annotations
 
-from ._common import *  # noqa: F401,F403
+import os
+import re
+import shlex
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import scriptconfig as scfg
+
+from ..config import AgentVMConfig, dump_toml, load, save
+from ..detect import auto_defaults
+from ..registry import (
+    DIR_METADATA_FILE,
+    find_attachment,
+    find_vm,
+    load_registry,
+    read_dir_metadata,
+    registry_path,
+    save_registry,
+    upsert_vm,
+    vm_global_config_path,
+)
+from ..runtime import virsh_system_cmd
+from ..util import ensure_dir, run_cmd, which
+from ._common import (
+    _BaseCommand,
+    _cfg_path,
+    _confirm_sudo_block,
+    _record_vm,
+    _resolve_cfg_fallback,
+    _resolve_cfg_for_code,
+)
 
 class InitCLI(_BaseCommand):
     """Initialize a new config file with auto-detected defaults."""

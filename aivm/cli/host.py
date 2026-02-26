@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from ._common import *  # noqa: F401,F403
+import sys
+
+import scriptconfig as scfg
+
+from ..host import check_commands, host_is_debian_like, install_deps_debian
+from ..vm import fetch_image
+from ._common import (
+    _BaseCommand,
+    _confirm_sudo_block,
+    _resolve_cfg_fallback,
+)
 from .firewall import FirewallModalCLI
 from .net import NetModalCLI
 

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from ._common import *  # noqa: F401,F403
+import textwrap
+
+import scriptconfig as scfg
+
+from ._common import _BaseCommand, _cfg_path
 
 class PlanCLI(_BaseCommand):
     """Show the recommended end-to-end setup command sequence."""

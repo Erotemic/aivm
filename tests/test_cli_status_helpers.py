@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aivm.cli._common import _check_firewall, _check_network, _check_vm_state
+from aivm.cli.vm import _check_firewall, _check_network, _check_vm_state
 from aivm.config import AgentVMConfig
 from aivm.util import CmdResult
 

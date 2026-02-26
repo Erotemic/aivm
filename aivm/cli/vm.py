@@ -1,11 +1,60 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shlex
 from pathlib import Path
 
-from ._common import *  # noqa: F401,F403
-from ..registry import upsert_attachment, write_dir_metadata
+import scriptconfig as scfg
+
+from ..config import AgentVMConfig, save
+from ..firewall import apply_firewall
+from ..net import ensure_network
+from ..registry import (
+    find_vm,
+    load_registry,
+    save_registry,
+    upsert_attachment,
+    upsert_vm,
+    vm_global_config_path,
+    write_dir_metadata,
+)
+from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..status import (
+    probe_firewall,
+    probe_network,
+    probe_provisioned,
+    probe_ssh_ready,
+    probe_vm_state,
+)
+from ..util import ensure_dir, run_cmd, which
+from ..vm import (
+    attach_vm_share,
+    create_or_start_vm,
+    destroy_vm,
+    ensure_share_mounted,
+    get_ip_cached,
+    provision,
+    ssh_config as mk_ssh_config,
+    sync_settings,
+    vm_exists,
+    vm_has_share,
+    vm_share_mappings,
+    vm_status,
+    wait_for_ip,
+    wait_for_ssh,
+)
+from ._common import (
+    PreparedSession,
+    _BaseCommand,
+    _cfg_path,
+    _confirm_sudo_block,
+    _load_cfg,
+    _load_cfg_with_path,
+    _record_vm,
+    _resolve_cfg_for_code,
+    log,
+)
 
 class VMUpCLI(_BaseCommand):
     """Create the VM if needed, or start it if already defined."""

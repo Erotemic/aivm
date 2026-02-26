@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from ._common import *  # noqa: F401,F403
+import scriptconfig as scfg
+
+from ..firewall import apply_firewall, firewall_status, remove_firewall
+from ._common import (
+    _BaseCommand,
+    _confirm_sudo_block,
+    _resolve_cfg_fallback,
+)
 
 class FirewallApplyCLI(_BaseCommand):
     """Apply nftables isolation rules for the VM network."""
