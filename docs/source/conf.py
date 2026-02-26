@@ -124,15 +124,15 @@ def parse_version(fpath):
     import ast
 
     if not exists(fpath):
-        raise ValueError('fpath={!r} does not exist'.format(fpath))
-    with open(fpath, 'r') as file_:
+        raise ValueError("fpath={!r} does not exist".format(fpath))
+    with open(fpath, "r") as file_:
         sourcecode = file_.read()
     pt = ast.parse(sourcecode)
 
     class VersionVisitor(ast.NodeVisitor):
         def visit_Assign(self, node):
             for target in node.targets:
-                if getattr(target, 'id', None) == '__version__':
+                if getattr(target, "id", None) == "__version__":
                     self.version = node.value.s
 
     visitor = VersionVisitor()
@@ -140,17 +140,17 @@ def parse_version(fpath):
     return visitor.version
 
 
-project = 'agentvm'
-copyright = '2026, Jon Crall'
-author = 'Jon Crall'
-modname = 'agentvm'
+project = "agentvm"
+copyright = "2026, Jon Crall"
+author = "Jon Crall"
+modname = "agentvm"
 
 repo_dpath = dirname(dirname(dirname(__file__)))
-mod_dpath = join(repo_dpath, 'agentvm')
+mod_dpath = join(repo_dpath, "agentvm")
 src_dpath = dirname(mod_dpath)
-modpath = join(mod_dpath, '__init__.py')
+modpath = join(mod_dpath, "__init__.py")
 release = parse_version(modpath)
-version = '.'.join(release.split('.')[0:2])
+version = ".".join(release.split(".")[0:2])
 
 # Hack to ensure the module is importable
 # sys.path.insert(0, os.path.abspath(src_dpath))
@@ -166,18 +166,18 @@ version = '.'.join(release.split('.')[0:2])
 # ones.
 extensions = [
     # 'autoapi.extension',
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.napoleon',
-    'sphinx.ext.todo',
-    'sphinx.ext.viewcode',
-    'myst_parser',  # For markdown docs
-    'sphinx.ext.imgconverter',  # For building latexpdf
-    'sphinx.ext.githubpages',
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.todo",
+    "sphinx.ext.viewcode",
+    "myst_parser",  # For markdown docs
+    "sphinx.ext.imgconverter",  # For building latexpdf
+    "sphinx.ext.githubpages",
     # 'sphinxcontrib.redirects',
-    'sphinxcontrib.jquery',  # Fix for search
-    'sphinx_reredirects',
+    "sphinxcontrib.jquery",  # Fix for search
+    "sphinx_reredirects",
 ]
 
 todo_include_todos = True
@@ -192,20 +192,20 @@ autodoc_inherit_docstrings = False
 
 # Hack for geowatch, todo configure
 autosummary_mock_imports = [
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_24_and_lt_4_xx',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_22_and_lt_4_24',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_21_and_lt_4_22',
-    'geowatch.tasks.fusion.datamodules.temporal_sampling.affinity_sampling',
-    'geowatch.tasks.depth_pcd.model',
-    'geowatch.tasks.cold.export_change_map',
+    "geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_24_and_lt_4_xx",
+    "geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_22_and_lt_4_24",
+    "geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_21_and_lt_4_22",
+    "geowatch.tasks.fusion.datamodules.temporal_sampling.affinity_sampling",
+    "geowatch.tasks.depth_pcd.model",
+    "geowatch.tasks.cold.export_change_map",
 ]
 
 autodoc_default_options = {  # Document callable classes
-    'special-members': '__call__'
+    "special-members": "__call__"
 }
 
-autodoc_member_order = 'bysource'
-autoclass_content = 'both'
+autodoc_member_order = "bysource"
+autoclass_content = "both"
 # autodoc_mock_imports = ['torch', 'torchvision', 'visdom']
 
 # autoapi_modules = {
@@ -222,31 +222,31 @@ autoclass_content = 'both'
 
 intersphinx_mapping = {
     # 'pytorch': ('http://pytorch.org/docs/master/', None),
-    'python': ('https://docs.python.org/3', None),
-    'click': ('https://click.palletsprojects.com/', None),
+    "python": ("https://docs.python.org/3", None),
+    "click": ("https://click.palletsprojects.com/", None),
     # 'xxhash': ('https://pypi.org/project/xxhash/', None),
     # 'pygments': ('https://pygments.org/docs/', None),
     # 'tqdm': ('https://tqdm.github.io/', None),
     # Requires that the repo have objects.inv
-    'kwarray': ('https://kwarray.readthedocs.io/en/latest/', None),
-    'kwimage': ('https://kwimage.readthedocs.io/en/latest/', None),
+    "kwarray": ("https://kwarray.readthedocs.io/en/latest/", None),
+    "kwimage": ("https://kwimage.readthedocs.io/en/latest/", None),
     # 'kwplot': ('https://kwplot.readthedocs.io/en/latest/', None),
-    'ndsampler': ('https://ndsampler.readthedocs.io/en/latest/', None),
-    'ubelt': ('https://ubelt.readthedocs.io/en/latest/', None),
-    'xdoctest': ('https://xdoctest.readthedocs.io/en/latest/', None),
-    'networkx': ('https://networkx.org/documentation/stable/', None),
-    'scriptconfig': ('https://scriptconfig.readthedocs.io/en/latest/', None),
-    'rich': ('https://rich.readthedocs.io/en/latest/', None),
-    'numpy': ('https://numpy.org/doc/stable/', None),
-    'sympy': ('https://docs.sympy.org/latest/', None),
-    'scikit-learn': ('https://scikit-learn.org/stable/', None),
-    'pandas': ('https://pandas.pydata.org/docs/', None),
-    'matplotlib': ('https://matplotlib.org/stable/', None),
-    'pytest': ('https://docs.pytest.org/en/latest/', None),
-    'platformdirs': ('https://platformdirs.readthedocs.io/en/latest/', None),
-    'timerit': ('https://timerit.readthedocs.io/en/latest/', None),
-    'progiter': ('https://progiter.readthedocs.io/en/latest/', None),
-    'dateutil': ('https://dateutil.readthedocs.io/en/latest/', None),
+    "ndsampler": ("https://ndsampler.readthedocs.io/en/latest/", None),
+    "ubelt": ("https://ubelt.readthedocs.io/en/latest/", None),
+    "xdoctest": ("https://xdoctest.readthedocs.io/en/latest/", None),
+    "networkx": ("https://networkx.org/documentation/stable/", None),
+    "scriptconfig": ("https://scriptconfig.readthedocs.io/en/latest/", None),
+    "rich": ("https://rich.readthedocs.io/en/latest/", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "sympy": ("https://docs.sympy.org/latest/", None),
+    "scikit-learn": ("https://scikit-learn.org/stable/", None),
+    "pandas": ("https://pandas.pydata.org/docs/", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
+    "pytest": ("https://docs.pytest.org/en/latest/", None),
+    "platformdirs": ("https://platformdirs.readthedocs.io/en/latest/", None),
+    "timerit": ("https://timerit.readthedocs.io/en/latest/", None),
+    "progiter": ("https://progiter.readthedocs.io/en/latest/", None),
+    "dateutil": ("https://dateutil.readthedocs.io/en/latest/", None),
     # 'pytest._pytest.doctest': ('https://docs.pytest.org/en/latest/_modules/_pytest/doctest.html', None),
     # 'colorama': ('https://pypi.org/project/colorama/', None),
     # 'cv2' : ('http://docs.opencv.org/2.4/', None),
@@ -269,22 +269,22 @@ python -m sphinx.ext.intersphinx https://pygments-doc.readthedocs.io/en/latest/o
 
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
 #
-source_suffix = ['.rst', '.md']
+source_suffix = [".rst", ".md"]
 
 # The master toctree document.
-master_doc = 'index'
+master_doc = "index"
 
 # The language for content autogenerated by Sphinx. Refer to documentation
 # for a list of supported languages.
 #
 # This is also used if you do content translation via gettext catalogs.
 # Usually you set "language" from the command line for these cases.
-language = 'en'
+language = "en"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -292,7 +292,7 @@ language = 'en'
 exclude_patterns = []
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = "sphinx"
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -300,7 +300,7 @@ pygments_style = 'sphinx'
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
+html_theme = "sphinx_rtd_theme"
 html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 
 # Theme options are theme-specific and customize the look and feel of a theme
@@ -308,9 +308,9 @@ html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
 # documentation.
 #
 html_theme_options = {
-    'collapse_navigation': False,
-    'display_version': True,
-    'navigation_depth': -1,
+    "collapse_navigation": False,
+    "display_version": True,
+    "navigation_depth": -1,
     # 'logo_only': True,
 }
 # html_logo = '.static/agentvm.svg'
@@ -319,7 +319,7 @@ html_theme_options = {
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
 
 # Custom sidebar templates, must be a dictionary that maps document names
 # to template names.
@@ -335,7 +335,7 @@ html_static_path = ['_static']
 # -- Options for HTMLHelp output ---------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = project + 'doc'
+htmlhelp_basename = project + "doc"
 
 
 # -- Options for LaTeX output ------------------------------------------------
@@ -374,7 +374,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'agentvm.tex', 'agentvm Documentation', 'Jon Crall', 'manual'),
+    (master_doc, "agentvm.tex", "agentvm Documentation", "Jon Crall", "manual"),
 ]
 
 
@@ -382,7 +382,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, 'agentvm', 'agentvm Documentation', [author], 1)]
+man_pages = [(master_doc, "agentvm", "agentvm Documentation", [author], 1)]
 
 
 # -- Options for Texinfo output ----------------------------------------------
@@ -393,12 +393,12 @@ man_pages = [(master_doc, 'agentvm', 'agentvm Documentation', [author], 1)]
 texinfo_documents = [
     (
         master_doc,
-        'agentvm',
-        'agentvm Documentation',
+        "agentvm",
+        "agentvm Documentation",
         author,
-        'agentvm',
-        'One line description of project.',
-        'Miscellaneous',
+        "agentvm",
+        "One line description of project.",
+        "Miscellaneous",
     ),
 ]
 
@@ -426,16 +426,14 @@ class PatchedPythonDomain(PythonDomain):
         https://github.com/sphinx-doc/sphinx/issues/3866
     """
 
-    def resolve_xref(
-        self, env, fromdocname, builder, typ, target, node, contnode
-    ):
+    def resolve_xref(self, env, fromdocname, builder, typ, target, node, contnode):
         """
         Helps to resolves cross-references
         """
-        if target.startswith('ub.'):
-            target = 'ubelt.' + target[3]
-        if target.startswith('xdoc.'):
-            target = 'xdoctest.' + target[3]
+        if target.startswith("ub."):
+            target = "ubelt." + target[3]
+        if target.startswith("xdoc."):
+            target = "xdoctest." + target[3]
         return_value = super(PatchedPythonDomain, self).resolve_xref(
             env, fromdocname, builder, typ, target, node, contnode
         )
@@ -470,9 +468,9 @@ class GoogleStyleDocstringProcessor:
         # TODO: better tag patterns
         def _wrap(func):
             self.registry[tag] = {
-                'tag': tag,
-                'alias': alias,
-                'func': func,
+                "tag": tag,
+                "alias": alias,
+                "func": func,
             }
             return func
 
@@ -483,43 +481,43 @@ class GoogleStyleDocstringProcessor:
         Adds definitions I like of CommandLine, TextArt, and Ignore
         """
 
-        @self.register_section(tag='CommandLine')
+        @self.register_section(tag="CommandLine")
         def commandline(lines):
             new_lines = []
-            new_lines.append('.. rubric:: CommandLine')
-            new_lines.append('')
-            new_lines.append('.. code-block:: bash')
-            new_lines.append('')
+            new_lines.append(".. rubric:: CommandLine")
+            new_lines.append("")
+            new_lines.append(".. code-block:: bash")
+            new_lines.append("")
             new_lines.extend(lines[1:])
             return new_lines
 
         @self.register_section(
-            tag='SpecialExample', alias=['Benchmark', 'Sympy', 'Doctest']
+            tag="SpecialExample", alias=["Benchmark", "Sympy", "Doctest"]
         )
         def benchmark(lines):
             import textwrap
 
             new_lines = []
-            tag = lines[0].replace(':', '').strip()
+            tag = lines[0].replace(":", "").strip()
             # new_lines.append(lines[0])  # TODO: it would be nice to change the tagline.
             # new_lines.append('')
-            new_lines.append('.. rubric:: {}'.format(tag))
-            new_lines.append('')
-            new_text = textwrap.dedent('\n'.join(lines[1:]))
-            redone = new_text.split('\n')
+            new_lines.append(".. rubric:: {}".format(tag))
+            new_lines.append("")
+            new_text = textwrap.dedent("\n".join(lines[1:]))
+            redone = new_text.split("\n")
             new_lines.extend(redone)
             # import ubelt as ub
             # print('new_lines = {}'.format(ub.urepr(new_lines, nl=1)))
             # new_lines.append('')
             return new_lines
 
-        @self.register_section(tag='TextArt', alias=['Ascii'])
+        @self.register_section(tag="TextArt", alias=["Ascii"])
         def text_art(lines):
             new_lines = []
-            new_lines.append('.. rubric:: TextArt')
-            new_lines.append('')
-            new_lines.append('.. code-block:: bash')
-            new_lines.append('')
+            new_lines.append(".. rubric:: TextArt")
+            new_lines.append("")
+            new_lines.append(".. code-block:: bash")
+            new_lines.append("")
             new_lines.extend(lines[1:])
             return new_lines
 
@@ -534,7 +532,7 @@ class GoogleStyleDocstringProcessor:
         #     print('lines = {}'.format(ub.urepr(lines, nl=1)))
         #     return new_lines
 
-        @self.register_section(tag='Ignore')
+        @self.register_section(tag="Ignore")
         def ignore(lines):
             return []
 
@@ -567,18 +565,18 @@ class GoogleStyleDocstringProcessor:
         """
         orig_lines = lines[:]
         new_lines = []
-        curr_mode = '__doc__'
+        curr_mode = "__doc__"
         accum = []
 
         def accept():
             """called when we finish reading a section"""
-            if curr_mode == '__doc__':
+            if curr_mode == "__doc__":
                 # Keep the lines as-is
                 new_lines.extend(accum)
             else:
                 # Process this section with the given function
                 regitem = self.registry[curr_mode]
-                func = regitem['func']
+                func = regitem["func"]
                 fixed = func(accum)
                 new_lines.extend(fixed)
             # Reset the accumulator for the next section
@@ -587,14 +585,14 @@ class GoogleStyleDocstringProcessor:
         for line in orig_lines:
             found = None
             for regitem in self.registry.values():
-                if line.startswith(regitem['alias']):
-                    found = regitem['tag']
+                if line.startswith(regitem["alias"]):
+                    found = regitem["tag"]
                     break
-            if not found and line and not line.startswith(' '):
+            if not found and line and not line.startswith(" "):
                 # if the line startswith anything but a space, we are no longer
                 # in the previous nested scope. NOTE: This assumption may not
                 # be general, but it works for my code.
-                found = '__doc__'
+                found = "__doc__"
 
             if found:
                 # New section is found, accept the previous one and start
@@ -610,7 +608,7 @@ class GoogleStyleDocstringProcessor:
         lines[:] = new_lines
         # make sure there is a blank line at the end
         if lines and lines[-1]:
-            lines.append('')
+            lines.append("")
 
         return lines
 
@@ -652,7 +650,7 @@ class GoogleStyleDocstringProcessor:
         """
         if self.debug:
             print(
-                f'ProcessDocstring: name={name}, what_={what_}, num_lines={len(lines)}'
+                f"ProcessDocstring: name={name}, what_={what_}, num_lines={len(lines)}"
             )
 
         # print('BEFORE:')
@@ -677,7 +675,7 @@ class GoogleStyleDocstringProcessor:
 
         if render_doc_images:
             # DEVELOPING
-            if any('REQUIRES(--show)' in line for line in lines):
+            if any("REQUIRES(--show)" in line for line in lines):
                 # import xdev
                 # xdev.embed()
                 create_doctest_figure(app, obj, name, lines)
@@ -685,9 +683,9 @@ class GoogleStyleDocstringProcessor:
         FIX_EXAMPLE_FORMATTING = 1
         if FIX_EXAMPLE_FORMATTING:
             for idx, line in enumerate(lines):
-                if line == 'Example:':
-                    lines[idx] = '**Example:**'
-                    lines.insert(idx + 1, '')
+                if line == "Example:":
+                    lines[idx] = "**Example:**"
+                    lines.insert(idx + 1, "")
 
         REFORMAT_SECTIONS = 0
         if REFORMAT_SECTIONS:
@@ -697,9 +695,9 @@ class GoogleStyleDocstringProcessor:
             docstr = SphinxDocstring(lines)
 
             if REFORMAT_PARAMS:
-                for found in docstr.find_tagged_lines('Parameters'):
-                    print(found['text'])
-                    edit_slice = found['edit_slice']
+                for found in docstr.find_tagged_lines("Parameters"):
+                    print(found["text"])
+                    edit_slice = found["edit_slice"]
 
                     # TODO: figure out how to do this.
 
@@ -723,16 +721,16 @@ class GoogleStyleDocstringProcessor:
                     # rst.Parser().parse(found['text'], document)
 
             if REFORMAT_RETURNS:
-                for found in docstr.find_tagged_lines('returns'):
+                for found in docstr.find_tagged_lines("returns"):
                     # FIXME: account for new slice with -2 offset
-                    edit_slice = found['edit_slice']
-                    text = found['text']
+                    edit_slice = found["edit_slice"]
+                    text = found["text"]
                     new_lines = []
-                    for para in text.split('\n\n'):
+                    for para in text.split("\n\n"):
                         indent = para[: len(para) - len(para.lstrip())]
                         new_paragraph = indent + paragraph(para)
                         new_lines.append(new_paragraph)
-                        new_lines.append('')
+                        new_lines.append("")
                     new_lines = new_lines[:-1]
                     lines[edit_slice] = new_lines
 
@@ -755,8 +753,8 @@ class SphinxDocstring:
         # FORMAT THE RETURNS SECTION A BIT NICER
         import re
 
-        tag_pat = re.compile(r'^:(\w*):')
-        directive_pat = re.compile(r'^.. (\w*)::\s*(\w*)')
+        tag_pat = re.compile(r"^:(\w*):")
+        directive_pat = re.compile(r"^.. (\w*)::\s*(\w*)")
 
         # Split by sphinx types, mark the line offset where they start / stop
         sphinx_parts = []
@@ -767,25 +765,25 @@ class SphinxDocstring:
                 tag = tag_match.groups()[0]
                 sphinx_parts.append(
                     {
-                        'tag': tag,
-                        'start_offset': idx,
-                        'type': 'tag',
+                        "tag": tag,
+                        "start_offset": idx,
+                        "type": "tag",
                     }
                 )
             elif directive_match:
                 tag = directive_match.groups()[0]
                 sphinx_parts.append(
                     {
-                        'tag': tag,
-                        'start_offset': idx,
-                        'type': 'directive',
+                        "tag": tag,
+                        "start_offset": idx,
+                        "type": "directive",
                     }
                 )
 
         prev_offset = len(lines)
         for part in sphinx_parts[::-1]:
-            part['end_offset'] = prev_offset
-            prev_offset = part['start_offset']
+            part["end_offset"] = prev_offset
+            prev_offset = part["start_offset"]
 
         docstr.sphinx_parts = sphinx_parts
 
@@ -795,13 +793,13 @@ class SphinxDocstring:
 
     def find_tagged_lines(docstr, tag):
         for part in docstr.sphinx_parts[::-1]:
-            if part['tag'] == tag:
-                edit_slice = slice(part['start_offset'], part['end_offset'])
+            if part["tag"] == tag:
+                edit_slice = slice(part["start_offset"], part["end_offset"])
                 return_section = docstr.lines[edit_slice]
-                text = '\n'.join(return_section)
+                text = "\n".join(return_section)
                 found = {
-                    'edit_slice': edit_slice,
-                    'text': text,
+                    "edit_slice": edit_slice,
+                    "text": text,
                 }
                 yield found
 
@@ -821,7 +819,7 @@ def paragraph(text):
     """
     import re
 
-    out = re.sub(r'\s\s*', ' ', text).strip()
+    out = re.sub(r"\s\s*", " ", text).strip()
     return out
 
 
@@ -839,10 +837,10 @@ def create_doctest_figure(app, obj, name, lines):
     else:
         module = sys.modules[obj.__module__]
     # TODO: read settings from pyproject.toml?
-    if '--show' not in sys.argv:
-        sys.argv.append('--show')
-    if '--nointeract' not in sys.argv:
-        sys.argv.append('--nointeract')
+    if "--show" not in sys.argv:
+        sys.argv.append("--show")
+    if "--nointeract" not in sys.argv:
+        sys.argv.append("--nointeract")
     modpath = module.__file__
 
     # print(doctest.format_src())
@@ -851,11 +849,11 @@ def create_doctest_figure(app, obj, name, lines):
     # HACK: write to the srcdir
     doc_outdir = pathlib.Path(app.outdir)
     doc_srcdir = pathlib.Path(app.srcdir)
-    doc_static_outdir = doc_outdir / '_static'
-    doc_static_srcdir = doc_srcdir / '_static'
-    src_fig_dpath = doc_static_srcdir / 'images'
+    doc_static_outdir = doc_outdir / "_static"
+    doc_static_srcdir = doc_srcdir / "_static"
+    src_fig_dpath = doc_static_srcdir / "images"
     src_fig_dpath.mkdir(exist_ok=True, parents=True)
-    out_fig_dpath = doc_static_outdir / 'images'
+    out_fig_dpath = doc_static_outdir / "images"
     out_fig_dpath.mkdir(exist_ok=True, parents=True)
 
     # fig_dpath = (doc_outdir / 'autofigs' / name).mkdir(exist_ok=True)
@@ -864,10 +862,10 @@ def create_doctest_figure(app, obj, name, lines):
 
     import kwplot
 
-    kwplot.autompl(force='agg')
+    kwplot.autompl(force="agg")
     plt = kwplot.autoplt()
 
-    docstr = '\n'.join(lines)
+    docstr = "\n".join(lines)
 
     # TODO: The freeform parser does not work correctly here.
     # We need to parse out the sphinx (epdoc)? individual examples
@@ -876,7 +874,7 @@ def create_doctest_figure(app, obj, name, lines):
     import re
 
     split_parts = re.split(
-        '({}\\s*\n)'.format(re.escape('.. rubric:: Example')), docstr
+        "({}\\s*\n)".format(re.escape(".. rubric:: Example")), docstr
     )
     # split_parts = docstr.split('.. rubric:: Example')
 
@@ -891,9 +889,9 @@ def create_doctest_figure(app, obj, name, lines):
             start_line_offset + last_part.line_offset + last_part.n_lines - 1
         )
         offsets = {
-            'start': start_line_offset,
-            'end': last_line_offset,
-            'stop': last_line_offset + 1,
+            "start": start_line_offset,
+            "end": last_line_offset,
+            "stop": last_line_offset + 1,
         }
         return offsets
 
@@ -904,7 +902,7 @@ def create_doctest_figure(app, obj, name, lines):
     to_insert_fpaths = []
     curr_line_offset = 0
     for part in split_parts:
-        num_lines = part.count('\n')
+        num_lines = part.count("\n")
 
         doctests = list(
             xdoctest.core.parse_docstr_examples(
@@ -920,7 +918,7 @@ def create_doctest_figure(app, obj, name, lines):
         #     docstr, modpath=modpath, callname=name))
 
         for doctest in doctests:
-            if '--show' in part:
+            if "--show" in part:
                 ...
                 # print('-- SHOW TEST---')/)
                 # kwplot.close_figures()
@@ -936,33 +934,31 @@ def create_doctest_figure(app, obj, name, lines):
                         pass
 
                 try:
-                    doctest.mode = 'native'
-                    doctest.run(verbose=0, on_error='raise')
+                    doctest.mode = "native"
+                    doctest.run(verbose=0, on_error="raise")
                     ...
                 except Skipped:
-                    print(f'Skip doctest={doctest}')
+                    print(f"Skip doctest={doctest}")
                 except Exception as ex:
-                    print(f'ex={ex}')
-                    print(f'Error in doctest={doctest}')
+                    print(f"ex={ex}")
+                    print(f"Error in doctest={doctest}")
 
                 offsets = doctest_line_offsets(doctest)
-                doctest_line_end = curr_line_offset + offsets['stop']
+                doctest_line_end = curr_line_offset + offsets["stop"]
                 insert_line_index = doctest_line_end
 
                 figures = kwplot.all_figures()
                 for fig in figures:
                     fig_num += 1
                     # path_name = path_sanatize(name)
-                    path_name = (name).replace('.', '_')
-                    fig_fpath = (
-                        src_fig_dpath / f'fig_{path_name}_{fig_num:03d}.jpeg'
-                    )
+                    path_name = (name).replace(".", "_")
+                    fig_fpath = src_fig_dpath / f"fig_{path_name}_{fig_num:03d}.jpeg"
                     fig.savefig(fig_fpath)
-                    print(f'Wrote figure: {fig_fpath}')
+                    print(f"Wrote figure: {fig_fpath}")
                     to_insert_fpaths.append(
                         {
-                            'insert_line_index': insert_line_index,
-                            'fpath': fig_fpath,
+                            "insert_line_index": insert_line_index,
+                            "fpath": fig_fpath,
                         }
                     )
 
@@ -977,15 +973,15 @@ def create_doctest_figure(app, obj, name, lines):
     #     import xdev
     #     xdev.embed()
 
-    INSERT_AT = 'end'
-    INSERT_AT = 'inline'
+    INSERT_AT = "end"
+    INSERT_AT = "inline"
 
     end_index = len(lines)
     # Reverse order for inserts
     import shutil
 
     for info in to_insert_fpaths[::-1]:
-        src_abs_fpath = info['fpath']
+        src_abs_fpath = info["fpath"]
 
         rel_to_static_fpath = src_abs_fpath.relative_to(doc_static_srcdir)
         # dst_abs_fpath = doc_static_outdir / rel_to_static_fpath
@@ -1005,19 +1001,17 @@ def create_doctest_figure(app, obj, name, lines):
         dst_abs_fpath3.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(src_abs_fpath, dst_abs_fpath3)
 
-        if INSERT_AT == 'inline':
+        if INSERT_AT == "inline":
             # Try to insert after test
-            insert_index = info['insert_line_index']
-        elif INSERT_AT == 'end':
+            insert_index = info["insert_line_index"]
+        elif INSERT_AT == "end":
             insert_index = end_index
         else:
             raise KeyError(INSERT_AT)
-        lines.insert(
-            insert_index, '.. image:: {}'.format('..' / rel_to_root_fpath)
-        )
+        lines.insert(insert_index, ".. image:: {}".format(".." / rel_to_root_fpath))
         # lines.insert(insert_index, '.. image:: {}'.format(rel_to_root_fpath))
         # lines.insert(insert_index, '.. image:: {}'.format(rel_to_static_fpath))
-        lines.insert(insert_index, '')
+        lines.insert(insert_index, "")
 
 
 def postprocess_hyperlinks(app, doctree, docname):
@@ -1031,16 +1025,14 @@ def postprocess_hyperlinks(app, doctree, docname):
     import pathlib
 
     for node in doctree.traverse(nodes.reference):
-        if 'refuri' in node.attributes:
-            refuri = node.attributes['refuri']
-            if '.rst' in refuri:
-                if 'source' in node.document:
-                    fpath = pathlib.Path(node.document['source'])
+        if "refuri" in node.attributes:
+            refuri = node.attributes["refuri"]
+            if ".rst" in refuri:
+                if "source" in node.document:
+                    fpath = pathlib.Path(node.document["source"])
                     parent_dpath = fpath.parent
                     if (parent_dpath / refuri).exists():
-                        node.attributes['refuri'] = refuri.replace(
-                            '.rst', '.html'
-                        )
+                        node.attributes["refuri"] = refuri.replace(".rst", ".html")
                 else:
                     raise AssertionError
 
@@ -1058,19 +1050,19 @@ def setup(app):
     app: sphinx.application.Sphinx = app
     app.add_domain(PatchedPythonDomain, override=True)
 
-    app.connect('doctree-resolved', postprocess_hyperlinks)
+    app.connect("doctree-resolved", postprocess_hyperlinks)
 
     docstring_processor = GoogleStyleDocstringProcessor()
     # https://stackoverflow.com/questions/26534184/can-sphinx-ignore-certain-tags-in-python-docstrings
     app.connect(
-        'autodoc-process-docstring',
+        "autodoc-process-docstring",
         docstring_processor.process_docstring_callback,
     )
 
     def copy(src, dst):
         import shutil
 
-        print(f'Copy {src} -> {dst}')
+        print(f"Copy {src} -> {dst}")
         assert src.exists()
         if not dst.parent.exists():
             dst.parent.mkdir()
@@ -1081,16 +1073,16 @@ def setup(app):
     if HACK_FOR_KWCOCO:
         import pathlib
 
-        doc_outdir = pathlib.Path(app.outdir) / 'auto'
-        doc_srcdir = pathlib.Path(app.srcdir) / 'auto'
+        doc_outdir = pathlib.Path(app.outdir) / "auto"
+        doc_srcdir = pathlib.Path(app.srcdir) / "auto"
 
-        mod_dpath = doc_srcdir / '../../../kwcoco'
+        mod_dpath = doc_srcdir / "../../../kwcoco"
 
-        src_fpath = mod_dpath / 'coco_schema.json'
+        src_fpath = mod_dpath / "coco_schema.json"
         copy(src_fpath, doc_outdir / src_fpath.name)
         copy(src_fpath, doc_srcdir / src_fpath.name)
 
-        src_fpath = mod_dpath / 'coco_schema_informal.rst'
+        src_fpath = mod_dpath / "coco_schema_informal.rst"
         copy(src_fpath, doc_outdir / src_fpath.name)
         copy(src_fpath, doc_srcdir / src_fpath.name)
     return app

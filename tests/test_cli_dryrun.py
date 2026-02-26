@@ -45,4 +45,7 @@ def test_help_tree_includes_one_line_descriptions(tmp_path: Path, capsys) -> Non
     assert _run(["help", "tree", "--yes", "--config", str(cfg_path)]) == 0
     out = capsys.readouterr().out
     assert "agentvm help tree - Print the expanded agentvm command tree." in out
-    assert "agentvm vm ssh - SSH into the VM and start a shell in the mapped guest directory." in out
+    assert (
+        "agentvm vm ssh - SSH into the VM and start a shell in the mapped guest directory."
+        in out
+    )

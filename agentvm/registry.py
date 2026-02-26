@@ -146,7 +146,9 @@ def upsert_attachment(
     force: bool = False,
 ) -> None:
     norm = _norm_dir(host_path)
-    conflict = [a for a in reg.attachments if a.host_path == norm and a.vm_name != vm_name]
+    conflict = [
+        a for a in reg.attachments if a.host_path == norm and a.vm_name != vm_name
+    ]
     if conflict and not force:
         vm_names = ", ".join(sorted({a.vm_name for a in conflict}))
         raise RuntimeError(
@@ -155,7 +157,9 @@ def upsert_attachment(
         )
     if force and conflict:
         reg.attachments = [a for a in reg.attachments if a.host_path != norm]
-    existing = [a for a in reg.attachments if a.host_path == norm and a.vm_name == vm_name]
+    existing = [
+        a for a in reg.attachments if a.host_path == norm and a.vm_name == vm_name
+    ]
     rec = AttachmentRecord(
         host_path=norm,
         vm_name=vm_name,
@@ -170,7 +174,9 @@ def upsert_attachment(
         reg.attachments.append(rec)
 
 
-def find_attachment(reg: GlobalRegistry, host_path: str | Path) -> AttachmentRecord | None:
+def find_attachment(
+    reg: GlobalRegistry, host_path: str | Path
+) -> AttachmentRecord | None:
     norm = _norm_dir(host_path)
     for att in reg.attachments:
         if att.host_path == norm:

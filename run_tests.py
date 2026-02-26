@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-if __name__ == '__main__':
+if __name__ == "__main__":
     import pytest
     import sys
 
-    package_name = 'agentvm'
-    mod_dpath = 'agentvm'
-    test_dpath = 'tests'
+    package_name = "agentvm"
+    mod_dpath = "agentvm"
+    test_dpath = "tests"
     pytest_args = [
-        '--cov-config',
-        'pyproject.toml',
-        '--cov-report',
-        'html',
-        '--cov-report',
-        'term',
-        '--xdoctest',
-        '--cov=' + package_name,
+        "--cov-config",
+        "pyproject.toml",
+        "--cov-report",
+        "html",
+        "--cov-report",
+        "term",
+        "--xdoctest",
+        "--cov=" + package_name,
         mod_dpath,
         test_dpath,
     ]

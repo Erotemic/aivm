@@ -14,15 +14,17 @@ log = logger
 
 
 def _sudo_path_exists(path: Path) -> bool:
-    return run_cmd(
-        ["test", "-e", str(path)], sudo=True, check=False, capture=True
-    ).code == 0
+    return (
+        run_cmd(["test", "-e", str(path)], sudo=True, check=False, capture=True).code
+        == 0
+    )
 
 
 def _sudo_file_exists(path: Path) -> bool:
-    return run_cmd(
-        ["test", "-f", str(path)], sudo=True, check=False, capture=True
-    ).code == 0
+    return (
+        run_cmd(["test", "-f", str(path)], sudo=True, check=False, capture=True).code
+        == 0
+    )
 
 
 def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
@@ -633,9 +635,13 @@ def attach_vm_share(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     with tempfile.NamedTemporaryFile("w", delete=False) as f:
         f.write(xml)
         tmp = f.name
-    state = run_cmd(
-        ["virsh", "domstate", cfg.vm.name], sudo=True, check=False, capture=True
-    ).stdout.strip().lower()
+    state = (
+        run_cmd(
+            ["virsh", "domstate", cfg.vm.name], sudo=True, check=False, capture=True
+        )
+        .stdout.strip()
+        .lower()
+    )
     is_running = "running" in state
     attach_cmd = (
         ["virsh", "attach-device", cfg.vm.name, tmp, "--live", "--config"]
@@ -704,7 +710,7 @@ def sync_settings(
     for raw in wanted:
         src_abs = Path(raw).expanduser()
         if not src_abs.is_absolute():
-            src_abs = (Path.cwd() / src_abs)
+            src_abs = Path.cwd() / src_abs
         if not src_abs.exists():
             skipped_missing.append(str(src_abs))
             continue
@@ -714,7 +720,9 @@ def sync_settings(
         except ValueError:
             remote_path = f"$HOME/.agentvm-sync/{src_abs.name}"
 
-        remote_parent = f"$HOME/{Path(remote_path.replace('$HOME/', '')).parent.as_posix()}"
+        remote_parent = (
+            f"$HOME/{Path(remote_path.replace('$HOME/', '')).parent.as_posix()}"
+        )
         check_cmd = [
             "ssh",
             "-o",
