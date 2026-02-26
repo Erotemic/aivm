@@ -486,7 +486,7 @@ def wait_for_ssh(
     ident = cfg.paths.ssh_identity_file
     if not ident:
         raise RuntimeError(
-            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+            "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
         )
     if dry_run:
         log.info("DRYRUN: wait for SSH on {}@{}", cfg.vm.user, ip)
@@ -527,7 +527,7 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     ident = cfg.paths.ssh_identity_file
     if not ident:
         raise RuntimeError(
-            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+            "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
         )
     pkgs = list(cfg.provision.packages)
     docker_pkgs = (
@@ -656,7 +656,7 @@ def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) 
     ident = cfg.paths.ssh_identity_file
     if not ident:
         raise RuntimeError(
-            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+            "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
         )
     if not cfg.share.enabled or not cfg.share.host_src:
         raise RuntimeError("Share is not enabled/configured.")
@@ -698,7 +698,7 @@ def sync_settings(
     ident = cfg.paths.ssh_identity_file
     if not ident:
         raise RuntimeError(
-            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+            "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
         )
     wanted = list(paths if paths is not None else cfg.sync.paths)
     host_home = Path.home()

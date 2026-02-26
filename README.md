@@ -24,7 +24,9 @@ uv pip install .
 Repo-local config flow:
 
 ```bash
-agentvm init --config .agentvm.toml
+agentvm config init --config .agentvm.toml
+agentvm config show
+agentvm config edit
 agentvm help plan --config .agentvm.toml
 agentvm help tree
 agentvm host doctor
@@ -128,6 +130,7 @@ When `[sync].enabled=true`, `agentvm vm code ...` will sync those paths before l
 ### Command groups
 
 ```bash
+agentvm config --help
 agentvm host --help
 agentvm help --help
 agentvm host net --help

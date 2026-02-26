@@ -28,11 +28,26 @@ def detect_ssh_identity() -> tuple[str, str]:
                         return ident, pub if os.path.exists(pub) else ""
         except Exception:
             pass
-    for cand in ("~/.ssh/id_ed25519", "~/.ssh/id_rsa"):
-        p = expand(cand)
-        if os.path.exists(p):
-            pub = p + ".pub"
-            return p, pub if os.path.exists(pub) else ""
+    preferred = ["id_ed25519", "id_rsa"]
+    ssh_dir = Path(expand("~/.ssh"))
+    for name in preferred:
+        p = ssh_dir / name
+        if p.exists():
+            pub = str(p) + ".pub"
+            return str(p), pub if os.path.exists(pub) else ""
+
+    # Fallback for custom key names like id_<org>_ed25519.
+    if ssh_dir.exists():
+        for p in sorted(ssh_dir.glob("id_*")):
+            if p.is_dir():
+                continue
+            n = p.name
+            if n.endswith(".pub") or n.endswith("-cert.pub"):
+                continue
+            if n.endswith(".pem") or n.endswith(".ppk"):
+                continue
+            pub = str(p) + ".pub"
+            return str(p), pub if os.path.exists(pub) else ""
     return "", ""
 
 

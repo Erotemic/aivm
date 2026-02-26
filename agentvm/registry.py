@@ -18,6 +18,7 @@ class VMRecord:
     config_path: str
     network_name: str
     strict_firewall: bool
+    global_config_path: str = ""
 
 
 @dataclass
@@ -39,6 +40,11 @@ class GlobalRegistry:
 def registry_path() -> Path:
     root = ub.Path.appdir("agentvm").ensuredir()
     return Path(root) / "registry.toml"
+
+
+def vm_global_config_path(vm_name: str) -> Path:
+    root = ub.Path.appdir("agentvm").ensuredir()
+    return Path(root) / "vms" / f"{vm_name}.toml"
 
 
 def _norm_dir(path: str | Path) -> str:
@@ -66,6 +72,7 @@ def load_registry(path: Path | None = None) -> GlobalRegistry:
             VMRecord(
                 name=name,
                 config_path=str(item.get("config_path", "")).strip(),
+                global_config_path=str(item.get("global_config_path", "")).strip(),
                 network_name=str(item.get("network_name", "")).strip(),
                 strict_firewall=bool(item.get("strict_firewall", False)),
             )
@@ -97,6 +104,7 @@ def save_registry(reg: GlobalRegistry, path: Path | None = None) -> Path:
         lines.append("[[vms]]")
         lines.append(f'name = "{vm.name}"')
         lines.append(f'config_path = "{vm.config_path}"')
+        lines.append(f'global_config_path = "{vm.global_config_path}"')
         lines.append(f'network_name = "{vm.network_name}"')
         lines.append(f"strict_firewall = {'true' if vm.strict_firewall else 'false'}")
         lines.append("")
@@ -112,13 +120,22 @@ def save_registry(reg: GlobalRegistry, path: Path | None = None) -> Path:
     return fpath
 
 
-def upsert_vm(reg: GlobalRegistry, cfg: AgentVMConfig, cfg_path: Path) -> None:
+def upsert_vm(
+    reg: GlobalRegistry,
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    global_cfg_path: Path | None = None,
+) -> None:
     cfg = cfg.expanded_paths()
+    if global_cfg_path is None:
+        global_cfg_path = vm_global_config_path(cfg.vm.name)
     rec = VMRecord(
         name=cfg.vm.name,
         config_path=str(cfg_path.resolve()),
         network_name=cfg.network.name,
         strict_firewall=bool(cfg.firewall.enabled),
+        global_config_path=str(global_cfg_path),
     )
     existing = [v for v in reg.vms if v.name == rec.name]
     if existing:

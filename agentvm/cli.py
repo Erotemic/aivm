@@ -11,8 +11,8 @@ from pathlib import Path
 import scriptconfig as scfg
 from loguru import logger
 
-from .config import AgentVMConfig, load, save
-from .detect import auto_defaults
+from .config import AgentVMConfig, dump_toml, load, save
+from .detect import auto_defaults, detect_ssh_identity
 from .firewall import apply_firewall, firewall_status, remove_firewall
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .net import destroy_network, ensure_network, network_status
@@ -25,6 +25,7 @@ from .registry import (
     save_registry,
     upsert_attachment,
     upsert_vm,
+    vm_global_config_path,
     write_dir_metadata,
 )
 from .util import ensure_dir, run_cmd, which
@@ -85,14 +86,44 @@ def _cfg_path(p: str | None) -> Path:
 
 
 def _load_cfg(config_path: str | None) -> AgentVMConfig:
-    path = _cfg_path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Config not found: {path}. "
-            f"Run: agentvm init --config {path} "
-            "or use global selection commands like `agentvm code .` / `agentvm list`."
+    cfg, _ = _load_cfg_with_path(config_path)
+    return cfg
+
+
+def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
+    """Fill missing runtime-critical defaults on legacy/stale configs."""
+    changed = False
+    # First prefer previously known good VM-global config values.
+    if not cfg.paths.ssh_identity_file or not cfg.paths.ssh_pubkey_path:
+        gpath = vm_global_config_path(cfg.vm.name)
+        if gpath.exists():
+            try:
+                gcfg = load(gpath).expanded_paths()
+            except Exception:
+                gcfg = None
+            if gcfg is not None:
+                if not cfg.paths.ssh_identity_file and gcfg.paths.ssh_identity_file:
+                    cfg.paths.ssh_identity_file = gcfg.paths.ssh_identity_file
+                    changed = True
+                if not cfg.paths.ssh_pubkey_path and gcfg.paths.ssh_pubkey_path:
+                    cfg.paths.ssh_pubkey_path = gcfg.paths.ssh_pubkey_path
+                    changed = True
+
+    ident, pub = detect_ssh_identity()
+    if not cfg.paths.ssh_identity_file and ident:
+        cfg.paths.ssh_identity_file = ident
+        changed = True
+    if not cfg.paths.ssh_pubkey_path and pub:
+        cfg.paths.ssh_pubkey_path = pub
+        changed = True
+    if changed:
+        log.debug(
+            "Hydrated runtime defaults for vm={} ssh_identity_file={} ssh_pubkey_path={}",
+            cfg.vm.name,
+            cfg.paths.ssh_identity_file or "(empty)",
+            cfg.paths.ssh_pubkey_path or "(empty)",
         )
-    return load(path).expanded_paths()
+    return changed
 
 
 def _load_cfg_with_path(config_path: str | None) -> tuple[AgentVMConfig, Path]:
@@ -100,10 +131,13 @@ def _load_cfg_with_path(config_path: str | None) -> tuple[AgentVMConfig, Path]:
     if not path.exists():
         raise FileNotFoundError(
             f"Config not found: {path}. "
-            f"Run: agentvm init --config {path} "
+            f"Run: agentvm config init --config {path} "
             "or use global selection commands like `agentvm code .` / `agentvm list`."
         )
-    return load(path).expanded_paths(), path
+    cfg = load(path).expanded_paths()
+    if _hydrate_runtime_defaults(cfg):
+        save(path, cfg)
+    return cfg, path
 
 
 def _resolve_cfg_fallback(
@@ -116,8 +150,11 @@ def _resolve_cfg_fallback(
 
 
 def _record_vm(cfg: AgentVMConfig, cfg_path: Path) -> Path:
+    gpath = vm_global_config_path(cfg.vm.name)
+    ensure_dir(gpath.parent)
+    save(gpath, cfg)
     reg = load_registry()
-    upsert_vm(reg, cfg, cfg_path)
+    upsert_vm(reg, cfg, cfg_path, global_cfg_path=gpath)
     return save_registry(reg)
 
 
@@ -688,6 +725,55 @@ class InitCLI(_BaseCommand):
         return 0
 
 
+class ConfigShowCLI(_BaseCommand):
+    """Show the resolved config content."""
+
+    vm = scfg.Value(
+        "",
+        help="Optional VM name override when no local config file is present.",
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg, path = _resolve_cfg_fallback(args.config, vm_opt=args.vm)
+        print(f"# Config: {path}")
+        print(dump_toml(cfg), end="")
+        return 0
+
+
+class ConfigEditCLI(_BaseCommand):
+    """Edit the resolved config file in $EDITOR."""
+
+    vm = scfg.Value(
+        "",
+        help="Optional VM name override when no local config file is present.",
+    )
+    editor = scfg.Value(
+        "",
+        help="Editor command override (default: $EDITOR/$VISUAL, then nano/vi).",
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg, path = _resolve_cfg_fallback(args.config, vm_opt=args.vm)
+        # Persist hydrated/defaulted values before opening an editor.
+        save(path, cfg)
+        editor_cmd = (
+            args.editor.strip()
+            if str(args.editor or "").strip()
+            else (os.environ.get("EDITOR") or os.environ.get("VISUAL") or "")
+        )
+        if not editor_cmd:
+            editor_cmd = which("nano") or which("vi") or ""
+        if not editor_cmd:
+            raise RuntimeError("No editor found. Set $EDITOR or pass --editor.")
+        parts = shlex.split(editor_cmd) + [str(path)]
+        run_cmd(parts, sudo=False, check=True, capture=False)
+        return 0
+
+
 class PlanCLI(_BaseCommand):
     """Show the recommended end-to-end setup command sequence."""
 
@@ -1091,13 +1177,37 @@ def _select_cfg_for_vm_name(vm_name: str, *, reason: str) -> tuple[AgentVMConfig
     rec = find_vm(reg, vm_name)
     if rec is None:
         raise RuntimeError(f"VM not found in global registry ({reason}): {vm_name}")
-    cfg_path = Path(rec.config_path).expanduser()
-    if not cfg_path.exists():
-        raise RuntimeError(
-            f"Config path for VM {vm_name} does not exist: {cfg_path}. "
-            "Re-register it with `agentvm init` or `agentvm vm up`."
-        )
-    return load(cfg_path).expanded_paths(), cfg_path
+    candidates: list[Path] = []
+    if rec.config_path:
+        candidates.append(Path(rec.config_path).expanduser())
+    if rec.global_config_path:
+        candidates.append(Path(rec.global_config_path).expanduser())
+    # Backward-compatible fallback for older registry entries.
+    candidates.append(vm_global_config_path(vm_name))
+
+    seen: set[str] = set()
+    for cfg_path in candidates:
+        key = str(cfg_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if cfg_path.exists():
+            cfg = load(cfg_path).expanded_paths()
+            if _hydrate_runtime_defaults(cfg):
+                save(cfg_path, cfg)
+            # Self-heal registry/global snapshot for older entries.
+            gpath = vm_global_config_path(vm_name)
+            ensure_dir(gpath.parent)
+            save(gpath, cfg)
+            upsert_vm(reg, cfg, cfg_path, global_cfg_path=gpath)
+            save_registry(reg)
+            return cfg, cfg_path
+
+    raise RuntimeError(
+        f"No usable config file found for VM {vm_name}. "
+        f"Tried: {', '.join(str(p) for p in candidates)}. "
+        "Re-register it with `agentvm config init` or `agentvm vm up`."
+    )
 
 
 def _resolve_cfg_for_code(
@@ -1133,7 +1243,7 @@ def _resolve_cfg_for_code(
     ]
     if not valid:
         raise RuntimeError(
-            "No usable VM config found. Pass --config, run `agentvm init`, or register a VM."
+            "No usable VM config found. Pass --config, run `agentvm config init`, or register a VM."
         )
     if len(valid) == 1:
         only = valid[0]
@@ -1594,7 +1704,7 @@ class VMSSHCLI(_BaseCommand):
         ident = cfg.paths.ssh_identity_file
         if not ident:
             raise RuntimeError(
-                "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+                "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
             )
         remote_cmd = f"cd {shlex.quote(cfg.share.guest_dst)} && exec $SHELL -l"
         run_cmd(
@@ -1898,6 +2008,14 @@ class HelpModalCLI(scfg.ModalCLI):
     tree = HelpTreeCLI
 
 
+class ConfigModalCLI(scfg.ModalCLI):
+    """Config file management commands."""
+
+    init = InitCLI
+    show = ConfigShowCLI
+    edit = ConfigEditCLI
+
+
 class HostModalCLI(scfg.ModalCLI):
     """Host preparation and host-level operations."""
 
@@ -1928,7 +2046,9 @@ class AgentVMModalCLI(scfg.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents.
 
     Common flows:
-      agentvm init --config .agentvm.toml
+      agentvm config init --config .agentvm.toml
+      agentvm config show
+      agentvm config edit
       agentvm help plan --config .agentvm.toml
       agentvm help tree
       agentvm host doctor
@@ -1948,10 +2068,9 @@ class AgentVMModalCLI(scfg.ModalCLI):
       agentvm apply --config .agentvm.toml --interactive
 
     Tips:
-      Use `agentvm <group> --help` for grouped commands (`help`, `host`, `vm`).
+      Use `agentvm <group> --help` for grouped commands (`config`, `help`, `host`, `vm`).
     """
-
-    init = InitCLI
+    config = ConfigModalCLI
     help = HelpModalCLI
     host = HostModalCLI
     code = CodeCLI
@@ -1964,6 +2083,8 @@ class AgentVMModalCLI(scfg.ModalCLI):
 
 def _normalize_argv(argv: list[str]) -> list[str]:
     """Normalize accepted hyphenated spellings to scriptconfig command names."""
+    if len(argv) >= 1 and argv[0] == "init":
+        return ["config", "init", *argv[1:]]
     if len(argv) >= 1 and argv[0] == "attach":
         if len(argv) >= 2 and not argv[1].startswith("-"):
             return ["attach", "--host_src", argv[1], *argv[2:]]
