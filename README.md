@@ -1,5 +1,9 @@
 # aivm
 
+> [!WARNING]
+> This project was written with GPT-5.3 Codex and is still being evaluated for correctness and safety.
+> It is for experimental use only.
+
 A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM** designed for
 running coding agents with a stronger boundary than containers.
 

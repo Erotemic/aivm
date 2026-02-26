@@ -1,6 +1,11 @@
 The aivm Module
 ==================
 
+.. warning::
+
+   This project was written with GPT-5.3 Codex and is still being evaluated
+   for correctness and safety. It is for experimental use only.
+
 
 
 |Pypi| |PypiDownloads| |ReadTheDocs|
