@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import tomllib
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import ubelt as ub
 
 from .config import AgentVMConfig
 
@@ -36,18 +37,17 @@ class GlobalRegistry:
     attachments: list[AttachmentRecord] = field(default_factory=list)
 
 
+def _appdir(appname: str, kind: str) -> Path:
+    p = ub.Path.appdir(appname, type=kind).ensuredir()
+    return Path(p)
+
+
 def registry_path() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
-    root = Path(base) / "aivm"
-    root.mkdir(parents=True, exist_ok=True)
-    return Path(root) / "registry.toml"
+    return _appdir("aivm", "config") / "registry.toml"
 
 
 def vm_global_config_path(vm_name: str) -> Path:
-    base = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
-    root = Path(base) / "aivm"
-    root.mkdir(parents=True, exist_ok=True)
-    return Path(root) / "vms" / f"{vm_name}.toml"
+    return _appdir("aivm", "config") / "vms" / f"{vm_name}.config"
 
 
 def _norm_dir(path: str | Path) -> str:

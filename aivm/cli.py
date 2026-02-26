@@ -6,6 +6,7 @@ import re
 import hashlib
 import os
 import shlex
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import scriptconfig as scfg
@@ -17,6 +18,7 @@ from .firewall import apply_firewall, firewall_status, remove_firewall
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .net import destroy_network, ensure_network, network_status
 from .registry import (
+    DIR_METADATA_FILE,
     find_attachment,
     find_vm,
     load_registry,
@@ -339,8 +341,16 @@ def _check_network(cfg: AgentVMConfig, *, use_sudo: bool) -> tuple[bool | None, 
                 f"{cfg.network.name} probe inconclusive without sudo ({raw_detail or 'unknown error'})",
             )
         return False, f"{cfg.network.name} not defined"
-    active = "active: yes" in info.stdout.lower()
-    autostart = "autostart: yes" in info.stdout.lower()
+    active = False
+    autostart = False
+    for line in (info.stdout or "").splitlines():
+        if ":" not in line:
+            continue
+        key, val = [x.strip().lower() for x in line.split(":", 1)]
+        if key == "active":
+            active = val == "yes"
+        elif key == "autostart":
+            autostart = val == "yes"
     if active:
         return (
             True,
@@ -525,6 +535,23 @@ def _render_status(
         done += int(vm_ok)
     lines.append(_status_line(vm_ok, "VM state", vm_detail))
 
+    share_mappings: list[tuple[str, str]] = []
+    if vm_defined:
+        share_mappings = vm_share_mappings(cfg, use_sudo=use_sudo)
+    if vm_defined and share_mappings:
+        lines.append(
+            _status_line(
+                True,
+                "VM shared folders",
+                f"{len(share_mappings)} mapping(s) configured "
+                "(use --detail to inspect host paths)",
+            )
+        )
+    elif vm_defined:
+        lines.append(_status_line(None, "VM shared folders", "none detected"))
+    else:
+        lines.append(_status_line(None, "VM shared folders", "VM not defined"))
+
     ip = get_ip_cached(cfg)
     ip_ok = bool(ip) and bool(vm_defined)
     if vm_ok is not None:
@@ -649,6 +676,13 @@ def _render_status(
                 _clip((vm_raw.stdout + "\n" + vm_raw.stderr).strip() or "(no output)")
             )
             lines.append("```")
+        lines.append("Filesystem shares")
+        if share_mappings:
+            for src, tag in share_mappings:
+                lines.append(f"- host_src: {src or '(none)'}")
+                lines.append(f"  tag: {tag or '(none)'}")
+        else:
+            lines.append("- none detected")
         lines.append("")
 
         ip_file = Path(cfg.paths.state_dir) / cfg.vm.name / f"{cfg.vm.name}.ip"
@@ -679,28 +713,95 @@ def _render_status(
         else:
             lines.append("- no probe output")
 
+        cfg_arg = shlex.quote(str(path))
         next_steps: list[str] = []
         if missing:
-            next_steps.append("aivm host install_deps --config .aivm.toml")
-        if not net_ok:
-            next_steps.append("aivm host net create --config .aivm.toml")
+            next_steps.append(f"aivm host install_deps --config {cfg_arg}")
+        if net_ok is False:
+            next_steps.append(f"aivm host net create --config {cfg_arg}")
         if cfg.firewall.enabled and fw_ok is not True:
-            next_steps.append("aivm host fw apply --config .aivm.toml")
-        if not img_ok:
-            next_steps.append("aivm host image_fetch --config .aivm.toml")
+            next_steps.append(f"aivm host fw apply --config {cfg_arg}")
+        # For imported/running VMs, missing base image cache is usually non-blocking.
+        # Suggest image fetch only when VM is not yet ready to run.
+        if (not img_ok) and (vm_ok is not True):
+            next_steps.append(f"aivm host image_fetch --config {cfg_arg}")
         if not vm_ok:
-            next_steps.append("aivm vm up --config .aivm.toml")
+            next_steps.append(f"aivm vm up --config {cfg_arg}")
         if vm_ok and not ip:
-            next_steps.append("aivm vm wait_ip --config .aivm.toml")
+            next_steps.append(f"aivm vm wait_ip --config {cfg_arg}")
         if vm_ok and ip and not ssh_ok:
-            next_steps.append("aivm vm status --config .aivm.toml")
+            next_steps.append(f"aivm vm status --config {cfg_arg}")
         if prov_ok is False:
-            next_steps.append("aivm vm provision --config .aivm.toml")
+            next_steps.append(f"aivm vm provision --config {cfg_arg}")
         if next_steps:
             lines.append("")
             lines.append("🛠️ Suggested Next Commands")
             for cmd in next_steps:
                 lines.append(f"- `{cmd}`")
+    return "\n".join(lines)
+
+
+def _render_global_status() -> str:
+    """Status fallback when no specific VM config can be resolved."""
+    lines: list[str] = ["🧭 AIVM Global Status", ""]
+    missing, missing_opt = check_commands()
+    host_ok = len(missing) == 0
+    host_detail = (
+        "all required commands found" if host_ok else f"missing: {', '.join(missing)}"
+    )
+    if missing_opt:
+        host_detail += f" (optional missing: {', '.join(missing_opt)})"
+    lines.append(_status_line(host_ok, "Host dependencies", host_detail))
+
+    reg_path = registry_path()
+    reg = load_registry(reg_path)
+    lines.append(_status_line(True, "Registry", str(reg_path)))
+    lines.append("")
+
+    lines.append("Managed VMs")
+    if not reg.vms:
+        lines.append("  (none)")
+    else:
+        for vm in sorted(reg.vms, key=lambda x: x.name):
+            cfg_ok = Path(vm.config_path).expanduser().exists()
+            cfg_state = "ok" if cfg_ok else "missing"
+            lines.append(
+                f"  - {vm.name} | network={vm.network_name} "
+                f"| strict_firewall={'yes' if vm.strict_firewall else 'no'} "
+                f"| config={vm.config_path} ({cfg_state})"
+            )
+
+    lines.append("")
+    lines.append("Managed Networks")
+    by_name: dict[str, bool] = {}
+    for vm in reg.vms:
+        strict = bool(vm.strict_firewall)
+        if vm.network_name not in by_name:
+            by_name[vm.network_name] = strict
+        else:
+            by_name[vm.network_name] = by_name[vm.network_name] or strict
+    if not by_name:
+        lines.append("  (none)")
+    else:
+        for name in sorted(by_name):
+            lines.append(f"  - {name} | strict_firewall={'yes' if by_name[name] else 'no'}")
+
+    lines.append("")
+    lines.append("Attached Folders")
+    if not reg.attachments:
+        lines.append("  (none)")
+    else:
+        for att in sorted(reg.attachments, key=lambda x: (x.vm_name, x.host_path)):
+            lines.append(
+                f"  - {att.host_path} | vm={att.vm_name} "
+                f"| mode={att.mode} | guest_dst={att.guest_dst or '(default)'}"
+            )
+
+    lines.append("")
+    lines.append(
+        "ℹ️ No per-directory VM config resolved. "
+        "Use `aivm status --vm <name>` for VM-specific checks."
+    )
     return "\n".join(lines)
 
 
@@ -771,6 +872,278 @@ class ConfigEditCLI(_BaseCommand):
             raise RuntimeError("No editor found. Set $EDITOR or pass --editor.")
         parts = shlex.split(editor_cmd) + [str(path)]
         run_cmd(parts, sudo=False, check=True, capture=False)
+        return 0
+
+
+class ConfigPathCLI(_BaseCommand):
+    """Show in-scope config and metadata paths for current/target directory."""
+
+    vm = scfg.Value(
+        "",
+        help="Optional VM name override for showing VM-global config path.",
+    )
+    host_src = scfg.Value(
+        ".",
+        help="Host directory scope to inspect (default: current directory).",
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        host_src = Path(args.host_src).resolve()
+        local_cfg = host_src / ".aivm.toml"
+        meta_path = host_src / DIR_METADATA_FILE
+        reg_path = registry_path()
+        reg = load_registry(reg_path)
+        att = find_attachment(reg, host_src)
+        meta = read_dir_metadata(host_src)
+        meta_vm = str(meta.get("vm_name", "")).strip() if isinstance(meta, dict) else ""
+        resolved_cfg_path: Path | None = None
+        resolved_vm = ""
+        resolve_error = ""
+        try:
+            resolved_cfg, resolved_cfg_path = _resolve_cfg_for_code(
+                config_opt=args.config,
+                vm_opt=args.vm,
+                host_src=host_src,
+            )
+            resolved_vm = resolved_cfg.vm.name
+        except Exception as ex:
+            resolve_error = str(ex)
+
+        vm_name = str(args.vm or "").strip() or resolved_vm or meta_vm
+        if not vm_name and att is not None:
+            vm_name = att.vm_name
+
+        print("🧭 AIVM Config Paths")
+        print(f"cwd = {host_src}")
+        print(
+            f"local_config = {local_cfg} "
+            f"({'exists' if local_cfg.exists() else 'missing'})"
+        )
+        print(
+            f"dir_metadata = {meta_path} "
+            f"({'exists' if meta_path.exists() else 'missing'})"
+        )
+        if meta_vm:
+            print(f"dir_metadata_vm = {meta_vm}")
+        print(
+            f"registry = {reg_path} "
+            f"({'exists' if reg_path.exists() else 'missing'})"
+        )
+        if att is not None:
+            print(f"registry_attachment_vm = {att.vm_name}")
+        if vm_name:
+            vm_cfg = vm_global_config_path(vm_name)
+            print(
+                f"vm_global_config = {vm_cfg} "
+                f"({'exists' if vm_cfg.exists() else 'missing'})"
+            )
+            rec = find_vm(reg, vm_name)
+            if rec is not None:
+                if rec.config_path:
+                    p = Path(rec.config_path).expanduser()
+                    print(
+                        f"registry_vm_config = {p} "
+                        f"({'exists' if p.exists() else 'missing'})"
+                    )
+                if rec.global_config_path:
+                    p = Path(rec.global_config_path).expanduser()
+                    print(
+                        f"registry_vm_global_config = {p} "
+                        f"({'exists' if p.exists() else 'missing'})"
+                    )
+        if resolved_cfg_path is not None:
+            print(f"resolved_config = {resolved_cfg_path}")
+            if resolved_vm:
+                print(f"resolved_vm = {resolved_vm}")
+        else:
+            print("resolved_config = (unresolved)")
+            if resolve_error:
+                print(f"resolution_error = {resolve_error}")
+        return 0
+
+
+def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
+    info: dict[str, object] = {
+        "name": vm_name,
+        "state": "unknown",
+        "autostart": "unknown",
+        "network": "unknown",
+        "vcpus": "unknown",
+        "memory_mib": "unknown",
+        "shares": [],
+    }
+    dominfo = run_cmd(
+        ["virsh", "-c", "qemu:///system", "dominfo", vm_name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if dominfo.code == 0:
+        for line in (dominfo.stdout or "").splitlines():
+            if ":" not in line:
+                continue
+            key, val = [x.strip() for x in line.split(":", 1)]
+            low = key.lower()
+            if low == "state":
+                info["state"] = val or "unknown"
+            elif low == "autostart":
+                info["autostart"] = val or "unknown"
+            elif low in {"cpu(s)", "cpus"}:
+                info["vcpus"] = val or "unknown"
+            elif low.startswith("max memory"):
+                m = re.search(r"(\d+)", val)
+                if m:
+                    kib = int(m.group(1))
+                    info["memory_mib"] = str(kib // 1024)
+    xml = run_cmd(
+        ["virsh", "-c", "qemu:///system", "dumpxml", vm_name],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if xml.code == 0 and xml.stdout.strip():
+        try:
+            root = ET.fromstring(xml.stdout)
+            iface = root.find(".//devices/interface[@type='network']/source")
+            if iface is not None:
+                name = iface.attrib.get("network", "").strip()
+                if name:
+                    info["network"] = name
+            shares: list[str] = []
+            for fs in root.findall(".//devices/filesystem[@type='mount']"):
+                src = fs.find("source")
+                tgt = fs.find("target")
+                src_dir = src.attrib.get("dir", "").strip() if src is not None else ""
+                tgt_dir = tgt.attrib.get("dir", "").strip() if tgt is not None else ""
+                if src_dir or tgt_dir:
+                    shares.append(f"{src_dir or '?'} -> {tgt_dir or '?'}")
+            info["shares"] = shares
+        except Exception:
+            pass
+    return info
+
+
+def _prompt_import_discovered_vm(vm_info: dict[str, object], *, yes: bool) -> bool:
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    print("")
+    print(f"Discovered unmanaged VM: {vm_info['name']}")
+    print(
+        f"  state={vm_info['state']} | autostart={vm_info['autostart']} | "
+        f"network={vm_info['network']} | vcpus={vm_info['vcpus']} | "
+        f"memory_mib={vm_info['memory_mib']}"
+    )
+    shares = vm_info.get("shares", [])
+    if isinstance(shares, list) and shares:
+        print("  shares:")
+        for item in shares[:5]:
+            print(f"    - {item}")
+        if len(shares) > 5:
+            print(f"    - ... ({len(shares) - 5} more)")
+    else:
+        print("  shares: none detected")
+    ans = input("Add this VM to aivm registry/config? [y/N]: ").strip().lower()
+    return ans in {"y", "yes"}
+
+
+class ConfigDiscoverCLI(_BaseCommand):
+    """Discover existing libvirt VMs and register them in aivm config registry."""
+
+    dry_run = scfg.Value(False, isflag=True, help="Print actions without writing config/registry.")
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        names_res = run_cmd(
+            ["virsh", "-c", "qemu:///system", "list", "--all", "--name"],
+            sudo=False,
+            check=False,
+            capture=True,
+        )
+        used_sudo = False
+        if names_res.code != 0:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose="Discover existing libvirt VMs via system virsh.",
+            )
+            used_sudo = True
+            names_res = run_cmd(
+                ["virsh", "-c", "qemu:///system", "list", "--all", "--name"],
+                sudo=True,
+                check=True,
+                capture=True,
+            )
+
+        vm_names = [n.strip() for n in names_res.stdout.splitlines() if n.strip()]
+        reg = load_registry()
+        managed_seen = 0
+        added = 0
+        updated = 0
+        created_cfg = 0
+        skipped_unmanaged = 0
+        for vm_name in vm_names:
+            rec = find_vm(reg, vm_name)
+            vm_info = _discover_vm_info(vm_name, use_sudo=used_sudo)
+            if rec is None and not _prompt_import_discovered_vm(
+                vm_info, yes=bool(args.yes)
+            ):
+                skipped_unmanaged += 1
+                continue
+            cfg_path = vm_global_config_path(vm_name)
+            cfg = None
+            if rec is not None:
+                managed_seen += 1
+                candidates = []
+                if rec.config_path:
+                    candidates.append(Path(rec.config_path).expanduser())
+                if rec.global_config_path:
+                    candidates.append(Path(rec.global_config_path).expanduser())
+                for p in candidates:
+                    if p.exists():
+                        try:
+                            cfg = load(p).expanded_paths()
+                            break
+                        except Exception:
+                            continue
+            if cfg is None:
+                cfg = AgentVMConfig().expanded_paths()
+                cfg.vm.name = vm_name
+                cfg.network.name = str(vm_info.get("network", "unknown"))
+                created_cfg += 1
+            else:
+                cfg.vm.name = vm_name
+                if not cfg.network.name:
+                    cfg.network.name = str(vm_info.get("network", "unknown"))
+
+            if rec is None:
+                added += 1
+            else:
+                updated += 1
+            if not args.dry_run:
+                ensure_dir(cfg_path.parent)
+                save(cfg_path, cfg)
+                upsert_vm(reg, cfg, cfg_path, global_cfg_path=cfg_path)
+
+        reg_path = registry_path()
+        if not args.dry_run:
+            save_registry(reg)
+
+        print(f"Discovered VMs: {len(vm_names)}")
+        print(f"  already_managed_seen: {managed_seen}")
+        print(f"  added: {added}")
+        print(f"  updated: {updated}")
+        print(f"  skipped_unmanaged: {skipped_unmanaged}")
+        print(f"  created_config_files: {created_cfg}")
+        print(f"Registry: {reg_path}")
+        print("")
+        print("Security caveats:")
+        print("  - Discovery trusts local libvirt state only; ownership/provenance of VMs is not verified.")
+        print("  - Imported configs may not reflect actual firewall isolation policy for each VM/network.")
+        print("  - Imported share mappings and SSH settings may expose host paths or credentials; review before use.")
         return 0
 
 
@@ -1234,11 +1607,16 @@ def _resolve_cfg_for_code(
     if att is not None:
         return _select_cfg_for_vm_name(att.vm_name, reason="existing attachment")
 
-    valid = [
-        r
-        for r in reg.vms
-        if r.config_path and Path(r.config_path).expanduser().exists()
-    ]
+    valid: list = []
+    for r in reg.vms:
+        paths = []
+        if r.config_path:
+            paths.append(Path(r.config_path).expanduser())
+        if r.global_config_path:
+            paths.append(Path(r.global_config_path).expanduser())
+        paths.append(vm_global_config_path(r.name))
+        if any(p.exists() for p in paths):
+            valid.append(r)
     if not valid:
         raise RuntimeError(
             "No usable VM config found. Pass --config, run `aivm config init`, or register a VM."
@@ -1329,7 +1707,12 @@ class VMCodeCLI(_BaseCommand):
         cached_ssh_ok = False
         if cached_ip:
             cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
-        vm_reachable = bool(cached_ssh_ok)
+        vm_running_probe = (
+            _probe_vm_running_nonsudo(cfg.vm.name) if not args.dry_run else None
+        )
+        # Optimistic reuse of non-sudo probes:
+        # if VM is already running, avoid host network/firewall sudo setup prompts.
+        vm_reachable = bool(cached_ssh_ok) or (vm_running_probe is True)
 
         net_probe, _ = _check_network(cfg, use_sudo=False)
         # Only escalate when we can confirm network is not ready.
@@ -1354,9 +1737,7 @@ class VMCodeCLI(_BaseCommand):
             apply_firewall(cfg, dry_run=args.dry_run)
 
         recreate = False
-        vm_running = (
-            _probe_vm_running_nonsudo(cfg.vm.name) if not args.dry_run else None
-        )
+        vm_running = vm_running_probe
         mappings: list[tuple[str, str]] = []
         has_share = False
         if vm_running is None and cached_ssh_ok:
@@ -1403,8 +1784,7 @@ class VMCodeCLI(_BaseCommand):
                     _confirm_sudo_block(
                         yes=bool(args.yes),
                         purpose=(
-                            f"Attach this folder to VM '{cfg.vm.name}' "
-                            "(only remaining privileged action)."
+                            f"Attach this folder to existing VM '{cfg.vm.name}'."
                         ),
                     )
                     attach_vm_share(cfg, dry_run=False)
@@ -1569,7 +1949,12 @@ class VMSSHCLI(_BaseCommand):
         cached_ssh_ok = False
         if cached_ip:
             cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
-        vm_reachable = bool(cached_ssh_ok)
+        vm_running_probe = (
+            _probe_vm_running_nonsudo(cfg.vm.name) if not args.dry_run else None
+        )
+        # Optimistic reuse of non-sudo probes:
+        # if VM is already running, avoid host network/firewall sudo setup prompts.
+        vm_reachable = bool(cached_ssh_ok) or (vm_running_probe is True)
 
         net_probe, _ = _check_network(cfg, use_sudo=False)
         need_network_ensure = (net_probe is False) and not vm_reachable
@@ -1592,9 +1977,7 @@ class VMSSHCLI(_BaseCommand):
             apply_firewall(cfg, dry_run=args.dry_run)
 
         recreate = False
-        vm_running = (
-            _probe_vm_running_nonsudo(cfg.vm.name) if not args.dry_run else None
-        )
+        vm_running = vm_running_probe
         mappings: list[tuple[str, str]] = []
         has_share = False
         if vm_running is None and cached_ssh_ok:
@@ -1639,8 +2022,7 @@ class VMSSHCLI(_BaseCommand):
                     _confirm_sudo_block(
                         yes=bool(args.yes),
                         purpose=(
-                            f"Attach this folder to VM '{cfg.vm.name}' "
-                            "(only remaining privileged action)."
+                            f"Attach this folder to existing VM '{cfg.vm.name}'."
                         ),
                     )
                     attach_vm_share(cfg, dry_run=False)
@@ -1970,14 +2352,23 @@ class StatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        if args.config is not None or _cfg_path(None).exists():
-            cfg, path = _load_cfg_with_path(args.config)
-        else:
-            cfg, path = _resolve_cfg_for_code(
-                config_opt=None,
-                vm_opt=args.vm,
-                host_src=Path.cwd(),
-            )
+        cfg = None
+        path = None
+        try:
+            if args.config is not None or _cfg_path(None).exists():
+                cfg, path = _load_cfg_with_path(args.config)
+            else:
+                cfg, path = _resolve_cfg_for_code(
+                    config_opt=None,
+                    vm_opt=args.vm,
+                    host_src=Path.cwd(),
+                )
+        except Exception:
+            cfg = None
+            path = None
+        if cfg is None or path is None:
+            print(_render_global_status())
+            return 0
         if args.sudo:
             _confirm_sudo_block(
                 yes=bool(args.yes),
@@ -2014,6 +2405,8 @@ class ConfigModalCLI(scfg.ModalCLI):
     """Config file management commands."""
 
     init = InitCLI
+    discover = ConfigDiscoverCLI
+    path = ConfigPathCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
 
@@ -2049,6 +2442,8 @@ class AgentVMModalCLI(scfg.ModalCLI):
 
     Common flows:
       aivm config init --config .aivm.toml
+      aivm config discover
+      aivm config path
       aivm config show
       aivm config edit
       aivm help plan --config .aivm.toml

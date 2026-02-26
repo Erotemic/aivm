@@ -47,6 +47,7 @@ Repo-local config flow:
 .. code-block:: bash
 
    aivm config init --config .aivm.toml
+   aivm config discover
    aivm config show
    aivm config edit
    aivm help plan --config .aivm.toml
@@ -68,6 +69,9 @@ No-local-init flow (recommended UX for new repos):
 (prompts if ambiguous), auto-attaches the folder if needed, then opens VS Code.
 ``aivm status`` also resolves from directory metadata/global registry when there
 is no local ``.aivm.toml`` (or use ``--vm``).
+Global registry/config metadata is stored in a user config appdir
+(``ub.Path.appdir(type='config')`` when available), with per-VM configs
+under ``vms/<name>.config``.
 By default ``status`` avoids sudo and reports limited checks; use
 ``status --sudo`` for privileged network/firewall/libvirt/image checks.
 Privileged host actions prompt for confirmation before sudo blocks; use ``--yes``

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from loguru import logger
 
 from .config import AgentVMConfig
@@ -8,10 +10,46 @@ from .util import run_cmd
 log = logger
 
 
+def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
+    """Prefer live libvirt network metadata over potentially stale config."""
+    bridge = cfg.network.bridge
+    gateway = cfg.network.gateway_ip
+    res = run_cmd(
+        ["virsh", "-c", "qemu:///system", "net-dumpxml", cfg.network.name],
+        sudo=True,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0 or not (res.stdout or "").strip():
+        return bridge, gateway
+    try:
+        root = ET.fromstring(res.stdout)
+    except Exception:
+        return bridge, gateway
+    br_node = root.find("./bridge")
+    ip_node = root.find("./ip")
+    live_bridge = br_node.attrib.get("name", "").strip() if br_node is not None else ""
+    live_gateway = ip_node.attrib.get("address", "").strip() if ip_node is not None else ""
+    if live_bridge and live_bridge != bridge:
+        log.warning(
+            "Firewall bridge differs from config: config={} live={}. Using live value.",
+            bridge,
+            live_bridge,
+        )
+        bridge = live_bridge
+    if live_gateway and live_gateway != gateway:
+        log.warning(
+            "Firewall gateway differs from config: config={} live={}. Using live value.",
+            gateway,
+            live_gateway,
+        )
+        gateway = live_gateway
+    return bridge, gateway
+
+
 def _nft_script(cfg: AgentVMConfig) -> str:
     table = cfg.firewall.table
-    br = cfg.network.bridge
-    gw = cfg.network.gateway_ip
+    br, gw = _effective_bridge_and_gateway(cfg)
     blocks = list(cfg.firewall.block_cidrs) + list(cfg.firewall.extra_block_cidrs or [])
     seen = set()
     blocks2 = []
