@@ -144,7 +144,13 @@ def _toml_escape(s: str) -> str:
 def dump_toml(cfg: AgentVMConfig) -> str:
     d = asdict(cfg)
     lines: list[str] = []
+    verbosity = d.get("verbosity", 1)
+    if isinstance(verbosity, int) and verbosity != 1:
+        lines.append(f"verbosity = {verbosity}")
+        lines.append("")
     for section, body in d.items():
+        if section == "verbosity":
+            continue
         if isinstance(body, dict):
             lines.append(f"[{section}]")
             for k, v in body.items():
@@ -157,9 +163,6 @@ def dump_toml(cfg: AgentVMConfig) -> str:
                     lines.append(f"{k} = [{', '.join(parts)}]")
                 else:
                     lines.append(f'{k} = "{_toml_escape(str(v))}"')
-            lines.append("")
-        elif section == "verbosity" and body != 1:
-            lines.append(f"{section} = {body}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
