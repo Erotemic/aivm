@@ -22,9 +22,9 @@ uv pip install .
 In your repo directory (recommended):
 
 ```bash
-agentvm --config .agentvm.toml init
-agentvm --config .agentvm.toml plan
-agentvm --config .agentvm.toml apply --interactive
+agentvm init --config .agentvm.toml 
+agentvm plan --config .agentvm.toml 
+agentvm apply --config .agentvm.toml --interactive
 ```
 
 Then connect with VS Code Remote-SSH using:

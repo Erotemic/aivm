@@ -10,6 +10,18 @@ from .util import run_cmd, ensure_dir
 log = logger
 
 
+def _sudo_path_exists(path: Path) -> bool:
+    return run_cmd(
+        ["test", "-e", str(path)], sudo=True, check=False, capture=True
+    ).code == 0
+
+
+def _sudo_file_exists(path: Path) -> bool:
+    return run_cmd(
+        ["test", "-f", str(path)], sudo=True, check=False, capture=True
+    ).code == 0
+
+
 def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     cfg = cfg.expanded_paths()
     base_dir = Path(cfg.paths.base_dir) / cfg.vm.name
@@ -31,19 +43,20 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     p = _paths(cfg, dry_run=dry_run)
     base_img = p["img_dir"] / cfg.image.cache_name
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
-    if base_img.exists() and not cfg.image.redownload:
+    if _sudo_file_exists(base_img) and not cfg.image.redownload:
         log.info("Base image cached: {}", base_img)
         return base_img
     if dry_run:
         log.info("DRYRUN: curl -L --fail -o {} {}", base_img, url)
         return base_img
-    ensure_dir(p["img_dir"])
+    _ensure_qemu_access(cfg, dry_run=False)
     run_cmd(["mkdir", "-p", str(p["img_dir"])], sudo=True, check=True, capture=True)
+    log.info("Downloading base image to {} (showing progress)", base_img)
     run_cmd(
-        ["curl", "-L", "--fail", "-o", str(base_img), url],
+        ["curl", "-L", "--fail", "--progress-bar", "-o", str(base_img), url],
         sudo=True,
         check=True,
-        capture=True,
+        capture=False,
     )
     log.info("Downloaded base image: {}", base_img)
     return base_img
@@ -185,12 +198,12 @@ def _ensure_disk(
 ) -> Path:
     p = _paths(cfg, dry_run=dry_run)
     vm_disk = p["img_dir"] / f"{cfg.vm.name}.qcow2"
-    if vm_disk.exists() and recreate:
+    if _sudo_path_exists(vm_disk) and recreate:
         if dry_run:
             log.info("DRYRUN: rm -f {}", vm_disk)
         else:
             run_cmd(["rm", "-f", str(vm_disk)], sudo=True, check=True, capture=True)
-    if vm_disk.exists():
+    if _sudo_path_exists(vm_disk):
         log.info("VM disk exists: {}", vm_disk)
         return vm_disk
     if dry_run:
@@ -457,6 +470,45 @@ def ssh_config(cfg: AgentVMConfig) -> str:
 """
 
 
+def wait_for_ssh(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    timeout_s: int = 300,
+    dry_run: bool = False,
+) -> None:
+    cfg = cfg.expanded_paths()
+    ident = cfg.paths.ssh_identity_file
+    if not ident:
+        raise RuntimeError(
+            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+        )
+    if dry_run:
+        log.info("DRYRUN: wait for SSH on {}@{}", cfg.vm.user, ip)
+        return
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        cmd = [
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=3",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            ident,
+            f"{cfg.vm.user}@{ip}",
+            "true",
+        ]
+        res = run_cmd(cmd, sudo=False, check=False, capture=True)
+        if res.code == 0:
+            log.info("SSH is ready on {}", ip)
+            return
+        time.sleep(2)
+    raise TimeoutError(f"Timed out waiting for SSH on {ip}:22")
+
+
 def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     log.debug("Provisioning VM with developer tools")
     if not cfg.provision.enabled:
@@ -496,5 +548,7 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if dry_run:
         log.info("DRYRUN: {}", " ".join(cmd))
         return
-    run_cmd(cmd, sudo=False, check=True, capture=True)
+    wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+    log.info("Running provisioning apt installs (showing progress)")
+    run_cmd(cmd, sudo=False, check=True, capture=False)
     log.info("Provisioning complete.")
