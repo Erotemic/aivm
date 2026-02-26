@@ -1049,7 +1049,7 @@ class VMCodeCLI(_BaseCommand):
 class VMAttachCLI(_BaseCommand):
     """Attach/register a host directory to an existing managed VM."""
 
-    vm = scfg.Value("", help="VM name in global registry.")
+    vm = scfg.Value("", help="Optional VM name in global registry.")
     host_src = scfg.Value(".", help="Host directory to attach.")
     guest_dst = scfg.Value("", help="Guest mount path override.")
     force = scfg.Value(
@@ -1231,7 +1231,7 @@ class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
     vm = scfg.Value(
         "",
-        help="Optional VM name override when no local config file is present.",
+        help="Optional VM name override (mainly when no local config file is present).",
     )
     detail = scfg.Value(
         False,

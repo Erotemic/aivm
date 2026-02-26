@@ -21,7 +21,7 @@ uv pip install .
 
 ## Quickstart
 
-In your repo directory (recommended):
+Repo-local config flow:
 
 ```bash
 agentvm init --config .agentvm.toml
@@ -31,7 +31,15 @@ agentvm status --config .agentvm.toml --detail
 agentvm apply --config .agentvm.toml --interactive
 ```
 
-If there is no local `.agentvm.toml`, `agentvm status` can resolve the VM from directory metadata / global registry (or use `--vm`).
+No-local-init flow (recommended UX for new repos):
+
+```bash
+agentvm code .
+agentvm status
+```
+
+`agentvm code .` auto-selects a VM from directory metadata/global registry (prompts if ambiguous), auto-attaches the folder if needed, then opens VS Code.
+`agentvm status` also resolves from directory metadata/global registry when there is no local `.agentvm.toml` (or use `--vm`).
 
 Then connect with VS Code Remote-SSH using:
 
@@ -69,7 +77,7 @@ agentvm vm attach --vm agentvm-2404 --host_src .
 
 By default, attached folders mount to the same absolute path inside the VM as on the host.
 Use `--guest_dst` to override.
-When possible, `agentvm code .` now live-attaches new shares to an existing VM instead of requiring recreation.
+When possible, `agentvm code .` live-attaches new shares to existing VMs (`--live --config` when running, `--config` when stopped) instead of requiring recreation.
 
 ## Make VM Feel Like Your Host
 
