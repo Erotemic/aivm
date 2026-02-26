@@ -10,7 +10,7 @@ def test_check_network_parsing_and_permission(monkeypatch) -> None:
     cfg.network.name = "aivm-net"
 
     monkeypatch.setattr(
-        "aivm.cli.run_cmd",
+        "aivm.status.run_cmd",
         lambda *a, **k: CmdResult(1, "", "permission denied"),
     )
     ok, detail = _check_network(cfg, use_sudo=False)
@@ -18,7 +18,7 @@ def test_check_network_parsing_and_permission(monkeypatch) -> None:
     assert "status --sudo" in detail
 
     monkeypatch.setattr(
-        "aivm.cli.run_cmd",
+        "aivm.status.run_cmd",
         lambda *a, **k: CmdResult(0, "Active: yes\nAutostart: no\n", ""),
     )
     ok, detail = _check_network(cfg, use_sudo=True)
@@ -35,14 +35,14 @@ def test_check_firewall_branches(monkeypatch) -> None:
 
     cfg.firewall.enabled = True
     monkeypatch.setattr(
-        "aivm.cli.run_cmd",
+        "aivm.status.run_cmd",
         lambda *a, **k: CmdResult(1, "", "operation not permitted"),
     )
     ok, detail = _check_firewall(cfg, use_sudo=False)
     assert ok is None
     assert "status --sudo" in detail
 
-    monkeypatch.setattr("aivm.cli.run_cmd", lambda *a, **k: CmdResult(0, "", ""))
+    monkeypatch.setattr("aivm.status.run_cmd", lambda *a, **k: CmdResult(0, "", ""))
     ok, detail = _check_firewall(cfg, use_sudo=True)
     assert ok is True
     assert "present" in detail
@@ -52,7 +52,7 @@ def test_check_vm_state_branches(monkeypatch) -> None:
     cfg = AgentVMConfig()
 
     monkeypatch.setattr(
-        "aivm.cli.run_cmd",
+        "aivm.status.run_cmd",
         lambda *a, **k: CmdResult(1, "", "authentication failed"),
     )
     ok, defined, detail = _check_vm_state(cfg, use_sudo=False)
@@ -68,7 +68,7 @@ def test_check_vm_state_branches(monkeypatch) -> None:
             return CmdResult(0, "ok", "")
         return CmdResult(0, "running", "")
 
-    monkeypatch.setattr("aivm.cli.run_cmd", fake_run_cmd)
+    monkeypatch.setattr("aivm.status.run_cmd", fake_run_cmd)
     ok, defined, detail = _check_vm_state(cfg, use_sudo=True)
     assert ok is True
     assert defined is True

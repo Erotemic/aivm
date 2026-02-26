@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 from loguru import logger
 
 from .config import AgentVMConfig
+from .runtime import virsh_system_cmd
 from .util import run_cmd
 
 log = logger
@@ -15,7 +16,7 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
     bridge = cfg.network.bridge
     gateway = cfg.network.gateway_ip
     res = run_cmd(
-        ["virsh", "-c", "qemu:///system", "net-dumpxml", cfg.network.name],
+        virsh_system_cmd("net-dumpxml", cfg.network.name),
         sudo=True,
         check=False,
         capture=True,

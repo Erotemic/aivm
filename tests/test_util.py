@@ -37,4 +37,4 @@ def test_run_cmd_sudo_prefix_when_non_root(monkeypatch) -> None:
         lambda cmd, **kwargs: (calls.append(cmd) or P()),
     )
     _run_cmd(["echo", "x"], sudo=True, check=True, capture=True)
-    assert calls[0][:2] == ["sudo", "echo"]
+    assert calls[0][:3] == ["sudo", "-n", "echo"]
