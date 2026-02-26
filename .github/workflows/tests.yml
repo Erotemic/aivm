@@ -37,7 +37,7 @@ jobs:
     - name: Typecheck
       run: |-
         python -m pip install ty
-        pip install -r pyproject.toml
+        pip install --prefer-binary -e ".[tests]"
         ty check ./aivm
   build_and_test_sdist:
     ##
@@ -56,7 +56,7 @@ jobs:
     - name: Upgrade pip
       run: |-
         python -m pip install pip uv -U
-        python -m pip install --prefer-binary -r pyproject.toml --extra tests
+        python -m pip install --prefer-binary -e ".[tests]"
     - name: Build sdist
       shell: bash
       run: |-
