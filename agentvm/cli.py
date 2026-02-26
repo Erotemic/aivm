@@ -766,7 +766,7 @@ class NetCreateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/update libvirt network '{cfg.network.name}'.",
@@ -781,8 +781,9 @@ class NetStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Inspect libvirt network status via virsh.")
-        print(network_status(_load_cfg(args.config)))
+        print(network_status(cfg))
         return 0
 
 
@@ -794,8 +795,9 @@ class NetDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Destroy/undefine libvirt network.")
-        destroy_network(_load_cfg(args.config), dry_run=args.dry_run)
+        destroy_network(cfg, dry_run=args.dry_run)
         return 0
 
 
@@ -807,8 +809,9 @@ class FirewallApplyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Apply nftables firewall rules.")
-        apply_firewall(_load_cfg(args.config), dry_run=args.dry_run)
+        apply_firewall(cfg, dry_run=args.dry_run)
         return 0
 
 
@@ -818,8 +821,9 @@ class FirewallStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Read nftables firewall status.")
-        print(firewall_status(_load_cfg(args.config)))
+        print(firewall_status(cfg))
         return 0
 
 
@@ -831,8 +835,9 @@ class FirewallRemoveCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Remove nftables firewall rules.")
-        remove_firewall(_load_cfg(args.config), dry_run=args.dry_run)
+        remove_firewall(cfg, dry_run=args.dry_run)
         return 0
 
 
@@ -844,8 +849,9 @@ class ImageFetchCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(yes=bool(args.yes), purpose="Download/cache base image under libvirt-managed storage.")
-        print(str(fetch_image(_load_cfg(args.config), dry_run=args.dry_run)))
+        print(str(fetch_image(cfg, dry_run=args.dry_run)))
         return 0
 
 
