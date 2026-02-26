@@ -9,7 +9,7 @@ import ubelt as ub
 
 from .config import AgentVMConfig
 
-DIR_METADATA_FILE = ".agentvm-dir.toml"
+DIR_METADATA_FILE = ".aivm-dir.toml"
 
 
 @dataclass
@@ -38,12 +38,12 @@ class GlobalRegistry:
 
 
 def registry_path() -> Path:
-    root = ub.Path.appdir("agentvm").ensuredir()
+    root = ub.Path.appdir("aivm").ensuredir()
     return Path(root) / "registry.toml"
 
 
 def vm_global_config_path(vm_name: str) -> Path:
-    root = ub.Path.appdir("agentvm").ensuredir()
+    root = ub.Path.appdir("aivm").ensuredir()
     return Path(root) / "vms" / f"{vm_name}.toml"
 
 

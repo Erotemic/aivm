@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agentvm.cli import AgentVMModalCLI
-from agentvm.config import AgentVMConfig, save
+from aivm.cli import AgentVMModalCLI
+from aivm.config import AgentVMConfig, save
 
 
 def _write_cfg(tmp_path: Path) -> Path:
-    cfg_path = tmp_path / ".agentvm.toml"
+    cfg_path = tmp_path / ".aivm.toml"
     cfg = AgentVMConfig()
     cfg.paths.base_dir = str(tmp_path / "libvirt")
     cfg.paths.state_dir = str(tmp_path / "state")
@@ -44,8 +44,8 @@ def test_help_tree_includes_one_line_descriptions(tmp_path: Path, capsys) -> Non
     cfg_path = _write_cfg(tmp_path)
     assert _run(["help", "tree", "--yes", "--config", str(cfg_path)]) == 0
     out = capsys.readouterr().out
-    assert "agentvm help tree - Print the expanded agentvm command tree." in out
+    assert "aivm help tree - Print the expanded aivm command tree." in out
     assert (
-        "agentvm vm ssh - SSH into the VM and start a shell in the mapped guest directory."
+        "aivm vm ssh - SSH into the VM and start a shell in the mapped guest directory."
         in out
     )

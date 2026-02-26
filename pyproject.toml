@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentvm"
+name = "aivm"
 version = "0.1.0"
 description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
 readme = "README.md"
@@ -22,15 +22,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Erotemic/agentvm"
+Homepage = "https://github.com/Erotemic/aivm"
 
 [[project.authors]]
 name = "Jon Crall"
 email = "erotemic@gmail.com"
 
 [project.scripts]
-agentvm = "agentvm.cli:main"
-avm = "agentvm.cli:main"
+aivm = "aivm.cli:main"
 
 [tool.pytest.ini_options]
 addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
@@ -42,7 +41,7 @@ branch = true
 
 [tool.coverage.report]
 exclude_lines = [ "pragma: no cover", ".*  # pragma: no cover", ".*  # nocover", "def __repr__", "raise AssertionError", "raise NotImplementedError", "if 0:", "if trace is not None", "verbose = .*", "^ *raise", "^ *pass *$", "if _debug:", "if __name__ == .__main__.:", ".*if six.PY2:",]
-omit = [ "agentvm/__main__.py", "*/setup.py",]
+omit = [ "aivm/__main__.py", "*/setup.py",]
 
 [tool.setuptools]
 include-package-data = true
@@ -52,19 +51,19 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = [ ".",]
-include = [ "agentvm*",]
+include = [ "aivm*",]
 
 
 [tool.xcookie]
 tags = [ "github", "erotemic", "purepy",]
-mod_name = "agentvm"
-repo_name = "agentvm"
-pkg_name = "agentvm"
+mod_name = "aivm"
+repo_name = "aivm"
+pkg_name = "aivm"
 rel_mod_parent_dpath = "."
 os = [ "linux", "osx", "win",]
 min_python = "3.11"
 version = "0.0.1"
-url = "https://github.com/Erotemic/agentvm"
+url = "https://github.com/Erotemic/aivm"
 author = "Jon Crall"
 author_email = "erotemic@gmail.com"
 description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."

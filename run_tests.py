@@ -3,8 +3,8 @@ if __name__ == "__main__":
     import pytest
     import sys
 
-    package_name = "agentvm"
-    mod_dpath = "agentvm"
+    package_name = "aivm"
+    mod_dpath = "aivm"
     test_dpath = "tests"
     pytest_args = [
         "--cov-config",

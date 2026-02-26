@@ -1,4 +1,4 @@
-The agentvm Module
+The aivm Module
 ==================
 
 
@@ -8,18 +8,18 @@ The agentvm Module
 
 
 +---------------+------------------------------------------+
-| Read the Docs | http://agentvm.readthedocs.io/en/latest/ |
+| Read the Docs | http://aivm.readthedocs.io/en/latest/ |
 +---------------+------------------------------------------+
-| Pypi          | https://pypi.org/project/agentvm         |
+| Pypi          | https://pypi.org/project/aivm         |
 +---------------+------------------------------------------+
 
 
 
-.. |Pypi| image:: https://img.shields.io/pypi/v/agentvm.svg
-    :target: https://pypi.python.org/pypi/agentvm
+.. |Pypi| image:: https://img.shields.io/pypi/v/aivm.svg
+    :target: https://pypi.python.org/pypi/aivm
 
-.. |PypiDownloads| image:: https://img.shields.io/pypi/dm/agentvm.svg
-    :target: https://pypistats.org/packages/agentvm
+.. |PypiDownloads| image:: https://img.shields.io/pypi/dm/aivm.svg
+    :target: https://pypistats.org/packages/aivm
 
-.. |ReadTheDocs| image:: https://readthedocs.org/projects/agentvm/badge/?version=latest
-    :target: http://agentvm.readthedocs.io/en/latest/
+.. |ReadTheDocs| image:: https://readthedocs.org/projects/aivm/badge/?version=latest
+    :target: http://aivm.readthedocs.io/en/latest/

@@ -53,7 +53,7 @@ log = logger
 class _BaseCommand(scfg.DataConfig):
     """Base options shared by all commands."""
 
-    config = scfg.Value(None, help="Path to config TOML (default: .agentvm.toml).")
+    config = scfg.Value(None, help="Path to config TOML (default: .aivm.toml).")
     verbose = scfg.Value(
         0, short_alias=["v"], isflag="counter", help="Increase verbosity (-v, -vv)."
     )
@@ -82,7 +82,7 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
 
 
 def _cfg_path(p: str | None) -> Path:
-    return Path(p or ".agentvm.toml").resolve()
+    return Path(p or ".aivm.toml").resolve()
 
 
 def _load_cfg(config_path: str | None) -> AgentVMConfig:
@@ -131,8 +131,8 @@ def _load_cfg_with_path(config_path: str | None) -> tuple[AgentVMConfig, Path]:
     if not path.exists():
         raise FileNotFoundError(
             f"Config not found: {path}. "
-            f"Run: agentvm config init --config {path} "
-            "or use global selection commands like `agentvm code .` / `agentvm list`."
+            f"Run: aivm config init --config {path} "
+            "or use global selection commands like `aivm code .` / `aivm list`."
         )
     cfg = load(path).expanded_paths()
     if _hydrate_runtime_defaults(cfg):
@@ -281,9 +281,9 @@ def _upsert_ssh_config_entry(cfg: AgentVMConfig, *, dry_run: bool = False) -> Pa
     ssh_cfg = ssh_dir / "config"
     block_name = cfg.vm.name
     new_block = (
-        f"# >>> agentvm:{block_name} >>>\n"
+        f"# >>> aivm:{block_name} >>>\n"
         f"{mk_ssh_config(cfg).rstrip()}\n"
-        f"# <<< agentvm:{block_name} <<<\n"
+        f"# <<< aivm:{block_name} <<<\n"
     )
     if dry_run:
         log.info(
@@ -293,7 +293,7 @@ def _upsert_ssh_config_entry(cfg: AgentVMConfig, *, dry_run: bool = False) -> Pa
     ensure_dir(ssh_dir)
     existing = ssh_cfg.read_text(encoding="utf-8") if ssh_cfg.exists() else ""
     pattern = re.compile(
-        rf"(?ms)^# >>> agentvm:{re.escape(block_name)} >>>\n.*?^# <<< agentvm:{re.escape(block_name)} <<<\n?"
+        rf"(?ms)^# >>> aivm:{re.escape(block_name)} >>>\n.*?^# <<< aivm:{re.escape(block_name)} <<<\n?"
     )
     if pattern.search(existing):
         updated = pattern.sub(new_block, existing)
@@ -681,21 +681,21 @@ def _render_status(
 
         next_steps: list[str] = []
         if missing:
-            next_steps.append("agentvm host install_deps --config .agentvm.toml")
+            next_steps.append("aivm host install_deps --config .aivm.toml")
         if not net_ok:
-            next_steps.append("agentvm host net create --config .agentvm.toml")
+            next_steps.append("aivm host net create --config .aivm.toml")
         if cfg.firewall.enabled and fw_ok is not True:
-            next_steps.append("agentvm host fw apply --config .agentvm.toml")
+            next_steps.append("aivm host fw apply --config .aivm.toml")
         if not img_ok:
-            next_steps.append("agentvm host image_fetch --config .agentvm.toml")
+            next_steps.append("aivm host image_fetch --config .aivm.toml")
         if not vm_ok:
-            next_steps.append("agentvm vm up --config .agentvm.toml")
+            next_steps.append("aivm vm up --config .aivm.toml")
         if vm_ok and not ip:
-            next_steps.append("agentvm vm wait_ip --config .agentvm.toml")
+            next_steps.append("aivm vm wait_ip --config .aivm.toml")
         if vm_ok and ip and not ssh_ok:
-            next_steps.append("agentvm vm status --config .agentvm.toml")
+            next_steps.append("aivm vm status --config .aivm.toml")
         if prov_ok is False:
-            next_steps.append("agentvm vm provision --config .agentvm.toml")
+            next_steps.append("aivm vm provision --config .aivm.toml")
         if next_steps:
             lines.append("")
             lines.append("🛠️ Suggested Next Commands")
@@ -788,26 +788,26 @@ class PlanCLI(_BaseCommand):
         Suggested flow:
 
         1. 🔎 Preflight checks
-           agentvm host doctor --config {path}
-           agentvm status --config {path}
-           agentvm status --config {path} --detail
+           aivm host doctor --config {path}
+           aivm status --config {path}
+           aivm status --config {path} --detail
         2. 🌐 Host network
-           agentvm host net create --config {path}
+           aivm host net create --config {path}
         3. 🔥 Optional firewall isolation (recommended)
-           agentvm host fw apply --config {path}
+           aivm host fw apply --config {path}
         4. 📦 Base image
-           agentvm host image_fetch --config {path}
+           aivm host image_fetch --config {path}
         5. 🖥️ VM lifecycle
-           agentvm vm up --config {path}
-           agentvm vm wait_ip --config {path}
+           aivm vm up --config {path}
+           aivm vm wait_ip --config {path}
         6. 🔑 Access
-           agentvm vm ssh_config --config {path}   # VS Code Remote-SSH
+           aivm vm ssh_config --config {path}   # VS Code Remote-SSH
         7. 🧰 Optional provisioning (docker + dev tools)
-           agentvm vm provision --config {path}
+           aivm vm provision --config {path}
         8. 🧩 Optional settings sync from host user profile
-           agentvm vm sync_settings --config {path}
+           aivm vm sync_settings --config {path}
         9. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
-           agentvm vm code --config {path} --host_src . --sync_settings
+           aivm vm code --config {path} --host_src . --sync_settings
         """).strip()
         print(steps)
         return 0
@@ -833,7 +833,7 @@ def _short_help_line(cls: type) -> str:
 
 
 def _render_command_tree(
-    modal_cls: type[scfg.ModalCLI], prefix: str = "agentvm"
+    modal_cls: type[scfg.ModalCLI], prefix: str = "aivm"
 ) -> str:
     root_help = _short_help_line(modal_cls)
     root_line = f"{prefix} - {root_help}" if root_help else prefix
@@ -858,7 +858,7 @@ def _render_command_tree(
 
 
 class HelpTreeCLI(_BaseCommand):
-    """Print the expanded agentvm command tree."""
+    """Print the expanded aivm command tree."""
 
     @classmethod
     def main(cls, argv=True, **kwargs):
@@ -876,7 +876,7 @@ class DoctorCLI(_BaseCommand):
         missing, missing_opt = check_commands()
         if missing:
             print("❌ Missing required commands:", ", ".join(missing))
-            print("💡 On Debian/Ubuntu you can run: agentvm host install_deps")
+            print("💡 On Debian/Ubuntu you can run: aivm host install_deps")
             return 2
         if missing_opt:
             print("➖ Missing optional commands:", ", ".join(missing_opt))
@@ -984,7 +984,7 @@ class FirewallStatusCLI(_BaseCommand):
 
 
 class FirewallRemoveCLI(_BaseCommand):
-    """Remove nftables rules managed by agentvm."""
+    """Remove nftables rules managed by aivm."""
 
     dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
 
@@ -1206,7 +1206,7 @@ def _select_cfg_for_vm_name(vm_name: str, *, reason: str) -> tuple[AgentVMConfig
     raise RuntimeError(
         f"No usable config file found for VM {vm_name}. "
         f"Tried: {', '.join(str(p) for p in candidates)}. "
-        "Re-register it with `agentvm config init` or `agentvm vm up`."
+        "Re-register it with `aivm config init` or `aivm vm up`."
     )
 
 
@@ -1243,7 +1243,7 @@ def _resolve_cfg_for_code(
     ]
     if not valid:
         raise RuntimeError(
-            "No usable VM config found. Pass --config, run `agentvm config init`, or register a VM."
+            "No usable VM config found. Pass --config, run `aivm config init`, or register a VM."
         )
     if len(valid) == 1:
         only = valid[0]
@@ -1704,7 +1704,7 @@ class VMSSHCLI(_BaseCommand):
         ident = cfg.paths.ssh_identity_file
         if not ident:
             raise RuntimeError(
-                "paths.ssh_identity_file is empty; run agentvm config init or set it in config."
+                "paths.ssh_identity_file is empty; run aivm config init or set it in config."
             )
         remote_cmd = f"cd {shlex.quote(cfg.share.guest_dst)} && exec $SHELL -l"
         run_cmd(
@@ -1807,11 +1807,11 @@ class VMAttachCLI(_BaseCommand):
 
 
 class CodeCLI(VMCodeCLI):
-    """Top-level shortcut for `agentvm vm code`."""
+    """Top-level shortcut for `aivm vm code`."""
 
 
 class AttachCLI(VMAttachCLI):
-    """Top-level shortcut for `agentvm vm attach`."""
+    """Top-level shortcut for `aivm vm attach`."""
 
 
 class ApplyCLI(_BaseCommand):
@@ -2046,29 +2046,29 @@ class AgentVMModalCLI(scfg.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents.
 
     Common flows:
-      agentvm config init --config .agentvm.toml
-      agentvm config show
-      agentvm config edit
-      agentvm help plan --config .agentvm.toml
-      agentvm help tree
-      agentvm host doctor
-      agentvm status --config .agentvm.toml
-      agentvm host net create --config .agentvm.toml
-      agentvm host fw apply --config .agentvm.toml
-      agentvm host image_fetch --config .agentvm.toml
-      agentvm vm up --config .agentvm.toml
-      agentvm vm wait_ip --config .agentvm.toml
-      agentvm vm ssh_config --config .agentvm.toml
-      agentvm vm provision --config .agentvm.toml
-      agentvm vm sync_settings --config .agentvm.toml
-      agentvm vm attach --vm agentvm-2404 --host_src .
-      agentvm vm code --config .agentvm.toml --host_src . --sync_settings
-      agentvm code . --sync_settings
-      agentvm list
-      agentvm apply --config .agentvm.toml --interactive
+      aivm config init --config .aivm.toml
+      aivm config show
+      aivm config edit
+      aivm help plan --config .aivm.toml
+      aivm help tree
+      aivm host doctor
+      aivm status --config .aivm.toml
+      aivm host net create --config .aivm.toml
+      aivm host fw apply --config .aivm.toml
+      aivm host image_fetch --config .aivm.toml
+      aivm vm up --config .aivm.toml
+      aivm vm wait_ip --config .aivm.toml
+      aivm vm ssh_config --config .aivm.toml
+      aivm vm provision --config .aivm.toml
+      aivm vm sync_settings --config .aivm.toml
+      aivm vm attach --vm aivm-2404 --host_src .
+      aivm vm code --config .aivm.toml --host_src . --sync_settings
+      aivm code . --sync_settings
+      aivm list
+      aivm apply --config .aivm.toml --interactive
 
     Tips:
-      Use `agentvm <group> --help` for grouped commands (`config`, `help`, `host`, `vm`).
+      Use `aivm <group> --help` for grouped commands (`config`, `help`, `host`, `vm`).
     """
     config = ConfigModalCLI
     help = HelpModalCLI
@@ -2152,7 +2152,7 @@ def main(argv: list[str] | None = None) -> None:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
     except Exception as ex:
         print(f"ERROR: {ex}", file=sys.stderr)
-        log.error("Unhandled agentvm error: {}", ex)
+        log.error("Unhandled aivm error: {}", ex)
         sys.exit(2)
 
     if any(flag in argv for flag in ("-h", "--help")):

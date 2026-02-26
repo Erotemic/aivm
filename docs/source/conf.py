@@ -8,7 +8,7 @@ Notes:
 
     pip install sphinx sphinx-autobuild sphinx_rtd_theme sphinxcontrib-napoleon
 
-    cd ~/code/agentvm
+    cd ~/code/aivm
     mkdir -p docs
     cd docs
 
@@ -17,9 +17,9 @@ Notes:
     # need to edit the conf.py
 
     # Remove any old auto docs folder and regenerate it.
-    rm -rf ~/code/agentvm/docs/source/auto
-    cd ~/code/agentvm/docs
-    sphinx-apidoc --private --separate --force --output-dir ~/code/agentvm/docs/source/auto ~/code/agentvm/agentvm
+    rm -rf ~/code/aivm/docs/source/auto
+    cd ~/code/aivm/docs
+    sphinx-apidoc --private --separate --force --output-dir ~/code/aivm/docs/source/auto ~/code/aivm/aivm
     git add source/auto/*.rst
 
     # Note: the module should importable before running this
@@ -31,7 +31,7 @@ Notes:
 
         https://docs.readthedocs.io/en/stable/guides/autobuild-docs-for-pull-requests.html
 
-        https://readthedocs.org/dashboard/agentvm/advanced/
+        https://readthedocs.org/dashboard/aivm/advanced/
 
         ensure your github account is connected to readthedocs
         https://readthedocs.org/accounts/social/connections/
@@ -44,14 +44,14 @@ Notes:
         https://readthedocs.org/dashboard/import/manual/?
 
         Enter the following information:
-            Set the Repository NAME: agentvm
-            Set the Repository URL: https://github.com/Erotemic/agentvm
+            Set the Repository NAME: aivm
+            Set the Repository URL: https://github.com/Erotemic/aivm
 
         Make sure you have a .readthedocs.yml file
 
         For gitlab you also need to setup an integrations. Navigate to:
 
-            https://readthedocs.org/dashboard/agentvm/integrations/create/
+            https://readthedocs.org/dashboard/aivm/integrations/create/
 
         Then add gitlab incoming webhook and copy the URL (make sure
         you copy the real url and not the text so https is included),
@@ -68,7 +68,7 @@ Notes:
 
         Then go to
 
-            https://github.com/Erotemic/agentvm/hooks
+            https://github.com/Erotemic/aivm/hooks
 
             Click "Add new webhook".
 
@@ -91,7 +91,7 @@ Notes:
         See Docs for more details https://docs.readthedocs.io/en/stable/integrations.html
 
         Will also need to activate the main branch:
-            https://readthedocs.org/projects/agentvm/versions/
+            https://readthedocs.org/projects/aivm/versions/
 """
 #
 # Configuration file for the Sphinx documentation builder.
@@ -140,13 +140,13 @@ def parse_version(fpath):
     return visitor.version
 
 
-project = "agentvm"
+project = "aivm"
 copyright = "2026, Jon Crall"
 author = "Jon Crall"
-modname = "agentvm"
+modname = "aivm"
 
 repo_dpath = dirname(dirname(dirname(__file__)))
-mod_dpath = join(repo_dpath, "agentvm")
+mod_dpath = join(repo_dpath, "aivm")
 src_dpath = dirname(mod_dpath)
 modpath = join(mod_dpath, "__init__.py")
 release = parse_version(modpath)
@@ -313,8 +313,8 @@ html_theme_options = {
     "navigation_depth": -1,
     # 'logo_only': True,
 }
-# html_logo = '.static/agentvm.svg'
-# html_favicon = '.static/agentvm.ico'
+# html_logo = '.static/aivm.svg'
+# html_favicon = '.static/aivm.ico'
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
@@ -374,7 +374,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, "agentvm.tex", "agentvm Documentation", "Jon Crall", "manual"),
+    (master_doc, "aivm.tex", "aivm Documentation", "Jon Crall", "manual"),
 ]
 
 
@@ -382,7 +382,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, "agentvm", "agentvm Documentation", [author], 1)]
+man_pages = [(master_doc, "aivm", "aivm Documentation", [author], 1)]
 
 
 # -- Options for Texinfo output ----------------------------------------------
@@ -393,10 +393,10 @@ man_pages = [(master_doc, "agentvm", "agentvm Documentation", [author], 1)]
 texinfo_documents = [
     (
         master_doc,
-        "agentvm",
-        "agentvm Documentation",
+        "aivm",
+        "aivm Documentation",
         author,
-        "agentvm",
+        "aivm",
         "One line description of project.",
         "Miscellaneous",
     ),

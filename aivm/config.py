@@ -24,7 +24,7 @@ class NetworkConfig:
 @dataclass
 class FirewallConfig:
     enabled: bool = True
-    table: str = "agentvm_sandbox"
+    table: str = "aivm_sandbox"
     block_cidrs: list[str] = field(
         default_factory=lambda: [
             "0.0.0.0/8",
@@ -50,7 +50,7 @@ class ImageConfig:
 
 @dataclass
 class VMConfig:
-    name: str = "agentvm-2404"
+    name: str = "aivm-2404"
     user: str = "agent"
     cpus: int = 4
     ram_mb: int = 8192
@@ -105,8 +105,8 @@ class SyncConfig:
 
 @dataclass
 class PathsConfig:
-    base_dir: str = "/var/lib/libvirt/agentvm"
-    state_dir: str = "~/.cache/agentvm"
+    base_dir: str = "/var/lib/libvirt/aivm"
+    state_dir: str = "~/.cache/aivm"
     ssh_identity_file: str = ""
     ssh_pubkey_path: str = ""
 

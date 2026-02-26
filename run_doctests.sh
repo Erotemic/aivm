@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-xdoctest agentvm --style=google all "$@"
+xdoctest aivm --style=google all "$@"
