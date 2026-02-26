@@ -167,10 +167,12 @@ class VMProvisionCLI(_BaseCommand):
                 vm_opt=args.vm,
                 host_src=Path.cwd(),
             )
-        _confirm_sudo_block(
-            yes=bool(args.yes),
-            purpose='Query VM networking state before SSH provisioning.',
-        )
+        if not args.dry_run:
+            _resolve_ip_for_ssh_ops(
+                cfg,
+                yes=bool(args.yes),
+                purpose='Query VM networking state before SSH provisioning.',
+            )
         provision(cfg, dry_run=args.dry_run)
         return 0
 
@@ -201,14 +203,11 @@ class VMSyncSettingsCLI(_BaseCommand):
         if args.dry_run:
             ip = '0.0.0.0'
         else:
-            _confirm_sudo_block(
+            ip = _resolve_ip_for_ssh_ops(
+                cfg,
                 yes=bool(args.yes),
                 purpose='Query VM networking state before settings sync.',
             )
-            ip = get_ip_cached(cfg) or wait_for_ip(
-                cfg, timeout_s=360, dry_run=False
-            )
-            wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
         chosen_paths = _parse_sync_paths_arg(args.paths) if args.paths else None
         result = sync_settings(
             cfg,
@@ -685,6 +684,20 @@ def _check_provisioned(
 ) -> tuple[bool | None, str, str]:
     out = probe_provisioned(cfg, ip)
     return out.ok, out.detail, out.diag
+
+
+def _resolve_ip_for_ssh_ops(
+    cfg: AgentVMConfig, *, yes: bool, purpose: str
+) -> str:
+    ip = get_ip_cached(cfg)
+    if ip:
+        ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        if ssh_ok:
+            return ip
+    _confirm_sudo_block(yes=bool(yes), purpose=purpose)
+    ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
+    wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+    return ip
 
 
 def _select_cfg_for_vm_name(
