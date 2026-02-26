@@ -30,6 +30,56 @@ def _sudo_file_exists(path: Path) -> bool:
     )
 
 
+def _vm_defined(name: str) -> bool:
+    return (
+        run_cmd(
+            ['virsh', 'dominfo', name], sudo=True, check=False, capture=True
+        ).code
+        == 0
+    )
+
+
+def _destroy_and_undefine_vm(name: str) -> None:
+    run_cmd(['virsh', 'destroy', name], sudo=True, check=False, capture=True)
+    # Different libvirt states require different undefine flags.
+    attempts = [
+        [
+            'virsh',
+            'undefine',
+            name,
+            '--managed-save',
+            '--snapshots-metadata',
+            '--nvram',
+            '--remove-all-storage',
+        ],
+        [
+            'virsh',
+            'undefine',
+            name,
+            '--managed-save',
+            '--snapshots-metadata',
+            '--nvram',
+        ],
+        ['virsh', 'undefine', name, '--nvram', '--remove-all-storage'],
+        ['virsh', 'undefine', name, '--nvram'],
+        ['virsh', 'undefine', name, '--remove-all-storage'],
+        ['virsh', 'undefine', name],
+    ]
+    errs: list[str] = []
+    for cmd in attempts:
+        res = run_cmd(cmd, sudo=True, check=False, capture=True)
+        if res.code != 0:
+            msg = (res.stderr or res.stdout or '').strip()
+            if msg:
+                errs.append(f'{cmd}: {msg}')
+        if not _vm_defined(name):
+            return
+    detail = '\n'.join(errs[-4:]) if errs else '(no details)'
+    raise RuntimeError(
+        f'Failed to undefine VM {name}; domain is still present after retries.\n{detail}'
+    )
+
+
 def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     cfg = cfg.expanded_paths()
     base_dir = Path(cfg.paths.base_dir) / cfg.vm.name
@@ -75,9 +125,12 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
 def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     cfg = cfg.expanded_paths()
     base_root = Path(cfg.paths.base_dir) / cfg.vm.name
-    grp = 'kvm'
-    if run_cmd(['getent', 'group', 'kvm'], check=False, capture=True).code != 0:
-        grp = 'libvirt-qemu'
+    grp = 'libvirt-qemu'
+    if (
+        run_cmd(['getent', 'group', 'libvirt-qemu'], check=False, capture=True).code
+        != 0
+    ):
+        grp = 'kvm'
     if dry_run:
         log.info(
             'DRYRUN: chown/chmod {} for qemu access (group={})', base_root, grp
@@ -115,6 +168,7 @@ def _write_cloud_init(
     ci_dir = p['ci_dir']
     user_data = ci_dir / 'user-data'
     meta_data = ci_dir / 'meta-data'
+    network_config = ci_dir / 'network-config'
     seed_iso = ci_dir / f'{cfg.vm.name}-seed.iso'
 
     pubkey_path = (
@@ -145,6 +199,10 @@ chpasswd:
 """
 
     cloud = f"""#cloud-config
+datasource_list: [ NoCloud, None ]
+datasource:
+  NoCloud: {{}}
+
 users:
   - name: {cfg.vm.user}
     groups: [sudo]
@@ -158,6 +216,9 @@ ssh_pwauth: {ssh_pwauth}
 disable_root: true
 
 {passwd_block}
+bootcmd:
+  - [bash, -lc, "systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true"]
+
 package_update: true
 packages:
   - openssh-server
@@ -181,6 +242,7 @@ write_files:
       GatewayPorts no
 
 runcmd:
+  - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
   - systemctl enable --now ssh
   - systemctl enable --now unattended-upgrades || true
 """
@@ -188,12 +250,29 @@ runcmd:
     meta = f"""instance-id: {cfg.vm.name}
 local-hostname: {cfg.vm.name}
 """
+    netcfg = """version: 2
+ethernets:
+  all-en:
+    match:
+      name: "en*"
+    dhcp4: true
+    optional: true
+  all-eth:
+    match:
+      name: "eth*"
+    dhcp4: true
+    optional: true
+"""
 
     if dry_run:
-        log.info('DRYRUN: write cloud-init + cloud-localds {}', seed_iso)
+        log.info(
+            'DRYRUN: write cloud-init (+network-config) + cloud-localds {}',
+            seed_iso,
+        )
         return {
             'user_data': user_data,
             'meta_data': meta_data,
+            'network_config': network_config,
             'seed_iso': seed_iso,
         }
 
@@ -212,7 +291,21 @@ local-hostname: {cfg.vm.name}
         capture=True,
     )
     run_cmd(
-        ['cloud-localds', '-v', str(seed_iso), str(user_data), str(meta_data)],
+        ['bash', '-lc', f"cat > {network_config} <<'EOF'\n{netcfg}\nEOF"],
+        sudo=True,
+        check=True,
+        capture=True,
+    )
+    run_cmd(
+        [
+            'cloud-localds',
+            '-v',
+            '-N',
+            str(network_config),
+            str(seed_iso),
+            str(user_data),
+            str(meta_data),
+        ],
         sudo=True,
         check=True,
         capture=True,
@@ -220,6 +313,7 @@ local-hostname: {cfg.vm.name}
     return {
         'user_data': user_data,
         'meta_data': meta_data,
+        'network_config': network_config,
         'seed_iso': seed_iso,
     }
 
@@ -274,15 +368,7 @@ def _ensure_disk(
 def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
     if dry_run:
         return False
-    return (
-        run_cmd(
-            ['virsh', 'dominfo', cfg.vm.name],
-            sudo=True,
-            check=False,
-            capture=True,
-        ).code
-        == 0
-    )
+    return _vm_defined(cfg.vm.name)
 
 
 def create_or_start_vm(
@@ -290,35 +376,9 @@ def create_or_start_vm(
 ) -> None:
     log.debug('Creating or starting VM {}', cfg.vm.name)
     cfg = cfg.expanded_paths()
-    base_img = fetch_image(cfg, dry_run=dry_run)
-    ci = _write_cloud_init(cfg, dry_run=dry_run)
-    vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
-    seed_iso = ci['seed_iso']
 
     if vm_exists(cfg, dry_run=dry_run):
-        if recreate:
-            if dry_run:
-                log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
-            else:
-                run_cmd(
-                    ['virsh', 'destroy', cfg.vm.name],
-                    sudo=True,
-                    check=False,
-                    capture=True,
-                )
-                run_cmd(
-                    ['virsh', 'undefine', cfg.vm.name, '--remove-all-storage'],
-                    sudo=True,
-                    check=False,
-                    capture=True,
-                )
-                run_cmd(
-                    ['virsh', 'undefine', cfg.vm.name],
-                    sudo=True,
-                    check=False,
-                    capture=True,
-                )
-        else:
+        if not recreate:
             st = (
                 run_cmd(
                     ['virsh', 'domstate', cfg.vm.name],
@@ -343,6 +403,15 @@ def create_or_start_vm(
             )
             log.info('VM started: {}', cfg.vm.name)
             return
+        if dry_run:
+            log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
+        else:
+            _destroy_and_undefine_vm(cfg.vm.name)
+
+    base_img = fetch_image(cfg, dry_run=dry_run)
+    ci = _write_cloud_init(cfg, dry_run=dry_run)
+    vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
+    seed_iso = ci['seed_iso']
 
     extra = []
     if cfg.share.enabled and cfg.share.host_src:
@@ -425,21 +494,36 @@ def wait_for_ip(
         return '0.0.0.0'
     ensure_dir(p['state_dir'])
     mac = _mac_for_vm(cfg)
+    cached_ip = get_ip_cached(cfg)
+    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     if not mac:
         log.warning(
             'Could not determine VM MAC; DHCP lease lookup may fail. Falling back to domifaddr.'
         )
+    if cached_ip:
+        log.info(
+            'Using cached IP as fallback while waiting for lease discovery: {}',
+            cached_ip,
+        )
     deadline = time.time() + timeout_s
+    start = time.time()
+    next_status_at = start
+    last_state = 'unknown'
+    last_lease_count = 0
+    last_domif_count = 0
+    warned_about_possible_hang = False
     while time.time() < deadline:
         ip = ''
+        lease_text = ''
+        domif_text = ''
         if mac:
-            leases = run_cmd(
+            lease_text = run_cmd(
                 ['virsh', 'net-dhcp-leases', cfg.network.name],
                 sudo=True,
                 check=False,
                 capture=True,
             ).stdout
-            for line in leases.splitlines():
+            for line in lease_text.splitlines():
                 if mac.lower() in line.lower():
                     parts = line.split()
                     for part in parts:
@@ -449,13 +533,13 @@ def wait_for_ip(
                 if ip:
                     break
         if not ip:
-            domif = run_cmd(
+            domif_text = run_cmd(
                 ['virsh', 'domifaddr', cfg.vm.name],
                 sudo=True,
                 check=False,
                 capture=True,
             ).stdout
-            for line in domif.splitlines():
+            for line in domif_text.splitlines():
                 if 'ipv4' in line.lower():
                     parts = line.split()
                     for part in parts:
@@ -468,9 +552,81 @@ def wait_for_ip(
             ip_file.write_text(ip + '\n', encoding='utf-8')
             log.info('VM IP: {} (saved to {})', ip, ip_file)
             return ip
+        if cached_ip:
+            ssh_probe = run_cmd(
+                [
+                    'ssh',
+                    *ssh_base_args(
+                        ident,
+                        batch_mode=True,
+                        connect_timeout=3,
+                        strict_host_key_checking='accept-new',
+                    ),
+                    f'{cfg.vm.user}@{cached_ip}',
+                    'true',
+                ],
+                sudo=False,
+                check=False,
+                capture=True,
+            )
+            if ssh_probe.code == 0:
+                ip_file.write_text(cached_ip + '\n', encoding='utf-8')
+                log.info(
+                    'VM reachable via cached IP fallback: {} (saved to {})',
+                    cached_ip,
+                    ip_file,
+                )
+                return cached_ip
+        now = time.time()
+        if now >= next_status_at:
+            st = run_cmd(
+                ['virsh', 'domstate', cfg.vm.name],
+                sudo=True,
+                check=False,
+                capture=True,
+            ).stdout.strip()
+            if st:
+                last_state = st
+            lease_lines = [
+                line
+                for line in lease_text.splitlines()
+                if line.strip() and not set(line.strip()) <= {'-'}
+            ]
+            last_lease_count = max(0, len(lease_lines) - 1)
+            domif_lines = [
+                line
+                for line in domif_text.splitlines()
+                if line.strip() and not set(line.strip()) <= {'-'}
+            ]
+            last_domif_count = max(0, len(domif_lines) - 1)
+            elapsed = max(0, int(now - start))
+            log.info(
+                'Waiting for VM network: vm={} elapsed={}s state={} leases_seen={} domifaddr_ipv4_rows={} mac={}',
+                cfg.vm.name,
+                elapsed,
+                last_state,
+                last_lease_count,
+                last_domif_count,
+                mac or 'unknown',
+            )
+            if elapsed >= 45 and not warned_about_possible_hang:
+                warned_about_possible_hang = True
+                log.warning(
+                    'VM network still not ready after {}s. VM may still be booting, or hung. '
+                    'Quick checks: `virsh console {}` and `aivm status --sudo --detail`.',
+                    elapsed,
+                    cfg.vm.name,
+                )
+            if 'running' not in last_state.lower():
+                raise RuntimeError(
+                    f'VM {cfg.vm.name} is not running while waiting for IP (state={last_state!r}).'
+                )
+            next_status_at = now + 10
         time.sleep(2)
     raise TimeoutError(
-        f'Timed out waiting for VM IP. Try: sudo virsh net-dhcp-leases {cfg.network.name}'
+        'Timed out waiting for VM IP '
+        f'(vm={cfg.vm.name}, state={last_state!r}, leases_seen={last_lease_count}, domifaddr_ipv4_rows={last_domif_count}, cached_ip={cached_ip or "none"}). '
+        f'Try: sudo virsh net-dhcp-leases {cfg.network.name}'
     )
 
 
@@ -479,14 +635,7 @@ def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if dry_run:
         log.info('DRYRUN: virsh destroy/undefine {}', name)
         return
-    run_cmd(['virsh', 'destroy', name], sudo=True, check=False, capture=True)
-    run_cmd(
-        ['virsh', 'undefine', name, '--remove-all-storage'],
-        sudo=True,
-        check=False,
-        capture=True,
-    )
-    run_cmd(['virsh', 'undefine', name], sudo=True, check=False, capture=True)
+    _destroy_and_undefine_vm(name)
     log.info('VM removed: {}', name)
 
 

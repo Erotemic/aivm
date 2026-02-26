@@ -72,7 +72,8 @@ table inet {table} {{
   chain input {{
     type filter hook input priority 0; policy accept;
     ct state established,related accept
-    iifname "{br}" ip daddr {gw} udp dport {{67,68}} accept
+    # DHCP client traffic may be broadcast (255.255.255.255), not just gateway-directed.
+    iifname "{br}" udp dport {{67,68}} accept
     iifname "{br}" ip daddr {gw} udp dport 53 accept
     iifname "{br}" ip daddr {gw} tcp dport 53 accept
     iifname "{br}" ip daddr {gw} icmp type echo-request accept
