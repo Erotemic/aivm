@@ -21,6 +21,9 @@ dependencies = [
   "ubelt",
 ]
 
+[project.urls]
+Homepage = "https://github.com/Erotemic/agentvm"
+
 [[project.authors]]
 name = "Jon Crall"
 email = "erotemic@gmail.com"
@@ -29,8 +32,27 @@ email = "erotemic@gmail.com"
 agentvm = "agentvm.cli:main"
 avm = "agentvm.cli:main"
 
+[tool.pytest.ini_options]
+addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
+norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
+filterwarnings = [ "default", "ignore:.*No cfgstr given in Cacher constructor or call.*:Warning", "ignore:.*Define the __nice__ method for.*:Warning", "ignore:.*private pytest class or function.*:Warning",]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [ "pragma: no cover", ".*  # pragma: no cover", ".*  # nocover", "def __repr__", "raise AssertionError", "raise NotImplementedError", "if 0:", "if trace is not None", "verbose = .*", "^ *raise", "^ *pass *$", "if _debug:", "if __name__ == .__main__.:", ".*if six.PY2:",]
+omit = [ "agentvm/__main__.py", "*/setup.py",]
+
 [tool.setuptools]
-packages = ["agentvm"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = [ "requirements/*.txt",]
+
+[tool.setuptools.packages.find]
+where = [ ".",]
+include = [ "agentvm*",]
 
 
 [tool.xcookie]
