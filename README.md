@@ -4,6 +4,8 @@
 > This project was written with GPT-5.3 Codex and is still being evaluated for correctness and safety.
 > It is for experimental use only.
 
+|Pypi| |PypiDownloads| |ReadTheDocs| |GithubActions| |Codecov|
+
 A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM** designed for
 running coding agents with a stronger boundary than containers.
 
@@ -148,3 +150,9 @@ aivm vm --help
 - NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want “internet-only” access.
 - virtiofs sharing is optional; it’s powerful, but it intentionally exposes that host directory to the VM.
 - `aivm vm code` requires VS Code's `code` CLI and the Remote - SSH extension.
+
+.. |GithubActions| image:: https://github.com/Erotemic/aivm/actions/workflows/tests.yml/badge.svg
+    :target: https://github.com/Erotemic/aivm/actions?query=branch%3Amain
+
+.. |Codecov| image:: https://codecov.io/github/Erotemic/aivm/badge.svg?branch=main&service=github
+    :target: https://codecov.io/github/Erotemic/aivm?branch=main
