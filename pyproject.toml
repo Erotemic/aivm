@@ -9,7 +9,6 @@ description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
-authors = [{name="AgentVM contributors"}]
 keywords = ["kvm", "libvirt", "vm", "sandbox", "agents", "vscode", "ssh", "virtiofs"]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -22,9 +21,34 @@ dependencies = [
   "ubelt",
 ]
 
+[[project.authors]]
+name = "Jon Crall"
+email = "erotemic@gmail.com"
+
 [project.scripts]
 agentvm = "agentvm.cli:main"
 avm = "agentvm.cli:main"
 
 [tool.setuptools]
 packages = ["agentvm"]
+
+
+[tool.xcookie]
+tags = [ "github", "erotemic", "purepy",]
+mod_name = "agentvm"
+repo_name = "agentvm"
+pkg_name = "agentvm"
+rel_mod_parent_dpath = "."
+os = [ "linux", "osx", "win",]
+min_python = "3.11"
+version = "0.0.1"
+url = "https://github.com/Erotemic/agentvm"
+author = "Jon Crall"
+author_email = "erotemic@gmail.com"
+description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
+license = "Apache 2"
+dev_status = "planning"
+remote_host = "github.com"
+remote_group = "Erotemic"
+use_setup_py = false
+use_pyproject_requirements = true
