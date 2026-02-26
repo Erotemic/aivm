@@ -56,3 +56,42 @@ class HelpModalCLI(scfg.ModalCLI):
 
     plan = PlanCLI
     tree = HelpTreeCLI
+
+def _iter_modal_members(modal_cls: type[scfg.ModalCLI]) -> list[tuple[str, type]]:
+    members: list[tuple[str, type]] = []
+    for name, val in modal_cls.__dict__.items():
+        if name.startswith("_"):
+            continue
+        if not isinstance(val, type):
+            continue
+        if issubclass(val, scfg.ModalCLI) or issubclass(val, scfg.DataConfig):
+            members.append((name, val))
+    return members
+
+def _short_help_line(cls: type) -> str:
+    doc = (getattr(cls, "__doc__", "") or "").strip()
+    if not doc:
+        return ""
+    return doc.splitlines()[0].strip()
+
+def _render_command_tree(modal_cls: type[scfg.ModalCLI], prefix: str = "aivm") -> str:
+    root_help = _short_help_line(modal_cls)
+    root_line = f"{prefix} - {root_help}" if root_help else prefix
+    lines: list[str] = [root_line]
+
+    def walk(cls: type[scfg.ModalCLI], parent: str, indent: str) -> None:
+        members = _iter_modal_members(cls)
+        for idx, (name, subcls) in enumerate(members):
+            last = idx == len(members) - 1
+            branch = "└── " if last else "├── "
+            path = f"{parent} {name}"
+            help_line = _short_help_line(subcls)
+            if help_line:
+                lines.append(f"{indent}{branch}{path} - {help_line}")
+            else:
+                lines.append(f"{indent}{branch}{path}")
+            if issubclass(subcls, scfg.ModalCLI):
+                walk(subcls, path, indent + ("    " if last else "│   "))
+
+    walk(modal_cls, prefix, "")
+    return "\n".join(lines)

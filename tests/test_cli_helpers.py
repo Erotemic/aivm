@@ -2,12 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aivm.cli._common import (
-    _auto_share_tag_for_path,
-    _count_verbose,
-    _normalize_argv,
-    _parse_sync_paths_arg,
-)
+from aivm.cli.main import _count_verbose, _normalize_argv
+from aivm.cli.vm import _auto_share_tag_for_path, _parse_sync_paths_arg
 
 
 def test_normalize_argv_aliases() -> None:

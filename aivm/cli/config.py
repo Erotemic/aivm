@@ -261,3 +261,87 @@ class ConfigModalCLI(scfg.ModalCLI):
     path = ConfigPathCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
+
+def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
+    info: dict[str, object] = {
+        "name": vm_name,
+        "state": "unknown",
+        "autostart": "unknown",
+        "network": "unknown",
+        "vcpus": "unknown",
+        "memory_mib": "unknown",
+        "shares": [],
+    }
+    dominfo = run_cmd(
+        virsh_system_cmd("dominfo", vm_name),
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if dominfo.code == 0:
+        for line in (dominfo.stdout or "").splitlines():
+            if ":" not in line:
+                continue
+            key, val = [x.strip() for x in line.split(":", 1)]
+            low = key.lower()
+            if low == "state":
+                info["state"] = val or "unknown"
+            elif low == "autostart":
+                info["autostart"] = val or "unknown"
+            elif low in {"cpu(s)", "cpus"}:
+                info["vcpus"] = val or "unknown"
+            elif low.startswith("max memory"):
+                m = re.search(r"(\d+)", val)
+                if m:
+                    kib = int(m.group(1))
+                    info["memory_mib"] = str(kib // 1024)
+    xml = run_cmd(
+        virsh_system_cmd("dumpxml", vm_name),
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if xml.code == 0 and xml.stdout.strip():
+        try:
+            root = ET.fromstring(xml.stdout)
+            iface = root.find(".//devices/interface[@type='network']/source")
+            if iface is not None:
+                name = iface.attrib.get("network", "").strip()
+                if name:
+                    info["network"] = name
+            shares: list[str] = []
+            for fs in root.findall(".//devices/filesystem[@type='mount']"):
+                src = fs.find("source")
+                tgt = fs.find("target")
+                src_dir = src.attrib.get("dir", "").strip() if src is not None else ""
+                tgt_dir = tgt.attrib.get("dir", "").strip() if tgt is not None else ""
+                if src_dir or tgt_dir:
+                    shares.append(f"{src_dir or '?'} -> {tgt_dir or '?'}")
+            info["shares"] = shares
+        except Exception:
+            pass
+    return info
+
+def _prompt_import_discovered_vm(vm_info: dict[str, object], *, yes: bool) -> bool:
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    print("")
+    print(f"Discovered unmanaged VM: {vm_info['name']}")
+    print(
+        f"  state={vm_info['state']} | autostart={vm_info['autostart']} | "
+        f"network={vm_info['network']} | vcpus={vm_info['vcpus']} | "
+        f"memory_mib={vm_info['memory_mib']}"
+    )
+    shares = vm_info.get("shares", [])
+    if isinstance(shares, list) and shares:
+        print("  shares:")
+        for item in shares[:5]:
+            print(f"    - {item}")
+        if len(shares) > 5:
+            print(f"    - ... ({len(shares) - 5} more)")
+    else:
+        print("  shares: none detected")
+    ans = input("Add this VM to aivm registry/config? [y/N]: ").strip().lower()
+    return ans in {"y", "yes"}
