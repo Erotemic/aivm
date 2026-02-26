@@ -88,6 +88,22 @@ class ProvisionConfig:
 
 
 @dataclass
+class SyncConfig:
+    enabled: bool = False
+    overwrite: bool = True
+    paths: list[str] = field(
+        default_factory=lambda: [
+            "~/.gitconfig",
+            "~/.gitignore",
+            "~/.config/Code/User/settings.json",
+            "~/.config/Code/User/keybindings.json",
+            "~/.tmux.conf",
+            "~/.bashrc",
+        ]
+    )
+
+
+@dataclass
 class PathsConfig:
     base_dir: str = "/var/lib/libvirt/agentvm"
     state_dir: str = "~/.cache/agentvm"
@@ -103,6 +119,7 @@ class AgentVMConfig:
     image: ImageConfig = field(default_factory=ImageConfig)
     share: ShareConfig = field(default_factory=ShareConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
+    sync: SyncConfig = field(default_factory=SyncConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     verbosity: int = 1
 
@@ -116,6 +133,7 @@ class AgentVMConfig:
             expand(self.paths.ssh_pubkey_path) if self.paths.ssh_pubkey_path else ""
         )
         self.share.host_src = expand(self.share.host_src) if self.share.host_src else ""
+        self.sync.paths = [expand(p) for p in self.sync.paths]
         return self
 
 
@@ -156,6 +174,7 @@ def load(path: Path) -> AgentVMConfig:
         "image",
         "share",
         "provision",
+        "sync",
         "paths",
     ):
         if section in raw and isinstance(raw[section], dict):

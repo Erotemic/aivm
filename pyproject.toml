@@ -19,10 +19,12 @@ classifiers = [
 dependencies = [
   "loguru",
   "scriptconfig>=0.9.0",
+  "ubelt",
 ]
 
 [project.scripts]
 agentvm = "agentvm.cli:main"
+avm = "agentvm.cli:main"
 
 [tool.setuptools]
 packages = ["agentvm"]

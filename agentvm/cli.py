@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import textwrap
 import re
+import hashlib
 from pathlib import Path
 
 import scriptconfig as scfg
@@ -13,6 +14,17 @@ from .detect import auto_defaults
 from .firewall import apply_firewall, firewall_status, remove_firewall
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .net import destroy_network, ensure_network, network_status
+from .registry import (
+    find_attachment,
+    find_vm,
+    load_registry,
+    read_dir_metadata,
+    registry_path,
+    save_registry,
+    upsert_attachment,
+    upsert_vm,
+    write_dir_metadata,
+)
 from .util import ensure_dir, run_cmd, which
 from .vm import (
     create_or_start_vm,
@@ -21,8 +33,11 @@ from .vm import (
     fetch_image,
     get_ip_cached,
     provision,
+    sync_settings,
+    attach_vm_share,
     ssh_config as mk_ssh_config,
     vm_has_share,
+    vm_share_mappings,
     vm_exists,
     vm_status,
     wait_for_ip,
@@ -64,9 +79,109 @@ def _load_cfg(config_path: str | None) -> AgentVMConfig:
     path = _cfg_path(config_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Config not found: {path}. Run: agentvm init --config {path}"
+            f"Config not found: {path}. "
+            f"Run: agentvm init --config {path} "
+            "or use global selection commands like `agentvm code .` / `agentvm list`."
         )
     return load(path).expanded_paths()
+
+
+def _load_cfg_with_path(config_path: str | None) -> tuple[AgentVMConfig, Path]:
+    path = _cfg_path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Config not found: {path}. "
+            f"Run: agentvm init --config {path} "
+            "or use global selection commands like `agentvm code .` / `agentvm list`."
+        )
+    return load(path).expanded_paths(), path
+
+
+def _record_vm(cfg: AgentVMConfig, cfg_path: Path) -> Path:
+    reg = load_registry()
+    upsert_vm(reg, cfg, cfg_path)
+    return save_registry(reg)
+
+
+def _record_attachment(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    host_src: Path,
+    force: bool = False,
+) -> tuple[Path, Path]:
+    reg = load_registry()
+    upsert_vm(reg, cfg, cfg_path)
+    upsert_attachment(
+        reg,
+        host_path=host_src,
+        vm_name=cfg.vm.name,
+        mode="shared",
+        guest_dst=cfg.share.guest_dst,
+        tag=cfg.share.tag,
+        force=force,
+    )
+    reg_path = save_registry(reg)
+    meta_path = write_dir_metadata(
+        host_src,
+        vm_name=cfg.vm.name,
+        config_path=str(cfg_path.resolve()),
+        mode="shared",
+    )
+    return reg_path, meta_path
+
+
+def _choose_vm_interactive(options: list[str], *, reason: str) -> str:
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"VM selection is ambiguous ({reason}). Re-run with --vm or --config."
+        )
+    print(f"Multiple VMs match ({reason}). Select one:")
+    for idx, item in enumerate(options, start=1):
+        print(f"  {idx}. {item}")
+    while True:
+        raw = input("Select VM number: ").strip()
+        if not raw.isdigit():
+            print("Please enter a number.")
+            continue
+        choice = int(raw)
+        if 1 <= choice <= len(options):
+            return options[choice - 1]
+        print(f"Please enter a number between 1 and {len(options)}.")
+
+
+def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
+    guest_dst_opt = (guest_dst_opt or "").strip()
+    if guest_dst_opt:
+        return guest_dst_opt
+    return str(host_src)
+
+
+def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
+    max_len = 36
+    raw = re.sub(r"[^A-Za-z0-9_.-]+", "-", host_src.name or "hostcode").strip("-")
+    base = f"hostcode-{raw}" if raw else "hostcode"
+    base = base[:max_len]
+    if base not in existing_tags:
+        return base
+    suffix = hashlib.sha1(str(host_src).encode("utf-8")).hexdigest()[:8]
+    tag = f"{base[: max_len - 1 - len(suffix)]}-{suffix}"
+    if tag not in existing_tags:
+        return tag
+    idx = 2
+    while True:
+        tail = f"-{suffix[:5]}-{idx}"
+        cand = f"{base[: max_len - len(tail)]}{tail}"
+        if cand not in existing_tags:
+            return cand
+        idx += 1
+
+
+def _ensure_share_tag_len(cfg: AgentVMConfig, host_src: Path, existing_tags: set[str]) -> None:
+    tag = (cfg.share.tag or "").strip()
+    if tag and len(tag) <= 36:
+        return
+    cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
 
 
 def _status_line(ok: bool | None, label: str, detail: str = "") -> str:
@@ -109,6 +224,11 @@ def _clip(text: str, *, max_lines: int = 60) -> str:
     keep = lines[:max_lines]
     keep.append(f"... ({len(lines) - max_lines} more lines)")
     return "\n".join(keep)
+
+
+def _parse_sync_paths_arg(paths_arg: str) -> list[str]:
+    items = [p.strip() for p in (paths_arg or "").split(",")]
+    return [p for p in items if p]
 
 
 def _check_network(cfg: AgentVMConfig) -> tuple[bool, str]:
@@ -424,7 +544,9 @@ class InitCLI(_BaseCommand):
             print("Use --force to overwrite.", file=sys.stderr)
             return 2
         save(path, cfg)
+        reg_path = _record_vm(cfg, path)
         print(f"Wrote config: {path}")
+        print(f"Registered VM in global registry: {reg_path}")
         return 0
 
 
@@ -458,8 +580,10 @@ class PlanCLI(_BaseCommand):
            agentvm vm ssh_config --config {path}   # VS Code Remote-SSH
         7. 🧰 Optional provisioning (docker + dev tools)
            agentvm vm provision --config {path}
-        8. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
-           agentvm vm code --config {path} --host_src .
+        8. 🧩 Optional settings sync from host user profile
+           agentvm vm sync_settings --config {path}
+        9. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
+           agentvm vm code --config {path} --host_src . --sync_settings
         """).strip()
         print(steps)
         return 0
@@ -587,7 +711,10 @@ class VMUpCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        create_or_start_vm(_load_cfg(args.config), dry_run=args.dry_run, recreate=args.recreate)
+        cfg, cfg_path = _load_cfg_with_path(args.config)
+        create_or_start_vm(cfg, dry_run=args.dry_run, recreate=args.recreate)
+        if not args.dry_run:
+            _record_vm(cfg, cfg_path)
         return 0
 
 
@@ -648,12 +775,119 @@ class VMProvisionCLI(_BaseCommand):
         return 0
 
 
+class VMSyncSettingsCLI(_BaseCommand):
+    """Copy host user settings/files into the VM user home."""
+
+    paths = scfg.Value(
+        "",
+        help=(
+            "Optional comma-separated host paths to sync. "
+            "Defaults to [sync].paths from config."
+        ),
+    )
+    overwrite = scfg.Value(
+        True,
+        isflag=True,
+        help="Overwrite existing files in VM (default true).",
+    )
+    dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg = _load_cfg(args.config)
+        if args.dry_run:
+            ip = "0.0.0.0"
+        else:
+            ip = get_ip_cached(cfg) or wait_for_ip(cfg, timeout_s=360, dry_run=False)
+            wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
+        chosen_paths = _parse_sync_paths_arg(args.paths) if args.paths else None
+        result = sync_settings(
+            cfg,
+            ip,
+            paths=chosen_paths,
+            overwrite=bool(args.overwrite),
+            dry_run=args.dry_run,
+        )
+        print("🧩 Settings sync summary")
+        print(f"  copied: {len(result['copied'])}")
+        print(f"  skipped_missing: {len(result['skipped_missing'])}")
+        print(f"  skipped_exists: {len(result['skipped_exists'])}")
+        print(f"  failed: {len(result['failed'])}")
+        for k in ("copied", "skipped_missing", "skipped_exists", "failed"):
+            for item in result[k]:
+                print(f"  - {k}: {item}")
+        if result["failed"]:
+            return 2
+        return 0
+
+
+def _select_cfg_for_vm_name(vm_name: str, *, reason: str) -> tuple[AgentVMConfig, Path]:
+    reg = load_registry()
+    rec = find_vm(reg, vm_name)
+    if rec is None:
+        raise RuntimeError(f"VM not found in global registry ({reason}): {vm_name}")
+    cfg_path = Path(rec.config_path).expanduser()
+    if not cfg_path.exists():
+        raise RuntimeError(
+            f"Config path for VM {vm_name} does not exist: {cfg_path}. "
+            "Re-register it with `agentvm init` or `agentvm vm up`."
+        )
+    return load(cfg_path).expanded_paths(), cfg_path
+
+
+def _resolve_cfg_for_code(
+    *,
+    config_opt: str | None,
+    vm_opt: str,
+    host_src: Path,
+) -> tuple[AgentVMConfig, Path]:
+    if config_opt is not None:
+        return _load_cfg_with_path(config_opt)
+
+    cwd_cfg = _cfg_path(None)
+    if cwd_cfg.exists():
+        return _load_cfg_with_path(None)
+
+    if vm_opt:
+        return _select_cfg_for_vm_name(vm_opt, reason="--vm")
+
+    reg = load_registry()
+    meta = read_dir_metadata(host_src)
+    meta_vm = str(meta.get("vm_name", "")).strip() if isinstance(meta, dict) else ""
+    if meta_vm:
+        return _select_cfg_for_vm_name(meta_vm, reason="directory metadata")
+
+    att = find_attachment(reg, host_src)
+    if att is not None:
+        return _select_cfg_for_vm_name(att.vm_name, reason="existing attachment")
+
+    valid = [r for r in reg.vms if r.config_path and Path(r.config_path).expanduser().exists()]
+    if not valid:
+        raise RuntimeError(
+            "No usable VM config found. Pass --config, run `agentvm init`, or register a VM."
+        )
+    if len(valid) == 1:
+        only = valid[0]
+        return _select_cfg_for_vm_name(only.name, reason="single registered VM")
+
+    chosen = _choose_vm_interactive(
+        [r.name for r in sorted(valid, key=lambda x: x.name)],
+        reason=f"{len(valid)} registered VMs",
+    )
+    return _select_cfg_for_vm_name(chosen, reason="interactive choice")
+
+
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
     host_src = scfg.Value(
         ".",
         help="Host project directory to share and open (default: current directory).",
+    )
+    vm = scfg.Value(
+        "",
+        help="VM name override for selecting config from global registry.",
     )
     guest_dst = scfg.Value(
         "",
@@ -669,12 +903,28 @@ class VMCodeCLI(_BaseCommand):
         isflag=True,
         help="Apply firewall rules when firewall.enabled=true.",
     )
+    sync_settings = scfg.Value(
+        False,
+        isflag=True,
+        help="Sync host settings files into VM before launching VS Code.",
+    )
+    sync_paths = scfg.Value(
+        "",
+        help=(
+            "Optional comma-separated paths used when --sync_settings is set. "
+            "Defaults to [sync].paths."
+        ),
+    )
+    force = scfg.Value(
+        False,
+        isflag=True,
+        help="Force attaching folder even if already attached to a different VM.",
+    )
     dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
 
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
 
         host_src = Path(args.host_src).resolve()
         if not host_src.exists():
@@ -682,24 +932,67 @@ class VMCodeCLI(_BaseCommand):
         if not host_src.is_dir():
             raise RuntimeError(f"Host source path is not a directory: {host_src}")
 
+        cfg, cfg_path = _resolve_cfg_for_code(
+            config_opt=args.config,
+            vm_opt=args.vm,
+            host_src=host_src,
+        )
+
         cfg.share.enabled = True
         cfg.share.host_src = str(host_src)
-        if args.guest_dst:
-            cfg.share.guest_dst = args.guest_dst
+        cfg.share.guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
+        _ensure_share_tag_len(cfg, host_src, set())
 
         ensure_network(cfg, recreate=False, dry_run=args.dry_run)
         if cfg.firewall.enabled and args.ensure_firewall:
             apply_firewall(cfg, dry_run=args.dry_run)
 
         recreate = False
+        if not args.dry_run and vm_exists(cfg):
+            mappings = vm_share_mappings(cfg)
+            requested_src = str(Path(cfg.share.host_src).resolve())
+            existing_tags = {tag for _, tag in mappings if tag}
+            _ensure_share_tag_len(cfg, host_src, existing_tags)
+            # Reuse existing tag if this source is already defined on the VM.
+            for src, tag in mappings:
+                if src == requested_src and tag:
+                    cfg.share.tag = tag
+                    break
+            # Avoid tag collisions if the default tag is already bound to a different source.
+            if not vm_has_share(cfg):
+                for src, tag in mappings:
+                    if tag == cfg.share.tag and src != requested_src:
+                        cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
+                        break
+
         if not args.dry_run and vm_exists(cfg) and not vm_has_share(cfg):
             if args.recreate_if_needed:
                 recreate = True
             else:
-                raise RuntimeError(
-                    "Existing VM does not include requested share mapping. "
-                    "Re-run with --recreate_if_needed."
-                )
+                try:
+                    attach_vm_share(cfg, dry_run=False)
+                except Exception as ex:
+                    current_maps = vm_share_mappings(cfg)
+                    requested_src = str(Path(cfg.share.host_src).resolve())
+                    requested_tag = cfg.share.tag
+                    if current_maps:
+                        found = "\n".join(
+                            f"  - source={src or '(none)'} tag={tag or '(none)'}"
+                            for src, tag in current_maps
+                        )
+                    else:
+                        found = "  - (no filesystem mappings found)"
+                    raise RuntimeError(
+                        "Existing VM does not include requested share mapping, and live attach failed.\n"
+                        f"VM: {cfg.vm.name}\n"
+                        f"Requested: source={requested_src} tag={requested_tag} guest_dst={cfg.share.guest_dst}\n"
+                        "Current VM filesystem mappings:\n"
+                        f"{found}\n"
+                        f"Live attach error: {ex}\n"
+                        "Next steps:\n"
+                        "  - Re-run with --recreate_if_needed to rebuild the VM definition with the new share.\n"
+                        "  - Or use a VM already defined with this share mapping."
+                    )
 
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=recreate)
 
@@ -707,9 +1000,33 @@ class VMCodeCLI(_BaseCommand):
             print(f"DRYRUN: would open {cfg.share.guest_dst} in VS Code via host {cfg.vm.name}")
             return 0
 
+        reg_path, meta_path = _record_attachment(
+            cfg,
+            cfg_path,
+            host_src=host_src,
+            force=bool(args.force),
+        )
+
         ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
         ensure_share_mounted(cfg, ip, dry_run=False)
+
+        do_sync = bool(args.sync_settings or cfg.sync.enabled)
+        if do_sync:
+            chosen_paths = _parse_sync_paths_arg(args.sync_paths) if args.sync_paths else None
+            sync_result = sync_settings(
+                cfg,
+                ip,
+                paths=chosen_paths,
+                overwrite=cfg.sync.overwrite,
+                dry_run=False,
+            )
+            if sync_result["failed"]:
+                raise RuntimeError(
+                    "Failed syncing one or more settings files:\n"
+                    + "\n".join(sync_result["failed"])
+                )
+
         ssh_cfg = _upsert_ssh_config_entry(cfg, dry_run=False)
 
         if which("code") is None:
@@ -725,7 +1042,87 @@ class VMCodeCLI(_BaseCommand):
         )
         print(f"Opened VS Code remote folder {cfg.share.guest_dst} on host {cfg.vm.name}")
         print(f"SSH entry updated in {ssh_cfg}")
+        print(f"Folder registered in {reg_path} and {meta_path}")
         return 0
+
+
+class VMAttachCLI(_BaseCommand):
+    """Attach/register a host directory to an existing managed VM."""
+
+    vm = scfg.Value("", help="VM name in global registry.")
+    host_src = scfg.Value(".", help="Host directory to attach.")
+    guest_dst = scfg.Value("", help="Guest mount path override.")
+    force = scfg.Value(
+        False,
+        isflag=True,
+        help="Allow attaching folder that is already attached to a different VM.",
+    )
+    dry_run = scfg.Value(False, isflag=True, help="Print actions without running.")
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        host_src = Path(args.host_src).resolve()
+        if not host_src.exists() or not host_src.is_dir():
+            raise RuntimeError(f"host_src must be an existing directory: {host_src}")
+
+        if args.config:
+            cfg, cfg_path = _load_cfg_with_path(args.config)
+        elif args.vm:
+            cfg, cfg_path = _select_cfg_for_vm_name(args.vm, reason="--vm")
+        else:
+            cfg, cfg_path = _resolve_cfg_for_code(
+                config_opt=None,
+                vm_opt="",
+                host_src=host_src,
+            )
+
+        cfg.share.enabled = True
+        cfg.share.host_src = str(host_src)
+        cfg.share.guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
+        _ensure_share_tag_len(cfg, host_src, set())
+
+        if args.dry_run:
+            print(f"DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {cfg.share.guest_dst}")
+            return 0
+
+        save(cfg_path, cfg)
+        if vm_exists(cfg):
+            mappings = vm_share_mappings(cfg)
+            requested_src = str(Path(cfg.share.host_src).resolve())
+            existing_tags = {tag for _, tag in mappings if tag}
+            _ensure_share_tag_len(cfg, host_src, existing_tags)
+            for src, tag in mappings:
+                if src == requested_src and tag:
+                    cfg.share.tag = tag
+                    break
+            if not vm_has_share(cfg):
+                for src, tag in mappings:
+                    if tag == cfg.share.tag and src != requested_src:
+                        cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
+                        break
+                if not vm_has_share(cfg):
+                    attach_vm_share(cfg, dry_run=False)
+                    save(cfg_path, cfg)
+        reg_path, meta_path = _record_attachment(
+            cfg,
+            cfg_path,
+            host_src=host_src,
+            force=bool(args.force),
+        )
+        print(f"Attached {host_src} to VM {cfg.vm.name} (shared mode)")
+        print(f"Updated config: {cfg_path}")
+        print(f"Updated registry: {reg_path}")
+        print(f"Updated directory metadata: {meta_path}")
+        return 0
+
+
+class CodeCLI(VMCodeCLI):
+    """Top-level shortcut for `agentvm vm code`."""
+
+
+class AttachCLI(VMAttachCLI):
+    """Top-level shortcut for `agentvm vm attach`."""
 
 
 class ApplyCLI(_BaseCommand):
@@ -737,7 +1134,7 @@ class ApplyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
+        cfg, cfg_path = _load_cfg_with_path(args.config)
         if args.interactive:
             PlanCLI.main(argv=False, config=args.config, verbose=args.verbose)
             print()
@@ -750,6 +1147,8 @@ class ApplyCLI(_BaseCommand):
         fetch_image(cfg, dry_run=args.dry_run)
         log.debug("Creating or starting VM")
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
+        if not args.dry_run:
+            _record_vm(cfg, cfg_path)
         log.debug("Waiting for VM IP address")
         wait_for_ip(cfg, timeout_s=360, dry_run=args.dry_run)
         if cfg.provision.enabled:
@@ -761,8 +1160,79 @@ class ApplyCLI(_BaseCommand):
         return 0
 
 
+class ListCLI(_BaseCommand):
+    """List managed VMs, managed networks, and attached host folders."""
+
+    section = scfg.Value(
+        "all",
+        help="One of: all, vms, networks, folders.",
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        want = str(args.section or "all").strip().lower()
+        allowed = {"all", "vms", "networks", "folders"}
+        if want not in allowed:
+            raise RuntimeError(f"--section must be one of: {', '.join(sorted(allowed))}")
+
+        reg_path = registry_path()
+        reg = load_registry(reg_path)
+
+        if want in {"all", "vms"}:
+            print("Managed VMs")
+            if not reg.vms:
+                print("  (none)")
+            else:
+                for vm in sorted(reg.vms, key=lambda x: x.name):
+                    cfg_ok = Path(vm.config_path).expanduser().exists()
+                    cfg_state = "ok" if cfg_ok else "missing"
+                    print(
+                        f"  - {vm.name} | network={vm.network_name} "
+                        f"| strict_firewall={'yes' if vm.strict_firewall else 'no'} "
+                        f"| config={vm.config_path} ({cfg_state})"
+                    )
+
+        if want in {"all", "networks"}:
+            if want == "all":
+                print("")
+            print("Managed Networks")
+            by_name: dict[str, bool] = {}
+            for vm in reg.vms:
+                strict = bool(vm.strict_firewall)
+                if vm.network_name not in by_name:
+                    by_name[vm.network_name] = strict
+                else:
+                    by_name[vm.network_name] = by_name[vm.network_name] or strict
+            if not by_name:
+                print("  (none)")
+            else:
+                for name in sorted(by_name):
+                    print(f"  - {name} | strict_firewall={'yes' if by_name[name] else 'no'}")
+
+        if want in {"all", "folders"}:
+            if want == "all":
+                print("")
+            print("Attached Folders")
+            if not reg.attachments:
+                print("  (none)")
+            else:
+                for att in sorted(reg.attachments, key=lambda x: (x.vm_name, x.host_path)):
+                    print(
+                        f"  - {att.host_path} | vm={att.vm_name} "
+                        f"| mode={att.mode} | guest_dst={att.guest_dst or '(default)'}"
+                    )
+        print("")
+        print(f"Registry: {reg_path}")
+        return 0
+
+
 class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
+    vm = scfg.Value(
+        "",
+        help="Optional VM name override when no local config file is present.",
+    )
     detail = scfg.Value(
         False,
         isflag=True,
@@ -772,8 +1242,14 @@ class StatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
-        cfg = _load_cfg(args.config)
+        if args.config is not None or _cfg_path(None).exists():
+            cfg, path = _load_cfg_with_path(args.config)
+        else:
+            cfg, path = _resolve_cfg_for_code(
+                config_opt=None,
+                vm_opt=args.vm,
+                host_src=Path.cwd(),
+            )
         print(_render_status(cfg, path, detail=args.detail))
         return 0
 
@@ -803,6 +1279,8 @@ class VMModalCLI(scfg.ModalCLI):
     destroy = VMDestroyCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI
+    sync_settings = VMSyncSettingsCLI
+    attach = VMAttachCLI
     code = VMCodeCLI
 
 
@@ -820,7 +1298,11 @@ class AgentVMModalCLI(scfg.ModalCLI):
       agentvm vm wait_ip --config .agentvm.toml
       agentvm vm ssh_config --config .agentvm.toml
       agentvm vm provision --config .agentvm.toml
-      agentvm vm code --config .agentvm.toml --host_src .
+      agentvm vm sync_settings --config .agentvm.toml
+      agentvm vm attach --vm agentvm-2404 --host_src .
+      agentvm vm code --config .agentvm.toml --host_src . --sync_settings
+      agentvm code . --sync_settings
+      agentvm list
       agentvm apply --config .agentvm.toml --interactive
 
     Tips:
@@ -833,18 +1315,35 @@ class AgentVMModalCLI(scfg.ModalCLI):
     net = NetModalCLI
     fw = FirewallModalCLI
     vm = VMModalCLI
+    code = CodeCLI
+    attach = AttachCLI
     image_fetch = ImageFetchCLI
     apply = ApplyCLI
+    list = ListCLI
     status = StatusCLI
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
     """Normalize accepted hyphenated spellings to scriptconfig command names."""
+    if len(argv) >= 1 and argv[0] == "attach":
+        if len(argv) >= 2 and not argv[1].startswith("-"):
+            return ["attach", "--host_src", argv[1], *argv[2:]]
+        return argv
+    if len(argv) >= 1 and argv[0] == "code":
+        if len(argv) >= 2 and not argv[1].startswith("-"):
+            return ["code", "--host_src", argv[1], *argv[2:]]
+        return argv
+    if len(argv) >= 1 and argv[0] == "ls":
+        return ["list", *argv[1:]]
     if len(argv) >= 2 and argv[0] == "vm":
         if argv[1] == "wait-ip":
             return [argv[0], "wait_ip", *argv[2:]]
         if argv[1] == "ssh-config":
             return [argv[0], "ssh_config", *argv[2:]]
+        if argv[1] == "sync-settings":
+            return [argv[0], "sync_settings", *argv[2:]]
+        if argv[1] == "code" and len(argv) >= 3 and not argv[2].startswith("-"):
+            return [argv[0], "code", "--host_src", argv[2], *argv[3:]]
     return argv
 
 

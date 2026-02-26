@@ -1,6 +1,7 @@
 from __future__ import annotations
 import shlex
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -581,6 +582,61 @@ def vm_has_share(cfg: AgentVMConfig) -> bool:
     return False
 
 
+def vm_share_mappings(cfg: AgentVMConfig) -> list[tuple[str, str]]:
+    """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
+    xml = run_cmd(
+        ["virsh", "dumpxml", cfg.vm.name], sudo=True, check=False, capture=True
+    )
+    if xml.code != 0 or not xml.stdout.strip():
+        return []
+    try:
+        root = ET.fromstring(xml.stdout)
+    except Exception:
+        return []
+    mappings: list[tuple[str, str]] = []
+    for fs in root.findall(".//devices/filesystem"):
+        src = fs.find("source")
+        tgt = fs.find("target")
+        src_dir = src.attrib.get("dir", "") if src is not None else ""
+        tgt_dir = tgt.attrib.get("dir", "") if tgt is not None else ""
+        if src_dir or tgt_dir:
+            mappings.append((src_dir, tgt_dir))
+    return mappings
+
+
+def attach_vm_share(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    """Attach a virtiofs share mapping to an existing VM definition."""
+    cfg = cfg.expanded_paths()
+    if not cfg.share.enabled or not cfg.share.host_src:
+        raise RuntimeError("Share is not enabled/configured.")
+    source_dir = str(Path(cfg.share.host_src).resolve())
+    tag = cfg.share.tag
+    if not tag:
+        raise RuntimeError("Share tag is empty; cannot attach filesystem mapping.")
+    if dry_run:
+        log.info("DRYRUN: attach virtiofs share source={} tag={}", source_dir, tag)
+        return
+    xml = f"""<filesystem type='mount' accessmode='passthrough'>
+  <driver type='virtiofs'/>
+  <source dir='{source_dir}'/>
+  <target dir='{tag}'/>
+</filesystem>
+"""
+    with tempfile.NamedTemporaryFile("w", delete=False) as f:
+        f.write(xml)
+        tmp = f.name
+    state = run_cmd(
+        ["virsh", "domstate", cfg.vm.name], sudo=True, check=False, capture=True
+    ).stdout.strip().lower()
+    is_running = "running" in state
+    attach_cmd = (
+        ["virsh", "attach-device", cfg.vm.name, tmp, "--live", "--config"]
+        if is_running
+        else ["virsh", "attach-device", cfg.vm.name, tmp, "--config"]
+    )
+    run_cmd(attach_cmd, sudo=True, check=True, capture=True)
+
+
 def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) -> None:
     cfg = cfg.expanded_paths()
     ident = cfg.paths.ssh_identity_file
@@ -611,3 +667,95 @@ def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) 
         log.info("DRYRUN: {}", " ".join(cmd))
         return
     run_cmd(cmd, sudo=False, check=True, capture=True)
+
+
+def sync_settings(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    paths: list[str] | None = None,
+    overwrite: bool = True,
+    dry_run: bool = False,
+) -> dict[str, list[str]]:
+    """
+    Copy selected host user settings into the VM user home over SSH/SCP.
+    """
+    cfg = cfg.expanded_paths()
+    ident = cfg.paths.ssh_identity_file
+    if not ident:
+        raise RuntimeError(
+            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+        )
+    wanted = list(paths if paths is not None else cfg.sync.paths)
+    host_home = Path.home()
+    copied: list[str] = []
+    skipped_missing: list[str] = []
+    skipped_exists: list[str] = []
+    failed: list[str] = []
+
+    for raw in wanted:
+        src_abs = Path(raw).expanduser()
+        if not src_abs.is_absolute():
+            src_abs = (Path.cwd() / src_abs)
+        if not src_abs.exists():
+            skipped_missing.append(str(src_abs))
+            continue
+        try:
+            rel = src_abs.relative_to(host_home)
+            remote_path = f"$HOME/{rel.as_posix()}"
+        except ValueError:
+            remote_path = f"$HOME/.agentvm-sync/{src_abs.name}"
+
+        remote_parent = f"$HOME/{Path(remote_path.replace('$HOME/', '')).parent.as_posix()}"
+        check_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            ident,
+            f"{cfg.vm.user}@{ip}",
+            f"test -e {shlex.quote(remote_path)}",
+        ]
+        if not overwrite and not dry_run:
+            exists = run_cmd(check_cmd, sudo=False, check=False, capture=True).code == 0
+            if exists:
+                skipped_exists.append(f"{src_abs} -> {remote_path}")
+                continue
+
+        mkdir_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            ident,
+            f"{cfg.vm.user}@{ip}",
+            f"mkdir -p {shlex.quote(remote_parent)}",
+        ]
+        scp_cmd = [
+            "scp",
+            "-r",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-i",
+            ident,
+            str(src_abs),
+            f"{cfg.vm.user}@{ip}:{remote_parent}/",
+        ]
+        if dry_run:
+            log.info("DRYRUN: {}", " ".join(mkdir_cmd))
+            log.info("DRYRUN: {}", " ".join(scp_cmd))
+            copied.append(f"{src_abs} -> {remote_path}")
+            continue
+        run_cmd(mkdir_cmd, sudo=False, check=True, capture=True)
+        res = run_cmd(scp_cmd, sudo=False, check=False, capture=True)
+        if res.code == 0:
+            copied.append(f"{src_abs} -> {remote_path}")
+        else:
+            failed.append(f"{src_abs} -> {remote_path}: {res.stderr.strip()}")
+
+    return {
+        "copied": copied,
+        "skipped_missing": skipped_missing,
+        "skipped_exists": skipped_exists,
+        "failed": failed,
+    }
