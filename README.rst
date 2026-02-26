@@ -12,11 +12,11 @@ The aivm Module
 
 
 
-+---------------+---------------------------------------+
++---------------+-----------------------------------------+
 | Read the Docs | https://aivm.readthedocs.io/en/latest/ |
-+---------------+---------------------------------------+
-| Pypi          | https://pypi.org/project/aivm         |
-+---------------+---------------------------------------+
++---------------+-----------------------------------------+
+| Pypi          | https://pypi.org/project/aivm          |
++---------------+-----------------------------------------+
 
 A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM**
 designed for running coding agents with a stronger boundary than containers.
