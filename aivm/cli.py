@@ -2198,6 +2198,10 @@ class AttachCLI(VMAttachCLI):
     """Top-level shortcut for `aivm vm attach`."""
 
 
+class SSHCLI(VMSSHCLI):
+    """Top-level shortcut for `aivm vm ssh`."""
+
+
 class ApplyCLI(_BaseCommand):
     """Run the full setup workflow from network to provisioning."""
 
@@ -2460,6 +2464,7 @@ class AgentVMModalCLI(scfg.ModalCLI):
       aivm vm sync_settings --config .aivm.toml
       aivm vm attach --vm aivm-2404 --host_src .
       aivm vm code --config .aivm.toml --host_src . --sync_settings
+      aivm ssh .
       aivm code . --sync_settings
       aivm list
       aivm apply --config .aivm.toml --interactive
@@ -2472,6 +2477,7 @@ class AgentVMModalCLI(scfg.ModalCLI):
     help = HelpModalCLI
     host = HostModalCLI
     code = CodeCLI
+    ssh = SSHCLI
     attach = AttachCLI
     vm = VMModalCLI
     apply = ApplyCLI
@@ -2490,6 +2496,10 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     if len(argv) >= 1 and argv[0] == "code":
         if len(argv) >= 2 and not argv[1].startswith("-"):
             return ["code", "--host_src", argv[1], *argv[2:]]
+        return argv
+    if len(argv) >= 1 and argv[0] == "ssh":
+        if len(argv) >= 2 and not argv[1].startswith("-"):
+            return ["ssh", "--host_src", argv[1], *argv[2:]]
         return argv
     if len(argv) >= 1 and argv[0] == "ls":
         return ["list", *argv[1:]]
