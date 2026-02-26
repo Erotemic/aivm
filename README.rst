@@ -12,11 +12,11 @@ The aivm Module
 
 
 
-+---------------+---------------------------------------+
-| Read the Docs | http://aivm.readthedocs.io/en/latest/ |
-+---------------+---------------------------------------+
-| Pypi          | https://pypi.org/project/aivm         |
-+---------------+---------------------------------------+
++---------------+-----------------------------------------+
+| Read the Docs | https://aivm.readthedocs.io/en/latest/  |
++---------------+-----------------------------------------+
+| Pypi          | https://pypi.org/project/aivm           |
++---------------+-----------------------------------------+
 
 A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM**
 designed for running coding agents with a stronger boundary than containers.
@@ -47,6 +47,7 @@ Repo-local config flow:
 .. code-block:: bash
 
    aivm config init --config .aivm.toml
+   aivm config discover
    aivm config show
    aivm config edit
    aivm help plan --config .aivm.toml
@@ -68,6 +69,9 @@ No-local-init flow (recommended UX for new repos):
 (prompts if ambiguous), auto-attaches the folder if needed, then opens VS Code.
 ``aivm status`` also resolves from directory metadata/global registry when there
 is no local ``.aivm.toml`` (or use ``--vm``).
+Global registry/config metadata is stored in a user config appdir
+(``ub.Path.appdir(type='config')`` when available), with per-VM configs
+under ``vms/<name>.config``.
 By default ``status`` avoids sudo and reports limited checks; use
 ``status --sudo`` for privileged network/firewall/libvirt/image checks.
 Privileged host actions prompt for confirmation before sudo blocks; use ``--yes``
@@ -164,6 +168,7 @@ Command Groups
 
    aivm config --help
    aivm host --help
+   aivm host image_fetch --help
    aivm help --help
    aivm host net --help
    aivm host fw --help
@@ -185,7 +190,7 @@ Notes
     :target: https://pypistats.org/packages/aivm
 
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/aivm/badge/?version=latest
-    :target: http://aivm.readthedocs.io/en/latest/
+    :target: https://aivm.readthedocs.io/en/latest/
 
 .. |GithubActions| image:: https://github.com/Erotemic/aivm/actions/workflows/tests.yml/badge.svg
     :target: https://github.com/Erotemic/aivm/actions?query=branch%3Amain

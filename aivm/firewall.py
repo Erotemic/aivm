@@ -1,18 +1,63 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 from loguru import logger
 
 from .config import AgentVMConfig
+from .runtime import virsh_system_cmd
 from .util import run_cmd
 
 log = logger
 
 
+def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
+    """Prefer live libvirt network metadata over potentially stale config."""
+    bridge = cfg.network.bridge
+    gateway = cfg.network.gateway_ip
+    res = run_cmd(
+        virsh_system_cmd('net-dumpxml', cfg.network.name),
+        sudo=True,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0 or not (res.stdout or '').strip():
+        return bridge, gateway
+    try:
+        root = ET.fromstring(res.stdout)
+    except Exception:
+        return bridge, gateway
+    br_node = root.find('./bridge')
+    ip_node = root.find('./ip')
+    live_bridge = (
+        br_node.attrib.get('name', '').strip() if br_node is not None else ''
+    )
+    live_gateway = (
+        ip_node.attrib.get('address', '').strip() if ip_node is not None else ''
+    )
+    if live_bridge and live_bridge != bridge:
+        log.warning(
+            'Firewall bridge differs from config: config={} live={}. Using live value.',
+            bridge,
+            live_bridge,
+        )
+        bridge = live_bridge
+    if live_gateway and live_gateway != gateway:
+        log.warning(
+            'Firewall gateway differs from config: config={} live={}. Using live value.',
+            gateway,
+            live_gateway,
+        )
+        gateway = live_gateway
+    return bridge, gateway
+
+
 def _nft_script(cfg: AgentVMConfig) -> str:
     table = cfg.firewall.table
-    br = cfg.network.bridge
-    gw = cfg.network.gateway_ip
-    blocks = list(cfg.firewall.block_cidrs) + list(cfg.firewall.extra_block_cidrs or [])
+    br, gw = _effective_bridge_and_gateway(cfg)
+    blocks = list(cfg.firewall.block_cidrs) + list(
+        cfg.firewall.extra_block_cidrs or []
+    )
     seen = set()
     blocks2 = []
     for b in blocks:
@@ -21,7 +66,7 @@ def _nft_script(cfg: AgentVMConfig) -> str:
             continue
         seen.add(b)
         blocks2.append(b)
-    block_set = ", ".join(blocks2)
+    block_set = ', '.join(blocks2)
     return f"""
 table inet {table} {{
   chain input {{
@@ -44,36 +89,51 @@ table inet {table} {{
 
 
 def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
-    log.debug("Applying nftables firewall rules")
+    log.debug('Applying nftables firewall rules')
     if not cfg.firewall.enabled:
-        log.info("Firewall disabled in config; skipping.")
+        log.info('Firewall disabled in config; skipping.')
         return
     script = _nft_script(cfg)
     table = cfg.firewall.table
     if dry_run:
-        log.info("DRYRUN: nft -f - <<EOF\\n{}\\nEOF", script.rstrip())
+        log.info('DRYRUN: nft -f - <<EOF\\n{}\\nEOF', script.rstrip())
         return
     run_cmd(
-        ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        check=False,
+        capture=True,
     )
-    run_cmd(["nft", "-f", "-"], sudo=True, check=True, capture=True, input_text=script)
-    log.info("Firewall rules applied (table=inet {}).", table)
+    run_cmd(
+        ['nft', '-f', '-'],
+        sudo=True,
+        check=True,
+        capture=True,
+        input_text=script,
+    )
+    log.info('Firewall rules applied (table=inet {}).', table)
 
 
 def firewall_status(cfg: AgentVMConfig) -> str:
     table = cfg.firewall.table
     res = run_cmd(
-        ["nft", "list", "table", "inet", table], sudo=True, check=False, capture=True
+        ['nft', 'list', 'table', 'inet', table],
+        sudo=True,
+        check=False,
+        capture=True,
     )
-    return res.stdout + (res.stderr or "")
+    return res.stdout + (res.stderr or '')
 
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     table = cfg.firewall.table
     if dry_run:
-        log.info("DRYRUN: nft delete table inet {}", table)
+        log.info('DRYRUN: nft delete table inet {}', table)
         return
     run_cmd(
-        ["nft", "delete", "table", "inet", table], sudo=True, check=False, capture=True
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        check=False,
+        capture=True,
     )
-    log.info("Firewall removed (table=inet {}).", table)
+    log.info('Firewall removed (table=inet {}).', table)
