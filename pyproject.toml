@@ -8,11 +8,11 @@ version = "0.2.0"
 description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
 readme = "README.rst"
 requires-python = ">=3.11"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = ["kvm", "libvirt", "vm", "sandbox", "agents", "vscode", "ssh", "virtiofs"]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: Apache Software License",
   "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
