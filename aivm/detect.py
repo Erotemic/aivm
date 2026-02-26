@@ -66,7 +66,9 @@ def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
         tok = line.split()[0]
         if "/" in tok:
             try:
-                nets.append(ipaddress.ip_network(tok, strict=False))
+                net = ipaddress.ip_network(tok, strict=False)
+                if isinstance(net, ipaddress.IPv4Network):
+                    nets.append(net)
             except Exception:
                 continue
     return nets
