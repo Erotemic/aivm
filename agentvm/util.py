@@ -45,7 +45,7 @@ def run_cmd(
     original_cmd = cmd
     if sudo and os.geteuid() != 0:
         cmd = ["sudo", *cmd]
-        log.info("Running with sudo: {}", shell_join(original_cmd))
+        log.debug("Running with sudo: {}", shell_join(original_cmd))
     log.debug("RUN: {}", shell_join(cmd))
     p = subprocess.run(
         cmd,

@@ -1,5 +1,7 @@
 from __future__ import annotations
+import shlex
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from loguru import logger
@@ -552,3 +554,60 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     log.info("Running provisioning apt installs (showing progress)")
     run_cmd(cmd, sudo=False, check=True, capture=False)
     log.info("Provisioning complete.")
+
+
+def vm_has_share(cfg: AgentVMConfig) -> bool:
+    cfg = cfg.expanded_paths()
+    if not cfg.share.enabled or not cfg.share.host_src:
+        return False
+    xml = run_cmd(
+        ["virsh", "dumpxml", cfg.vm.name], sudo=True, check=False, capture=True
+    )
+    if xml.code != 0 or not xml.stdout.strip():
+        return False
+    try:
+        root = ET.fromstring(xml.stdout)
+    except Exception:
+        return False
+    want_src = str(Path(cfg.share.host_src).resolve())
+    want_tag = cfg.share.tag
+    for fs in root.findall(".//devices/filesystem"):
+        src = fs.find("source")
+        tgt = fs.find("target")
+        src_dir = src.attrib.get("dir", "") if src is not None else ""
+        tgt_dir = tgt.attrib.get("dir", "") if tgt is not None else ""
+        if src_dir == want_src and tgt_dir == want_tag:
+            return True
+    return False
+
+
+def ensure_share_mounted(cfg: AgentVMConfig, ip: str, *, dry_run: bool = False) -> None:
+    cfg = cfg.expanded_paths()
+    ident = cfg.paths.ssh_identity_file
+    if not ident:
+        raise RuntimeError(
+            "paths.ssh_identity_file is empty; run agentvm init or set it in config."
+        )
+    if not cfg.share.enabled or not cfg.share.host_src:
+        raise RuntimeError("Share is not enabled/configured.")
+    guest_dst = cfg.share.guest_dst
+    tag = cfg.share.tag
+    remote = (
+        "set -euo pipefail; "
+        f"sudo mkdir -p {shlex.quote(guest_dst)}; "
+        f"mountpoint -q {shlex.quote(guest_dst)} || "
+        f"sudo mount -t virtiofs {shlex.quote(tag)} {shlex.quote(guest_dst)}"
+    )
+    cmd = [
+        "ssh",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-i",
+        ident,
+        f"{cfg.vm.user}@{ip}",
+        remote,
+    ]
+    if dry_run:
+        log.info("DRYRUN: {}", " ".join(cmd))
+        return
+    run_cmd(cmd, sudo=False, check=True, capture=True)
