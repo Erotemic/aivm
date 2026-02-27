@@ -87,3 +87,15 @@ Uncertainties / risks: exact appearance still depends on terminal theme capabili
 Tradeoffs and what might break: no behavior change to verbosity/routing, only formatter styling. Any tooling that expects plain uncolored text in TTY mode may still need `NO_COLOR=1`.
 
 What I am confident about: compile checks still pass and formatter now tracks Loguru’s default visual language more closely while preserving caller detail.
+
+## 2026-02-27 17:59:28 +0000
+
+Implemented runtime environment detection in status reporting so users can quickly see whether `aivm` is running on a host system or inside a virtualized guest. Added `probe_runtime_environment()` in `aivm/status.py` with layered detection: `systemd-detect-virt` when available, fallback to `/proc/cpuinfo` hypervisor flag, and DMI product-name heuristics before yielding unknown. Wired this into both scoped and global status outputs, with extra diagnostics in `--detail` mode.
+
+State of mind / reflection: this was intentionally narrow and low-risk to improve observability before building nested-VM tooling. I focused on best-effort signals that are usually available without elevated privileges, while avoiding hard failures when host capabilities differ.
+
+Uncertainties / risks: virtualization detection is heuristic and environment-dependent; some bare-metal systems with unusual firmware strings or containerized contexts may remain “unknown” or occasionally misclassified. Current logic optimizes for non-invasive checks rather than exhaustive platform-specific detection.
+
+Tradeoffs and what might break: status output gains one additional line (`Runtime environment`), which may affect consumers parsing status text verbatim. I kept existing progress-check accounting unchanged to avoid changing completion ratios based on heuristic detection.
+
+What I am confident about: targeted tests cover guest/host/unknown branches and global status wiring (`tests/test_status_runtime.py`), and related status helper tests still pass. Compile checks pass for touched modules.
