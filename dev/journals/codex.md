@@ -75,3 +75,15 @@ Uncertainties / risks: terminal/color behavior can still vary with host environm
 Tradeoffs and what might break: adding `<level>` markup scopes coloring to level and message fields; if users parse stderr logs with strict plain-text expectations in TTY mode, ANSI codes may now appear where they previously did not. Redirected/non-TTY output remains uncolored.
 
 What I am confident about: syntax checks passed via `python -m py_compile aivm/*.py aivm/cli/*.py aivm/vm/*.py`, and logging setup now aligns with typical terminal-color conventions without forcing color into non-interactive sinks.
+
+## 2026-02-27 17:30:18 +0000
+
+Adjusted the logging formatter in `aivm/cli/main.py` to more closely match Loguru’s default color scheme after feedback. Kept the existing field layout (time, level, caller, message) but switched color tags to default-style palette: green timestamp, level-colored severity/message, and cyan caller components.
+
+State of mind / reflection: this was a fast refinement to align visual expectations rather than functional behavior. The previous fix restored conditional coloring, but the palette emphasized only level/message; this update makes output feel immediately familiar to users accustomed to stock Loguru defaults.
+
+Uncertainties / risks: exact appearance still depends on terminal theme capabilities and environment flags like `NO_COLOR`; if that variable is present, colors remain intentionally disabled.
+
+Tradeoffs and what might break: no behavior change to verbosity/routing, only formatter styling. Any tooling that expects plain uncolored text in TTY mode may still need `NO_COLOR=1`.
+
+What I am confident about: compile checks still pass and formatter now tracks Loguru’s default visual language more closely while preserving caller detail.

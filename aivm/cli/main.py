@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 import sys
 import scriptconfig as scfg
+from pathlib import Path
 from loguru import logger
 
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
-from ..store import find_vm, load_store, store_path
+from ..store import find_vm, load_store
 from ..status import (
     clip as _clip_text,
     render_global_status,
@@ -316,7 +317,7 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
         sys.stderr,
         level=level,
         colorize=colorize,
-        format='{time:YYYY-MM-DD HH:mm:ss} | <level>{level: <8}</level> | {name}:{function}:{line} - <level>{message}</level>',
+        format='<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>',
     )
     log.debug(
         'Logging configured at {} (effective_verbosity={}, colorize={})',
