@@ -36,7 +36,7 @@ class AttachmentEntry:
 
 @dataclass
 class Store:
-    schema_version: int = 2
+    schema_version: int = 3
     active_vm: str = ''
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
@@ -66,7 +66,6 @@ def _cfg_from_dict(raw: dict) -> AgentVMConfig:
         'network',
         'firewall',
         'image',
-        'share',
         'provision',
         'sync',
         'paths',
@@ -104,7 +103,7 @@ def load_store(path: Path | None = None) -> Store:
         return Store()
     raw = tomllib.loads(fpath.read_text(encoding='utf-8'))
     reg = Store()
-    reg.schema_version = int(raw.get('schema_version', 2))
+    reg.schema_version = int(raw.get('schema_version', 3))
     reg.active_vm = str(raw.get('active_vm', '')).strip()
 
     for item in raw.get('vms', []):
@@ -155,7 +154,6 @@ def save_store(reg: Store, path: Path | None = None) -> Path:
             'network',
             'firewall',
             'image',
-            'share',
             'provision',
             'sync',
             'paths',

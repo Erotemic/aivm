@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import scriptconfig as scfg
+from loguru import logger
 
 from ..config import AgentVMConfig, dump_toml
 from ..detect import auto_defaults
@@ -30,6 +31,8 @@ from ._common import (
     _resolve_cfg_for_code,
 )
 
+log = logger
+
 
 class InitCLI(_BaseCommand):
     """Initialize global config store with one VM definition."""
@@ -39,6 +42,11 @@ class InitCLI(_BaseCommand):
         isflag=True,
         help='Overwrite existing VM definition if the same name already exists.',
     )
+    defaults = scfg.Value(
+        False,
+        isflag=True,
+        help='Accept detected defaults without interactive review.',
+    )
 
     @classmethod
     def main(cls, argv=True, **kwargs):
@@ -46,6 +54,12 @@ class InitCLI(_BaseCommand):
         path = _cfg_path(args.config)
         reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
+        if not bool(args.yes) and not bool(args.defaults):
+            cfg = _review_init_defaults_interactive(cfg, path)
+        else:
+            warn_lines = _ssh_key_setup_warning_lines(cfg)
+            for line in warn_lines:
+                print(line)
         exists = find_vm(reg, cfg.vm.name) is not None
         if exists and not args.force:
             print(
@@ -59,6 +73,132 @@ class InitCLI(_BaseCommand):
         print(f'Updated config store: {path}')
         print(f'Active VM: {cfg.vm.name}')
         return 0
+
+
+def _render_init_default_summary(cfg: AgentVMConfig, path: Path) -> str:
+    lines = [
+        'Detected defaults for `aivm config init`:',
+        f'  config_store: {path}',
+        f'  vm.name: {cfg.vm.name}',
+        f'  vm.user: {cfg.vm.user}',
+        f'  vm.cpus: {cfg.vm.cpus}',
+        f'  vm.ram_mb: {cfg.vm.ram_mb}',
+        f'  vm.disk_gb: {cfg.vm.disk_gb}',
+        f'  network.name: {cfg.network.name}',
+        f'  network.subnet_cidr: {cfg.network.subnet_cidr}',
+        f'  network.gateway_ip: {cfg.network.gateway_ip}',
+        f'  network.dhcp_start: {cfg.network.dhcp_start}',
+        f'  network.dhcp_end: {cfg.network.dhcp_end}',
+        f'  paths.ssh_identity_file: {cfg.paths.ssh_identity_file or "(empty)"}',
+        f'  paths.ssh_pubkey_path: {cfg.paths.ssh_pubkey_path or "(empty)"}',
+    ]
+    return '\n'.join(lines)
+
+
+def _ssh_key_setup_warning_lines(cfg: AgentVMConfig) -> list[str]:
+    ident = (cfg.paths.ssh_identity_file or '').strip()
+    pub = (cfg.paths.ssh_pubkey_path or '').strip()
+    ident_ok = bool(ident) and Path(ident).expanduser().exists()
+    pub_ok = bool(pub) and Path(pub).expanduser().exists()
+    if ident_ok and pub_ok:
+        return []
+    log.warning(
+        'SSH identity/public key not detected for config init '
+        '(identity_file={}, pubkey_file={}). '
+        'VM SSH/provisioning may fail until keys are configured.',
+        ident or '(empty)',
+        pub or '(empty)',
+    )
+    return [
+        '⚠️ SSH keypair not detected for this VM config.',
+        '  `aivm` expects an SSH identity + public key for VM access/provisioning.',
+        '  Quick setup:',
+        '    ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""',
+        '  (Advisory only: config init will continue.)',
+    ]
+
+
+def _prompt_with_default(prompt: str, default: str) -> str:
+    raw = input(f'{prompt} [{default}]: ').strip()
+    return raw if raw else default
+
+
+def _prompt_int_with_default(prompt: str, default: int) -> int:
+    while True:
+        raw = input(f'{prompt} [{default}]: ').strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            print('Please enter a valid integer.')
+            continue
+        if value <= 0:
+            print('Please enter a positive integer.')
+            continue
+        return value
+
+
+def _review_init_defaults_interactive(
+    cfg: AgentVMConfig, path: Path
+) -> AgentVMConfig:
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            'Config init defaults require confirmation in interactive mode. '
+            'Re-run with --yes or --defaults.'
+        )
+    print(_render_init_default_summary(cfg, path))
+    warn_lines = _ssh_key_setup_warning_lines(cfg)
+    if warn_lines:
+        print('')
+        for line in warn_lines:
+            print(line)
+    while True:
+        ans = input('Use these values? [Y/e/n] (e=edit): ').strip().lower()
+        if ans in {'', 'y', 'yes'}:
+            return cfg
+        if ans in {'n', 'no'}:
+            raise RuntimeError('Aborted by user.')
+        if ans in {'e', 'edit'}:
+            cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
+            cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
+            cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
+            cfg.vm.ram_mb = _prompt_int_with_default(
+                'vm.ram_mb', cfg.vm.ram_mb
+            )
+            cfg.vm.disk_gb = _prompt_int_with_default(
+                'vm.disk_gb', cfg.vm.disk_gb
+            )
+            cfg.network.name = _prompt_with_default(
+                'network.name', cfg.network.name
+            )
+            cfg.network.subnet_cidr = _prompt_with_default(
+                'network.subnet_cidr', cfg.network.subnet_cidr
+            )
+            cfg.network.gateway_ip = _prompt_with_default(
+                'network.gateway_ip', cfg.network.gateway_ip
+            )
+            cfg.network.dhcp_start = _prompt_with_default(
+                'network.dhcp_start', cfg.network.dhcp_start
+            )
+            cfg.network.dhcp_end = _prompt_with_default(
+                'network.dhcp_end', cfg.network.dhcp_end
+            )
+            cfg.paths.ssh_identity_file = _prompt_with_default(
+                'paths.ssh_identity_file', cfg.paths.ssh_identity_file or ''
+            )
+            cfg.paths.ssh_pubkey_path = _prompt_with_default(
+                'paths.ssh_pubkey_path', cfg.paths.ssh_pubkey_path or ''
+            )
+            print('')
+            print(_render_init_default_summary(cfg, path))
+            warn_lines = _ssh_key_setup_warning_lines(cfg)
+            if warn_lines:
+                print('')
+                for line in warn_lines:
+                    print(line)
+            continue
+        print("Please answer 'y', 'e', or 'n'.")
 
 
 class ConfigShowCLI(_BaseCommand):

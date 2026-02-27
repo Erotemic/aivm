@@ -60,15 +60,6 @@ class VMConfig:
 
 
 @dataclass
-class ShareConfig:
-    enabled: bool = False
-    host_src: str = ''
-    guest_dst: str = '/mnt/hostcode'
-    mount_opts: str = 'nodev,nosuid,noexec'
-    tag: str = 'hostcode'
-
-
-@dataclass
 class ProvisionConfig:
     enabled: bool = True
     install_docker: bool = True
@@ -117,7 +108,6 @@ class AgentVMConfig:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
     image: ImageConfig = field(default_factory=ImageConfig)
-    share: ShareConfig = field(default_factory=ShareConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
@@ -135,9 +125,6 @@ class AgentVMConfig:
             expand(self.paths.ssh_pubkey_path)
             if self.paths.ssh_pubkey_path
             else ''
-        )
-        self.share.host_src = (
-            expand(self.share.host_src) if self.share.host_src else ''
         )
         self.sync.paths = [expand(p) for p in self.sync.paths]
         return self
@@ -181,7 +168,6 @@ def load(path: Path) -> AgentVMConfig:
         'network',
         'firewall',
         'image',
-        'share',
         'provision',
         'sync',
         'paths',

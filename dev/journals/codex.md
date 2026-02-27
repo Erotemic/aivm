@@ -209,3 +209,125 @@ Uncertainties / risks: the per-run VM image path still causes a local file copy 
 Tradeoffs and what might break: default behavior now depends on local curl/file URL handling and a persistent user cache path. Independent mode remains available via env flag for clean-room testing.
 
 What I am confident about: default test-run behavior remains opt-in and skip-safe, and syntax/targeted test checks pass after this change.
+
+## 2026-02-27 21:38:32 +0000
+
+Implemented a more interactive `aivm config init` flow to make default choices explicit before persisting config. Added a new `--defaults` flag to `config init` and changed behavior so, unless `--yes` or `--defaults` is supplied, init now prints a detailed detected-default summary and asks user confirmation (`[Y/e/n]`), with an edit path to adjust key fields inline before save.
+
+State of mind / reflection: this change improves user trust and visibility without overcomplicating the first-run path. The main goal was making implicit auto-detection decisions visible and user-approved by default in interactive sessions.
+
+Uncertainties / risks: inline edit prompts currently cover high-impact fields but are still text-based and minimal; users can still use `config edit` for full control after init. Prompt wording/output can drift over time and may require upkeep in tests.
+
+Tradeoffs and what might break: non-interactive `config init` now errors unless `--yes` or `--defaults` is provided. This is intentional for explicitness but could affect unattended scripts that previously relied on implicit defaults.
+
+What I am confident about: added targeted tests for non-interactive enforcement, `--defaults` bypass, and interactive summary confirmation (`tests/test_cli_config_init.py`), and existing CLI helper/dry-run tests still pass.
+
+## 2026-02-27 21:41:39 +0000
+
+Added explicit SSH-key setup warnings to `aivm config init` when detected identity/public key paths are missing on disk. The init flow now prints actionable guidance with a concrete `ssh-keygen -t ed25519 ...` command and a follow-up `aivm config init --force` reminder. Warning appears during interactive review and also in non-interactive `--yes/--defaults` paths.
+
+State of mind / reflection: this is a small but high-value usability guardrail. Missing SSH keys are a common first-run blocker; surfacing the fix at init time is better than deferring to later SSH/provision failures.
+
+Uncertainties / risks: warning is currently tied to detected file existence; users with atypical key management (hardware tokens, agent-only keys, non-file identities) may see a warning they can safely ignore.
+
+Tradeoffs and what might break: init output is slightly noisier, intentionally. The warning is advisory only and does not block config creation.
+
+What I am confident about: added test coverage for both interactive and defaults flows (`tests/test_cli_config_init.py`) and related CLI tests pass.
+
+## 2026-02-27 21:42:49 +0000
+
+Adjusted `aivm config init` to stop auto-populating `share.host_src` with the current working directory. The command still uses host/network/SSH auto-detection defaults, but now explicitly clears share source during init so host-folder exposure only occurs through explicit attach/code workflows.
+
+State of mind / reflection: this aligns init semantics with least-surprise and least-exposure principles. Auto-sharing cwd at init was convenient but easy to misinterpret as implicit permission/attachment state.
+
+Uncertainties / risks: users accustomed to previous behavior may need one extra explicit attach/code step before first use. This is a UX tradeoff in favor of safety and intentionality.
+
+Tradeoffs and what might break: tests and summary output expectations needed updates because `share.host_src` now defaults to empty in init-created configs.
+
+What I am confident about: targeted CLI init/helper/dryrun tests pass with assertions covering empty `share.host_src` persistence and interactive summary display.
+
+## 2026-02-27 21:43:45 +0000
+
+Refined SSH-key advisory behavior in `aivm config init`: missing-key guidance now emits through Loguru (`log.warning(...)`) in addition to human-readable CLI output, and removed the previous “re-run with --force” suggestion. The warning is now explicitly advisory-only messaging and does not imply required follow-up init reruns.
+
+State of mind / reflection: this keeps diagnostic signal visible in both structured logs and terminal UX while avoiding prescriptive/incorrect remediation steps. The intent is to inform, not alter control flow.
+
+Uncertainties / risks: duplicate visibility (stdout + log warning) is intentional, but may feel noisy at higher verbosity levels; acceptable for setup-time advisories.
+
+Tradeoffs and what might break: tests needed minor updates to validate log-warning emission instead of older textual guidance.
+
+What I am confident about: targeted config-init tests pass and include coverage that a log warning is produced when key files are missing.
+
+## 2026-02-27 21:46:06 +0000
+
+Updated SSH identity auto-detection to explicitly inspect `~/.ssh/config` first before falling back to existing `ssh -G` and key-file heuristics. Added `_detect_identity_from_ssh_config()` in `aivm/detect.py` that parses `Host` + `IdentityFile` directives (including `Host *` defaults) and resolves `%d`/`~` paths prior to existence checks.
+
+State of mind / reflection: this change addresses a real user expectation mismatch. If a default `IdentityFile` is intentionally set in SSH config, aivm should honor it before choosing conventional key filenames.
+
+Uncertainties / risks: parser intentionally handles common cases and does not yet implement full OpenSSH config semantics (e.g., `Include`, `Match` blocks, token expansion beyond `%d`). Existing fallback chain remains to preserve robustness.
+
+Tradeoffs and what might break: preferring explicit SSH config may change which key aivm selects on hosts with multiple key files; this is the desired behavior when users have configured defaults.
+
+What I am confident about: added a targeted test proving config-file-first precedence (`tests/test_detect.py`) and detect/config-init test suites pass.
+
+## 2026-02-27 21:48:34 +0000
+
+Added explicit subnet-selection logging in `aivm/detect.py` so default-network detection reports which CIDR was selected. `pick_free_subnet()` now logs an info message when it finds a non-overlapping preferred subnet and a warning when it must fall back to the first candidate because all preferred ranges overlap current routes.
+
+State of mind / reflection: this is a small observability improvement that makes network default behavior easier to reason about during setup/debugging.
+
+Uncertainties / risks: logging frequency is low and tied to init/default-detection paths; minimal operational risk.
+
+Tradeoffs and what might break: none expected beyond slightly noisier logs at info level during config-default computation.
+
+What I am confident about: detect tests and compile checks pass after the change.
+
+## 2026-02-27 21:56:26 +0000
+
+Hardened base-image fetch atomicity in `aivm/vm/lifecycle.py`. `fetch_image()` now downloads to a same-directory temporary path (`<cache_name>.part`) and only moves it into the final cache filename after curl succeeds. On failure, it removes the temp file before re-raising, preventing partially downloaded files from being mistaken as valid cached images.
+
+State of mind / reflection: this was a correctness/safety fix to align cache semantics with user expectations under interruption/cancellation scenarios.
+
+Uncertainties / risks: temporary `.part` naming is deterministic per VM/image path; concurrent downloads for the exact same VM config could still contend on that temp filename. Current behavior is still materially safer than direct-to-final writes.
+
+Tradeoffs and what might break: one extra `mv` and cleanup call in the happy path; minimal overhead for improved integrity.
+
+What I am confident about: added regression test (`test_fetch_image_uses_atomic_temp_then_move`) and VM helper tests + syntax checks pass.
+
+## 2026-02-27 22:01:13 +0000
+
+Addressed two issues from live usage. First, improved VM-create error handling when share mode is requested but host lacks `virtiofsd`: `aivm/vm/lifecycle.py` now detects that specific `virt-install` failure and raises a clearer actionable `RuntimeError` message instead of surfacing only the raw installer error chain. This applies to both normal and UEFI-fallback create attempts.
+
+Second, expanded interactive `aivm config init` edit flow to include core VM hardware choices (`vm.user`, `vm.cpus`, `vm.ram_mb`, `vm.disk_gb`) and updated the default summary display to show those fields up front. Added integer-input validation for hardware fields.
+
+State of mind / reflection: these are practical UX corrections directly informed by real runs. The virtiofsd issue is a host capability mismatch, so clarity matters more than silent retries; hardware controls in init reduce friction and prevent immediate post-init edits.
+
+Uncertainties / risks: virtiofsd detection still relies on matching known `virt-install` error text; if upstream wording changes, enriched messaging could miss and fall back to raw error output.
+
+Tradeoffs and what might break: init interaction now includes more prompts in edit mode; this is intentional for explicit control but slightly longer.
+
+What I am confident about: targeted tests for both behaviors pass (`tests/test_vm_helpers.py`, `tests/test_cli_config_init.py`) and syntax checks are clean.
+
+## 2026-02-27 22:06:11 +0000
+
+Added hardware drift guidance for existing VM definitions after config edits. In `aivm/cli/vm.py`, `VMUpCLI` now checks live `virsh dominfo` vs configured `vm.cpus` / `vm.ram_mb` when bringing up an existing VM without `--recreate`. If drift is detected, it prints a non-destructive command recipe (`virsh setvcpus`, `setmaxmem`, `setmem`) and explicitly notes that these changes preserve disk/state.
+
+State of mind / reflection: this closes an important UX gap where users could edit config expecting changes to apply, but existing domains remained unchanged silently. The goal was actionable clarity without taking risky implicit actions.
+
+Uncertainties / risks: drift detection currently focuses on CPU and RAM only; other domain-definition changes still require manual judgment/recreate workflows. Parsing relies on `dominfo` output format but is simple and tested.
+
+Tradeoffs and what might break: extra informational output appears on `vm up` when drift is present; this is intentional to prevent hidden mismatch confusion.
+
+What I am confident about: added parser/drift tests in `tests/test_cli_status_helpers.py`, and related helper test suites pass.
+
+## 2026-02-27 22:15:17 +0000
+
+Completed a breaking state-model refactor to remove `vms.share` and consolidate share configuration into attachment records. Key changes: removed `ShareConfig` from `AgentVMConfig`; removed `[vms.share]` load/save handling in store serialization; bumped store schema default to `3`; updated share operations to take explicit attachment parameters (`source_dir`, `tag`, `guest_dst`) instead of reading from VM config fields; updated attached-session plumbing to carry share parameters in `PreparedSession` and persist them via `[[attachments]]` only.
+
+State of mind / reflection: this was a high-surface-area cleanup but conceptually simplifying. The previous mixed model (VM-embedded share config + attachment table) caused drift and confusing ownership of share state. Unifying on attachments makes behavior easier to reason about and aligns with the intended workflow.
+
+Uncertainties / risks: this intentionally drops backward compatibility for `vms.share` entries in existing config stores. Also, VM create paths now only include virtiofs mapping when share info is explicitly provided by attach/code/ssh flows, which changes behavior for users who previously relied on VM config embedded share defaults.
+
+Tradeoffs and what might break: direct `vm up` no longer implicitly provisions share mappings because there is no share state in VM config. This is consistent with attachment-first design but may surprise old workflows.
+
+What I am confident about: full test suite passes (`61 passed, 1 skipped`) after refactor, including CLI, store, detect, status, and VM helper coverage.
