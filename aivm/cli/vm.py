@@ -13,6 +13,7 @@ from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..store import (
+    find_attachment,
     find_vm,
     load_store,
     save_store,
@@ -77,6 +78,8 @@ class VMUpCLI(_BaseCommand):
             purpose=f"Create/start/redefine VM '{cfg.vm.name}' and libvirt resources.",
         )
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=args.recreate)
+        if not args.dry_run and not args.recreate:
+            _maybe_warn_hardware_drift(cfg)
         if not args.dry_run:
             _record_vm(cfg, cfg_path)
         return 0
@@ -245,7 +248,7 @@ class VMCodeCLI(_BaseCommand):
     )
     guest_dst = scfg.Value(
         '',
-        help='Guest mount path override (default: config share.guest_dst).',
+        help='Guest mount path override (default: mirrors host_src path).',
     )
     recreate_if_needed = scfg.Value(
         False,
@@ -295,7 +298,7 @@ class VMCodeCLI(_BaseCommand):
         cfg = session.cfg
         if args.dry_run:
             print(
-                f'DRYRUN: would open {cfg.share.guest_dst} in VS Code via host {cfg.vm.name}'
+                f'DRYRUN: would open {session.share_guest_dst} in VS Code via host {cfg.vm.name}'
             )
             return 0
         ip = session.ip
@@ -331,13 +334,13 @@ class VMCodeCLI(_BaseCommand):
             )
         remote_target = f'ssh-remote+{cfg.vm.name}'
         run_cmd(
-            ['code', '--remote', remote_target, cfg.share.guest_dst],
+            ['code', '--remote', remote_target, session.share_guest_dst],
             sudo=False,
             check=True,
             capture=False,
         )
         print(
-            f'Opened VS Code remote folder {cfg.share.guest_dst} on host {cfg.vm.name}'
+            f'Opened VS Code remote folder {session.share_guest_dst} on host {cfg.vm.name}'
         )
         print(f'SSH entry updated in {ssh_cfg}')
         print(
@@ -397,14 +400,16 @@ class VMSSHCLI(_BaseCommand):
         cfg = session.cfg
         if args.dry_run:
             print(
-                f'DRYRUN: would SSH to {cfg.vm.user}@<ip> and cd {cfg.share.guest_dst}'
+                f'DRYRUN: would SSH to {cfg.vm.user}@<ip> and cd {session.share_guest_dst}'
             )
             return 0
 
         ip = session.ip
         assert ip is not None
         ident = require_ssh_identity(cfg.paths.ssh_identity_file)
-        remote_cmd = f'cd {shlex.quote(cfg.share.guest_dst)} && exec $SHELL -l'
+        remote_cmd = (
+            f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
+        )
         run_cmd(
             [
                 'ssh',
@@ -417,7 +422,7 @@ class VMSSHCLI(_BaseCommand):
             check=True,
             capture=False,
         )
-        print(f'Connected to {cfg.vm.user}@{ip} in {cfg.share.guest_dst}')
+        print(f'Connected to {cfg.vm.user}@{ip} in {session.share_guest_dst}')
         print(
             f'Folder registered in {session.reg_path}'
         )
@@ -459,14 +464,12 @@ class VMAttachCLI(_BaseCommand):
                 host_src=host_src,
             )
 
-        cfg.share.enabled = True
-        cfg.share.host_src = str(host_src)
-        cfg.share.guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
-        _ensure_share_tag_len(cfg, host_src, set())
+        share_guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
+        share_tag = _auto_share_tag_for_path(host_src, set())
 
         if args.dry_run:
             print(
-                f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {cfg.share.guest_dst}'
+                f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {share_guest_dst}'
             )
             return 0
 
@@ -477,27 +480,32 @@ class VMAttachCLI(_BaseCommand):
                 purpose=f"Inspect VM '{cfg.vm.name}' share mappings and attach folder if needed.",
             )
             mappings = vm_share_mappings(cfg)
-            requested_src = str(Path(cfg.share.host_src).resolve())
+            requested_src = str(host_src.resolve())
             existing_tags = {tag for _, tag in mappings if tag}
-            _ensure_share_tag_len(cfg, host_src, existing_tags)
+            share_tag = _ensure_share_tag_len(
+                share_tag, host_src, existing_tags
+            )
             for src, tag in mappings:
                 if src == requested_src and tag:
-                    cfg.share.tag = tag
+                    share_tag = tag
                     break
-            if not vm_has_share(cfg):
+            if not vm_has_share(cfg, requested_src, share_tag):
                 for src, tag in mappings:
-                    if tag == cfg.share.tag and src != requested_src:
-                        cfg.share.tag = _auto_share_tag_for_path(
+                    if tag == share_tag and src != requested_src:
+                        share_tag = _auto_share_tag_for_path(
                             host_src, existing_tags
                         )
                         break
-                if not vm_has_share(cfg):
-                    attach_vm_share(cfg, dry_run=False)
-                    _record_vm(cfg, cfg_path)
+                if not vm_has_share(cfg, requested_src, share_tag):
+                    attach_vm_share(
+                        cfg, requested_src, share_tag, dry_run=False
+                    )
         reg_path = _record_attachment(
             cfg,
             cfg_path,
             host_src=host_src,
+            guest_dst=share_guest_dst,
+            tag=share_tag,
             force=bool(args.force),
         )
         print(f'Attached {host_src} to VM {cfg.vm.name} (shared mode)')
@@ -582,12 +590,12 @@ def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
 
 
 def _ensure_share_tag_len(
-    cfg: AgentVMConfig, host_src: Path, existing_tags: set[str]
-) -> None:
-    tag = (cfg.share.tag or '').strip()
+    tag: str, host_src: Path, existing_tags: set[str]
+) -> str:
+    tag = (tag or '').strip()
     if tag and len(tag) <= 36:
-        return
-    cfg.share.tag = _auto_share_tag_for_path(host_src, existing_tags)
+        return tag
+    return _auto_share_tag_for_path(host_src, existing_tags)
 
 
 def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
@@ -698,6 +706,71 @@ def _check_provisioned(
     return out.ok, out.detail, out.diag
 
 
+def _parse_dominfo_hardware(dominfo_text: str) -> tuple[int | None, int | None]:
+    cpus = None
+    max_mem_mib = None
+    for line in (dominfo_text or '').splitlines():
+        if ':' not in line:
+            continue
+        key, val = [x.strip() for x in line.split(':', 1)]
+        low = key.lower()
+        if low in {'cpu(s)', 'cpus'}:
+            m = re.search(r'(\d+)', val)
+            if m:
+                cpus = int(m.group(1))
+        elif low.startswith('max memory'):
+            m = re.search(r'(\d+)', val)
+            if m:
+                max_mem_mib = int(m.group(1)) // 1024
+    return cpus, max_mem_mib
+
+
+def _vm_hardware_drift(cfg: AgentVMConfig) -> dict[str, tuple[int, int]]:
+    res = run_cmd(
+        virsh_system_cmd('dominfo', cfg.vm.name),
+        sudo=True,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        return {}
+    cur_cpus, cur_mem_mib = _parse_dominfo_hardware(res.stdout)
+    drift: dict[str, tuple[int, int]] = {}
+    if cur_cpus is not None and cur_cpus != int(cfg.vm.cpus):
+        drift['cpus'] = (cur_cpus, int(cfg.vm.cpus))
+    if cur_mem_mib is not None and cur_mem_mib != int(cfg.vm.ram_mb):
+        drift['ram_mb'] = (cur_mem_mib, int(cfg.vm.ram_mb))
+    return drift
+
+
+def _maybe_warn_hardware_drift(cfg: AgentVMConfig) -> None:
+    drift = _vm_hardware_drift(cfg)
+    if not drift:
+        return
+    print(
+        f'⚠️ VM {cfg.vm.name} is already defined and differs from config for hardware settings.'
+    )
+    if 'cpus' in drift:
+        cur, want = drift['cpus']
+        print(f'  - cpus: current={cur} desired={want}')
+    if 'ram_mb' in drift:
+        cur, want = drift['ram_mb']
+        print(f'  - ram_mb: current={cur} desired={want}')
+    print('Suggested non-destructive apply commands:')
+    print(f'  sudo virsh shutdown {cfg.vm.name}   # if VM is running')
+    if 'cpus' in drift:
+        _, want = drift['cpus']
+        print(f'  sudo virsh setvcpus {cfg.vm.name} {want} --config')
+    if 'ram_mb' in drift:
+        _, want = drift['ram_mb']
+        kib = int(want) * 1024
+        print(f'  sudo virsh setmaxmem {cfg.vm.name} {kib} --config')
+        print(f'  sudo virsh setmem {cfg.vm.name} {kib} --config')
+    print(
+        'These updates preserve VM disk/state. Recreate is only needed for definition-level changes that cannot be edited in place.'
+    )
+
+
 def _resolve_ip_for_ssh_ops(
     cfg: AgentVMConfig, *, yes: bool, purpose: str
 ) -> str:
@@ -724,6 +797,8 @@ def _record_attachment(
     cfg_path: Path,
     *,
     host_src: Path,
+    guest_dst: str,
+    tag: str,
     force: bool = False,
 ) -> Path:
     reg = load_store(cfg_path)
@@ -733,8 +808,8 @@ def _record_attachment(
         host_path=host_src,
         vm_name=cfg.vm.name,
         mode='shared',
-        guest_dst=cfg.share.guest_dst,
-        tag=cfg.share.tag,
+        guest_dst=guest_dst,
+        tag=tag,
         force=force,
     )
     return save_store(reg, cfg_path)
@@ -763,15 +838,20 @@ def _prepare_attached_session(
         host_src=host_src,
     )
 
-    cfg.share.enabled = True
-    cfg.share.host_src = str(host_src)
-    cfg.share.guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
-    _ensure_share_tag_len(cfg, host_src, set())
-    requested_src = str(Path(cfg.share.host_src).resolve())
+    requested_src = str(host_src.resolve())
+    share_guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
+    share_tag = _ensure_share_tag_len('', host_src, set())
+    reg = load_store(cfg_path)
+    att = find_attachment(reg, host_src)
+    if att is not None and att.vm_name == cfg.vm.name:
+        if not guest_dst_opt and att.guest_dst:
+            share_guest_dst = att.guest_dst
+        if att.tag:
+            share_tag = att.tag
 
     def _has_share_in_mappings(mappings: list[tuple[str, str]]) -> bool:
         return any(
-            src == requested_src and tag == cfg.share.tag
+            src == requested_src and tag == share_tag
             for src, tag in mappings
         )
 
@@ -818,16 +898,16 @@ def _prepare_attached_session(
     if not dry_run and vm_running is True:
         mappings = vm_share_mappings(cfg, use_sudo=False)
         existing_tags = {tag for _, tag in mappings if tag}
-        _ensure_share_tag_len(cfg, host_src, existing_tags)
+        share_tag = _ensure_share_tag_len(share_tag, host_src, existing_tags)
         for src, tag in mappings:
             if src == requested_src and tag:
-                cfg.share.tag = tag
+                share_tag = tag
                 break
         has_share = _has_share_in_mappings(mappings)
         if not has_share:
             for src, tag in mappings:
-                if tag == cfg.share.tag and src != requested_src:
-                    cfg.share.tag = _auto_share_tag_for_path(
+                if tag == share_tag and src != requested_src:
+                    share_tag = _auto_share_tag_for_path(
                         host_src, existing_tags
                     )
                     break
@@ -840,7 +920,13 @@ def _prepare_attached_session(
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
         )
         try:
-            create_or_start_vm(cfg, dry_run=dry_run, recreate=False)
+            create_or_start_vm(
+                cfg,
+                dry_run=dry_run,
+                recreate=False,
+                share_source_dir=requested_src,
+                share_tag=share_tag,
+            )
         except Exception as ex:
             missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
             if not dry_run and missing_virtiofs_dir is not None:
@@ -853,7 +939,13 @@ def _prepare_attached_session(
                     yes=bool(yes),
                     purpose=f"Recreate VM '{cfg.vm.name}' to repair stale virtiofs mapping.",
                 )
-                create_or_start_vm(cfg, dry_run=False, recreate=True)
+                create_or_start_vm(
+                    cfg,
+                    dry_run=False,
+                    recreate=True,
+                    share_source_dir=requested_src,
+                    share_tag=share_tag,
+                )
             else:
                 raise
         vm_running = True if dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
@@ -870,13 +962,15 @@ def _prepare_attached_session(
                     yes=bool(yes),
                     purpose=f"Attach this folder to existing VM '{cfg.vm.name}'.",
                 )
-                attach_vm_share(cfg, dry_run=False)
+                attach_vm_share(
+                    cfg, requested_src, share_tag, dry_run=False
+                )
                 has_share = True
             except Exception as ex:
                 current_maps = mappings or vm_share_mappings(
                     cfg, use_sudo=False
                 )
-                requested_tag = cfg.share.tag
+                requested_tag = share_tag
                 if current_maps:
                     found = '\n'.join(
                         f'  - source={src or "(none)"} tag={tag or "(none)"}'
@@ -887,7 +981,7 @@ def _prepare_attached_session(
                 raise RuntimeError(
                     'Existing VM does not include requested share mapping, and live attach failed.\n'
                     f'VM: {cfg.vm.name}\n'
-                    f'Requested: source={requested_src} tag={requested_tag} guest_dst={cfg.share.guest_dst}\n'
+                    f'Requested: source={requested_src} tag={requested_tag} guest_dst={share_guest_dst}\n'
                     'Current VM filesystem mappings:\n'
                     f'{found}\n'
                     f'Live attach error: {ex}\n'
@@ -901,13 +995,22 @@ def _prepare_attached_session(
             yes=bool(yes),
             purpose=f"Recreate VM '{cfg.vm.name}' to apply new share mapping.",
         )
-        create_or_start_vm(cfg, dry_run=dry_run, recreate=True)
+        create_or_start_vm(
+            cfg,
+            dry_run=dry_run,
+            recreate=True,
+            share_source_dir=requested_src,
+            share_tag=share_tag,
+        )
 
     if dry_run:
         return PreparedSession(
             cfg=cfg,
             cfg_path=cfg_path,
             host_src=host_src,
+            share_source_dir=requested_src,
+            share_tag=share_tag,
+            share_guest_dst=share_guest_dst,
             ip=None,
             reg_path=None,
             meta_path=None,
@@ -917,6 +1020,8 @@ def _prepare_attached_session(
         cfg,
         cfg_path,
         host_src=host_src,
+        guest_dst=share_guest_dst,
+        tag=share_tag,
         force=bool(force),
     )
 
@@ -934,11 +1039,20 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    ensure_share_mounted(cfg, ip, dry_run=False)
+    ensure_share_mounted(
+        cfg,
+        ip,
+        guest_dst=share_guest_dst,
+        tag=share_tag,
+        dry_run=False,
+    )
     return PreparedSession(
         cfg=cfg,
         cfg_path=cfg_path,
         host_src=host_src,
+        share_source_dir=requested_src,
+        share_tag=share_tag,
+        share_guest_dst=share_guest_dst,
         ip=ip,
         reg_path=reg_path,
         meta_path=None,

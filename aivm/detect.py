@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import shlex
+from fnmatch import fnmatch
 from pathlib import Path
 
 from loguru import logger
@@ -14,8 +16,51 @@ from .util import run_cmd, which, expand
 log = logger
 
 
+def _expand_identity_path(raw: str) -> str:
+    # `%d` is commonly used in ssh config for local user's home directory.
+    return expand(raw.replace('%d', '~'))
+
+
+def _detect_identity_from_ssh_config() -> tuple[str, str]:
+    cfg_path = Path(expand('~/.ssh/config'))
+    if not cfg_path.exists():
+        return '', ''
+    target_host = 'aivm-default-probe'
+    applies = True
+    candidates: list[str] = []
+    for raw_line in cfg_path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        try:
+            parts = shlex.split(line, comments=True)
+        except Exception:
+            parts = line.split()
+        if not parts:
+            continue
+        key = parts[0].lower()
+        vals = parts[1:]
+        if key == 'host':
+            pos = [p for p in vals if not p.startswith('!')]
+            neg = [p[1:] for p in vals if p.startswith('!')]
+            pos_match = any(fnmatch(target_host, p) for p in pos) if pos else False
+            neg_match = any(fnmatch(target_host, p) for p in neg)
+            applies = pos_match and not neg_match
+            continue
+        if key == 'identityfile' and applies and vals:
+            candidates.append(_expand_identity_path(vals[0]))
+    for ident in candidates:
+        if os.path.exists(ident):
+            pub = ident + '.pub'
+            return ident, pub if os.path.exists(pub) else ''
+    return '', ''
+
+
 def detect_ssh_identity() -> tuple[str, str]:
     log.debug('detecting detect_ssh_identity')
+    ident, pub = _detect_identity_from_ssh_config()
+    if ident:
+        return ident, pub
     if which('ssh'):
         try:
             res = run_cmd(
@@ -24,7 +69,7 @@ def detect_ssh_identity() -> tuple[str, str]:
             for line in res.stdout.splitlines():
                 parts = line.strip().split()
                 if len(parts) >= 2 and parts[0].lower() == 'identityfile':
-                    ident = expand(parts[1])
+                    ident = _expand_identity_path(parts[1])
                     pub = ident + '.pub'
                     if os.path.exists(ident):
                         return ident, pub if os.path.exists(pub) else ''
@@ -81,7 +126,15 @@ def pick_free_subnet(preferred: list[str]) -> str:
     for cidr in preferred:
         cand = ipaddress.ip_network(cidr, strict=False)
         if not any(cand.overlaps(r) for r in routes):
+            log.debug(
+                'Selected free subnet {} from preferred candidates.',
+                cidr,
+            )
             return cidr
+    log.warning(
+        'No preferred free subnet found; falling back to first candidate {}.',
+        preferred[0],
+    )
     return preferred[0]
 
 
@@ -91,9 +144,6 @@ def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
         cfg.paths.ssh_identity_file = ident
     if not cfg.paths.ssh_pubkey_path and pub:
         cfg.paths.ssh_pubkey_path = pub
-
-    if not cfg.share.host_src:
-        cfg.share.host_src = str(project_dir)
 
     preferred = [
         '10.77.0.0/24',

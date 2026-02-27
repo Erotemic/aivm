@@ -29,26 +29,28 @@ class PlanCLI(_BaseCommand):
 
         Suggested flow:
 
-        1. 🔎 Preflight checks
+        1. ⚙️ Initialize config store
+           aivm config init{cfg_flag}
+        2. 🔎 Preflight checks
            aivm host doctor{cfg_flag}
            aivm status{cfg_flag}
            aivm status{cfg_flag} --detail
-        2. 🌐 Host network
+        3. 🌐 Host network
            aivm host net create{cfg_flag}
-        3. 🔥 Optional firewall isolation (recommended)
+        4. 🔥 Optional firewall isolation (recommended)
            aivm host fw apply{cfg_flag}
-        4. 📦 Base image
+        5. 📦 Base image
            aivm host image_fetch{cfg_flag}
-        5. 🖥️ VM lifecycle
+        6. 🖥️ VM lifecycle
            aivm vm up{cfg_flag}
            aivm vm wait_ip{cfg_flag}
-        6. 🔑 Access
+        7. 🔑 Access
            aivm vm ssh_config{cfg_flag}   # VS Code Remote-SSH
-        7. 🧰 Optional provisioning (docker + dev tools)
+        8. 🧰 Optional provisioning (docker + dev tools)
            aivm vm provision{cfg_flag}
-        8. 🧩 Optional settings sync from host user profile
+        9. 🧩 Optional settings sync from host user profile
            aivm vm sync_settings{cfg_flag}
-        9. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
+        10. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
            aivm vm code{cfg_flag} --host_src . --sync_settings
         """).strip()
         print(steps)

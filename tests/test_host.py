@@ -52,6 +52,8 @@ def test_install_deps_debian_behaviors(monkeypatch) -> None:
     install_deps_debian()
     assert calls[0][0][:3] == ['apt-get', 'update', '-y']
     assert calls[1][0][:3] == ['apt-get', 'install', '-y']
-    assert calls[2][0][:3] == ['systemctl', 'enable', '--now']
+    assert calls[2][0][:3] == ['apt-get', 'install', '-y']
+    assert calls[2][0][-1] == 'virtiofsd'
+    assert calls[3][0][:3] == ['systemctl', 'enable', '--now']
     assert calls[0][1]['capture'] is False
     assert calls[1][1]['capture'] is False

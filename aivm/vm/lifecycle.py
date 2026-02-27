@@ -19,6 +19,20 @@ def _is_missing_uefi_firmware_error(ex: Exception) -> bool:
     return "did not find any uefi binary path for arch 'x86_64'" in text
 
 
+def _is_missing_virtiofsd_error(ex: Exception) -> bool:
+    return 'unable to find a satisfying virtiofsd' in str(ex).lower()
+
+
+def _virtiofsd_failure_message(source_dir: str) -> str:
+    return (
+        'VM creation failed because virtiofsd is not available on this host, '
+        f'but a shared folder was requested (source={source_dir}).\n'
+        'Install virtiofs support on the host (e.g. package providing '
+        '`virtiofsd`, often `qemu-system-common` or `virtiofsd`), or disable '
+        'folder sharing for this run.'
+    )
+
+
 def _sudo_path_exists(path: Path) -> bool:
     return (
         run_cmd(
@@ -107,24 +121,46 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     log.debug('Fetching Ubuntu cloud image')
     p = _paths(cfg, dry_run=dry_run)
     base_img = p['img_dir'] / cfg.image.cache_name
+    tmp_img = Path(str(base_img) + '.part')
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         log.info('Base image cached: {}', base_img)
         return base_img
     if dry_run:
-        log.info('DRYRUN: curl -L --fail -o {} {}', base_img, url)
+        log.info(
+            'DRYRUN: curl -L --fail -o {} {}; mv {} {}',
+            tmp_img,
+            url,
+            tmp_img,
+            base_img,
+        )
         return base_img
     _ensure_qemu_access(cfg, dry_run=False)
     run_cmd(
         ['mkdir', '-p', str(p['img_dir'])], sudo=True, check=True, capture=True
     )
-    log.info('Downloading base image to {} (showing progress)', base_img)
     run_cmd(
-        ['curl', '-L', '--fail', '--progress-bar', '-o', str(base_img), url],
-        sudo=True,
-        check=True,
-        capture=False,
+        ['rm', '-f', str(tmp_img)], sudo=True, check=False, capture=True
     )
+    log.info('Downloading base image to {} (showing progress)', base_img)
+    try:
+        run_cmd(
+            ['curl', '-L', '--fail', '--progress-bar', '-o', str(tmp_img), url],
+            sudo=True,
+            check=True,
+            capture=False,
+        )
+        run_cmd(
+            ['mv', '-f', str(tmp_img), str(base_img)],
+            sudo=True,
+            check=True,
+            capture=True,
+        )
+    except CmdError:
+        run_cmd(
+            ['rm', '-f', str(tmp_img)], sudo=True, check=False, capture=True
+        )
+        raise
     log.info('Downloaded base image: {}', base_img)
     return base_img
 
@@ -379,7 +415,12 @@ def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
 
 
 def create_or_start_vm(
-    cfg: AgentVMConfig, *, dry_run: bool = False, recreate: bool = False
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool = False,
+    recreate: bool = False,
+    share_source_dir: str = '',
+    share_tag: str = '',
 ) -> None:
     log.debug('Creating or starting VM {}', cfg.vm.name)
     cfg = cfg.expanded_paths()
@@ -421,11 +462,17 @@ def create_or_start_vm(
     seed_iso = ci['seed_iso']
 
     extra = []
-    if cfg.share.enabled and cfg.share.host_src:
+    source_dir = str(share_source_dir or '').strip()
+    tag = str(share_tag or '').strip()
+    if source_dir:
+        if not tag:
+            raise RuntimeError(
+                'share_tag is required when share_source_dir is provided.'
+            )
         extra += ['--memorybacking', 'source.type=memfd,access.mode=shared']
         extra += [
             '--filesystem',
-            f'source={cfg.share.host_src},target={cfg.share.tag},driver.type=virtiofs',
+            f'source={source_dir},target={tag},driver.type=virtiofs',
         ]
 
     cmd = [
@@ -462,6 +509,8 @@ def create_or_start_vm(
     try:
         run_cmd(cmd, sudo=True, check=True, capture=True)
     except CmdError as ex:
+        if source_dir and _is_missing_virtiofsd_error(ex):
+            raise RuntimeError(_virtiofsd_failure_message(source_dir)) from ex
         if _is_missing_uefi_firmware_error(ex):
             log.warning(
                 'UEFI firmware not available on host. Retrying VM create with non-UEFI boot.'
@@ -472,7 +521,12 @@ def create_or_start_vm(
                 del cmd_no_uefi[idx : idx + 2]
             except ValueError:
                 pass
-            run_cmd(cmd_no_uefi, sudo=True, check=True, capture=True)
+            try:
+                run_cmd(cmd_no_uefi, sudo=True, check=True, capture=True)
+            except CmdError as ex2:
+                if source_dir and _is_missing_virtiofsd_error(ex2):
+                    raise RuntimeError(_virtiofsd_failure_message(source_dir)) from ex2
+                raise
         else:
             raise
     log.info('VM created: {}', cfg.vm.name)

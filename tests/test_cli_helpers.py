@@ -103,6 +103,7 @@ def test_plan_omits_default_config_flag(monkeypatch, capsys) -> None:
     PlanCLI.main(argv=False, config=None, yes=True)
     out = capsys.readouterr().out
     assert '--config' not in out
+    assert 'aivm config init' in out
     assert f'Config: {default}' in out
 
 
@@ -115,6 +116,7 @@ def test_plan_includes_nondefault_config_flag(monkeypatch, capsys) -> None:
     )
     PlanCLI.main(argv=False, config=str(custom), yes=True)
     out = capsys.readouterr().out
+    assert 'aivm config init' in out
     assert f'--config {custom}' in out
 
 

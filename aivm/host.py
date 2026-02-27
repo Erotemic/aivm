@@ -45,6 +45,7 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         )
     pkgs = [
         'qemu-kvm',
+        'qemu-system-common',
         'libvirt-daemon-system',
         'libvirt-clients',
         'virtinst',
@@ -59,6 +60,18 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
     run_cmd(
         ['apt-get', 'install', '-y', *pkgs], sudo=True, check=True, capture=False
     )
+    # Some distros split virtiofsd into a separate package; install best-effort.
+    virtiofsd_install = run_cmd(
+        ['apt-get', 'install', '-y', 'virtiofsd'],
+        sudo=True,
+        check=False,
+        capture=False,
+    )
+    if virtiofsd_install.code != 0:
+        log.warning(
+            'Optional package `virtiofsd` was not installed. '
+            'Folder sharing may fail if virtiofsd is unavailable on this host.'
+        )
     run_cmd(
         ['systemctl', 'enable', '--now', 'libvirtd'],
         sudo=True,
