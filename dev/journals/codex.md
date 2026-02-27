@@ -51,3 +51,27 @@ State of mind / reflection: this was a small but important policy-consistency ch
 Uncertainties / risks: there may be other code paths (now or later) that touch user-owned files and should also use the same helper; those would need a follow-up audit. Behavior in non-interactive environments now intentionally fails fast unless `--yes` is set, which is correct for safety but could surprise scripts that relied on implicit writes.
 
 What might break: workflows that call `aivm vm code` in non-interactive sessions without `--yes` will now error before writing SSH config. Confident this is intended behavior and matches the safety contract. Added targeted unit tests in `tests/test_cli_helpers.py` for `--yes` bypass, non-interactive refusal, and explicit abort response.
+
+## 2026-02-27 17:20:06 +0000
+
+Worked on a follow-up to SSH-config confirmation flow: avoid asking for external-file update permission when `~/.ssh/config` does not need to change. Updated `_upsert_ssh_config_entry` in `aivm/cli/vm.py` to read and compute the post-upsert content first, return early when unchanged, and only invoke `_confirm_external_file_update` immediately before an actual write.
+
+State of mind / reflection: this was a precision fix motivated by friction in real usage. The previous behavior was safety-correct but ergonomically noisy because it treated idempotent runs as mutating operations. The revised order keeps the same safety guarantee for writes while honoring the principle of skipping unnecessary privileged/consent flows when we can infer no-op behavior.
+
+Uncertainties / risks: newline normalization and block-matching regex semantics are still the critical edge points; if a user has hand-edited spacing inside the managed block, we still classify that as a write-needed update, which is expected but could trigger prompt surprise. Also, if the file does not exist, this remains a write path and still requires confirmation unless `--yes` is set.
+
+Tradeoffs and what might break: preserving prompt-on-write means non-interactive automation without `--yes` still fails for true updates, by design. The main tradeoff is slightly more logic in the upsert path to avoid false-positive prompts. Added regression coverage in `tests/test_cli_helpers.py` (`test_upsert_ssh_config_no_confirm_when_unchanged`) to lock behavior for non-interactive, unchanged re-upsert.
+
+Validation: `pytest -q tests/test_cli_helpers.py` passed (8 tests).
+
+## 2026-02-27 17:26:07 +0000
+
+Worked on restoring colored Loguru output for interactive CLI runs. The issue was self-inflicted in `aivm/cli/main.py`: `_setup_logging` forced `colorize=False`, which disabled level/message colors unconditionally even in a terminal. I changed setup to derive `colorize` from runtime conditions (`sys.stderr.isatty()` and `NO_COLOR` not set), and updated the log format to wrap level/message in `<level>...</level>` markup so color application is explicit.
+
+State of mind / reflection: this was a straightforward quality-of-life fix, but it highlighted an important ergonomics-vs-portability balance. I wanted to preserve clean redirected output while making interactive diagnostics visually scannable again. Choosing auto-color with `NO_COLOR` compliance felt like the most pragmatic middle ground with minimal behavioral surprise.
+
+Uncertainties / risks: terminal/color behavior can still vary with host environment variables (`NO_COLOR`, `TERM`) and PTY handling. In this environment `NO_COLOR=1`, so color stays disabled by design; users expecting color in such environments will need to unset that variable.
+
+Tradeoffs and what might break: adding `<level>` markup scopes coloring to level and message fields; if users parse stderr logs with strict plain-text expectations in TTY mode, ANSI codes may now appear where they previously did not. Redirected/non-TTY output remains uncolored.
+
+What I am confident about: syntax checks passed via `python -m py_compile aivm/*.py aivm/cli/*.py aivm/vm/*.py`, and logging setup now aligns with typical terminal-color conventions without forcing color into non-interactive sinks.

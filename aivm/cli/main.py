@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import scriptconfig as scfg
 from loguru import logger
@@ -310,16 +311,18 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
         level = 'INFO'
     elif effective_verbosity >= 2:
         level = 'DEBUG'
+    colorize = sys.stderr.isatty() and os.getenv('NO_COLOR') is None
     logger.add(
         sys.stderr,
         level=level,
-        colorize=False,
-        format='{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}',
+        colorize=colorize,
+        format='{time:YYYY-MM-DD HH:mm:ss} | <level>{level: <8}</level> | {name}:{function}:{line} - <level>{message}</level>',
     )
     log.debug(
-        'Logging configured at {} (effective_verbosity={})',
+        'Logging configured at {} (effective_verbosity={}, colorize={})',
         level,
         effective_verbosity,
+        colorize,
     )
 
 

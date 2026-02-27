@@ -622,11 +622,6 @@ def _upsert_ssh_config_entry(
             ssh_cfg,
         )
         return ssh_cfg
-    _confirm_external_file_update(
-        yes=bool(yes),
-        path=ssh_cfg,
-        purpose=f"Update SSH config entry for host '{block_name}'.",
-    )
     ensure_dir(ssh_dir)
     existing = ssh_cfg.read_text(encoding='utf-8') if ssh_cfg.exists() else ''
     pattern = re.compile(
@@ -637,6 +632,13 @@ def _upsert_ssh_config_entry(
     else:
         sep = '' if not existing or existing.endswith('\n') else '\n'
         updated = f'{existing}{sep}{new_block}'
+    if updated == existing:
+        return ssh_cfg
+    _confirm_external_file_update(
+        yes=bool(yes),
+        path=ssh_cfg,
+        purpose=f"Update SSH config entry for host '{block_name}'.",
+    )
     ssh_cfg.write_text(updated, encoding='utf-8')
     return ssh_cfg
 
