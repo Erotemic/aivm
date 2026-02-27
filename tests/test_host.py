@@ -1,3 +1,5 @@
+"""Tests for test host."""
+
 from __future__ import annotations
 
 import pytest

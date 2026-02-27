@@ -1,3 +1,5 @@
+"""Probe and rendering logic for host/VM/network/firewall status reporting."""
+
 from __future__ import annotations
 
 import shlex

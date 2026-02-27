@@ -1,3 +1,5 @@
+"""Configuration data model and TOML serialization helpers for VM settings."""
+
 from __future__ import annotations
 
 import tomllib

@@ -1,3 +1,5 @@
+"""Config-store subcommands (init, discover, show, edit, and path inspection)."""
+
 from __future__ import annotations
 
 import os

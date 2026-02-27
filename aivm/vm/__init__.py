@@ -1,3 +1,5 @@
+"""VM operation exports for lifecycle, share, and sync helpers."""
+
 from __future__ import annotations
 
 from .lifecycle import (

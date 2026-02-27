@@ -1,3 +1,5 @@
+"""Top-level modal CLI wiring, argv normalization, and logging setup."""
+
 from __future__ import annotations
 
 import sys

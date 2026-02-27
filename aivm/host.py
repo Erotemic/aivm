@@ -1,3 +1,5 @@
+"""Host dependency checks and host package installation routines."""
+
 from __future__ import annotations
 
 from pathlib import Path

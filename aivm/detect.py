@@ -1,3 +1,5 @@
+"""Auto-detection of host defaults such as SSH identity and network parameters."""
+
 from __future__ import annotations
 
 import ipaddress

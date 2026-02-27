@@ -1,3 +1,5 @@
+"""Shared utility helpers for subprocess execution, paths, and command formatting."""
+
 from __future__ import annotations
 
 import os

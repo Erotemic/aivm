@@ -1,3 +1,5 @@
+"""Tests for test detect."""
+
 from __future__ import annotations
 
 import ipaddress

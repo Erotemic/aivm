@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+"""Module for run tests."""
+
 if __name__ == '__main__':
     import pytest
     import sys

@@ -1,3 +1,5 @@
+"""Tests for test cli helpers."""
+
 from __future__ import annotations
 
 import builtins
