@@ -331,3 +331,15 @@ Uncertainties / risks: this intentionally drops backward compatibility for `vms.
 Tradeoffs and what might break: direct `vm up` no longer implicitly provisions share mappings because there is no share state in VM config. This is consistent with attachment-first design but may surprise old workflows.
 
 What I am confident about: full test suite passes (`61 passed, 1 skipped`) after refactor, including CLI, store, detect, status, and VM helper coverage.
+
+## 2026-02-27 22:24:45 +0000
+
+Implemented the first structural refactor pass after share-model consolidation: introduced a unified attachment resolution layer in `aivm/cli/vm.py` (`ResolvedAttachment` + `_resolve_attachment`, `_align_attachment_tag_with_mappings`, `_attachment_has_mapping`) and rewired both `vm attach` and attached-session preparation (`code`/`ssh` path) to use it.
+
+State of mind / reflection: this was a good seam to extract first because attachment tag/guest-destination derivation had started to drift between code paths. Centralizing those decisions reduces subtle behavior mismatches and makes follow-on VM reconcile refactor cleaner.
+
+Uncertainties / risks: the resolver currently lives in `cli/vm.py` rather than a dedicated module, so ownership is clearer than before but still CLI-scoped. If reuse expands, moving to a shared attachment utility module may be warranted.
+
+Tradeoffs and what might break: this touched hot paths for attach/code/ssh, so regression risk was non-trivial; mitigated by full-suite run.
+
+What I am confident about: all tests pass (`61 passed, 1 skipped`) and compile checks are clean after the refactor.
