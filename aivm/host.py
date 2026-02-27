@@ -55,13 +55,13 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         'iproute2',
         'nftables',
     ]
-    run_cmd(['apt-get', 'update', '-y'], sudo=True, check=True, capture=True)
+    run_cmd(['apt-get', 'update', '-y'], sudo=True, check=True, capture=False)
     run_cmd(
-        ['apt-get', 'install', '-y', *pkgs], sudo=True, check=True, capture=True
+        ['apt-get', 'install', '-y', *pkgs], sudo=True, check=True, capture=False
     )
     run_cmd(
         ['systemctl', 'enable', '--now', 'libvirtd'],
         sudo=True,
         check=False,
-        capture=True,
+        capture=False,
     )

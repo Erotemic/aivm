@@ -178,16 +178,18 @@ def _record_vm(cfg: AgentVMConfig, store_file: Path | None = None) -> Path:
     return save_store(reg, target)
 
 
+def _has_passwordless_sudo() -> bool:
+    res = run_cmd(['sudo', '-n', 'true'], sudo=False, check=False, capture=True)
+    return res.code == 0
+
+
 def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
     global _SUDO_VALIDATED
-    if yes or os.geteuid() == 0:
-        if (
-            not _SUDO_VALIDATED
-            and os.geteuid() != 0
-            and sys.stdin.isatty()
-        ):
-            run_cmd(['sudo', '-v'], sudo=False, check=True, capture=False)
-            _SUDO_VALIDATED = True
+    if os.geteuid() == 0:
+        return
+    if not _SUDO_VALIDATED and _has_passwordless_sudo():
+        _SUDO_VALIDATED = True
+    if yes:
         return
     if not sys.stdin.isatty():
         raise RuntimeError(

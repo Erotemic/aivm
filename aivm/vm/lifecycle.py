@@ -9,9 +9,14 @@ from loguru import logger
 
 from ..config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..util import ensure_dir, run_cmd
+from ..util import CmdError, ensure_dir, run_cmd
 
 log = logger
+
+
+def _is_missing_uefi_firmware_error(ex: Exception) -> bool:
+    text = str(ex).lower()
+    return "did not find any uefi binary path for arch 'x86_64'" in text
 
 
 def _sudo_path_exists(path: Path) -> bool:
@@ -454,7 +459,22 @@ def create_or_start_vm(
     if dry_run:
         log.info('DRYRUN: {}', ' '.join(cmd))
         return
-    run_cmd(cmd, sudo=True, check=True, capture=True)
+    try:
+        run_cmd(cmd, sudo=True, check=True, capture=True)
+    except CmdError as ex:
+        if _is_missing_uefi_firmware_error(ex):
+            log.warning(
+                'UEFI firmware not available on host. Retrying VM create with non-UEFI boot.'
+            )
+            cmd_no_uefi = list(cmd)
+            try:
+                idx = cmd_no_uefi.index('--boot')
+                del cmd_no_uefi[idx : idx + 2]
+            except ValueError:
+                pass
+            run_cmd(cmd_no_uefi, sudo=True, check=True, capture=True)
+        else:
+            raise
     log.info('VM created: {}', cfg.vm.name)
 
 
