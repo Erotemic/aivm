@@ -7,9 +7,14 @@ from pathlib import Path
 
 import pytest
 
+from aivm.config import AgentVMConfig
 from aivm.cli._common import _confirm_external_file_update
 from aivm.cli.main import _count_verbose, _normalize_argv
-from aivm.cli.vm import _auto_share_tag_for_path, _parse_sync_paths_arg
+from aivm.cli.vm import (
+    _auto_share_tag_for_path,
+    _parse_sync_paths_arg,
+    _upsert_ssh_config_entry,
+)
 
 
 def test_normalize_argv_aliases() -> None:
@@ -74,3 +79,15 @@ def test_confirm_external_file_update_abort(monkeypatch) -> None:
             path=Path('/tmp/ssh-config'),
             purpose='Update SSH entry',
         )
+
+
+def test_upsert_ssh_config_no_confirm_when_unchanged(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('HOME', str(tmp_path))
+    cfg = AgentVMConfig()
+    _upsert_ssh_config_entry(cfg, dry_run=False, yes=True)
+
+    # Should not require --yes when no file update is needed.
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    _upsert_ssh_config_entry(cfg, dry_run=False, yes=False)
