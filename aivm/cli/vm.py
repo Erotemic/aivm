@@ -1,3 +1,5 @@
+"""CLI commands for VM lifecycle, attach/code/ssh workflows, and sync/provision."""
+
 from __future__ import annotations
 
 import hashlib

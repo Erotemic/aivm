@@ -1,3 +1,5 @@
+"""Single-file config store for VM definitions, attachments, and active VM selection."""
+
 from __future__ import annotations
 
 import tomllib

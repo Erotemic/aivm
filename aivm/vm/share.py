@@ -1,3 +1,5 @@
+"""Virtiofs share inspection, attach, and guest-side mount helpers."""
+
 from __future__ import annotations
 
 import shlex

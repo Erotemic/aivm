@@ -1,3 +1,5 @@
+"""Tests for test cli dryrun."""
+
 from __future__ import annotations
 
 from pathlib import Path

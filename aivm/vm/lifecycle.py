@@ -1,3 +1,5 @@
+"""VM lifecycle implementation: image, cloud-init, create/start, wait, and provision."""
+
 from __future__ import annotations
 
 import time

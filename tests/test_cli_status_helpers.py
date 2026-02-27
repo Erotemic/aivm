@@ -1,3 +1,5 @@
+"""Tests for test cli status helpers."""
+
 from __future__ import annotations
 
 from aivm.cli.vm import _check_firewall, _check_network, _check_vm_state

@@ -1,3 +1,5 @@
+"""Shared CLI resolution, sudo confirmation, and config-store helpers."""
+
 from __future__ import annotations
 
 import os

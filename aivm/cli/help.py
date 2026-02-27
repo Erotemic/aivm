@@ -1,3 +1,5 @@
+"""CLI help and command-tree rendering utilities."""
+
 from __future__ import annotations
 
 import textwrap
