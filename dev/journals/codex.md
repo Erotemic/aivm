@@ -99,3 +99,15 @@ Uncertainties / risks: virtualization detection is heuristic and environment-dep
 Tradeoffs and what might break: status output gains one additional line (`Runtime environment`), which may affect consumers parsing status text verbatim. I kept existing progress-check accounting unchanged to avoid changing completion ratios based on heuristic detection.
 
 What I am confident about: targeted tests cover guest/host/unknown branches and global status wiring (`tests/test_status_runtime.py`), and related status helper tests still pass. Compile checks pass for touched modules.
+
+## 2026-02-27 20:36:23 +0000
+
+Adjusted `aivm help plan` command rendering so it only includes `--config <path>` when using a non-default config-store path. Kept the plan header line showing the resolved config path for visibility, but removed repeated `--config` noise from suggested commands when the path is the default store.
+
+State of mind / reflection: this was a small UX polish with high signal-to-noise value. The existing output was technically correct but overly verbose in the common case; this change makes the quick-copy workflow cleaner without hiding which config is active.
+
+Uncertainties / risks: command-string assertions can be sensitive to future formatting changes in the plan template. I added focused tests to lock intended behavior for default vs custom config paths.
+
+Tradeoffs and what might break: users who relied on always seeing explicit `--config` in plan commands may need to infer the default path from the header line. Non-default paths remain explicit in every command, preserving safety for multi-config workflows.
+
+What I am confident about: helper tests now cover both branches (`tests/test_cli_helpers.py`) and pass locally, and compile checks remain clean.

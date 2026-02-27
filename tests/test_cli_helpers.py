@@ -10,6 +10,7 @@ import pytest
 from aivm.config import AgentVMConfig
 from aivm.cli._common import _confirm_external_file_update
 from aivm.cli.main import _count_verbose, _normalize_argv
+from aivm.cli.help import PlanCLI
 from aivm.cli.vm import (
     _auto_share_tag_for_path,
     _parse_sync_paths_arg,
@@ -91,3 +92,27 @@ def test_upsert_ssh_config_no_confirm_when_unchanged(
     # Should not require --yes when no file update is needed.
     monkeypatch.setattr('sys.stdin.isatty', lambda: False)
     _upsert_ssh_config_entry(cfg, dry_run=False, yes=False)
+
+
+def test_plan_omits_default_config_flag(monkeypatch, capsys) -> None:
+    default = Path('/tmp/default-config.toml')
+    monkeypatch.setattr(
+        'aivm.cli.help._cfg_path',
+        lambda p: default if p is None else Path(p),
+    )
+    PlanCLI.main(argv=False, config=None, yes=True)
+    out = capsys.readouterr().out
+    assert '--config' not in out
+    assert f'Config: {default}' in out
+
+
+def test_plan_includes_nondefault_config_flag(monkeypatch, capsys) -> None:
+    default = Path('/tmp/default-config.toml')
+    custom = Path('/tmp/custom-config.toml')
+    monkeypatch.setattr(
+        'aivm.cli.help._cfg_path',
+        lambda p: default if p is None else Path(p),
+    )
+    PlanCLI.main(argv=False, config=str(custom), yes=True)
+    out = capsys.readouterr().out
+    assert f'--config {custom}' in out

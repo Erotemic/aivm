@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import textwrap
 
 import scriptconfig as scfg
@@ -16,6 +17,12 @@ class PlanCLI(_BaseCommand):
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         path = _cfg_path(args.config)
+        default_path = _cfg_path(None)
+        cfg_flag = (
+            f' --config {shlex.quote(str(path))}'
+            if path != default_path
+            else ''
+        )
         steps = textwrap.dedent(f"""
         🗺️  AgentVM Plan
         📄 Config: {path}
@@ -23,26 +30,26 @@ class PlanCLI(_BaseCommand):
         Suggested flow:
 
         1. 🔎 Preflight checks
-           aivm host doctor --config {path}
-           aivm status --config {path}
-           aivm status --config {path} --detail
+           aivm host doctor{cfg_flag}
+           aivm status{cfg_flag}
+           aivm status{cfg_flag} --detail
         2. 🌐 Host network
-           aivm host net create --config {path}
+           aivm host net create{cfg_flag}
         3. 🔥 Optional firewall isolation (recommended)
-           aivm host fw apply --config {path}
+           aivm host fw apply{cfg_flag}
         4. 📦 Base image
-           aivm host image_fetch --config {path}
+           aivm host image_fetch{cfg_flag}
         5. 🖥️ VM lifecycle
-           aivm vm up --config {path}
-           aivm vm wait_ip --config {path}
+           aivm vm up{cfg_flag}
+           aivm vm wait_ip{cfg_flag}
         6. 🔑 Access
-           aivm vm ssh_config --config {path}   # VS Code Remote-SSH
+           aivm vm ssh_config{cfg_flag}   # VS Code Remote-SSH
         7. 🧰 Optional provisioning (docker + dev tools)
-           aivm vm provision --config {path}
+           aivm vm provision{cfg_flag}
         8. 🧩 Optional settings sync from host user profile
-           aivm vm sync_settings --config {path}
+           aivm vm sync_settings{cfg_flag}
         9. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
-           aivm vm code --config {path} --host_src . --sync_settings
+           aivm vm code{cfg_flag} --host_src . --sync_settings
         """).strip()
         print(steps)
         return 0
