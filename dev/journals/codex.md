@@ -111,3 +111,101 @@ Uncertainties / risks: command-string assertions can be sensitive to future form
 Tradeoffs and what might break: users who relied on always seeing explicit `--config` in plan commands may need to infer the default path from the header line. Non-default paths remain explicit in every command, preserving safety for multi-config workflows.
 
 What I am confident about: helper tests now cover both branches (`tests/test_cli_helpers.py`) and pass locally, and compile checks remain clean.
+
+## 2026-02-27 20:45:27 +0000
+
+Addressed a sudo UX bug affecting VM-side workflows: `_confirm_sudo_block` would proactively run `sudo -v` even when `--yes` was supplied, which could trigger an unnecessary password prompt in environments where `sudo -v` policy differs from command-level sudo usage. Updated `aivm/cli/_common.py` so `--yes` bypasses interactive confirmation *and* skips sudo-ticket warmup.
+
+State of mind / reflection: this was a good reminder that convenience preflight checks can become correctness bugs when they are stricter than the real execution path. The right behavior for `--yes` is “do not block on interactive sudo validation”; command execution can still fail naturally where privileges are truly unavailable.
+
+Uncertainties / risks: skipping `sudo -v` under `--yes` means first privileged command failure may now happen deeper in the command path rather than upfront. That is acceptable and more consistent with non-interactive semantics.
+
+Tradeoffs and what might break: users who liked eager sudo-cache warming with `--yes` lose that behavior; interactive non-`--yes` flow still keeps existing confirmation + `sudo -v` warmup.
+
+What I am confident about: added regression coverage in `tests/test_cli_helpers.py` (`test_confirm_sudo_block_yes_skips_sudo_validate`) and helper test suite passes.
+
+## 2026-02-27 20:50:18 +0000
+
+Refined sudo confirmation behavior to better support VM environments with passwordless sudo. Added `_has_passwordless_sudo()` in `aivm/cli/_common.py` and integrated it into `_confirm_sudo_block()`: before any interactive `sudo -v` warmup, the code now probes `sudo -n true`; if that succeeds, it marks sudo as validated and skips `sudo -v` entirely.
+
+State of mind / reflection: this adjustment better aligns policy intent (explicit confirmation unless `--yes`) with practical execution realities in nested/guest contexts where sudo is available non-interactively. The previous eager `sudo -v` check could be stricter than actual command execution and therefore blocked valid workflows.
+
+Uncertainties / risks: `sudo -n true` behavior can vary under custom sudoers policy; in rare setups it may fail despite other commands succeeding with different policy tags. Current fallback still uses the previous `sudo -v` prompt path after explicit confirmation.
+
+Tradeoffs and what might break: this adds one extra lightweight sudo probe call (`sudo -n true`) per process until cached validation is set. That slight overhead is intentional to avoid unnecessary password prompts.
+
+What I am confident about: helper tests now cover both `--yes` and non-`--yes` passwordless-sudo branches and pass (`tests/test_cli_helpers.py`). Compile checks remain clean.
+
+## 2026-02-27 20:54:10 +0000
+
+Adjusted host dependency installation command execution to stream output for long-running operations. In `aivm/host.py`, switched `run_cmd(..., capture=True)` to `capture=False` for `apt-get update`, `apt-get install`, and the follow-up `systemctl enable --now libvirtd` call so users can observe progress and troubleshoot stalls in real time.
+
+State of mind / reflection: this was an operator-visibility improvement with low technical risk and high usability payoff. Silent capture is fine for short probes, but long installs should be transparent by default.
+
+Uncertainties / risks: uncaptured output is noisier, but this command is explicitly operational and long-running, so verbosity is expected. Error handling semantics remain unchanged.
+
+Tradeoffs and what might break: tests that assumed only command ordering (and ignored kwargs) needed a slight update to assert capture behavior explicitly.
+
+What I am confident about: host tests now validate the non-capturing behavior for apt calls, helper tests still pass, and compile checks are clean.
+
+## 2026-02-27 20:58:51 +0000
+
+Added an opt-in end-to-end nested smoke test in `tests/test_e2e_nested.py` that runs the real CLI via `python -m aivm` against an isolated temporary config store. The flow provisions unique VM/network names, creates host network, brings VM up, waits for IP, checks status, and performs best-effort cleanup (VM destroy + network destroy) in `finally`.
+
+State of mind / reflection: I kept this intentionally pragmatic and operationally safe. E2E coverage is valuable here, but default test runs should stay fast and deterministic, so the test is guarded behind `AIVM_E2E=1` and preflight checks for SSH key availability + passwordless sudo.
+
+Uncertainties / risks: this test depends on host/libvirt state, networking availability, and image cache/download behavior, so runtime and reliability will vary by environment. It is a smoke test, not a full conformance suite.
+
+Tradeoffs and what might break: assertions are intentionally lightweight (`vm ip`/`cached vm ip`, `vm state`) to reduce false negatives across minor output changes; this sacrifices strictness in exchange for portability.
+
+What I am confident about: default CI/local test runs are unaffected (test skips unless explicitly enabled), targeted test invocation works, and syntax checks pass.
+
+## 2026-02-27 21:02:12 +0000
+
+Refined the opt-in nested E2E smoke test to remove dependency on user-global SSH identities. `tests/test_e2e_nested.py` now generates a temporary ed25519 keypair with `ssh-keygen`, writes an isolated `~/.ssh/config` under a temp HOME, and runs all `python -m aivm` subprocesses with that HOME in env. VM config paths (`ssh_identity_file`, `ssh_pubkey_path`) now point to these ephemeral files.
+
+State of mind / reflection: this change makes the E2E path much more reproducible and safer for local developer environments by avoiding hidden reliance on personal `~/.ssh` state. The test setup is now explicit and self-contained.
+
+Uncertainties / risks: environments lacking `ssh-keygen` will skip this E2E path; that is acceptable for an opt-in integration test. Runtime variability from libvirt/network/image operations remains unchanged.
+
+Tradeoffs and what might break: added setup work per run (small keygen overhead) in exchange for deterministic SSH material provisioning.
+
+What I am confident about: default runs still skip unless `AIVM_E2E=1`, and syntax/targeted test checks pass with the new setup.
+
+## 2026-02-27 21:05:56 +0000
+
+Updated nested E2E CLI runner to stream live subprocess output while still capturing it for assertions and failure diagnostics. In `tests/test_e2e_nested.py`, replaced `subprocess.run(..., capture_output=True)` with a `Popen` + line-by-line tee loop (`stderr` merged into `stdout`) so `pytest -s` shows command progress in real time.
+
+State of mind / reflection: this was important observability plumbing for long-running integration steps. Silent capture made failures expensive to debug because the only signal appeared after timeout/error. Live tee output lowers debugging latency significantly.
+
+Uncertainties / risks: merged stderr/stdout sacrifices channel separation, but preserves chronological visibility which is more valuable for this smoke test.
+
+Tradeoffs and what might break: output volume is larger when running with `-s`, by design. The runner still retains captured output for final assertions and failure messages.
+
+What I am confident about: the test module still skips cleanly by default, syntax checks pass, and the new runner behavior is aligned with interactive debugging needs.
+
+## 2026-02-27 21:10:10 +0000
+
+Addressed nested E2E failure caused by missing UEFI firmware in the test environment and reduced smoke-test VM footprint. In `aivm/vm/lifecycle.py`, `create_or_start_vm()` now catches `virt-install` failures that specifically indicate missing x86_64 UEFI firmware and retries VM creation once without the `--boot uefi` arguments. Added a unit regression test in `tests/test_vm_helpers.py` to lock this fallback path.
+
+Also updated `tests/test_e2e_nested.py` to use lower resource settings for smoke runs (`1 vCPU`, `2048 MB RAM`, `16 GB disk`) to better fit nested test environments.
+
+State of mind / reflection: this is a pragmatic resilience improvement. Strict UEFI-only boot is ideal where available, but failing hard on hosts without OVMF blocks otherwise-valid smoke coverage. A targeted retry on one known error keeps behavior predictable while improving portability.
+
+Uncertainties / risks: non-UEFI fallback may behave differently for some guest images/boot paths, though Ubuntu cloud images generally support legacy boot in common libvirt setups. Fallback is intentionally narrow to avoid masking unrelated `virt-install` errors.
+
+Tradeoffs and what might break: hosts expecting UEFI-specific behavior (secure boot assumptions, firmware-variable workflows) will now silently run BIOS fallback when UEFI binaries are absent; this is primarily relevant in constrained environments and is logged as a warning.
+
+What I am confident about: regression test covers the fallback trigger and command retry shape; targeted test suite and compile checks pass.
+
+## 2026-02-27 21:14:51 +0000
+
+Changed nested E2E image strategy to default to a user-level shared cache instead of independent per-run network download. In `tests/test_e2e_nested.py`, added `_ensure_user_cached_image()` and wiring so, unless `AIVM_E2E_INDEPENDENT_IMAGE=1`, the test populates/uses `~/.cache/aivm/e2e/noble-base.img` (or `AIVM_E2E_SHARED_IMAGE`) and points VM image URL to `file://...`.
+
+State of mind / reflection: this aligns test cost with what we actually care about validating. Downloading cloud images repeatedly is noise for this smoke test and slows iteration without improving confidence in VM lifecycle logic.
+
+Uncertainties / risks: the per-run VM image path still causes a local file copy from the shared cache (via existing fetch logic) rather than direct in-place reuse; this keeps behavior stable but does not fully eliminate I/O overhead.
+
+Tradeoffs and what might break: default behavior now depends on local curl/file URL handling and a persistent user cache path. Independent mode remains available via env flag for clean-room testing.
+
+What I am confident about: default test-run behavior remains opt-in and skip-safe, and syntax/targeted test checks pass after this change.

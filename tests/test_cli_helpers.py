@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from aivm.config import AgentVMConfig
-from aivm.cli._common import _confirm_external_file_update
+from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
 from aivm.cli.main import _count_verbose, _normalize_argv
 from aivm.cli.help import PlanCLI
 from aivm.cli.vm import (
@@ -116,3 +116,48 @@ def test_plan_includes_nondefault_config_flag(monkeypatch, capsys) -> None:
     PlanCLI.main(argv=False, config=str(custom), yes=True)
     out = capsys.readouterr().out
     assert f'--config {custom}' in out
+
+
+def test_confirm_sudo_block_yes_only_checks_passwordless_probe(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli._common._SUDO_VALIDATED', False)
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        calls.append(cmd)
+        from aivm.util import CmdResult
+
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr(
+        'aivm.cli._common.run_cmd',
+        fake_run_cmd,
+    )
+    _confirm_sudo_block(yes=True, purpose='test')
+    assert calls == [['sudo', '-n', 'true']]
+
+
+def test_confirm_sudo_block_confirmed_skips_sudo_validate_when_passwordless(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli._common._SUDO_VALIDATED', False)
+    monkeypatch.setattr('builtins.input', lambda _: 'y')
+
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd == ['sudo', '-n', 'true']:
+            from aivm.util import CmdResult
+
+            return CmdResult(0, '', '')
+        raise AssertionError(f'Unexpected command: {cmd!r}')
+
+    monkeypatch.setattr('aivm.cli._common.run_cmd', fake_run_cmd)
+    _confirm_sudo_block(yes=False, purpose='test')
+    assert calls == [['sudo', '-n', 'true']]

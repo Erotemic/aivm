@@ -5,8 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from aivm.config import AgentVMConfig
-from aivm.util import CmdResult
-from aivm.vm import _mac_for_vm, get_ip_cached, vm_has_share, vm_share_mappings
+from aivm.util import CmdError, CmdResult
+from aivm.vm import (
+    _mac_for_vm,
+    create_or_start_vm,
+    get_ip_cached,
+    vm_has_share,
+    vm_share_mappings,
+)
 
 
 def test_mac_for_vm_parsing(monkeypatch) -> None:
@@ -61,3 +67,42 @@ def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
         (str(source.resolve()), 'hostcode-src'),
         ('/opt/other', 'other'),
     ]
+
+
+def test_create_vm_fallback_when_uefi_firmware_missing(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    cfg.share.enabled = False
+    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+    )
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._write_cloud_init',
+        lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
+    )
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+    )
+
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == 'virt-install' and '--boot' in cmd:
+            raise CmdError(
+                cmd,
+                CmdResult(
+                    1,
+                    '',
+                    "ERROR    Did not find any UEFI binary path for arch 'x86_64'",
+                ),
+            )
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    create_or_start_vm(cfg, dry_run=False, recreate=False)
+
+    virt_calls = [c for c in calls if c and c[0] == 'virt-install']
+    assert len(virt_calls) == 2
+    assert '--boot' in virt_calls[0]
+    assert '--boot' not in virt_calls[1]
