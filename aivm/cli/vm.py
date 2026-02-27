@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shlex
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import scriptconfig as scfg
@@ -464,12 +465,11 @@ class VMAttachCLI(_BaseCommand):
                 host_src=host_src,
             )
 
-        share_guest_dst = _resolve_guest_dst(host_src, args.guest_dst)
-        share_tag = _auto_share_tag_for_path(host_src, set())
+        attachment = _resolve_attachment(cfg, cfg_path, host_src, args.guest_dst)
 
         if args.dry_run:
             print(
-                f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {share_guest_dst}'
+                f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {attachment.guest_dst}'
             )
             return 0
 
@@ -480,32 +480,22 @@ class VMAttachCLI(_BaseCommand):
                 purpose=f"Inspect VM '{cfg.vm.name}' share mappings and attach folder if needed.",
             )
             mappings = vm_share_mappings(cfg)
-            requested_src = str(host_src.resolve())
-            existing_tags = {tag for _, tag in mappings if tag}
-            share_tag = _ensure_share_tag_len(
-                share_tag, host_src, existing_tags
+            attachment = _align_attachment_tag_with_mappings(
+                attachment, host_src, mappings
             )
-            for src, tag in mappings:
-                if src == requested_src and tag:
-                    share_tag = tag
-                    break
-            if not vm_has_share(cfg, requested_src, share_tag):
-                for src, tag in mappings:
-                    if tag == share_tag and src != requested_src:
-                        share_tag = _auto_share_tag_for_path(
-                            host_src, existing_tags
-                        )
-                        break
-                if not vm_has_share(cfg, requested_src, share_tag):
+            if not _attachment_has_mapping(attachment, mappings):
                     attach_vm_share(
-                        cfg, requested_src, share_tag, dry_run=False
+                        cfg,
+                        attachment.source_dir,
+                        attachment.tag,
+                        dry_run=False,
                     )
         reg_path = _record_attachment(
             cfg,
             cfg_path,
             host_src=host_src,
-            guest_dst=share_guest_dst,
-            tag=share_tag,
+            guest_dst=attachment.guest_dst,
+            tag=attachment.tag,
             force=bool(args.force),
         )
         print(f'Attached {host_src} to VM {cfg.vm.name} (shared mode)')
@@ -558,6 +548,14 @@ class VMModalCLI(scfg.ModalCLI):
     sync_settings = VMSyncSettingsCLI
     attach = VMAttachCLI
     code = VMCodeCLI
+
+
+@dataclass(frozen=True)
+class ResolvedAttachment:
+    vm_name: str
+    source_dir: str
+    guest_dst: str
+    tag: str
 
 
 def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
@@ -815,6 +813,54 @@ def _record_attachment(
     return save_store(reg, cfg_path)
 
 
+def _resolve_attachment(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    host_src: Path,
+    guest_dst_opt: str,
+) -> ResolvedAttachment:
+    source_dir = str(host_src.resolve())
+    guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
+    tag = _ensure_share_tag_len('', host_src, set())
+    reg = load_store(cfg_path)
+    att = find_attachment(reg, host_src)
+    if att is not None and att.vm_name == cfg.vm.name:
+        if not guest_dst_opt and att.guest_dst:
+            guest_dst = att.guest_dst
+        if att.tag:
+            tag = att.tag
+    return ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        source_dir=source_dir,
+        guest_dst=guest_dst,
+        tag=tag,
+    )
+
+
+def _attachment_has_mapping(
+    att: ResolvedAttachment, mappings: list[tuple[str, str]]
+) -> bool:
+    return any(src == att.source_dir and tag == att.tag for src, tag in mappings)
+
+
+def _align_attachment_tag_with_mappings(
+    att: ResolvedAttachment, host_src: Path, mappings: list[tuple[str, str]]
+) -> ResolvedAttachment:
+    existing_tags = {tag for _, tag in mappings if tag}
+    tag = _ensure_share_tag_len(att.tag, host_src, existing_tags)
+    for src, existing_tag in mappings:
+        if src == att.source_dir and existing_tag:
+            tag = existing_tag
+            break
+    has_share = any(src == att.source_dir and t == tag for src, t in mappings)
+    if not has_share:
+        for src, existing_tag in mappings:
+            if existing_tag == tag and src != att.source_dir:
+                tag = _auto_share_tag_for_path(host_src, existing_tags)
+                break
+    return replace(att, tag=tag)
+
+
 def _prepare_attached_session(
     *,
     config_opt: str | None,
@@ -838,22 +884,7 @@ def _prepare_attached_session(
         host_src=host_src,
     )
 
-    requested_src = str(host_src.resolve())
-    share_guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
-    share_tag = _ensure_share_tag_len('', host_src, set())
-    reg = load_store(cfg_path)
-    att = find_attachment(reg, host_src)
-    if att is not None and att.vm_name == cfg.vm.name:
-        if not guest_dst_opt and att.guest_dst:
-            share_guest_dst = att.guest_dst
-        if att.tag:
-            share_tag = att.tag
-
-    def _has_share_in_mappings(mappings: list[tuple[str, str]]) -> bool:
-        return any(
-            src == requested_src and tag == share_tag
-            for src, tag in mappings
-        )
+    attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
 
     cached_ip = get_ip_cached(cfg) if not dry_run else None
     cached_ssh_ok = False
@@ -897,21 +928,10 @@ def _prepare_attached_session(
         vm_running = True
     if not dry_run and vm_running is True:
         mappings = vm_share_mappings(cfg, use_sudo=False)
-        existing_tags = {tag for _, tag in mappings if tag}
-        share_tag = _ensure_share_tag_len(share_tag, host_src, existing_tags)
-        for src, tag in mappings:
-            if src == requested_src and tag:
-                share_tag = tag
-                break
-        has_share = _has_share_in_mappings(mappings)
-        if not has_share:
-            for src, tag in mappings:
-                if tag == share_tag and src != requested_src:
-                    share_tag = _auto_share_tag_for_path(
-                        host_src, existing_tags
-                    )
-                    break
-            has_share = _has_share_in_mappings(mappings)
+        attachment = _align_attachment_tag_with_mappings(
+            attachment, host_src, mappings
+        )
+        has_share = _attachment_has_mapping(attachment, mappings)
 
     need_vm_start_or_create = dry_run or (vm_running is not True)
     if need_vm_start_or_create:
@@ -924,8 +944,8 @@ def _prepare_attached_session(
                 cfg,
                 dry_run=dry_run,
                 recreate=False,
-                share_source_dir=requested_src,
-                share_tag=share_tag,
+                share_source_dir=attachment.source_dir,
+                share_tag=attachment.tag,
             )
         except Exception as ex:
             missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
@@ -943,15 +963,18 @@ def _prepare_attached_session(
                     cfg,
                     dry_run=False,
                     recreate=True,
-                    share_source_dir=requested_src,
-                    share_tag=share_tag,
+                    share_source_dir=attachment.source_dir,
+                    share_tag=attachment.tag,
                 )
             else:
                 raise
         vm_running = True if dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
         if not dry_run and vm_running is True:
             mappings = vm_share_mappings(cfg, use_sudo=False)
-            has_share = _has_share_in_mappings(mappings)
+            attachment = _align_attachment_tag_with_mappings(
+                attachment, host_src, mappings
+            )
+            has_share = _attachment_has_mapping(attachment, mappings)
 
     if not dry_run and vm_running is True and not has_share:
         if recreate_if_needed:
@@ -963,14 +986,17 @@ def _prepare_attached_session(
                     purpose=f"Attach this folder to existing VM '{cfg.vm.name}'.",
                 )
                 attach_vm_share(
-                    cfg, requested_src, share_tag, dry_run=False
+                    cfg,
+                    attachment.source_dir,
+                    attachment.tag,
+                    dry_run=False,
                 )
                 has_share = True
             except Exception as ex:
                 current_maps = mappings or vm_share_mappings(
                     cfg, use_sudo=False
                 )
-                requested_tag = share_tag
+                requested_tag = attachment.tag
                 if current_maps:
                     found = '\n'.join(
                         f'  - source={src or "(none)"} tag={tag or "(none)"}'
@@ -981,7 +1007,7 @@ def _prepare_attached_session(
                 raise RuntimeError(
                     'Existing VM does not include requested share mapping, and live attach failed.\n'
                     f'VM: {cfg.vm.name}\n'
-                    f'Requested: source={requested_src} tag={requested_tag} guest_dst={share_guest_dst}\n'
+                    f'Requested: source={attachment.source_dir} tag={requested_tag} guest_dst={attachment.guest_dst}\n'
                     'Current VM filesystem mappings:\n'
                     f'{found}\n'
                     f'Live attach error: {ex}\n'
@@ -999,8 +1025,8 @@ def _prepare_attached_session(
             cfg,
             dry_run=dry_run,
             recreate=True,
-            share_source_dir=requested_src,
-            share_tag=share_tag,
+            share_source_dir=attachment.source_dir,
+            share_tag=attachment.tag,
         )
 
     if dry_run:
@@ -1008,9 +1034,9 @@ def _prepare_attached_session(
             cfg=cfg,
             cfg_path=cfg_path,
             host_src=host_src,
-            share_source_dir=requested_src,
-            share_tag=share_tag,
-            share_guest_dst=share_guest_dst,
+            share_source_dir=attachment.source_dir,
+            share_tag=attachment.tag,
+            share_guest_dst=attachment.guest_dst,
             ip=None,
             reg_path=None,
             meta_path=None,
@@ -1020,8 +1046,8 @@ def _prepare_attached_session(
         cfg,
         cfg_path,
         host_src=host_src,
-        guest_dst=share_guest_dst,
-        tag=share_tag,
+        guest_dst=attachment.guest_dst,
+        tag=attachment.tag,
         force=bool(force),
     )
 
@@ -1042,17 +1068,17 @@ def _prepare_attached_session(
     ensure_share_mounted(
         cfg,
         ip,
-        guest_dst=share_guest_dst,
-        tag=share_tag,
+        guest_dst=attachment.guest_dst,
+        tag=attachment.tag,
         dry_run=False,
     )
     return PreparedSession(
         cfg=cfg,
         cfg_path=cfg_path,
         host_src=host_src,
-        share_source_dir=requested_src,
-        share_tag=share_tag,
-        share_guest_dst=share_guest_dst,
+        share_source_dir=attachment.source_dir,
+        share_tag=attachment.tag,
+        share_guest_dst=attachment.guest_dst,
         ip=ip,
         reg_path=reg_path,
         meta_path=None,
