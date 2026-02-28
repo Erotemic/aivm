@@ -173,7 +173,7 @@ class VMStatusCLI(_BaseCommand):
 
 
 class VMDestroyCLI(_BaseCommand):
-    """Destroy and undefine the VM and associated storage."""
+    """Destroy and undefine the VM (shared host directories are not deleted)."""
 
     vm = scfg.Value(
         '',
@@ -190,7 +190,10 @@ class VMDestroyCLI(_BaseCommand):
         cfg, cfg_path = _load_cfg_with_path(args.config, vm_opt=args.vm)
         _confirm_sudo_block(
             yes=bool(args.yes),
-            purpose='Destroy/undefine VM and attached storage.',
+            purpose=(
+                'Destroy/undefine VM domain and detach its libvirt disks/share mappings '
+                '(host shared directories are not deleted).'
+            ),
         )
         destroy_vm(cfg, dry_run=args.dry_run)
         if not args.dry_run:
