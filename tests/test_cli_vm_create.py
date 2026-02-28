@@ -81,6 +81,34 @@ def test_vm_destroy_removes_vm_and_attachments(
     assert all(a.vm_name != 'killme' for a in loaded.attachments)
 
 
+def test_vm_destroy_warns_when_network_becomes_unused(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'solo-vm'
+    cfg.network.name = 'solo-net'
+    upsert_vm(store, cfg)
+    save_store(store, cfg_path)
+    warns: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm._load_cfg_with_path',
+        lambda *a, **k: (cfg, cfg_path),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    monkeypatch.setattr('aivm.cli.vm.destroy_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm.log.warning',
+        lambda *a, **k: warns.append((a, k)),
+    )
+    rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
+    assert rc == 0
+    assert any("Network '{}'" in args[0] and args[1] == 'solo-net' for args, _ in warns)
+
+
 def test_vm_destroy_accepts_positional_vm_name(
     monkeypatch, tmp_path: Path
 ) -> None:
