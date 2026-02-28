@@ -591,7 +591,7 @@ class VMCodeCLI(_BaseCommand):
                     + '\n'.join(sync_result.failed)
                 )
 
-        ssh_cfg = _upsert_ssh_config_entry(
+        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
             cfg, dry_run=False, yes=bool(args.yes)
         )
 
@@ -609,7 +609,8 @@ class VMCodeCLI(_BaseCommand):
         print(
             f'Opened VS Code remote folder {session.share_guest_dst} on host {cfg.vm.name}'
         )
-        print(f'SSH entry updated in {ssh_cfg}')
+        if ssh_cfg_updated:
+            print(f'SSH entry updated in {ssh_cfg}')
         print(f'Folder registered in {session.reg_path}')
         return 0
 
@@ -891,7 +892,7 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
 
 def _upsert_ssh_config_entry(
     cfg: AgentVMConfig, *, dry_run: bool = False, yes: bool = False
-) -> Path:
+) -> tuple[Path, bool]:
     cfg = cfg.expanded_paths()
     ssh_dir = Path.home() / '.ssh'
     ssh_cfg = ssh_dir / 'config'
@@ -907,7 +908,7 @@ def _upsert_ssh_config_entry(
             block_name,
             ssh_cfg,
         )
-        return ssh_cfg
+        return ssh_cfg, False
     ensure_dir(ssh_dir)
     existing = ssh_cfg.read_text(encoding='utf-8') if ssh_cfg.exists() else ''
     pattern = re.compile(
@@ -919,14 +920,19 @@ def _upsert_ssh_config_entry(
         sep = '' if not existing or existing.endswith('\n') else '\n'
         updated = f'{existing}{sep}{new_block}'
     if updated == existing:
-        return ssh_cfg
+        log.debug(
+            "SSH config entry for host '{}' already up to date in {}",
+            block_name,
+            ssh_cfg,
+        )
+        return ssh_cfg, False
     _confirm_external_file_update(
         yes=bool(yes),
         path=ssh_cfg,
         purpose=f"Update SSH config entry for host '{block_name}'.",
     )
     ssh_cfg.write_text(updated, encoding='utf-8')
-    return ssh_cfg
+    return ssh_cfg, True
 
 
 def _parse_sync_paths_arg(paths_arg: str) -> list[str]:

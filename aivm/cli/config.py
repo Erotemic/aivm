@@ -226,18 +226,23 @@ class ConfigShowCLI(_BaseCommand):
         vm_name = str(args.vm or '').strip()
         if not vm_name:
             if path.exists():
-                print(path.read_text(encoding='utf-8'), end='')
+                toml_text = path.read_text(encoding='utf-8')
             else:
                 store = load_store(path)
                 save_store(store, path)
-                print(path.read_text(encoding='utf-8'), end='')
-            return 0
-        cfg, _ = _load_cfg_with_path(
-            args.config, vm_opt=vm_name, host_src=Path.cwd()
-        )
-        print(f'# Store: {path}')
-        print(f'# VM: {cfg.vm.name}')
-        print(dump_toml(cfg), end='')
+                toml_text = path.read_text(encoding='utf-8')
+        else:
+            cfg, _ = _load_cfg_with_path(
+                args.config, vm_opt=vm_name, host_src=Path.cwd()
+            )
+            toml_text = '\n'.join([
+                '# Store: {path}',
+                '# VM: {cfg.vm.name}',
+                dump_toml(cfg),
+            ])
+        import ubelt as ub
+        text = ub.highlight_code(toml_text, lexer_name='toml')
+        print(text, end='')
         return 0
 
 

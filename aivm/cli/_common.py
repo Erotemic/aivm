@@ -20,7 +20,6 @@ from ..store import (
     save_store,
     upsert_network,
     store_path,
-    upsert_vm,
     upsert_vm_with_network,
 )
 from ..util import run_cmd

@@ -88,11 +88,15 @@ def test_upsert_ssh_config_no_confirm_when_unchanged(
 ) -> None:
     monkeypatch.setenv('HOME', str(tmp_path))
     cfg = AgentVMConfig()
-    _upsert_ssh_config_entry(cfg, dry_run=False, yes=True)
+    path1, changed1 = _upsert_ssh_config_entry(cfg, dry_run=False, yes=True)
+    assert path1.exists()
+    assert changed1 is True
 
     # Should not require --yes when no file update is needed.
     monkeypatch.setattr('sys.stdin.isatty', lambda: False)
-    _upsert_ssh_config_entry(cfg, dry_run=False, yes=False)
+    path2, changed2 = _upsert_ssh_config_entry(cfg, dry_run=False, yes=False)
+    assert path2 == path1
+    assert changed2 is False
 
 
 def test_plan_omits_default_config_flag(monkeypatch, capsys) -> None:
