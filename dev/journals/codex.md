@@ -525,3 +525,65 @@ Uncertainties / risks: this warning is store-driven, not live-libvirt-driven. If
 Tradeoffs and what might break: warning volume can increase in workflows that intentionally keep persistent shared networks after deleting VMs; however this is only a warning and does not change behavior.
 
 What I am confident about: targeted tests pass (`tests/test_cli_vm_create.py` and `tests/test_cli_helpers.py`), and the added logic runs only on non-dry-run destroy paths, preserving existing dry-run behavior.
+
+## 2026-02-28 22:01:00 +0000
+
+Fixed a regression in `aivm vm create` where libvirt network provisioning could be skipped before `virt-install`. The create flow already ensured a network record existed in config store, but that is not equivalent to ensuring the runtime libvirt network exists; this caused failures like `Network not found: no network with matching name 'aivm-net'` on fresh hosts/environments.
+
+I updated `VMCreateCLI.main` to call `ensure_network(cfg, recreate=False, dry_run=...)` before VM creation, and to apply firewall rules when enabled (`apply_firewall(cfg, dry_run=...)`) in the same privileged block. Added a regression test (`test_vm_create_ensures_network_before_vm_create`) and adjusted existing VM-create tests to stub network/firewall side effects.
+
+State of mind / reflection: this was a direct runtime-vs-config distinction bug. The fix keeps behavior aligned with user expectations for “create from scratch” while preserving dry-run semantics.
+
+Uncertainties / risks: warning text from `virt-install` about low recommended RAM remains external/tool-level; we are not suppressing it, which is desirable for visibility.
+
+Tradeoffs and what might break: VM create now always executes network/firewall setup paths (or dry-run logs), which is intended but increases touched subsystems during create.
+
+What I am confident about: full suite is green (`78 passed, 1 skipped`), and the regression path is explicitly covered by unit tests.
+
+## 2026-02-28 22:03:20 +0000
+
+Fixed a share-reconciliation bug that could cause `aivm ssh .` to skip attaching a required share and then fail inside guest mount with `mount -t virtiofs ... wrong fs type`. Root cause: share discovery helpers (`vm_share_mappings`, `vm_has_share`) treated all libvirt `<filesystem>` devices as equivalent, including non-virtiofs entries (e.g., legacy 9p). That could falsely report "share already present" even when no virtiofs mapping existed for the requested tag.
+
+I updated `aivm/vm/share.py` to only consider filesystem entries with `<driver type='virtiofs'/>`. Also updated `tests/test_vm_helpers.py` to include mixed filesystem drivers and assert non-virtiofs mappings are ignored.
+
+State of mind / reflection: this was a clear semantic mismatch between "filesystem device exists" and "virtiofs share exists". Narrowing to virtiofs makes the detection logic honest and aligns with guest mount behavior.
+
+Uncertainties / risks: if any environments define virtiofs without explicit driver nodes in domain XML, these mappings would now be ignored. Given aivm emits explicit virtiofs driver declarations, this is an acceptable constraint.
+
+Tradeoffs and what might break: status/reporting may show fewer mappings where legacy non-virtiofs filesystems exist; this is intentional and prevents false positives in attach logic.
+
+What I am confident about: full test suite passes (`78 passed, 1 skipped`) and the mixed-driver helper test now guards against regression.
+
+## 2026-02-28 22:04:30 +0000
+
+Handled a follow-up `aivm ssh .` attach failure where libvirt rejected live virtiofs attach with `unsupported configuration: 'virtiofs' requires shared memory`. This occurs when an existing VM definition lacks the required `<memoryBacking><source type='memfd'/><access mode='shared'/>` entries.
+
+Implemented two changes:
+1) Added `vm_has_virtiofs_shared_memory(...)` in `aivm/vm/share.py` to inspect domain XML for virtiofs-compatible shared-memory backing.
+2) Updated attached-session reconcile flow (`aivm/cli/vm.py`) to pre-check this condition before attempting live attach and return a precise actionable error that points users to `--recreate_if_needed` (or manual recreate), rather than surfacing only the lower-level virsh attach failure.
+
+Also added helper tests in `tests/test_vm_helpers.py` and kept prior virtiofs-only mapping filtering intact.
+
+State of mind / reflection: this is a pragmatic guardrail. The raw virsh error is technically accurate but not enough at the CLI level; this change makes failure mode explicit in aivm terms.
+
+Uncertainties / risks: we still rely on recreate semantics for repairing old VM definitions; if users expect non-recreate in-place conversion, that would need a separate redefine workflow.
+
+Tradeoffs and what might break: none expected beyond earlier/cleaner failure in this specific mismatch case.
+
+What I am confident about: full suite passes (`79 passed, 1 skipped`) and helper coverage now includes shared-memory detection.
+
+## 2026-02-28 22:06:10 +0000
+
+Changed VM creation defaults so every newly defined VM is created with shared memory backing (`--memorybacking source.type=memfd,access.mode=shared`) regardless of whether an initial share is attached during create. Previously this option was only added when `share_source_dir` was provided, which left many VMs unable to accept later virtiofs live-attach operations without recreate.
+
+Implementation detail: in `aivm/vm/lifecycle.py`, `create_or_start_vm` now seeds `virt-install` args with memorybacking by default and only appends `--filesystem ... driver.type=virtiofs` conditionally when share params are provided.
+
+Tests: updated `tests/test_vm_helpers.py` (`test_create_vm_fallback_when_uefi_firmware_missing`) to assert both initial and UEFI-fallback `virt-install` calls include `--memorybacking`.
+
+State of mind / reflection: this aligns command defaults with the common workflow (`vm create` first, attach later) and removes an avoidable trap.
+
+Uncertainties / risks: hosts lacking memfd/shared support could fail earlier at create-time; in supported libvirt/qemu setups this is expected to work and is required for virtiofs.
+
+Tradeoffs and what might break: if someone intentionally wanted a VM definition without shared memory backing, that is no longer default behavior.
+
+What I am confident about: full test suite passes (`79 passed, 1 skipped`) and the regression path is now guarded.

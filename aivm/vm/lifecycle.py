@@ -484,7 +484,9 @@ def create_or_start_vm(
     vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
     seed_iso = ci['seed_iso']
 
-    extra = []
+    # Always define VMs with shared memory backing so virtiofs can be attached
+    # later without requiring a VM recreate.
+    extra = ['--memorybacking', 'source.type=memfd,access.mode=shared']
     source_dir = str(share_source_dir or '').strip()
     tag = str(share_tag or '').strip()
     if source_dir:
@@ -492,7 +494,6 @@ def create_or_start_vm(
             raise RuntimeError(
                 'share_tag is required when share_source_dir is provided.'
             )
-        extra += ['--memorybacking', 'source.type=memfd,access.mode=shared']
         extra += [
             '--filesystem',
             f'source={source_dir},target={tag},driver.type=virtiofs',

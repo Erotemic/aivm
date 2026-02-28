@@ -48,6 +48,7 @@ from ..vm import (
     provision,
     sync_settings,
     vm_exists,
+    vm_has_virtiofs_shared_memory,
     vm_share_mappings,
     vm_status,
     wait_for_ip,
@@ -152,6 +153,9 @@ class VMCreateCLI(_BaseCommand):
             yes=bool(args.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' from config defaults.",
         )
+        ensure_network(cfg, recreate=False, dry_run=bool(args.dry_run))
+        if cfg.firewall.enabled:
+            apply_firewall(cfg, dry_run=bool(args.dry_run))
         create_or_start_vm(
             cfg,
             dry_run=bool(args.dry_run),
@@ -1218,6 +1222,21 @@ def _reconcile_attached_vm(
             has_share = _attachment_has_mapping(attachment, mappings)
 
     if not policy.dry_run and vm_running is True and not has_share:
+        vm_has_shared_mem = vm_has_virtiofs_shared_memory(
+            cfg, use_sudo=False
+        )
+        if vm_has_shared_mem is False and not policy.recreate_if_needed:
+            raise RuntimeError(
+                'Existing VM cannot accept virtiofs attachments because its domain '
+                'definition lacks required shared-memory backing (memfd/shared).\n'
+                f'VM: {cfg.vm.name}\n'
+                f'Requested: source={attachment.source_dir} tag={attachment.tag} '
+                f'guest_dst={attachment.guest_dst}\n'
+                'Next steps:\n'
+                '  - Re-run with --recreate_if_needed to rebuild the VM definition '
+                'with virtiofs shared-memory support.\n'
+                '  - Or destroy and recreate the VM with the desired share mapping.'
+            )
         if policy.recreate_if_needed:
             recreate = True
         else:

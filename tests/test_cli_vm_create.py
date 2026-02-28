@@ -35,6 +35,8 @@ def test_vm_create_uses_defaults_and_adds_vm(
     monkeypatch.setattr(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
     monkeypatch.setattr(
@@ -181,6 +183,8 @@ def test_vm_create_interactive_edit_overrides_defaults(
     monkeypatch.setattr(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
     monkeypatch.setattr(
@@ -238,6 +242,8 @@ def test_vm_create_warns_when_requested_resources_look_too_high(
     monkeypatch.setattr(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
     monkeypatch.setattr(
         'aivm.cli.vm.vm_resource_warning_lines',
@@ -255,6 +261,45 @@ def test_vm_create_warns_when_requested_resources_look_too_high(
     rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     assert len(warns) >= 2
+
+
+def test_vm_create_ensures_network_before_vm_create(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    defaults = AgentVMConfig()
+    defaults.vm.name = 'net-first-vm'
+    defaults.network.name = 'net-first'
+    store.defaults = defaults
+    save_store(store, cfg_path)
+    monkeypatch.setattr(
+        'aivm.cli.vm._cfg_path', lambda p: cfg_path if p else cfg_path
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm.ensure_network',
+        lambda *a, **k: calls.append('ensure_network'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm.apply_firewall',
+        lambda *a, **k: calls.append('apply_firewall'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm.create_or_start_vm',
+        lambda *a, **k: calls.append('create_or_start_vm'),
+    )
+    rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
+    assert rc == 0
+    assert calls[:2] == ['ensure_network', 'apply_firewall']
+    assert calls[-1] == 'create_or_start_vm'
 
 
 def test_vm_create_errors_when_resources_physically_impossible(
@@ -276,5 +321,7 @@ def test_vm_create_errors_when_resources_physically_impossible(
         'aivm.cli.vm.vm_resource_impossible_lines',
         lambda cfg: ['vm.cpus=8 exceeds host CPU count=2'],
     )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     with pytest.raises(RuntimeError, match='not feasible on this host'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
