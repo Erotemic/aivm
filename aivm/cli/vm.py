@@ -107,6 +107,13 @@ class VMCreateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        log.trace(
+            'VMCreateCLI.main vm={} force={} dry_run={} yes={}',
+            args.vm,
+            bool(args.force),
+            bool(args.dry_run),
+            bool(args.yes),
+        )
         cfg_path = _cfg_path(args.config)
         reg = load_store(cfg_path)
         if reg.defaults is None:
@@ -463,6 +470,14 @@ class VMCodeCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        log.trace(
+            'VMCodeCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
+            args.host_src,
+            args.vm,
+            args.guest_dst,
+            bool(args.dry_run),
+            bool(args.yes),
+        )
         session = _prepare_attached_session(
             config_opt=args.config,
             vm_opt=args.vm,
@@ -565,6 +580,14 @@ class VMSSHCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        log.trace(
+            'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
+            args.host_src,
+            args.vm,
+            args.guest_dst,
+            bool(args.dry_run),
+            bool(args.yes),
+        )
         session = _prepare_attached_session(
             config_opt=args.config,
             vm_opt=args.vm,
@@ -624,6 +647,15 @@ class VMAttachCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        log.trace(
+            'VMAttachCLI.main host_src={} vm={} guest_dst={} force={} dry_run={} yes={}',
+            args.host_src,
+            args.vm,
+            args.guest_dst,
+            bool(args.force),
+            bool(args.dry_run),
+            bool(args.yes),
+        )
         host_src = Path(args.host_src).resolve()
         if not host_src.exists() or not host_src.is_dir():
             raise RuntimeError(

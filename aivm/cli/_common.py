@@ -64,6 +64,13 @@ class _BaseCommand(scfg.DataConfig):
             cfg_verbosity = 1
         args_verbose = int(getattr(self, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
+        log.trace(
+            'Initialized command {} with config={} verbose={} yes={}',
+            self.__class__.__name__,
+            getattr(self, 'config', None),
+            args_verbose,
+            bool(getattr(self, 'yes', False)),
+        )
 
 
 def _cfg_path(p: str | None) -> Path:
@@ -76,8 +83,10 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
     level = 'WARNING'
     if effective_verbosity == 1:
         level = 'INFO'
-    elif effective_verbosity >= 2:
+    elif effective_verbosity == 2:
         level = 'DEBUG'
+    elif effective_verbosity >= 3:
+        level = 'TRACE'
     colorize = sys.stderr.isatty() and os.getenv('NO_COLOR') is None
     logger.add(
         sys.stderr,
@@ -137,6 +146,12 @@ def _resolve_vm_name(
     vm_opt: str,
     host_src: Path | None,
 ) -> tuple[str, Path]:
+    log.trace(
+        'Resolving VM name config_opt={} vm_opt={} host_src={}',
+        config_opt,
+        vm_opt,
+        host_src,
+    )
     store_path = _cfg_path(config_opt)
     reg = load_store(store_path)
 
@@ -177,6 +192,12 @@ def _load_cfg_with_path(
     hydrate_runtime_defaults: bool = True,
     persist_runtime_defaults: bool = True,
 ) -> tuple[AgentVMConfig, Path]:
+    log.trace(
+        'Loading cfg with path config_path={} vm_opt={} host_src={}',
+        config_path,
+        vm_opt,
+        host_src,
+    )
     vm_name, store_path = _resolve_vm_name(
         config_opt=config_path,
         vm_opt=vm_opt,
@@ -231,6 +252,12 @@ def _has_passwordless_sudo() -> bool:
 
 def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
     global _SUDO_VALIDATED
+    log.trace(
+        'Confirm sudo block yes={} purpose={!r} sudo_validated={}',
+        yes,
+        purpose,
+        _SUDO_VALIDATED,
+    )
     if os.geteuid() == 0:
         return
     if not _SUDO_VALIDATED and _has_passwordless_sudo():

@@ -45,6 +45,14 @@ def run_cmd(
     env: Optional[dict[str, str]] = None,
 ) -> CmdResult:
     original_cmd = cmd
+    log.opt(depth=1).trace(
+        'run_cmd entry sudo={} check={} capture={} text={} cmd={}',
+        sudo,
+        check,
+        capture,
+        text,
+        shell_join(cmd),
+    )
     if sudo and os.geteuid() != 0:
         # Non-interactive sudo: fail fast if password/TTY is required.
         cmd = ['sudo', '-n', *cmd]
@@ -60,6 +68,13 @@ def run_cmd(
         env=env,
     )
     res = CmdResult(p.returncode, p.stdout or '', p.stderr or '')
+    log.opt(depth=1).trace(
+        'run_cmd result code={} stdout_len={} stderr_len={} cmd={}',
+        res.code,
+        len(res.stdout),
+        len(res.stderr),
+        shell_join(cmd),
+    )
     if check and p.returncode != 0:
         log.opt(depth=1).error(
             'Command failed code={} cmd={} stderr={} stdout={}',
