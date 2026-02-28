@@ -36,10 +36,10 @@ def test_vm_create_uses_defaults_and_adds_vm(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_total_mb', lambda: 65536)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_available_mb', lambda: 32768)
-    monkeypatch.setattr('aivm.cli.vm._host_cpu_count', lambda: 32)
-    monkeypatch.setattr('aivm.cli.vm._host_free_disk_gb', lambda p: 512.0)
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
     rc = VMCreateCLI.main(
         argv=False, config=str(cfg_path), vm='new-vm', yes=True
     )
@@ -154,10 +154,10 @@ def test_vm_create_interactive_edit_overrides_defaults(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_total_mb', lambda: 65536)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_available_mb', lambda: 32768)
-    monkeypatch.setattr('aivm.cli.vm._host_cpu_count', lambda: 32)
-    monkeypatch.setattr('aivm.cli.vm._host_free_disk_gb', lambda p: 512.0)
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
 
     rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=False)
     assert rc == 0
@@ -182,10 +182,10 @@ def test_vm_create_interactive_abort(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr('aivm.cli.vm.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: 'n')
-    monkeypatch.setattr('aivm.cli.vm._host_mem_total_mb', lambda: 8192)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_available_mb', lambda: 4096)
-    monkeypatch.setattr('aivm.cli.vm._host_cpu_count', lambda: 4)
-    monkeypatch.setattr('aivm.cli.vm._host_free_disk_gb', lambda p: 100.0)
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
     with pytest.raises(RuntimeError, match='Aborted by user'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=False)
 
@@ -211,10 +211,13 @@ def test_vm_create_warns_when_requested_resources_look_too_high(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_total_mb', lambda: 4096)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_available_mb', lambda: 2048)
-    monkeypatch.setattr('aivm.cli.vm._host_cpu_count', lambda: 4)
-    monkeypatch.setattr('aivm.cli.vm._host_free_disk_gb', lambda p: 20.0)
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_warning_lines',
+        lambda cfg: ['warn1', 'warn2'],
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
     warns: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.cli.vm.log.warning',
@@ -240,8 +243,10 @@ def test_vm_create_errors_when_resources_physically_impossible(
     monkeypatch.setattr(
         'aivm.cli.vm._cfg_path', lambda p: cfg_path if p else cfg_path
     )
-    monkeypatch.setattr('aivm.cli.vm._host_mem_total_mb', lambda: 4096)
-    monkeypatch.setattr('aivm.cli.vm._host_mem_available_mb', lambda: 2048)
-    monkeypatch.setattr('aivm.cli.vm._host_cpu_count', lambda: 2)
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines',
+        lambda cfg: ['vm.cpus=8 exceeds host CPU count=2'],
+    )
     with pytest.raises(RuntimeError, match='not feasible on this host'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)

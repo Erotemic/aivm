@@ -26,6 +26,7 @@ from ..config import (
     dump_toml,
 )
 from ..detect import auto_defaults
+from ..resource_checks import vm_resource_warning_lines
 from ..store import (
     find_attachment,
     find_vm,
@@ -67,6 +68,7 @@ class InitCLI(_BaseCommand):
         path = _cfg_path(args.config)
         reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
+        _warn_high_resource_defaults(cfg)
         if not bool(args.yes) and not bool(args.defaults):
             cfg = _review_init_defaults_interactive(cfg, path)
         else:
@@ -131,6 +133,11 @@ def _ssh_key_setup_warning_lines(cfg: AgentVMConfig) -> list[str]:
     ]
 
 
+def _warn_high_resource_defaults(cfg: AgentVMConfig) -> None:
+    for line in vm_resource_warning_lines(cfg):
+        log.warning('Config-init default resource warning: {}', line)
+
+
 def _prompt_with_default(prompt: str, default: str) -> str:
     raw = input(f'{prompt} [{default}]: ').strip()
     return raw if raw else default
@@ -161,6 +168,7 @@ def _review_init_defaults_interactive(
             'Re-run with --yes or --defaults.'
         )
     print(_render_init_default_summary(cfg, path))
+    _warn_high_resource_defaults(cfg)
     warn_lines = _ssh_key_setup_warning_lines(cfg)
     if warn_lines:
         print('')
@@ -202,6 +210,7 @@ def _review_init_defaults_interactive(
             )
             print('')
             print(_render_init_default_summary(cfg, path))
+            _warn_high_resource_defaults(cfg)
             warn_lines = _ssh_key_setup_warning_lines(cfg)
             if warn_lines:
                 print('')
@@ -217,6 +226,7 @@ class ConfigShowCLI(_BaseCommand):
     vm = scfg.Value(
         '',
         help='Optional VM name override.',
+        position=1,
     )
 
     @classmethod

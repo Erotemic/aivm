@@ -22,8 +22,8 @@ from aivm.cli.vm import (
 def test_normalize_argv_aliases() -> None:
     assert _normalize_argv(['init']) == ['config', 'init']
     assert _normalize_argv(['ls']) == ['list']
-    assert _normalize_argv(['attach', '.']) == ['attach', '--host_src', '.']
-    assert _normalize_argv(['code', '.']) == ['code', '--host_src', '.']
+    assert _normalize_argv(['attach', '.']) == ['attach', '.']
+    assert _normalize_argv(['code', '.']) == ['code', '.']
     assert _normalize_argv(['vm', 'wait-ip']) == ['vm', 'wait_ip']
     assert _normalize_argv(['vm', 'sync-settings']) == ['vm', 'sync_settings']
 
@@ -185,6 +185,7 @@ def test_help_raw_outputs_direct_system_commands(
     rc = HelpRawCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     out = capsys.readouterr().out
+    # FIXME: fix this by stripping ansi out of out
     assert 'aivm help raw' in out
     assert 'sudo virsh dominfo vm-raw' in out
     assert 'sudo virsh net-info net-raw' in out

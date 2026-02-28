@@ -161,3 +161,28 @@ def test_config_init_interactive_edit_updates_hardware(
     assert 'cpus = 2' in text
     assert 'ram_mb = 3072' in text
     assert 'disk_gb = 24' in text
+
+
+def test_config_init_logs_resource_warnings_from_shared_checker(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr(
+        'aivm.cli.config.auto_defaults',
+        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.vm_resource_warning_lines',
+        lambda cfg: ['resource warning test'],
+    )
+    logged = []
+    monkeypatch.setattr(
+        'aivm.cli.config.log.warning',
+        lambda *a, **k: logged.append((a, k)),
+    )
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=True
+    )
+    assert rc == 0
+    assert any('resource warning test' in str(args) for args, _ in logged)

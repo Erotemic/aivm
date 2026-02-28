@@ -441,3 +441,51 @@ Uncertainties / risks: if a user edits `network.name` to an existing managed net
 Tradeoffs and what might break: non-interactive runs still require `--yes`; now they also avoid the new review step. Interactive runs are one prompt longer by design.
 
 What I am confident about: added tests for interactive edit and abort flows in `tests/test_cli_vm_create.py`; full suite remains green (`72 passed, 1 skipped`).
+
+## 2026-02-28 17:59:44 +0000
+
+Refactored VM resource sanity checks into a shared module (`aivm/resource_checks.py`) and reused it across both `vm create` and `config init` to reduce duplication. `vm create` continues to warn for “likely too high” resource requests and hard-fails for physically infeasible CPU/RAM requests. `config init` now emits the same warning class for baseline defaults so users see capacity concerns earlier while choosing defaults.
+
+State of mind / reflection: this was a straightforward consolidation that also fixed UX timing: warnings now appear consistently from one source of truth in both workflows.
+
+Uncertainties / risks: host-availability metrics (especially `MemAvailable`) are snapshot-based and can fluctuate quickly, so warnings/errors are best-effort guardrails rather than deterministic admission control.
+
+Tradeoffs and what might break: moving checks into a shared module changed monkeypatch/test seams; tests were updated to patch shared check outputs instead of host-probe internals.
+
+What I am confident about: added config-init coverage for shared resource warnings, updated vm-create tests, and full suite is green (`75 passed, 1 skipped`).
+
+## 2026-02-28 18:05:45 +0000
+
+Adjusted resource warning and VM-create error reporting based on real nested-VM behavior. RAM warnings now prioritize `MemTotal` (stable capacity signal) instead of warning on low transient `MemAvailable` snapshots that were producing false positives. Hard feasibility checks already use `MemTotal`/CPU only. Also changed `virt-install` UEFI-first attempt handling to avoid surfacing a noisy error log when UEFI is unavailable but non-UEFI fallback succeeds.
+
+State of mind / reflection: this was a practical correction from production-like logs. The previous warning/error shape was technically derived from system metrics but not aligned with user expectations in constrained virtualized hosts.
+
+Uncertainties / risks: disk-warning heuristics remain conservative and may still produce advisory warnings in sparse-image scenarios; keeping it warning-only avoids blocking.
+
+Tradeoffs and what might break: first-attempt `virt-install` now uses non-throwing path and manually promotes failures, which slightly changes control flow but preserves explicit errors for real failures.
+
+What I am confident about: added/updated tests in `tests/test_resource_checks.py` and verified VM helper fallback behavior; full suite passes (`78 passed, 1 skipped`).
+
+## 2026-02-28 18:33:55 +0000
+
+Applied `special_options=False` explicitly to all `cls.cli(...)` invocations in `aivm/cli/*` to avoid scriptconfig special-option interactions (notably around `--config`/short-flag parsing behavior). This keeps parsing behavior predictable and decoupled from scriptconfig’s special-option machinery while preserving existing command semantics.
+
+State of mind / reflection: this is a targeted parser hardening change motivated by observed scriptconfig quirks. It’s low complexity and improves determinism.
+
+Uncertainties / risks: if any command previously relied on special options implicitly (e.g., uncommon scriptconfig-level meta flags), those are now disabled by design.
+
+Tradeoffs and what might break: help and normal subcommand parsing remain intact; only scriptconfig special-option paths are suppressed.
+
+What I am confident about: full suite remains green after the change (`78 passed, 1 skipped`).
+
+## 2026-02-28 18:47:12 +0000
+
+Reversed the prior parser hard-disable and moved toward scriptconfig-native argument handling as requested. Removed `special_options=False` from all command `cls.cli(...)` calls, added `_BaseCommand.__post_init__` to centralize logging setup from parsed args/config context, and trimmed manual argv normalization to only legacy top-level/subcommand name aliases (kept `init`/`ls` and hyphenated subcommand names). Also made `host_src` positional in code/ssh/attach command definitions so scriptconfig handles those directly without argv rewriting.
+
+State of mind / reflection: this is a cleaner architecture boundary: scriptconfig parses, commands consume normalized config, and `_BaseCommand` handles cross-cutting setup in one place.
+
+Uncertainties / risks: a small amount of name-alias normalization remains in `main` for backward-compatible command spellings; if we want to go fully strict later, that shim can be removed in one step.
+
+Tradeoffs and what might break: direct unit-style invocation patterns that depended on parser quirks may shift with special options re-enabled, but command behavior through `aivm ...` stays stable.
+
+What I am confident about: test suite is fully green after this refactor (`78 passed, 1 skipped`).

@@ -48,9 +48,49 @@ class _BaseCommand(scfg.DataConfig):
         help='Auto-approve interactive confirmations.',
     )
 
+    def __post_init__(self):
+        cfg_verbosity = 1
+        try:
+            path = _cfg_path(getattr(self, 'config', None))
+            if path.exists():
+                reg = load_store(path)
+                if reg.active_vm:
+                    rec = find_vm(reg, reg.active_vm)
+                    if rec is not None:
+                        cfg_verbosity = int(rec.cfg.verbosity)
+                elif reg.defaults is not None:
+                    cfg_verbosity = int(reg.defaults.verbosity)
+        except Exception:
+            cfg_verbosity = 1
+        args_verbose = int(getattr(self, 'verbose', 0) or 0)
+        _setup_logging(args_verbose, cfg_verbosity)
+
 
 def _cfg_path(p: str | None) -> Path:
     return Path(p).expanduser().resolve() if p else store_path().resolve()
+
+
+def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
+    logger.remove()
+    effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
+    level = 'WARNING'
+    if effective_verbosity == 1:
+        level = 'INFO'
+    elif effective_verbosity >= 2:
+        level = 'DEBUG'
+    colorize = sys.stderr.isatty() and os.getenv('NO_COLOR') is None
+    logger.add(
+        sys.stderr,
+        level=level,
+        colorize=colorize,
+        format='<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>',
+    )
+    log.debug(
+        'Logging configured at {} (effective_verbosity={}, colorize={})',
+        level,
+        effective_verbosity,
+        colorize,
+    )
 
 
 def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
