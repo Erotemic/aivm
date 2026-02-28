@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import re
 from pathlib import Path
 
 import pytest
@@ -185,8 +186,9 @@ def test_help_raw_outputs_direct_system_commands(
     rc = HelpRawCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     out = capsys.readouterr().out
-    # FIXME: fix this by stripping ansi out of out
-    assert 'aivm help raw' in out
-    assert 'sudo virsh dominfo vm-raw' in out
-    assert 'sudo virsh net-info net-raw' in out
-    assert 'sudo nft list table inet fw-raw' in out
+    # strip ansi to remove colors
+    clean = re.sub(r'\x1b\[[0-9;]*m', '', out)
+    assert 'aivm help raw' in clean
+    assert 'sudo virsh dominfo vm-raw' in clean
+    assert 'sudo virsh net-info net-raw' in clean
+    assert 'sudo nft list table inet fw-raw' in clean
