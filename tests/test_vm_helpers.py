@@ -14,6 +14,7 @@ from aivm.vm import (
     fetch_image,
     get_ip_cached,
     vm_has_share,
+    vm_has_virtiofs_shared_memory,
     vm_share_mappings,
 )
 
@@ -51,10 +52,12 @@ def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
 <domain>
   <devices>
     <filesystem type='mount' accessmode='passthrough'>
+      <driver type='virtiofs'/>
       <source dir='{source.resolve()}'/>
       <target dir='hostcode-src'/>
     </filesystem>
     <filesystem type='mount' accessmode='passthrough'>
+      <driver type='virtio-9p'/>
       <source dir='/opt/other'/>
       <target dir='other'/>
     </filesystem>
@@ -67,8 +70,31 @@ def test_vm_share_helpers(monkeypatch, tmp_path: Path) -> None:
     assert vm_has_share(cfg, source_dir, share_tag, use_sudo=False) is True
     assert vm_share_mappings(cfg, use_sudo=False) == [
         (str(source.resolve()), 'hostcode-src'),
-        ('/opt/other', 'other'),
     ]
+
+
+def test_vm_has_virtiofs_shared_memory(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    xml_with_shared = """
+<domain>
+  <memoryBacking>
+    <source type='memfd'/>
+    <access mode='shared'/>
+  </memoryBacking>
+</domain>
+"""
+    monkeypatch.setattr(
+        'aivm.vm.share.run_cmd',
+        lambda *a, **k: CmdResult(0, xml_with_shared, ''),
+    )
+    assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is True
+
+    xml_without_shared = '<domain><memoryBacking/></domain>'
+    monkeypatch.setattr(
+        'aivm.vm.share.run_cmd',
+        lambda *a, **k: CmdResult(0, xml_without_shared, ''),
+    )
+    assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 
 def test_create_vm_fallback_when_uefi_firmware_missing(monkeypatch) -> None:
@@ -105,6 +131,8 @@ def test_create_vm_fallback_when_uefi_firmware_missing(monkeypatch) -> None:
 
     virt_calls = [c for c in calls if c and c[0] == 'virt-install']
     assert len(virt_calls) == 2
+    assert '--memorybacking' in virt_calls[0]
+    assert '--memorybacking' in virt_calls[1]
     assert '--boot' in virt_calls[0]
     assert '--boot' not in virt_calls[1]
 
