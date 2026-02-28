@@ -110,11 +110,14 @@ class HelpRawCLI(_BaseCommand):
             sudo virsh domstate {shlex.quote(vm_name)}
             sudo virsh dumpxml {shlex.quote(vm_name)}
 
-            # Network state + DHCP leases (maps to: aivm host net status / aivm vm wait_ip)
-            sudo virsh net-list --all
+            # List networks
             sudo virsh net-info {shlex.quote(net_name)}
+
+            # Inspect a network
             sudo virsh net-dumpxml {shlex.quote(net_name)}
             sudo virsh net-dhcp-leases {shlex.quote(net_name)}
+
+            # Network state of a VM
             sudo virsh domiflist {shlex.quote(vm_name)}
             sudo virsh domifaddr {shlex.quote(vm_name)}
 
