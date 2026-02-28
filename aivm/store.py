@@ -7,6 +7,7 @@ from pathlib import Path
 
 import tomllib
 import ubelt as ub
+from loguru import logger as log
 
 from .config import AgentVMConfig, FirewallConfig, NetworkConfig
 
@@ -100,8 +101,10 @@ def _emit_toml_kv(lines: list[str], key: str, val: object) -> None:
 
 
 def load_store(path: Path | None = None) -> Store:
+    log.trace(f'Start load store {path}')
     fpath = path or store_path()
     if not fpath.exists():
+        log.trace('Finish load store: does not exist, returning default')
         return Store()
     raw = tomllib.loads(fpath.read_text(encoding='utf-8'))
     reg = Store()
@@ -165,6 +168,7 @@ def load_store(path: Path | None = None) -> Store:
                 tag=str(item.get('tag', '')).strip(),
             )
         )
+    log.trace('Finish load store')
     return reg
 
 

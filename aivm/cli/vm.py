@@ -31,6 +31,7 @@ from ..store import (
     find_network,
     find_vm,
     load_store,
+    network_users,
     remove_vm,
     save_store,
     upsert_attachment,
@@ -327,6 +328,16 @@ class VMDestroyCLI(_BaseCommand):
             reg = load_store(cfg_path)
             remove_vm(reg, cfg.vm.name, remove_attachments=True)
             save_store(reg, cfg_path)
+            net_name = (cfg.network.name or '').strip()
+            if net_name:
+                net = find_network(reg, net_name)
+                if net is not None and not network_users(reg, net_name):
+                    log.warning(
+                        "Network '{}' now has no VM users and remains defined. "
+                        "Destroy it explicitly if no longer needed: aivm host net destroy {}",
+                        net_name,
+                        net_name,
+                    )
         return 0
 
 
@@ -592,17 +603,21 @@ class VMSSHCLI(_BaseCommand):
             bool(args.dry_run),
             bool(args.yes),
         )
-        session = _prepare_attached_session(
-            config_opt=args.config,
-            vm_opt=args.vm,
-            host_src=Path(args.host_src).resolve(),
-            guest_dst_opt=args.guest_dst,
-            recreate_if_needed=bool(args.recreate_if_needed),
-            ensure_firewall_opt=bool(args.ensure_firewall),
-            force=bool(args.force),
-            dry_run=bool(args.dry_run),
-            yes=bool(args.yes),
-        )
+        try:
+            session = _prepare_attached_session(
+                config_opt=args.config,
+                vm_opt=args.vm,
+                host_src=Path(args.host_src).resolve(),
+                guest_dst_opt=args.guest_dst,
+                recreate_if_needed=bool(args.recreate_if_needed),
+                ensure_firewall_opt=bool(args.ensure_firewall),
+                force=bool(args.force),
+                dry_run=bool(args.dry_run),
+                yes=bool(args.yes),
+            )
+        except RuntimeError as ex:
+            log.error(str(ex))
+            return 1
         cfg = session.cfg
         if args.dry_run:
             print(

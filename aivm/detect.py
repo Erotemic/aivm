@@ -141,6 +141,7 @@ def pick_free_subnet(preferred: list[str]) -> str:
 
 
 def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
+    log.trace('Start automatic default detection')
     ident, pub = detect_ssh_identity()
     if not cfg.paths.ssh_identity_file and ident:
         cfg.paths.ssh_identity_file = ident
@@ -166,5 +167,5 @@ def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
 
     if len(cfg.network.bridge) > 15:
         cfg.network.bridge = 'virbr-aivm'
-
+    log.trace('Finish automatic default detection')
     return cfg

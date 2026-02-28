@@ -513,3 +513,15 @@ Uncertainties / risks: repeated command parses still perform config reads (inten
 Tradeoffs and what might break: moving logic into `cli` override depends on scriptconfig call ordering contracts; current tests confirm behavior but this is a coupling to monitor if scriptconfig internals change.
 
 What I am confident about: full test suite remains green (`76 passed, 1 skipped`) and targeted dryrun test remains substantially improved over pre-optimization baseline.
+
+## 2026-02-28 21:34:50 +0000
+
+Implemented a focused UX safety warning in VM destroy flow: after `aivm vm destroy` removes the VM from the config store, the CLI now checks whether that VM's network still exists in the store but has zero VM users. If so, it emits a `log.warning` that the network is now unused and suggests the explicit cleanup command (`aivm host net destroy <name>`). I also added a unit test in `tests/test_cli_vm_create.py` that stubs destructive calls and asserts this warning is emitted for a single-VM/single-network case.
+
+State of mind / reflection: this was a tight, low-risk change with clear behavioral intent from user feedback. The existing store helpers (`find_network`, `network_users`) made this straightforward and kept the implementation clean rather than adding custom bookkeeping.
+
+Uncertainties / risks: this warning is store-driven, not live-libvirt-driven. If a user has out-of-band state changes, messaging may be slightly optimistic/pessimistic relative to actual libvirt network usage. Given current CLI semantics, that tradeoff is acceptable for a post-destroy hint.
+
+Tradeoffs and what might break: warning volume can increase in workflows that intentionally keep persistent shared networks after deleting VMs; however this is only a warning and does not change behavior.
+
+What I am confident about: targeted tests pass (`tests/test_cli_vm_create.py` and `tests/test_cli_helpers.py`), and the added logic runs only on non-dry-run destroy paths, preserving existing dry-run behavior.

@@ -68,10 +68,10 @@ class InitCLI(_BaseCommand):
         path = _cfg_path(args.config)
         reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
-        _warn_high_resource_defaults(cfg)
         if not bool(args.yes) and not bool(args.defaults):
             cfg = _review_init_defaults_interactive(cfg, path)
         else:
+            _warn_high_resource_defaults(cfg)
             warn_lines = _ssh_key_setup_warning_lines(cfg)
             for line in warn_lines:
                 print(line)
@@ -167,6 +167,7 @@ def _review_init_defaults_interactive(
             'Config init defaults require confirmation in interactive mode. '
             'Re-run with --yes or --defaults.'
         )
+    log.trace('Start interactive default review')
     print(_render_init_default_summary(cfg, path))
     _warn_high_resource_defaults(cfg)
     warn_lines = _ssh_key_setup_warning_lines(cfg)
