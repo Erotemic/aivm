@@ -53,7 +53,7 @@ class _BaseCommand(scfg.DataConfig):
 
     @classmethod
     def cli(cls, *args, **kwargs):  # type: ignore[override]
-        parsed = super().cli(*args, **kwargs, verbose=True)
+        parsed = super().cli(*args, **kwargs)
         cfg_verbosity = _resolve_cfg_verbosity(getattr(parsed, 'config', None))
         args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
