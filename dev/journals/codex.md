@@ -489,3 +489,15 @@ Uncertainties / risks: a small amount of name-alias normalization remains in `ma
 Tradeoffs and what might break: direct unit-style invocation patterns that depended on parser quirks may shift with special options re-enabled, but command behavior through `aivm ...` stays stable.
 
 What I am confident about: test suite is fully green after this refactor (`78 passed, 1 skipped`).
+
+## 2026-02-28 19:23:50 +0000
+
+Completed the next parser cleanup pass: removed argv munging from `aivm.cli.main.main(...)` entirely and now pass argv directly to `AgentVMModalCLI.main(...)`. Also set `_BaseCommand.__special_options__ = False` so scriptconfig special-option behavior is consistently disabled via class configuration rather than per-call flags. Deleted old `_normalize_argv` and `_count_verbose` helpers and updated helper tests that imported those private functions.
+
+State of mind / reflection: this is closer to the desired boundary where scriptconfig owns parsing behavior and aivm avoids maintaining a parallel argv rewrite layer.
+
+Uncertainties / risks: dropping normalization removes compatibility shims for legacy aliases (`init`, `ls`, hyphenated subcommand forms). This is intentional based on current direction, but users/scripts depending on those aliases may need adjustment.
+
+Tradeoffs and what might break: convenience alias behavior is the primary likely impact; core command parsing and execution remain intact.
+
+What I am confident about: full suite passes after removal (`76 passed, 1 skipped`), including CLI command-path tests.

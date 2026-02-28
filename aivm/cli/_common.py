@@ -32,6 +32,8 @@ _SUDO_VALIDATED = False
 class _BaseCommand(scfg.DataConfig):
     """Base options shared by all commands."""
 
+    __special_options__ = False
+
     config = scfg.Value(
         None,
         help='Path to global aivm config store (default: ~/.config/aivm/config.toml).',

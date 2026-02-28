@@ -10,7 +10,6 @@ import pytest
 
 from aivm.config import AgentVMConfig
 from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
-from aivm.cli.main import _count_verbose, _normalize_argv
 from aivm.cli.help import HelpRawCLI, PlanCLI
 from aivm.store import Store, save_store, upsert_vm
 from aivm.cli.vm import (
@@ -18,22 +17,6 @@ from aivm.cli.vm import (
     _parse_sync_paths_arg,
     _upsert_ssh_config_entry,
 )
-
-
-def test_normalize_argv_aliases() -> None:
-    assert _normalize_argv(['init']) == ['config', 'init']
-    assert _normalize_argv(['ls']) == ['list']
-    assert _normalize_argv(['attach', '.']) == ['attach', '.']
-    assert _normalize_argv(['code', '.']) == ['code', '.']
-    assert _normalize_argv(['vm', 'wait-ip']) == ['vm', 'wait_ip']
-    assert _normalize_argv(['vm', 'sync-settings']) == ['vm', 'sync_settings']
-
-
-def test_count_verbose() -> None:
-    assert _count_verbose([]) == 0
-    assert _count_verbose(['--verbose']) == 1
-    assert _count_verbose(['-v']) == 1
-    assert _count_verbose(['-vvv', '--verbose']) == 4
 
 
 def test_parse_sync_paths_arg() -> None:

@@ -29,12 +29,10 @@ from ._common import (
     _BaseCommand,
     _cfg_path,
     _confirm_sudo_block,
-    _load_cfg,
     _load_cfg_with_path,
     _record_vm,
     _resolve_cfg_for_code,
     log,
-    _setup_logging,
 )
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
@@ -242,8 +240,6 @@ class AgentVMModalCLI(scfg.ModalCLI):
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
-    argv = _normalize_argv(argv)
-    _setup_logging(0, 1)
 
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
@@ -280,39 +276,3 @@ def _render_status(
 
 def _render_global_status() -> str:
     return render_global_status()
-
-
-def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
-    # Backwards-compat shim for tests/imports; implementation moved to _common.
-    from ._common import _setup_logging as _impl
-
-    return _impl(args_verbose, cfg_verbosity)
-
-
-def _normalize_argv(argv: list[str]) -> list[str]:
-    """Normalize accepted hyphenated spellings to scriptconfig command names."""
-    if len(argv) >= 1 and argv[0] == 'init':
-        return ['config', 'init', *argv[1:]]
-    if len(argv) >= 1 and argv[0] == 'ls':
-        return ['list', *argv[1:]]
-    if len(argv) >= 2 and argv[0] == 'vm':
-        if argv[1] == 'wait-ip':
-            return [argv[0], 'wait_ip', *argv[2:]]
-        if argv[1] == 'ssh-config':
-            return [argv[0], 'ssh_config', *argv[2:]]
-        if argv[1] == 'sync-settings':
-            return [argv[0], 'sync_settings', *argv[2:]]
-    return argv
-
-
-def _count_verbose(argv: list[str]) -> int:
-    # Kept for compatibility with older tests/imports.
-    count = 0
-    for item in argv:
-        if item == '--verbose':
-            count += 1
-        elif item.startswith('-') and not item.startswith('--'):
-            short = item[1:]
-            if short and set(short) <= {'v'}:
-                count += len(short)
-    return count
