@@ -501,3 +501,15 @@ Uncertainties / risks: dropping normalization removes compatibility shims for le
 Tradeoffs and what might break: convenience alias behavior is the primary likely impact; core command parsing and execution remain intact.
 
 What I am confident about: full suite passes after removal (`76 passed, 1 skipped`), including CLI command-path tests.
+
+## 2026-02-28 21:19:38 +0000
+
+Refactored command side effects out of `_BaseCommand.__post_init__` into an overridden `_BaseCommand.cli(...)` flow. The classmethod now calls `super().cli(...)`, resolves config-driven verbosity from parsed args, and then performs logging setup once per actual command parse path. Simplified global state by removing request-key caching and keeping only idempotent `_setup_logging` state guard keyed by effective `(level, colorize)`.
+
+State of mind / reflection: this is a cleaner lifecycle boundary: parse first, then side effects based on parsed values. It avoids parser-construction churn from `__post_init__` while keeping config reads explicit and safe.
+
+Uncertainties / risks: repeated command parses still perform config reads (intentional to avoid stale-config footguns), which leaves some overhead in dryrun aggregation tests.
+
+Tradeoffs and what might break: moving logic into `cli` override depends on scriptconfig call ordering contracts; current tests confirm behavior but this is a coupling to monitor if scriptconfig internals change.
+
+What I am confident about: full test suite remains green (`76 passed, 1 skipped`) and targeted dryrun test remains substantially improved over pre-optimization baseline.

@@ -210,7 +210,7 @@ class StatusCLI(_BaseCommand):
             cfg = None
             path = None
         if cfg is None or path is None:
-            print(_render_global_status())
+            print(render_global_status())
             return 0
         if args.sudo:
             _confirm_sudo_block(
@@ -218,9 +218,7 @@ class StatusCLI(_BaseCommand):
                 purpose=f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'.",
             )
         print(
-            _render_status(
-                cfg, path, detail=args.detail, use_sudo=bool(args.sudo)
-            )
+            render_status(cfg, path, detail=args.detail, use_sudo=bool(args.sudo))
         )
         return 0
 
@@ -257,25 +255,3 @@ def main(argv: list[str] | None = None) -> None:
     if isinstance(rc, int):
         sys.exit(rc)
     sys.exit(0)
-
-
-def _status_line(ok: bool | None, label: str, detail: str = '') -> str:
-    return status_line(ok, label, detail)
-
-
-def _clip(text: str, *, max_lines: int = 60) -> str:
-    return _clip_text(text, max_lines=max_lines)
-
-
-def _render_status(
-    cfg: AgentVMConfig,
-    path: Path,
-    *,
-    detail: bool = False,
-    use_sudo: bool = False,
-) -> str:
-    return render_status(cfg, path, detail=detail, use_sudo=use_sudo)
-
-
-def _render_global_status() -> str:
-    return render_global_status()
