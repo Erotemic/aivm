@@ -39,6 +39,8 @@ class FirewallConfig:
         ]
     )
     extra_block_cidrs: list[str] = field(default_factory=list)
+    allow_tcp_ports: list[int] = field(default_factory=list)
+    allow_udp_ports: list[int] = field(default_factory=list)
 
 
 @dataclass

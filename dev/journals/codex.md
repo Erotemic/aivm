@@ -355,3 +355,15 @@ Uncertainties / risks: reconcile logic still lives in `cli/vm.py` and depends on
 Tradeoffs and what might break: there is some upfront abstraction overhead (extra dataclasses and call layers), but behavior remained unchanged and test coverage stayed green.
 
 What I am confident about: full test suite passes (`61 passed, 1 skipped`) and compile checks pass; attach/code/ssh paths now share a clearer single reconciliation flow.
+
+## 2026-02-28 02:27:26 +0000
+
+Implemented configurable firewall port allowlists to permit selective VM access to host and blocked/private network services while keeping default isolation strict. Added `allow_tcp_ports` and `allow_udp_ports` to `FirewallConfig` in `aivm/config.py`, and wired them into nft rule generation in `aivm/firewall.py`.
+
+Behavior: when allowlists are set, nft script now inserts explicit accept rules for those ports on bridge ingress in `input` (VM->host services) and before blocked-CIDR drops in `forward` (VM->private/LAN services on specified ports). Added port normalization/validation (dedupe + 1..65535 range) with clear runtime errors on invalid values.
+
+State of mind / reflection: this fills a practical gap without weakening default stance. The key tradeoff was where to apply exceptions; applying both to host input and blocked-forward paths matches user intent (“host network or machine”) while preserving deny-by-default for everything else.
+
+Uncertainties / risks: if users clear `block_cidrs` entirely, rule shape around blocked-CIDR clauses may become less meaningful; current behavior assumes normal non-empty block lists. Also, broad port allowlists can materially reduce isolation if misused.
+
+What I am confident about: added firewall tests for allowlist rendering and invalid-port validation, updated README note, and full test suite passes (`63 passed, 1 skipped`).
