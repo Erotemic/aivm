@@ -27,6 +27,7 @@ from ..util import run_cmd
 log = logger
 
 _SUDO_VALIDATED = False
+_LAST_LOGGING_STATE: tuple[str, bool] | None = None
 
 
 class _BaseCommand(scfg.DataConfig):
@@ -50,37 +51,45 @@ class _BaseCommand(scfg.DataConfig):
         help='Auto-approve interactive confirmations.',
     )
 
-    def __post_init__(self):
-        cfg_verbosity = 1
-        try:
-            path = _cfg_path(getattr(self, 'config', None))
-            if path.exists():
-                reg = load_store(path)
-                if reg.active_vm:
-                    rec = find_vm(reg, reg.active_vm)
-                    if rec is not None:
-                        cfg_verbosity = int(rec.cfg.verbosity)
-                elif reg.defaults is not None:
-                    cfg_verbosity = int(reg.defaults.verbosity)
-        except Exception:
-            cfg_verbosity = 1
-        args_verbose = int(getattr(self, 'verbose', 0) or 0)
+    @classmethod
+    def cli(cls, *args, **kwargs):  # type: ignore[override]
+        parsed = super().cli(*args, **kwargs, verbose=True)
+        cfg_verbosity = _resolve_cfg_verbosity(getattr(parsed, 'config', None))
+        args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
-            'Initialized command {} with config={} verbose={} yes={}',
-            self.__class__.__name__,
-            getattr(self, 'config', None),
+            'Parsed command {} with config={} verbose={} yes={}',
+            cls.__name__,
+            getattr(parsed, 'config', None),
             args_verbose,
-            bool(getattr(self, 'yes', False)),
+            bool(getattr(parsed, 'yes', False)),
         )
+        return parsed
 
 
 def _cfg_path(p: str | None) -> Path:
     return Path(p).expanduser().resolve() if p else store_path().resolve()
 
 
+def _resolve_cfg_verbosity(config_opt: str | None) -> int:
+    cfg_verbosity = 1
+    try:
+        path = _cfg_path(config_opt)
+        if path.exists():
+            reg = load_store(path)
+            if reg.active_vm:
+                rec = find_vm(reg, reg.active_vm)
+                if rec is not None:
+                    cfg_verbosity = int(rec.cfg.verbosity)
+            elif reg.defaults is not None:
+                cfg_verbosity = int(reg.defaults.verbosity)
+    except Exception:
+        cfg_verbosity = 1
+    return cfg_verbosity
+
+
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
-    logger.remove()
+    global _LAST_LOGGING_STATE
     effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
     level = 'WARNING'
     if effective_verbosity == 1:
@@ -90,12 +99,17 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
     elif effective_verbosity >= 3:
         level = 'TRACE'
     colorize = sys.stderr.isatty() and os.getenv('NO_COLOR') is None
+    state = (level, colorize)
+    if _LAST_LOGGING_STATE == state:
+        return
+    logger.remove()
     logger.add(
         sys.stderr,
         level=level,
         colorize=colorize,
         format='<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>',
     )
+    _LAST_LOGGING_STATE = state
     log.debug(
         'Logging configured at {} (effective_verbosity={}, colorize={})',
         level,
