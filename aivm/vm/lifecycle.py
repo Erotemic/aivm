@@ -132,6 +132,7 @@ def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
 
 
 def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
+    log.trace('fetch_image vm={} dry_run={}', cfg.vm.name, dry_run)
     log.debug('Fetching Ubuntu cloud image')
     p = _paths(cfg, dry_run=dry_run)
     base_img = p['img_dir'] / cfg.image.cache_name
@@ -436,6 +437,14 @@ def create_or_start_vm(
     share_source_dir: str = '',
     share_tag: str = '',
 ) -> None:
+    log.trace(
+        'create_or_start_vm vm={} dry_run={} recreate={} share_source_dir={} share_tag={}',
+        cfg.vm.name,
+        dry_run,
+        recreate,
+        share_source_dir or '(none)',
+        share_tag or '(none)',
+    )
     log.debug('Creating or starting VM {}', cfg.vm.name)
     cfg = cfg.expanded_paths()
 
