@@ -11,7 +11,7 @@ from pathlib import Path
 from loguru import logger
 
 from .config import AgentVMConfig
-from .util import run_cmd, which, expand
+from .util import expand, run_cmd, which
 
 log = logger
 

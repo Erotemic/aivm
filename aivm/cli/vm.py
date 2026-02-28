@@ -14,28 +14,28 @@ import scriptconfig as scfg
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
-from ..store import (
-    find_attachment,
-    find_vm,
-    find_network,
-    load_store,
-    remove_vm,
-    save_store,
-    upsert_attachment,
-    upsert_network,
-    upsert_vm_with_network,
-)
-from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..resource_checks import (
     vm_resource_impossible_lines,
     vm_resource_warning_lines,
 )
+from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..status import (
     probe_firewall,
     probe_network,
     probe_provisioned,
     probe_ssh_ready,
     probe_vm_state,
+)
+from ..store import (
+    find_attachment,
+    find_network,
+    find_vm,
+    load_store,
+    remove_vm,
+    save_store,
+    upsert_attachment,
+    upsert_network,
+    upsert_vm_with_network,
 )
 from ..util import CmdError, ensure_dir, run_cmd, which
 from ..vm import (
@@ -45,14 +45,15 @@ from ..vm import (
     ensure_share_mounted,
     get_ip_cached,
     provision,
-    ssh_config as mk_ssh_config,
     sync_settings,
     vm_exists,
-    vm_has_share,
     vm_share_mappings,
     vm_status,
     wait_for_ip,
     wait_for_ssh,
+)
+from ..vm import (
+    ssh_config as mk_ssh_config,
 )
 from ._common import (
     PreparedSession,

@@ -8,15 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from aivm.config import AgentVMConfig
 from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
 from aivm.cli.help import HelpRawCLI, PlanCLI
-from aivm.store import Store, save_store, upsert_vm
 from aivm.cli.vm import (
     _auto_share_tag_for_path,
     _parse_sync_paths_arg,
     _upsert_ssh_config_entry,
 )
+from aivm.config import AgentVMConfig
+from aivm.store import Store, save_store, upsert_vm
 
 
 def test_parse_sync_paths_arg() -> None:

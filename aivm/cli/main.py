@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
-import os
 import sys
-import scriptconfig as scfg
 from pathlib import Path
-from loguru import logger
+
+import scriptconfig as scfg
 
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
-from ..store import find_vm, load_store
 from ..status import (
     clip as _clip_text,
+)
+from ..status import (
     render_global_status,
     render_status,
     status_line,
 )
+from ..store import load_store
 from ..vm import (
     create_or_start_vm,
     fetch_image,
     provision,
-    ssh_config as mk_ssh_config,
     wait_for_ip,
+)
+from ..vm import (
+    ssh_config as mk_ssh_config,
 )
 from ._common import (
     _BaseCommand,
@@ -37,7 +40,7 @@ from ._common import (
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
 from .host import HostModalCLI
-from .vm import AttachCLI, CodeCLI, SSHCLI, VMModalCLI
+from .vm import SSHCLI, AttachCLI, CodeCLI, VMModalCLI
 
 
 class ApplyCLI(_BaseCommand):

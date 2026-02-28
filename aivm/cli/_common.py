@@ -18,8 +18,8 @@ from ..store import (
     load_store,
     materialize_vm_cfg,
     save_store,
-    upsert_network,
     store_path,
+    upsert_network,
     upsert_vm_with_network,
 )
 from ..util import run_cmd

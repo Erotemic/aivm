@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import tomllib
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+import tomllib
 
 from .util import expand
 
