@@ -343,3 +343,15 @@ Uncertainties / risks: the resolver currently lives in `cli/vm.py` rather than a
 Tradeoffs and what might break: this touched hot paths for attach/code/ssh, so regression risk was non-trivial; mitigated by full-suite run.
 
 What I am confident about: all tests pass (`61 passed, 1 skipped`) and compile checks are clean after the refactor.
+
+## 2026-02-27 22:29:02 +0000
+
+Completed the larger reconcile-layer refactor for attached VM workflows in `aivm/cli/vm.py`. Introduced explicit policy/result objects (`ReconcilePolicy`, `ReconcileResult`) and extracted the state transition engine into `_reconcile_attached_vm(...)`, which now centralizes optimistic probes + privileged reconciliation for network/firewall/vm/share in one place. `_prepare_attached_session(...)` is now primarily orchestration/wiring around resolver + reconcile + final SSH mount/setup.
+
+State of mind / reflection: this is the right structural boundary for current code size. The previous giant function mixed attachment resolution, plan decisions, action execution, and final session return; splitting it gives a coherent reconcile API that can evolve into a dedicated module later if needed.
+
+Uncertainties / risks: reconcile logic still lives in `cli/vm.py` and depends on local helper functions; if we later want cross-command reuse beyond attach/code/ssh, moving this into `aivm/vm/reconcile.py` with more formal dependency injection may be worthwhile.
+
+Tradeoffs and what might break: there is some upfront abstraction overhead (extra dataclasses and call layers), but behavior remained unchanged and test coverage stayed green.
+
+What I am confident about: full test suite passes (`61 passed, 1 skipped`) and compile checks pass; attach/code/ssh paths now share a clearer single reconciliation flow.

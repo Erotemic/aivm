@@ -558,6 +558,21 @@ class ResolvedAttachment:
     tag: str
 
 
+@dataclass(frozen=True)
+class ReconcilePolicy:
+    ensure_firewall_opt: bool
+    recreate_if_needed: bool
+    dry_run: bool
+    yes: bool
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    attachment: ResolvedAttachment
+    cached_ip: str | None
+    cached_ssh_ok: bool
+
+
 def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
     guest_dst_opt = (guest_dst_opt or '').strip()
     if guest_dst_opt:
@@ -861,64 +876,46 @@ def _align_attachment_tag_with_mappings(
     return replace(att, tag=tag)
 
 
-def _prepare_attached_session(
-    *,
-    config_opt: str | None,
-    vm_opt: str,
+def _reconcile_attached_vm(
+    cfg: AgentVMConfig,
     host_src: Path,
-    guest_dst_opt: str,
-    recreate_if_needed: bool,
-    ensure_firewall_opt: bool,
-    force: bool,
-    dry_run: bool,
-    yes: bool,
-) -> PreparedSession:
-    if not host_src.exists():
-        raise FileNotFoundError(f'Host source path does not exist: {host_src}')
-    if not host_src.is_dir():
-        raise RuntimeError(f'Host source path is not a directory: {host_src}')
-
-    cfg, cfg_path = _resolve_cfg_for_code(
-        config_opt=config_opt,
-        vm_opt=vm_opt,
-        host_src=host_src,
-    )
-
-    attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
-
-    cached_ip = get_ip_cached(cfg) if not dry_run else None
+    attachment: ResolvedAttachment,
+    *,
+    policy: ReconcilePolicy,
+) -> ReconcileResult:
+    cached_ip = get_ip_cached(cfg) if not policy.dry_run else None
     cached_ssh_ok = False
     if cached_ip:
         cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
     vm_running_probe = (
-        _probe_vm_running_nonsudo(cfg.vm.name) if not dry_run else None
+        _probe_vm_running_nonsudo(cfg.vm.name) if not policy.dry_run else None
     )
 
     net_probe, _ = _check_network(cfg, use_sudo=False)
     need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
     if need_network_ensure:
         _confirm_sudo_block(
-            yes=bool(yes),
+            yes=bool(policy.yes),
             purpose=f"Ensure libvirt network '{cfg.network.name}'.",
         )
-        ensure_network(cfg, recreate=False, dry_run=dry_run)
+        ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
     need_firewall_apply = False
-    if cfg.firewall.enabled and ensure_firewall_opt and (not cached_ssh_ok):
+    if cfg.firewall.enabled and policy.ensure_firewall_opt and (not cached_ssh_ok):
         fw_probe, _ = _check_firewall(cfg, use_sudo=False)
         if fw_probe is None:
             _confirm_sudo_block(
-                yes=bool(yes),
+                yes=bool(policy.yes),
                 purpose=f"Inspect firewall table '{cfg.firewall.table}'.",
             )
             fw_probe, _ = _check_firewall(cfg, use_sudo=True)
         need_firewall_apply = fw_probe is not True
     if need_firewall_apply:
         _confirm_sudo_block(
-            yes=bool(yes),
+            yes=bool(policy.yes),
             purpose=f"Apply/update firewall table '{cfg.firewall.table}'.",
         )
-        apply_firewall(cfg, dry_run=dry_run)
+        apply_firewall(cfg, dry_run=policy.dry_run)
 
     recreate = False
     vm_running = vm_running_probe
@@ -926,37 +923,37 @@ def _prepare_attached_session(
     has_share = False
     if vm_running is None and cached_ssh_ok:
         vm_running = True
-    if not dry_run and vm_running is True:
+    if not policy.dry_run and vm_running is True:
         mappings = vm_share_mappings(cfg, use_sudo=False)
         attachment = _align_attachment_tag_with_mappings(
             attachment, host_src, mappings
         )
         has_share = _attachment_has_mapping(attachment, mappings)
 
-    need_vm_start_or_create = dry_run or (vm_running is not True)
+    need_vm_start_or_create = policy.dry_run or (vm_running is not True)
     if need_vm_start_or_create:
         _confirm_sudo_block(
-            yes=bool(yes),
+            yes=bool(policy.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
         )
         try:
             create_or_start_vm(
                 cfg,
-                dry_run=dry_run,
+                dry_run=policy.dry_run,
                 recreate=False,
                 share_source_dir=attachment.source_dir,
                 share_tag=attachment.tag,
             )
         except Exception as ex:
             missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
-            if not dry_run and missing_virtiofs_dir is not None:
+            if not policy.dry_run and missing_virtiofs_dir is not None:
                 log.warning(
                     'VM {} has stale virtiofs source {}; recreating VM definition',
                     cfg.vm.name,
                     missing_virtiofs_dir,
                 )
                 _confirm_sudo_block(
-                    yes=bool(yes),
+                    yes=bool(policy.yes),
                     purpose=f"Recreate VM '{cfg.vm.name}' to repair stale virtiofs mapping.",
                 )
                 create_or_start_vm(
@@ -968,21 +965,25 @@ def _prepare_attached_session(
                 )
             else:
                 raise
-        vm_running = True if dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
-        if not dry_run and vm_running is True:
+        vm_running = (
+            True
+            if policy.dry_run
+            else _probe_vm_running_nonsudo(cfg.vm.name)
+        )
+        if not policy.dry_run and vm_running is True:
             mappings = vm_share_mappings(cfg, use_sudo=False)
             attachment = _align_attachment_tag_with_mappings(
                 attachment, host_src, mappings
             )
             has_share = _attachment_has_mapping(attachment, mappings)
 
-    if not dry_run and vm_running is True and not has_share:
-        if recreate_if_needed:
+    if not policy.dry_run and vm_running is True and not has_share:
+        if policy.recreate_if_needed:
             recreate = True
         else:
             try:
                 _confirm_sudo_block(
-                    yes=bool(yes),
+                    yes=bool(policy.yes),
                     purpose=f"Attach this folder to existing VM '{cfg.vm.name}'.",
                 )
                 attach_vm_share(
@@ -1018,16 +1019,61 @@ def _prepare_attached_session(
 
     if recreate:
         _confirm_sudo_block(
-            yes=bool(yes),
+            yes=bool(policy.yes),
             purpose=f"Recreate VM '{cfg.vm.name}' to apply new share mapping.",
         )
         create_or_start_vm(
             cfg,
-            dry_run=dry_run,
+            dry_run=policy.dry_run,
             recreate=True,
             share_source_dir=attachment.source_dir,
             share_tag=attachment.tag,
         )
+
+    return ReconcileResult(
+        attachment=attachment,
+        cached_ip=cached_ip,
+        cached_ssh_ok=cached_ssh_ok,
+    )
+
+
+def _prepare_attached_session(
+    *,
+    config_opt: str | None,
+    vm_opt: str,
+    host_src: Path,
+    guest_dst_opt: str,
+    recreate_if_needed: bool,
+    ensure_firewall_opt: bool,
+    force: bool,
+    dry_run: bool,
+    yes: bool,
+) -> PreparedSession:
+    if not host_src.exists():
+        raise FileNotFoundError(f'Host source path does not exist: {host_src}')
+    if not host_src.is_dir():
+        raise RuntimeError(f'Host source path is not a directory: {host_src}')
+
+    cfg, cfg_path = _resolve_cfg_for_code(
+        config_opt=config_opt,
+        vm_opt=vm_opt,
+        host_src=host_src,
+    )
+
+    attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
+    reconcile = _reconcile_attached_vm(
+        cfg,
+        host_src,
+        attachment,
+        policy=ReconcilePolicy(
+            ensure_firewall_opt=bool(ensure_firewall_opt),
+            recreate_if_needed=bool(recreate_if_needed),
+            dry_run=bool(dry_run),
+            yes=bool(yes),
+        ),
+    )
+    attachment = reconcile.attachment
+    cached_ip = reconcile.cached_ip
 
     if dry_run:
         return PreparedSession(
