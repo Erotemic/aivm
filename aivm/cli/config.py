@@ -245,12 +245,15 @@ class ConfigShowCLI(_BaseCommand):
             cfg, _ = _load_cfg_with_path(
                 args.config, vm_opt=vm_name, host_src=Path.cwd()
             )
-            toml_text = '\n'.join([
-                '# Store: {path}',
-                '# VM: {cfg.vm.name}',
-                dump_toml(cfg),
-            ])
+            toml_text = '\n'.join(
+                [
+                    '# Store: {path}',
+                    '# VM: {cfg.vm.name}',
+                    dump_toml(cfg),
+                ]
+            )
         import ubelt as ub
+
         text = ub.highlight_code(toml_text, lexer_name='toml')
         print(text, end='')
         return 0
