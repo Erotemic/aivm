@@ -47,6 +47,7 @@ Config-store flow:
 .. code-block:: bash
 
    aivm config init
+   aivm vm create
    aivm config discover
    aivm config show
    aivm config edit

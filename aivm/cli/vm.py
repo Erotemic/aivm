@@ -17,6 +17,7 @@ from ..store import (
     find_attachment,
     find_vm,
     load_store,
+    remove_vm,
     save_store,
     upsert_attachment,
     upsert_vm,
@@ -86,6 +87,53 @@ class VMUpCLI(_BaseCommand):
         return 0
 
 
+class VMCreateCLI(_BaseCommand):
+    """Create a managed VM from config-store defaults and start it."""
+
+    vm = scfg.Value('', help='Optional VM name override.')
+    force = scfg.Value(
+        False,
+        isflag=True,
+        help='Overwrite existing VM entry and recreate VM definition if present.',
+    )
+    dry_run = scfg.Value(
+        False, isflag=True, help='Print actions without running.'
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg_path = _cfg_path(args.config)
+        reg = load_store(cfg_path)
+        if reg.defaults is None:
+            raise RuntimeError(
+                f'No config defaults found in store: {cfg_path}. '
+                'Run `aivm config init` first.'
+            )
+        cfg = reg.defaults.expanded_paths()
+        if args.vm:
+            cfg.vm.name = str(args.vm).strip()
+        existing = find_vm(reg, cfg.vm.name)
+        if existing is not None and not args.force:
+            raise RuntimeError(
+                f"VM '{cfg.vm.name}' already exists in config store. "
+                'Use --force to overwrite.'
+            )
+        _confirm_sudo_block(
+            yes=bool(args.yes),
+            purpose=f"Create/start VM '{cfg.vm.name}' from config defaults.",
+        )
+        create_or_start_vm(
+            cfg,
+            dry_run=bool(args.dry_run),
+            recreate=bool(args.force and existing is not None),
+        )
+        if not args.dry_run:
+            upsert_vm(reg, cfg)
+            save_store(reg, cfg_path)
+        return 0
+
+
 class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
@@ -127,6 +175,11 @@ class VMStatusCLI(_BaseCommand):
 class VMDestroyCLI(_BaseCommand):
     """Destroy and undefine the VM and associated storage."""
 
+    vm = scfg.Value(
+        '',
+        position=1,
+        help='Optional VM name override (positional).',
+    )
     dry_run = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -134,11 +187,16 @@ class VMDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg, cfg_path = _load_cfg_with_path(args.config, vm_opt=args.vm)
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Destroy/undefine VM and attached storage.',
         )
-        destroy_vm(_load_cfg(args.config), dry_run=args.dry_run)
+        destroy_vm(cfg, dry_run=args.dry_run)
+        if not args.dry_run:
+            reg = load_store(cfg_path)
+            remove_vm(reg, cfg.vm.name, remove_attachments=True)
+            save_store(reg, cfg_path)
         return 0
 
 
@@ -538,6 +596,7 @@ class VMModalCLI(scfg.ModalCLI):
     """VM lifecycle subcommands."""
 
     list = VMListCLI
+    create = VMCreateCLI
     up = VMUpCLI
     wait_ip = VMWaitIPCLI
     status = VMStatusCLI

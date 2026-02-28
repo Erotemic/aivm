@@ -21,6 +21,8 @@ from aivm.store import (
 
 def test_store_roundtrip(tmp_path: Path) -> None:
     store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.vm.cpus = 2
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-b'
     upsert_vm(store, cfg)
@@ -36,6 +38,8 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     save_store(store, fpath)
 
     loaded = load_store(fpath)
+    assert loaded.defaults is not None
+    assert loaded.defaults.vm.cpus == 2
     assert [v.name for v in loaded.vms] == ['vm-a', 'vm-b']
     assert [a.host_path for a in loaded.attachments] == ['/tmp/a', '/tmp/z']
     assert find_vm(loaded, 'vm-a') is not None

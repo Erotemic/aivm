@@ -367,3 +367,39 @@ State of mind / reflection: this fills a practical gap without weakening default
 Uncertainties / risks: if users clear `block_cidrs` entirely, rule shape around blocked-CIDR clauses may become less meaningful; current behavior assumes normal non-empty block lists. Also, broad port allowlists can materially reduce isolation if misused.
 
 What I am confident about: added firewall tests for allowlist rendering and invalid-port validation, updated README note, and full test suite passes (`63 passed, 1 skipped`).
+
+## 2026-02-28 02:33:23 +0000
+
+Added a new `aivm config lint` command to detect unknown/unused keys and sections in the config store TOML. Implemented linting in `aivm/cli/config.py` by parsing the raw TOML and validating top-level keys, `[[vms]]` record keys/section names, per-section field keys, and `[[attachments]]` keys. This now flags stale removed sections like `vms.share` explicitly.
+
+State of mind / reflection: this complements recent breaking schema/model changes by giving users a direct way to discover stale config state instead of relying on silent ignore behavior.
+
+Uncertainties / risks: lint currently focuses on structural key/section validity, not deep semantic validation (e.g., types/ranges for every field beyond TOML parsing and model-level usage).
+
+Tradeoffs and what might break: `config lint` returns non-zero when issues are found, which is intentional and useful for CI/preflight checks.
+
+What I am confident about: added focused lint tests (`tests/test_cli_config_lint.py`) and full suite remains green (`65 passed, 1 skipped`).
+
+## 2026-02-28 15:12:44 +0000
+
+Aligned docs/status wording with the new defaults-first flow where `aivm config init` sets baseline defaults and VM lifecycle is explicit via `aivm vm create` / `aivm vm destroy`. Updated `aivm/status.py` suggested next-step command from `vm up` to `vm create` when the VM is not defined, and adjusted the global status guidance line to call out init-then-create. Also updated README quickstart config-store flow to include `aivm vm create` immediately after `aivm config init`.
+
+State of mind / reflection: this is a consistency pass, not new behavior, but it matters because users rely on status output as operational guidance. Inconsistent text would create friction right after the recent command model shift.
+
+Uncertainties / risks: there may still be additional stale references in external docs (e.g., readthedocs pages not in this repo snapshot) that need the same wording update.
+
+Tradeoffs and what might break: very low risk; the changes are user-facing messaging/docs only. The only behavioral impact is which command is suggested in status detail.
+
+What I am confident about: changes are minimal and localized, and they align with the implemented CLI behavior already covered by existing tests.
+
+## 2026-02-28 15:16:34 +0000
+
+Updated `aivm vm destroy` to accept VM name as positional argument 1. Added `vm = scfg.Value('', position=1, ...)` to `VMDestroyCLI` and wired it through `_load_cfg_with_path(..., vm_opt=args.vm)` so explicit names bypass ambiguity and target the intended VM directly.
+
+State of mind / reflection: this is a small but important CLI ergonomics fix; destroy should mirror create/attach style where a VM can be named inline without extra flags.
+
+Uncertainties / risks: parser behavior for direct command-class unit invocation is quirky because `scriptconfig` reserves a special `--config` option in list-argv mode; tests should exercise the top-level modal parser path to reflect actual usage.
+
+Tradeoffs and what might break: low risk change; omission of positional VM still retains prior resolution behavior via active/single VM selection.
+
+What I am confident about: added parser-level test coverage in `tests/test_cli_vm_create.py` using `AgentVMModalCLI` invocation (`aivm vm destroy <name> ...`), and focused tests pass.

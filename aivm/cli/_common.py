@@ -123,7 +123,7 @@ def _resolve_vm_name(
 
     raise RuntimeError(
         f'No VM definitions found in config store: {store_path}. '
-        'Run `aivm config init` first.'
+        'Run `aivm config init` then `aivm vm create` first.'
     )
 
 

@@ -48,8 +48,9 @@ def test_config_init_noninteractive_defaults_flag_bypasses_prompt(
     assert rc == 0
     assert cfg_path.exists()
     text = cfg_path.read_text(encoding='utf-8')
-    assert 'aivm-init-test' in text
-    assert '[vms.share]' not in text
+    assert '[defaults.vm]' in text
+    assert 'name = "aivm-init-test"' in text
+    assert '[[vms]]' not in text
 
 
 def test_config_init_interactive_shows_summary_and_accepts(

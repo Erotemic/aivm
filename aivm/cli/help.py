@@ -42,7 +42,7 @@ class PlanCLI(_BaseCommand):
         5. 📦 Base image
            aivm host image_fetch{cfg_flag}
         6. 🖥️ VM lifecycle
-           aivm vm up{cfg_flag}
+           aivm vm create{cfg_flag}
            aivm vm wait_ip{cfg_flag}
         7. 🔑 Access
            aivm vm ssh_config{cfg_flag}   # VS Code Remote-SSH
