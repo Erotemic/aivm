@@ -6,13 +6,25 @@ import os
 import re
 import shlex
 import sys
+import tomllib
 import xml.etree.ElementTree as ET
+from dataclasses import fields
 from pathlib import Path
 
 import scriptconfig as scfg
 from loguru import logger
 
-from ..config import AgentVMConfig, dump_toml
+from ..config import (
+    AgentVMConfig,
+    FirewallConfig,
+    ImageConfig,
+    NetworkConfig,
+    PathsConfig,
+    ProvisionConfig,
+    SyncConfig,
+    VMConfig,
+    dump_toml,
+)
 from ..detect import auto_defaults
 from ..store import (
     find_attachment,
@@ -35,7 +47,7 @@ log = logger
 
 
 class InitCLI(_BaseCommand):
-    """Initialize global config store with one VM definition."""
+    """Initialize global config-store defaults (without creating a VM)."""
 
     force = scfg.Value(
         False,
@@ -60,18 +72,17 @@ class InitCLI(_BaseCommand):
             warn_lines = _ssh_key_setup_warning_lines(cfg)
             for line in warn_lines:
                 print(line)
-        exists = find_vm(reg, cfg.vm.name) is not None
-        if exists and not args.force:
+        if reg.defaults is not None and not args.force:
             print(
-                f"VM '{cfg.vm.name}' already exists in config store: {path}",
+                f'Config defaults already exist in store: {path}',
                 file=sys.stderr,
             )
-            print('Use --force to overwrite this VM definition.', file=sys.stderr)
+            print('Use --force to overwrite defaults.', file=sys.stderr)
             return 2
-        upsert_vm(reg, cfg)
+        reg.defaults = cfg
         save_store(reg, path)
-        print(f'Updated config store: {path}')
-        print(f'Active VM: {cfg.vm.name}')
+        print(f'Updated config defaults: {path}')
+        print('No VM created. Use `aivm vm create` to create one from defaults.')
         return 0
 
 
@@ -378,11 +389,143 @@ class ConfigDiscoverCLI(_BaseCommand):
         return 0
 
 
+class ConfigLintCLI(_BaseCommand):
+    """Lint config store for unknown/unused keys and sections."""
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        path = _cfg_path(args.config)
+        if not path.exists():
+            print(f'Config store not found: {path}', file=sys.stderr)
+            return 2
+        problems = _lint_store_file(path)
+        if not problems:
+            print(f'✅ Config lint passed: {path}')
+            return 0
+        print(f'❌ Config lint found {len(problems)} issue(s): {path}')
+        for item in problems:
+            print(f'  - {item}')
+        return 2
+
+
+def _field_names(cls: type) -> set[str]:
+    return {f.name for f in fields(cls)}
+
+
+def _lint_store_file(path: Path) -> list[str]:
+    raw = tomllib.loads(path.read_text(encoding='utf-8'))
+    problems: list[str] = []
+
+    allowed_top = {'schema_version', 'active_vm', 'defaults', 'vms', 'attachments'}
+    for key in sorted(raw.keys()):
+        if key not in allowed_top:
+            problems.append(f'unknown top-level key: {key!r}')
+
+    allowed_vm_record = {
+        'name',
+        'verbosity',
+        'vm',
+        'network',
+        'firewall',
+        'image',
+        'provision',
+        'sync',
+        'paths',
+    }
+    section_allowed: dict[str, set[str]] = {
+        'vm': _field_names(VMConfig),
+        'network': _field_names(NetworkConfig),
+        'firewall': _field_names(FirewallConfig),
+        'image': _field_names(ImageConfig),
+        'provision': _field_names(ProvisionConfig),
+        'sync': _field_names(SyncConfig),
+        'paths': _field_names(PathsConfig),
+    }
+    defaults = raw.get('defaults', None)
+    if defaults is not None:
+        if not isinstance(defaults, dict):
+            problems.append('top-level key "defaults" should be a table/object')
+        else:
+            allowed_defaults_record = {
+                'verbosity',
+                'vm',
+                'network',
+                'firewall',
+                'image',
+                'provision',
+                'sync',
+                'paths',
+            }
+            for key in sorted(defaults.keys()):
+                if key not in allowed_defaults_record:
+                    problems.append(f'defaults unknown key/section: {key!r}')
+            for sec_name, allowed in section_allowed.items():
+                sec = defaults.get(sec_name, None)
+                if sec is None:
+                    continue
+                if not isinstance(sec, dict):
+                    problems.append(
+                        f'defaults.{sec_name} should be a table/object'
+                    )
+                    continue
+                for key in sorted(sec.keys()):
+                    if key not in allowed:
+                        problems.append(
+                            f'defaults.{sec_name} unknown key: {key!r}'
+                        )
+    vms = raw.get('vms', [])
+    if isinstance(vms, list):
+        for idx, item in enumerate(vms):
+            if not isinstance(item, dict):
+                problems.append(f'vms[{idx}] is not a table/object')
+                continue
+            for key in sorted(item.keys()):
+                if key not in allowed_vm_record:
+                    problems.append(f'vms[{idx}] unknown key/section: {key!r}')
+            for sec_name, allowed in section_allowed.items():
+                sec = item.get(sec_name, None)
+                if sec is None:
+                    continue
+                if not isinstance(sec, dict):
+                    problems.append(
+                        f'vms[{idx}].{sec_name} should be a table/object'
+                    )
+                    continue
+                for key in sorted(sec.keys()):
+                    if key not in allowed:
+                        problems.append(
+                            f'vms[{idx}].{sec_name} unknown key: {key!r}'
+                        )
+    elif vms is not None:
+        problems.append('top-level key "vms" should be an array of tables')
+
+    allowed_attachment = {'host_path', 'vm_name', 'mode', 'guest_dst', 'tag'}
+    atts = raw.get('attachments', [])
+    if isinstance(atts, list):
+        for idx, item in enumerate(atts):
+            if not isinstance(item, dict):
+                problems.append(f'attachments[{idx}] is not a table/object')
+                continue
+            for key in sorted(item.keys()):
+                if key not in allowed_attachment:
+                    problems.append(
+                        f'attachments[{idx}] unknown key: {key!r}'
+                    )
+    elif atts is not None:
+        problems.append(
+            'top-level key "attachments" should be an array of tables'
+        )
+
+    return problems
+
+
 class ConfigModalCLI(scfg.ModalCLI):
     """Config store management commands."""
 
     init = InitCLI
     discover = ConfigDiscoverCLI
+    lint = ConfigLintCLI
     path = ConfigPathCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI

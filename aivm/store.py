@@ -36,8 +36,9 @@ class AttachmentEntry:
 
 @dataclass
 class Store:
-    schema_version: int = 3
+    schema_version: int = 4
     active_vm: str = ''
+    defaults: AgentVMConfig | None = None
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
 
@@ -103,8 +104,11 @@ def load_store(path: Path | None = None) -> Store:
         return Store()
     raw = tomllib.loads(fpath.read_text(encoding='utf-8'))
     reg = Store()
-    reg.schema_version = int(raw.get('schema_version', 3))
+    reg.schema_version = int(raw.get('schema_version', 4))
     reg.active_vm = str(raw.get('active_vm', '')).strip()
+    defaults_raw = raw.get('defaults', None)
+    if isinstance(defaults_raw, dict):
+        reg.defaults = _cfg_from_dict(defaults_raw).expanded_paths()
 
     for item in raw.get('vms', []):
         if not isinstance(item, dict):
@@ -141,6 +145,30 @@ def save_store(reg: Store, path: Path | None = None) -> Path:
     lines: list[str] = [f'schema_version = {reg.schema_version}']
     lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
     lines.append('')
+
+    if reg.defaults is not None:
+        d = asdict(reg.defaults)
+        verbosity = int(d.get('verbosity', 1))
+        if verbosity != 1:
+            lines.append('[defaults]')
+            lines.append(f'verbosity = {verbosity}')
+            lines.append('')
+        for section in (
+            'vm',
+            'network',
+            'firewall',
+            'image',
+            'provision',
+            'sync',
+            'paths',
+        ):
+            body = d.get(section, {})
+            if not isinstance(body, dict):
+                continue
+            lines.append(f'[defaults.{section}]')
+            for k, v in body.items():
+                _emit_toml_kv(lines, k, v)
+            lines.append('')
 
     for vm in sorted(reg.vms, key=lambda v: v.name):
         lines.append('[[vms]]')
@@ -197,6 +225,20 @@ def find_vm(reg: Store, vm_name: str) -> VMEntry | None:
         if rec.name == vm_name:
             return rec
     return None
+
+
+def remove_vm(
+    reg: Store, vm_name: str, *, remove_attachments: bool = True
+) -> bool:
+    existing = [v for v in reg.vms if v.name == vm_name]
+    if not existing:
+        return False
+    reg.vms = [v for v in reg.vms if v.name != vm_name]
+    if remove_attachments:
+        reg.attachments = [a for a in reg.attachments if a.vm_name != vm_name]
+    if reg.active_vm == vm_name:
+        reg.active_vm = reg.vms[0].name if reg.vms else ''
+    return True
 
 
 def upsert_attachment(

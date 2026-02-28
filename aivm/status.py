@@ -554,7 +554,7 @@ def render_status(
         if (not img_ok) and (vm_out.ok is not True):
             next_steps.append(f'aivm host image_fetch --config {cfg_arg}')
         if not vm_out.ok:
-            next_steps.append(f'aivm vm up --config {cfg_arg}')
+            next_steps.append(f'aivm vm create --config {cfg_arg}')
         if vm_out.ok and not ip:
             next_steps.append(f'aivm vm wait_ip --config {cfg_arg}')
         if vm_out.ok and ip and not ssh.ok:
@@ -599,6 +599,7 @@ def render_global_status() -> str:
     lines.append('')
     lines.append('ℹ️ No in-scope VM config found for this directory.')
     lines.append(
-        'Use `aivm config init` or `aivm status --vm <name>`.'
+        'Use `aivm config init`, then `aivm vm create`, or run '
+        '`aivm status --vm <name>`.'
     )
     return '\n'.join(lines)
