@@ -26,7 +26,10 @@ from ..store import (
     upsert_vm_with_network,
 )
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
-from ..resource_checks import vm_resource_impossible_lines, vm_resource_warning_lines
+from ..resource_checks import (
+    vm_resource_impossible_lines,
+    vm_resource_warning_lines,
+)
 from ..status import (
     probe_firewall,
     probe_network,

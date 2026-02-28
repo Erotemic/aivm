@@ -10,7 +10,9 @@ from .config import AgentVMConfig
 
 def host_mem_available_mb() -> int | None:
     try:
-        text = Path('/proc/meminfo').read_text(encoding='utf-8', errors='ignore')
+        text = Path('/proc/meminfo').read_text(
+            encoding='utf-8', errors='ignore'
+        )
     except Exception:
         return None
     for line in text.splitlines():
@@ -23,7 +25,9 @@ def host_mem_available_mb() -> int | None:
 
 def host_mem_total_mb() -> int | None:
     try:
-        text = Path('/proc/meminfo').read_text(encoding='utf-8', errors='ignore')
+        text = Path('/proc/meminfo').read_text(
+            encoding='utf-8', errors='ignore'
+        )
     except Exception:
         return None
     for line in text.splitlines():
