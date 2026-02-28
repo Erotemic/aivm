@@ -34,6 +34,7 @@ from ._common import (
     _record_vm,
     _resolve_cfg_for_code,
     log,
+    _setup_logging,
 )
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
@@ -239,41 +240,17 @@ class AgentVMModalCLI(scfg.ModalCLI):
 
 
 def main(argv: list[str] | None = None) -> None:
-    verbosity = 1
-    config_value = None
     if argv is None:
         argv = sys.argv[1:]
     argv = _normalize_argv(argv)
-    if '--config' in argv:
-        try:
-            config_value = argv[argv.index('--config') + 1]
-        except IndexError:
-            pass
-    elif '-c' in argv:
-        try:
-            config_value = argv[argv.index('-c') + 1]
-        except IndexError:
-            pass
-    try:
-        if config_value is not None:
-            verbosity = _load_cfg(config_value).verbosity
-        elif _cfg_path(None).exists():
-            reg = load_store(_cfg_path(None))
-            if reg.active_vm:
-                rec = find_vm(reg, reg.active_vm)
-                if rec is not None:
-                    verbosity = rec.cfg.verbosity
-    except Exception:
-        verbosity = 1
-
-    explicit_verbose = _count_verbose(argv)
-    _setup_logging(explicit_verbose, verbosity)
+    _setup_logging(0, 1)
 
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
     except Exception as ex:
         print(f'ERROR: {ex}', file=sys.stderr)
         log.error('Unhandled aivm error: {}', ex)
+        raise
         sys.exit(2)
 
     if any(flag in argv for flag in ('-h', '--help')):
@@ -306,44 +283,16 @@ def _render_global_status() -> str:
 
 
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
-    logger.remove()
-    effective_verbosity = args_verbose if args_verbose > 0 else cfg_verbosity
-    level = 'WARNING'
-    if effective_verbosity == 1:
-        level = 'INFO'
-    elif effective_verbosity >= 2:
-        level = 'DEBUG'
-    colorize = sys.stderr.isatty() and os.getenv('NO_COLOR') is None
-    logger.add(
-        sys.stderr,
-        level=level,
-        colorize=colorize,
-        format='<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>',
-    )
-    log.debug(
-        'Logging configured at {} (effective_verbosity={}, colorize={})',
-        level,
-        effective_verbosity,
-        colorize,
-    )
+    # Backwards-compat shim for tests/imports; implementation moved to _common.
+    from ._common import _setup_logging as _impl
+
+    return _impl(args_verbose, cfg_verbosity)
 
 
 def _normalize_argv(argv: list[str]) -> list[str]:
     """Normalize accepted hyphenated spellings to scriptconfig command names."""
     if len(argv) >= 1 and argv[0] == 'init':
         return ['config', 'init', *argv[1:]]
-    if len(argv) >= 1 and argv[0] == 'attach':
-        if len(argv) >= 2 and not argv[1].startswith('-'):
-            return ['attach', '--host_src', argv[1], *argv[2:]]
-        return argv
-    if len(argv) >= 1 and argv[0] == 'code':
-        if len(argv) >= 2 and not argv[1].startswith('-'):
-            return ['code', '--host_src', argv[1], *argv[2:]]
-        return argv
-    if len(argv) >= 1 and argv[0] == 'ssh':
-        if len(argv) >= 2 and not argv[1].startswith('-'):
-            return ['ssh', '--host_src', argv[1], *argv[2:]]
-        return argv
     if len(argv) >= 1 and argv[0] == 'ls':
         return ['list', *argv[1:]]
     if len(argv) >= 2 and argv[0] == 'vm':
@@ -351,16 +300,13 @@ def _normalize_argv(argv: list[str]) -> list[str]:
             return [argv[0], 'wait_ip', *argv[2:]]
         if argv[1] == 'ssh-config':
             return [argv[0], 'ssh_config', *argv[2:]]
-        if argv[1] == 'ssh' and len(argv) >= 3 and not argv[2].startswith('-'):
-            return [argv[0], 'ssh', '--host_src', argv[2], *argv[3:]]
         if argv[1] == 'sync-settings':
             return [argv[0], 'sync_settings', *argv[2:]]
-        if argv[1] == 'code' and len(argv) >= 3 and not argv[2].startswith('-'):
-            return [argv[0], 'code', '--host_src', argv[2], *argv[3:]]
     return argv
 
 
 def _count_verbose(argv: list[str]) -> int:
+    # Kept for compatibility with older tests/imports.
     count = 0
     for item in argv:
         if item == '--verbose':

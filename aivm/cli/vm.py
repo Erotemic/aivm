@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import shlex
 import sys
@@ -27,6 +26,7 @@ from ..store import (
     upsert_vm_with_network,
 )
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..resource_checks import vm_resource_impossible_lines, vm_resource_warning_lines
 from ..status import (
     probe_firewall,
     probe_network,
@@ -110,10 +110,11 @@ class VMCreateCLI(_BaseCommand):
         cfg_path = _cfg_path(args.config)
         reg = load_store(cfg_path)
         if reg.defaults is None:
-            raise RuntimeError(
+            log.error(
                 f'No config defaults found in store: {cfg_path}. '
                 'Run `aivm config init` first.'
             )
+            return 1
         cfg = reg.defaults.expanded_paths()
         if args.vm:
             cfg.vm.name = str(args.vm).strip()
@@ -130,10 +131,11 @@ class VMCreateCLI(_BaseCommand):
             cfg.network.name = net.name
         existing = find_vm(reg, cfg.vm.name)
         if existing is not None and not args.force:
-            raise RuntimeError(
+            log.error(
                 f"VM '{cfg.vm.name}' already exists in config store. "
-                'Use --force to overwrite.'
+                'Use --force to overwrite. Or use a different name and try again'
             )
+            return 1
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' from config defaults.",
@@ -232,104 +234,13 @@ def _review_vm_create_overrides_interactive(
         print("Please answer 'y', 'e', or 'n'.")
 
 
-def _host_mem_available_mb() -> int | None:
-    try:
-        text = Path('/proc/meminfo').read_text(
-            encoding='utf-8', errors='ignore'
-        )
-    except Exception:
-        return None
-    for line in text.splitlines():
-        if line.startswith('MemAvailable:'):
-            parts = line.split()
-            if len(parts) >= 2 and parts[1].isdigit():
-                return int(parts[1]) // 1024
-    return None
-
-
-def _host_mem_total_mb() -> int | None:
-    try:
-        text = Path('/proc/meminfo').read_text(
-            encoding='utf-8', errors='ignore'
-        )
-    except Exception:
-        return None
-    for line in text.splitlines():
-        if line.startswith('MemTotal:'):
-            parts = line.split()
-            if len(parts) >= 2 and parts[1].isdigit():
-                return int(parts[1]) // 1024
-    return None
-
-
-def _host_cpu_count() -> int | None:
-    try:
-        count = os.cpu_count()
-    except Exception:
-        return None
-    return int(count) if count else None
-
-
-def _host_free_disk_gb(path: Path) -> float | None:
-    try:
-        stat = os.statvfs(str(path))
-    except Exception:
-        return None
-    free_bytes = int(stat.f_bavail) * int(stat.f_frsize)
-    return free_bytes / (1024**3)
-
-
 def _warn_if_vm_resources_high(cfg: AgentVMConfig) -> None:
-    mem_avail_mb = _host_mem_available_mb()
-    if mem_avail_mb is not None and cfg.vm.ram_mb > int(mem_avail_mb * 0.8):
-        log.warning(
-            'Requested VM RAM may be too high for host available memory: '
-            'requested={} MiB, MemAvailable={} MiB. '
-            'If VM creation fails, lower vm.ram_mb (e.g. 2048-3072).',
-            cfg.vm.ram_mb,
-            mem_avail_mb,
-        )
-
-    cpu_count = _host_cpu_count()
-    if cpu_count is not None and cfg.vm.cpus > cpu_count:
-        log.warning(
-            'Requested VM CPUs exceed host CPU count: requested={}, host_cpus={}. '
-            'If VM creation fails, lower vm.cpus.',
-            cfg.vm.cpus,
-            cpu_count,
-        )
-
-    free_gb = _host_free_disk_gb(Path(cfg.paths.base_dir).expanduser())
-    if free_gb is not None and float(cfg.vm.disk_gb) > float(free_gb) * 0.9:
-        log.warning(
-            'Requested VM disk may be too large for free space at base_dir: '
-            'requested={} GiB, free≈{:.1f} GiB (base_dir={}). '
-            'If provisioning fails later, lower vm.disk_gb or free disk space.',
-            cfg.vm.disk_gb,
-            free_gb,
-            cfg.paths.base_dir,
-        )
+    for line in vm_resource_warning_lines(cfg):
+        log.warning(line)
 
 
 def _raise_if_vm_resources_physically_impossible(cfg: AgentVMConfig) -> None:
-    problems: list[str] = []
-    mem_total_mb = _host_mem_total_mb()
-    mem_avail_mb = _host_mem_available_mb()
-    if mem_total_mb is not None and cfg.vm.ram_mb > mem_total_mb:
-        problems.append(
-            f'vm.ram_mb={cfg.vm.ram_mb} exceeds host MemTotal={mem_total_mb} MiB'
-        )
-    elif mem_avail_mb is not None and cfg.vm.ram_mb > mem_avail_mb:
-        problems.append(
-            f'vm.ram_mb={cfg.vm.ram_mb} exceeds current MemAvailable={mem_avail_mb} MiB'
-        )
-
-    cpu_count = _host_cpu_count()
-    if cpu_count is not None and cfg.vm.cpus > cpu_count:
-        problems.append(
-            f'vm.cpus={cfg.vm.cpus} exceeds host CPU count={cpu_count}'
-        )
-
+    problems = vm_resource_impossible_lines(cfg)
     if problems:
         detail = '\n  - '.join(problems)
         raise RuntimeError(
@@ -507,6 +418,7 @@ class VMCodeCLI(_BaseCommand):
 
     host_src = scfg.Value(
         '.',
+        position=1,
         help='Host project directory to share and open (default: current directory).',
     )
     vm = scfg.Value(
@@ -620,6 +532,7 @@ class VMSSHCLI(_BaseCommand):
 
     host_src = scfg.Value(
         '.',
+        position=1,
         help='Host project directory to share and open (default: current directory).',
     )
     vm = scfg.Value(
@@ -697,7 +610,7 @@ class VMAttachCLI(_BaseCommand):
     """Attach/register a host directory to an existing managed VM."""
 
     vm = scfg.Value('', help='Optional VM name override.')
-    host_src = scfg.Value('.', help='Host directory to attach.')
+    host_src = scfg.Value('.', position=1, help='Host directory to attach.')
     guest_dst = scfg.Value('', help='Guest mount path override.')
     force = scfg.Value(
         False,

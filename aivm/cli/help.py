@@ -98,22 +98,19 @@ class HelpRawCLI(_BaseCommand):
             # Direct system-tool probes for the current managed context.
             # Mapping: VM={vm_name} | network={net_name} | firewall_table={fw_table}
 
-            # Host dependency checks (maps to: aivm host doctor)
-            command -v virsh virt-install qemu-img cloud-localds nft ssh curl
+            # List vms
+            sudo virsh list
 
-            # Runtime environment detection (maps to: aivm status runtime environment)
-            systemd-detect-virt
-            grep -m1 -E '^(flags|Features)' /proc/cpuinfo
+            # List networks
+            sudo virsh net-list --all
 
             # VM domain lifecycle/state (maps to: aivm vm status / wait_ip)
             sudo virsh dominfo {shlex.quote(vm_name)}
             sudo virsh domstate {shlex.quote(vm_name)}
             sudo virsh dumpxml {shlex.quote(vm_name)}
 
-            # List networks
-            sudo virsh net-info {shlex.quote(net_name)}
-
             # Inspect a network
+            sudo virsh net-info {shlex.quote(net_name)}
             sudo virsh net-dumpxml {shlex.quote(net_name)}
             sudo virsh net-dhcp-leases {shlex.quote(net_name)}
 
@@ -131,6 +128,13 @@ class HelpRawCLI(_BaseCommand):
             # SSH readiness probe (maps to: aivm status SSH readiness)
             # Replace <VM_IP> with DHCP lease / cached VM IP.
             ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@<VM_IP> true
+
+            # Host dependency checks (maps to: aivm host doctor)
+            command -v virsh virt-install qemu-img cloud-localds nft ssh curl
+
+            # Runtime environment detection (maps to: aivm status runtime environment)
+            systemd-detect-virt
+            grep -m1 -E '^(flags|Features)' /proc/cpuinfo
             """
         ).strip()
         print(ub.highlight_code(lines, lexer_name='bash'))
