@@ -29,9 +29,10 @@ from ..detect import auto_defaults
 from ..store import (
     find_attachment,
     find_vm,
+    upsert_network,
     load_store,
     save_store,
-    upsert_vm,
+    upsert_vm_with_network,
 )
 from ..runtime import virsh_system_cmd
 from ..util import run_cmd, which
@@ -82,7 +83,9 @@ class InitCLI(_BaseCommand):
         reg.defaults = cfg
         save_store(reg, path)
         print(f'Updated config defaults: {path}')
-        print('No VM created. Use `aivm vm create` to create one from defaults.')
+        print(
+            'No VM created. Use `aivm vm create` to create one from defaults.'
+        )
         return 0
 
 
@@ -90,7 +93,6 @@ def _render_init_default_summary(cfg: AgentVMConfig, path: Path) -> str:
     lines = [
         'Detected defaults for `aivm config init`:',
         f'  config_store: {path}',
-        f'  vm.name: {cfg.vm.name}',
         f'  vm.user: {cfg.vm.user}',
         f'  vm.cpus: {cfg.vm.cpus}',
         f'  vm.ram_mb: {cfg.vm.ram_mb}',
@@ -171,12 +173,9 @@ def _review_init_defaults_interactive(
         if ans in {'n', 'no'}:
             raise RuntimeError('Aborted by user.')
         if ans in {'e', 'edit'}:
-            cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
             cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
             cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
-            cfg.vm.ram_mb = _prompt_int_with_default(
-                'vm.ram_mb', cfg.vm.ram_mb
-            )
+            cfg.vm.ram_mb = _prompt_int_with_default('vm.ram_mb', cfg.vm.ram_mb)
             cfg.vm.disk_gb = _prompt_int_with_default(
                 'vm.disk_gb', cfg.vm.disk_gb
             )
@@ -299,7 +298,9 @@ class ConfigPathCLI(_BaseCommand):
 
         print('🧭 AIVM Config Paths')
         print(f'cwd = {host_src}')
-        print(f'config_store = {store} ({"exists" if store.exists() else "missing"})')
+        print(
+            f'config_store = {store} ({"exists" if store.exists() else "missing"})'
+        )
         print(f'active_vm = {reg.active_vm or "(unset)"}')
         if att is not None:
             print(f'attachment_vm = {att.vm_name}')
@@ -371,7 +372,8 @@ class ConfigDiscoverCLI(_BaseCommand):
                 cfg.vm.name = vm_name
             if not cfg.network.name:
                 cfg.network.name = str(vm_info.get('network', 'aivm-net'))
-            upsert_vm(reg, cfg)
+            upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+            upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
             if rec is None:
                 added += 1
             else:
@@ -417,17 +419,23 @@ def _lint_store_file(path: Path) -> list[str]:
     raw = tomllib.loads(path.read_text(encoding='utf-8'))
     problems: list[str] = []
 
-    allowed_top = {'schema_version', 'active_vm', 'defaults', 'vms', 'attachments'}
+    allowed_top = {
+        'schema_version',
+        'active_vm',
+        'defaults',
+        'networks',
+        'vms',
+        'attachments',
+    }
     for key in sorted(raw.keys()):
         if key not in allowed_top:
             problems.append(f'unknown top-level key: {key!r}')
 
     allowed_vm_record = {
         'name',
+        'network_name',
         'verbosity',
         'vm',
-        'network',
-        'firewall',
         'image',
         'provision',
         'sync',
@@ -474,6 +482,45 @@ def _lint_store_file(path: Path) -> list[str]:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
                         )
+
+    networks = raw.get('networks', [])
+    if isinstance(networks, list):
+        allowed_network_record = {'name', 'network', 'firewall'}
+        for idx, item in enumerate(networks):
+            if not isinstance(item, dict):
+                problems.append(f'networks[{idx}] is not a table/object')
+                continue
+            for key in sorted(item.keys()):
+                if key not in allowed_network_record:
+                    problems.append(
+                        f'networks[{idx}] unknown key/section: {key!r}'
+                    )
+            net_sec = item.get('network', None)
+            if net_sec is not None:
+                if not isinstance(net_sec, dict):
+                    problems.append(
+                        f'networks[{idx}].network should be a table/object'
+                    )
+                else:
+                    for key in sorted(net_sec.keys()):
+                        if key not in _field_names(NetworkConfig):
+                            problems.append(
+                                f'networks[{idx}].network unknown key: {key!r}'
+                            )
+            fw_sec = item.get('firewall', None)
+            if fw_sec is not None:
+                if not isinstance(fw_sec, dict):
+                    problems.append(
+                        f'networks[{idx}].firewall should be a table/object'
+                    )
+                else:
+                    for key in sorted(fw_sec.keys()):
+                        if key not in _field_names(FirewallConfig):
+                            problems.append(
+                                f'networks[{idx}].firewall unknown key: {key!r}'
+                            )
+    elif networks is not None:
+        problems.append('top-level key "networks" should be an array of tables')
     vms = raw.get('vms', [])
     if isinstance(vms, list):
         for idx, item in enumerate(vms):
@@ -509,9 +556,7 @@ def _lint_store_file(path: Path) -> list[str]:
                 continue
             for key in sorted(item.keys()):
                 if key not in allowed_attachment:
-                    problems.append(
-                        f'attachments[{idx}] unknown key: {key!r}'
-                    )
+                    problems.append(f'attachments[{idx}] unknown key: {key!r}')
     elif atts is not None:
         problems.append(
             'top-level key "attachments" should be an array of tables'

@@ -92,6 +92,10 @@ def test_help_tree_includes_one_line_descriptions(
     out = capsys.readouterr().out
     assert 'aivm help tree - Print the expanded aivm command tree.' in out
     assert (
+        'aivm help raw - Print direct system-tool commands equivalent to common aivm checks.'
+        in out
+    )
+    assert (
         'aivm vm ssh - SSH into the VM and start a shell in the mapped guest directory.'
         in out
     )

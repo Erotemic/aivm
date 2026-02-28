@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import shlex
 import textwrap
+from pathlib import Path
 
 import scriptconfig as scfg
+import ubelt as ub
 
 from ._common import _BaseCommand, _cfg_path
+from ..store import find_vm, load_store
 
 
 class PlanCLI(_BaseCommand):
@@ -69,11 +72,107 @@ class HelpTreeCLI(_BaseCommand):
         return 0
 
 
+class HelpRawCLI(_BaseCommand):
+    """Print direct system-tool commands equivalent to common aivm checks."""
+
+    vm = scfg.Value(
+        '',
+        help='Optional VM name override.',
+    )
+    host_src = scfg.Value(
+        '.',
+        help='Host folder for attachment/share inspection context.',
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        vm_name, net_name, fw_table = _resolve_raw_targets(
+            config_opt=args.config,
+            vm_opt=str(args.vm or '').strip(),
+            host_src=Path(args.host_src).resolve(),
+        )
+        lines = textwrap.dedent(
+            f"""
+            # aivm help raw
+            # Direct system-tool probes for the current managed context.
+            # Mapping: VM={vm_name} | network={net_name} | firewall_table={fw_table}
+
+            # Host dependency checks (maps to: aivm host doctor)
+            command -v virsh virt-install qemu-img cloud-localds nft ssh curl
+
+            # Runtime environment detection (maps to: aivm status runtime environment)
+            systemd-detect-virt
+            grep -m1 -E '^(flags|Features)' /proc/cpuinfo
+
+            # VM domain lifecycle/state (maps to: aivm vm status / wait_ip)
+            sudo virsh dominfo {shlex.quote(vm_name)}
+            sudo virsh domstate {shlex.quote(vm_name)}
+            sudo virsh dumpxml {shlex.quote(vm_name)}
+
+            # Network state + DHCP leases (maps to: aivm host net status / aivm vm wait_ip)
+            sudo virsh net-list --all
+            sudo virsh net-info {shlex.quote(net_name)}
+            sudo virsh net-dumpxml {shlex.quote(net_name)}
+            sudo virsh net-dhcp-leases {shlex.quote(net_name)}
+            sudo virsh domiflist {shlex.quote(vm_name)}
+            sudo virsh domifaddr {shlex.quote(vm_name)}
+
+            # Firewall table inspection (maps to: aivm host fw status)
+            sudo nft list table inet {shlex.quote(fw_table)}
+
+            # Image + VM disk files (maps to: aivm host image_fetch / vm create)
+            sudo ls -lh /var/lib/libvirt/aivm/{shlex.quote(vm_name)}/images
+            sudo qemu-img info /var/lib/libvirt/aivm/{shlex.quote(vm_name)}/images/{shlex.quote(vm_name)}.qcow2
+
+            # SSH readiness probe (maps to: aivm status SSH readiness)
+            # Replace <VM_IP> with DHCP lease / cached VM IP.
+            ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null agent@<VM_IP> true
+            """
+        ).strip()
+        print(ub.highlight_code(lines, lexer_name='bash'))
+        return 0
+
+
 class HelpModalCLI(scfg.ModalCLI):
     """Help and discovery commands."""
 
     plan = PlanCLI
     tree = HelpTreeCLI
+    raw = HelpRawCLI
+
+
+def _resolve_raw_targets(
+    *,
+    config_opt: str | None,
+    vm_opt: str,
+    host_src: Path,
+) -> tuple[str, str, str]:
+    vm_name = vm_opt or 'aivm-2404'
+    net_name = 'aivm-net'
+    fw_table = 'aivm_sandbox'
+    reg = load_store(_cfg_path(config_opt))
+    rec = None
+    if vm_opt:
+        rec = find_vm(reg, vm_opt)
+    elif reg.active_vm:
+        rec = find_vm(reg, reg.active_vm)
+    elif len(reg.vms) == 1:
+        rec = reg.vms[0]
+    else:
+        att = next(
+            (a for a in reg.attachments if Path(a.host_path) == host_src),
+            None,
+        )
+        if att is not None:
+            rec = find_vm(reg, att.vm_name)
+    if rec is not None:
+        vm_name = rec.name
+        net_name = rec.network_name or net_name
+        net = next((n for n in reg.networks if n.name == net_name), None)
+        if net is not None and net.firewall.table:
+            fw_table = net.firewall.table
+    return vm_name, net_name, fw_table
 
 
 def _iter_modal_members(

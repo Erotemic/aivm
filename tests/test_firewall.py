@@ -56,10 +56,9 @@ def test_nft_script_allows_configured_ports(monkeypatch) -> None:
     script = _nft_script(cfg)
     assert 'iifname "virbr-aivm" tcp dport {22, 2222} accept' in script
     assert 'iifname "virbr-aivm" udp dport {53} accept' in script
-    assert (
-        'iifname "virbr-aivm" ip daddr {'
-        in script
-    ) and ('tcp dport {22, 2222} accept' in script)
+    assert ('iifname "virbr-aivm" ip daddr {' in script) and (
+        'tcp dport {22, 2222} accept' in script
+    )
 
 
 def test_nft_script_invalid_port_raises(monkeypatch) -> None:

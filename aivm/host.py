@@ -58,7 +58,10 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
     ]
     run_cmd(['apt-get', 'update', '-y'], sudo=True, check=True, capture=False)
     run_cmd(
-        ['apt-get', 'install', '-y', *pkgs], sudo=True, check=True, capture=False
+        ['apt-get', 'install', '-y', *pkgs],
+        sudo=True,
+        check=True,
+        capture=False,
     )
     # Some distros split virtiofsd into a separate package; install best-effort.
     virtiofsd_install = run_cmd(

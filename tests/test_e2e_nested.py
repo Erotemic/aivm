@@ -86,9 +86,7 @@ def _run_cli(
             f'--- output tail ---\n{tail}\n'
         )
     stdout = ''.join(out_lines)
-    completed = subprocess.CompletedProcess(
-        cmd, rc, stdout=stdout, stderr=''
-    )
+    completed = subprocess.CompletedProcess(cmd, rc, stdout=stdout, stderr='')
     if check and completed.returncode != 0:
         raise AssertionError(
             f'CLI failed: {" ".join(cmd)}\n'
@@ -165,7 +163,9 @@ def test_e2e_nested_smoke(tmp_path: Path) -> None:
 
     if os.getenv('AIVM_E2E_INDEPENDENT_IMAGE') != '1':
         user_home = Path(os.environ.get('HOME', '~')).expanduser()
-        default_shared = user_home / '.cache' / 'aivm' / 'e2e' / 'noble-base.img'
+        default_shared = (
+            user_home / '.cache' / 'aivm' / 'e2e' / 'noble-base.img'
+        )
         shared_img = Path(
             os.getenv('AIVM_E2E_SHARED_IMAGE', str(default_shared))
         ).expanduser()

@@ -403,3 +403,41 @@ Uncertainties / risks: parser behavior for direct command-class unit invocation 
 Tradeoffs and what might break: low risk change; omission of positional VM still retains prior resolution behavior via active/single VM selection.
 
 What I am confident about: added parser-level test coverage in `tests/test_cli_vm_create.py` using `AgentVMModalCLI` invocation (`aivm vm destroy <name> ...`), and focused tests pass.
+
+## 2026-02-28 15:27:34 +0000
+
+Refactored store model to make networks first-class managed objects with VM references, without migration/back-compat handling. Added `Store.networks` and `NetworkEntry`, changed `VMEntry` to carry `network_name`, and updated serialization to persist `[[networks]]` + lean `[[vms]]` records (no embedded per-VM network/firewall sections). Added runtime materialization (`materialize_vm_cfg`) that resolves VM network/firewall by reference and fails clearly when a VM points to a missing network.
+
+Wired CLI paths to the new model: `_load_cfg_with_path` now uses materialized VM config; VM record persistence now ensures referenced network is recorded; `vm create` auto-registers/uses network definitions from defaults; `host net` subcommands now resolve managed networks directly (even when no VMs exist), accept positional network name, and `host net destroy` guards against deleting in-use networks unless `--force` (guard skipped in dry-run).
+
+State of mind / reflection: this is the right structural boundary to keep network lifecycle sane and independent. Treating network/firewall as shared resources avoids duplicated/conflicting per-VM settings and matches real libvirt semantics.
+
+Uncertainties / risks: no migration means old stores with only per-VM network definitions will break until users reinitialize/recreate config in the new shape. That is intentional per current project direction.
+
+Tradeoffs and what might break: stricter referential checks can surface errors earlier (missing network references), which is desirable but may feel abrupt. Force-destroying a network still allows creating dangling VM references; this remains a deliberate escape hatch.
+
+What I am confident about: full suite passes after refactor (`68 passed, 1 skipped`), including updated lint/schema tests and dry-run command coverage.
+
+## 2026-02-28 15:41:26 +0000
+
+Added `aivm help raw` to print direct underlying system-tool commands that map to common `aivm` status/debug checks. Implemented in `aivm/cli/help.py` as `HelpRawCLI`, included in the help modal tree, and made it resolve VM/network/firewall targets from the config store when possible (active/specified/single VM heuristics), while still printing usable defaults when context is ambiguous.
+
+State of mind / reflection: this is a practical transparency feature. Users can now inspect/debug with `virsh`/`nft`/`ssh` commands directly without reverse-engineering what `aivm` is doing under the hood.
+
+Uncertainties / risks: command block currently assumes common defaults for some paths/users in the examples (e.g., image path root, SSH username) where exact values may differ; still useful as a mapping aid rather than exact execution transcript.
+
+Tradeoffs and what might break: very low risk; this is additive command output. The new resolver logic in help is intentionally lightweight and non-authoritative.
+
+What I am confident about: added tests for raw output and command tree inclusion (`tests/test_cli_helpers.py`, `tests/test_cli_dryrun.py`), and full suite passes (`69 passed, 1 skipped`).
+
+## 2026-02-28 15:56:39 +0000
+
+Added an interactive defaults-override review step to `aivm vm create` to mirror prior `config init` ergonomics, but scoped to VM creation time. `VMCreateCLI` now shows a summary and prompts `Use these values? [Y/e/n] (e=edit)` when `--yes` is not provided, allowing edits to VM identity/hardware and network settings before create/start.
+
+State of mind / reflection: this aligns command intent with user workflow: `config init` sets baseline preferences; `vm create` is now where per-VM overrides are naturally applied.
+
+Uncertainties / risks: if a user edits `network.name` to an existing managed network while also editing subnet fields, existing network definitions still take precedence by name. That behavior is consistent with first-class network ownership but may be surprising without explicit warning.
+
+Tradeoffs and what might break: non-interactive runs still require `--yes`; now they also avoid the new review step. Interactive runs are one prompt longer by design.
+
+What I am confident about: added tests for interactive edit and abort flows in `tests/test_cli_vm_create.py`; full suite remains green (`72 passed, 1 skipped`).

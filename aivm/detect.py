@@ -43,7 +43,9 @@ def _detect_identity_from_ssh_config() -> tuple[str, str]:
         if key == 'host':
             pos = [p for p in vals if not p.startswith('!')]
             neg = [p[1:] for p in vals if p.startswith('!')]
-            pos_match = any(fnmatch(target_host, p) for p in pos) if pos else False
+            pos_match = (
+                any(fnmatch(target_host, p) for p in pos) if pos else False
+            )
             neg_match = any(fnmatch(target_host, p) for p in neg)
             applies = pos_match and not neg_match
             continue

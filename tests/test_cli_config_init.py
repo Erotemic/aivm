@@ -29,7 +29,9 @@ def test_config_init_noninteractive_requires_yes_or_defaults(
     )
     monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
     with pytest.raises(RuntimeError, match='--yes or --defaults'):
-        InitCLI.main(argv=False, config=str(cfg_path), yes=False, defaults=False)
+        InitCLI.main(
+            argv=False, config=str(cfg_path), yes=False, defaults=False
+        )
 
 
 def test_config_init_noninteractive_defaults_flag_bypasses_prompt(
@@ -64,11 +66,13 @@ def test_config_init_interactive_shows_summary_and_accepts(
     )
     monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: '')
-    rc = InitCLI.main(argv=False, config=str(cfg_path), yes=False, defaults=False)
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
     assert rc == 0
     out = capsys.readouterr().out
     assert 'Detected defaults for `aivm config init`' in out
-    assert 'vm.name: aivm-init-test' in out
+    assert 'vm.name:' not in out
     assert 'ssh-keygen -t ed25519' in out
 
 
@@ -114,7 +118,9 @@ def test_config_init_prompt_mentions_edit_shortcut(
         return ''
 
     monkeypatch.setattr('builtins.input', fake_input)
-    rc = InitCLI.main(argv=False, config=str(cfg_path), yes=False, defaults=False)
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
     assert rc == 0
     assert any('(e=edit)' in p for p in prompts)
 
@@ -132,7 +138,6 @@ def test_config_init_interactive_edit_updates_hardware(
     answers = iter(
         [
             'e',  # use edit flow
-            '',  # vm.name
             '',  # vm.user
             '2',  # vm.cpus
             '3072',  # vm.ram_mb
@@ -148,7 +153,9 @@ def test_config_init_interactive_edit_updates_hardware(
         ]
     )
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
-    rc = InitCLI.main(argv=False, config=str(cfg_path), yes=False, defaults=False)
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
     assert rc == 0
     text = cfg_path.read_text(encoding='utf-8')
     assert 'cpus = 2' in text

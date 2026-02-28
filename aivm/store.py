@@ -1,4 +1,4 @@
-"""Single-file config store for VM definitions, attachments, and active VM selection."""
+"""Single-file config store for defaults, networks, VMs, and attachments."""
 
 from __future__ import annotations
 
@@ -8,21 +8,21 @@ from pathlib import Path
 
 import ubelt as ub
 
-from .config import AgentVMConfig
+from .config import AgentVMConfig, FirewallConfig, NetworkConfig
 
 
 @dataclass
 class VMEntry:
     name: str
+    network_name: str
     cfg: AgentVMConfig
 
-    @property
-    def network_name(self) -> str:
-        return self.cfg.network.name
 
-    @property
-    def strict_firewall(self) -> bool:
-        return bool(self.cfg.firewall.enabled)
+@dataclass
+class NetworkEntry:
+    name: str
+    network: NetworkConfig = field(default_factory=NetworkConfig)
+    firewall: FirewallConfig = field(default_factory=FirewallConfig)
 
 
 @dataclass
@@ -36,9 +36,10 @@ class AttachmentEntry:
 
 @dataclass
 class Store:
-    schema_version: int = 4
+    schema_version: int = 5
     active_vm: str = ''
     defaults: AgentVMConfig | None = None
+    networks: list[NetworkEntry] = field(default_factory=list)
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
 
@@ -104,11 +105,34 @@ def load_store(path: Path | None = None) -> Store:
         return Store()
     raw = tomllib.loads(fpath.read_text(encoding='utf-8'))
     reg = Store()
-    reg.schema_version = int(raw.get('schema_version', 4))
+    reg.schema_version = int(raw.get('schema_version', 5))
     reg.active_vm = str(raw.get('active_vm', '')).strip()
     defaults_raw = raw.get('defaults', None)
     if isinstance(defaults_raw, dict):
         reg.defaults = _cfg_from_dict(defaults_raw).expanded_paths()
+
+    for item in raw.get('networks', []):
+        if not isinstance(item, dict):
+            continue
+        net = NetworkConfig()
+        fw = FirewallConfig()
+        net_raw = item.get('network', None)
+        if isinstance(net_raw, dict):
+            for k, v in net_raw.items():
+                if hasattr(net, k):
+                    setattr(net, k, v)
+        fw_raw = item.get('firewall', None)
+        if isinstance(fw_raw, dict):
+            for k, v in fw_raw.items():
+                if hasattr(fw, k):
+                    setattr(fw, k, v)
+        name = str(item.get('name', '')).strip()
+        if not name:
+            name = str(net.name or '').strip()
+        if not name:
+            continue
+        net.name = name
+        reg.networks.append(NetworkEntry(name=name, network=net, firewall=fw))
 
     for item in raw.get('vms', []):
         if not isinstance(item, dict):
@@ -118,7 +142,12 @@ def load_store(path: Path | None = None) -> Store:
             continue
         cfg = _cfg_from_dict(item).expanded_paths()
         cfg.vm.name = name
-        reg.vms.append(VMEntry(name=name, cfg=cfg))
+        network_name = str(item.get('network_name', '')).strip()
+        if not network_name:
+            network_name = str(cfg.network.name or '').strip()
+        if not network_name:
+            network_name = 'aivm-net'
+        reg.vms.append(VMEntry(name=name, network_name=network_name, cfg=cfg))
 
     for item in raw.get('attachments', []):
         if not isinstance(item, dict):
@@ -170,22 +199,30 @@ def save_store(reg: Store, path: Path | None = None) -> Path:
                 _emit_toml_kv(lines, k, v)
             lines.append('')
 
+    for net in sorted(reg.networks, key=lambda n: n.name):
+        lines.append('[[networks]]')
+        lines.append(f'name = "{_toml_escape(net.name)}"')
+        net_d = asdict(net.network)
+        lines.append('[networks.network]')
+        for k, v in net_d.items():
+            if k == 'name':
+                continue
+            _emit_toml_kv(lines, k, v)
+        fw_d = asdict(net.firewall)
+        lines.append('[networks.firewall]')
+        for k, v in fw_d.items():
+            _emit_toml_kv(lines, k, v)
+        lines.append('')
+
     for vm in sorted(reg.vms, key=lambda v: v.name):
         lines.append('[[vms]]')
         lines.append(f'name = "{_toml_escape(vm.name)}"')
+        lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
         d = asdict(vm.cfg)
         verbosity = int(d.get('verbosity', 1))
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
-        for section in (
-            'vm',
-            'network',
-            'firewall',
-            'image',
-            'provision',
-            'sync',
-            'paths',
-        ):
+        for section in ('vm', 'image', 'provision', 'sync', 'paths'):
             body = d.get(section, {})
             if not isinstance(body, dict):
                 continue
@@ -208,9 +245,19 @@ def save_store(reg: Store, path: Path | None = None) -> Path:
 
 
 def upsert_vm(reg: Store, cfg: AgentVMConfig) -> None:
+    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+
+
+def upsert_vm_with_network(
+    reg: Store, cfg: AgentVMConfig, *, network_name: str
+) -> None:
     cfg = cfg.expanded_paths()
     name = cfg.vm.name
-    rec = VMEntry(name=name, cfg=cfg)
+    net_name = str(network_name or '').strip()
+    if not net_name:
+        net_name = str(cfg.network.name or '').strip() or 'aivm-net'
+    rec = VMEntry(name=name, network_name=net_name, cfg=cfg)
     existing = [v for v in reg.vms if v.name == name]
     if existing:
         i = reg.vms.index(existing[0])
@@ -225,6 +272,68 @@ def find_vm(reg: Store, vm_name: str) -> VMEntry | None:
         if rec.name == vm_name:
             return rec
     return None
+
+
+def find_network(reg: Store, network_name: str) -> NetworkEntry | None:
+    for rec in reg.networks:
+        if rec.name == network_name:
+            return rec
+    return None
+
+
+def upsert_network(
+    reg: Store,
+    *,
+    network: NetworkConfig,
+    firewall: FirewallConfig | None = None,
+    name: str | None = None,
+) -> None:
+    net_name = str(name or network.name or '').strip()
+    if not net_name:
+        raise RuntimeError('network name must be non-empty')
+    net = NetworkConfig(**asdict(network))
+    net.name = net_name
+    fw = (
+        FirewallConfig(**asdict(firewall))
+        if firewall is not None
+        else FirewallConfig()
+    )
+    rec = NetworkEntry(name=net_name, network=net, firewall=fw)
+    existing = [n for n in reg.networks if n.name == net_name]
+    if existing:
+        i = reg.networks.index(existing[0])
+        reg.networks[i] = rec
+    else:
+        reg.networks.append(rec)
+
+
+def remove_network(reg: Store, network_name: str) -> bool:
+    existing = [n for n in reg.networks if n.name == network_name]
+    if not existing:
+        return False
+    reg.networks = [n for n in reg.networks if n.name != network_name]
+    return True
+
+
+def network_users(reg: Store, network_name: str) -> list[str]:
+    return sorted(v.name for v in reg.vms if v.network_name == network_name)
+
+
+def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
+    vm = find_vm(reg, vm_name)
+    if vm is None:
+        raise RuntimeError(f'VM not found in config store: {vm_name}')
+    net = find_network(reg, vm.network_name)
+    if net is None:
+        raise RuntimeError(
+            f"VM '{vm_name}' references unknown network '{vm.network_name}'. "
+            'Define it under [[networks]].'
+        )
+    cfg = vm.cfg.expanded_paths()
+    cfg.network = NetworkConfig(**asdict(net.network))
+    cfg.firewall = FirewallConfig(**asdict(net.firewall))
+    cfg.network.name = net.name
+    return cfg
 
 
 def remove_vm(

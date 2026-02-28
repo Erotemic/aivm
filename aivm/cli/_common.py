@@ -16,9 +16,12 @@ from ..store import (
     find_attachment,
     find_vm,
     load_store,
+    materialize_vm_cfg,
     save_store,
+    upsert_network,
     store_path,
     upsert_vm,
+    upsert_vm_with_network,
 )
 from ..util import run_cmd
 
@@ -144,10 +147,13 @@ def _load_cfg_with_path(
     rec = find_vm(reg, vm_name)
     if rec is None:
         raise RuntimeError(f'VM not found in config store: {vm_name}')
-    cfg = rec.cfg.expanded_paths()
-    changed = _hydrate_runtime_defaults(cfg) if hydrate_runtime_defaults else False
+    cfg = materialize_vm_cfg(reg, vm_name)
+    changed = (
+        _hydrate_runtime_defaults(cfg) if hydrate_runtime_defaults else False
+    )
     if changed and persist_runtime_defaults:
-        upsert_vm(reg, cfg)
+        upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
         save_store(reg, store_path)
     return cfg, store_path
 
@@ -174,7 +180,8 @@ def _resolve_cfg_fallback(
 def _record_vm(cfg: AgentVMConfig, store_file: Path | None = None) -> Path:
     target = store_file or store_path()
     reg = load_store(target)
-    upsert_vm(reg, cfg)
+    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
     return save_store(reg, target)
 
 
