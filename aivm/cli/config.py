@@ -6,12 +6,12 @@ import os
 import re
 import shlex
 import sys
-import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import fields
 from pathlib import Path
 
 import scriptconfig as scfg
+import tomllib
 from loguru import logger
 
 from ..config import (
@@ -27,15 +27,15 @@ from ..config import (
 )
 from ..detect import auto_defaults
 from ..resource_checks import vm_resource_warning_lines
+from ..runtime import virsh_system_cmd
 from ..store import (
     find_attachment,
     find_vm,
-    upsert_network,
     load_store,
     save_store,
+    upsert_network,
     upsert_vm_with_network,
 )
-from ..runtime import virsh_system_cmd
 from ..util import run_cmd, which
 from ._common import (
     _BaseCommand,

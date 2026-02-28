@@ -9,8 +9,8 @@ from pathlib import Path
 import scriptconfig as scfg
 import ubelt as ub
 
-from ._common import _BaseCommand, _cfg_path
 from ..store import find_vm, load_store
+from ._common import _BaseCommand, _cfg_path
 
 
 class PlanCLI(_BaseCommand):

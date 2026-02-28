@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from aivm.config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
+from aivm.config import DEFAULT_UBUNTU_NOBLE_IMG_URL, AgentVMConfig
 from aivm.store import Store, save_store, upsert_vm
 
 

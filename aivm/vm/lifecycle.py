@@ -7,7 +7,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..config import AgentVMConfig, DEFAULT_UBUNTU_NOBLE_IMG_URL
+from ..config import DEFAULT_UBUNTU_NOBLE_IMG_URL, AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import CmdError, ensure_dir, run_cmd
 

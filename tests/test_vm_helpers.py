@@ -10,8 +10,8 @@ from aivm.config import AgentVMConfig
 from aivm.util import CmdError, CmdResult
 from aivm.vm import (
     _mac_for_vm,
-    fetch_image,
     create_or_start_vm,
+    fetch_image,
     get_ip_cached,
     vm_has_share,
     vm_share_mappings,

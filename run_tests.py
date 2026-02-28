@@ -2,8 +2,9 @@
 """Module for run tests."""
 
 if __name__ == '__main__':
-    import pytest
     import sys
+
+    import pytest
 
     package_name = 'aivm'
     mod_dpath = 'aivm'
