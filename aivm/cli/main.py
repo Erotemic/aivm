@@ -124,10 +124,16 @@ class ListCLI(_BaseCommand):
             if not reg.vms:
                 print('  (none)')
             else:
+                by_net = {n.name: n for n in reg.networks}
                 for vm in sorted(reg.vms, key=lambda x: x.name):
+                    strict = (
+                        bool(by_net[vm.network_name].firewall.enabled)
+                        if vm.network_name in by_net
+                        else False
+                    )
                     print(
                         f'  - {vm.name} | network={vm.network_name} '
-                        f'| strict_firewall={"yes" if vm.strict_firewall else "no"} '
+                        f'| strict_firewall={"yes" if strict else "no"} '
                         f'| store={reg_path}'
                     )
 
@@ -135,21 +141,16 @@ class ListCLI(_BaseCommand):
             if want == 'all':
                 print('')
             print('Managed Networks')
-            by_name: dict[str, bool] = {}
-            for vm in reg.vms:
-                strict = bool(vm.strict_firewall)
-                if vm.network_name not in by_name:
-                    by_name[vm.network_name] = strict
-                else:
-                    by_name[vm.network_name] = (
-                        by_name[vm.network_name] or strict
-                    )
-            if not by_name:
+            if not reg.networks:
                 print('  (none)')
             else:
-                for name in sorted(by_name):
+                usage: dict[str, int] = {n.name: 0 for n in reg.networks}
+                for vm in reg.vms:
+                    usage[vm.network_name] = usage.get(vm.network_name, 0) + 1
+                for net in sorted(reg.networks, key=lambda n: n.name):
                     print(
-                        f'  - {name} | strict_firewall={"yes" if by_name[name] else "no"}'
+                        f'  - {net.name} | strict_firewall={"yes" if net.firewall.enabled else "no"} '
+                        f'| vm_count={usage.get(net.name, 0)}'
                     )
 
         if want in {'all', 'folders'}:

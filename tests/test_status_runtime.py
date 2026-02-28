@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from aivm.status import ProbeOutcome, probe_runtime_environment, render_global_status
+from aivm.status import (
+    ProbeOutcome,
+    probe_runtime_environment,
+    render_global_status,
+)
 from aivm.store import Store
 from aivm.util import CmdResult
 

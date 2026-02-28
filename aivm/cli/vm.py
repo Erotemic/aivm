@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
-from dataclasses import dataclass, replace
+import sys
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import scriptconfig as scfg
@@ -16,11 +18,13 @@ from ..net import ensure_network
 from ..store import (
     find_attachment,
     find_vm,
+    find_network,
     load_store,
     remove_vm,
     save_store,
     upsert_attachment,
-    upsert_vm,
+    upsert_network,
+    upsert_vm_with_network,
 )
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..status import (
@@ -113,6 +117,17 @@ class VMCreateCLI(_BaseCommand):
         cfg = reg.defaults.expanded_paths()
         if args.vm:
             cfg.vm.name = str(args.vm).strip()
+        _warn_if_vm_resources_high(cfg)
+        if not bool(args.yes):
+            cfg = _review_vm_create_overrides_interactive(cfg, cfg_path)
+        _raise_if_vm_resources_physically_impossible(cfg)
+        net = find_network(reg, cfg.network.name)
+        if net is None:
+            upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+        else:
+            cfg.network = type(net.network)(**asdict(net.network))
+            cfg.firewall = type(net.firewall)(**asdict(net.firewall))
+            cfg.network.name = net.name
         existing = find_vm(reg, cfg.vm.name)
         if existing is not None and not args.force:
             raise RuntimeError(
@@ -129,9 +144,199 @@ class VMCreateCLI(_BaseCommand):
             recreate=bool(args.force and existing is not None),
         )
         if not args.dry_run:
-            upsert_vm(reg, cfg)
+            upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
             save_store(reg, cfg_path)
         return 0
+
+
+def _render_vm_create_summary(cfg: AgentVMConfig, path: Path) -> str:
+    lines = [
+        'Create VM from defaults:',
+        f'  config_store: {path}',
+        f'  vm.name: {cfg.vm.name}',
+        f'  vm.user: {cfg.vm.user}',
+        f'  vm.cpus: {cfg.vm.cpus}',
+        f'  vm.ram_mb: {cfg.vm.ram_mb}',
+        f'  vm.disk_gb: {cfg.vm.disk_gb}',
+        f'  network.name: {cfg.network.name}',
+        f'  network.subnet_cidr: {cfg.network.subnet_cidr}',
+        f'  network.gateway_ip: {cfg.network.gateway_ip}',
+        f'  network.dhcp_start: {cfg.network.dhcp_start}',
+        f'  network.dhcp_end: {cfg.network.dhcp_end}',
+    ]
+    return '\n'.join(lines)
+
+
+def _prompt_with_default(prompt: str, default: str) -> str:
+    raw = input(f'{prompt} [{default}]: ').strip()
+    return raw if raw else default
+
+
+def _prompt_int_with_default(prompt: str, default: int) -> int:
+    while True:
+        raw = input(f'{prompt} [{default}]: ').strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            print('Please enter a valid integer.')
+            continue
+        if value <= 0:
+            print('Please enter a positive integer.')
+            continue
+        return value
+
+
+def _review_vm_create_overrides_interactive(
+    cfg: AgentVMConfig, path: Path
+) -> AgentVMConfig:
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            'VM create defaults require confirmation in interactive mode. '
+            'Re-run with --yes.'
+        )
+    print(_render_vm_create_summary(cfg, path))
+    while True:
+        ans = input('Use these values? [Y/e/n] (e=edit): ').strip().lower()
+        if ans in {'', 'y', 'yes'}:
+            return cfg
+        if ans in {'n', 'no'}:
+            raise RuntimeError('Aborted by user.')
+        if ans in {'e', 'edit'}:
+            cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
+            cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
+            cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
+            cfg.vm.ram_mb = _prompt_int_with_default('vm.ram_mb', cfg.vm.ram_mb)
+            cfg.vm.disk_gb = _prompt_int_with_default(
+                'vm.disk_gb', cfg.vm.disk_gb
+            )
+            cfg.network.name = _prompt_with_default(
+                'network.name', cfg.network.name
+            )
+            cfg.network.subnet_cidr = _prompt_with_default(
+                'network.subnet_cidr', cfg.network.subnet_cidr
+            )
+            cfg.network.gateway_ip = _prompt_with_default(
+                'network.gateway_ip', cfg.network.gateway_ip
+            )
+            cfg.network.dhcp_start = _prompt_with_default(
+                'network.dhcp_start', cfg.network.dhcp_start
+            )
+            cfg.network.dhcp_end = _prompt_with_default(
+                'network.dhcp_end', cfg.network.dhcp_end
+            )
+            print('')
+            print(_render_vm_create_summary(cfg, path))
+            continue
+        print("Please answer 'y', 'e', or 'n'.")
+
+
+def _host_mem_available_mb() -> int | None:
+    try:
+        text = Path('/proc/meminfo').read_text(
+            encoding='utf-8', errors='ignore'
+        )
+    except Exception:
+        return None
+    for line in text.splitlines():
+        if line.startswith('MemAvailable:'):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                return int(parts[1]) // 1024
+    return None
+
+
+def _host_mem_total_mb() -> int | None:
+    try:
+        text = Path('/proc/meminfo').read_text(
+            encoding='utf-8', errors='ignore'
+        )
+    except Exception:
+        return None
+    for line in text.splitlines():
+        if line.startswith('MemTotal:'):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                return int(parts[1]) // 1024
+    return None
+
+
+def _host_cpu_count() -> int | None:
+    try:
+        count = os.cpu_count()
+    except Exception:
+        return None
+    return int(count) if count else None
+
+
+def _host_free_disk_gb(path: Path) -> float | None:
+    try:
+        stat = os.statvfs(str(path))
+    except Exception:
+        return None
+    free_bytes = int(stat.f_bavail) * int(stat.f_frsize)
+    return free_bytes / (1024**3)
+
+
+def _warn_if_vm_resources_high(cfg: AgentVMConfig) -> None:
+    mem_avail_mb = _host_mem_available_mb()
+    if mem_avail_mb is not None and cfg.vm.ram_mb > int(mem_avail_mb * 0.8):
+        log.warning(
+            'Requested VM RAM may be too high for host available memory: '
+            'requested={} MiB, MemAvailable={} MiB. '
+            'If VM creation fails, lower vm.ram_mb (e.g. 2048-3072).',
+            cfg.vm.ram_mb,
+            mem_avail_mb,
+        )
+
+    cpu_count = _host_cpu_count()
+    if cpu_count is not None and cfg.vm.cpus > cpu_count:
+        log.warning(
+            'Requested VM CPUs exceed host CPU count: requested={}, host_cpus={}. '
+            'If VM creation fails, lower vm.cpus.',
+            cfg.vm.cpus,
+            cpu_count,
+        )
+
+    free_gb = _host_free_disk_gb(Path(cfg.paths.base_dir).expanduser())
+    if free_gb is not None and float(cfg.vm.disk_gb) > float(free_gb) * 0.9:
+        log.warning(
+            'Requested VM disk may be too large for free space at base_dir: '
+            'requested={} GiB, free≈{:.1f} GiB (base_dir={}). '
+            'If provisioning fails later, lower vm.disk_gb or free disk space.',
+            cfg.vm.disk_gb,
+            free_gb,
+            cfg.paths.base_dir,
+        )
+
+
+def _raise_if_vm_resources_physically_impossible(cfg: AgentVMConfig) -> None:
+    problems: list[str] = []
+    mem_total_mb = _host_mem_total_mb()
+    mem_avail_mb = _host_mem_available_mb()
+    if mem_total_mb is not None and cfg.vm.ram_mb > mem_total_mb:
+        problems.append(
+            f'vm.ram_mb={cfg.vm.ram_mb} exceeds host MemTotal={mem_total_mb} MiB'
+        )
+    elif mem_avail_mb is not None and cfg.vm.ram_mb > mem_avail_mb:
+        problems.append(
+            f'vm.ram_mb={cfg.vm.ram_mb} exceeds current MemAvailable={mem_avail_mb} MiB'
+        )
+
+    cpu_count = _host_cpu_count()
+    if cpu_count is not None and cfg.vm.cpus > cpu_count:
+        problems.append(
+            f'vm.cpus={cfg.vm.cpus} exceeds host CPU count={cpu_count}'
+        )
+
+    if problems:
+        detail = '\n  - '.join(problems)
+        raise RuntimeError(
+            'Requested VM resources are not feasible on this host right now:\n'
+            f'  - {detail}\n'
+            'Lower vm.ram_mb / vm.cpus and retry.'
+        )
 
 
 class VMWaitIPCLI(_BaseCommand):
@@ -405,9 +610,7 @@ class VMCodeCLI(_BaseCommand):
             f'Opened VS Code remote folder {session.share_guest_dst} on host {cfg.vm.name}'
         )
         print(f'SSH entry updated in {ssh_cfg}')
-        print(
-            f'Folder registered in {session.reg_path}'
-        )
+        print(f'Folder registered in {session.reg_path}')
         return 0
 
 
@@ -485,9 +688,7 @@ class VMSSHCLI(_BaseCommand):
             capture=False,
         )
         print(f'Connected to {cfg.vm.user}@{ip} in {session.share_guest_dst}')
-        print(
-            f'Folder registered in {session.reg_path}'
-        )
+        print(f'Folder registered in {session.reg_path}')
         return 0
 
 
@@ -526,7 +727,9 @@ class VMAttachCLI(_BaseCommand):
                 host_src=host_src,
             )
 
-        attachment = _resolve_attachment(cfg, cfg_path, host_src, args.guest_dst)
+        attachment = _resolve_attachment(
+            cfg, cfg_path, host_src, args.guest_dst
+        )
 
         if args.dry_run:
             print(
@@ -545,12 +748,12 @@ class VMAttachCLI(_BaseCommand):
                 attachment, host_src, mappings
             )
             if not _attachment_has_mapping(attachment, mappings):
-                    attach_vm_share(
-                        cfg,
-                        attachment.source_dir,
-                        attachment.tag,
-                        dry_run=False,
-                    )
+                attach_vm_share(
+                    cfg,
+                    attachment.source_dir,
+                    attachment.tag,
+                    dry_run=False,
+                )
         reg_path = _record_attachment(
             cfg,
             cfg_path,
@@ -877,7 +1080,8 @@ def _record_attachment(
     force: bool = False,
 ) -> Path:
     reg = load_store(cfg_path)
-    upsert_vm(reg, cfg)
+    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
     upsert_attachment(
         reg,
         host_path=host_src,
@@ -917,7 +1121,9 @@ def _resolve_attachment(
 def _attachment_has_mapping(
     att: ResolvedAttachment, mappings: list[tuple[str, str]]
 ) -> bool:
-    return any(src == att.source_dir and tag == att.tag for src, tag in mappings)
+    return any(
+        src == att.source_dir and tag == att.tag for src, tag in mappings
+    )
 
 
 def _align_attachment_tag_with_mappings(
@@ -963,7 +1169,11 @@ def _reconcile_attached_vm(
         ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
     need_firewall_apply = False
-    if cfg.firewall.enabled and policy.ensure_firewall_opt and (not cached_ssh_ok):
+    if (
+        cfg.firewall.enabled
+        and policy.ensure_firewall_opt
+        and (not cached_ssh_ok)
+    ):
         fw_probe, _ = _check_firewall(cfg, use_sudo=False)
         if fw_probe is None:
             _confirm_sudo_block(
@@ -1028,9 +1238,7 @@ def _reconcile_attached_vm(
             else:
                 raise
         vm_running = (
-            True
-            if policy.dry_run
-            else _probe_vm_running_nonsudo(cfg.vm.name)
+            True if policy.dry_run else _probe_vm_running_nonsudo(cfg.vm.name)
         )
         if not policy.dry_run and vm_running is True:
             mappings = vm_share_mappings(cfg, use_sudo=False)

@@ -10,7 +10,8 @@ import pytest
 from aivm.config import AgentVMConfig
 from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
 from aivm.cli.main import _count_verbose, _normalize_argv
-from aivm.cli.help import PlanCLI
+from aivm.cli.help import HelpRawCLI, PlanCLI
+from aivm.store import Store, save_store, upsert_vm
 from aivm.cli.vm import (
     _auto_share_tag_for_path,
     _parse_sync_paths_arg,
@@ -163,3 +164,24 @@ def test_confirm_sudo_block_confirmed_skips_sudo_validate_when_passwordless(
     monkeypatch.setattr('aivm.cli._common.run_cmd', fake_run_cmd)
     _confirm_sudo_block(yes=False, purpose='test')
     assert calls == [['sudo', '-n', 'true']]
+
+
+def test_help_raw_outputs_direct_system_commands(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-raw'
+    cfg.network.name = 'net-raw'
+    cfg.firewall.table = 'fw-raw'
+    upsert_vm(store, cfg)
+    save_store(store, cfg_path)
+    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    rc = HelpRawCLI.main(argv=False, config=str(cfg_path), yes=True)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'aivm help raw' in out
+    assert 'sudo virsh dominfo vm-raw' in out
+    assert 'sudo virsh net-info net-raw' in out
+    assert 'sudo nft list table inet fw-raw' in out

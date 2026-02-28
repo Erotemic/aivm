@@ -163,7 +163,9 @@ def test_create_vm_raises_clear_error_when_virtiofsd_missing(
             raise CmdError(
                 cmd,
                 CmdResult(
-                    1, '', 'operation failed: Unable to find a satisfying virtiofsd'
+                    1,
+                    '',
+                    'operation failed: Unable to find a satisfying virtiofsd',
                 ),
             )
         return CmdResult(0, '', '')
@@ -177,3 +179,51 @@ def test_create_vm_raises_clear_error_when_virtiofsd_missing(
             share_source_dir=source_dir,
             share_tag='hostcode',
         )
+
+
+def test_create_vm_raises_clear_error_when_guest_memory_unavailable(
+    monkeypatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.vm.ram_mb = 8192
+    cfg.vm.cpus = 4
+    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+    )
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._write_cloud_init',
+        lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
+    )
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+    )
+
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd and cmd[0] == 'virt-install' and '--boot' in cmd:
+            raise CmdError(
+                cmd,
+                CmdResult(
+                    1,
+                    '',
+                    "ERROR    Did not find any UEFI binary path for arch 'x86_64'",
+                ),
+            )
+        if cmd and cmd[0] == 'virt-install':
+            raise CmdError(
+                cmd,
+                CmdResult(
+                    1,
+                    '',
+                    "qemu-system-x86_64: cannot set up guest memory 'pc.ram': Cannot allocate memory",
+                ),
+            )
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    with pytest.raises(RuntimeError, match='could not allocate guest RAM'):
+        create_or_start_vm(cfg, dry_run=False, recreate=False)

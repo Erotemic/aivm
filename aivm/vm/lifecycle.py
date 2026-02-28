@@ -23,6 +23,11 @@ def _is_missing_virtiofsd_error(ex: Exception) -> bool:
     return 'unable to find a satisfying virtiofsd' in str(ex).lower()
 
 
+def _is_guest_memory_allocation_error(ex: Exception) -> bool:
+    text = str(ex).lower()
+    return "cannot set up guest memory 'pc.ram': cannot allocate memory" in text
+
+
 def _virtiofsd_failure_message(source_dir: str) -> str:
     return (
         'VM creation failed because virtiofsd is not available on this host, '
@@ -30,6 +35,15 @@ def _virtiofsd_failure_message(source_dir: str) -> str:
         'Install virtiofs support on the host (e.g. package providing '
         '`virtiofsd`, often `qemu-system-common` or `virtiofsd`), or disable '
         'folder sharing for this run.'
+    )
+
+
+def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
+    return (
+        'VM creation failed because QEMU could not allocate guest RAM on the host.\n'
+        f'Requested resources: ram_mb={cfg.vm.ram_mb}, cpus={cfg.vm.cpus}.\n'
+        'This is common on nested/low-memory hosts. Try lowering VM resources '
+        '(for example ram_mb=2048 and cpus=2) and retry.'
     )
 
 
@@ -139,9 +153,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     run_cmd(
         ['mkdir', '-p', str(p['img_dir'])], sudo=True, check=True, capture=True
     )
-    run_cmd(
-        ['rm', '-f', str(tmp_img)], sudo=True, check=False, capture=True
-    )
+    run_cmd(['rm', '-f', str(tmp_img)], sudo=True, check=False, capture=True)
     log.info('Downloading base image to {} (showing progress)', base_img)
     try:
         run_cmd(
@@ -170,7 +182,9 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     base_root = Path(cfg.paths.base_dir) / cfg.vm.name
     grp = 'libvirt-qemu'
     if (
-        run_cmd(['getent', 'group', 'libvirt-qemu'], check=False, capture=True).code
+        run_cmd(
+            ['getent', 'group', 'libvirt-qemu'], check=False, capture=True
+        ).code
         != 0
     ):
         grp = 'kvm'
@@ -511,6 +525,8 @@ def create_or_start_vm(
     except CmdError as ex:
         if source_dir and _is_missing_virtiofsd_error(ex):
             raise RuntimeError(_virtiofsd_failure_message(source_dir)) from ex
+        if _is_guest_memory_allocation_error(ex):
+            raise RuntimeError(_memory_allocation_failure_message(cfg)) from ex
         if _is_missing_uefi_firmware_error(ex):
             log.warning(
                 'UEFI firmware not available on host. Retrying VM create with non-UEFI boot.'
@@ -525,7 +541,13 @@ def create_or_start_vm(
                 run_cmd(cmd_no_uefi, sudo=True, check=True, capture=True)
             except CmdError as ex2:
                 if source_dir and _is_missing_virtiofsd_error(ex2):
-                    raise RuntimeError(_virtiofsd_failure_message(source_dir)) from ex2
+                    raise RuntimeError(
+                        _virtiofsd_failure_message(source_dir)
+                    ) from ex2
+                if _is_guest_memory_allocation_error(ex2):
+                    raise RuntimeError(
+                        _memory_allocation_failure_message(cfg)
+                    ) from ex2
                 raise
         else:
             raise
