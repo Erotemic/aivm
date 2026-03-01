@@ -35,7 +35,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - UX and provisioning improvements (avoid sudo where possible, better prompts).
 
 
-## [Version 0.0.1] - 2026-02-25
+## [Version 0.1.0] - 2026-02-25
 
 ### Added
 - Project scaffold and initial CLI: single-file `aivm/cli.py` providing basic VM lifecycle and host utilities.
