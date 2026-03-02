@@ -243,6 +243,9 @@ def _write_cloud_init(
     passwd_block = ''
     sshd_pw = 'yes' if cfg.vm.allow_password_login else 'no'
     sshd_kbd = 'yes' if cfg.vm.allow_password_login else 'no'
+
+    # TODO: use textwrap to make these multi-line strings look
+    # nice with the code indentation.
     if cfg.vm.allow_password_login:
         if ':' in cfg.vm.password or '\n' in cfg.vm.password:
             raise RuntimeError(
@@ -480,7 +483,13 @@ def create_or_start_vm(
             _destroy_and_undefine_vm(cfg.vm.name)
 
     base_img = fetch_image(cfg, dry_run=dry_run)
-    ci = _write_cloud_init(cfg, dry_run=dry_run)
+    try:
+        ci = _write_cloud_init(cfg, dry_run=dry_run)
+    except Exception:
+        # TODO: better handling of errors when the user does not have the
+        # prerequisites installed. Tell them to run `aivm host install_deps`
+        raise
+
     vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
     seed_iso = ci['seed_iso']
 

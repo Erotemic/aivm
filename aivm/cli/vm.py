@@ -497,17 +497,22 @@ class VMCodeCLI(_BaseCommand):
             bool(args.dry_run),
             bool(args.yes),
         )
-        session = _prepare_attached_session(
-            config_opt=args.config,
-            vm_opt=args.vm,
-            host_src=Path(args.host_src).resolve(),
-            guest_dst_opt=args.guest_dst,
-            recreate_if_needed=bool(args.recreate_if_needed),
-            ensure_firewall_opt=bool(args.ensure_firewall),
-            force=bool(args.force),
-            dry_run=bool(args.dry_run),
-            yes=bool(args.yes),
-        )
+        try:
+            session = _prepare_attached_session(
+                config_opt=args.config,
+                vm_opt=args.vm,
+                host_src=Path(args.host_src).resolve(),
+                guest_dst_opt=args.guest_dst,
+                recreate_if_needed=bool(args.recreate_if_needed),
+                ensure_firewall_opt=bool(args.ensure_firewall),
+                force=bool(args.force),
+                dry_run=bool(args.dry_run),
+                yes=bool(args.yes),
+            )
+        except RuntimeError as ex:
+            # TODO: log the traceback to a trace call
+            log.error(str(ex))
+            return 1
         cfg = session.cfg
         if args.dry_run:
             print(
@@ -647,6 +652,10 @@ class VMSSHCLI(_BaseCommand):
             check=True,
             capture=False,
         )
+        # FIXME: these messages don't make sense after a user completes a
+        # successful ssh session, we should either say exited from whatever
+        # context we entered if the ssh worked, or detect if ssh failed and
+        # handle that case.
         print(f'Connected to {cfg.vm.user}@{ip} in {session.share_guest_dst}')
         print(f'Folder registered in {session.reg_path}')
         return 0
