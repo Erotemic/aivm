@@ -32,6 +32,15 @@ Features:
 * Optional host settings sync into VM user profile (git/vscode shell config, etc.)
 * Single global config store with compose-style VM and attachment entries
 
+.. note::
+
+   Two opt-in end-to-end test modules live in ``tests/``: ``test_e2e_nested.py``
+   (light smoke path) and ``test_e2e_full.py`` (comprehensive cycle).  They are
+   skipped by default; to run them locally set ``AIVM_E2E=1`` and invoke pytest
+   manually.  These tests require a host with libvirt/KVM, passwordless ``sudo``
+   and (optionally) an Ubuntu cloud image cached under
+   ``~/.cache/aivm/e2e``.
+
 Install
 -------
 
