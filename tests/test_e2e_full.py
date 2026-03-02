@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import uuid
 from pathlib import Path
 
@@ -27,13 +26,13 @@ import pytest
 # repository root to sys.path so we can import the module directly by
 # name rather than treating `tests` as a package.
 from test_e2e_nested import (
+    _ensure_user_cached_image,
     _make_temp_ssh_material,
     _run_cli,
-    _ensure_user_cached_image,
 )
+
 from aivm.config import AgentVMConfig
 from aivm.store import Store, save_store, upsert_vm
-
 
 # Re‑use the same helper logic from test_e2e_nested.
 
@@ -160,13 +159,24 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
         # checks.
         ssh_cmd = [
             'ssh',
-            '-i', str(priv),
-            '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'StrictHostKeyChecking=accept-new',
-            f"{cfg.vm.user}@{ip}",
-            'ls', '/'
+            '-i',
+            str(priv),
+            '-o',
+            'UserKnownHostsFile=/dev/null',
+            '-o',
+            'StrictHostKeyChecking=accept-new',
+            f'{cfg.vm.user}@{ip}',
+            'ls',
+            '/',
         ]
-        proc = subprocess.run(ssh_cmd, cwd=str(repo_root), env=env, check=False, capture_output=True, text=True)
+        proc = subprocess.run(
+            ssh_cmd,
+            cwd=str(repo_root),
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if proc.returncode != 0:
             raise AssertionError(
                 'SSH connectivity check failed:\n'
@@ -179,7 +189,14 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
         # exercise the provision command in dry-run mode (we disabled
         # real provisioning above to avoid flakes with apt locks).
         _run_cli(
-            ['vm', 'provision', '--yes', '--dry_run', '--config', str(cfg_path)],
+            [
+                'vm',
+                'provision',
+                '--yes',
+                '--dry_run',
+                '--config',
+                str(cfg_path),
+            ],
             cwd=repo_root,
             timeout_s=timeout_s,
             env=env,
@@ -187,7 +204,14 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
 
         # attach the host folder explicitly (should already be attached by ssh above)
         _run_cli(
-            ['vm', 'attach', str(share_dir), '--yes', '--config', str(cfg_path)],
+            [
+                'vm',
+                'attach',
+                str(share_dir),
+                '--yes',
+                '--config',
+                str(cfg_path),
+            ],
             cwd=repo_root,
             timeout_s=timeout_s,
             env=env,
@@ -197,7 +221,15 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
         test_sync = tmp_path / 'testrc'
         test_sync.write_text('echo hi', encoding='utf-8')
         _run_cli(
-            ['vm', 'sync_settings', '--yes', '--paths', str(test_sync), '--config', str(cfg_path)],
+            [
+                'vm',
+                'sync_settings',
+                '--yes',
+                '--paths',
+                str(test_sync),
+                '--config',
+                str(cfg_path),
+            ],
             cwd=repo_root,
             timeout_s=timeout_s,
             env=env,

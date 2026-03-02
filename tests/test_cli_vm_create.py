@@ -108,7 +108,9 @@ def test_vm_destroy_warns_when_network_becomes_unused(
     )
     rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
-    assert any("Network '{}'" in args[0] and args[1] == 'solo-net' for args, _ in warns)
+    assert any(
+        "Network '{}'" in args[0] and args[1] == 'solo-net' for args, _ in warns
+    )
 
 
 def test_vm_destroy_accepts_positional_vm_name(

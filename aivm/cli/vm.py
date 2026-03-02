@@ -338,7 +338,7 @@ class VMDestroyCLI(_BaseCommand):
                 if net is not None and not network_users(reg, net_name):
                     log.warning(
                         "Network '{}' now has no VM users and remains defined. "
-                        "Destroy it explicitly if no longer needed: aivm host net destroy {}",
+                        'Destroy it explicitly if no longer needed: aivm host net destroy {}',
                         net_name,
                         net_name,
                     )
@@ -1231,9 +1231,7 @@ def _reconcile_attached_vm(
             has_share = _attachment_has_mapping(attachment, mappings)
 
     if not policy.dry_run and vm_running is True and not has_share:
-        vm_has_shared_mem = vm_has_virtiofs_shared_memory(
-            cfg, use_sudo=False
-        )
+        vm_has_shared_mem = vm_has_virtiofs_shared_memory(cfg, use_sudo=False)
         if vm_has_shared_mem is False and not policy.recreate_if_needed:
             raise RuntimeError(
                 'Existing VM cannot accept virtiofs attachments because its domain '

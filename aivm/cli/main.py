@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 """Top-level modal CLI wiring, argv normalization, and logging setup."""
 
 from __future__ import annotations
@@ -7,16 +8,11 @@ from pathlib import Path
 
 import scriptconfig as scfg
 
-from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..status import (
-    clip as _clip_text,
-)
-from ..status import (
     render_global_status,
     render_status,
-    status_line,
 )
 from ..store import load_store
 from ..vm import (
@@ -218,7 +214,9 @@ class StatusCLI(_BaseCommand):
                 purpose=f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'.",
             )
         print(
-            render_status(cfg, path, detail=args.detail, use_sudo=bool(args.sudo))
+            render_status(
+                cfg, path, detail=args.detail, use_sudo=bool(args.sudo)
+            )
         )
         return 0
 
