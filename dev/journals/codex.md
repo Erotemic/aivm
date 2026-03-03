@@ -799,3 +799,17 @@ State of mind / reflection: this was a targeted correction that improved predict
 Risks/uncertainties: some users might expect behavior verbose=1 to force INFO and suppress VM/default verbosity; current logic treats 1 as neutral to preserve compatibility with prior VM-scoped verbosity behavior.
 
 Confidence: high; targeted tests and full suite passed (`97 passed, 2 skipped`).
+## 2026-03-03 15:16:58 +0000
+Fixed `ty check aivm` failure caused by strict attribute resolution on `scriptconfig` parsed objects.
+
+What changed:
+- In `aivm/cli/_common.py`, replaced direct assignment `parsed.yes_sudo = ...` with:
+  - compute `effective_yes_sudo`
+  - `setattr(parsed, 'yes_sudo', effective_yes_sudo)`
+  - set context var from the local computed value.
+
+Rationale: `ty` sees `parsed` as a generic `Config` and flags direct assignment to undeclared attributes. Using `setattr` preserves runtime behavior and avoids type-level unresolved-attribute diagnostics.
+
+State of mind / reflection: very narrow compatibility fix; minimal change with clear semantics.
+
+Confidence: high; `ty check aivm` passes and full tests remain green (`97 passed, 2 skipped`).

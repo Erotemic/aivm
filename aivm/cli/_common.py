@@ -64,12 +64,13 @@ class _BaseCommand(scfg.DataConfig):
         parsed = super().cli(*args, **kwargs)
         cfg_verbosity = _resolve_cfg_verbosity(getattr(parsed, 'config', None))
         cfg_yes_sudo = _resolve_cfg_yes_sudo(getattr(parsed, 'config', None))
-        parsed.yes_sudo = bool(
+        effective_yes_sudo = bool(
             getattr(parsed, 'yes_sudo', False)
             or getattr(parsed, 'yes', False)
             or cfg_yes_sudo
         )
-        _CURRENT_YES_SUDO.set(bool(parsed.yes_sudo))
+        setattr(parsed, 'yes_sudo', effective_yes_sudo)
+        _CURRENT_YES_SUDO.set(effective_yes_sudo)
         args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
