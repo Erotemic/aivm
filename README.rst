@@ -6,7 +6,8 @@ The aivm Module
 
    This project was written with GPT-5.3 Codex and is still being evaluated
    for correctness and safety. It is for experimental use only.
-   See ``docs/source/security.rst`` for the threat model and security posture.
+   See the `Security Model <docs/source/security.rst>`_ for the threat model
+   and security posture.
 
 
 |Pypi| |PypiDownloads| |ReadTheDocs| |GithubActions| |Codecov|
