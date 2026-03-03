@@ -17,6 +17,7 @@ This document is about *threats and mitigations* at the VM boundary. It is not
 a complete operational hardening guide for all host services.
 
 References:
+
 * QEMU security guide: `QEMU Security`_
 * libvirt QEMU/KVM driver overview: `libvirt QEMU driver`_
 
@@ -51,6 +52,7 @@ Important nuance:
   virtiofsd, microarchitectural side-channels). See `Historical examples`_.
 
 References:
+
 * QEMU’s statement on attack surface (emulated devices, monitor): `QEMU Security`_
 * KVM escape case study (example of kernel-level breakout): `Project Zero: EPYC escape (CVE-2021-29657)`_
 
@@ -80,6 +82,7 @@ Network boundary:
   is intended to be blocked unless explicitly allowed.
 
 References:
+
 * libvirt filesystem sharing + virtiofs configuration: `libvirt Domain XML (filesystems/virtiofs)`_
 * libvirt network filtering concepts (optional): `libvirt NWFilter`_
 
@@ -107,6 +110,7 @@ Guidance:
 * Prefer read-only sharing when possible.
 
 References:
+
 * virtiofs overview and constraints: `libvirt virtiofs guide`_
 
 
@@ -128,6 +132,7 @@ processes (depending on configuration). ``aivm`` should treat QEMU monitor acces
 as host-privileged.
 
 References:
+
 * QEMU security guide (emulated devices, monitor risk): `QEMU Security`_
 
 2) Kernel virtualization paths (KVM + vhost backends)
@@ -146,6 +151,7 @@ and that the default will try ``vhost`` if present and silently fall back to
 ``qemu`` otherwise.
 
 References:
+
 * libvirt interface driver backend (qemu vs vhost, default behavior):
   `libvirt Domain XML (interface driver backend)`_
 
@@ -167,6 +173,7 @@ bugs have existed that allowed a privileged guest to leverage the shared directo
 to access host devices.
 
 References:
+
 * virtiofsd security/sandbox behavior: `virtiofsd documentation`_
 * libvirt virtiofs config (sandbox mode, idmap, readonly): `libvirt Domain XML (filesystems/virtiofs)`_
 * Example virtiofsd privilege-escalation class issue (CVE-2020-35517): `CVE-2020-35517 record`_
@@ -179,6 +186,7 @@ execution vulnerabilities that can allow information leakage across isolation
 boundaries (including VM boundaries), depending on CPU model and mitigation state.
 
 References:
+
 * Linux kernel documentation for L1TF/L1 Terminal Fault: `Linux kernel doc: L1TF (CVE-2018-3646 class)`_
 * Ubuntu vulnerability note for L1TF (virtualization impact): `Ubuntu: L1TF vulnerability page`_
 
@@ -192,6 +200,7 @@ flooding). These are often easier than escapes.
 Mitigations typically involve cgroups/resource limits and sensible disk sizing.
 
 References:
+
 * QEMU security guide notes cgroups/resource limits as a control: `QEMU Security`_
 
 
@@ -379,6 +388,7 @@ This profile model is not currently a stable interface; it is included here as
 planning context.
 
 References:
+
 * QEMU hardening controls and attack surface notes: `QEMU Security`_
 * libvirt driver/domain options relevant to networking/filesystems:
   `libvirt QEMU driver`_
@@ -408,6 +418,7 @@ Operator guidance:
 management channels are overly powerful.)
 
 References:
+
 * QEMU security guide (sensitive management interfaces): `QEMU Security`_
 
 
@@ -443,9 +454,6 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 * If using additional host hardening controls (AppArmor/SELinux/cgroups), treat
   them as defense-in-depth external to ``aivm``.
 
-
-References
-----------
 
 .. _QEMU Security: https://www.qemu.org/docs/master/system/security.html
 
