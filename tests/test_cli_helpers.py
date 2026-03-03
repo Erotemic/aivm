@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import aivm.cli._common as common_mod
 from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
 from aivm.cli.help import HelpRawCLI, PlanCLI
 from aivm.cli.vm import (
@@ -109,49 +110,80 @@ def test_plan_includes_nondefault_config_flag(monkeypatch, capsys) -> None:
     assert f'--config {custom}' in out
 
 
-def test_confirm_sudo_block_yes_only_checks_passwordless_probe(
-    monkeypatch,
-) -> None:
+def test_confirm_sudo_block_arms_intent(monkeypatch) -> None:
     monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('aivm.cli._common._SUDO_VALIDATED', False)
     calls = []
-
-    def fake_run_cmd(cmd, **kwargs):
-        calls.append(cmd)
-        from aivm.util import CmdResult
-
-        return CmdResult(0, '', '')
-
     monkeypatch.setattr(
-        'aivm.cli._common.run_cmd',
-        fake_run_cmd,
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
     )
-    _confirm_sudo_block(yes=True, purpose='test')
-    assert calls == [['sudo', '-n', 'true']]
+    _confirm_sudo_block(
+        yes=True,
+        purpose='test',
+    )
+    assert calls == [
+        {
+            'yes': True,
+            'purpose': 'test',
+        }
+    ]
 
 
-def test_confirm_sudo_block_confirmed_skips_sudo_validate_when_passwordless(
+def test_confirm_sudo_block_noop_when_root(monkeypatch) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 0)
+    calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    _confirm_sudo_block(yes=False, purpose='test')
+    assert calls == []
+
+
+def test_confirm_sudo_block_uses_effective_yes_sudo_context(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('aivm.cli._common._SUDO_VALIDATED', False)
-    monkeypatch.setattr('builtins.input', lambda _: 'y')
-
     calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    token = common_mod._CURRENT_YES_SUDO.set(True)
+    try:
+        _confirm_sudo_block(yes=False, purpose='test')
+    finally:
+        common_mod._CURRENT_YES_SUDO.reset(token)
+    assert calls == [{'yes': True, 'purpose': 'test'}]
 
-    def fake_run_cmd(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd == ['sudo', '-n', 'true']:
-            from aivm.util import CmdResult
 
-            return CmdResult(0, '', '')
-        raise AssertionError(f'Unexpected command: {cmd!r}')
+def test_cli_yes_sudo_defaults_from_config(monkeypatch, tmp_path: Path) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.behavior.yes_sudo = True
+    save_store(store, cfg_path)
+    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    parsed = PlanCLI.cli(
+        argv=False,
+        data={'config': str(cfg_path), 'yes': False, 'yes_sudo': False},
+    )
+    assert bool(parsed.yes_sudo) is True
 
-    monkeypatch.setattr('aivm.cli._common.run_cmd', fake_run_cmd)
-    _confirm_sudo_block(yes=False, purpose='test')
-    assert calls == [['sudo', '-n', 'true']]
+
+def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.verbosity = 2
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-verbose'
+    cfg.verbosity = 2
+    upsert_vm(store, cfg)
+    store.active_vm = cfg.vm.name
+    store.behavior.verbose = 4
+    save_store(store, cfg_path)
+    assert common_mod._resolve_cfg_verbosity(str(cfg_path)) == 4
 
 
 def test_help_raw_outputs_direct_system_commands(

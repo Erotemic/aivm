@@ -101,7 +101,8 @@ class NetDestroyCLI(_BaseCommand):
                 'Detach or destroy those VMs first, or use --force.'
             )
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Destroy/undefine libvirt network.'
+            yes=bool(args.yes),
+            purpose='Destroy/undefine libvirt network.',
         )
         destroy_network(cfg, dry_run=args.dry_run)
         if not args.dry_run:

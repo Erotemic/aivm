@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import scriptconfig as scfg
 
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
+from ..host import check_commands, host_is_debian_like, install_deps_debian
 from ..net import ensure_network
 from ..resource_checks import (
     vm_resource_impossible_lines,
@@ -22,7 +25,6 @@ from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..status import (
     probe_firewall,
     probe_network,
-    probe_provisioned,
     probe_ssh_ready,
     probe_vm_state,
 )
@@ -84,6 +86,9 @@ class VMUpCLI(_BaseCommand):
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = _load_cfg_with_path(args.config)
+        _maybe_install_missing_host_deps(
+            yes=bool(args.yes), dry_run=bool(args.dry_run)
+        )
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start/redefine VM '{cfg.vm.name}' and libvirt resources.",
@@ -130,10 +135,18 @@ class VMCreateCLI(_BaseCommand):
         cfg = reg.defaults.expanded_paths()
         if args.vm:
             cfg.vm.name = str(args.vm).strip()
-        _warn_if_vm_resources_high(cfg)
+        for line in vm_resource_warning_lines(cfg):
+            log.warning(line)
         if not bool(args.yes):
             cfg = _review_vm_create_overrides_interactive(cfg, cfg_path)
-        _raise_if_vm_resources_physically_impossible(cfg)
+        problems = vm_resource_impossible_lines(cfg)
+        if problems:
+            detail = '\n  - '.join(problems)
+            raise RuntimeError(
+                'Requested VM resources are not feasible on this host right now:\n'
+                f'  - {detail}\n'
+                'Lower vm.ram_mb / vm.cpus and retry.'
+            )
         net = find_network(reg, cfg.network.name)
         if net is None:
             upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
@@ -148,6 +161,9 @@ class VMCreateCLI(_BaseCommand):
                 'Use --force to overwrite. Or use a different name and try again'
             )
             return 1
+        _maybe_install_missing_host_deps(
+            yes=bool(args.yes), dry_run=bool(args.dry_run)
+        )
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' from config defaults.",
@@ -249,22 +265,6 @@ def _review_vm_create_overrides_interactive(
         print("Please answer 'y', 'e', or 'n'.")
 
 
-def _warn_if_vm_resources_high(cfg: AgentVMConfig) -> None:
-    for line in vm_resource_warning_lines(cfg):
-        log.warning(line)
-
-
-def _raise_if_vm_resources_physically_impossible(cfg: AgentVMConfig) -> None:
-    problems = vm_resource_impossible_lines(cfg)
-    if problems:
-        detail = '\n  - '.join(problems)
-        raise RuntimeError(
-            'Requested VM resources are not feasible on this host right now:\n'
-            f'  - {detail}\n'
-            'Lower vm.ram_mb / vm.cpus and retry.'
-        )
-
-
 class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
@@ -276,13 +276,14 @@ class VMWaitIPCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg = _load_cfg(args.config)
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Query VM networking state via virsh to resolve VM IP.',
         )
         print(
             wait_for_ip(
-                _load_cfg(args.config),
+                cfg,
                 timeout_s=args.timeout,
                 dry_run=args.dry_run,
             )
@@ -296,10 +297,12 @@ class VMStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
+        cfg = _load_cfg(args.config)
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Inspect VM state via virsh.'
+            yes=bool(args.yes),
+            purpose='Inspect VM state via virsh.',
         )
-        print(vm_status(_load_cfg(args.config)))
+        print(vm_status(cfg))
         return 0
 
 
@@ -509,7 +512,7 @@ class VMCodeCLI(_BaseCommand):
                 yes=bool(args.yes),
             )
         except RuntimeError as ex:
-            # TODO: log the traceback to a trace call
+            log.opt(exception=True).trace('Failed preparing code session')
             log.error(str(ex))
             return 1
         cfg = session.cfg
@@ -635,11 +638,14 @@ class VMSSHCLI(_BaseCommand):
 
         ip = session.ip
         assert ip is not None
+        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
+            cfg, dry_run=False, yes=bool(args.yes)
+        )
         ident = require_ssh_identity(cfg.paths.ssh_identity_file)
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        run_cmd(
+        ssh_result = run_cmd(
             [
                 'ssh',
                 '-t',
@@ -648,14 +654,20 @@ class VMSSHCLI(_BaseCommand):
                 remote_cmd,
             ],
             sudo=False,
-            check=True,
+            check=False,
             capture=False,
         )
-        # FIXME: these messages don't make sense after a user completes a
-        # successful ssh session, we should either say exited from whatever
-        # context we entered if the ssh worked, or detect if ssh failed and
-        # handle that case.
-        print(f'Connected to {cfg.vm.user}@{ip} in {session.share_guest_dst}')
+        if ssh_result.code != 0:
+            log.error(
+                'SSH command failed (exit code {}) for {}@{}',
+                ssh_result.code,
+                cfg.vm.user,
+                ip,
+            )
+            return int(ssh_result.code) if ssh_result.code else 1
+        print(f'SSH session ended for {cfg.vm.user}@{ip}')
+        if ssh_cfg_updated:
+            print(f'SSH entry updated in {ssh_cfg}')
         print(f'Folder registered in {session.reg_path}')
         return 0
 
@@ -718,9 +730,8 @@ class VMAttachCLI(_BaseCommand):
         vm_running = False
         vm_defined = False
         sudo_confirmed = False
-        vm_running_probe, vm_defined_probe, _ = _check_vm_state(
-            cfg, use_sudo=False
-        )
+        vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=False)
+        vm_running_probe = vm_out.ok
         vm_defined = vm_defined_probe
         if not vm_defined:
             _confirm_sudo_block(
@@ -728,9 +739,8 @@ class VMAttachCLI(_BaseCommand):
                 purpose=f"Inspect VM '{cfg.vm.name}' share mappings and attach folder if needed.",
             )
             sudo_confirmed = True
-            vm_running_probe, vm_defined_probe, _ = _check_vm_state(
-                cfg, use_sudo=True
-            )
+            vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=True)
+            vm_running_probe = vm_out.ok
             vm_defined = vm_defined_probe
         if vm_defined:
             if not sudo_confirmed:
@@ -802,6 +812,65 @@ class VMListCLI(_BaseCommand):
         )
 
 
+@dataclass(frozen=True)
+class VMUpdateDrift:
+    cpus: tuple[int, int] | None = None
+    ram_mb: tuple[int, int] | None = None
+    disk_bytes: tuple[int, int] | None = None
+    disk_path: str = ''
+    notes: tuple[str, ...] = ()
+
+    def has_changes(self) -> bool:
+        return any((self.cpus, self.ram_mb, self.disk_bytes))
+
+
+class VMUpdateCLI(_BaseCommand):
+    """Reconcile VM config drift against live libvirt settings."""
+
+    vm = scfg.Value('', help='Optional VM name override.')
+    restart = scfg.Value(
+        'auto',
+        help='Restart policy when changes require reboot to take effect: auto, always, never.',
+    )
+    dry_run = scfg.Value(
+        False, isflag=True, help='Print actions without running.'
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        restart_policy = str(args.restart or 'auto').strip().lower()
+        if restart_policy not in {'auto', 'always', 'never'}:
+            raise RuntimeError('--restart must be one of: auto, always, never')
+        cfg, _ = _load_cfg_with_path(args.config, vm_opt=args.vm)
+        drift, vm_running = _vm_update_drift(cfg, yes=bool(args.yes))
+        if drift.notes:
+            print('Detected diagnostics (not auto-applied):')
+            for note in drift.notes:
+                print(f'  - {note}')
+        if not drift.has_changes():
+            print(f'VM {cfg.vm.name} is already in sync with config.')
+            return 0
+        _print_vm_update_plan(cfg, drift)
+        _confirm_sudo_block(
+            yes=bool(args.yes),
+            purpose=f"Update VM '{cfg.vm.name}' to match config drift.",
+        )
+        changed, restart_required = _apply_vm_update(
+            cfg, drift, dry_run=bool(args.dry_run)
+        )
+        if changed and restart_required and vm_running:
+            _maybe_restart_vm_after_update(
+                cfg,
+                restart_policy=restart_policy,
+                dry_run=bool(args.dry_run),
+                yes=bool(args.yes),
+            )
+        elif changed:
+            print('Update complete.')
+        return 0
+
+
 class CodeCLI(VMCodeCLI):
     """Top-level shortcut for `aivm vm code`."""
 
@@ -822,6 +891,7 @@ class VMModalCLI(scfg.ModalCLI):
     up = VMUpCLI
     wait_ip = VMWaitIPCLI
     status = VMStatusCLI
+    update = VMUpdateCLI
     destroy = VMDestroyCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI
@@ -852,6 +922,429 @@ class ReconcileResult:
     attachment: ResolvedAttachment
     cached_ip: str | None
     cached_ssh_ok: bool
+
+
+def _bytes_to_gib(size_bytes: int) -> float:
+    return float(size_bytes) / float(1024**3)
+
+
+def _maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
+    missing, _ = check_commands()
+    if not missing:
+        return
+    missing_txt = ', '.join(missing)
+    print(f'Missing required host dependencies: {missing_txt}')
+    print('Suggested command: aivm host install_deps')
+    if yes:
+        print(
+            '--yes was provided; skipping interactive dependency install prompt.'
+        )
+        return
+    if dry_run:
+        print(
+            'DRYRUN: would prompt to install missing dependencies before VM setup.'
+        )
+        return
+    if not host_is_debian_like():
+        raise RuntimeError(
+            'Host is not detected as Debian/Ubuntu. Install dependencies manually, then retry.'
+        )
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            'Missing required host dependencies in non-interactive mode. '
+            'Run `aivm host install_deps` first.'
+        )
+    ans = (
+        input('Install missing dependencies now with apt? [Y/n]: ')
+        .strip()
+        .lower()
+    )
+    do_install = ans in {'', 'y', 'yes'}
+    if not do_install:
+        raise RuntimeError('Aborted by user.')
+    _confirm_sudo_block(
+        yes=bool(yes),
+        purpose='Install host dependencies with apt/libvirt tooling.',
+    )
+    install_deps_debian(assume_yes=True)
+    missing_after, _ = check_commands()
+    if missing_after:
+        raise RuntimeError(
+            'Required dependencies are still missing after install attempt: '
+            + ', '.join(missing_after)
+        )
+
+
+def _parse_qemu_img_virtual_size(info_json: str) -> int | None:
+    try:
+        raw = json.loads(info_json or '{}')
+    except Exception:
+        return None
+    size = raw.get('virtual-size')
+    if isinstance(size, int) and size > 0:
+        return size
+    return None
+
+
+def _parse_vm_disk_path_from_dumpxml(dumpxml_text: str) -> str | None:
+    try:
+        root = ET.fromstring(dumpxml_text)
+    except ET.ParseError:
+        return None
+    devices = root.find('devices')
+    if devices is None:
+        return None
+    for disk in devices.findall('disk'):
+        if disk.get('device') != 'disk':
+            continue
+        source = disk.find('source')
+        if source is None:
+            continue
+        source_file = (source.get('file') or '').strip()
+        if source_file:
+            return source_file
+    return None
+
+
+def _parse_vm_network_from_dumpxml(dumpxml_text: str) -> str | None:
+    try:
+        root = ET.fromstring(dumpxml_text)
+    except ET.ParseError:
+        return None
+    devices = root.find('devices')
+    if devices is None:
+        return None
+    for iface in devices.findall('interface'):
+        if (iface.get('type') or '').strip() != 'network':
+            continue
+        source = iface.find('source')
+        if source is None:
+            continue
+        network_name = (source.get('network') or '').strip()
+        if network_name:
+            return network_name
+    return None
+
+
+def _resolve_vm_disk_path(
+    cfg: AgentVMConfig, *, use_sudo: bool
+) -> tuple[Path, tuple[str, ...]]:
+    notes: list[str] = []
+    expected = (
+        Path(cfg.paths.base_dir)
+        / cfg.vm.name
+        / 'images'
+        / f'{cfg.vm.name}.qcow2'
+    )
+    res = run_cmd(
+        virsh_system_cmd('dumpxml', cfg.vm.name),
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        notes.append(
+            'Could not read domain XML; falling back to expected aivm disk path.'
+        )
+        return expected, tuple(notes)
+    xml_path = _parse_vm_disk_path_from_dumpxml(res.stdout)
+    if not xml_path:
+        notes.append(
+            'Domain XML has no file-backed disk entry; falling back to expected aivm disk path.'
+        )
+        return expected, tuple(notes)
+    return Path(xml_path), tuple(notes)
+
+
+def _qemu_img_virtual_size_bytes(
+    path: Path, *, use_sudo: bool
+) -> tuple[int | None, str]:
+    res = run_cmd(
+        ['qemu-img', 'info', '--output=json', str(path)],
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        err = (res.stderr or res.stdout or '').strip()
+        return None, err
+    return _parse_qemu_img_virtual_size(res.stdout), ''
+
+
+def _parse_domblkinfo_capacity(domblkinfo_text: str) -> int | None:
+    for line in (domblkinfo_text or '').splitlines():
+        if ':' not in line:
+            continue
+        key, val = [x.strip() for x in line.split(':', 1)]
+        if key.lower() == 'capacity':
+            m = re.search(r'(\d+)', val)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def _virsh_domblk_capacity_bytes(
+    cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
+) -> int | None:
+    res = run_cmd(
+        virsh_system_cmd('domblkinfo', cfg.vm.name, path_or_target),
+        sudo=use_sudo,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        return None
+    return _parse_domblkinfo_capacity(res.stdout)
+
+
+def _vm_update_drift(
+    cfg: AgentVMConfig, *, yes: bool
+) -> tuple[VMUpdateDrift, bool]:
+    notes: list[str] = []
+    dominfo = run_cmd(
+        virsh_system_cmd('dominfo', cfg.vm.name),
+        sudo=False,
+        check=False,
+        capture=True,
+    )
+    if dominfo.code != 0:
+        _confirm_sudo_block(
+            yes=bool(yes),
+            purpose=f"Inspect VM '{cfg.vm.name}' state/config for update planning.",
+        )
+        dominfo = run_cmd(
+            virsh_system_cmd('dominfo', cfg.vm.name),
+            sudo=True,
+            check=False,
+            capture=True,
+        )
+    if dominfo.code != 0:
+        raise RuntimeError(
+            f"VM '{cfg.vm.name}' is not defined (or inaccessible via sudo)."
+        )
+
+    cur_cpus, cur_mem_mib = _parse_dominfo_hardware(dominfo.stdout)
+    cpus = (
+        (cur_cpus, int(cfg.vm.cpus))
+        if cur_cpus is not None and cur_cpus != int(cfg.vm.cpus)
+        else None
+    )
+    ram_mb = (
+        (cur_mem_mib, int(cfg.vm.ram_mb))
+        if cur_mem_mib is not None and cur_mem_mib != int(cfg.vm.ram_mb)
+        else None
+    )
+
+    state_res = run_cmd(
+        virsh_system_cmd('domstate', cfg.vm.name),
+        sudo=False,
+        check=False,
+        capture=True,
+    )
+    if state_res.code != 0:
+        state_res = run_cmd(
+            virsh_system_cmd('domstate', cfg.vm.name),
+            sudo=True,
+            check=False,
+            capture=True,
+        )
+    vm_running = (
+        state_res.code == 0
+        and 'running' in (state_res.stdout or '').strip().lower()
+    )
+
+    sudo_confirmed = False
+
+    disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=False)
+    if (
+        any('Could not read domain XML' in note for note in disk_notes)
+        and not sudo_confirmed
+    ):
+        _confirm_sudo_block(
+            yes=bool(yes),
+            purpose=f"Inspect VM '{cfg.vm.name}' disk/network details via libvirt.",
+        )
+        sudo_confirmed = True
+        disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=True)
+    notes.extend(disk_notes)
+    cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
+        disk_path, use_sudo=False
+    )
+    if cur_disk is None:
+        if not sudo_confirmed:
+            _confirm_sudo_block(
+                yes=bool(yes),
+                purpose=f"Inspect VM '{cfg.vm.name}' disk image size via qemu-img.",
+            )
+            sudo_confirmed = True
+        cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
+            disk_path, use_sudo=True
+        )
+    if cur_disk is None:
+        if (
+            qemu_img_err
+            and 'failed to get shared "write" lock' in qemu_img_err.lower()
+        ):
+            notes.append(
+                'qemu-img could not inspect disk while VM was running (shared write lock); falling back to virsh domblkinfo.'
+            )
+        domblk = _virsh_domblk_capacity_bytes(
+            cfg, str(disk_path), use_sudo=bool(sudo_confirmed)
+        )
+        if domblk is None and not sudo_confirmed:
+            _confirm_sudo_block(
+                yes=bool(yes),
+                purpose=f"Inspect VM '{cfg.vm.name}' disk capacity via virsh domblkinfo.",
+            )
+            sudo_confirmed = True
+            domblk = _virsh_domblk_capacity_bytes(
+                cfg, str(disk_path), use_sudo=True
+            )
+        cur_disk = domblk
+    desired_disk = int(cfg.vm.disk_gb) * (1024**3)
+    disk_bytes = (
+        (cur_disk, desired_disk)
+        if cur_disk is not None and cur_disk != desired_disk
+        else None
+    )
+    if cur_disk is None:
+        notes.append(f'Could not determine disk size from {disk_path}.')
+
+    xml = run_cmd(
+        virsh_system_cmd('dumpxml', cfg.vm.name),
+        sudo=False,
+        check=False,
+        capture=True,
+    )
+    if xml.code != 0:
+        if not sudo_confirmed:
+            _confirm_sudo_block(
+                yes=bool(yes),
+                purpose=f"Inspect VM '{cfg.vm.name}' network details via libvirt.",
+            )
+            sudo_confirmed = True
+        xml = run_cmd(
+            virsh_system_cmd('dumpxml', cfg.vm.name),
+            sudo=True,
+            check=False,
+            capture=True,
+        )
+    if xml.code == 0:
+        live_network = _parse_vm_network_from_dumpxml(xml.stdout)
+        want_network = (cfg.network.name or '').strip()
+        if live_network and want_network and live_network != want_network:
+            notes.append(
+                f'Network drift detected (live={live_network}, config={want_network}); auto-update is not implemented for network rebinding.'
+            )
+
+    return (
+        VMUpdateDrift(
+            cpus=cpus,
+            ram_mb=ram_mb,
+            disk_bytes=disk_bytes,
+            disk_path=str(disk_path),
+            notes=tuple(notes),
+        ),
+        vm_running,
+    )
+
+
+def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
+    print(f'Planned VM update for {cfg.vm.name}:')
+    if drift.cpus is not None:
+        cur, want = drift.cpus
+        print(f'  - cpus: {cur} -> {want}')
+    if drift.ram_mb is not None:
+        cur, want = drift.ram_mb
+        print(f'  - ram_mb: {cur} -> {want}')
+    if drift.disk_bytes is not None:
+        cur, want = drift.disk_bytes
+        print(
+            f'  - disk_gb: {_bytes_to_gib(cur):.2f} GiB -> {_bytes_to_gib(want):.2f} GiB ({drift.disk_path})'
+        )
+
+
+def _apply_vm_update(
+    cfg: AgentVMConfig, drift: VMUpdateDrift, *, dry_run: bool
+) -> tuple[bool, bool]:
+    changed = False
+    restart_required = False
+    if drift.cpus is not None:
+        _, want = drift.cpus
+        cmd = virsh_system_cmd('setvcpus', cfg.vm.name, str(want), '--config')
+        if dry_run:
+            print(f'DRYRUN: {" ".join(cmd)}')
+        else:
+            run_cmd(cmd, sudo=True, check=True, capture=True)
+            print(f'Updated CPU count to {want}.')
+        changed = True
+        restart_required = True
+    if drift.ram_mb is not None:
+        _, want = drift.ram_mb
+        kib = int(want) * 1024
+        max_cmd = virsh_system_cmd(
+            'setmaxmem', cfg.vm.name, str(kib), '--config'
+        )
+        mem_cmd = virsh_system_cmd('setmem', cfg.vm.name, str(kib), '--config')
+        if dry_run:
+            print(f'DRYRUN: {" ".join(max_cmd)}')
+            print(f'DRYRUN: {" ".join(mem_cmd)}')
+        else:
+            run_cmd(max_cmd, sudo=True, check=True, capture=True)
+            run_cmd(mem_cmd, sudo=True, check=True, capture=True)
+            print(f'Updated RAM to {want} MiB.')
+        changed = True
+        restart_required = True
+    if drift.disk_bytes is not None:
+        cur, want = drift.disk_bytes
+        if want < cur:
+            raise RuntimeError(
+                f'Disk shrink is not supported safely (live={_bytes_to_gib(cur):.2f} GiB, config={_bytes_to_gib(want):.2f} GiB).'
+            )
+        if want > cur:
+            cmd = ['qemu-img', 'resize', drift.disk_path, f'{cfg.vm.disk_gb}G']
+            if dry_run:
+                print(f'DRYRUN: {" ".join(cmd)}')
+            else:
+                run_cmd(cmd, sudo=True, check=True, capture=True)
+                print(
+                    f'Expanded disk to {_bytes_to_gib(want):.2f} GiB at {drift.disk_path}.'
+                )
+            changed = True
+    return changed, restart_required
+
+
+def _maybe_restart_vm_after_update(
+    cfg: AgentVMConfig, *, restart_policy: str, dry_run: bool, yes: bool
+) -> None:
+    should_restart = False
+    if restart_policy == 'always':
+        should_restart = True
+    elif restart_policy == 'never':
+        should_restart = False
+    else:
+        if yes:
+            should_restart = True
+        elif sys.stdin.isatty():
+            ans = (
+                input(
+                    'A restart is needed for CPU/RAM changes to take effect now. Restart VM now? [y/N]: '
+                )
+                .strip()
+                .lower()
+            )
+            should_restart = ans in {'y', 'yes'}
+    if not should_restart:
+        print(
+            f'CPU/RAM updates are saved, but VM {cfg.vm.name} must be restarted for them to take effect.'
+        )
+        return
+    cmd = virsh_system_cmd('reboot', cfg.vm.name)
+    if dry_run:
+        print(f'DRYRUN: {" ".join(cmd)}')
+    else:
+        run_cmd(cmd, sudo=True, check=True, capture=True)
+        print(f'Restarted VM {cfg.vm.name}.')
 
 
 def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
@@ -946,6 +1439,7 @@ def _upsert_ssh_config_entry(
         path=ssh_cfg,
         purpose=f"Update SSH config entry for host '{block_name}'.",
     )
+    log.info('Writing SSH config entry to {}', ssh_cfg)
     ssh_cfg.write_text(updated, encoding='utf-8')
     return ssh_cfg, True
 
@@ -961,48 +1455,6 @@ def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
         text = f'{ex.result.stderr}\n{ex.result.stdout}\n{text}'
     m = re.search(r"virtiofs export directory '([^']+)' does not exist", text)
     return m.group(1) if m else None
-
-
-def _check_network(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, str]:
-    out = probe_network(cfg, use_sudo=use_sudo)
-    return out.ok, out.detail
-
-
-def _check_firewall(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, str]:
-    out = probe_firewall(cfg, use_sudo=use_sudo)
-    return out.ok, out.detail
-
-
-def _file_exists(path: Path, *, use_sudo: bool) -> bool:
-    return (
-        run_cmd(
-            ['test', '-f', str(path)], sudo=use_sudo, check=False, capture=True
-        ).code
-        == 0
-    )
-
-
-def _check_vm_state(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, bool, str]:
-    out, vm_defined = probe_vm_state(cfg, use_sudo=use_sudo)
-    return out.ok, vm_defined, out.detail
-
-
-def _check_ssh_ready(cfg: AgentVMConfig, ip: str) -> tuple[bool, str, str]:
-    out = probe_ssh_ready(cfg, ip)
-    return bool(out.ok), out.detail, out.diag
-
-
-def _check_provisioned(
-    cfg: AgentVMConfig, ip: str
-) -> tuple[bool | None, str, str]:
-    out = probe_provisioned(cfg, ip)
-    return out.ok, out.detail, out.diag
 
 
 def _parse_dominfo_hardware(dominfo_text: str) -> tuple[int | None, int | None]:
@@ -1075,20 +1527,16 @@ def _resolve_ip_for_ssh_ops(
 ) -> str:
     ip = get_ip_cached(cfg)
     if ip:
-        ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        ssh_ok = bool(probe_ssh_ready(cfg, ip).ok)
         if ssh_ok:
             return ip
-    _confirm_sudo_block(yes=bool(yes), purpose=purpose)
+    _confirm_sudo_block(
+        yes=bool(yes),
+        purpose=purpose,
+    )
     ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
     wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     return ip
-
-
-def _select_cfg_for_vm_name(
-    vm_name: str, *, reason: str
-) -> tuple[AgentVMConfig, Path]:
-    del reason
-    return _load_cfg_with_path(None, vm_opt=vm_name)
 
 
 def _record_attachment(
@@ -1175,12 +1623,12 @@ def _reconcile_attached_vm(
     cached_ip = get_ip_cached(cfg) if not policy.dry_run else None
     cached_ssh_ok = False
     if cached_ip:
-        cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
+        cached_ssh_ok = bool(probe_ssh_ready(cfg, cached_ip).ok)
     vm_running_probe = (
         _probe_vm_running_nonsudo(cfg.vm.name) if not policy.dry_run else None
     )
 
-    net_probe, _ = _check_network(cfg, use_sudo=False)
+    net_probe = probe_network(cfg, use_sudo=False).ok
     need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
     if need_network_ensure:
         _confirm_sudo_block(
@@ -1195,13 +1643,13 @@ def _reconcile_attached_vm(
         and policy.ensure_firewall_opt
         and (not cached_ssh_ok)
     ):
-        fw_probe, _ = _check_firewall(cfg, use_sudo=False)
+        fw_probe = probe_firewall(cfg, use_sudo=False).ok
         if fw_probe is None:
             _confirm_sudo_block(
                 yes=bool(policy.yes),
                 purpose=f"Inspect firewall table '{cfg.firewall.table}'.",
             )
-            fw_probe, _ = _check_firewall(cfg, use_sudo=True)
+            fw_probe = probe_firewall(cfg, use_sudo=True).ok
         need_firewall_apply = fw_probe is not True
     if need_firewall_apply:
         _confirm_sudo_block(
@@ -1225,6 +1673,9 @@ def _reconcile_attached_vm(
 
     need_vm_start_or_create = policy.dry_run or (vm_running is not True)
     if need_vm_start_or_create:
+        _maybe_install_missing_host_deps(
+            yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+        )
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
@@ -1358,11 +1809,53 @@ def _prepare_attached_session(
     if not host_src.is_dir():
         raise RuntimeError(f'Host source path is not a directory: {host_src}')
 
-    cfg, cfg_path = _resolve_cfg_for_code(
-        config_opt=config_opt,
-        vm_opt=vm_opt,
-        host_src=host_src,
-    )
+    try:
+        cfg, cfg_path = _resolve_cfg_for_code(
+            config_opt=config_opt,
+            vm_opt=vm_opt,
+            host_src=host_src,
+        )
+    except RuntimeError as ex:
+        msg = str(ex)
+        if 'No VM definitions found in config store' not in msg:
+            raise
+        if not yes:
+            if not sys.stdin.isatty():
+                raise RuntimeError(
+                    'No managed VM found for this folder. Re-run with --yes to initialize defaults and create one automatically.'
+                ) from ex
+            print('No managed VM found for this folder.')
+            ans = (
+                input(
+                    'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+                )
+                .strip()
+                .lower()
+            )
+            if ans not in {'', 'y', 'yes'}:
+                raise RuntimeError('Aborted by user.') from ex
+        from .config import InitCLI
+
+        InitCLI.main(
+            argv=False,
+            config=config_opt,
+            yes=True,
+            defaults=True,
+            force=False,
+        )
+        VMCreateCLI.main(
+            argv=False,
+            config=config_opt,
+            vm=vm_opt,
+            yes=True,
+            dry_run=bool(dry_run),
+            force=False,
+        )
+        cfg, cfg_path = _resolve_cfg_for_code(
+            config_opt=config_opt,
+            vm_opt=vm_opt,
+            host_src=host_src,
+        )
 
     attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
     reconcile = _reconcile_attached_vm(
@@ -1403,7 +1896,7 @@ def _prepare_attached_session(
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)
     if ip:
-        ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        ssh_ok = bool(probe_ssh_ready(cfg, ip).ok)
     else:
         ssh_ok = False
     if not ssh_ok:

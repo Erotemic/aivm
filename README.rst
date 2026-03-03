@@ -57,6 +57,7 @@ Config-store flow:
 
    aivm config init
    aivm vm create
+   aivm vm update
    aivm config discover
    aivm config show
    aivm config edit
@@ -65,7 +66,6 @@ Config-store flow:
    aivm host doctor
    aivm status
    aivm status --detail
-   aivm apply --interactive
 
 No-local-init flow (recommended UX for new repos):
 
@@ -83,7 +83,14 @@ Global config metadata is stored in a user config appdir
 By default ``status`` avoids sudo and reports limited checks; use
 ``status --sudo`` for privileged network/firewall/libvirt/image checks.
 Privileged host actions prompt for confirmation before sudo blocks; use ``--yes``
-to auto-approve in scripted/non-interactive flows.
+to auto-approve all prompts, or ``--yes-sudo`` to auto-approve only sudo prompts.
+You can set a default in config:
+
+.. code-block:: toml
+
+   [behavior]
+   yes_sudo = true
+
 ``aivm code .`` first performs non-sudo probes and only asks for sudo when it
 can confirm privileged actions are needed.
 
@@ -148,6 +155,12 @@ Sync selected user settings/files into the VM:
 
    aivm vm sync_settings
 
+Reconcile config drift (CPU / RAM / disk) back into libvirt VM settings:
+
+.. code-block:: bash
+
+   aivm vm update
+
 Override what to sync ad hoc:
 
 .. code-block:: bash
@@ -191,6 +204,7 @@ Notes
 -----
 
 * This tool assumes **Linux + libvirt**. It focuses on Debian/Ubuntu hosts for dependency installation.
+* Security model and threat model details: ``docs/source/security.rst``.
 * NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want "internet-only" access.
 * To allow specific VM->host or VM->blocked-LAN service ports while firewall isolation is enabled, set ``[firewall].allow_tcp_ports`` / ``allow_udp_ports`` in config (for example ``allow_tcp_ports = [22, 5432]``).
 * virtiofs sharing is optional; it's powerful, but it intentionally exposes that host directory to the VM.

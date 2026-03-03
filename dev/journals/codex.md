@@ -607,3 +607,303 @@ State of mind / reflection: this was a correctness-over-convenience fix. The pri
 Uncertainties / risks: attach now prompts for sudo in more cases (specifically when non-sudo probe cannot establish VM state), which may feel noisier for some setups. This is acceptable because privileged checks/operations are genuinely required to guarantee live attach behavior.
 
 What I am confident about: regression coverage now includes the exact sudo-inconclusive path, plus running/stopped behavior. Targeted tests and syntax checks passed in this environment.
+## 2026-03-02 22:51:25 +0000
+Implemented a new `aivm vm update` command to reconcile config drift against the live libvirt VM definition with explicit operator confirmation behavior. The command now compares configured CPU, RAM, and disk size against libvirt/qemu state, prints a concrete update plan, applies non-destructive updates (`virsh setvcpus`, `virsh setmaxmem/setmem`, `qemu-img resize` for growth), and handles restart policy with `--restart={auto,always,never}`. For running VMs, CPU/RAM changes are persisted and the command can prompt/reboot so changes take effect immediately.
+
+State of mind / reflection: this felt like closing a known usability loop where drift was already detectable but not actionable. I kept scope focused on high-value mutable settings (disk/cpu/ram) and intentionally avoided broad “best effort” mutation of fragile areas (network rebinding), because silent or partial behavior there is risky.
+
+Uncertainties / risks: libvirt host environments vary; `virsh reboot` may fail on some guest setups without ACPI reboot support. In that case the command currently surfaces the error and leaves the persisted updates intact, requiring manual restart. Disk shrink is intentionally rejected as unsafe in-place.
+
+Tradeoffs and what might break: update flow currently requires sudo-backed introspection and applies only the supported mutable settings. Network drift is reported diagnostically but not auto-remediated. That is a deliberate safety tradeoff to avoid hidden topology changes.
+
+What I am confident about: added unit coverage for new parsing helpers and update command behavior, and full suite passed locally (`87 passed, 2 skipped`). Docs/help were updated to expose `aivm vm update` in quickstart and `help plan` flow.
+## 2026-03-02 23:01:12 +0000
+Fixed a `vm update` privilege-escalation gap reported from real usage. Initial implementation only escalated to sudo when `dominfo` failed, but some hosts allow non-sudo `dominfo/domstate` while requiring sudo for `dumpxml` and `qemu-img info` (disk path/size inspection). In that case disk drift could be skipped and the command could incorrectly say the VM was in sync.
+
+I updated `aivm/cli/vm.py` so `_vm_update_drift` now probes disk/XML with non-sudo first, then explicitly prompts via `_confirm_sudo_block(...)` and retries with sudo when needed. This preserves safe default behavior while correctly discovering disk drift for users without passwordless sudo. Added regression test `test_vm_update_drift_escalates_for_disk_probe` in `tests/test_cli_vm_update.py` to lock in this flow.
+
+State of mind / reflection: this is exactly the kind of split-permission runtime detail that unit mocks often miss unless forced. The user trace made root cause unambiguous.
+
+Uncertainties / risks: command still depends on interactive confirmation unless `--yes`; non-interactive callers without `--yes` will intentionally fail before privileged probes.
+
+What I am confident about: targeted tests and full suite pass (`88 passed, 2 skipped`).
+## 2026-03-02 23:40:28 +0000
+Addressed a batch of UX/runtime issues surfaced from hands-on feedback.
+
+1) `vm update` running-VM disk drift:
+`qemu-img info` can fail against active qcow2 images due to shared write lock. I updated drift detection to catch that failure mode and fall back to `virsh domblkinfo` capacity so disk drift can still be computed without requiring VM shutdown.
+
+2) Missing host deps flow:
+Added preflight dependency checks in VM bring-up paths (`vm create`, `vm up`, and attach/code/ssh reconcile start/create path). When required tools are missing, the CLI now prints the missing commands and offers an interactive install prompt (`aivm host install_deps` path) on Debian-like hosts. `--yes` now skips this interactive prompt and continues, so scripted/non-interactive behavior remains predictable.
+
+3) Command visibility logging:
+Adjusted command logging in `run_cmd(...)` so setup/mutating commands (`check=True`) are logged at INFO as explicit `RUN: ...` lines; probe/query commands (`check=False`) remain DEBUG-level. This makes setup intent visible at normal verbosity while keeping introspection noise lower.
+
+4) SSH config update consistency:
+`aivm ssh .` now updates the managed SSH config block (same as `aivm code .`) before launching SSH, and reports when the entry changed.
+
+5) One-step bootstrap from ssh/code:
+When `aivm ssh .` / `aivm code .` is invoked with no managed VMs configured, the flow now prompts to run config init + VM create automatically (or performs it directly with `--yes`), then retries resolution.
+
+State of mind / reflection: this set was about reducing friction in first-run and drift-reconciliation workflows without widening safety blast radius. The tradeoff was introducing more branchy control flow around bootstrap and privilege escalation; tests were added for each new path to keep it manageable.
+
+Uncertainties / risks: static IP/hostname stability in generated SSH config remains unresolved; current updates improve freshness/automation but do not yet provide deterministic guest addressing.
+
+What I am confident about: targeted tests plus full suite passed (`90 passed, 2 skipped`).
+## 2026-03-02 23:47:16 +0000
+Implemented command-preview UX for privileged blocks so users see concrete commands before sudo validation/prompting.
+
+Changes:
+- Extended `_confirm_sudo_block(...)` to accept `preview_cmds` and print them first.
+- Reordered behavior so preview output appears before any sudo capability checks (`sudo -n true`) or interactive approval prompts.
+- Wired previews into major privileged callsites across VM, network, firewall, host, and apply flows (create/start/update/status/wait_ip/destroy and related attach/code/ssh reconcile paths).
+
+State of mind / reflection: this makes the CLI’s intent legible at the exact decision point users care about (before privilege escalation). It also aligns better with “show me the actual command” feedback rather than abstract operation labels.
+
+Uncertainties / risks: some previews are representative templates (e.g., generated XML/ruleset files) rather than literal final argv for every internal sub-step. The concrete runtime `RUN:` logs still provide exact executed commands once approved.
+
+What I am confident about: behavior is now materially improved for trust/transparency, and full suite remains green (`90 passed, 2 skipped`).
+## 2026-03-03 01:11:14 +0000
+Implemented deferred sudo preflight/confirmation via intent arming so the prompt occurs at the first real `sudo` command execution point and can show that exact next command.
+
+Technical changes:
+- Added `SudoIntent` + contextvar state in `aivm/util.py` (`arm_sudo_intent`, consume-on-use flow).
+- Moved sudo preflight/prompt behavior into `run_cmd(..., sudo=True)` when an intent is armed.
+- First sudo command now previews:
+  - `sudo -n true`
+  - any high-level preview lines
+  - the exact immediate command about to run
+- Kept session-level sudo cache in util (`_SUDO_VALIDATED`) so repeated privileged calls do not reprompt.
+- Simplified `aivm/cli/_common.py::_confirm_sudo_block` to arm intent only.
+
+State of mind / reflection: this addressed the UX gap around “show me what you are actually about to run” without requiring fragile duplicated command strings at every callsite. The tradeoff is a little more stateful behavior in `run_cmd`, but it remains opt-in (only when a CLI flow arms intent).
+
+Uncertainties / risks: if a privileged path forgets to call `_confirm_sudo_block`, it will still execute via old sudo behavior (no intent preview/prompt context). Existing policy already expects callsites to declare privileged boundaries.
+
+What I am confident about: full suite passes (`92 passed, 2 skipped`) and targeted tests now cover intent-armed sudo flows.
+## 2026-03-03 01:20:09 +0000
+Follow-up refinement to sudo-preview UX to eliminate drift-prone duplicated command previews. The intent path now ignores callsite `preview_cmds` and always renders the immediate privileged command directly from `run_cmd` at execution time, alongside `sudo -n true`. This guarantees preview accuracy without maintaining command strings in two places.
+
+I kept the arming model via `_confirm_sudo_block` and one-shot consumption at first sudo call so the displayed “next command” is exact and deterministic. Added `clear_sudo_intent()` helper and used it in util tests to avoid stale-intent leakage across test process state.
+
+State of mind / reflection: this better matches the user’s concern about command drift while preserving explicit CLI privilege boundaries.
+
+What I am confident about: test suite remains green (`92 passed, 2 skipped`).
+## 2026-03-03 01:24:36 +0000
+Adjusted sudo UX to remove `sudo -n true` preflight entirely. Privilege confirmation now happens only at the first actual privileged command execution point, and preview output shows only that real command (no synthetic probe command).
+
+Implementation notes:
+- `run_cmd(..., sudo=True)` now uses `sudo <cmd>` when stdin is interactive, allowing native sudo password prompt on the real command.
+- Non-interactive mode still uses `sudo -n <cmd>` for fail-fast behavior.
+- Intent-armed confirmation (`_confirm_sudo_block`) remains as the yes/no gate; with `yes=False` it prompts before each intent-scoped sudo command.
+- Added intent reset at CLI parse entry (`clear_sudo_intent()`) to prevent stale intent leakage.
+
+State of mind / reflection: this directly aligns behavior with user expectation that logs and prompt context should map to the real command, not a probe.
+
+What I am confident about: full suite remains green (`92 passed, 2 skipped`).
+## 2026-03-03 01:36:40 +0000
+Refined privilege UX and policy defaults per feedback.
+
+1) Removed duplicated preview surface:
+- Eliminated `preview_cmds` usage entirely from callsites and sudo intent APIs.
+- Preview now always comes from the exact immediate sudo command in `run_cmd`, preventing drift.
+
+2) Removed synthetic sudo probe command:
+- No `sudo -n true` preflight in interactive flows.
+- With an armed sudo intent, confirmation occurs at the first real sudo command.
+- Interactive execution now uses `sudo <cmd>` so sudo prompt/log context aligns with that command.
+- Non-interactive execution still uses `sudo -n <cmd>` for fail-fast behavior.
+
+3) Added configurable sudo-approval defaults:
+- New config section: `[behavior]` with `yes_sudo` (default false).
+- New CLI option on base command: `--yes-sudo`.
+- `--yes` implies `--yes-sudo`.
+- Effective sudo-approval policy now resolves from (CLI flags OR config defaults).
+
+4) Context hygiene:
+- Clear sudo intent at CLI parse start to avoid stale intent leakage between commands.
+
+Also updated config/store/lint serialization paths to include `behavior` and added tests for roundtrip and CLI default resolution.
+
+Validation: full suite green (`94 passed, 2 skipped`).
+## 2026-03-03 14:46:27 +0000
+Removed top-level `aivm apply` as requested to reduce CLI surface area and overlap with modern one-step flows (`aivm code .` / `aivm ssh .`) and explicit subcommands.
+
+Changes made:
+- Deleted `ApplyCLI` implementation from `aivm/cli/main.py`.
+- Removed `apply = ApplyCLI` from `AgentVMModalCLI` command wiring.
+- Updated README quickstart to remove `aivm apply --interactive` from the primary config-store flow.
+
+State of mind / reflection: this is a straightforward simplification with low operational risk because the underlying granular commands remain available and one-step auto-reconcile flows are now the intended user path.
+
+Uncertainties / risks: existing user scripts invoking `aivm apply` will now fail and must be migrated to explicit command sequences or `aivm code/ssh` workflows.
+
+What I am confident about: command tree no longer includes `aivm apply`, and full suite remains green (`94 passed, 2 skipped`).
+## 2026-03-03 14:53:21 +0000
+Moved sudo-behavior policy to a true top-level store section, as requested.
+
+Changes:
+- `yes_sudo` now lives in top-level `[behavior]` on the config store, not under VM/default sections.
+- Store model now has `Store.behavior` and serialization emits:
+  - `[behavior]`
+  - `yes_sudo = <bool>`
+- Removed per-VM/default behavior serialization (`[vms.behavior]` / `[defaults.behavior]`) from save paths.
+- Updated CLI policy resolution to read `reg.behavior.yes_sudo` as the default for `--yes-sudo`.
+- Updated config lint rules to validate top-level `behavior` and stop treating VM/default `behavior` as first-class.
+
+Compatibility:
+- Added legacy read fallback: if top-level `[behavior]` is absent, loader can still infer `yes_sudo` from old `defaults.behavior` / `vms.behavior` records and surface it in `Store.behavior`.
+
+Validation: full suite passes (`96 passed, 2 skipped`).
+## 2026-03-03 15:11:27 +0000
+Cleanup pass to reduce wrapper noise in `aivm/cli/vm.py` by removing one-hop private helpers that mostly forwarded to `aivm.status.probe_*` functions and inlining those probe calls at use sites.
+
+What I worked on:
+- Removed wrapper/helper functions that were trivial indirections (`_check_network`, `_check_firewall`, `_check_vm_state`, `_check_ssh_ready`, `_check_provisioned`, `_select_cfg_for_vm_name`, and an unused `_file_exists`).
+- Updated callsites to directly consume `ProbeOutcome` from `probe_network`, `probe_firewall`, `probe_vm_state`, and `probe_ssh_ready`.
+- Inlined VM resource warning/impossible checks into `VMCreateCLI.main` by removing two single-use private helpers.
+- Repaired tests that referenced removed wrapper names by monkeypatching/testing `probe_*` APIs directly.
+
+State of mind / reflection: this is the right direction for traceback clarity and maintenance cost. Each removed wrapper had become an extra frame with minimal semantic value, and keeping the logic at the callsite made control flow easier to read.
+
+Uncertainties / risks: any external/private test harnesses relying on removed private symbols will break (internal suite was updated). There is still room for further cleanup, but aggressive inlining everywhere would risk reducing readability in more complex paths.
+
+Tradeoffs: fewer helper boundaries can make long methods denser, but here the net effect is positive because the wrappers were almost pure passthroughs.
+
+What might break: monkeypatch targets using old private function names.
+
+What I am confident about: behavior parity is preserved; targeted tests and full suite pass (`96 passed, 2 skipped`).
+## 2026-03-03 15:27:06 +0000
+Implemented two cleanup/UX fixes requested by the user:
+
+1) INFO logs for file writes
+- Added explicit INFO log lines immediately before every direct runtime `write_text(...)` in `aivm` code:
+  - config store writes (`aivm/store.py`)
+  - single VM config writes (`aivm/config.py`)
+  - SSH config entry updates (`aivm/cli/vm.py`)
+  - VM IP cache writes (`aivm/vm/lifecycle.py`)
+- This gives a consistent operator-visible audit trail of local file mutations.
+
+2) Top-level behavior verbosity defaults
+- Extended top-level behavior config with `verbose` and wired it into CLI logging default resolution.
+- Root cause was that `_resolve_cfg_verbosity` only considered active/default VM verbosity and ignored `[behavior]` entirely.
+- Added serialization and lint support for `[behavior].verbose`.
+
+Tradeoff and precedence decision:
+- To preserve old semantics for configs that never set behavior verbosity, I made behavior verbosity override only when it is non-default (`!= 1`).
+- If behavior verbose is left at default 1, prior fallback still works (active VM verbosity, then defaults verbosity).
+- If behavior verbose is explicitly set to another value (e.g., 100), it now controls CLI logging as intended.
+
+State of mind / reflection: this was a targeted correction that improved predictability without broad refactors. I intentionally avoided introducing a larger logging abstraction and instead instrumented concrete write sites to keep behavior obvious.
+
+Risks/uncertainties: some users might expect behavior verbose=1 to force INFO and suppress VM/default verbosity; current logic treats 1 as neutral to preserve compatibility with prior VM-scoped verbosity behavior.
+
+Confidence: high; targeted tests and full suite passed (`97 passed, 2 skipped`).
+## 2026-03-03 15:16:58 +0000
+Fixed `ty check aivm` failure caused by strict attribute resolution on `scriptconfig` parsed objects.
+
+What changed:
+- In `aivm/cli/_common.py`, replaced direct assignment `parsed.yes_sudo = ...` with:
+  - compute `effective_yes_sudo`
+  - `setattr(parsed, 'yes_sudo', effective_yes_sudo)`
+  - set context var from the local computed value.
+
+Rationale: `ty` sees `parsed` as a generic `Config` and flags direct assignment to undeclared attributes. Using `setattr` preserves runtime behavior and avoids type-level unresolved-attribute diagnostics.
+
+State of mind / reflection: very narrow compatibility fix; minimal change with clear semantics.
+
+Confidence: high; `ty check aivm` passes and full tests remain green (`97 passed, 2 skipped`).
+## 2026-03-03 15:46:24 +0000
+Audited the repository for TODO/FIXME comment markers and reviewed each hit in context to propose concrete remediation paths.
+
+What I worked on:
+- Enumerated all TODO/FIXME markers across runtime code, CLI UX paths, docs tooling, CI workflow, and legacy dev scripts.
+- Focused technical review on actionable production paths (`aivm/host.py`, `aivm/vm/lifecycle.py`, `aivm/cli/vm.py`) and separated low-risk docs/developer-script debt from end-user behavior issues.
+- Prepared a prioritized set of changes emphasizing dependency-install robustness, user-facing error quality, and post-SSH messaging correctness.
+
+State of mind / reflection: this was primarily a triage/risk-ranking pass rather than implementation. The important part was distinguishing comments that are stale/disabled code from TODOs attached to live flows users hit frequently.
+
+Uncertainties / risks: docs `conf.py` contains multiple disabled or hacky branches that may be historical carryovers; changing them without docs-build coverage could introduce subtle Sphinx regressions. Legacy release/secrets scripts may no longer be operationally critical but still present maintenance drag.
+
+Tradeoffs: prioritizing runtime/CLI TODOs first gives immediate UX and reliability benefits, while deferring documentation tooling cleanup avoids broad, low-signal churn.
+
+What might break: tightening dependency-install behavior (lock retries, distro branching) can alter host setup timing and failure modes; post-SSH message changes may affect tests that assert exact CLI stdout.
+
+What I am confident about: the TODO/FIXME inventory is complete for comment markers and the highest-impact fixes are concentrated in a small set of runtime files.
+## 2026-03-03 15:50:05 +0000
+Implemented the easy TODO/FIXME fixes limited to the `aivm` module runtime code, per user request.
+
+What I worked on:
+- `aivm/vm/lifecycle.py`
+  - Replaced the cloud-init heredoc string TODO with `textwrap.dedent` formatting for `passwd_block`, `cloud`, `meta`, and `netcfg` blocks.
+  - Implemented the prereq-error TODO around cloud-init generation: when command-missing conditions are detected (`FileNotFoundError`, exit 127, or "command not found"), `create_or_start_vm` now raises a clear `RuntimeError` directing users to run `aivm host install_deps`.
+- `aivm/cli/vm.py`
+  - Replaced TODO about traceback visibility by logging session-prep errors with trace-level exception context (`log.opt(exception=True).trace(...)`) while preserving user-facing concise error output.
+  - Fixed VM SSH post-session messaging FIXME by handling ssh exit code explicitly (`check=False`) and only printing a success-end message when exit code is zero; non-zero now logs and returns failure code.
+
+State of mind / reflection: these were small, contained improvements with high signal-to-risk. I avoided touching `aivm/host.py` TODOs because they involve broader installer policy and distro support decisions.
+
+Uncertainties / risks: cloud-init text refactor preserves semantics but any whitespace-sensitive downstream parser expectations could surface; current tests passed. SSH CLI now returns the underlying ssh exit code rather than raising via `CmdError`, which is behaviorally cleaner but could affect callers relying on prior exception behavior.
+
+What I am confident about: TODO/FIXME markers in active `aivm` runtime files (except host installer TODOs) are resolved, and targeted tests pass.
+
+Validation:
+- `python -m py_compile aivm/*.py aivm/cli/*.py aivm/vm/*.py`
+- `pytest -q tests/test_vm_helpers.py tests/test_cli_helpers.py tests/test_cli_dryrun.py tests/test_cli_vm_update.py` -> `32 passed`
+## 2026-03-03 15:58:43 +0000
+Worked on security documentation aligned to the user’s primary threat model (malicious code inside VM; trusted host user/operator). Added a dedicated document at `docs/source/security.rst` and linked it from docs index and README notes.
+
+What I focused on:
+- Framed threat model boundaries explicitly (in-scope/out-of-scope).
+- Documented trust boundaries for host, guest, shared folders, and network.
+- Clarified SSH key handling scope (path usage + public key injection only, no private key copy intent).
+- Added host package installation risk framing and rationale.
+- Added design decision tradeoff table with explicit UX consequences, including cases that degrade convenience versus cases that break core workflows.
+- Added a final section with practical hardening steps expected to improve security without major UX loss.
+
+State of mind / reflection: I optimized for clarity and operator decision support rather than “security marketing.” The user asked for a model that justifies confidence, so the writeup explicitly calls out what protections do not cover, especially hypervisor escape class risk.
+
+Uncertainties / risks: some statements are policy/intent-level and should stay synchronized with implementation as code evolves (for example firewall fail-closed behavior and attachment guardrails if/when implemented). There is a risk of doc drift unless kept as part of release review.
+
+Tradeoffs: I intentionally kept this document at architecture/policy level and did not embed many implementation details to reduce churn, but that also means fewer direct code anchors for auditors.
+
+What might break: only documentation and docs navigation changed; no runtime behavior changes.
+
+What I am confident about: the document now captures the requested threat model and explicitly frames accepted risks versus UX cost of stronger controls.
+## 2026-03-03 15:52:58 +0000
+Addressed a follow-up formatting concern in cloud-init template generation (`aivm/vm/lifecycle.py`).
+
+What changed:
+- The risk was not the backslash continuation marker itself, but `dedent` behavior when interpolating a zero-indentation multiline block (`passwd_block`) into a dedented outer template.
+- Fixed by pre-indenting the generated `passwd_block` to match the outer template indentation before interpolation.
+- Kept the `f"""\` style (which is intentional for suppressing a leading blank line) and moved `{passwd_block}` to column 0 in the source template to avoid unintended mixed indentation outcomes.
+
+Validation:
+- `pytest -q tests/test_vm_helpers.py tests/test_cli_vm_update.py` -> `16 passed`.
+## 2026-03-03 16:10:51 +0000
+Fixed CI packaging-doc rendering issue in README long description.
+
+What I worked on:
+- Located `long_description` source via `pyproject.toml` (`readme = "README.rst"`).
+- Found malformed RST near reported failure line: a `.. code-block:: toml` section ended and was immediately followed by normal paragraph text with no blank separator.
+- Added the required blank line after the TOML snippet in `README.rst` (around line 93), which resolves the docutils warning `Explicit markup ends without a blank line; unexpected unindent`.
+
+State of mind / reflection: this was a surgical fix tied directly to CI output; best to avoid broader README rewrites when the parser warning points to a specific structural issue.
+
+Uncertainties / risks: local environment lacks packaging/render dependencies (`wheel`, `docutils`), so I could not execute full `python -m build` + `twine check` verification here; however, the specific parser rule violation is corrected.
+
+What I am confident about: the RST structure at the failing location is now valid (explicit markup block separated from following paragraph by a blank line).
+## 2026-03-03 16:03:48 +0000
+Refined `docs/source/security.rst` based on feedback that the tail of the document mixed current guarantees with aspirational hardening advice.
+
+What changed:
+- Replaced the old "Design decisions and recommended hardening options" + operational profiles block with:
+  - `Current design posture` (describes what is true today), and
+  - `Future Security Work` (explicitly prospective; not guaranteed current behavior).
+- Rewrote the operator checklist to a current practical baseline that avoids implying unsupported profile toggles are available today.
+
+State of mind / reflection: the goal was to avoid overpromising capabilities while preserving useful direction. The previous language risked being interpreted as implemented controls.
+
+Risks/uncertainties: this remains a narrative policy doc; if security features land, sections should be updated to move items from “future work” into “current behavior” with concrete links/config names.
+
+Confidence: high that the document now better separates present-state security posture from roadmap-level ideas.

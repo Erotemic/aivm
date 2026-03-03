@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import time
 from pathlib import Path
 
@@ -45,6 +46,35 @@ def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
         'This is common on nested/low-memory hosts. Try lowering VM resources '
         '(for example ram_mb=2048 and cpus=2) and retry.'
     )
+
+
+def _failed_command_name(ex: Exception) -> str | None:
+    if isinstance(ex, FileNotFoundError):
+        name = ex.filename
+        return str(name) if name else None
+    if not isinstance(ex, CmdError):
+        return None
+    cmd = ex.cmd
+    if isinstance(cmd, str):
+        parts = cmd.split()
+    else:
+        parts = [str(p) for p in cmd]
+    if not parts:
+        return None
+    if parts[0] == 'sudo' and len(parts) > 1:
+        return parts[1]
+    return parts[0]
+
+
+def _is_missing_command_error(ex: Exception) -> bool:
+    if isinstance(ex, FileNotFoundError):
+        return True
+    if not isinstance(ex, CmdError):
+        return False
+    if ex.result.code == 127:
+        return True
+    text = f'{ex.result.stderr}\n{ex.result.stdout}'.lower()
+    return 'command not found' in text
 
 
 def _sudo_path_exists(path: Path) -> bool:
@@ -244,86 +274,96 @@ def _write_cloud_init(
     sshd_pw = 'yes' if cfg.vm.allow_password_login else 'no'
     sshd_kbd = 'yes' if cfg.vm.allow_password_login else 'no'
 
-    # TODO: use textwrap to make these multi-line strings look
-    # nice with the code indentation.
     if cfg.vm.allow_password_login:
         if ':' in cfg.vm.password or '\n' in cfg.vm.password:
             raise RuntimeError(
                 "VM password must not contain ':' or newlines (cloud-init chpasswd format)."
             )
-        passwd_block = f"""
-chpasswd:
-  expire: false
-  users:
-    - name: {cfg.vm.user}
-      password: {cfg.vm.password}
-"""
+        passwd_block = textwrap.dedent(
+            f"""\
+            chpasswd:
+              expire: false
+              users:
+                - name: {cfg.vm.user}
+                  password: {cfg.vm.password}
+            """
+        )
+        passwd_block = textwrap.indent(passwd_block.rstrip('\n'), '        ')
 
-    cloud = f"""#cloud-config
-datasource_list: [ NoCloud, None ]
-datasource:
-  NoCloud: {{}}
+    cloud = textwrap.dedent(
+        f"""\
+        #cloud-config
+        datasource_list: [ NoCloud, None ]
+        datasource:
+          NoCloud: {{}}
 
-users:
-  - name: {cfg.vm.user}
-    groups: [sudo]
-    shell: /bin/bash
-    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-    lock_passwd: {lock_passwd}
-    ssh_authorized_keys:
-      - {pubkey}
+        users:
+          - name: {cfg.vm.user}
+            groups: [sudo]
+            shell: /bin/bash
+            sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+            lock_passwd: {lock_passwd}
+            ssh_authorized_keys:
+              - {pubkey}
 
-ssh_pwauth: {ssh_pwauth}
-disable_root: true
+        ssh_pwauth: {ssh_pwauth}
+        disable_root: true
 
 {passwd_block}
-bootcmd:
-  - [bash, -lc, "systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true"]
+        bootcmd:
+          - [bash, -lc, "systemctl mask systemd-networkd-wait-online.service NetworkManager-wait-online.service || true"]
 
-package_update: true
-packages:
-  - openssh-server
-  - ca-certificates
-  - curl
-  - git
-  - python3
-  - python3-venv
-  - python3-pip
-  - unattended-upgrades
+        package_update: true
+        packages:
+          - openssh-server
+          - ca-certificates
+          - curl
+          - git
+          - python3
+          - python3-venv
+          - python3-pip
+          - unattended-upgrades
 
-write_files:
-  - path: /etc/ssh/sshd_config.d/99-aivm-hardening.conf
-    permissions: "0644"
-    content: |
-      PasswordAuthentication {sshd_pw}
-      PermitRootLogin no
-      KbdInteractiveAuthentication {sshd_kbd}
-      X11Forwarding no
-      AllowTcpForwarding yes
-      GatewayPorts no
+        write_files:
+          - path: /etc/ssh/sshd_config.d/99-aivm-hardening.conf
+            permissions: "0644"
+            content: |
+              PasswordAuthentication {sshd_pw}
+              PermitRootLogin no
+              KbdInteractiveAuthentication {sshd_kbd}
+              X11Forwarding no
+              AllowTcpForwarding yes
+              GatewayPorts no
 
-runcmd:
-  - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
-  - systemctl enable --now ssh
-  - systemctl enable --now unattended-upgrades || true
-"""
+        runcmd:
+          - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
+          - systemctl enable --now ssh
+          - systemctl enable --now unattended-upgrades || true
+        """
+    )
 
-    meta = f"""instance-id: {cfg.vm.name}
-local-hostname: {cfg.vm.name}
-"""
-    netcfg = """version: 2
-ethernets:
-  all-en:
-    match:
-      name: "en*"
-    dhcp4: true
-    optional: true
-  all-eth:
-    match:
-      name: "eth*"
-    dhcp4: true
-    optional: true
-"""
+    meta = textwrap.dedent(
+        f"""\
+        instance-id: {cfg.vm.name}
+        local-hostname: {cfg.vm.name}
+        """
+    )
+    netcfg = textwrap.dedent(
+        """\
+        version: 2
+        ethernets:
+          all-en:
+            match:
+              name: "en*"
+            dhcp4: true
+            optional: true
+          all-eth:
+            match:
+              name: "eth*"
+            dhcp4: true
+            optional: true
+        """
+    )
 
     if dry_run:
         log.info(
@@ -485,9 +525,18 @@ def create_or_start_vm(
     base_img = fetch_image(cfg, dry_run=dry_run)
     try:
         ci = _write_cloud_init(cfg, dry_run=dry_run)
-    except Exception:
-        # TODO: better handling of errors when the user does not have the
-        # prerequisites installed. Tell them to run `aivm host install_deps`
+    except Exception as ex:
+        if _is_missing_command_error(ex):
+            missing = _failed_command_name(ex)
+            hint = (
+                f'Missing required host command: `{missing}`. '
+                if missing
+                else ''
+            )
+            raise RuntimeError(
+                f'Failed to build cloud-init artifacts for VM `{cfg.vm.name}`. '
+                f'{hint}Run `aivm host install_deps` and retry.'
+            ) from ex
         raise
 
     vm_disk = _ensure_disk(cfg, base_img, dry_run=dry_run, recreate=recreate)
@@ -670,6 +719,7 @@ def wait_for_ip(
                 if ip:
                     break
         if ip:
+            log.info('Writing VM IP cache to {}', ip_file)
             ip_file.write_text(ip + '\n', encoding='utf-8')
             log.info('VM IP: {} (saved to {})', ip, ip_file)
             return ip
@@ -691,6 +741,7 @@ def wait_for_ip(
                 capture=True,
             )
             if ssh_probe.code == 0:
+                log.info('Writing VM IP cache to {}', ip_file)
                 ip_file.write_text(cached_ip + '\n', encoding='utf-8')
                 log.info(
                     'VM reachable via cached IP fallback: {} (saved to {})',

@@ -47,6 +47,7 @@ class PlanCLI(_BaseCommand):
         6. 🖥️ VM lifecycle
            aivm vm create{cfg_flag}
            aivm vm wait_ip{cfg_flag}
+           aivm vm update{cfg_flag}    # reconcile config drift into libvirt
         7. 🔑 Access
            aivm vm ssh_config{cfg_flag}   # VS Code Remote-SSH
         8. 🧰 Optional provisioning (docker + dev tools)

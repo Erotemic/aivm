@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import tomllib
+from loguru import logger as log
 
 from .util import expand
 
@@ -106,6 +107,12 @@ class PathsConfig:
 
 
 @dataclass
+class BehaviorConfig:
+    yes_sudo: bool = False
+    verbose: int = 1
+
+
+@dataclass
 class AgentVMConfig:
     vm: VMConfig = field(default_factory=VMConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
@@ -187,4 +194,5 @@ def load(path: Path) -> AgentVMConfig:
 
 
 def save(path: Path, cfg: AgentVMConfig) -> None:
+    log.info('Writing VM config to {}', path)
     path.write_text(dump_toml(cfg), encoding='utf-8')

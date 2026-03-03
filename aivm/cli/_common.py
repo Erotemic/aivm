@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,12 +23,13 @@ from ..store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..util import run_cmd
+from ..util import arm_sudo_intent, clear_sudo_intent
 
 log = logger
-
-_SUDO_VALIDATED = False
 _LAST_LOGGING_STATE: tuple[str, bool] | None = None
+_CURRENT_YES_SUDO: ContextVar[bool] = ContextVar(
+    'aivm_current_yes_sudo', default=False
+)
 
 
 class _BaseCommand(scfg.DataConfig):
@@ -50,19 +52,34 @@ class _BaseCommand(scfg.DataConfig):
         isflag=True,
         help='Auto-approve interactive confirmations.',
     )
+    yes_sudo = scfg.Value(
+        False,
+        isflag=True,
+        help='Auto-approve sudo confirmation prompts only.',
+    )
 
     @classmethod
     def cli(cls, *args, **kwargs):  # type: ignore[override]
+        clear_sudo_intent()
         parsed = super().cli(*args, **kwargs)
         cfg_verbosity = _resolve_cfg_verbosity(getattr(parsed, 'config', None))
+        cfg_yes_sudo = _resolve_cfg_yes_sudo(getattr(parsed, 'config', None))
+        effective_yes_sudo = bool(
+            getattr(parsed, 'yes_sudo', False)
+            or getattr(parsed, 'yes', False)
+            or cfg_yes_sudo
+        )
+        setattr(parsed, 'yes_sudo', effective_yes_sudo)
+        _CURRENT_YES_SUDO.set(effective_yes_sudo)
         args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
-            'Parsed command {} with config={} verbose={} yes={}',
+            'Parsed command {} with config={} verbose={} yes={} yes_sudo={}',
             cls.__name__,
             getattr(parsed, 'config', None),
             args_verbose,
             bool(getattr(parsed, 'yes', False)),
+            bool(getattr(parsed, 'yes_sudo', False)),
         )
         return parsed
 
@@ -77,7 +94,10 @@ def _resolve_cfg_verbosity(config_opt: str | None) -> int:
         path = _cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
-            if reg.active_vm:
+            behavior_verbose = int(getattr(reg.behavior, 'verbose', 1) or 1)
+            if behavior_verbose != 1:
+                cfg_verbosity = behavior_verbose
+            elif reg.active_vm:
                 rec = find_vm(reg, reg.active_vm)
                 if rec is not None:
                     cfg_verbosity = int(rec.cfg.verbosity)
@@ -86,6 +106,18 @@ def _resolve_cfg_verbosity(config_opt: str | None) -> int:
     except Exception:
         cfg_verbosity = 1
     return cfg_verbosity
+
+
+def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
+    cfg_yes_sudo = False
+    try:
+        path = _cfg_path(config_opt)
+        if path.exists():
+            reg = load_store(path)
+            cfg_yes_sudo = bool(reg.behavior.yes_sudo)
+    except Exception:
+        cfg_yes_sudo = False
+    return cfg_yes_sudo
 
 
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
@@ -261,38 +293,20 @@ def _record_vm(cfg: AgentVMConfig, store_file: Path | None = None) -> Path:
     return save_store(reg, target)
 
 
-def _has_passwordless_sudo() -> bool:
-    res = run_cmd(['sudo', '-n', 'true'], sudo=False, check=False, capture=True)
-    return res.code == 0
-
-
-def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
-    global _SUDO_VALIDATED
+def _confirm_sudo_block(
+    *,
+    yes: bool,
+    purpose: str,
+) -> None:
     log.trace(
-        'Confirm sudo block yes={} purpose={!r} sudo_validated={}',
+        'Confirm sudo block yes={} purpose={!r}',
         yes,
         purpose,
-        _SUDO_VALIDATED,
     )
     if os.geteuid() == 0:
         return
-    if not _SUDO_VALIDATED and _has_passwordless_sudo():
-        _SUDO_VALIDATED = True
-    if yes:
-        return
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            'Privileged host operations require confirmation, but stdin is not interactive. '
-            'Re-run with --yes.'
-        )
-    print('About to run privileged host operations via sudo:')
-    print(f'  {purpose}')
-    ans = input('Continue? [y/N]: ').strip().lower()
-    if ans not in {'y', 'yes'}:
-        raise RuntimeError('Aborted by user.')
-    if not _SUDO_VALIDATED:
-        run_cmd(['sudo', '-v'], sudo=False, check=True, capture=False)
-        _SUDO_VALIDATED = True
+    eff_yes = bool(yes or _CURRENT_YES_SUDO.get(False))
+    arm_sudo_intent(yes=eff_yes, purpose=purpose)
 
 
 def _confirm_external_file_update(

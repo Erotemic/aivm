@@ -23,6 +23,8 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     store = Store()
     store.defaults = AgentVMConfig()
     store.defaults.vm.cpus = 2
+    store.behavior.yes_sudo = True
+    store.behavior.verbose = 4
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-b'
     upsert_vm(store, cfg)
@@ -40,6 +42,8 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     loaded = load_store(fpath)
     assert loaded.defaults is not None
     assert loaded.defaults.vm.cpus == 2
+    assert loaded.behavior.yes_sudo is True
+    assert loaded.behavior.verbose == 4
     assert [v.name for v in loaded.vms] == ['vm-a', 'vm-b']
     assert [a.host_path for a in loaded.attachments] == ['/tmp/a', '/tmp/z']
     assert find_vm(loaded, 'vm-a') is not None
