@@ -185,13 +185,25 @@ def test_vm_create_interactive_edit_overrides_defaults(
             'y',
         ]
     )
-    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    def fake_input(_prompt: str) -> str:
+        try:
+            return next(answers)
+        except StopIteration:
+            # Keep this test focused on interactive override flow even if
+            # environment-dependent prompts (e.g. missing host deps) appear.
+            return 'y'
+
+    monkeypatch.setattr('builtins.input', fake_input)
     monkeypatch.setattr(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
     monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
     monkeypatch.setattr(
         'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
