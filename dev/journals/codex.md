@@ -701,3 +701,28 @@ Implementation notes:
 State of mind / reflection: this directly aligns behavior with user expectation that logs and prompt context should map to the real command, not a probe.
 
 What I am confident about: full suite remains green (`92 passed, 2 skipped`).
+## 2026-03-03 01:36:40 +0000
+Refined privilege UX and policy defaults per feedback.
+
+1) Removed duplicated preview surface:
+- Eliminated `preview_cmds` usage entirely from callsites and sudo intent APIs.
+- Preview now always comes from the exact immediate sudo command in `run_cmd`, preventing drift.
+
+2) Removed synthetic sudo probe command:
+- No `sudo -n true` preflight in interactive flows.
+- With an armed sudo intent, confirmation occurs at the first real sudo command.
+- Interactive execution now uses `sudo <cmd>` so sudo prompt/log context aligns with that command.
+- Non-interactive execution still uses `sudo -n <cmd>` for fail-fast behavior.
+
+3) Added configurable sudo-approval defaults:
+- New config section: `[behavior]` with `yes_sudo` (default false).
+- New CLI option on base command: `--yes-sudo`.
+- `--yes` implies `--yes-sudo`.
+- Effective sudo-approval policy now resolves from (CLI flags OR config defaults).
+
+4) Context hygiene:
+- Clear sudo intent at CLI parse start to avoid stale intent leakage between commands.
+
+Also updated config/store/lint serialization paths to include `behavior` and added tests for roundtrip and CLI default resolution.
+
+Validation: full suite green (`94 passed, 2 skipped`).

@@ -47,10 +47,7 @@ def shell_join(cmd: Sequence[str]) -> str:
     return ' '.join(shlex.quote(c) for c in cmd)
 
 
-def arm_sudo_intent(
-    *, yes: bool, purpose: str, preview_cmds: Sequence[Sequence[str] | str] | None
-) -> None:
-    del preview_cmds
+def arm_sudo_intent(*, yes: bool, purpose: str) -> None:
     _SUDO_INTENT.set(
         SudoIntent(yes=bool(yes), purpose=str(purpose))
     )

@@ -106,6 +106,11 @@ class PathsConfig:
 
 
 @dataclass
+class BehaviorConfig:
+    yes_sudo: bool = False
+
+
+@dataclass
 class AgentVMConfig:
     vm: VMConfig = field(default_factory=VMConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
@@ -114,6 +119,7 @@ class AgentVMConfig:
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
+    behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     verbosity: int = 1
 
     def expanded_paths(self) -> 'AgentVMConfig':
@@ -174,6 +180,7 @@ def load(path: Path) -> AgentVMConfig:
         'provision',
         'sync',
         'paths',
+        'behavior',
     ):
         if section in raw and isinstance(raw[section], dict):
             sec = raw[section]

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import aivm.cli._common as common_mod
 from aivm.cli._common import _confirm_external_file_update, _confirm_sudo_block
 from aivm.cli.help import HelpRawCLI, PlanCLI
 from aivm.cli.vm import (
@@ -119,13 +120,11 @@ def test_confirm_sudo_block_arms_intent(monkeypatch) -> None:
     _confirm_sudo_block(
         yes=True,
         purpose='test',
-        preview_cmds=[['virsh', 'dominfo', 'vmx']],
     )
     assert calls == [
         {
             'yes': True,
             'purpose': 'test',
-            'preview_cmds': [['virsh', 'dominfo', 'vmx']],
         }
     ]
 
@@ -139,6 +138,35 @@ def test_confirm_sudo_block_noop_when_root(monkeypatch) -> None:
     )
     _confirm_sudo_block(yes=False, purpose='test')
     assert calls == []
+
+
+def test_confirm_sudo_block_uses_effective_yes_sudo_context(monkeypatch) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    token = common_mod._CURRENT_YES_SUDO.set(True)
+    try:
+        _confirm_sudo_block(yes=False, purpose='test')
+    finally:
+        common_mod._CURRENT_YES_SUDO.reset(token)
+    assert calls == [{'yes': True, 'purpose': 'test'}]
+
+
+def test_cli_yes_sudo_defaults_from_config(monkeypatch, tmp_path: Path) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.behavior.yes_sudo = True
+    save_store(store, cfg_path)
+    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    parsed = PlanCLI.cli(
+        argv=False,
+        data={'config': str(cfg_path), 'yes': False, 'yes_sudo': False},
+    )
+    assert bool(parsed.yes_sudo) is True
 
 
 def test_help_raw_outputs_direct_system_commands(

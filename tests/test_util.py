@@ -64,9 +64,7 @@ def test_run_cmd_sudo_uses_armed_intent_yes(monkeypatch) -> None:
         return P(returncode=0)
 
     monkeypatch.setattr('aivm.util.subprocess.run', fake_subprocess_run)
-    arm_sudo_intent(
-        yes=True, purpose='test intent', preview_cmds=[['virsh', 'dominfo', 'x']]
-    )
+    arm_sudo_intent(yes=True, purpose='test intent')
     _run_cmd(['virsh', 'dominfo', 'x'], sudo=True, check=False, capture=True)
     assert calls[0] == ['sudo', 'virsh', 'dominfo', 'x']
 
@@ -90,8 +88,6 @@ def test_run_cmd_sudo_uses_armed_intent_prompt(monkeypatch) -> None:
         return P(returncode=0)
 
     monkeypatch.setattr('aivm.util.subprocess.run', fake_subprocess_run)
-    arm_sudo_intent(
-        yes=False, purpose='test intent', preview_cmds=[['virsh', 'dominfo', 'x']]
-    )
+    arm_sudo_intent(yes=False, purpose='test intent')
     _run_cmd(['virsh', 'dominfo', 'x'], sudo=True, check=False, capture=True)
     assert calls[0] == ['sudo', 'virsh', 'dominfo', 'x']

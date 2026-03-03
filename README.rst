@@ -84,7 +84,13 @@ Global config metadata is stored in a user config appdir
 By default ``status`` avoids sudo and reports limited checks; use
 ``status --sudo`` for privileged network/firewall/libvirt/image checks.
 Privileged host actions prompt for confirmation before sudo blocks; use ``--yes``
-to auto-approve in scripted/non-interactive flows.
+to auto-approve all prompts, or ``--yes-sudo`` to auto-approve only sudo prompts.
+You can set a default in config:
+
+.. code-block:: toml
+
+   [behavior]
+   yes_sudo = true
 ``aivm code .`` first performs non-sudo probes and only asks for sudo when it
 can confirm privileged actions are needed.
 

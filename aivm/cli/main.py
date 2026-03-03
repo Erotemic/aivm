@@ -62,11 +62,6 @@ class ApplyCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/update libvirt network '{cfg.network.name}'.",
-            preview_cmds=[
-                ['virsh', 'net-define', '<network.xml>'],
-                ['virsh', 'net-autostart', cfg.network.name],
-                ['virsh', 'net-start', cfg.network.name],
-            ],
         )
         ensure_network(cfg, recreate=False, dry_run=args.dry_run)
         if cfg.firewall.enabled:
@@ -74,39 +69,18 @@ class ApplyCLI(_BaseCommand):
             _confirm_sudo_block(
                 yes=bool(args.yes),
                 purpose='Apply nftables firewall rules.',
-                preview_cmds=[
-                    ['nft', 'list', 'table', 'inet', cfg.firewall.table],
-                    ['nft', '-f', '<generated-ruleset>'],
-                ],
             )
             apply_firewall(cfg, dry_run=args.dry_run)
         log.debug('Fetching Ubuntu image')
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Download/cache VM base image.',
-            preview_cmds=[
-                'curl -L --fail --progress-bar -o <tmp-image> <image-url>',
-                'mv -f <tmp-image> <base-image>',
-            ],
         )
         fetch_image(cfg, dry_run=args.dry_run)
         log.debug('Creating or starting VM')
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start VM '{cfg.vm.name}'.",
-            preview_cmds=[
-                [
-                    'virt-install',
-                    '--name',
-                    cfg.vm.name,
-                    '--memory',
-                    str(cfg.vm.ram_mb),
-                    '--vcpus',
-                    str(cfg.vm.cpus),
-                    '...',
-                ],
-                ['virsh', 'start', cfg.vm.name],
-            ],
         )
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=False)
         if not args.dry_run:
@@ -115,10 +89,6 @@ class ApplyCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Query VM networking state via virsh.',
-            preview_cmds=[
-                ['virsh', 'net-dhcp-leases', cfg.network.name],
-                ['virsh', 'domifaddr', cfg.vm.name],
-            ],
         )
         wait_for_ip(cfg, timeout_s=360, dry_run=args.dry_run)
         if cfg.provision.enabled:
@@ -246,12 +216,6 @@ class StatusCLI(_BaseCommand):
             _confirm_sudo_block(
                 yes=bool(args.yes),
                 purpose=f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'.",
-                preview_cmds=[
-                    ['virsh', 'dominfo', cfg.vm.name],
-                    ['virsh', 'domstate', cfg.vm.name],
-                    ['virsh', 'net-info', cfg.network.name],
-                    ['nft', 'list', 'table', 'inet', cfg.firewall.table],
-                ],
             )
         print(
             render_status(

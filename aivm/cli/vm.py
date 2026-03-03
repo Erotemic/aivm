@@ -10,7 +10,6 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Sequence
 
 import scriptconfig as scfg
 
@@ -94,20 +93,6 @@ class VMUpCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start/redefine VM '{cfg.vm.name}' and libvirt resources.",
-            preview_cmds=[
-                ['virsh', 'dominfo', cfg.vm.name],
-                [
-                    'virt-install',
-                    '--name',
-                    cfg.vm.name,
-                    '--memory',
-                    str(cfg.vm.ram_mb),
-                    '--vcpus',
-                    str(cfg.vm.cpus),
-                    '...',
-                ],
-                ['virsh', 'start', cfg.vm.name],
-            ],
         )
         create_or_start_vm(cfg, dry_run=args.dry_run, recreate=args.recreate)
         if not args.dry_run and not args.recreate:
@@ -175,20 +160,6 @@ class VMCreateCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' from config defaults.",
-            preview_cmds=[
-                ['virsh', 'net-define', '<network.xml>'],
-                ['nft', '-f', '<generated-ruleset>'],
-                [
-                    'virt-install',
-                    '--name',
-                    cfg.vm.name,
-                    '--memory',
-                    str(cfg.vm.ram_mb),
-                    '--vcpus',
-                    str(cfg.vm.cpus),
-                    '...',
-                ],
-            ],
         )
         ensure_network(cfg, recreate=False, dry_run=bool(args.dry_run))
         if cfg.firewall.enabled:
@@ -318,10 +289,6 @@ class VMWaitIPCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Query VM networking state via virsh to resolve VM IP.',
-            preview_cmds=[
-                ['virsh', 'net-dhcp-leases', cfg.network.name],
-                ['virsh', 'domifaddr', cfg.vm.name],
-            ],
         )
         print(
             wait_for_ip(
@@ -343,10 +310,6 @@ class VMStatusCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Inspect VM state via virsh.',
-            preview_cmds=[
-                ['virsh', 'dominfo', cfg.vm.name],
-                ['virsh', 'domstate', cfg.vm.name],
-            ],
         )
         print(vm_status(cfg))
         return 0
@@ -374,10 +337,6 @@ class VMDestroyCLI(_BaseCommand):
                 'Destroy/undefine VM domain and detach its libvirt disks/share mappings '
                 '(host shared directories are not deleted).'
             ),
-            preview_cmds=[
-                ['virsh', 'destroy', cfg.vm.name],
-                ['virsh', 'undefine', cfg.vm.name, '--nvram'],
-            ],
         )
         destroy_vm(cfg, dry_run=args.dry_run)
         if not args.dry_run:
@@ -905,7 +864,6 @@ class VMUpdateCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Update VM '{cfg.vm.name}' to match config drift.",
-            preview_cmds=_preview_vm_update_cmds(cfg, drift),
         )
         changed, restart_required = _apply_vm_update(
             cfg, drift, dry_run=bool(args.dry_run)
@@ -1308,25 +1266,6 @@ def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
         )
 
 
-def _preview_vm_update_cmds(
-    cfg: AgentVMConfig, drift: VMUpdateDrift
-) -> list[Sequence[str] | str]:
-    cmds: list[Sequence[str] | str] = []
-    if drift.cpus is not None:
-        _, want = drift.cpus
-        cmds.append(virsh_system_cmd('setvcpus', cfg.vm.name, str(want), '--config'))
-    if drift.ram_mb is not None:
-        _, want = drift.ram_mb
-        kib = int(want) * 1024
-        cmds.append(virsh_system_cmd('setmaxmem', cfg.vm.name, str(kib), '--config'))
-        cmds.append(virsh_system_cmd('setmem', cfg.vm.name, str(kib), '--config'))
-    if drift.disk_bytes is not None:
-        cur, want = drift.disk_bytes
-        if want > cur:
-            cmds.append(['qemu-img', 'resize', drift.disk_path, f'{cfg.vm.disk_gb}G'])
-    return cmds
-
-
 def _apply_vm_update(
     cfg: AgentVMConfig, drift: VMUpdateDrift, *, dry_run: bool
 ) -> tuple[bool, bool]:
@@ -1633,10 +1572,6 @@ def _resolve_ip_for_ssh_ops(
     _confirm_sudo_block(
         yes=bool(yes),
         purpose=purpose,
-        preview_cmds=[
-            ['virsh', 'net-dhcp-leases', cfg.network.name],
-            ['virsh', 'domifaddr', cfg.vm.name],
-        ],
     )
     ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
     wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
@@ -1745,11 +1680,6 @@ def _reconcile_attached_vm(
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Ensure libvirt network '{cfg.network.name}'.",
-            preview_cmds=[
-                ['virsh', 'net-define', '<network.xml>'],
-                ['virsh', 'net-autostart', cfg.network.name],
-                ['virsh', 'net-start', cfg.network.name],
-            ],
         )
         ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
@@ -1764,9 +1694,6 @@ def _reconcile_attached_vm(
             _confirm_sudo_block(
                 yes=bool(policy.yes),
                 purpose=f"Inspect firewall table '{cfg.firewall.table}'.",
-                preview_cmds=[
-                    ['nft', 'list', 'table', 'inet', cfg.firewall.table]
-                ],
             )
             fw_probe, _ = _check_firewall(cfg, use_sudo=True)
         need_firewall_apply = fw_probe is not True
@@ -1774,9 +1701,6 @@ def _reconcile_attached_vm(
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Apply/update firewall table '{cfg.firewall.table}'.",
-            preview_cmds=[
-                ['nft', '-f', '<generated-ruleset>']
-            ],
         )
         apply_firewall(cfg, dry_run=policy.dry_run)
 
@@ -1801,19 +1725,6 @@ def _reconcile_attached_vm(
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
-            preview_cmds=[
-                [
-                    'virt-install',
-                    '--name',
-                    cfg.vm.name,
-                    '--memory',
-                    str(cfg.vm.ram_mb),
-                    '--vcpus',
-                    str(cfg.vm.cpus),
-                    '...',
-                ],
-                ['virsh', 'start', cfg.vm.name],
-            ],
         )
         try:
             create_or_start_vm(
@@ -1834,20 +1745,6 @@ def _reconcile_attached_vm(
                 _confirm_sudo_block(
                     yes=bool(policy.yes),
                     purpose=f"Recreate VM '{cfg.vm.name}' to repair stale virtiofs mapping.",
-                    preview_cmds=[
-                        ['virsh', 'destroy', cfg.vm.name],
-                        ['virsh', 'undefine', cfg.vm.name, '--nvram'],
-                        [
-                            'virt-install',
-                            '--name',
-                            cfg.vm.name,
-                            '--memory',
-                            str(cfg.vm.ram_mb),
-                            '--vcpus',
-                            str(cfg.vm.cpus),
-                            '...',
-                        ],
-                    ],
                 )
                 create_or_start_vm(
                     cfg,
@@ -1889,16 +1786,6 @@ def _reconcile_attached_vm(
                 _confirm_sudo_block(
                     yes=bool(policy.yes),
                     purpose=f"Attach this folder to existing VM '{cfg.vm.name}'.",
-                    preview_cmds=[
-                        [
-                            'virsh',
-                            'attach-device',
-                            cfg.vm.name,
-                            '<virtiofs.xml>',
-                            '--live',
-                            '--config',
-                        ]
-                    ],
                 )
                 attach_vm_share(
                     cfg,
@@ -1935,20 +1822,6 @@ def _reconcile_attached_vm(
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Recreate VM '{cfg.vm.name}' to apply new share mapping.",
-            preview_cmds=[
-                ['virsh', 'destroy', cfg.vm.name],
-                ['virsh', 'undefine', cfg.vm.name, '--nvram'],
-                [
-                    'virt-install',
-                    '--name',
-                    cfg.vm.name,
-                    '--memory',
-                    str(cfg.vm.ram_mb),
-                    '--vcpus',
-                    str(cfg.vm.cpus),
-                    '...',
-                ],
-            ],
         )
         create_or_start_vm(
             cfg,

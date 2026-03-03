@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +27,9 @@ from ..util import arm_sudo_intent, clear_sudo_intent
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool] | None = None
+_CURRENT_YES_SUDO: ContextVar[bool] = ContextVar(
+    'aivm_current_yes_sudo', default=False
+)
 
 
 class _BaseCommand(scfg.DataConfig):
@@ -48,20 +52,35 @@ class _BaseCommand(scfg.DataConfig):
         isflag=True,
         help='Auto-approve interactive confirmations.',
     )
+    yes_sudo = scfg.Value(
+        False,
+        isflag=True,
+        help='Auto-approve sudo confirmation prompts only.',
+    )
 
     @classmethod
     def cli(cls, *args, **kwargs):  # type: ignore[override]
         clear_sudo_intent()
         parsed = super().cli(*args, **kwargs)
         cfg_verbosity = _resolve_cfg_verbosity(getattr(parsed, 'config', None))
+        cfg_yes_sudo = _resolve_cfg_yes_sudo(
+            getattr(parsed, 'config', None)
+        )
+        parsed.yes_sudo = bool(
+            getattr(parsed, 'yes_sudo', False)
+            or getattr(parsed, 'yes', False)
+            or cfg_yes_sudo
+        )
+        _CURRENT_YES_SUDO.set(bool(parsed.yes_sudo))
         args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
-            'Parsed command {} with config={} verbose={} yes={}',
+            'Parsed command {} with config={} verbose={} yes={} yes_sudo={}',
             cls.__name__,
             getattr(parsed, 'config', None),
             args_verbose,
             bool(getattr(parsed, 'yes', False)),
+            bool(getattr(parsed, 'yes_sudo', False)),
         )
         return parsed
 
@@ -85,6 +104,23 @@ def _resolve_cfg_verbosity(config_opt: str | None) -> int:
     except Exception:
         cfg_verbosity = 1
     return cfg_verbosity
+
+
+def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
+    cfg_yes_sudo = False
+    try:
+        path = _cfg_path(config_opt)
+        if path.exists():
+            reg = load_store(path)
+            if reg.active_vm:
+                rec = find_vm(reg, reg.active_vm)
+                if rec is not None:
+                    cfg_yes_sudo = bool(rec.cfg.behavior.yes_sudo)
+            elif reg.defaults is not None:
+                cfg_yes_sudo = bool(reg.defaults.behavior.yes_sudo)
+    except Exception:
+        cfg_yes_sudo = False
+    return cfg_yes_sudo
 
 
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
@@ -264,7 +300,6 @@ def _confirm_sudo_block(
     *,
     yes: bool,
     purpose: str,
-    preview_cmds=None,
 ) -> None:
     log.trace(
         'Confirm sudo block yes={} purpose={!r}',
@@ -273,7 +308,8 @@ def _confirm_sudo_block(
     )
     if os.geteuid() == 0:
         return
-    arm_sudo_intent(yes=bool(yes), purpose=purpose, preview_cmds=preview_cmds)
+    eff_yes = bool(yes or _CURRENT_YES_SUDO.get(False))
+    arm_sudo_intent(yes=eff_yes, purpose=purpose)
 
 
 def _confirm_external_file_update(
