@@ -91,3 +91,40 @@ def test_run_cmd_sudo_uses_armed_intent_prompt(monkeypatch) -> None:
     arm_sudo_intent(yes=False, purpose='test intent')
     _run_cmd(['virsh', 'dominfo', 'x'], sudo=True, check=False, capture=True)
     assert calls[0] == ['sudo', 'virsh', 'dominfo', 'x']
+
+
+def test_run_cmd_sudo_prompt_all_sticks_for_remaining_ops(
+    monkeypatch,
+) -> None:
+    calls = []
+    prompts = []
+
+    class P:
+        def __init__(self, returncode=0, stdout='', stderr=''):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    monkeypatch.setattr('aivm.util.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.util.sys.stdin.isatty', lambda: True)
+
+    def fake_input(prompt):
+        prompts.append(prompt)
+        return 'a'
+
+    monkeypatch.setattr(builtins, 'input', fake_input)
+
+    def fake_subprocess_run(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        return P(returncode=0)
+
+    monkeypatch.setattr('aivm.util.subprocess.run', fake_subprocess_run)
+    arm_sudo_intent(yes=False, purpose='test intent')
+    _run_cmd(['virsh', 'dominfo', 'x'], sudo=True, check=False, capture=True)
+    # Subsequent sudo command should not ask again.
+    _run_cmd(['virsh', 'domstate', 'x'], sudo=True, check=False, capture=True)
+
+    assert calls[0] == ['sudo', 'virsh', 'dominfo', 'x']
+    assert calls[1] == ['sudo', 'virsh', 'domstate', 'x']
+    assert len(prompts) == 1

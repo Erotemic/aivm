@@ -990,3 +990,15 @@ Uncertainties/risks: there is now one more interactive prompt path in `vm create
 Tradeoffs and what might break: introducing `--set_default` changes expectations for users who were implicitly relying on created VMs becoming active. This is intentional per new policy request. I left the prompt default as No to keep non-accidental default switching.
 
 What I am confident about: compile checks pass for touched modules, and tests now cover three cases in `tests/test_cli_vm_create.py`: `--yes` preserves existing active VM, `--set_default` opts in, and interactive prompt path with No keeps existing active VM.
+
+## 2026-03-03 20:38:10 +0000
+
+Added a “yes to remaining privileged operations” path to sudo confirmation flow without requiring `--yes-sudo`. Implementation is in `aivm/util.py` and `aivm/cli/_common.py`: the sudo prompt now accepts `[a]ll`, which re-arms sudo intent as `yes=True` for the rest of the current command run. `_confirm_sudo_block()` now checks this sticky intent via `sudo_intent_auto_yes()` so later privileged checkpoints are auto-approved after the user opts in once.
+
+Reflection/state of mind: this change preserves safety while reducing prompt fatigue in multi-step flows. It keeps explicit per-run consent in-band and avoids forcing users to restart command invocation with flags when they decide mid-run they trust the remaining privileged actions.
+
+Uncertainties/risks: sticky approval scope is per-process/current invocation (intent context), not persisted to config; this matches expected transient behavior but users might assume persistence similar to `behavior.yes_sudo`. Prompt wording could still be improved for discoverability in long logs.
+
+Tradeoffs and what might break: changed sudo prompt text from `[y/N]` to `[y]es/[a]ll/[N]o`. Any tests/tools matching exact prompt text needed updates. Non-interactive behavior remains unchanged.
+
+What I am confident about: compile checks pass for touched modules; new tests cover sticky-all behavior in util and confirm-block honoring of sticky state (`tests/test_util.py`, `tests/test_cli_helpers.py`).

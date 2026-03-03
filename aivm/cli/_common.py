@@ -23,7 +23,7 @@ from ..store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..util import arm_sudo_intent, clear_sudo_intent
+from ..util import arm_sudo_intent, clear_sudo_intent, sudo_intent_auto_yes
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool] | None = None
@@ -337,7 +337,9 @@ def _confirm_sudo_block(
     )
     if os.geteuid() == 0:
         return
-    eff_yes = bool(yes or _CURRENT_YES_SUDO.get(False))
+    eff_yes = bool(
+        yes or _CURRENT_YES_SUDO.get(False) or sudo_intent_auto_yes()
+    )
     arm_sudo_intent(yes=eff_yes, purpose=purpose)
 
 

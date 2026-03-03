@@ -60,6 +60,11 @@ def clear_sudo_intent() -> None:
     _SUDO_INTENT.set(None)
 
 
+def sudo_intent_auto_yes() -> bool:
+    intent = _SUDO_INTENT.get()
+    return bool(intent is not None and intent.yes)
+
+
 def _consume_sudo_intent() -> SudoIntent | None:
     # Intentionally *not* one-shot. We keep the intent armed so each sudo call
     # in the current flow can require explicit confirmation unless --yes-sudo.
@@ -81,7 +86,10 @@ def _ensure_sudo_ready(intent: SudoIntent, cmd: Sequence[str]) -> None:
         )
     log.opt(depth=2).info('About to run privileged host operations via sudo:')
     log.opt(depth=2).info(f'  {intent.purpose}')
-    ans = input('Continue? [y/N]: ').strip().lower()
+    ans = input('Continue? [y]es/[a]ll/[N]o: ').strip().lower()
+    if ans in {'a', 'all'}:
+        arm_sudo_intent(yes=True, purpose=intent.purpose)
+        return
     if ans not in {'y', 'yes'}:
         raise RuntimeError('Aborted by user.')
 

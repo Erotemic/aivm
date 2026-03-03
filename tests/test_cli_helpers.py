@@ -157,6 +157,18 @@ def test_confirm_sudo_block_uses_effective_yes_sudo_context(
     assert calls == [{'yes': True, 'purpose': 'test'}]
 
 
+def test_confirm_sudo_block_honors_sticky_all_choice(monkeypatch) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr('aivm.cli._common.sudo_intent_auto_yes', lambda: True)
+    _confirm_sudo_block(yes=False, purpose='test')
+    assert calls == [{'yes': True, 'purpose': 'test'}]
+
+
 def test_cli_yes_sudo_defaults_from_config(monkeypatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / 'config.toml'
     store = Store()
