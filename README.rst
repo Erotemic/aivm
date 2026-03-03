@@ -90,6 +90,7 @@ You can set a default in config:
 
    [behavior]
    yes_sudo = true
+
 ``aivm code .`` first performs non-sudo probes and only asks for sudo when it
 can confirm privileged actions are needed.
 

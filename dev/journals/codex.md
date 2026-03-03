@@ -880,3 +880,16 @@ What changed:
 
 Validation:
 - `pytest -q tests/test_vm_helpers.py tests/test_cli_vm_update.py` -> `16 passed`.
+## 2026-03-03 16:10:51 +0000
+Fixed CI packaging-doc rendering issue in README long description.
+
+What I worked on:
+- Located `long_description` source via `pyproject.toml` (`readme = "README.rst"`).
+- Found malformed RST near reported failure line: a `.. code-block:: toml` section ended and was immediately followed by normal paragraph text with no blank separator.
+- Added the required blank line after the TOML snippet in `README.rst` (around line 93), which resolves the docutils warning `Explicit markup ends without a blank line; unexpected unindent`.
+
+State of mind / reflection: this was a surgical fix tied directly to CI output; best to avoid broader README rewrites when the parser warning points to a specific structural issue.
+
+Uncertainties / risks: local environment lacks packaging/render dependencies (`wheel`, `docutils`), so I could not execute full `python -m build` + `twine check` verification here; however, the specific parser rule violation is corrected.
+
+What I am confident about: the RST structure at the failing location is now valid (explicit markup block separated from following paragraph by a blank line).
