@@ -978,3 +978,15 @@ Uncertainties/risks: folder-centric commands (`aivm code .` / `aivm ssh .`) now 
 Tradeoffs and what might break: kept CLI `--force` flags in attach/code/ssh for now but marked as deprecated no-op text to avoid abrupt argument removal in this pass. If full cleanup is desired, removing those flags is a follow-up. `find_attachment()` remains for compatibility but now returns a deterministic first match from the attachment set; newer code should prefer explicit helpers.
 
 What I am confident about: compile checks pass for all touched modules; tests were updated to assert multi-attach behavior and resolver ambiguity handling (`tests/test_store.py`, `tests/test_cli_helpers.py`), and stale conflict-based tests were removed from attach/update suites.
+
+## 2026-03-03 20:32:51 +0000
+
+Implemented VM-create default-selection policy so creating a new VM no longer silently changes `active_vm`. In `aivm/cli/vm.py`, `VMCreateCLI` now has `--set_default` (opt-in). Post-create persistence now snapshots previous active VM, upserts the created VM, and only keeps it active when explicitly requested (`--set_default`) or when interactive prompt confirms; otherwise active VM is restored.
+
+Reflection/state of mind: this was a targeted behavior fix with minimal model churn. I intentionally avoided changing store-level `upsert_vm_with_network()` semantics globally because many command paths rely on it; instead I scoped policy enforcement to `vm create` where user intent is clear and requested.
+
+Uncertainties/risks: there is now one more interactive prompt path in `vm create` when not using `--yes` and not using `--set_default`; scripting should continue to pass `--yes` and now gets deterministic “default=no” behavior. If later we want the same policy for other workflows (discover/import/update), we should unify on a shared active-vm policy helper.
+
+Tradeoffs and what might break: introducing `--set_default` changes expectations for users who were implicitly relying on created VMs becoming active. This is intentional per new policy request. I left the prompt default as No to keep non-accidental default switching.
+
+What I am confident about: compile checks pass for touched modules, and tests now cover three cases in `tests/test_cli_vm_create.py`: `--yes` preserves existing active VM, `--set_default` opts in, and interactive prompt path with No keeps existing active VM.

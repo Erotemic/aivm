@@ -100,6 +100,147 @@ def test_vm_create_falls_back_to_existing_vm_when_defaults_missing(
     assert rec.network_name == 'tmpl-net'
 
 
+def test_vm_create_yes_preserves_existing_active_vm(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    defaults = AgentVMConfig()
+    defaults.vm.name = 'template-vm'
+    store.defaults = defaults
+    existing = AgentVMConfig()
+    existing.vm.name = 'current-default'
+    upsert_vm(store, existing)
+    store.active_vm = existing.vm.name
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr(
+        'aivm.cli.vm._cfg_path', lambda p: cfg_path if p else cfg_path
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
+
+    rc = VMCreateCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        vm='new-vm',
+        yes=True,
+    )
+    assert rc == 0
+    loaded = load_store(cfg_path)
+    assert loaded.active_vm == 'current-default'
+    assert any(v.name == 'new-vm' for v in loaded.vms)
+
+
+def test_vm_create_set_default_opt_in(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    defaults = AgentVMConfig()
+    defaults.vm.name = 'template-vm'
+    store.defaults = defaults
+    existing = AgentVMConfig()
+    existing.vm.name = 'current-default'
+    upsert_vm(store, existing)
+    store.active_vm = existing.vm.name
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr(
+        'aivm.cli.vm._cfg_path', lambda p: cfg_path if p else cfg_path
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
+
+    rc = VMCreateCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        vm='new-vm',
+        yes=True,
+        set_default=True,
+    )
+    assert rc == 0
+    loaded = load_store(cfg_path)
+    assert loaded.active_vm == 'new-vm'
+
+
+def test_vm_create_interactive_default_prompt_no_keeps_active(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    defaults = AgentVMConfig()
+    defaults.vm.name = 'template-vm'
+    store.defaults = defaults
+    existing = AgentVMConfig()
+    existing.vm.name = 'current-default'
+    upsert_vm(store, existing)
+    store.active_vm = existing.vm.name
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr(
+        'aivm.cli.vm._cfg_path', lambda p: cfg_path if p else cfg_path
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._review_vm_create_overrides_interactive',
+        lambda cfg, path: cfg,
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm._prompt_set_created_vm_default',
+        lambda vm_name: (asked.append(vm_name) or False),
+    )
+    monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
+    monkeypatch.setattr(
+        'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
+    )
+
+    rc = VMCreateCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        vm='new-vm',
+        yes=False,
+    )
+    assert rc == 0
+    assert asked == ['new-vm']
+    loaded = load_store(cfg_path)
+    assert loaded.active_vm == 'current-default'
+
+
 def test_vm_destroy_removes_vm_and_attachments(
     monkeypatch, tmp_path: Path
 ) -> None:
