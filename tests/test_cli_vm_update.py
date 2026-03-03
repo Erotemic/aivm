@@ -17,6 +17,7 @@ from aivm.cli.vm import (
     _vm_update_drift,
 )
 from aivm.config import AgentVMConfig
+from aivm.status import ProbeOutcome
 from aivm.util import CmdResult
 
 
@@ -295,7 +296,8 @@ def test_prepare_attached_session_bootstraps_missing_vm(
     )
     monkeypatch.setattr('aivm.cli.vm.get_ip_cached', lambda *a, **k: '10.0.0.2')
     monkeypatch.setattr(
-        'aivm.cli.vm._check_ssh_ready', lambda *a, **k: (True, '', '')
+        'aivm.cli.vm.probe_ssh_ready',
+        lambda *a, **k: ProbeOutcome(True, 'ready', ''),
     )
     monkeypatch.setattr('aivm.cli.vm.ensure_share_mounted', lambda *a, **k: None)
 

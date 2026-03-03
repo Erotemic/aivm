@@ -25,7 +25,6 @@ from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..status import (
     probe_firewall,
     probe_network,
-    probe_provisioned,
     probe_ssh_ready,
     probe_vm_state,
 )
@@ -136,10 +135,18 @@ class VMCreateCLI(_BaseCommand):
         cfg = reg.defaults.expanded_paths()
         if args.vm:
             cfg.vm.name = str(args.vm).strip()
-        _warn_if_vm_resources_high(cfg)
+        for line in vm_resource_warning_lines(cfg):
+            log.warning(line)
         if not bool(args.yes):
             cfg = _review_vm_create_overrides_interactive(cfg, cfg_path)
-        _raise_if_vm_resources_physically_impossible(cfg)
+        problems = vm_resource_impossible_lines(cfg)
+        if problems:
+            detail = '\n  - '.join(problems)
+            raise RuntimeError(
+                'Requested VM resources are not feasible on this host right now:\n'
+                f'  - {detail}\n'
+                'Lower vm.ram_mb / vm.cpus and retry.'
+            )
         net = find_network(reg, cfg.network.name)
         if net is None:
             upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
@@ -256,22 +263,6 @@ def _review_vm_create_overrides_interactive(
             print(_render_vm_create_summary(cfg, path))
             continue
         print("Please answer 'y', 'e', or 'n'.")
-
-
-def _warn_if_vm_resources_high(cfg: AgentVMConfig) -> None:
-    for line in vm_resource_warning_lines(cfg):
-        log.warning(line)
-
-
-def _raise_if_vm_resources_physically_impossible(cfg: AgentVMConfig) -> None:
-    problems = vm_resource_impossible_lines(cfg)
-    if problems:
-        detail = '\n  - '.join(problems)
-        raise RuntimeError(
-            'Requested VM resources are not feasible on this host right now:\n'
-            f'  - {detail}\n'
-            'Lower vm.ram_mb / vm.cpus and retry.'
-        )
 
 
 class VMWaitIPCLI(_BaseCommand):
@@ -735,9 +726,8 @@ class VMAttachCLI(_BaseCommand):
         vm_running = False
         vm_defined = False
         sudo_confirmed = False
-        vm_running_probe, vm_defined_probe, _ = _check_vm_state(
-            cfg, use_sudo=False
-        )
+        vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=False)
+        vm_running_probe = vm_out.ok
         vm_defined = vm_defined_probe
         if not vm_defined:
             _confirm_sudo_block(
@@ -745,9 +735,8 @@ class VMAttachCLI(_BaseCommand):
                 purpose=f"Inspect VM '{cfg.vm.name}' share mappings and attach folder if needed.",
             )
             sudo_confirmed = True
-            vm_running_probe, vm_defined_probe, _ = _check_vm_state(
-                cfg, use_sudo=True
-            )
+            vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=True)
+            vm_running_probe = vm_out.ok
             vm_defined = vm_defined_probe
         if vm_defined:
             if not sudo_confirmed:
@@ -1454,48 +1443,6 @@ def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
     return m.group(1) if m else None
 
 
-def _check_network(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, str]:
-    out = probe_network(cfg, use_sudo=use_sudo)
-    return out.ok, out.detail
-
-
-def _check_firewall(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, str]:
-    out = probe_firewall(cfg, use_sudo=use_sudo)
-    return out.ok, out.detail
-
-
-def _file_exists(path: Path, *, use_sudo: bool) -> bool:
-    return (
-        run_cmd(
-            ['test', '-f', str(path)], sudo=use_sudo, check=False, capture=True
-        ).code
-        == 0
-    )
-
-
-def _check_vm_state(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[bool | None, bool, str]:
-    out, vm_defined = probe_vm_state(cfg, use_sudo=use_sudo)
-    return out.ok, vm_defined, out.detail
-
-
-def _check_ssh_ready(cfg: AgentVMConfig, ip: str) -> tuple[bool, str, str]:
-    out = probe_ssh_ready(cfg, ip)
-    return bool(out.ok), out.detail, out.diag
-
-
-def _check_provisioned(
-    cfg: AgentVMConfig, ip: str
-) -> tuple[bool | None, str, str]:
-    out = probe_provisioned(cfg, ip)
-    return out.ok, out.detail, out.diag
-
-
 def _parse_dominfo_hardware(dominfo_text: str) -> tuple[int | None, int | None]:
     cpus = None
     max_mem_mib = None
@@ -1566,7 +1513,7 @@ def _resolve_ip_for_ssh_ops(
 ) -> str:
     ip = get_ip_cached(cfg)
     if ip:
-        ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        ssh_ok = bool(probe_ssh_ready(cfg, ip).ok)
         if ssh_ok:
             return ip
     _confirm_sudo_block(
@@ -1576,13 +1523,6 @@ def _resolve_ip_for_ssh_ops(
     ip = wait_for_ip(cfg, timeout_s=360, dry_run=False)
     wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     return ip
-
-
-def _select_cfg_for_vm_name(
-    vm_name: str, *, reason: str
-) -> tuple[AgentVMConfig, Path]:
-    del reason
-    return _load_cfg_with_path(None, vm_opt=vm_name)
 
 
 def _record_attachment(
@@ -1669,12 +1609,12 @@ def _reconcile_attached_vm(
     cached_ip = get_ip_cached(cfg) if not policy.dry_run else None
     cached_ssh_ok = False
     if cached_ip:
-        cached_ssh_ok, _, _ = _check_ssh_ready(cfg, cached_ip)
+        cached_ssh_ok = bool(probe_ssh_ready(cfg, cached_ip).ok)
     vm_running_probe = (
         _probe_vm_running_nonsudo(cfg.vm.name) if not policy.dry_run else None
     )
 
-    net_probe, _ = _check_network(cfg, use_sudo=False)
+    net_probe = probe_network(cfg, use_sudo=False).ok
     need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
     if need_network_ensure:
         _confirm_sudo_block(
@@ -1689,13 +1629,13 @@ def _reconcile_attached_vm(
         and policy.ensure_firewall_opt
         and (not cached_ssh_ok)
     ):
-        fw_probe, _ = _check_firewall(cfg, use_sudo=False)
+        fw_probe = probe_firewall(cfg, use_sudo=False).ok
         if fw_probe is None:
             _confirm_sudo_block(
                 yes=bool(policy.yes),
                 purpose=f"Inspect firewall table '{cfg.firewall.table}'.",
             )
-            fw_probe, _ = _check_firewall(cfg, use_sudo=True)
+            fw_probe = probe_firewall(cfg, use_sudo=True).ok
         need_firewall_apply = fw_probe is not True
     if need_firewall_apply:
         _confirm_sudo_block(
@@ -1938,7 +1878,7 @@ def _prepare_attached_session(
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)
     if ip:
-        ssh_ok, _, _ = _check_ssh_ready(cfg, ip)
+        ssh_ok = bool(probe_ssh_ready(cfg, ip).ok)
     else:
         ssh_ok = False
     if not ssh_ok:

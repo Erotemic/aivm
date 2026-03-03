@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aivm.cli.vm import ResolvedAttachment, VMAttachCLI
 from aivm.config import AgentVMConfig
+from aivm.status import ProbeOutcome
 
 
 def test_vm_attach_mounts_share_when_vm_running(
@@ -36,8 +37,8 @@ def test_vm_attach_mounts_share_when_vm_running(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._check_vm_state',
-        lambda *a, **k: (True, True, 'vm-running state=running'),
+        'aivm.cli.vm.probe_vm_state',
+        lambda *a, **k: (ProbeOutcome(True, 'vm-running state=running'), True),
     )
     monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])
 
@@ -106,8 +107,11 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
         'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._check_vm_state',
-        lambda *a, **k: (False, True, 'vm-stopped state=shut off'),
+        'aivm.cli.vm.probe_vm_state',
+        lambda *a, **k: (
+            ProbeOutcome(False, 'vm-stopped state=shut off'),
+            True,
+        ),
     )
     monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])
     monkeypatch.setattr('aivm.cli.vm.attach_vm_share', lambda *a, **k: None)
@@ -167,11 +171,11 @@ def test_vm_attach_escalates_when_nonsudo_probe_inconclusive(
     )
 
     states = [
-        (None, False, 'probe inconclusive without sudo'),
-        (True, True, 'vm-needs-sudo state=running'),
+        (ProbeOutcome(None, 'probe inconclusive without sudo'), False),
+        (ProbeOutcome(True, 'vm-needs-sudo state=running'), True),
     ]
     monkeypatch.setattr(
-        'aivm.cli.vm._check_vm_state',
+        'aivm.cli.vm.probe_vm_state',
         lambda *a, **k: states.pop(0),
     )
     monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])

@@ -755,3 +755,21 @@ Compatibility:
 - Added legacy read fallback: if top-level `[behavior]` is absent, loader can still infer `yes_sudo` from old `defaults.behavior` / `vms.behavior` records and surface it in `Store.behavior`.
 
 Validation: full suite passes (`96 passed, 2 skipped`).
+## 2026-03-03 15:11:27 +0000
+Cleanup pass to reduce wrapper noise in `aivm/cli/vm.py` by removing one-hop private helpers that mostly forwarded to `aivm.status.probe_*` functions and inlining those probe calls at use sites.
+
+What I worked on:
+- Removed wrapper/helper functions that were trivial indirections (`_check_network`, `_check_firewall`, `_check_vm_state`, `_check_ssh_ready`, `_check_provisioned`, `_select_cfg_for_vm_name`, and an unused `_file_exists`).
+- Updated callsites to directly consume `ProbeOutcome` from `probe_network`, `probe_firewall`, `probe_vm_state`, and `probe_ssh_ready`.
+- Inlined VM resource warning/impossible checks into `VMCreateCLI.main` by removing two single-use private helpers.
+- Repaired tests that referenced removed wrapper names by monkeypatching/testing `probe_*` APIs directly.
+
+State of mind / reflection: this is the right direction for traceback clarity and maintenance cost. Each removed wrapper had become an extra frame with minimal semantic value, and keeping the logic at the callsite made control flow easier to read.
+
+Uncertainties / risks: any external/private test harnesses relying on removed private symbols will break (internal suite was updated). There is still room for further cleanup, but aggressive inlining everywhere would risk reducing readability in more complex paths.
+
+Tradeoffs: fewer helper boundaries can make long methods denser, but here the net effect is positive because the wrappers were almost pure passthroughs.
+
+What might break: monkeypatch targets using old private function names.
+
+What I am confident about: behavior parity is preserved; targeted tests and full suite pass (`96 passed, 2 skipped`).
