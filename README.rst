@@ -57,6 +57,7 @@ Config-store flow:
 
    aivm config init
    aivm vm create
+   aivm vm update
    aivm config discover
    aivm config show
    aivm config edit
@@ -147,6 +148,12 @@ Sync selected user settings/files into the VM:
 .. code-block:: bash
 
    aivm vm sync_settings
+
+Reconcile config drift (CPU / RAM / disk) back into libvirt VM settings:
+
+.. code-block:: bash
+
+   aivm vm update
 
 Override what to sync ad hoc:
 

@@ -49,6 +49,11 @@ class HostInstallDepsCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Install host dependencies with apt/libvirt tooling.',
+            preview_cmds=[
+                ['apt-get', 'update', '-y'],
+                ['apt-get', 'install', '-y', 'qemu-kvm', 'virtinst', 'qemu-utils', 'libvirt-clients', 'libvirt-daemon-system'],
+                ['systemctl', 'enable', '--now', 'libvirtd'],
+            ],
         )
         install_deps_debian(assume_yes=True)
         print('✅ Installed host dependencies (best effort).')
@@ -69,6 +74,10 @@ class ImageFetchCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Download/cache base image under libvirt-managed storage.',
+            preview_cmds=[
+                'curl -L --fail --progress-bar -o <tmp-image> <image-url>',
+                'mv -f <tmp-image> <base-image>',
+            ],
         )
         print(str(fetch_image(cfg, dry_run=args.dry_run)))
         return 0

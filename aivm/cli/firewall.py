@@ -24,7 +24,12 @@ class FirewallApplyCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Apply nftables firewall rules.'
+            yes=bool(args.yes),
+            purpose='Apply nftables firewall rules.',
+            preview_cmds=[
+                ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+                ['nft', '-f', '<generated-ruleset>'],
+            ],
         )
         apply_firewall(cfg, dry_run=args.dry_run)
         return 0
@@ -38,7 +43,9 @@ class FirewallStatusCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Read nftables firewall status.'
+            yes=bool(args.yes),
+            purpose='Read nftables firewall status.',
+            preview_cmds=[['nft', 'list', 'table', 'inet', cfg.firewall.table]],
         )
         print(firewall_status(cfg))
         return 0
@@ -56,7 +63,9 @@ class FirewallRemoveCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, _ = _resolve_cfg_fallback(args.config)
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Remove nftables firewall rules.'
+            yes=bool(args.yes),
+            purpose='Remove nftables firewall rules.',
+            preview_cmds=[['nft', 'delete', 'table', 'inet', cfg.firewall.table]],
         )
         remove_firewall(cfg, dry_run=args.dry_run)
         return 0

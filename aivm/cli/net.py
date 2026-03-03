@@ -42,6 +42,11 @@ class NetCreateCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose=f"Create/update libvirt network '{cfg.network.name}'.",
+            preview_cmds=[
+                ['virsh', 'net-define', '<network.xml>'],
+                ['virsh', 'net-autostart', cfg.network.name],
+                ['virsh', 'net-start', cfg.network.name],
+            ],
         )
         ensure_network(cfg, recreate=args.recreate, dry_run=args.dry_run)
         return 0
@@ -63,6 +68,10 @@ class NetStatusCLI(_BaseCommand):
         _confirm_sudo_block(
             yes=bool(args.yes),
             purpose='Inspect libvirt network status via virsh.',
+            preview_cmds=[
+                ['virsh', 'net-info', cfg.network.name],
+                ['virsh', 'net-dumpxml', cfg.network.name],
+            ],
         )
         print(network_status(cfg))
         return 0
@@ -101,7 +110,12 @@ class NetDestroyCLI(_BaseCommand):
                 'Detach or destroy those VMs first, or use --force.'
             )
         _confirm_sudo_block(
-            yes=bool(args.yes), purpose='Destroy/undefine libvirt network.'
+            yes=bool(args.yes),
+            purpose='Destroy/undefine libvirt network.',
+            preview_cmds=[
+                ['virsh', 'net-destroy', cfg.network.name],
+                ['virsh', 'net-undefine', cfg.network.name],
+            ],
         )
         destroy_network(cfg, dry_run=args.dry_run)
         if not args.dry_run:

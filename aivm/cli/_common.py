@@ -6,6 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 import scriptconfig as scfg
 from loguru import logger
@@ -22,7 +23,7 @@ from ..store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..util import run_cmd
+from ..util import run_cmd, shell_join
 
 log = logger
 
@@ -266,7 +267,12 @@ def _has_passwordless_sudo() -> bool:
     return res.code == 0
 
 
-def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
+def _confirm_sudo_block(
+    *,
+    yes: bool,
+    purpose: str,
+    preview_cmds: Sequence[Sequence[str] | str] | None = None,
+) -> None:
     global _SUDO_VALIDATED
     log.trace(
         'Confirm sudo block yes={} purpose={!r} sudo_validated={}',
@@ -274,6 +280,15 @@ def _confirm_sudo_block(*, yes: bool, purpose: str) -> None:
         purpose,
         _SUDO_VALIDATED,
     )
+    if preview_cmds:
+        print('Planned privileged command(s):')
+        for item in preview_cmds:
+            if isinstance(item, str):
+                line = item
+            else:
+                line = shell_join([str(p) for p in item])
+            print(f'  {line}')
+
     if os.geteuid() == 0:
         return
     if not _SUDO_VALIDATED and _has_passwordless_sudo():

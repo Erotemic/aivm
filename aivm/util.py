@@ -59,7 +59,13 @@ def run_cmd(
         log.opt(depth=1).debug(
             'Running with sudo: {}', shell_join(original_cmd)
         )
-    log.opt(depth=1).debug('RUN: {}', shell_join(cmd))
+    run_line = shell_join(cmd)
+    if check:
+        # check=True generally corresponds to imperative setup/change steps.
+        log.opt(depth=1).info('RUN: {}', run_line)
+    else:
+        # check=False is commonly used for probes/introspection.
+        log.opt(depth=1).debug('RUN: {}', run_line)
     p = subprocess.run(
         cmd,
         input=input_text if input_text is not None else None,

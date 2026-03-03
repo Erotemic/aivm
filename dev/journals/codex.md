@@ -607,3 +607,59 @@ State of mind / reflection: this was a correctness-over-convenience fix. The pri
 Uncertainties / risks: attach now prompts for sudo in more cases (specifically when non-sudo probe cannot establish VM state), which may feel noisier for some setups. This is acceptable because privileged checks/operations are genuinely required to guarantee live attach behavior.
 
 What I am confident about: regression coverage now includes the exact sudo-inconclusive path, plus running/stopped behavior. Targeted tests and syntax checks passed in this environment.
+## 2026-03-02 22:51:25 +0000
+Implemented a new `aivm vm update` command to reconcile config drift against the live libvirt VM definition with explicit operator confirmation behavior. The command now compares configured CPU, RAM, and disk size against libvirt/qemu state, prints a concrete update plan, applies non-destructive updates (`virsh setvcpus`, `virsh setmaxmem/setmem`, `qemu-img resize` for growth), and handles restart policy with `--restart={auto,always,never}`. For running VMs, CPU/RAM changes are persisted and the command can prompt/reboot so changes take effect immediately.
+
+State of mind / reflection: this felt like closing a known usability loop where drift was already detectable but not actionable. I kept scope focused on high-value mutable settings (disk/cpu/ram) and intentionally avoided broad “best effort” mutation of fragile areas (network rebinding), because silent or partial behavior there is risky.
+
+Uncertainties / risks: libvirt host environments vary; `virsh reboot` may fail on some guest setups without ACPI reboot support. In that case the command currently surfaces the error and leaves the persisted updates intact, requiring manual restart. Disk shrink is intentionally rejected as unsafe in-place.
+
+Tradeoffs and what might break: update flow currently requires sudo-backed introspection and applies only the supported mutable settings. Network drift is reported diagnostically but not auto-remediated. That is a deliberate safety tradeoff to avoid hidden topology changes.
+
+What I am confident about: added unit coverage for new parsing helpers and update command behavior, and full suite passed locally (`87 passed, 2 skipped`). Docs/help were updated to expose `aivm vm update` in quickstart and `help plan` flow.
+## 2026-03-02 23:01:12 +0000
+Fixed a `vm update` privilege-escalation gap reported from real usage. Initial implementation only escalated to sudo when `dominfo` failed, but some hosts allow non-sudo `dominfo/domstate` while requiring sudo for `dumpxml` and `qemu-img info` (disk path/size inspection). In that case disk drift could be skipped and the command could incorrectly say the VM was in sync.
+
+I updated `aivm/cli/vm.py` so `_vm_update_drift` now probes disk/XML with non-sudo first, then explicitly prompts via `_confirm_sudo_block(...)` and retries with sudo when needed. This preserves safe default behavior while correctly discovering disk drift for users without passwordless sudo. Added regression test `test_vm_update_drift_escalates_for_disk_probe` in `tests/test_cli_vm_update.py` to lock in this flow.
+
+State of mind / reflection: this is exactly the kind of split-permission runtime detail that unit mocks often miss unless forced. The user trace made root cause unambiguous.
+
+Uncertainties / risks: command still depends on interactive confirmation unless `--yes`; non-interactive callers without `--yes` will intentionally fail before privileged probes.
+
+What I am confident about: targeted tests and full suite pass (`88 passed, 2 skipped`).
+## 2026-03-02 23:40:28 +0000
+Addressed a batch of UX/runtime issues surfaced from hands-on feedback.
+
+1) `vm update` running-VM disk drift:
+`qemu-img info` can fail against active qcow2 images due to shared write lock. I updated drift detection to catch that failure mode and fall back to `virsh domblkinfo` capacity so disk drift can still be computed without requiring VM shutdown.
+
+2) Missing host deps flow:
+Added preflight dependency checks in VM bring-up paths (`vm create`, `vm up`, and attach/code/ssh reconcile start/create path). When required tools are missing, the CLI now prints the missing commands and offers an interactive install prompt (`aivm host install_deps` path) on Debian-like hosts. `--yes` now skips this interactive prompt and continues, so scripted/non-interactive behavior remains predictable.
+
+3) Command visibility logging:
+Adjusted command logging in `run_cmd(...)` so setup/mutating commands (`check=True`) are logged at INFO as explicit `RUN: ...` lines; probe/query commands (`check=False`) remain DEBUG-level. This makes setup intent visible at normal verbosity while keeping introspection noise lower.
+
+4) SSH config update consistency:
+`aivm ssh .` now updates the managed SSH config block (same as `aivm code .`) before launching SSH, and reports when the entry changed.
+
+5) One-step bootstrap from ssh/code:
+When `aivm ssh .` / `aivm code .` is invoked with no managed VMs configured, the flow now prompts to run config init + VM create automatically (or performs it directly with `--yes`), then retries resolution.
+
+State of mind / reflection: this set was about reducing friction in first-run and drift-reconciliation workflows without widening safety blast radius. The tradeoff was introducing more branchy control flow around bootstrap and privilege escalation; tests were added for each new path to keep it manageable.
+
+Uncertainties / risks: static IP/hostname stability in generated SSH config remains unresolved; current updates improve freshness/automation but do not yet provide deterministic guest addressing.
+
+What I am confident about: targeted tests plus full suite passed (`90 passed, 2 skipped`).
+## 2026-03-02 23:47:16 +0000
+Implemented command-preview UX for privileged blocks so users see concrete commands before sudo validation/prompting.
+
+Changes:
+- Extended `_confirm_sudo_block(...)` to accept `preview_cmds` and print them first.
+- Reordered behavior so preview output appears before any sudo capability checks (`sudo -n true`) or interactive approval prompts.
+- Wired previews into major privileged callsites across VM, network, firewall, host, and apply flows (create/start/update/status/wait_ip/destroy and related attach/code/ssh reconcile paths).
+
+State of mind / reflection: this makes the CLI’s intent legible at the exact decision point users care about (before privilege escalation). It also aligns better with “show me the actual command” feedback rather than abstract operation labels.
+
+Uncertainties / risks: some previews are representative templates (e.g., generated XML/ruleset files) rather than literal final argv for every internal sub-step. The concrete runtime `RUN:` logs still provide exact executed commands once approved.
+
+What I am confident about: behavior is now materially improved for trust/transparency, and full suite remains green (`90 passed, 2 skipped`).
