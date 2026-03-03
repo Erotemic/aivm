@@ -512,7 +512,7 @@ class VMCodeCLI(_BaseCommand):
                 yes=bool(args.yes),
             )
         except RuntimeError as ex:
-            # TODO: log the traceback to a trace call
+            log.opt(exception=True).trace('Failed preparing code session')
             log.error(str(ex))
             return 1
         cfg = session.cfg
@@ -645,7 +645,7 @@ class VMSSHCLI(_BaseCommand):
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        run_cmd(
+        ssh_result = run_cmd(
             [
                 'ssh',
                 '-t',
@@ -654,14 +654,18 @@ class VMSSHCLI(_BaseCommand):
                 remote_cmd,
             ],
             sudo=False,
-            check=True,
+            check=False,
             capture=False,
         )
-        # FIXME: these messages don't make sense after a user completes a
-        # successful ssh session, we should either say exited from whatever
-        # context we entered if the ssh worked, or detect if ssh failed and
-        # handle that case.
-        print(f'Connected to {cfg.vm.user}@{ip} in {session.share_guest_dst}')
+        if ssh_result.code != 0:
+            log.error(
+                'SSH command failed (exit code {}) for {}@{}',
+                ssh_result.code,
+                cfg.vm.user,
+                ip,
+            )
+            return int(ssh_result.code) if ssh_result.code else 1
+        print(f'SSH session ended for {cfg.vm.user}@{ip}')
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
         print(f'Folder registered in {session.reg_path}')

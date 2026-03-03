@@ -203,6 +203,7 @@ Notes
 -----
 
 * This tool assumes **Linux + libvirt**. It focuses on Debian/Ubuntu hosts for dependency installation.
+* Security model and threat model details: ``docs/source/security.rst``.
 * NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want "internet-only" access.
 * To allow specific VM->host or VM->blocked-LAN service ports while firewall isolation is enabled, set ``[firewall].allow_tcp_ports`` / ``allow_udp_ports`` in config (for example ``allow_tcp_ports = [22, 5432]``).
 * virtiofs sharing is optional; it's powerful, but it intentionally exposes that host directory to the VM.

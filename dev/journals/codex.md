@@ -813,3 +813,70 @@ Rationale: `ty` sees `parsed` as a generic `Config` and flags direct assignment 
 State of mind / reflection: very narrow compatibility fix; minimal change with clear semantics.
 
 Confidence: high; `ty check aivm` passes and full tests remain green (`97 passed, 2 skipped`).
+## 2026-03-03 15:46:24 +0000
+Audited the repository for TODO/FIXME comment markers and reviewed each hit in context to propose concrete remediation paths.
+
+What I worked on:
+- Enumerated all TODO/FIXME markers across runtime code, CLI UX paths, docs tooling, CI workflow, and legacy dev scripts.
+- Focused technical review on actionable production paths (`aivm/host.py`, `aivm/vm/lifecycle.py`, `aivm/cli/vm.py`) and separated low-risk docs/developer-script debt from end-user behavior issues.
+- Prepared a prioritized set of changes emphasizing dependency-install robustness, user-facing error quality, and post-SSH messaging correctness.
+
+State of mind / reflection: this was primarily a triage/risk-ranking pass rather than implementation. The important part was distinguishing comments that are stale/disabled code from TODOs attached to live flows users hit frequently.
+
+Uncertainties / risks: docs `conf.py` contains multiple disabled or hacky branches that may be historical carryovers; changing them without docs-build coverage could introduce subtle Sphinx regressions. Legacy release/secrets scripts may no longer be operationally critical but still present maintenance drag.
+
+Tradeoffs: prioritizing runtime/CLI TODOs first gives immediate UX and reliability benefits, while deferring documentation tooling cleanup avoids broad, low-signal churn.
+
+What might break: tightening dependency-install behavior (lock retries, distro branching) can alter host setup timing and failure modes; post-SSH message changes may affect tests that assert exact CLI stdout.
+
+What I am confident about: the TODO/FIXME inventory is complete for comment markers and the highest-impact fixes are concentrated in a small set of runtime files.
+## 2026-03-03 15:50:05 +0000
+Implemented the easy TODO/FIXME fixes limited to the `aivm` module runtime code, per user request.
+
+What I worked on:
+- `aivm/vm/lifecycle.py`
+  - Replaced the cloud-init heredoc string TODO with `textwrap.dedent` formatting for `passwd_block`, `cloud`, `meta`, and `netcfg` blocks.
+  - Implemented the prereq-error TODO around cloud-init generation: when command-missing conditions are detected (`FileNotFoundError`, exit 127, or "command not found"), `create_or_start_vm` now raises a clear `RuntimeError` directing users to run `aivm host install_deps`.
+- `aivm/cli/vm.py`
+  - Replaced TODO about traceback visibility by logging session-prep errors with trace-level exception context (`log.opt(exception=True).trace(...)`) while preserving user-facing concise error output.
+  - Fixed VM SSH post-session messaging FIXME by handling ssh exit code explicitly (`check=False`) and only printing a success-end message when exit code is zero; non-zero now logs and returns failure code.
+
+State of mind / reflection: these were small, contained improvements with high signal-to-risk. I avoided touching `aivm/host.py` TODOs because they involve broader installer policy and distro support decisions.
+
+Uncertainties / risks: cloud-init text refactor preserves semantics but any whitespace-sensitive downstream parser expectations could surface; current tests passed. SSH CLI now returns the underlying ssh exit code rather than raising via `CmdError`, which is behaviorally cleaner but could affect callers relying on prior exception behavior.
+
+What I am confident about: TODO/FIXME markers in active `aivm` runtime files (except host installer TODOs) are resolved, and targeted tests pass.
+
+Validation:
+- `python -m py_compile aivm/*.py aivm/cli/*.py aivm/vm/*.py`
+- `pytest -q tests/test_vm_helpers.py tests/test_cli_helpers.py tests/test_cli_dryrun.py tests/test_cli_vm_update.py` -> `32 passed`
+## 2026-03-03 15:58:43 +0000
+Worked on security documentation aligned to the user’s primary threat model (malicious code inside VM; trusted host user/operator). Added a dedicated document at `docs/source/security.rst` and linked it from docs index and README notes.
+
+What I focused on:
+- Framed threat model boundaries explicitly (in-scope/out-of-scope).
+- Documented trust boundaries for host, guest, shared folders, and network.
+- Clarified SSH key handling scope (path usage + public key injection only, no private key copy intent).
+- Added host package installation risk framing and rationale.
+- Added design decision tradeoff table with explicit UX consequences, including cases that degrade convenience versus cases that break core workflows.
+- Added a final section with practical hardening steps expected to improve security without major UX loss.
+
+State of mind / reflection: I optimized for clarity and operator decision support rather than “security marketing.” The user asked for a model that justifies confidence, so the writeup explicitly calls out what protections do not cover, especially hypervisor escape class risk.
+
+Uncertainties / risks: some statements are policy/intent-level and should stay synchronized with implementation as code evolves (for example firewall fail-closed behavior and attachment guardrails if/when implemented). There is a risk of doc drift unless kept as part of release review.
+
+Tradeoffs: I intentionally kept this document at architecture/policy level and did not embed many implementation details to reduce churn, but that also means fewer direct code anchors for auditors.
+
+What might break: only documentation and docs navigation changed; no runtime behavior changes.
+
+What I am confident about: the document now captures the requested threat model and explicitly frames accepted risks versus UX cost of stronger controls.
+## 2026-03-03 15:52:58 +0000
+Addressed a follow-up formatting concern in cloud-init template generation (`aivm/vm/lifecycle.py`).
+
+What changed:
+- The risk was not the backslash continuation marker itself, but `dedent` behavior when interpolating a zero-indentation multiline block (`passwd_block`) into a dedented outer template.
+- Fixed by pre-indenting the generated `passwd_block` to match the outer template indentation before interpolation.
+- Kept the `f"""\` style (which is intentional for suppressing a leading blank line) and moved `{passwd_block}` to column 0 in the source template to avoid unintended mixed indentation outcomes.
+
+Validation:
+- `pytest -q tests/test_vm_helpers.py tests/test_cli_vm_update.py` -> `16 passed`.
