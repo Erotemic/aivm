@@ -38,6 +38,10 @@ def test_vm_create_uses_defaults_and_adds_vm(
     monkeypatch.setattr('aivm.cli.vm.ensure_network', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.apply_firewall', lambda *a, **k: None)
     monkeypatch.setattr('aivm.cli.vm.create_or_start_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
     monkeypatch.setattr('aivm.cli.vm.vm_resource_warning_lines', lambda cfg: [])
     monkeypatch.setattr(
         'aivm.cli.vm.vm_resource_impossible_lines', lambda cfg: []
