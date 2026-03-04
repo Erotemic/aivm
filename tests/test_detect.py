@@ -7,6 +7,7 @@ from pathlib import Path
 
 from aivm.config import AgentVMConfig
 from aivm.detect import (
+    _recommend_vm_resources,
     auto_defaults,
     detect_ssh_identity,
     existing_ipv4_routes,
@@ -59,6 +60,9 @@ def test_auto_defaults_sets_network_and_identity(
     monkeypatch.setattr(
         'aivm.detect.pick_free_subnet', lambda preferred: '10.88.0.0/24'
     )
+    monkeypatch.setattr('aivm.detect.host_cpu_count', lambda: 12)
+    monkeypatch.setattr('aivm.detect.host_mem_total_mb', lambda: 32768)
+    monkeypatch.setattr('aivm.detect.host_free_disk_gb', lambda p: 180.0)
 
     out = auto_defaults(cfg, project_dir=tmp_path)
     assert out.paths.ssh_identity_file == '/tmp/id_a'
@@ -67,7 +71,28 @@ def test_auto_defaults_sets_network_and_identity(
     assert out.network.gateway_ip == '10.88.0.1'
     assert out.network.dhcp_start == '10.88.0.100'
     assert out.network.dhcp_end == '10.88.0.200'
+    assert out.vm.cpus == 6
+    assert out.vm.ram_mb == 8192
+    assert out.vm.disk_gb == 40
     assert out.network.bridge == 'virbr-aivm'
+
+
+def test_recommend_vm_resources_constrained_host() -> None:
+    cpus, ram_mb, disk_gb = _recommend_vm_resources(
+        host_cpus=2, host_mem_total_mb=4096, host_free_disk=28.0
+    )
+    assert cpus == 1
+    assert ram_mb == 2048
+    assert disk_gb == 16
+
+
+def test_recommend_vm_resources_large_host() -> None:
+    cpus, ram_mb, disk_gb = _recommend_vm_resources(
+        host_cpus=32, host_mem_total_mb=65536, host_free_disk=800.0
+    )
+    assert cpus == 8
+    assert ram_mb == 12288
+    assert disk_gb == 64
 
 
 def test_detect_ssh_identity_prefers_ssh_config_identityfile(

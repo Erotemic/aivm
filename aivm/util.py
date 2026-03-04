@@ -1,4 +1,9 @@
-"""Shared utility helpers for subprocess execution, paths, and command formatting."""
+"""Shared utility helpers for command execution and CLI safety boundaries.
+
+This module is intentionally central: most host/VM operations eventually call
+``run_cmd``. Keeping sudo-confirmation semantics here ensures the command shown
+to users is the command actually executed.
+"""
 
 from __future__ import annotations
 
@@ -55,7 +60,14 @@ def clear_sudo_intent() -> None:
     _SUDO_INTENT.set(None)
 
 
+def sudo_intent_auto_yes() -> bool:
+    intent = _SUDO_INTENT.get()
+    return bool(intent is not None and intent.yes)
+
+
 def _consume_sudo_intent() -> SudoIntent | None:
+    # Intentionally *not* one-shot. We keep the intent armed so each sudo call
+    # in the current flow can require explicit confirmation unless --yes-sudo.
     return _SUDO_INTENT.get()
 
 
@@ -74,7 +86,10 @@ def _ensure_sudo_ready(intent: SudoIntent, cmd: Sequence[str]) -> None:
         )
     log.opt(depth=2).info('About to run privileged host operations via sudo:')
     log.opt(depth=2).info(f'  {intent.purpose}')
-    ans = input('Continue? [y/N]: ').strip().lower()
+    ans = input('Continue? [y]es/[a]ll/[N]o: ').strip().lower()
+    if ans in {'a', 'all'}:
+        arm_sudo_intent(yes=True, purpose=intent.purpose)
+        return
     if ans not in {'y', 'yes'}:
         raise RuntimeError('Aborted by user.')
 
@@ -89,6 +104,15 @@ def run_cmd(
     input_text: Optional[str] = None,
     env: Optional[dict[str, str]] = None,
 ) -> CmdResult:
+    """Execute a command with consistent logging, sudo policy, and error handling.
+
+    Design notes:
+    * ``check=True`` is treated as an imperative/change action and logged at
+      INFO so users can follow setup steps.
+    * ``check=False`` is usually probe/introspection and logged at DEBUG.
+    * sudo prompts are driven by intent armed from CLI orchestration code, so
+      users see/approve the real privileged command instead of a probe command.
+    """
     original_cmd = cmd
     log.opt(depth=1).trace(
         'run_cmd entry sudo={} check={} capture={} text={} cmd={}',

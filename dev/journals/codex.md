@@ -921,3 +921,192 @@ State of mind / reflection: aimed for practical onboarding clarity without delet
 Risks/uncertainties: README restructuring can still omit niche details some power users expect; deeper lifecycle corner-cases may still belong in docs rather than README.
 
 Confidence: high that the README now scans better for first-time users while preserving key safety and workflow information.
+## 2026-03-03 17:40:52 +0000
+Documentation-context pass in core code paths to improve maintainability for human/agent readers without changing behavior.
+
+What I changed:
+- Expanded key module/function docstrings in orchestration-heavy files:
+  - `aivm/util.py`: clarified that `run_cmd` is the policy center for command logging and sudo intent semantics.
+  - `aivm/cli/_common.py`: documented VM resolution precedence and folder-flow config resolution intent.
+  - `aivm/cli/vm.py`: documented host dependency gating, VM update drift strategy, attach-session reconciliation role, and session bootstrap behavior.
+  - `aivm/vm/lifecycle.py`: expanded module-level context and added lifecycle summary docstrings for cloud-init generation and create/start behavior.
+  - `aivm/store.py`: documented effective-config materialization via VM/network join.
+- Added one targeted inline comment in sudo intent plumbing explaining why intent is not consumed one-shot.
+
+Reflection: focused on "why" and control-flow intent at points where function names alone do not reveal design constraints. Avoided dense inline commentary that would age poorly.
+
+Risk/tradeoff: more docstring prose can drift if behavior changes; chosen comments are at stable orchestration boundaries to minimize churn.
+
+Confidence: high; this was non-functional and validated by `ty check aivm` plus full tests (`97 passed, 2 skipped`).
+## 2026-03-03 19:08:22 +0000
+Performed requested staged documentation pass: deep context updates first in `status.py` and `cli/config.py`, then a broader repo-wide module-docstring sweep.
+
+Deep pass details:
+- `aivm/status.py`: expanded module context, documented tri-state `ProbeOutcome`, and added intent docstrings for probe/render functions.
+- `aivm/cli/config.py`: expanded module context and documented interactive init review, discover/import behavior, lint scope, and discovery summary helpers.
+
+Repo-wide pass details:
+- Expanded terse module docstrings in core modules (`config`, `detect`, `firewall`, `host`, `net`, `resource_checks`, `runtime`, `store`) and CLI/VM wrappers (`cli/main`, `cli/help`, `cli/host`, `cli/net`, `cli/firewall`, `vm/share`, `vm/sync`).
+- Added targeted orchestration docstrings/comments in `util`, `cli/_common`, `cli/vm`, and `vm/lifecycle` to capture design intent and non-obvious flow decisions.
+
+Reflection: I prioritized comments that communicate control-flow intent, policy boundaries, and tradeoffs rather than narrating obvious code mechanics.
+
+Risk/tradeoff: additional prose can drift as behavior evolves; I kept commentary centered on stable boundaries (resolution precedence, probe semantics, orchestration pivots) to reduce churn.
+
+Validation: `ty check aivm` passed; full tests passed (`97 passed, 2 skipped`).
+
+## 2026-03-03 20:11:53 +0000
+
+Worked on a regression where attaching an already-owned host folder to a second VM could mutate VM/share state before the ownership conflict was surfaced. The key fix was to move conflict detection earlier in execution: I added `_ensure_attachment_not_owned_by_other_vm()` in `aivm/cli/vm.py` and called it in both `VMAttachCLI.main` and `_prepare_attached_session` before `_resolve_attachment` / `_reconcile_attached_vm` side effects.
+
+State of mind / reflection: this felt like a safety-boundary ordering bug rather than a data-model bug. I focused on minimizing blast radius by preserving existing store semantics (`upsert_attachment` still enforces force/no-force) while making operational behavior match user expectations: if conflict exists and no `--force`, nothing in libvirt/VM state should be touched.
+
+Uncertainties / risks: this does not change `--force` semantics; force reassignment can still intentionally move store ownership for a folder, which may alter folder-centric VM resolution for later `aivm code .` calls. I did not add automatic detach from the previous VM domain on force because that is a policy decision with potential surprise and broader lifecycle implications.
+
+Tradeoffs and what might break: we now fail earlier in more paths, so callers that implicitly relied on late failures after partial reconcile will see earlier RuntimeError exits. That is intentional and should reduce accidental host-path exposure. If any external tooling expected those side effects before failure, behavior changes.
+
+What I am confident about: regression tests now cover fail-fast ordering in `tests/test_cli_vm_attach.py` and `tests/test_cli_vm_update.py`; both ensure conflict abort happens before reconcile/mutation calls. `python3 -m py_compile` passes for touched modules.
+
+## 2026-03-03 20:22:15 +0000
+
+Shifted attachment policy from single-owner to multi-owner for shared host folders. Core change was in `aivm/store.py`: `upsert_attachment()` no longer rejects/rewrites when another VM already uses the same `host_path`; uniqueness is now only `(host_path, vm_name)`. Added helpers `find_attachments()` and `find_attachment_for_vm()` so call sites can choose explicit semantics instead of relying on a single implicit owner.
+
+Reflection/state of mind: this was a policy simplification with a resolver complexity tradeoff. Removing the hard block is straightforward at storage layer, but folder-oriented VM selection needed an explicit strategy for ambiguous mappings. I chose deterministic behavior: attached-folder resolution prefers an attached active VM, otherwise prompts interactively, and errors in non-interactive mode unless `--vm` is provided.
+
+Uncertainties/risks: folder-centric commands (`aivm code .` / `aivm ssh .`) now have ambiguity paths that can fail where old policy previously avoided ambiguity by prohibition. That is expected, but users/scripts may need to pass `--vm` more often when one folder is intentionally shared across VMs.
+
+Tradeoffs and what might break: kept CLI `--force` flags in attach/code/ssh for now but marked as deprecated no-op text to avoid abrupt argument removal in this pass. If full cleanup is desired, removing those flags is a follow-up. `find_attachment()` remains for compatibility but now returns a deterministic first match from the attachment set; newer code should prefer explicit helpers.
+
+What I am confident about: compile checks pass for all touched modules; tests were updated to assert multi-attach behavior and resolver ambiguity handling (`tests/test_store.py`, `tests/test_cli_helpers.py`), and stale conflict-based tests were removed from attach/update suites.
+
+## 2026-03-03 20:32:51 +0000
+
+Implemented VM-create default-selection policy so creating a new VM no longer silently changes `active_vm`. In `aivm/cli/vm.py`, `VMCreateCLI` now has `--set_default` (opt-in). Post-create persistence now snapshots previous active VM, upserts the created VM, and only keeps it active when explicitly requested (`--set_default`) or when interactive prompt confirms; otherwise active VM is restored.
+
+Reflection/state of mind: this was a targeted behavior fix with minimal model churn. I intentionally avoided changing store-level `upsert_vm_with_network()` semantics globally because many command paths rely on it; instead I scoped policy enforcement to `vm create` where user intent is clear and requested.
+
+Uncertainties/risks: there is now one more interactive prompt path in `vm create` when not using `--yes` and not using `--set_default`; scripting should continue to pass `--yes` and now gets deterministic “default=no” behavior. If later we want the same policy for other workflows (discover/import/update), we should unify on a shared active-vm policy helper.
+
+Tradeoffs and what might break: introducing `--set_default` changes expectations for users who were implicitly relying on created VMs becoming active. This is intentional per new policy request. I left the prompt default as No to keep non-accidental default switching.
+
+What I am confident about: compile checks pass for touched modules, and tests now cover three cases in `tests/test_cli_vm_create.py`: `--yes` preserves existing active VM, `--set_default` opts in, and interactive prompt path with No keeps existing active VM.
+
+## 2026-03-03 20:38:10 +0000
+
+Added a “yes to remaining privileged operations” path to sudo confirmation flow without requiring `--yes-sudo`. Implementation is in `aivm/util.py` and `aivm/cli/_common.py`: the sudo prompt now accepts `[a]ll`, which re-arms sudo intent as `yes=True` for the rest of the current command run. `_confirm_sudo_block()` now checks this sticky intent via `sudo_intent_auto_yes()` so later privileged checkpoints are auto-approved after the user opts in once.
+
+Reflection/state of mind: this change preserves safety while reducing prompt fatigue in multi-step flows. It keeps explicit per-run consent in-band and avoids forcing users to restart command invocation with flags when they decide mid-run they trust the remaining privileged actions.
+
+Uncertainties/risks: sticky approval scope is per-process/current invocation (intent context), not persisted to config; this matches expected transient behavior but users might assume persistence similar to `behavior.yes_sudo`. Prompt wording could still be improved for discoverability in long logs.
+
+Tradeoffs and what might break: changed sudo prompt text from `[y/N]` to `[y]es/[a]ll/[N]o`. Any tests/tools matching exact prompt text needed updates. Non-interactive behavior remains unchanged.
+
+What I am confident about: compile checks pass for touched modules; new tests cover sticky-all behavior in util and confirm-block honoring of sticky state (`tests/test_util.py`, `tests/test_cli_helpers.py`).
+
+## 2026-03-03 20:46:36 +0000
+
+Addressed a first-boot/share-mount race in `aivm ssh .` / attached-session flows by hardening guest mount reconciliation. In `aivm/vm/share.py`, `ensure_share_mounted()` now runs a bounded retry loop (12 attempts, 2s interval) instead of a single mount attempt. It emits clear user-facing logs on first failure and subsequent retries, then raises a structured RuntimeError with context if retries are exhausted.
+
+Reflection/state of mind: this was a practical reliability fix aimed at demo/operator experience. The failure signature (SSH ready but first virtiofs mount returns code 32, second invocation succeeds) strongly suggests readiness lag; retrying at the mount boundary is the least invasive and most user-visible mitigation.
+
+Uncertainties/risks: retries are generic for nonzero mount outcomes, so truly permanent mount failures now take ~22 seconds longer before surfacing. I considered heuristic filtering by stderr, but that is brittle across distros/locales; a bounded retry with explicit logs is safer and easier to reason about.
+
+Tradeoffs and what might break: error timing changes (later failure) for persistent mount issues; however logs now make this explicit and actionable. No behavior change for successful first-attempt mounts.
+
+What I am confident about: compile checks pass; added tests in `tests/test_vm_helpers.py` cover retry-then-success and exhausted-retry failure paths for `ensure_share_mounted()`.
+
+## 2026-03-03 20:57:17 +0000
+
+Implemented checksum validation for downloaded Ubuntu cloud images in `fetch_image()`. Added image config knobs (`image.sha256`, `image.sha256sums_url`) and verification flow in `aivm/vm/lifecycle.py`: when downloading an Ubuntu cloud image URL, aivm now resolves expected SHA256 from explicit config or upstream `SHA256SUMS`, computes local digest via `sha256sum`, and fails hard on mismatch while removing the invalid image.
+
+Reflection/state of mind: this is a supply-chain integrity improvement with low operational complexity. I intentionally scoped mandatory auto-resolution to Ubuntu cloud image URLs so common defaults are protected without forcing checksum infrastructure on arbitrary custom image sources.
+
+Uncertainties/risks: for Ubuntu URLs, a download now depends on access to checksum index endpoint unless `image.sha256` is pinned. Environments with restricted outbound networking may need to set explicit checksum (and optionally local sums URL) for deterministic behavior.
+
+Tradeoffs and what might break: first-time Ubuntu downloads do one extra metadata fetch (`SHA256SUMS`) and one hash computation (`sha256sum`), adding startup latency. Cached-image fast path remains unchanged and does not re-verify to avoid repeated startup cost.
+
+What I am confident about: compile checks pass, and tests now cover checksum validation success and mismatch failure/removal paths in `tests/test_vm_helpers.py`.
+
+## 2026-03-03 21:01:55 +0000
+
+Refined image checksum design per feedback: removed user-facing checksum knobs and switched to an internal supported-image hash registry. In `aivm/config.py`, dropped `ImageConfig.sha256` / `sha256sums_url` and introduced `SUPPORTED_IMAGE_SHA256` keyed by supported image URLs (currently default Ubuntu noble cloud image URL). In `aivm/vm/lifecycle.py`, checksum resolution now enforces membership in this registry and fails fast for unsupported URLs; post-download SHA256 verification remains mandatory with cleanup-on-mismatch.
+
+Reflection/state of mind: this aligns security policy with usability. Asking users to source hashes themselves was the wrong UX burden; a curated internal registry gives deterministic integrity checks and clearer trust boundaries.
+
+Uncertainties/risks: registry entries can go stale if upstream “current” URLs roll to new artifacts. That means maintainers must refresh hashes when supported image URLs change content. This is intentional but requires lightweight maintenance discipline.
+
+Tradeoffs and what might break: custom image URLs that previously worked will now fail unless added to the built-in registry; this is a deliberate tightening to avoid unverified downloads.
+
+What I am confident about: compile checks pass and tests were updated for the new model (registered URL success, mismatch removal, unsupported URL rejection) in `tests/test_vm_helpers.py`.
+
+## 2026-03-03 21:05:14 +0000
+
+Pinned the default Ubuntu image URL to a dated artifact path (`/noble/20260225/...`) instead of `/current/` so the configured URL and built-in SHA256 refer to the same immutable object. Updated tests that hardcoded `/current/` to use `DEFAULT_UBUNTU_NOBLE_IMG_URL` for consistency.
+
+Reflection/state of mind: this change closes the integrity gap where a mutable URL could drift underneath a fixed hash. It makes the security model coherent: one URL, one digest, predictable verification.
+
+Uncertainties/risks: pinned daily URLs eventually age out operationally (security updates) and must be refreshed intentionally; this is expected and preferable to silent drift from `current`.
+
+Tradeoffs and what might break: users expecting automatic movement to latest daily image will no longer get that implicitly. They now need code/config updates when we intentionally roll the pinned default.
+
+What I am confident about: compile checks pass and the default + tests are now aligned on the pinned URL.
+
+## 2026-03-04 03:01:55 +0000
+
+Fixed a compatibility regression introduced by pinned image URL enforcement. Existing stores/VM templates may still carry the legacy mutable URL (`.../noble/current/...`), which was failing hard against the supported-image registry. Added `SUPPORTED_IMAGE_URL_ALIASES` in `aivm/config.py` and canonicalization in `fetch_image()` (`aivm/vm/lifecycle.py`) so legacy known URLs are automatically mapped to the pinned canonical URL before download + checksum verification.
+
+Reflection/state of mind: this keeps the stronger security stance (pinned download + built-in hash) without forcing users to manually edit existing config stores immediately. It is a practical migration shim that preserves intent and reduces breakage.
+
+Uncertainties/risks: alias table requires maintenance when defaults are rotated again; if stale aliases remain indefinitely, code complexity can creep. Current alias set is intentionally small and explicit.
+
+Tradeoffs and what might break: users with truly custom URLs are still rejected by design. Legacy known URL now logs a warning and proceeds via canonical pinned URL, which changes exactly what gets downloaded compared to historical `current` behavior.
+
+What I am confident about: compile checks pass; added regression coverage in `tests/test_vm_helpers.py` to ensure legacy URL is accepted and canonical pinned URL is used for the actual download command.
+
+## 2026-03-04 03:06:18 +0000
+
+Implemented host-aware VM sizing defaults in `aivm detect auto_defaults`. Added a tiered recommendation helper (`_recommend_vm_resources`) in `aivm/detect.py` based on host CPU count, total RAM, and free disk at `paths.base_dir`. `auto_defaults` now sets `vm.cpus`, `vm.ram_mb`, and `vm.disk_gb` using these recommendations and logs detected host/resource context.
+
+Reflection/state of mind: this change improves first-run ergonomics by making init defaults less arbitrary and less likely to overcommit constrained hosts. I intentionally chose transparent tier thresholds over complex formulas so behavior is predictable and easy to tune in follow-ups.
+
+Uncertainties/risks: tier boundaries are heuristic and may still be suboptimal for some environments (e.g., memory-heavy workstations where users might prefer larger defaults). Since interactive init already supports edit, this is acceptable for now but could benefit from telemetry/feedback-based tuning.
+
+Tradeoffs and what might break: users previously accustomed to static defaults may notice changed default values after `config init`. This is expected and aligned with environment-aware behavior.
+
+What I am confident about: compile checks pass and tests now cover constrained and large host sizing as well as auto-default integration (`tests/test_detect.py`).
+
+## 2026-03-04 03:12:54 +0000
+
+Fixed attached-session bootstrap behavior for the case "config exists with defaults, but no VM definitions yet." Previously `_prepare_attached_session()` unconditionally treated missing VM definitions as needing both `config init` and `vm create`. It now inspects the failing store path, checks whether defaults already exist, and runs only the missing step:
+- defaults missing -> run `config init` then `vm create`
+- defaults present -> run `vm create` only
+
+Also updated interactive/non-interactive wording to avoid implying `config init` is always required when defaults already exist.
+
+Reflection/state of mind: this was an accuracy/UX correction rather than a deep lifecycle bug. The fallback was too coarse and leaked an implementation assumption into user guidance. The safer design is state-driven bootstrap from store contents.
+
+Uncertainties/risks: path extraction currently relies on the existing resolver error format (regex over message). If that message changes, fallback uses `_cfg_path(config_opt)`; behavior remains functional but could lose precision in mocked contexts.
+
+Tradeoffs and what might break: minor prompt text changes; automation behavior should improve (fewer unnecessary init calls).
+
+What I am confident about: compile checks pass and tests now cover both bootstrap branches in `tests/test_cli_vm_update.py`.
+
+## 2026-03-04 03:15:01 +0000
+
+Addressed two follow-up test regressions.
+
+1) Removed legacy image URL support completely, per policy decision.
+- Deleted legacy alias constants from `aivm/config.py`.
+- Removed URL canonicalization path from `aivm/vm/lifecycle.py`.
+- Removed legacy URL acceptance test from `tests/test_vm_helpers.py`.
+- Kept strict supported-URL registry enforcement.
+
+2) Fixed bootstrap branch detection in `_prepare_attached_session()`.
+- Previous store-path parsing used a fragile regex that broke when the path contained dots (e.g. `~/.config/...`), causing false `need_init=True` and incorrectly calling `config init` even when defaults existed.
+- Replaced with deterministic prefix/suffix splitting based on known resolver error text, with fallback to `_cfg_path(config_opt)`.
+
+Reflection/state of mind: this was cleanup and correctness hardening after fast iteration. The main bug was self-inflicted string parsing fragility; path parsing should avoid ambiguous regex delimiters when path text can contain dots.
+
+Uncertainties/risks: error-text parsing still depends on resolver message shape, but now in a more robust way and with a safe fallback. A future refactor could return structured error context instead of parsing strings.
+
+What I am confident about: py_compile passes for all touched files and the two reported failing tests should now align with intended behavior.

@@ -14,7 +14,7 @@ from loguru import logger
 from ..config import AgentVMConfig
 from ..detect import detect_ssh_identity
 from ..store import (
-    find_attachment,
+    find_attachments,
     find_vm,
     load_store,
     materialize_vm_cfg,
@@ -23,7 +23,7 @@ from ..store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..util import arm_sudo_intent, clear_sudo_intent
+from ..util import arm_sudo_intent, clear_sudo_intent, sudo_intent_auto_yes
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool] | None = None
@@ -194,6 +194,13 @@ def _resolve_vm_name(
     vm_opt: str,
     host_src: Path | None,
 ) -> tuple[str, Path]:
+    """Resolve a VM name using CLI intent precedence.
+
+    Precedence is deliberate:
+    explicit ``--vm`` > folder attachment mapping > active VM > single VM >
+    interactive selection. This keeps one-command workflows predictable while
+    still allowing explicit override.
+    """
     log.trace(
         'Resolving VM name config_opt={} vm_opt={} host_src={}',
         config_opt,
@@ -209,9 +216,34 @@ def _resolve_vm_name(
         return vm_opt, store_path
 
     if host_src is not None:
-        att = find_attachment(reg, host_src)
-        if att is not None:
-            return att.vm_name, store_path
+        atts = find_attachments(reg, host_src)
+        if atts:
+            attached_vm_names = sorted(
+                {
+                    att.vm_name
+                    for att in atts
+                    if find_vm(reg, att.vm_name) is not None
+                }
+            )
+            if len(attached_vm_names) == 1:
+                return attached_vm_names[0], store_path
+            if attached_vm_names:
+                if reg.active_vm in attached_vm_names:
+                    return reg.active_vm, store_path
+                if not sys.stdin.isatty():
+                    vm_names = ', '.join(attached_vm_names)
+                    raise RuntimeError(
+                        'Host folder is attached to multiple VMs: '
+                        f'{vm_names}. Re-run with --vm.'
+                    )
+                chosen = _choose_vm_interactive(
+                    attached_vm_names,
+                    reason=(
+                        f'folder {host_src} is attached to '
+                        f'{len(attached_vm_names)} VMs'
+                    ),
+                )
+                return chosen, store_path
 
     if reg.active_vm and find_vm(reg, reg.active_vm) is not None:
         return reg.active_vm, store_path
@@ -305,7 +337,9 @@ def _confirm_sudo_block(
     )
     if os.geteuid() == 0:
         return
-    eff_yes = bool(yes or _CURRENT_YES_SUDO.get(False))
+    eff_yes = bool(
+        yes or _CURRENT_YES_SUDO.get(False) or sudo_intent_auto_yes()
+    )
     arm_sudo_intent(yes=eff_yes, purpose=purpose)
 
 
@@ -333,6 +367,7 @@ def _resolve_cfg_for_code(
     vm_opt: str,
     host_src: Path,
 ) -> tuple[AgentVMConfig, Path]:
+    """Resolve VM config for folder-oriented flows (``code``/``ssh``/``attach``)."""
     return _load_cfg_with_path(
         config_opt,
         vm_opt=vm_opt,

@@ -17,7 +17,7 @@ from aivm.cli.vm import (
     _upsert_ssh_config_entry,
 )
 from aivm.config import AgentVMConfig
-from aivm.store import Store, save_store, upsert_vm
+from aivm.store import Store, save_store, upsert_attachment, upsert_vm
 
 
 def test_parse_sync_paths_arg() -> None:
@@ -157,6 +157,18 @@ def test_confirm_sudo_block_uses_effective_yes_sudo_context(
     assert calls == [{'yes': True, 'purpose': 'test'}]
 
 
+def test_confirm_sudo_block_honors_sticky_all_choice(monkeypatch) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr('aivm.cli._common.sudo_intent_auto_yes', lambda: True)
+    _confirm_sudo_block(yes=False, purpose='test')
+    assert calls == [{'yes': True, 'purpose': 'test'}]
+
+
 def test_cli_yes_sudo_defaults_from_config(monkeypatch, tmp_path: Path) -> None:
     cfg_path = tmp_path / 'config.toml'
     store = Store()
@@ -207,3 +219,61 @@ def test_help_raw_outputs_direct_system_commands(
     assert 'sudo virsh dominfo vm-raw' in clean
     assert 'sudo virsh net-info net-raw' in clean
     assert 'sudo nft list table inet fw-raw' in clean
+
+
+def test_resolve_vm_name_prefers_active_vm_for_multi_attached_folder(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+
+    store = Store()
+    vm1 = AgentVMConfig()
+    vm1.vm.name = 'vm-a'
+    vm2 = AgentVMConfig()
+    vm2.vm.name = 'vm-b'
+    upsert_vm(store, vm1)
+    upsert_vm(store, vm2)
+    store.active_vm = 'vm-b'
+    upsert_attachment(store, host_path=host_src, vm_name='vm-a')
+    upsert_attachment(store, host_path=host_src, vm_name='vm-b')
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr('aivm.cli._common._cfg_path', lambda p: cfg_path)
+    vm_name, resolved = common_mod._resolve_vm_name(
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+    )
+    assert vm_name == 'vm-b'
+    assert resolved == cfg_path
+
+
+def test_resolve_vm_name_errors_noninteractive_for_multi_attached_folder(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+
+    store = Store()
+    vm1 = AgentVMConfig()
+    vm1.vm.name = 'vm-a'
+    vm2 = AgentVMConfig()
+    vm2.vm.name = 'vm-b'
+    upsert_vm(store, vm1)
+    upsert_vm(store, vm2)
+    store.active_vm = ''
+    upsert_attachment(store, host_path=host_src, vm_name='vm-a')
+    upsert_attachment(store, host_path=host_src, vm_name='vm-b')
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr('aivm.cli._common._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+    with pytest.raises(RuntimeError, match='attached to multiple VMs'):
+        common_mod._resolve_vm_name(
+            config_opt=str(cfg_path),
+            vm_opt='',
+            host_src=host_src,
+        )

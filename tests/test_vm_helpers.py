@@ -6,11 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from aivm.config import AgentVMConfig
+from aivm.config import (
+    DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    AgentVMConfig,
+)
 from aivm.util import CmdError, CmdResult
 from aivm.vm import (
     _mac_for_vm,
     create_or_start_vm,
+    ensure_share_mounted,
     fetch_image,
     get_ip_cached,
     vm_has_share,
@@ -97,6 +101,80 @@ def test_vm_has_virtiofs_shared_memory(monkeypatch) -> None:
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 
+def test_ensure_share_mounted_retries_then_succeeds(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    calls = {'n': 0}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        'aivm.vm.share.require_ssh_identity', lambda p: p or '/tmp/id_ed25519'
+    )
+    monkeypatch.setattr(
+        'aivm.vm.share.ssh_base_args', lambda *a, **k: ['-i', '/tmp/id_ed25519']
+    )
+
+    def fake_run_cmd(*a, **k):
+        del a, k
+        calls['n'] += 1
+        if calls['n'] == 1:
+            return CmdResult(
+                32,
+                '',
+                'mount: /workspace: wrong fs type, bad option',
+            )
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.share.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.vm.share.time.sleep', lambda s: sleeps.append(s))
+    ensure_share_mounted(
+        cfg,
+        '10.0.0.2',
+        guest_dst='/workspace',
+        tag='hostcode-workspace',
+        dry_run=False,
+    )
+    assert calls['n'] == 2
+    assert sleeps == [2.0]
+
+
+def test_ensure_share_mounted_raises_after_retries(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-share-fail'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    sleeps: list[float] = []
+
+    monkeypatch.setattr(
+        'aivm.vm.share.require_ssh_identity', lambda p: p or '/tmp/id_ed25519'
+    )
+    monkeypatch.setattr(
+        'aivm.vm.share.ssh_base_args', lambda *a, **k: ['-i', '/tmp/id_ed25519']
+    )
+    monkeypatch.setattr(
+        'aivm.vm.share.run_cmd',
+        lambda *a, **k: CmdResult(
+            32,
+            '',
+            'mount: /workspace: wrong fs type, bad option',
+        ),
+    )
+    monkeypatch.setattr('aivm.vm.share.time.sleep', lambda s: sleeps.append(s))
+
+    with pytest.raises(
+        RuntimeError, match='Failed to mount shared folder inside guest'
+    ):
+        ensure_share_mounted(
+            cfg,
+            '10.0.0.2',
+            guest_dst='/workspace',
+            tag='hostcode-workspace',
+            dry_run=False,
+        )
+    assert len(sleeps) == 11
+
+
 def test_create_vm_fallback_when_uefi_firmware_missing(monkeypatch) -> None:
     cfg = AgentVMConfig()
     monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
@@ -143,29 +221,112 @@ def test_fetch_image_uses_atomic_temp_then_move(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
-    cfg.image.cache_name = 'base.img'
-    cfg.image.ubuntu_img_url = 'http://example.com/base.img'
+    cfg.image.cache_name = 'noble-base.img'
+    cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
     monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
         'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
     )
     calls = []
+    expected = (
+        '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
+    )
 
     def fake_run_cmd(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[:1] == ['sha256sum']:
+            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
         return CmdResult(0, '', '')
 
     monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
     out = fetch_image(cfg, dry_run=False)
-    assert out.name == 'base.img'
+    assert out.name == 'noble-base.img'
     curl_calls = [c for c in calls if c and c[0] == 'curl']
     assert len(curl_calls) == 1
     mv_calls = [c for c in calls if c and c[0] == 'mv']
     assert len(mv_calls) == 1
+    sha_calls = [c for c in calls if c and c[0] == 'sha256sum']
+    assert len(sha_calls) == 1
     tmp_target = str(out) + '.part'
     assert tmp_target in curl_calls[0]
     assert tmp_target in mv_calls[0]
     assert str(out) in mv_calls[0]
+
+
+def test_fetch_image_validates_ubuntu_checksum(monkeypatch, tmp_path: Path) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    cfg.image.cache_name = 'noble-base.img'
+    cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+    )
+    calls = []
+    expected = (
+        '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
+    )
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            return CmdResult(0, '', '')
+        if cmd[:1] == ['sha256sum']:
+            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    out = fetch_image(cfg, dry_run=False)
+    assert out.name == 'noble-base.img'
+    assert any(c[:1] == ['sha256sum'] for c in calls)
+
+
+def test_fetch_image_raises_on_checksum_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    cfg.image.cache_name = 'noble-base.img'
+    cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+    )
+    calls = []
+    actual = (
+        'abcdef0123456789abcdef0123456789'
+        'abcdef0123456789abcdef0123456789'
+    )
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            return CmdResult(0, '', '')
+        if cmd[:1] == ['sha256sum']:
+            return CmdResult(0, f'{actual}  {cmd[-1]}\n', '')
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    with pytest.raises(RuntimeError, match='checksum mismatch'):
+        fetch_image(cfg, dry_run=False)
+    assert any(c[:2] == ['rm', '-f'] for c in calls)
+
+
+def test_fetch_image_rejects_unsupported_url(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    cfg.image.cache_name = 'base.img'
+    cfg.image.ubuntu_img_url = 'https://example.com/custom.img'
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    with pytest.raises(RuntimeError, match='not in the built-in verified image registry'):
+        fetch_image(cfg, dry_run=False)
 
 
 def test_create_vm_raises_clear_error_when_virtiofsd_missing(

@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 import xml.etree.ElementTree as ET
+from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -29,10 +30,11 @@ from ..status import (
     probe_vm_state,
 )
 from ..store import (
-    find_attachment,
+    find_attachment_for_vm,
     find_network,
     find_vm,
     load_store,
+    materialize_vm_cfg,
     network_users,
     remove_vm,
     save_store,
@@ -105,6 +107,11 @@ class VMCreateCLI(_BaseCommand):
     """Create a managed VM from config-store defaults and start it."""
 
     vm = scfg.Value('', help='Optional VM name override.')
+    set_default = scfg.Value(
+        False,
+        isflag=True,
+        help='Set the created VM as the active default VM.',
+    )
     force = scfg.Value(
         False,
         isflag=True,
@@ -118,21 +125,38 @@ class VMCreateCLI(_BaseCommand):
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
         log.trace(
-            'VMCreateCLI.main vm={} force={} dry_run={} yes={}',
+            'VMCreateCLI.main vm={} set_default={} force={} dry_run={} yes={}',
             args.vm,
+            bool(args.set_default),
             bool(args.force),
             bool(args.dry_run),
             bool(args.yes),
         )
         cfg_path = _cfg_path(args.config)
         reg = load_store(cfg_path)
-        if reg.defaults is None:
+        if reg.defaults is not None:
+            # Work on a copy so per-create overrides (e.g. --vm) never mutate
+            # persisted defaults in the registry.
+            cfg = deepcopy(reg.defaults).expanded_paths()
+        elif reg.vms:
+            # Fallback for stores that predate/omit [defaults]: use an existing
+            # managed VM definition as the template source for new VM creation.
+            template_name = (
+                reg.active_vm if find_vm(reg, reg.active_vm) is not None else ''
+            )
+            if not template_name:
+                template_name = sorted(v.name for v in reg.vms)[0]
+            cfg = materialize_vm_cfg(reg, template_name).expanded_paths()
+            log.warning(
+                'No config defaults found; using managed VM {} as create template.',
+                template_name,
+            )
+        else:
             log.error(
                 f'No config defaults found in store: {cfg_path}. '
                 'Run `aivm config init` first.'
             )
             return 1
-        cfg = reg.defaults.expanded_paths()
         if args.vm:
             cfg.vm.name = str(args.vm).strip()
         for line in vm_resource_warning_lines(cfg):
@@ -177,7 +201,17 @@ class VMCreateCLI(_BaseCommand):
             recreate=bool(args.force and existing is not None),
         )
         if not args.dry_run:
+            prev_active_vm = reg.active_vm
             upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+            set_active = bool(args.set_default)
+            if (
+                not set_active
+                and not bool(args.yes)
+                and prev_active_vm != cfg.vm.name
+            ):
+                set_active = _prompt_set_created_vm_default(cfg.vm.name)
+            if not set_active:
+                reg.active_vm = prev_active_vm
             save_store(reg, cfg_path)
         return 0
 
@@ -219,6 +253,22 @@ def _prompt_int_with_default(prompt: str, default: int) -> int:
             print('Please enter a positive integer.')
             continue
         return value
+
+
+def _prompt_set_created_vm_default(vm_name: str) -> bool:
+    while True:
+        ans = (
+            input(
+                f'Set "{vm_name}" as the active default VM for folder-based commands? [y/N]: '
+            )
+            .strip()
+            .lower()
+        )
+        if ans in {'', 'n', 'no'}:
+            return False
+        if ans in {'y', 'yes'}:
+            return True
+        print("Please answer 'y' or 'n'.")
 
 
 def _review_vm_create_overrides_interactive(
@@ -482,7 +532,7 @@ class VMCodeCLI(_BaseCommand):
     force = scfg.Value(
         False,
         isflag=True,
-        help='Force attaching folder even if already attached to a different VM.',
+        help='Deprecated no-op; multiple VMs may attach the same folder.',
     )
     dry_run = scfg.Value(
         False, isflag=True, help='Print actions without running.'
@@ -597,7 +647,7 @@ class VMSSHCLI(_BaseCommand):
     force = scfg.Value(
         False,
         isflag=True,
-        help='Force attaching folder even if already attached to a different VM.',
+        help='Deprecated no-op; multiple VMs may attach the same folder.',
     )
     dry_run = scfg.Value(
         False, isflag=True, help='Print actions without running.'
@@ -681,7 +731,7 @@ class VMAttachCLI(_BaseCommand):
     force = scfg.Value(
         False,
         isflag=True,
-        help='Allow attaching folder that is already attached to a different VM.',
+        help='Deprecated no-op; multiple VMs may attach the same folder.',
     )
     dry_run = scfg.Value(
         False, isflag=True, help='Print actions without running.'
@@ -929,6 +979,11 @@ def _bytes_to_gib(size_bytes: int) -> float:
 
 
 def _maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
+    """Best-effort host dependency gate before VM lifecycle operations.
+
+    We keep this prompt local to workflows that actively create/start/reconcile
+    VMs so users see missing prerequisites at the point of need.
+    """
     missing, _ = check_commands()
     if not missing:
         return
@@ -1100,6 +1155,14 @@ def _virsh_domblk_capacity_bytes(
 def _vm_update_drift(
     cfg: AgentVMConfig, *, yes: bool
 ) -> tuple[VMUpdateDrift, bool]:
+    """Compute editable drift between config and live libvirt VM state.
+
+    The update flow is intentionally conservative:
+    * prefer non-sudo probes first,
+    * escalate to sudo only when required,
+    * gather diagnostics in ``notes`` instead of failing hard when a probe is
+      inconclusive (for example qemu-img lock contention on running VMs).
+    """
     notes: list[str] = []
     dominfo = run_cmd(
         virsh_system_cmd('dominfo', cfg.vm.name),
@@ -1573,8 +1636,8 @@ def _resolve_attachment(
     guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
     tag = _ensure_share_tag_len('', host_src, set())
     reg = load_store(cfg_path)
-    att = find_attachment(reg, host_src)
-    if att is not None and att.vm_name == cfg.vm.name:
+    att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    if att is not None:
         if not guest_dst_opt and att.guest_dst:
             guest_dst = att.guest_dst
         if att.tag:
@@ -1620,6 +1683,12 @@ def _reconcile_attached_vm(
     *,
     policy: ReconcilePolicy,
 ) -> ReconcileResult:
+    """Reconcile VM/network/firewall/share state before code/ssh-style sessions.
+
+    This function is the orchestration pivot for "one-command" UX. It tries to
+    preserve an existing running VM when safe, and only escalates to recreate or
+    privileged host changes when required for correctness.
+    """
     cached_ip = get_ip_cached(cfg) if not policy.dry_run else None
     cached_ssh_ok = False
     if cached_ip:
@@ -1804,6 +1873,12 @@ def _prepare_attached_session(
     dry_run: bool,
     yes: bool,
 ) -> PreparedSession:
+    """Prepare a ready-to-use VM session rooted at a host folder attachment.
+
+    If no VM context exists, this may bootstrap ``config init`` + ``vm create``
+    (with consent/non-interactive policy checks), then continue with attachment,
+    IP/SSH readiness, and in-guest mount reconciliation.
+    """
     if not host_src.exists():
         raise FileNotFoundError(f'Host source path does not exist: {host_src}')
     if not host_src.is_dir():
@@ -1819,30 +1894,45 @@ def _prepare_attached_session(
         msg = str(ex)
         if 'No VM definitions found in config store' not in msg:
             raise
+        prefix = 'No VM definitions found in config store: '
+        missing_store_path = _cfg_path(config_opt)
+        if msg.startswith(prefix):
+            tail = msg[len(prefix) :]
+            # Avoid brittle regex parsing: split at our known guidance suffix.
+            store_str = tail.split('. Run `aivm config init`', 1)[0].strip()
+            if store_str:
+                missing_store_path = Path(store_str).expanduser().resolve()
+        missing_store = load_store(missing_store_path)
+        need_init = missing_store.defaults is None
         if not yes:
             if not sys.stdin.isatty():
                 raise RuntimeError(
-                    'No managed VM found for this folder. Re-run with --yes to initialize defaults and create one automatically.'
+                    'No managed VM found for this folder. Re-run with --yes to create one automatically.'
                 ) from ex
             print('No managed VM found for this folder.')
-            ans = (
-                input(
-                    'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+            if need_init:
+                prompt = 'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+            else:
+                prompt = (
+                    'Run `aivm vm create` now using existing config defaults? [Y/n]: '
                 )
+            ans = (
+                input(prompt)
                 .strip()
                 .lower()
             )
             if ans not in {'', 'y', 'yes'}:
                 raise RuntimeError('Aborted by user.') from ex
-        from .config import InitCLI
+        if need_init:
+            from .config import InitCLI
 
-        InitCLI.main(
-            argv=False,
-            config=config_opt,
-            yes=True,
-            defaults=True,
-            force=False,
-        )
+            InitCLI.main(
+                argv=False,
+                config=config_opt,
+                yes=True,
+                defaults=True,
+                force=False,
+            )
         VMCreateCLI.main(
             argv=False,
             config=config_opt,

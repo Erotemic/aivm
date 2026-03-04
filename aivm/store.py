@@ -1,4 +1,8 @@
-"""Single-file config store for defaults, networks, VMs, and attachments."""
+"""Single-file registry model for defaults, networks, VMs, and attachments.
+
+This store is the canonical source for "managed by aivm" state and is designed
+to support folder-centric VM resolution workflows.
+"""
 
 from __future__ import annotations
 
@@ -335,6 +339,12 @@ def network_users(reg: Store, network_name: str) -> list[str]:
 
 
 def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
+    """Build an effective VM config by joining VM entry + referenced network.
+
+    VM records keep only a ``network_name`` pointer; network/firewall details
+    live in ``[[networks]]``. This join step avoids stale duplicated network
+    settings in VM entries and centralizes network edits.
+    """
     vm = find_vm(reg, vm_name)
     if vm is None:
         raise RuntimeError(f'VM not found in config store: {vm_name}')
@@ -375,20 +385,8 @@ def upsert_attachment(
     tag: str = '',
     force: bool = False,
 ) -> None:
+    del force
     norm = _norm_dir(host_path)
-    conflict = [
-        a
-        for a in reg.attachments
-        if a.host_path == norm and a.vm_name != vm_name
-    ]
-    if conflict and not force:
-        vm_names = ', '.join(sorted({a.vm_name for a in conflict}))
-        raise RuntimeError(
-            f'Host folder already attached to other VM(s): {vm_names}. '
-            'Use --force to override this safety check.'
-        )
-    if force and conflict:
-        reg.attachments = [a for a in reg.attachments if a.host_path != norm]
     existing = [
         a
         for a in reg.attachments
@@ -408,11 +406,26 @@ def upsert_attachment(
         reg.attachments.append(rec)
 
 
-def find_attachment(
-    reg: Store, host_path: str | Path
+def find_attachments(reg: Store, host_path: str | Path) -> list[AttachmentEntry]:
+    norm = _norm_dir(host_path)
+    return [att for att in reg.attachments if att.host_path == norm]
+
+
+def find_attachment_for_vm(
+    reg: Store, host_path: str | Path, vm_name: str
 ) -> AttachmentEntry | None:
     norm = _norm_dir(host_path)
     for att in reg.attachments:
-        if att.host_path == norm:
+        if att.host_path == norm and att.vm_name == vm_name:
             return att
     return None
+
+
+def find_attachment(
+    reg: Store, host_path: str | Path
+) -> AttachmentEntry | None:
+    atts = sorted(
+        find_attachments(reg, host_path),
+        key=lambda att: (att.vm_name, att.guest_dst, att.tag),
+    )
+    return atts[0] if atts else None
