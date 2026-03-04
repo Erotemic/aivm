@@ -1062,3 +1062,15 @@ Uncertainties/risks: alias table requires maintenance when defaults are rotated 
 Tradeoffs and what might break: users with truly custom URLs are still rejected by design. Legacy known URL now logs a warning and proceeds via canonical pinned URL, which changes exactly what gets downloaded compared to historical `current` behavior.
 
 What I am confident about: compile checks pass; added regression coverage in `tests/test_vm_helpers.py` to ensure legacy URL is accepted and canonical pinned URL is used for the actual download command.
+
+## 2026-03-04 03:06:18 +0000
+
+Implemented host-aware VM sizing defaults in `aivm detect auto_defaults`. Added a tiered recommendation helper (`_recommend_vm_resources`) in `aivm/detect.py` based on host CPU count, total RAM, and free disk at `paths.base_dir`. `auto_defaults` now sets `vm.cpus`, `vm.ram_mb`, and `vm.disk_gb` using these recommendations and logs detected host/resource context.
+
+Reflection/state of mind: this change improves first-run ergonomics by making init defaults less arbitrary and less likely to overcommit constrained hosts. I intentionally chose transparent tier thresholds over complex formulas so behavior is predictable and easy to tune in follow-ups.
+
+Uncertainties/risks: tier boundaries are heuristic and may still be suboptimal for some environments (e.g., memory-heavy workstations where users might prefer larger defaults). Since interactive init already supports edit, this is acceptable for now but could benefit from telemetry/feedback-based tuning.
+
+Tradeoffs and what might break: users previously accustomed to static defaults may notice changed default values after `config init`. This is expected and aligned with environment-aware behavior.
+
+What I am confident about: compile checks pass and tests now cover constrained and large host sizing as well as auto-default integration (`tests/test_detect.py`).

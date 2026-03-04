@@ -15,6 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 from .config import AgentVMConfig
+from .resource_checks import host_cpu_count, host_free_disk_gb, host_mem_total_mb
 from .util import expand, run_cmd, which
 
 log = logger
@@ -144,6 +145,52 @@ def pick_free_subnet(preferred: list[str]) -> str:
     return preferred[0]
 
 
+def _recommend_vm_resources(
+    *, host_cpus: int | None, host_mem_total_mb: int | None, host_free_disk: float | None
+) -> tuple[int, int, int]:
+    """Choose conservative VM defaults based on host resource tiers."""
+    cpus = 4
+    if host_cpus is not None:
+        if host_cpus <= 2:
+            cpus = 1
+        elif host_cpus <= 4:
+            cpus = 2
+        elif host_cpus <= 8:
+            cpus = 4
+        elif host_cpus <= 16:
+            cpus = 6
+        else:
+            cpus = 8
+
+    ram_mb = 8192
+    if host_mem_total_mb is not None:
+        if host_mem_total_mb <= 4096:
+            ram_mb = 2048
+        elif host_mem_total_mb <= 8192:
+            ram_mb = 3072
+        elif host_mem_total_mb <= 16384:
+            ram_mb = 4096
+        elif host_mem_total_mb <= 32768:
+            ram_mb = 8192
+        else:
+            ram_mb = 12288
+
+    disk_gb = 40
+    if host_free_disk is not None:
+        if host_free_disk <= 32:
+            disk_gb = 16
+        elif host_free_disk <= 64:
+            disk_gb = 24
+        elif host_free_disk <= 128:
+            disk_gb = 32
+        elif host_free_disk <= 256:
+            disk_gb = 40
+        else:
+            disk_gb = 64
+
+    return cpus, ram_mb, disk_gb
+
+
 def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
     log.trace('Start automatic default detection')
     ident, pub = detect_ssh_identity()
@@ -168,6 +215,29 @@ def auto_defaults(cfg: AgentVMConfig, *, project_dir: Path) -> AgentVMConfig:
     cfg.network.gateway_ip = str(ipaddress.IPv4Address(base + 1))
     cfg.network.dhcp_start = str(ipaddress.IPv4Address(base + 100))
     cfg.network.dhcp_end = str(ipaddress.IPv4Address(base + 200))
+
+    # Keep default sizing practical across laptops/workstations/servers.
+    host_cpus = host_cpu_count()
+    host_mem_mb = host_mem_total_mb()
+    host_free_disk = host_free_disk_gb(Path(cfg.paths.base_dir).expanduser())
+    cpus, ram_mb, disk_gb = _recommend_vm_resources(
+        host_cpus=host_cpus,
+        host_mem_total_mb=host_mem_mb,
+        host_free_disk=host_free_disk,
+    )
+    cfg.vm.cpus = cpus
+    cfg.vm.ram_mb = ram_mb
+    cfg.vm.disk_gb = disk_gb
+    log.info(
+        'Detected VM defaults from host resources: cpus={} ram_mb={} disk_gb={} '
+        '(host_cpus={} host_mem_total_mb={} host_free_disk_gb={})',
+        cpus,
+        ram_mb,
+        disk_gb,
+        host_cpus,
+        host_mem_mb,
+        f'{host_free_disk:.1f}' if host_free_disk is not None else 'unknown',
+    )
 
     if len(cfg.network.bridge) > 15:
         cfg.network.bridge = 'virbr-aivm'
