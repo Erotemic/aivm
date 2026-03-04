@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from aivm.config import DEFAULT_UBUNTU_NOBLE_IMG_URL, AgentVMConfig
+from aivm.config import (
+    DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    LEGACY_DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    AgentVMConfig,
+)
 from aivm.util import CmdError, CmdResult
 from aivm.vm import (
     _mac_for_vm,
@@ -324,6 +328,40 @@ def test_fetch_image_rejects_unsupported_url(
     monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
     with pytest.raises(RuntimeError, match='not in the built-in verified image registry'):
         fetch_image(cfg, dry_run=False)
+
+
+def test_fetch_image_accepts_legacy_url_via_alias(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    cfg.image.cache_name = 'noble-base.img'
+    cfg.image.ubuntu_img_url = LEGACY_DEFAULT_UBUNTU_NOBLE_IMG_URL
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+    )
+    expected = (
+        '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
+    )
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            # Verify canonical pinned URL is used for actual download.
+            assert cmd[-1] == DEFAULT_UBUNTU_NOBLE_IMG_URL
+            return CmdResult(0, '', '')
+        if cmd[:1] == ['sha256sum']:
+            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    out = fetch_image(cfg, dry_run=False)
+    assert out.name == 'noble-base.img'
+    assert any(c[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o'] for c in calls)
 
 
 def test_create_vm_raises_clear_error_when_virtiofsd_missing(

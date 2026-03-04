@@ -15,6 +15,7 @@ from loguru import logger
 
 from ..config import (
     DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    SUPPORTED_IMAGE_URL_ALIASES,
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
@@ -186,6 +187,18 @@ def _resolve_expected_image_sha256(
     )
 
 
+def _canonicalize_supported_image_url(image_url: str) -> str:
+    """Map legacy supported URLs to their pinned canonical equivalents."""
+    canon = SUPPORTED_IMAGE_URL_ALIASES.get(image_url, image_url)
+    if canon != image_url:
+        log.warning(
+            'Image URL {} is legacy/mutable; using pinned URL {}',
+            image_url,
+            canon,
+        )
+    return canon
+
+
 def _verify_image_sha256(
     *, image_path: Path, expected_sha256: str | None, source: str
 ) -> None:
@@ -216,7 +229,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     p = _paths(cfg, dry_run=dry_run)
     base_img = p['img_dir'] / cfg.image.cache_name
     tmp_img = Path(str(base_img) + '.part')
-    url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
+    requested_url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
+    url = _canonicalize_supported_image_url(requested_url)
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         log.info('Base image cached: {}', base_img)
         return base_img

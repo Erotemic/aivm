@@ -1050,3 +1050,15 @@ Uncertainties/risks: pinned daily URLs eventually age out operationally (securit
 Tradeoffs and what might break: users expecting automatic movement to latest daily image will no longer get that implicitly. They now need code/config updates when we intentionally roll the pinned default.
 
 What I am confident about: compile checks pass and the default + tests are now aligned on the pinned URL.
+
+## 2026-03-04 03:01:55 +0000
+
+Fixed a compatibility regression introduced by pinned image URL enforcement. Existing stores/VM templates may still carry the legacy mutable URL (`.../noble/current/...`), which was failing hard against the supported-image registry. Added `SUPPORTED_IMAGE_URL_ALIASES` in `aivm/config.py` and canonicalization in `fetch_image()` (`aivm/vm/lifecycle.py`) so legacy known URLs are automatically mapped to the pinned canonical URL before download + checksum verification.
+
+Reflection/state of mind: this keeps the stronger security stance (pinned download + built-in hash) without forcing users to manually edit existing config stores immediately. It is a practical migration shim that preserves intent and reduces breakage.
+
+Uncertainties/risks: alias table requires maintenance when defaults are rotated again; if stale aliases remain indefinitely, code complexity can creep. Current alias set is intentionally small and explicit.
+
+Tradeoffs and what might break: users with truly custom URLs are still rejected by design. Legacy known URL now logs a warning and proceeds via canonical pinned URL, which changes exactly what gets downloaded compared to historical `current` behavior.
+
+What I am confident about: compile checks pass; added regression coverage in `tests/test_vm_helpers.py` to ensure legacy URL is accepted and canonical pinned URL is used for the actual download command.
