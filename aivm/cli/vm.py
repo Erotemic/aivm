@@ -1894,30 +1894,43 @@ def _prepare_attached_session(
         msg = str(ex)
         if 'No VM definitions found in config store' not in msg:
             raise
+        m = re.search(r'No VM definitions found in config store: (.+?)\.', msg)
+        missing_store_path = (
+            Path(m.group(1)).expanduser().resolve()
+            if m is not None
+            else _cfg_path(config_opt)
+        )
+        missing_store = load_store(missing_store_path)
+        need_init = missing_store.defaults is None
         if not yes:
             if not sys.stdin.isatty():
                 raise RuntimeError(
-                    'No managed VM found for this folder. Re-run with --yes to initialize defaults and create one automatically.'
+                    'No managed VM found for this folder. Re-run with --yes to create one automatically.'
                 ) from ex
             print('No managed VM found for this folder.')
-            ans = (
-                input(
-                    'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+            if need_init:
+                prompt = 'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+            else:
+                prompt = (
+                    'Run `aivm vm create` now using existing config defaults? [Y/n]: '
                 )
+            ans = (
+                input(prompt)
                 .strip()
                 .lower()
             )
             if ans not in {'', 'y', 'yes'}:
                 raise RuntimeError('Aborted by user.') from ex
-        from .config import InitCLI
+        if need_init:
+            from .config import InitCLI
 
-        InitCLI.main(
-            argv=False,
-            config=config_opt,
-            yes=True,
-            defaults=True,
-            force=False,
-        )
+            InitCLI.main(
+                argv=False,
+                config=config_opt,
+                yes=True,
+                defaults=True,
+                force=False,
+            )
         VMCreateCLI.main(
             argv=False,
             config=config_opt,
