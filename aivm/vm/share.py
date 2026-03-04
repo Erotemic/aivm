@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shlex
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from loguru import logger
 
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
-from ..util import run_cmd
+from ..util import CmdError, run_cmd
 
 log = logger
 
@@ -189,4 +190,47 @@ def ensure_share_mounted(
     if dry_run:
         log.info('DRYRUN: {}', ' '.join(cmd))
         return
-    run_cmd(cmd, sudo=False, check=True, capture=True)
+    max_attempts = 12
+    retry_sleep_s = 2.0
+    for attempt in range(1, max_attempts + 1):
+        res = run_cmd(cmd, sudo=False, check=False, capture=True)
+        if res.code == 0:
+            if attempt > 1:
+                log.info(
+                    'Guest share mount became ready after {} attempt(s): tag={} dst={}',
+                    attempt,
+                    tag,
+                    guest_dst,
+                )
+            return
+        err = (res.stderr or '').strip() or f'command exited with {res.code}'
+        if attempt == 1:
+            log.warning(
+                'Guest share mount is not ready yet (tag={} dst={}). '
+                'Will retry up to {:.0f}s. Initial error: {}',
+                tag,
+                guest_dst,
+                (max_attempts - 1) * retry_sleep_s,
+                err,
+            )
+        elif attempt < max_attempts:
+            log.info(
+                'Retrying guest share mount ({}/{}): tag={} dst={}',
+                attempt,
+                max_attempts,
+                tag,
+                guest_dst,
+            )
+        if attempt < max_attempts:
+            time.sleep(retry_sleep_s)
+            continue
+        raise RuntimeError(
+            'Failed to mount shared folder inside guest after retries.\n'
+            f'VM: {cfg.vm.name}\n'
+            f'IP: {ip}\n'
+            f'Tag: {tag}\n'
+            f'Guest destination: {guest_dst}\n'
+            f'Last error: {err}\n'
+            'Try running the command again; if it keeps failing, inspect guest '
+            'kernel logs (e.g. dmesg) and verify virtiofs support in the image.'
+        ) from CmdError(cmd, res)

@@ -13,7 +13,11 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..config import DEFAULT_UBUNTU_NOBLE_IMG_URL, AgentVMConfig
+from ..config import (
+    DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    SUPPORTED_IMAGE_SHA256,
+    AgentVMConfig,
+)
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import CmdError, ensure_dir, run_cmd
 
@@ -166,6 +170,46 @@ def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     }
 
 
+def _resolve_expected_image_sha256(
+    *, image_url: str
+) -> tuple[str | None, str]:
+    digest = SUPPORTED_IMAGE_SHA256.get(image_url, '').strip().lower()
+    if digest:
+        return digest, 'built-in supported-image hash registry'
+    supported = '\n'.join(f'  - {u}' for u in sorted(SUPPORTED_IMAGE_SHA256))
+    raise RuntimeError(
+        'Image URL is not in the built-in verified image registry.\n'
+        f'Requested URL: {image_url}\n'
+        'Supported URLs:\n'
+        f'{supported}\n'
+        'Use a supported image URL, or add this URL + SHA256 to SUPPORTED_IMAGE_SHA256.'
+    )
+
+
+def _verify_image_sha256(
+    *, image_path: Path, expected_sha256: str | None, source: str
+) -> None:
+    if not expected_sha256:
+        return
+    log.info('Verifying base image checksum (source: {})', source)
+    out = run_cmd(
+        ['sha256sum', str(image_path)], sudo=True, check=True, capture=True
+    ).stdout
+    actual = out.strip().split()[0].lower() if out.strip() else ''
+    if actual != expected_sha256:
+        run_cmd(
+            ['rm', '-f', str(image_path)], sudo=True, check=False, capture=True
+        )
+        raise RuntimeError(
+            'Downloaded base image checksum mismatch; removed invalid image.\n'
+            f'Path: {image_path}\n'
+            f'Expected: {expected_sha256}\n'
+            f'Actual:   {actual}\n'
+            'Re-run to retry download, or pin image.sha256 / image.sha256sums_url.'
+        )
+    log.info('Base image checksum verified: {}', image_path)
+
+
 def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     log.trace('fetch_image vm={} dry_run={}', cfg.vm.name, dry_run)
     log.debug('Fetching Ubuntu cloud image')
@@ -176,6 +220,9 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         log.info('Base image cached: {}', base_img)
         return base_img
+    expected_sha256, checksum_source = _resolve_expected_image_sha256(
+        image_url=url
+    )
     if dry_run:
         log.info(
             'DRYRUN: curl -L --fail -o {} {}; mv {} {}',
@@ -209,6 +256,11 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             ['rm', '-f', str(tmp_img)], sudo=True, check=False, capture=True
         )
         raise
+    _verify_image_sha256(
+        image_path=base_img,
+        expected_sha256=expected_sha256,
+        source=checksum_source,
+    )
     log.info('Downloaded base image: {}', base_img)
     return base_img
 

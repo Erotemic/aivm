@@ -1002,3 +1002,51 @@ Uncertainties/risks: sticky approval scope is per-process/current invocation (in
 Tradeoffs and what might break: changed sudo prompt text from `[y/N]` to `[y]es/[a]ll/[N]o`. Any tests/tools matching exact prompt text needed updates. Non-interactive behavior remains unchanged.
 
 What I am confident about: compile checks pass for touched modules; new tests cover sticky-all behavior in util and confirm-block honoring of sticky state (`tests/test_util.py`, `tests/test_cli_helpers.py`).
+
+## 2026-03-03 20:46:36 +0000
+
+Addressed a first-boot/share-mount race in `aivm ssh .` / attached-session flows by hardening guest mount reconciliation. In `aivm/vm/share.py`, `ensure_share_mounted()` now runs a bounded retry loop (12 attempts, 2s interval) instead of a single mount attempt. It emits clear user-facing logs on first failure and subsequent retries, then raises a structured RuntimeError with context if retries are exhausted.
+
+Reflection/state of mind: this was a practical reliability fix aimed at demo/operator experience. The failure signature (SSH ready but first virtiofs mount returns code 32, second invocation succeeds) strongly suggests readiness lag; retrying at the mount boundary is the least invasive and most user-visible mitigation.
+
+Uncertainties/risks: retries are generic for nonzero mount outcomes, so truly permanent mount failures now take ~22 seconds longer before surfacing. I considered heuristic filtering by stderr, but that is brittle across distros/locales; a bounded retry with explicit logs is safer and easier to reason about.
+
+Tradeoffs and what might break: error timing changes (later failure) for persistent mount issues; however logs now make this explicit and actionable. No behavior change for successful first-attempt mounts.
+
+What I am confident about: compile checks pass; added tests in `tests/test_vm_helpers.py` cover retry-then-success and exhausted-retry failure paths for `ensure_share_mounted()`.
+
+## 2026-03-03 20:57:17 +0000
+
+Implemented checksum validation for downloaded Ubuntu cloud images in `fetch_image()`. Added image config knobs (`image.sha256`, `image.sha256sums_url`) and verification flow in `aivm/vm/lifecycle.py`: when downloading an Ubuntu cloud image URL, aivm now resolves expected SHA256 from explicit config or upstream `SHA256SUMS`, computes local digest via `sha256sum`, and fails hard on mismatch while removing the invalid image.
+
+Reflection/state of mind: this is a supply-chain integrity improvement with low operational complexity. I intentionally scoped mandatory auto-resolution to Ubuntu cloud image URLs so common defaults are protected without forcing checksum infrastructure on arbitrary custom image sources.
+
+Uncertainties/risks: for Ubuntu URLs, a download now depends on access to checksum index endpoint unless `image.sha256` is pinned. Environments with restricted outbound networking may need to set explicit checksum (and optionally local sums URL) for deterministic behavior.
+
+Tradeoffs and what might break: first-time Ubuntu downloads do one extra metadata fetch (`SHA256SUMS`) and one hash computation (`sha256sum`), adding startup latency. Cached-image fast path remains unchanged and does not re-verify to avoid repeated startup cost.
+
+What I am confident about: compile checks pass, and tests now cover checksum validation success and mismatch failure/removal paths in `tests/test_vm_helpers.py`.
+
+## 2026-03-03 21:01:55 +0000
+
+Refined image checksum design per feedback: removed user-facing checksum knobs and switched to an internal supported-image hash registry. In `aivm/config.py`, dropped `ImageConfig.sha256` / `sha256sums_url` and introduced `SUPPORTED_IMAGE_SHA256` keyed by supported image URLs (currently default Ubuntu noble cloud image URL). In `aivm/vm/lifecycle.py`, checksum resolution now enforces membership in this registry and fails fast for unsupported URLs; post-download SHA256 verification remains mandatory with cleanup-on-mismatch.
+
+Reflection/state of mind: this aligns security policy with usability. Asking users to source hashes themselves was the wrong UX burden; a curated internal registry gives deterministic integrity checks and clearer trust boundaries.
+
+Uncertainties/risks: registry entries can go stale if upstream “current” URLs roll to new artifacts. That means maintainers must refresh hashes when supported image URLs change content. This is intentional but requires lightweight maintenance discipline.
+
+Tradeoffs and what might break: custom image URLs that previously worked will now fail unless added to the built-in registry; this is a deliberate tightening to avoid unverified downloads.
+
+What I am confident about: compile checks pass and tests were updated for the new model (registered URL success, mismatch removal, unsupported URL rejection) in `tests/test_vm_helpers.py`.
+
+## 2026-03-03 21:05:14 +0000
+
+Pinned the default Ubuntu image URL to a dated artifact path (`/noble/20260225/...`) instead of `/current/` so the configured URL and built-in SHA256 refer to the same immutable object. Updated tests that hardcoded `/current/` to use `DEFAULT_UBUNTU_NOBLE_IMG_URL` for consistency.
+
+Reflection/state of mind: this change closes the integrity gap where a mutable URL could drift underneath a fixed hash. It makes the security model coherent: one URL, one digest, predictable verification.
+
+Uncertainties/risks: pinned daily URLs eventually age out operationally (security updates) and must be refreshed intentionally; this is expected and preferable to silent drift from `current`.
+
+Tradeoffs and what might break: users expecting automatic movement to latest daily image will no longer get that implicitly. They now need code/config updates when we intentionally roll the pinned default.
+
+What I am confident about: compile checks pass and the default + tests are now aligned on the pinned URL.
