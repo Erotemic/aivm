@@ -1074,3 +1074,39 @@ Uncertainties/risks: tier boundaries are heuristic and may still be suboptimal f
 Tradeoffs and what might break: users previously accustomed to static defaults may notice changed default values after `config init`. This is expected and aligned with environment-aware behavior.
 
 What I am confident about: compile checks pass and tests now cover constrained and large host sizing as well as auto-default integration (`tests/test_detect.py`).
+
+## 2026-03-04 03:12:54 +0000
+
+Fixed attached-session bootstrap behavior for the case "config exists with defaults, but no VM definitions yet." Previously `_prepare_attached_session()` unconditionally treated missing VM definitions as needing both `config init` and `vm create`. It now inspects the failing store path, checks whether defaults already exist, and runs only the missing step:
+- defaults missing -> run `config init` then `vm create`
+- defaults present -> run `vm create` only
+
+Also updated interactive/non-interactive wording to avoid implying `config init` is always required when defaults already exist.
+
+Reflection/state of mind: this was an accuracy/UX correction rather than a deep lifecycle bug. The fallback was too coarse and leaked an implementation assumption into user guidance. The safer design is state-driven bootstrap from store contents.
+
+Uncertainties/risks: path extraction currently relies on the existing resolver error format (regex over message). If that message changes, fallback uses `_cfg_path(config_opt)`; behavior remains functional but could lose precision in mocked contexts.
+
+Tradeoffs and what might break: minor prompt text changes; automation behavior should improve (fewer unnecessary init calls).
+
+What I am confident about: compile checks pass and tests now cover both bootstrap branches in `tests/test_cli_vm_update.py`.
+
+## 2026-03-04 03:15:01 +0000
+
+Addressed two follow-up test regressions.
+
+1) Removed legacy image URL support completely, per policy decision.
+- Deleted legacy alias constants from `aivm/config.py`.
+- Removed URL canonicalization path from `aivm/vm/lifecycle.py`.
+- Removed legacy URL acceptance test from `tests/test_vm_helpers.py`.
+- Kept strict supported-URL registry enforcement.
+
+2) Fixed bootstrap branch detection in `_prepare_attached_session()`.
+- Previous store-path parsing used a fragile regex that broke when the path contained dots (e.g. `~/.config/...`), causing false `need_init=True` and incorrectly calling `config init` even when defaults existed.
+- Replaced with deterministic prefix/suffix splitting based on known resolver error text, with fallback to `_cfg_path(config_opt)`.
+
+Reflection/state of mind: this was cleanup and correctness hardening after fast iteration. The main bug was self-inflicted string parsing fragility; path parsing should avoid ambiguous regex delimiters when path text can contain dots.
+
+Uncertainties/risks: error-text parsing still depends on resolver message shape, but now in a more robust way and with a safe fallback. A future refactor could return structured error context instead of parsing strings.
+
+What I am confident about: py_compile passes for all touched files and the two reported failing tests should now align with intended behavior.

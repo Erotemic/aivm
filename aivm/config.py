@@ -16,12 +16,8 @@ from .util import expand
 
 # Pinned daily image path so URL and hash are coupled to a specific artifact.
 DEFAULT_UBUNTU_NOBLE_IMG_URL = 'https://cloud-images.ubuntu.com/noble/20260225/noble-server-cloudimg-amd64.img'
-LEGACY_DEFAULT_UBUNTU_NOBLE_IMG_URL = 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img'
 SUPPORTED_IMAGE_SHA256 = {
     DEFAULT_UBUNTU_NOBLE_IMG_URL: '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21',
-}
-SUPPORTED_IMAGE_URL_ALIASES = {
-    LEGACY_DEFAULT_UBUNTU_NOBLE_IMG_URL: DEFAULT_UBUNTU_NOBLE_IMG_URL,
 }
 
 

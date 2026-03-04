@@ -1894,12 +1894,14 @@ def _prepare_attached_session(
         msg = str(ex)
         if 'No VM definitions found in config store' not in msg:
             raise
-        m = re.search(r'No VM definitions found in config store: (.+?)\.', msg)
-        missing_store_path = (
-            Path(m.group(1)).expanduser().resolve()
-            if m is not None
-            else _cfg_path(config_opt)
-        )
+        prefix = 'No VM definitions found in config store: '
+        missing_store_path = _cfg_path(config_opt)
+        if msg.startswith(prefix):
+            tail = msg[len(prefix) :]
+            # Avoid brittle regex parsing: split at our known guidance suffix.
+            store_str = tail.split('. Run `aivm config init`', 1)[0].strip()
+            if store_str:
+                missing_store_path = Path(store_str).expanduser().resolve()
         missing_store = load_store(missing_store_path)
         need_init = missing_store.defaults is None
         if not yes:

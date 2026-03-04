@@ -324,3 +324,93 @@ def test_prepare_attached_session_bootstraps_missing_vm(
     )
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert calls == ['config_init', 'vm_create']
+
+
+def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
+    monkeypatch, tmp_path: Path
+) -> None:
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'bootstrap-vm'
+    cfg_path = tmp_path / 'config.toml'
+
+    from aivm.store import Store, save_store
+
+    store = Store()
+    store.defaults = AgentVMConfig()
+    save_store(store, cfg_path)
+
+    calls: list[str] = []
+    state = {'ready': False}
+
+    def fake_resolve_cfg_for_code(**kwargs):
+        del kwargs
+        if not state['ready']:
+            raise RuntimeError(
+                f'No VM definitions found in config store: {cfg_path}. '
+                'Run `aivm config init` then `aivm vm create` first.'
+            )
+        return cfg, cfg_path
+
+    monkeypatch.setattr(
+        'aivm.cli.vm._resolve_cfg_for_code', fake_resolve_cfg_for_code
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.InitCLI.main',
+        lambda *a, **k: calls.append('config_init') or 0,
+    )
+
+    def fake_vm_create(*a, **k):
+        calls.append('vm_create')
+        state['ready'] = True
+        return 0
+
+    monkeypatch.setattr('aivm.cli.vm.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr(
+        'aivm.cli.vm._resolve_attachment',
+        lambda *a, **k: ResolvedAttachment(
+            vm_name=cfg.vm.name,
+            source_dir=str(host_src),
+            guest_dst=str(host_src),
+            tag='hostcode-proj',
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._reconcile_attached_vm',
+        lambda *a, **k: ReconcileResult(
+            attachment=ResolvedAttachment(
+                vm_name=cfg.vm.name,
+                source_dir=str(host_src),
+                guest_dst=str(host_src),
+                tag='hostcode-proj',
+            ),
+            cached_ip=None,
+            cached_ssh_ok=False,
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm._record_attachment', lambda *a, **k: tmp_path / 'dummy'
+    )
+    monkeypatch.setattr('aivm.cli.vm.get_ip_cached', lambda *a, **k: '10.0.0.2')
+    monkeypatch.setattr(
+        'aivm.cli.vm.probe_ssh_ready',
+        lambda *a, **k: ProbeOutcome(True, 'ready', ''),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm.ensure_share_mounted', lambda *a, **k: None
+    )
+
+    session = _prepare_attached_session(
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        recreate_if_needed=False,
+        ensure_firewall_opt=True,
+        force=False,
+        dry_run=False,
+        yes=True,
+    )
+    assert session.cfg.vm.name == 'bootstrap-vm'
+    assert calls == ['vm_create']
