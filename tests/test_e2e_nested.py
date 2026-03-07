@@ -21,6 +21,14 @@ from aivm.config import (
 from aivm.store import Store, save_store, upsert_vm
 
 
+def _host_context_enabled() -> bool:
+    raw = os.getenv(
+        'AIVM_E2E_HOST_CONTEXT',
+        '1' if os.getenv('AIVM_E2E') == '1' else '0',
+    )
+    return str(raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 def _make_temp_ssh_material(tmp_path: Path) -> tuple[Path, Path, Path]:
     ssh_keygen = shutil.which('ssh-keygen')
     if not ssh_keygen:
@@ -195,8 +203,10 @@ def _ensure_user_cached_image(shared_img: Path) -> None:
 
 
 def test_e2e_nested_smoke(tmp_path: Path) -> None:
-    if os.getenv('AIVM_E2E') != '1':
-        pytest.skip('Set AIVM_E2E=1 to run nested e2e smoke test.')
+    if not _host_context_enabled():
+        pytest.skip(
+            'Set AIVM_E2E_HOST_CONTEXT=1 (and AIVM_E2E=1) to run host-context e2e tests.'
+        )
 
     home, priv, pub = _make_temp_ssh_material(tmp_path)
     env = os.environ.copy()

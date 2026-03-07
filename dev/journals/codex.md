@@ -1222,3 +1222,17 @@ Uncertainties/risks: final `uv` install strategy (apt package vs installer scrip
 Tradeoffs and what might break: no runtime behavior changed; comments-only updates.
 
 What I am confident about: TODOs now exist in the exact code paths where `uv` provisioning changes will need to land.
+
+## 2026-03-07 17:44:17 +0000
+
+Implemented a two-style e2e structure and expanded coverage toward fresh-user confidence. Existing e2e tests now explicitly represent `host-context` mode (current host executes full VM lifecycle checks), while a new opt-in `bootstrap-context` e2e (`tests/test_e2e_bootstrap_context.py`) creates an outer VM, provisions host dependencies inside it, installs `aivm` from the attached repo, and invokes the host-context e2e suite from within that outer VM.
+
+Also updated `run_e2e_tests.sh` to run host-context tests by default and include bootstrap-context only when `AIVM_E2E_BOOTSTRAP=1` is set. Added `AIVM_E2E_HOST_CONTEXT` gating to host-context tests to prevent accidental recursion when bootstrap mode runs nested pytest inside the guest.
+
+Reflection/state of mind: this is the right decomposition for confidence without duplicating behavioral assertions. Bootstrap validates “new user from fresh environment” setup flow, and host-context remains the canonical behavior suite.
+
+Uncertainties/risks: bootstrap-context runtime is long and environment-sensitive (nested virtualization `/dev/kvm`, guest apt mirrors, libvirtd service behavior in guest). This is intentionally opt-in to keep default local cycles practical.
+
+Tradeoffs and what might break: additional complexity in e2e orchestration and more moving parts for bootstrap mode; however host-context path remains unchanged for normal runs and non-e2e test runs still skip cleanly.
+
+What I am confident about: syntax checks pass, e2e modules import and skip correctly in default mode, and the bootstrap test executes the intended layering model (outer VM runs host-context e2e suite) when enabled.

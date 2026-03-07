@@ -43,6 +43,11 @@ What it provides
    and (optionally) an Ubuntu cloud image cached under
    ``~/.cache/aivm/e2e``.
 
+   An additional opt-in bootstrap-context e2e test is available in
+   ``test_e2e_bootstrap_context.py``. It creates a fresh outer VM and runs the
+   host-context e2e suite inside that VM. Enable it with
+   ``AIVM_E2E_BOOTSTRAP=1`` when running ``./run_e2e_tests.sh``.
+
 Install
 -------
 

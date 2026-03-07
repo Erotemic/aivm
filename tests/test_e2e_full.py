@@ -28,6 +28,7 @@ import pytest
 from test_e2e_nested import (
     _default_shared_image_path,
     _ensure_user_cached_image,
+    _host_context_enabled,
     _make_temp_ssh_material,
     _require_e2e_host_dependencies,
     _run_cli,
@@ -58,8 +59,10 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     passwordless sudo; it is skipped unless ``AIVM_E2E=1``.
     """
 
-    if os.getenv('AIVM_E2E') != '1':
-        pytest.skip('Set AIVM_E2E=1 to run full e2e test.')
+    if not _host_context_enabled():
+        pytest.skip(
+            'Set AIVM_E2E_HOST_CONTEXT=1 (and AIVM_E2E=1) to run host-context e2e tests.'
+        )
 
     home, priv, pub = _make_temp_ssh_material(tmp_path)
     env = os.environ.copy()
