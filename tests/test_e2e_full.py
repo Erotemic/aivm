@@ -26,8 +26,10 @@ import pytest
 # repository root to sys.path so we can import the module directly by
 # name rather than treating `tests` as a package.
 from test_e2e_nested import (
+    _default_shared_image_path,
     _ensure_user_cached_image,
     _make_temp_ssh_material,
+    _require_e2e_host_dependencies,
     _run_cli,
 )
 
@@ -71,6 +73,9 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
         pytest.skip('E2E requires passwordless sudo (sudo -n true).')
 
     repo_root = Path(__file__).resolve().parent.parent
+    timeout_s = int(os.getenv('AIVM_E2E_TIMEOUT', '2400'))
+    _require_e2e_host_dependencies(cwd=repo_root, timeout_s=timeout_s, env=env)
+
     cfg_path = tmp_path / 'e2e-full.toml'
 
     suffix = uuid.uuid4().hex[:6]
@@ -101,9 +106,7 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     # reuse shared image cache unless explicitly disabled
     if os.getenv('AIVM_E2E_INDEPENDENT_IMAGE') != '1':
         user_home = Path(os.environ.get('HOME', '~')).expanduser()
-        default_shared = (
-            user_home / '.cache' / 'aivm' / 'e2e' / 'noble-base.img'
-        )
+        default_shared = _default_shared_image_path(user_home)
         shared_img = Path(
             os.getenv('AIVM_E2E_SHARED_IMAGE', str(default_shared))
         ).expanduser()
@@ -118,8 +121,6 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     store = Store()
     upsert_vm(store, cfg)
     save_store(store, cfg_path)
-
-    timeout_s = int(os.getenv('AIVM_E2E_TIMEOUT', '2400'))
 
     # wrap the main operations so we can always clean up.
     try:

@@ -72,6 +72,7 @@ If you prefer an explicit flow, ``aivm config init`` is required before
 
 See also:
 
+* `Design Contract <docs/source/design.rst>`_
 * `Quickstart <docs/source/quickstart.rst>`_
 * `Workflows <docs/source/workflows.rst>`_
 

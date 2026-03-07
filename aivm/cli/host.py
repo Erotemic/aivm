@@ -10,7 +10,12 @@ import sys
 
 import scriptconfig as scfg
 
-from ..host import check_commands, host_is_debian_like, install_deps_debian
+from ..host import (
+    check_commands,
+    check_commands_with_sudo,
+    host_is_debian_like,
+    install_deps_debian,
+)
 from ..vm import fetch_image
 from ._common import (
     _BaseCommand,
@@ -24,14 +29,35 @@ from .net import NetModalCLI
 class DoctorCLI(_BaseCommand):
     """Check host prerequisites and list missing required tools."""
 
+    sudo = scfg.Value(
+        False,
+        isflag=True,
+        help='Also verify required commands are available under sudo -n.',
+    )
+
     @classmethod
     def main(cls, argv=True, **kwargs):
-        cls.cli(argv=argv, data=kwargs)
+        args = cls.cli(argv=argv, data=kwargs)
         missing, missing_opt = check_commands()
         if missing:
             print('❌ Missing required commands:', ', '.join(missing))
             print('💡 On Debian/Ubuntu you can run: aivm host install_deps')
             return 2
+        if args.sudo:
+            missing_sudo, sudo_err = check_commands_with_sudo()
+            if sudo_err:
+                print(f'❌ Sudo preflight failed: {sudo_err}')
+                return 2
+            if missing_sudo:
+                print(
+                    '❌ Missing required commands under sudo PATH:',
+                    ', '.join(missing_sudo),
+                )
+                print(
+                    '💡 Ensure required tools are installed in locations '
+                    'available to sudo secure_path.'
+                )
+                return 2
         if missing_opt:
             print('➖ Missing optional commands:', ', '.join(missing_opt))
         print('✅ Required host commands are present.')

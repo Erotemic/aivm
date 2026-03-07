@@ -13,6 +13,7 @@ See the repository README for current CLI usage and safety notes.
 .. toctree::
    :maxdepth: 2
 
+   design
    quickstart
    workflows
    security

@@ -10,6 +10,7 @@ from __future__ import annotations
 import textwrap
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
@@ -176,6 +177,40 @@ def _resolve_expected_image_sha256(
     digest = SUPPORTED_IMAGE_SHA256.get(image_url, '').strip().lower()
     if digest:
         return digest, 'built-in supported-image hash registry'
+    parsed = urlparse(image_url)
+    if parsed.scheme == 'file':
+        file_path = Path(unquote(parsed.path))
+        if not file_path.exists():
+            raise RuntimeError(
+                'Local file image URL does not exist.\n'
+                f'Requested URL: {image_url}\n'
+                f'Path: {file_path}'
+            )
+        out = run_cmd(
+            ['sha256sum', str(file_path)],
+            check=True,
+            capture=True,
+        ).stdout
+        local_digest = out.strip().split()[0].lower() if out.strip() else ''
+        for supported_url, supported_digest in SUPPORTED_IMAGE_SHA256.items():
+            if local_digest == supported_digest.strip().lower():
+                return (
+                    local_digest,
+                    'local file URL matched supported pinned image digest '
+                    f'({supported_url})',
+                )
+        supported_hashes = '\n'.join(
+            f'  - {u} :: {d}' for u, d in sorted(SUPPORTED_IMAGE_SHA256.items())
+        )
+        raise RuntimeError(
+            'Image file URL digest is not in the built-in verified image registry.\n'
+            f'Requested URL: {image_url}\n'
+            f'Path: {file_path}\n'
+            f'Actual SHA256: {local_digest}\n'
+            'Supported URL/hash entries:\n'
+            f'{supported_hashes}\n'
+            'This often means a partial/corrupt local cache file. Delete it and retry.'
+        )
     supported = '\n'.join(f'  - {u}' for u in sorted(SUPPORTED_IMAGE_SHA256))
     raise RuntimeError(
         'Image URL is not in the built-in verified image registry.\n'
@@ -217,6 +252,9 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     base_img = p['img_dir'] / cfg.image.cache_name
     tmp_img = Path(str(base_img) + '.part')
     url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
+    # TODO(design): Do not trust named cache files by existence alone.
+    # Verify cached image hash before reuse, and add digest-addressable
+    # fallback lookup (e.g., images/sha256/<digest>.img) before URL fetch.
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         log.info('Base image cached: {}', base_img)
         return base_img
@@ -385,6 +423,7 @@ def _write_cloud_init(
           - python3
           - python3-venv
           - python3-pip
+          # TODO(provision): add uv installation/bootstrap to guest base setup.
           - unattended-upgrades
 
         write_files:
@@ -959,6 +998,9 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         )
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     pkgs = list(cfg.provision.packages)
+    # TODO(provision): add first-class `uv` provisioning (install + version
+    # check) and decide whether it belongs in cloud-init base vs post-boot
+    # provisioning path.
     docker_pkgs = (
         ['docker.io', 'docker-compose-v2']
         if cfg.provision.install_docker

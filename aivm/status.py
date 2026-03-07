@@ -344,6 +344,8 @@ def render_status(
     base_img = (
         Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / cfg.image.cache_name
     )
+    # TODO(design): once digest-addressable image cache fallback exists,
+    # surface both named-path and digest-path resolution in status.
     img_ok = (
         run_cmd(
             ['test', '-f', str(base_img)],

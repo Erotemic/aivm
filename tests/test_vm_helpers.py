@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -326,6 +327,59 @@ def test_fetch_image_rejects_unsupported_url(
     cfg.image.ubuntu_img_url = 'https://example.com/custom.img'
     monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
     with pytest.raises(RuntimeError, match='not in the built-in verified image registry'):
+        fetch_image(cfg, dry_run=False)
+
+
+def test_fetch_image_accepts_supported_file_url(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.image.cache_name = 'noble-base.img'
+    local_img = tmp_path / 'source.img'
+    local_img.write_bytes(b'e2e-source-image')
+    digest = sha256(local_img.read_bytes()).hexdigest()
+    cfg.image.ubuntu_img_url = f'file://{local_img}'
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle.SUPPORTED_IMAGE_SHA256',
+        {DEFAULT_UBUNTU_NOBLE_IMG_URL: digest},
+    )
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+    )
+
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        if cmd[:1] == ['sha256sum']:
+            return CmdResult(0, f'{digest}  {cmd[-1]}\n', '')
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    out = fetch_image(cfg, dry_run=False)
+    assert out.name == 'noble-base.img'
+    assert any(
+        c[:5] == ['curl', '-L', '--fail', '--progress-bar', '-o']
+        for c in calls
+    )
+
+
+def test_fetch_image_rejects_unsupported_file_url_digest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.image.cache_name = 'noble-base.img'
+    local_img = tmp_path / 'bad.img'
+    local_img.write_bytes(b'corrupt-partial')
+    cfg.image.ubuntu_img_url = f'file://{local_img}'
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    with pytest.raises(RuntimeError, match='digest is not in the built-in verified image registry'):
         fetch_image(cfg, dry_run=False)
 
 

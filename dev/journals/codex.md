@@ -1122,3 +1122,103 @@ Uncertainties/risks: pin ranges between `requirements/*.txt` and extras may drif
 Tradeoffs and what might break: `all` references self-extras (`aivm[...]`), which is valid for extras aggregation but may expose installer edge cases on very old tooling; with modern pip/setuptools this should be stable.
 
 What I am confident about: the extras table now exposes all current optional groups and provides the requested `all` convenience target.
+
+## 2026-03-07 17:07:09 +0000
+
+Worked on hardening e2e preflight checks after failures where tests proceeded into privileged network creation and then failed with `sudo: virsh: command not found`. Added a sudo-aware dependency probe (`check_commands_with_sudo`) and exposed it through `aivm host doctor --sudo`. Updated e2e tests to invoke this doctor preflight early and skip with diagnostics when dependencies are not available in the same sudo context used by runtime operations.
+
+Reflection/state of mind: the key issue was mismatch between “tool exists for current user” and “tool exists where privileged commands actually execute.” This was a correctness gap in test gating, not VM lifecycle logic, so the fix needed to shift failure earlier and make the reason explicit.
+
+Uncertainties/risks: the sudo probe uses `sh -lc 'command -v ...'`, which assumes a conventional POSIX shell under sudo; this is a pragmatic baseline but still shell-dependent. If environments heavily customize sudo behavior, false negatives remain possible.
+
+Tradeoffs and what might break: `host doctor --sudo` now requires non-interactive sudo and returns a failing code when that precondition is absent. That is intentional for CI/e2e readiness, but interactive local users without passwordless sudo should continue using plain `host doctor`.
+
+What I am confident about: unit coverage for the new host helper passes, and both e2e modules now enforce dependency readiness before network/VM operations, preventing the mid-test failure mode and associated cleanup churn.
+
+## 2026-03-07 17:12:31 +0000
+
+Adjusted e2e readiness and image handling after feedback from failed runs. Replaced dependency preflight skip behavior with hard failure semantics so e2e surfaces unmet host prerequisites as explicit test failures. Also tightened image-source handling by allowing `file://` image URLs only when their SHA256 matches a digest from the built-in supported-image registry; this keeps the strict trust model while supporting local cached mirrors of pinned images.
+
+In parallel, hardened the e2e shared image cache helper: switched to atomic download (`.part` then rename), checksum verification both for existing cache reuse and post-download integrity, and default cache naming derived from the pinned URL version segment to avoid stale/mutable filename reuse.
+
+Reflection/state of mind: this iteration focused on aligning behavior with user intent and operational reality. The prior “skip on doctor failure” was polite but hid actionable setup errors in a pipeline intended to validate end-to-end correctness. Likewise, the image-cache path needed stronger anti-corruption semantics because interrupted transfers are expected in real workflows.
+
+Uncertainties/risks: deriving cache version from URL path structure assumes Ubuntu cloud-image URL layout stays similar. If upstream path conventions change, naming may degrade (still functional, less descriptive). Also, file URL verification now computes source hashes in-process and may add slight startup cost for large local images.
+
+Tradeoffs and what might break: local `file://` URLs are no longer categorically rejected, but only accepted when they hash-match a known supported image. Custom local images outside the registry continue to fail by design. E2E dependency preflight now fails the test instead of skipping, which may increase red builds on under-provisioned hosts but is intended.
+
+What I am confident about: targeted unit tests cover supported/unsupported file URL behavior in `fetch_image`, and preflight/error-path updates compile and pass relevant non-e2e test subsets.
+
+## 2026-03-07 17:17:47 +0000
+
+Created a formal design contract document to anchor project intent and reduce drift during rapid iteration. Added `docs/source/design.rst` with product scope, UX objectives, design principles (including idempotency and atomic operations), implementation invariants, code organization/style guidance (including scriptconfig usage), and an append-only decision-record process with starter entries from today’s recent changes.
+
+Reflection/state of mind: the repository has been moving quickly with meaningful behavior changes, and without a durable north-star doc it is easy for tactical fixes to fragment architectural intent. This document is meant to make tradeoffs explicit and keep future changes auditable at the design level.
+
+Uncertainties/risks: any such document can become stale if updates are not enforced as part of review flow. The decision-log process is only effective if contributors actively append entries for design-level changes.
+
+Tradeoffs and what might break: no runtime behavior changed; risk is primarily social/process-based (maintenance discipline). Added links in docs index and README to increase discoverability and reduce risk of silent staleness.
+
+What I am confident about: the design contract now exists in-tree, is reachable from both README and docs toctree, and includes concrete rules/templates that future contributors can follow.
+
+## 2026-03-07 17:21:44 +0000
+
+Reworked `docs/source/design.rst` based on recurring patterns in the journal rather than recent point-fixes. Removed dated decision snippets and replaced them with an evergreen design contract: product intent, single-source-of-truth state model, reconciliation/idempotency expectations, safety/trust boundaries, atomic operation guidance, preflight/readiness expectations, observability rules, scriptconfig-oriented CLI architecture conventions, testing contract, and a neutral decision-update template.
+
+Reflection/state of mind: this pass was about tightening the distinction between "history" and "contract." The previous draft mixed durable principles with recent implementation specifics. The updated version is intentionally less event-driven and more governance-oriented so it stays useful over time.
+
+Uncertainties/risks: some principles are still broad and may need further sharpening into strict acceptance criteria if contributors interpret them differently. The document is now directionally aligned, but enforcement remains a process discipline issue.
+
+Tradeoffs and what might break: no runtime code changed. The tradeoff is less concrete historical detail in the design doc itself, with history now intentionally delegated to the journal.
+
+What I am confident about: the design doc now reflects long-running architecture/UX patterns encouraged in prior work (explicit safety boundaries, idempotent reconcile flows, atomic host/file operations, scriptconfig-based CLI structure) without depending on dated references.
+
+## 2026-03-07 17:23:37 +0000
+
+Updated the evergreen design contract per user direction. Moved `Non-goals` to the end of `docs/source/design.rst`, expanded primary product outcomes to emphasize low cognitive load for non-VM users and host-like default development flow (`code`/`ssh` from working directories after attachment), clarified provisioning stance as intentionally basic/user-directed, and added forward-looking trust-mode guidance for secret-sensitive workflows (future read-only mounts and potential git-based synchronization).
+
+Reflection/state of mind: this pass improved alignment with practical intent over abstract architecture language. The prior draft captured many principles but underrepresented the ergonomic goal that non-VM users should barely have to think about virtualization mechanics.
+
+Uncertainties/risks: future sync/isolation modes are intentionally framed as direction rather than commitment, so exact implementation boundaries remain open. That ambiguity is useful now but will need concretization when those features are prioritized.
+
+Tradeoffs and what might break: no runtime behavior changed; this is documentation-only. The tradeoff is committing more explicitly to UX simplicity while preserving strong safety/trust language.
+
+What I am confident about: the design doc now better reflects intended user experience and future security-minded workflow options while remaining evergreen.
+
+## 2026-03-07 17:29:39 +0000
+
+Updated the design contract to explicitly require hash verification for downloaded artifacts and to encourage content-addressable fallbacks for data access. Added a new reliability subsection in `docs/source/design.rst` and an `Implementation TODO Notes` section that points to concrete modules needing follow-on work.
+
+Also added inline `TODO(design)` markers in runtime code where this policy is not fully realized yet: image fetch currently trusts existing named cache files by existence (`aivm/vm/lifecycle.py`), image config identity is still name-based (`aivm/config.py`), and status currently reflects only named cache paths (`aivm/status.py`).
+
+Reflection/state of mind: this was a contract-tightening pass, not a behavior change pass. The goal was to capture a strong invariant now and make the implementation gaps explicit at exact callsites to keep future work focused.
+
+Uncertainties/risks: content-addressable fallback can be implemented in multiple ways (layout, migration, backward compatibility), so TODOs intentionally avoid overcommitting to one storage schema. The risk is that partial implementation could create dual-path complexity if not planned holistically.
+
+Tradeoffs and what might break: no runtime behavior changed in this step. Main tradeoff is increased visible technical debt markers, which is intentional to keep the policy actionable.
+
+What I am confident about: the design doc now states the requirement unambiguously, and the codebase has concrete TODO anchors where implementation changes are needed.
+
+## 2026-03-07 17:33:40 +0000
+
+Added a targeted design TODO to include `uv` in baseline provisioning defaults in `docs/source/design.rst` (Implementation TODO Notes). This captures the desired future direction without changing runtime provisioning behavior yet.
+
+Reflection/state of mind: this is a small but useful alignment update. Capturing package-tooling expectations in the design TODO list helps avoid drift between intended developer workflow and current bootstrap defaults.
+
+Uncertainties/risks: adding `uv` to default provisioning later may require distro/package-manager handling details and idempotent install strategy in constrained hosts.
+
+Tradeoffs and what might break: no behavior changes in this step; documentation-only change.
+
+What I am confident about: the design contract now explicitly tracks the `uv` provisioning follow-up.
+
+## 2026-03-07 17:35:17 +0000
+
+Added code-level TODO markers for future `uv` provisioning work without modifying the design contract. Placed TODOs at the practical implementation points: provisioning defaults in `aivm/config.py`, cloud-init guest base package block in `aivm/vm/lifecycle.py`, and the post-boot provisioning routine in `aivm/vm/lifecycle.py` where install/version checks can be implemented.
+
+Reflection/state of mind: this was intentionally narrow and tactical, matching the request to stop evolving design text and instead annotate execution points that future implementation work will touch.
+
+Uncertainties/risks: final `uv` install strategy (apt package vs installer script, version pinning policy, and where to enforce checks) is still open, so TODOs are directional rather than prescriptive.
+
+Tradeoffs and what might break: no runtime behavior changed; comments-only updates.
+
+What I am confident about: TODOs now exist in the exact code paths where `uv` provisioning changes will need to land.

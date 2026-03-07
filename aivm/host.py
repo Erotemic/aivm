@@ -6,6 +6,8 @@ Debian/Ubuntu dependencies used by VM/network/firewall workflows.
 
 from __future__ import annotations
 
+import shlex
+
 from pathlib import Path
 
 from loguru import logger
@@ -30,6 +32,30 @@ def check_commands() -> tuple[list[str], list[str]]:
     missing = [c for c in REQUIRED_CMDS if which(c) is None]
     missing_opt = [c for c in OPTIONAL_CMDS if which(c) is None]
     return missing, missing_opt
+
+
+def check_commands_with_sudo() -> tuple[list[str], str | None]:
+    """Check required commands in a non-interactive sudo environment."""
+    sudo_probe = run_cmd(
+        ['sudo', '-n', 'true'], check=False, capture=True, text=True
+    )
+    if sudo_probe.code != 0:
+        return [], (
+            'sudo -n is not available. Configure passwordless sudo for e2e '
+            'or run without --sudo checks.'
+        )
+    missing = []
+    for cmd in REQUIRED_CMDS:
+        # Match sudo's effective PATH and shell command lookup behavior.
+        probe = run_cmd(
+            ['sudo', '-n', 'sh', '-lc', f'command -v {shlex.quote(cmd)}'],
+            check=False,
+            capture=True,
+            text=True,
+        )
+        if probe.code != 0:
+            missing.append(cmd)
+    return missing, None
 
 
 def host_is_debian_like() -> bool:

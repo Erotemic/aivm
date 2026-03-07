@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from aivm.host import check_commands, host_is_debian_like, install_deps_debian
+from aivm.host import (
+    check_commands,
+    check_commands_with_sudo,
+    host_is_debian_like,
+    install_deps_debian,
+)
 from aivm.util import CmdResult
 
 
@@ -18,6 +23,35 @@ def test_check_commands(monkeypatch) -> None:
     assert 'virt-install' in missing
     assert 'cloud-localds' in missing
     assert 'nft' not in missing_opt
+
+
+def test_check_commands_with_sudo(monkeypatch) -> None:
+    calls = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:3] == ['sudo', '-n', 'true']:
+            return CmdResult(0, '', '')
+        if 'virt-install' in cmd[-1]:
+            return CmdResult(1, '', '')
+        return CmdResult(0, '/usr/bin/whatever\n', '')
+
+    monkeypatch.setattr('aivm.host.run_cmd', fake_run_cmd)
+    missing, err = check_commands_with_sudo()
+    assert err is None
+    assert 'virt-install' in missing
+    assert calls[0][:3] == ['sudo', '-n', 'true']
+
+
+def test_check_commands_with_sudo_no_passwordless(monkeypatch) -> None:
+    monkeypatch.setattr(
+        'aivm.host.run_cmd',
+        lambda cmd, **kwargs: CmdResult(1, '', 'sudo: a password is required'),
+    )
+    missing, err = check_commands_with_sudo()
+    assert missing == []
+    assert err is not None
+    assert 'sudo -n' in err
 
 
 def test_host_is_debian_like(monkeypatch) -> None:
