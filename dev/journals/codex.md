@@ -1468,3 +1468,14 @@ Uncertainties/risks: old local config files using the legacy key will now silent
 Tradeoffs and what might break: strict-read-prompt users who had already written `prompt_sudo_readonly=true` need to rename it to `auto_approve_readonly_sudo=false`.
 
 What I am confident about: test coverage and full suite remain green (`134 passed, 3 skipped`) after removing compatibility paths.
+## 2026-03-12 20:12:28 +0000
+
+Debugged and fixed a real `aivm code --mode git .` failure where guest repo initialization attempted to create host-mirrored absolute paths (for example `/home/joncrall/...`) inside the VM and failed with permission denied for the VM user. Root cause was default guest destination derivation being shared-mode-centric (`guest_dst = host_src`) even in git mode. I updated attachment resolution so git mode defaults to a VM-user-writable path under `/home/<vm-user>/...`, and added auto-migration for legacy git attachments that had saved the old host-mirror guest path (`guest_dst == host_src`) when no explicit `--guest_dst` is provided.
+
+Reflection/state of mind: this was a good product-contract correction because git mode should not rely on guest root path creation to function. The failure trace made it clear the issue was deterministic default-path policy, not flaky SSH/Git behavior.
+
+Uncertainties/risks: path migration heuristic intentionally targets the narrow legacy case (`saved guest_dst equals host source path`). It should be low risk, but if someone intentionally set that exact path and made it writable in guest, the new logic may remap unless they set explicit `--guest_dst`/saved path differently.
+
+Tradeoffs and what might break: git mode default guest path no longer exactly mirrors host absolute path. This is safer and more portable across differing host/guest usernames, but it is a behavioral change users may notice when they relied on exact path identity.
+
+What I am confident about: added tests for new git default destination and legacy migration path, docs now clarify shared-vs-git default path behavior, and full suite is green (`136 passed, 3 skipped`).

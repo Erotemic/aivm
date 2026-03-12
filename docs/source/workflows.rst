@@ -37,6 +37,8 @@ avoids a writable host share and adds a host-side Git remote pointing at the
 guest repo. ``aivm`` configures the guest side with
 ``receive.denyCurrentBranch=updateInstead`` so the host can push committed
 branch state into the checked-out guest repo and fetch guest commits later.
+Git-mode default guest paths are chosen under ``/home/<vm-user>/...`` so sync
+does not depend on root-owned guest paths; use ``--guest_dst`` to override.
 
 Attachment mode rules:
 

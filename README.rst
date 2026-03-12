@@ -130,8 +130,10 @@ Folder attachment
    aivm vm attach --vm aivm-2404 --host_src .
    aivm attach . --mode git
 
-By default, attached folders mount to the same absolute path inside the guest.
-Use ``--guest_dst`` to override. Running VMs are live-attached when possible.
+In ``shared`` mode, attached folders mount to the same absolute path inside the
+guest by default. In ``git`` mode, default guest paths are placed under
+``/home/<vm-user>/...`` so Git sync can run without guest root privileges.
+Use ``--guest_dst`` to override in either mode. Running VMs are live-attached when possible.
 ``aivm code`` and ``aivm ssh`` remount the selected folder and best-effort
 restore other folders already saved for that VM after guest startup.
 

@@ -284,6 +284,54 @@ def test_resolve_attachment_rejects_mode_change_for_existing_attachment(
     assert 'detach + reattach' in msg
 
 
+def test_resolve_attachment_git_defaults_to_guest_home_path(
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-git'
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'repo'
+    host_src.mkdir()
+    save_store(Store(), cfg_path)
+
+    resolved = _resolve_attachment(cfg, cfg_path, host_src, '', 'git')
+
+    assert resolved.mode == ATTACHMENT_MODE_GIT
+    assert resolved.guest_dst.startswith('/home/agent/')
+    assert resolved.guest_dst.endswith('/repo')
+
+
+def test_resolve_attachment_git_migrates_legacy_host_mirror_guest_dst(
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-git'
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'repo'
+    host_src.mkdir()
+    source_abs = str(host_src.resolve())
+
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=source_abs,
+            vm_name=cfg.vm.name,
+            mode=ATTACHMENT_MODE_GIT,
+            guest_dst=source_abs,
+            tag='',
+        )
+    )
+    save_store(store, cfg_path)
+
+    resolved = _resolve_attachment(cfg, cfg_path, host_src, '', '')
+
+    assert resolved.mode == ATTACHMENT_MODE_GIT
+    assert resolved.guest_dst != source_abs
+    assert resolved.guest_dst.startswith('/home/agent/')
+
+
 def test_vm_attach_git_mode_syncs_guest_repo_when_running(
     monkeypatch, tmp_path: Path
 ) -> None:

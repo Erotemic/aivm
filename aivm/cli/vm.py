@@ -1561,6 +1561,24 @@ def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
     return str(host_src)
 
 
+def _default_git_guest_dst(cfg: AgentVMConfig, host_src: Path) -> str:
+    """Choose a writable guest path for git-mode attachments.
+
+    Shared mode can mirror host absolute paths because mount setup runs with
+    guest sudo. Git mode operates as the VM user, so default under /home/<user>.
+    """
+    guest_home = PurePosixPath('/home') / cfg.vm.user
+    host_abs = host_src.resolve()
+    rel: Path
+    try:
+        rel = host_abs.relative_to(Path.home().resolve())
+    except Exception:
+        rel = Path('workspaces') / (host_abs.name or 'project')
+    if not rel.parts:
+        rel = Path('workspaces') / (host_abs.name or 'project')
+    return str(guest_home.joinpath(*rel.parts))
+
+
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
     max_len = 36
     raw = re.sub(r'[^A-Za-z0-9_.-]+', '-', host_src.name or 'hostcode').strip(
@@ -1805,6 +1823,22 @@ def _resolve_attachment(
             guest_dst = att.guest_dst
         if att.tag:
             tag = att.tag
+    # Git mode should default to a guest-user writable path rather than host
+    # absolute path mirroring, which may point to an unwritable guest location.
+    if mode == ATTACHMENT_MODE_GIT and not guest_dst_opt:
+        source_abs = str(host_src.resolve())
+        if att is None or not att.guest_dst:
+            guest_dst = _default_git_guest_dst(cfg, host_src)
+        elif att.guest_dst.strip() == source_abs:
+            migrated = _default_git_guest_dst(cfg, host_src)
+            if migrated != att.guest_dst.strip():
+                log.info(
+                    'Auto-migrating git attachment guest destination from {} to {} for VM {}',
+                    att.guest_dst,
+                    migrated,
+                    cfg.vm.name,
+                )
+                guest_dst = migrated
     if mode != ATTACHMENT_MODE_SHARED:
         tag = ''
     return ResolvedAttachment(
