@@ -14,6 +14,7 @@ from aivm.store import (
     find_attachments_for_vm,
     find_vm,
     load_store,
+    remove_attachment,
     save_store,
     upsert_attachment,
     upsert_vm,
@@ -88,3 +89,18 @@ def test_find_attachments_for_vm_returns_sorted_entries(tmp_path: Path) -> None:
         str(host_a.resolve()),
         str(host_b.resolve()),
     ]
+
+
+def test_remove_attachment_removes_single_vm_mapping(tmp_path: Path) -> None:
+    store = Store()
+    host = tmp_path / 'project'
+    host.mkdir()
+    upsert_attachment(store, host_path=host, vm_name='vm1')
+    upsert_attachment(store, host_path=host, vm_name='vm2')
+
+    changed = remove_attachment(store, host_path=host, vm_name='vm1')
+
+    assert changed is True
+    remaining = find_attachments(store, host)
+    assert len(remaining) == 1
+    assert remaining[0].vm_name == 'vm2'

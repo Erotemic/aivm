@@ -161,6 +161,53 @@ def attach_vm_share(
     run_cmd(attach_cmd, sudo=True, check=True, capture=True)
 
 
+def detach_vm_share(
+    cfg: AgentVMConfig, source_dir: str, tag: str, *, dry_run: bool = False
+) -> bool:
+    """Detach a virtiofs share mapping from an existing VM definition."""
+    cfg = cfg.expanded_paths()
+    if not source_dir or not tag:
+        return False
+    source_dir = str(Path(source_dir).resolve())
+    xml = f"""<filesystem type='mount' accessmode='passthrough'>
+  <driver type='virtiofs'/>
+  <source dir='{source_dir}'/>
+  <target dir='{tag}'/>
+</filesystem>
+"""
+    if dry_run:
+        log.info(
+            'DRYRUN: detach virtiofs share source={} tag={}', source_dir, tag
+        )
+        return True
+    with tempfile.NamedTemporaryFile('w', delete=False) as f:
+        f.write(xml)
+        tmp = f.name
+    state = (
+        run_cmd(
+            ['virsh', 'domstate', cfg.vm.name],
+            sudo=True,
+            check=False,
+            capture=True,
+        )
+        .stdout.strip()
+        .lower()
+    )
+    is_running = 'running' in state
+    detach_cmd = (
+        ['virsh', 'detach-device', cfg.vm.name, tmp, '--live', '--config']
+        if is_running
+        else ['virsh', 'detach-device', cfg.vm.name, tmp, '--config']
+    )
+    res = run_cmd(detach_cmd, sudo=True, check=False, capture=True)
+    if res.code != 0:
+        msg = ((res.stderr or '') + '\n' + (res.stdout or '')).lower()
+        if 'not found' in msg or 'no matching device' in msg:
+            return False
+        raise CmdError(detach_cmd, res)
+    return True
+
+
 def ensure_share_mounted(
     cfg: AgentVMConfig,
     ip: str,

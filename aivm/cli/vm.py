@@ -37,6 +37,7 @@ from ..store import (
     load_store,
     materialize_vm_cfg,
     network_users,
+    remove_attachment,
     remove_vm,
     save_store,
     upsert_attachment,
@@ -47,6 +48,7 @@ from ..util import CmdError, ensure_dir, run_cmd, which
 from ..vm import (
     attach_vm_share,
     create_or_start_vm,
+    detach_vm_share,
     destroy_vm,
     ensure_share_mounted,
     get_ip_cached,
@@ -514,7 +516,7 @@ class VMCodeCLI(_BaseCommand):
     )
     mode = scfg.Value(
         '',
-        help='Attachment mode override: shared or git (default: saved mode or shared).',
+        help='Attachment mode override: shared or git (default: saved mode or shared; mode changes require detach+reattach).',
     )
     recreate_if_needed = scfg.Value(
         False,
@@ -646,7 +648,7 @@ class VMSSHCLI(_BaseCommand):
     )
     mode = scfg.Value(
         '',
-        help='Attachment mode override: shared or git (default: saved mode or shared).',
+        help='Attachment mode override: shared or git (default: saved mode or shared; mode changes require detach+reattach).',
     )
     recreate_if_needed = scfg.Value(
         False,
@@ -745,7 +747,7 @@ class VMAttachCLI(_BaseCommand):
     guest_dst = scfg.Value('', help='Guest mount path override.')
     mode = scfg.Value(
         '',
-        help='Attachment mode: shared or git (default: saved mode or shared).',
+        help='Attachment mode: shared or git (default: saved mode or shared; mode changes require detach+reattach).',
     )
     force = scfg.Value(
         False,
@@ -883,6 +885,89 @@ class VMAttachCLI(_BaseCommand):
         return 0
 
 
+class VMDetachCLI(_BaseCommand):
+    """Detach/unregister a host directory from a managed VM."""
+
+    vm = scfg.Value('', help='Optional VM name override.')
+    host_src = scfg.Value('.', position=1, help='Host directory to detach.')
+    dry_run = scfg.Value(
+        False, isflag=True, help='Print actions without running.'
+    )
+
+    @classmethod
+    def main(cls, argv=True, **kwargs):
+        args = cls.cli(argv=argv, data=kwargs)
+        host_src = Path(args.host_src).resolve()
+        if not host_src.exists() or not host_src.is_dir():
+            raise RuntimeError(
+                f'host_src must be an existing directory: {host_src}'
+            )
+
+        cfg, cfg_path = _resolve_cfg_for_code(
+            config_opt=args.config,
+            vm_opt=args.vm,
+            host_src=host_src,
+        )
+
+        reg = load_store(cfg_path)
+        att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+        if att is None:
+            print(
+                f'No attachment found for {host_src} on VM {cfg.vm.name}. Nothing to do.'
+            )
+            return 0
+
+        if args.dry_run:
+            print(
+                f'DRYRUN: would detach {host_src} from VM {cfg.vm.name} ({att.mode} mode)'
+            )
+            return 0
+
+        vm_out, vm_defined = probe_vm_state(cfg, use_sudo=False)
+        vm_defined_probe = vm_defined
+        if vm_defined_probe is False:
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Inspect VM '{cfg.vm.name}' share mappings for detach.",
+            )
+            vm_out, vm_defined = probe_vm_state(cfg, use_sudo=True)
+            vm_defined_probe = vm_defined
+        vm_running = bool(vm_out.ok)
+
+        detached_share = False
+        if (
+            att.mode == ATTACHMENT_MODE_SHARED
+            and vm_defined_probe is True
+            and att.tag
+        ):
+            _confirm_sudo_block(
+                yes=bool(args.yes),
+                purpose=f"Detach shared folder mapping from VM '{cfg.vm.name}'.",
+            )
+            detached_share = detach_vm_share(
+                cfg, att.host_path, att.tag, dry_run=False
+            )
+
+        removed = remove_attachment(reg, host_path=host_src, vm_name=cfg.vm.name)
+        if removed:
+            save_store(reg, cfg_path)
+
+        print(f'Detached {host_src} from VM {cfg.vm.name} ({att.mode} mode)')
+        if att.mode == ATTACHMENT_MODE_SHARED and vm_defined_probe is True:
+            if detached_share:
+                print('Detached virtiofs mapping from VM definition.')
+            elif att.tag:
+                print(
+                    'No matching virtiofs mapping found in VM definition (already absent).'
+                )
+        if vm_running and att.mode == ATTACHMENT_MODE_SHARED:
+            print(
+                f'If the guest still has {att.guest_dst or host_src} mounted, unmount it inside the VM manually.'
+            )
+        print(f'Updated config store: {cfg_path}')
+        return 0
+
+
 class VMListCLI(_BaseCommand):
     """List managed VM records (VM-focused view)."""
 
@@ -968,6 +1053,10 @@ class AttachCLI(VMAttachCLI):
     """Top-level shortcut for `aivm vm attach`."""
 
 
+class DetachCLI(VMDetachCLI):
+    """Top-level shortcut for `aivm vm detach`."""
+
+
 class SSHCLI(VMSSHCLI):
     """Top-level shortcut for `aivm vm ssh`."""
 
@@ -987,6 +1076,7 @@ class VMModalCLI(scfg.ModalCLI):
     ssh = VMSSHCLI
     sync_settings = VMSyncSettingsCLI
     attach = VMAttachCLI
+    detach = VMDetachCLI
     code = VMCodeCLI
 
 
@@ -1681,8 +1771,21 @@ def _resolve_attachment(
     reg = load_store(cfg_path)
     att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
     if att is not None:
+        saved_mode = _normalize_attachment_mode(att.mode)
+        if mode_opt and mode != saved_mode:
+            raise RuntimeError(
+                'Attachment mode mismatch for existing folder attachment.\n'
+                f'VM: {cfg.vm.name}\n'
+                f'Host folder: {host_src}\n'
+                f'Saved mode: {saved_mode}\n'
+                f'Requested mode: {mode}\n'
+                'Changing attachment mode requires an explicit detach + reattach.\n'
+                'Run:\n'
+                f'  aivm detach {host_src}\n'
+                f'  aivm attach {host_src} --mode {mode}'
+            )
         if not mode_opt and att.mode:
-            mode = _normalize_attachment_mode(att.mode)
+            mode = saved_mode
         if not guest_dst_opt and att.guest_dst:
             guest_dst = att.guest_dst
         if att.tag:

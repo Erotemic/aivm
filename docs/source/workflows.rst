@@ -25,6 +25,7 @@ Attach folders
 .. code-block:: bash
 
    aivm attach .
+   aivm detach .
    aivm vm attach --vm aivm-2404 --host_src . --guest_dst /workspace/project
    aivm attach . --mode git
 
@@ -36,6 +37,18 @@ avoids a writable host share and adds a host-side Git remote pointing at the
 guest repo. ``aivm`` configures the guest side with
 ``receive.denyCurrentBranch=updateInstead`` so the host can push committed
 branch state into the checked-out guest repo and fetch guest commits later.
+
+Attachment mode rules:
+
+* New folder defaults to ``shared`` when ``--mode`` is omitted.
+* Existing folder reuses its saved mode when ``--mode`` is omitted.
+* Changing mode for an existing folder requires explicit detach + reattach.
+  Passing a different ``--mode`` directly now returns an error.
+
+.. code-block:: bash
+
+   aivm detach .
+   aivm attach . --mode git
 
 Inspect and list resources
 --------------------------

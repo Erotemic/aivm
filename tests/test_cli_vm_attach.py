@@ -252,6 +252,38 @@ def test_resolve_attachment_uses_saved_git_mode(
     assert resolved.tag == ''
 
 
+def test_resolve_attachment_rejects_mode_change_for_existing_attachment(
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=str(host_src.resolve()),
+            vm_name=cfg.vm.name,
+            mode=ATTACHMENT_MODE_SHARED,
+            guest_dst='/workspace/proj',
+            tag='hostcode-proj',
+        )
+    )
+    save_store(store, cfg_path)
+
+    try:
+        _resolve_attachment(cfg, cfg_path, host_src, '', 'git')
+    except RuntimeError as ex:
+        msg = str(ex)
+    else:
+        raise AssertionError('Expected mode-mismatch RuntimeError')
+
+    assert 'Attachment mode mismatch' in msg
+    assert 'detach + reattach' in msg
+
+
 def test_vm_attach_git_mode_syncs_guest_repo_when_running(
     monkeypatch, tmp_path: Path
 ) -> None:

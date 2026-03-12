@@ -120,6 +120,7 @@ Folder attachment
 .. code-block:: bash
 
    aivm attach .
+   aivm detach .
    aivm vm attach --vm aivm-2404 --host_src .
    aivm attach . --mode git
 
@@ -134,6 +135,20 @@ accept host pushes via ``receive.denyCurrentBranch=updateInstead`` and
 registers a host-side remote pointing at the guest repo over the VM SSH alias.
 The host can push committed branch state into the VM and fetch guest commits
 back later. Uncommitted host changes stay on the host until you commit them.
+
+Mode selection behavior:
+
+* New folder (no saved attachment record): defaults to ``shared`` unless
+  ``--mode`` is explicitly set.
+* Existing folder attachment: omitting ``--mode`` reuses the saved mode for that
+  ``(host folder, VM)`` pair.
+* Existing folder attachment + explicit different ``--mode``: this now errors.
+  You must explicitly detach then reattach to change mode:
+
+.. code-block:: bash
+
+   aivm detach .
+   aivm attach . --mode git
 
 Inventory and visibility
 

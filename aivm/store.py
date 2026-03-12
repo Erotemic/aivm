@@ -406,6 +406,23 @@ def upsert_attachment(
         reg.attachments.append(rec)
 
 
+def remove_attachment(
+    reg: Store,
+    *,
+    host_path: str | Path,
+    vm_name: str,
+) -> bool:
+    norm = _norm_dir(host_path)
+    vm_name = str(vm_name).strip()
+    orig_n = len(reg.attachments)
+    reg.attachments = [
+        a
+        for a in reg.attachments
+        if not (a.host_path == norm and a.vm_name == vm_name)
+    ]
+    return len(reg.attachments) != orig_n
+
+
 def find_attachments(reg: Store, host_path: str | Path) -> list[AttachmentEntry]:
     norm = _norm_dir(host_path)
     return [att for att in reg.attachments if att.host_path == norm]

@@ -29,7 +29,7 @@ from ._common import (
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
 from .host import HostModalCLI
-from .vm import SSHCLI, AttachCLI, CodeCLI, VMModalCLI
+from .vm import SSHCLI, AttachCLI, CodeCLI, DetachCLI, VMModalCLI
 
 
 class ListCLI(_BaseCommand):
@@ -168,6 +168,7 @@ class AgentVMModalCLI(scfg.ModalCLI):
     code = CodeCLI
     ssh = SSHCLI
     attach = AttachCLI
+    detach = DetachCLI
     config = ConfigModalCLI
     vm = VMModalCLI
     host = HostModalCLI
