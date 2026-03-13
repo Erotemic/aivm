@@ -130,20 +130,34 @@ Folder attachment
    aivm vm attach --vm aivm-2404 --host_src .
    aivm attach . --mode git
 
-In ``shared`` mode, attached folders mount to the same absolute path inside the
-guest by default. In ``git`` mode, default guest paths are placed under
-``/home/<vm-user>/...`` so Git sync can run without guest root privileges.
-Use ``--guest_dst`` to override in either mode. Running VMs are live-attached when possible.
+Attachment modes:
+
+* ``shared-root`` (default for new attachments): one VM-level virtiofs mapping
+  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
+  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
+  guest.
+* ``shared``: direct per-folder virtiofs mapping from host source to guest. This
+  is simpler but consumes one VM virtiofs device slot per folder.
+* ``git``: guest-local Git clone, synced via host/guest remotes.
+
+In ``shared`` and ``shared-root`` modes, attached folders mount to the same
+absolute path inside the guest by default. In ``git`` mode, default guest paths
+are placed under ``/home/<vm-user>/...`` so Git sync can run without guest root
+privileges. Use ``--guest_dst`` to override in any mode. Running VMs are
+live-attached when possible.
 ``aivm code`` and ``aivm ssh`` remount the selected folder and best-effort
 restore other folders already saved for that VM after guest startup.
 
 Major limitation: shared-mode folder count
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each ``shared`` folder uses a virtiofs device mapping in the VM definition.
-Attaching many folders can hit VM device-slot limits (for example PCI/PCIe
-capacity), which surfaces from libvirt as errors like ``No more available PCI
-slots`` during attach/restore.
+Each ``shared`` folder uses a dedicated virtiofs device mapping in the VM
+definition. Attaching many folders can hit VM device-slot limits (for example
+PCI/PCIe capacity), which surfaces from libvirt as errors like
+``No more available PCI slots`` during attach/restore.
+
+``shared-root`` is designed to reduce this pressure by using one persistent
+virtiofs mapping per VM and per-attachment host/guest bind mounts.
 
 Workarounds today:
 
@@ -158,9 +172,18 @@ registers a host-side remote pointing at the guest repo over the VM SSH alias.
 The host can push committed branch state into the VM and fetch guest commits
 back later. Uncommitted host changes stay on the host until you commit them.
 
+``aivm code --mode git .`` behavior:
+
+* New folder (no saved attachment): creates/uses a git-mode attachment and
+  defaults guest destination under ``/home/<vm-user>/...``.
+* Folder previously attached as ``shared`` or ``shared-root``: returns an error
+  (mode mismatch). Detach + reattach is required to switch modes.
+* ``aivm code .`` without ``--mode``: reuses saved mode if present; otherwise
+  creates a new ``shared-root`` attachment.
+
 Mode selection behavior:
 
-* New folder (no saved attachment record): defaults to ``shared`` unless
+* New folder (no saved attachment record): defaults to ``shared-root`` unless
   ``--mode`` is explicitly set.
 * Existing folder attachment: omitting ``--mode`` reuses the saved mode for that
   ``(host folder, VM)`` pair.

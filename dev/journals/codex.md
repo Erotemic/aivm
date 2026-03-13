@@ -1556,3 +1556,47 @@ Uncertainties/risks: guest destination mapping policy (guest symlink vs guest bi
 Tradeoffs and what might break: none runtime; design-doc only.
 
 What I am confident about: the future-design doc now includes a technically viable path that directly addresses the device-slot bottleneck.
+## 2026-03-12 22:22:52 +0000
+
+Implemented the `shared-root` attachment mode end-to-end and switched default new-attachment mode selection to `shared-root` when `--mode` is omitted. Core changes are in `aivm/cli/vm.py`: completed detach/session support for `shared-root`, added shared-root restore path coverage for saved attachments, introduced `_ensure_attachment_available_in_guest(...)` to localize mode-specific guest activation logic, and tightened `_restore_saved_vm_attachments(...)` so shared-only mapping probes are skipped when irrelevant. I also updated mode/help/docs text in `README.rst` and `docs/source/workflows.rst` to explicitly document mode behavior, including `aivm code --mode git .` semantics and required detach+reattach on mode mismatch.
+
+Reflection/state of mind: I considered a broader attachment-backend abstraction layer, but chose a bounded refactor (single guest-activation helper + targeted branch cleanup) because it reduces duplication in the highest-churn call paths without introducing framework overhead or touching unrelated lifecycle modules. This keeps momentum while still improving extensibility for future backends.
+
+Uncertainties/risks: `shared-root` still relies on host/guest bind-mount operations and therefore inherits mount lifecycle edge cases (stale mounts, missing source paths at restore time, partial cleanup after interrupted operations). Another risk is mixed historical attachment records with missing tags; detach now warns and continues best-effort cleanup rather than failing hard.
+
+Tradeoffs and what might break: default mode behavior for *new* attachments changed from `shared` to `shared-root`, which is intentional but user-visible. Existing attachment mode records are preserved and reused, so behavioral drift should be limited to first-time folder attaches. The small helper abstraction avoids broad churn but leaves some mode branching still explicit in orchestration paths by design.
+
+What I am confident about: added/updated regression coverage in `tests/test_cli_vm_attach.py`, `tests/test_cli_vm_detach.py`, and `tests/test_cli_vm_update.py`; targeted suites pass and full test suite is green (`141 passed, 3 skipped`). Static check also passes (`ty check aivm`: `All checks passed!`).
+## 2026-03-12 23:16:08 +0000
+
+Extended opt-in end-to-end coverage so the newly introduced attachment-mode behavior is exercised in real CLI workflows. In `tests/test_e2e_full.py`, after VM bring-up I now assert that default attach (no mode) persists `shared-root`, verify explicit mode mismatch (`--mode git` on an existing non-git attachment) fails with the expected error text, then run detach + explicit shared-root reattach and assert store state across each step. In `tests/test_e2e_bootstrap_context.py`, I updated the guest-side bootstrap script to run the same operational sequence (`attach` default, mismatched attach expected-fail, `detach`, explicit `attach --mode shared-root`) so nested host-context exercises cover those branches too.
+
+Reflection/state of mind: this is the right place to validate behavior contracts because unit tests already prove internal branching, while e2e now confirms user-facing command sequencing and failure semantics across real subprocess boundaries.
+
+Uncertainties/risks: these tests remain environment-gated (`AIVM_E2E*`) and are skipped by default, so they protect behavior when run in capable environments but do not run in every local fast cycle. Also, mismatch assertion currently checks error substring in merged CLI output, which is robust enough today but still text-dependent.
+
+Tradeoffs and what might break: added a few CLI calls to the full/bootstrap e2e flows, increasing runtime slightly when e2e is enabled. The additional assertions are intentional to catch regressions in mode-default and detach/reattach requirements.
+
+What I am confident about: parse/skip behavior remains clean (`pytest -q tests/test_e2e_full.py tests/test_e2e_bootstrap_context.py tests/test_e2e_nested.py` -> skipped as expected without e2e env), and full suite is still green (`141 passed, 3 skipped`).
+## 2026-03-13 00:29:33 +0000
+
+Focused on stabilizing the new `shared-root` attach flow under real e2e conditions (`run_e2e_tests.sh`). The initial rerun exposed a remaining bind-source comparison bug in `_ensure_shared_root_host_bind(...)`: `findmnt -o SOURCE` can return device-backed bind source strings like `/dev/vda1[/abs/source]`, and our previous normalization only handled `/src[/sub]` forms. I added `_mount_source_compare_candidates(...)` in `aivm/cli/vm.py` to compare all relevant candidates (raw, prefix, bracket suffix), then added a regression test in `tests/test_cli_vm_attach.py` for the `/dev/...[/path]` case.
+
+Reflection/state of mind: this felt like a classic “unit tests were close but not complete” issue. The earlier fix was directionally right, but e2e revealed the real-world `findmnt` shape we missed. I’m satisfied the comparison logic now models the kernel/util-linux output variants we actually see on host systems.
+
+Uncertainties/risks: detach still logs a warning when host-side bind unmount is busy in the e2e flow; behavior is currently best-effort and non-fatal by design, but mount lifecycle cleanup remains an area to watch if we tighten semantics later.
+
+Tradeoffs and what might break: normalization is now more permissive in what it accepts as “same source”, which avoids false remount churn. The risk is low, but if `findmnt` emits an unexpected bracket format that is not a bind path, we could match more broadly than intended; current candidate handling still requires canonical path equality with the resolved source.
+
+What I am confident about: targeted regression tests pass (`pytest -q tests/test_cli_vm_attach.py -k "shared_root_host_bind"` -> `3 passed`), and full end-to-end script is green (`./run_e2e_tests.sh` -> `2 passed`).
+## 2026-03-13 18:37:22 +0000
+
+Adjusted `_upsert_host_git_remote(...)` in `aivm/cli/vm.py` so confirmation purpose text is action-specific: it now says `Register` when adding a missing remote and `Update` when changing an existing remote URL. I also added assertions in `tests/test_cli_vm_attach.py` to verify both paths and the exact purpose wording.
+
+Reflection/state of mind: this was a small but worthwhile UX precision fix. The previous prompt was technically correct but vague at decision time; tightening the action wording makes privileged/external-file confirmation clearer without altering behavior.
+
+Uncertainties/risks: low risk, primarily around test brittleness from exact purpose-string assertions if prompt wording changes again intentionally.
+
+Tradeoffs and what might break: prompts are now more explicit and include previous URL during update; this increases clarity but couples tests to message text. Runtime behavior for git remote management is unchanged.
+
+What I am confident about: local coverage for both register/update flows is in place and the full attach test module passes (`pytest -q tests/test_cli_vm_attach.py` -> `16 passed`).
