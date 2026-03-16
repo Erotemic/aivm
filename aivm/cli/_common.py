@@ -371,13 +371,17 @@ def _confirm_sudo_block(
     auto_yes_read = mode == 'read' and _CURRENT_AUTO_APPROVE_READONLY_SUDO.get(
         True
     )
+    sticky_all = sudo_intent_auto_yes()
     eff_yes = bool(
         yes
         or _CURRENT_YES_SUDO.get(False)
-        or sudo_intent_auto_yes()
+        or sticky_all
         or auto_yes_read
     )
-    arm_sudo_intent(yes=eff_yes, purpose=purpose, action=mode, sticky=False)
+    # Preserve "accept all" across later confirm blocks in the same command.
+    arm_sudo_intent(
+        yes=eff_yes, purpose=purpose, action=mode, sticky=sticky_all
+    )
 
 
 def _confirm_external_file_update(

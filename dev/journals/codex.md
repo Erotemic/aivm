@@ -1736,3 +1736,40 @@ Uncertainties/risks: low code risk, but info logs are now a bit more chatty for 
 Tradeoffs and what might break: no behavior change in mount mechanics, only observability change. Any tests asserting exact CLI/log text could need updates if they start checking this path in the future.
 
 What I am confident about: attach/update regression suites pass after the edit (`pytest -q tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` -> `37 passed`).
+## 2026-03-13 21:27:23 +0000
+
+Investigated a live failure after adding shared-root verification: `findmnt -o SOURCE --target <guest_dst>` returned `none`, causing false-negative verification (`expected /mnt/aivm-shared/<token>, actual none`) even though this can be a valid representation for bind mounts on some stacks (notably when binding from virtiofs/fuse-backed paths). I updated `_ensure_shared_root_guest_bind(...)` to pair SOURCE with ROOT checks.
+
+Implementation details: the guest-side script now captures both SOURCE and ROOT for current/final mount state. A mount is accepted when either SOURCE exactly matches the expected source path, or SOURCE is `none` and ROOT matches the expected token root (`/<token>`). This logic is applied both before deciding whether to unmount an existing mount and during final verification. Verification error output now includes expected/actual ROOT for easier diagnosis.
+
+Reflection/state of mind: this was a useful correction to over-strict validation. The previous check prevented silent mismatch, but it assumed SOURCE formatting was stable across filesystems and mount helpers. The new check keeps correctness while acknowledging real kernel/userspace variability.
+
+Uncertainties/risks: ROOT formatting across environments may still vary in edge cases; if an environment reports an unexpected ROOT form, we may need a small normalization helper.
+
+Tradeoffs and what might break: verification is slightly more complex and now depends on `findmnt -o ROOT`, but this should be broadly available where existing `findmnt` usage already works.
+
+What I am confident about: targeted suites remain green (`pytest -q tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` -> `37 passed`), and I added an assertion to keep ROOT-check logic present in the generated guest script.
+## 2026-03-14 18:43:51 +0000
+
+Handled another shared-root guest verification edge case from real logs: `findmnt -o SOURCE` returned `none` and `findmnt -o ROOT` returned empty for the destination after bind, which made the previous check still fail despite an apparently valid path state. I updated `_ensure_shared_root_guest_bind(...)` to fall back to device+inode equivalence checks (`stat -Lc %d:%i`) when findmnt metadata is ambiguous.
+
+Behavioral change: both the pre-existing-mount reconciliation branch and final verification branch now accept the mount as correct if either SOURCE matches expected directly, SOURCE=none with expected ROOT, or SOURCE=none with matching source/destination stat signature. On failure, diagnostics now optionally print expected/actual stat signatures to make guest-level investigation easier.
+
+Reflection/state of mind: this was a pragmatic reliability fix under heterogeneous util-linux behavior. The intent remains strict correctness, but verification now uses multiple independent signals instead of a single metadata field that is not stable across systems.
+
+Uncertainties/risks: stat-based equivalence assumes destination mountpoint root inode should match source root inode for the bind case, which is true for normal bind mounts but could be surprising in unusual filesystem/proxy scenarios.
+
+Tradeoffs and what might break: remote script complexity increased again; however this is localized and test-covered. There is modest extra command overhead (`stat`) only in ambiguous SOURCE=none paths.
+
+What I am confident about: attach/update tests and compile checks pass after the change (`pytest -q tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` -> `37 passed`; `python -m py_compile aivm/cli/vm.py tests/test_cli_vm_attach.py` succeeds).
+## 2026-03-14 18:49:06 +0000
+
+Fixed a sudo-confirmation regression where choosing `[a]ll` only suppressed the next confirmation block, then prompts returned later in the same command. Root cause was in `_confirm_sudo_block(...)`: it always re-armed sudo intent with `sticky=False`, which erased prior sticky-all state whenever a new block armed intent.
+
+I changed `_confirm_sudo_block(...)` to snapshot current sticky state via `sudo_intent_auto_yes()` and preserve it when re-arming (`sticky=sticky_all`). Effective-yes computation still honors explicit `--yes`, `--yes-sudo`, sticky-all, and read-only auto-approve policy; the key change is that sticky-all now survives across multiple confirm blocks during one CLI run.
+
+Tests: updated existing sticky expectation and added a regression test for read-action blocks preserving sticky-all in `tests/test_cli_helpers.py`. Ran `pytest -q tests/test_cli_helpers.py tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` (`60 passed`) and compile check for touched files.
+
+Reflection/state of mind: this was a straightforward state-lifetime bug that matched user telemetry perfectly. The fix is intentionally minimal and localized to avoid changing confirmation semantics beyond preserving what the user explicitly asked for with `[a]ll`.
+
+Uncertainties/risks: low. Behavior when users never choose `[a]ll` is unchanged; behavior with `[a]ll` is now consistent across the full command execution.

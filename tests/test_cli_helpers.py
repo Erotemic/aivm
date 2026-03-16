@@ -180,7 +180,28 @@ def test_confirm_sudo_block_honors_sticky_all_choice(monkeypatch) -> None:
             'yes': True,
             'purpose': 'test',
             'action': 'modify',
-            'sticky': False,
+            'sticky': True,
+        }
+    ]
+
+
+def test_confirm_sudo_block_read_preserves_sticky_all_choice(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr('aivm.cli._common.os.geteuid', lambda: 1000)
+    calls = []
+    monkeypatch.setattr(
+        'aivm.cli._common.arm_sudo_intent',
+        lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr('aivm.cli._common.sudo_intent_auto_yes', lambda: True)
+    _confirm_sudo_block(yes=False, purpose='read check', action='read')
+    assert calls == [
+        {
+            'yes': True,
+            'purpose': 'read check',
+            'action': 'read',
+            'sticky': True,
         }
     ]
 
