@@ -752,6 +752,64 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
     assert any(line.startswith('mount --bind') for line in command_text)
 
 
+def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared-root-safe-restore'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=ATTACHMENT_MODE_SHARED_ROOT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm._confirm_sudo_block', lambda **kwargs: None
+    )
+    calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        cmd = [str(part) for part in cmd]
+        calls.append(cmd)
+        if cmd[:2] == ['mkdir', '-p']:
+            return CmdResult(0, '', '')
+        if cmd[:2] == ['mountpoint', '-q']:
+            return CmdResult(0, '', '')
+        if cmd[:2] == ['findmnt', '-n']:
+            return CmdResult(0, '/other/source\n', '')
+        if cmd[0] == 'umount':
+            raise AssertionError('unexpected unmount in non-disruptive mode')
+        if cmd[:2] == ['mount', '--bind']:
+            raise AssertionError('unexpected bind remount in non-disruptive mode')
+        raise AssertionError(f'unexpected command: {cmd}')
+
+    monkeypatch.setattr('aivm.cli.vm.run_cmd', fake_run_cmd)
+
+    with pytest.raises(RuntimeError, match='Refusing to replace existing'):
+        _ensure_shared_root_host_bind(
+            cfg,
+            attachment,
+            yes=True,
+            dry_run=False,
+            allow_disruptive_rebind=False,
+        )
+
+    command_text = [' '.join(c) for c in calls]
+    assert any(line.startswith('mountpoint -q') for line in command_text)
+    assert any(
+        line.startswith('findmnt -n -o SOURCE --target')
+        for line in command_text
+    )
+    assert all(not line.startswith('umount ') for line in command_text)
+    assert all(not line.startswith('mount --bind') for line in command_text)
+
+
 def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     monkeypatch, tmp_path: Path
 ) -> None:

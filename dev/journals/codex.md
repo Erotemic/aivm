@@ -1818,3 +1818,22 @@ Uncertainties/risks: callers that rely on `INFO` for every read-only sudo probe 
 Tradeoffs and what might break: no command behavior changes, only log-level changes. Any tests asserting exact log levels/messages for read-only probe planning may need updates.
 
 What I am confident about: focused suites covering util + CLI helper/attach/update behavior remain green after the change (`pytest -q tests/test_util.py tests/test_cli_helpers.py tests/test_vm_helpers.py tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` -> `89 passed`).
+## 2026-03-16 16:23:14 +0000
+
+Worked on a safety regression surfaced by user logs: running `aivm code .` in a new directory triggered automatic restore of saved shared-root attachments, and some restore paths used `umount` / `umount -l` on mismatched existing bind targets. That can disrupt unrelated active workflows inside a running VM.
+
+Implementation details:
+- Added a new guard in `aivm/cli/vm.py::_ensure_shared_root_host_bind(...)` via `allow_disruptive_rebind` (default `True` for explicit/user-invoked flows).
+- When `allow_disruptive_rebind=False` and target is already mounted to a different source, the function now raises a clear `RuntimeError` instead of unmounting/rebinding.
+- `_restore_saved_vm_attachments(...)` now calls `_ensure_shared_root_host_bind(..., allow_disruptive_rebind=False)` so background/automatic restore avoids forced/lazy unmounts.
+- Added a specific warning path in restore to explain it skipped the attachment to avoid disruption.
+- Updated `docs/source/design.rst` operational policy: automatic/background reconciliation must avoid disruptive mount operations and require explicit user action for risky repair.
+- Added regression test `test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled`.
+
+Reflection/state of mind: this was the right place to tighten safety boundaries. Auto-restore should be conservative because users may have long-running in-guest work that the host cannot reliably classify as safe to disrupt.
+
+Uncertainties/risks: with this guard, some stale shared-root host bind mismatches remain unrepaired during restore and will require explicit user reconcile (attach/detach). That is intentional, but may surprise users who expected fully self-healing behavior.
+
+Tradeoffs and what might break: no destructive auto-fix in restore means fewer accidental disruptions, but potentially more warnings and manual follow-up. Explicit attach flows still allow disruptive repair when the user directly requests it.
+
+What I am confident about: targeted suites pass after the change (`pytest -q tests/test_cli_vm_attach.py tests/test_cli_vm_update.py tests/test_cli_helpers.py tests/test_util.py` -> `69 passed`) and touched files compile.

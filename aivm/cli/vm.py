@@ -1729,6 +1729,7 @@ def _ensure_shared_root_host_bind(
     *,
     yes: bool,
     dry_run: bool,
+    allow_disruptive_rebind: bool = True,
 ) -> Path:
     source_dir = str(Path(attachment.source_dir).resolve())
     source = Path(source_dir)
@@ -1785,6 +1786,12 @@ def _ensure_shared_root_host_bind(
                 candidate_abs = candidate
             if candidate_abs == source_dir:
                 return target
+        if not allow_disruptive_rebind:
+            raise RuntimeError(
+                'Refusing to replace existing shared-root host bind mount during automatic restore '
+                f'(target={target}, expected_source={source_dir}, actual_source={current or "unknown"}). '
+                'Use an explicit attach/detach command to reconcile this mount.'
+            )
         # Busy mountpoints are possible when the shared-root parent export is
         # actively used by a running guest. Fall back to lazy unmount so we can
         # rebind the requested host source deterministically.
@@ -2505,6 +2512,7 @@ def _restore_saved_vm_attachments(
                     aligned,
                     yes=bool(yes),
                     dry_run=False,
+                    allow_disruptive_rebind=False,
                 )
                 _ensure_shared_root_vm_mapping(
                     cfg,
@@ -2528,6 +2536,20 @@ def _restore_saved_vm_attachments(
                 )
                 restored += 1
             except Exception as ex:
+                if (
+                    isinstance(ex, RuntimeError)
+                    and 'Refusing to replace existing shared-root host bind mount during automatic restore'
+                    in str(ex)
+                ):
+                    log.warning(
+                        'Skipping saved shared-root attachment restore for VM {} to avoid disrupting an active mount: source={} guest_dst={} token={} detail={}',
+                        cfg.vm.name,
+                        aligned.source_dir,
+                        aligned.guest_dst,
+                        aligned.tag,
+                        ex,
+                    )
+                    continue
                 log.warning(
                     'Could not restore shared-root attachment for VM {}: source={} guest_dst={} token={} err={}',
                     cfg.vm.name,

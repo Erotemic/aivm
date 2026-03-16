@@ -153,6 +153,10 @@ Operational command execution
   policy, logging, and error semantics.
 * Keep privilege handling explicit and auditable.
 * Preserve ``--dry_run`` as a true non-destructive preview path.
+* Automatic/background reconciliation must avoid disruptive host operations
+  against existing mounts (for example, forced/lazy unmount of busy targets).
+  If repair might break active guest workflows, skip with a warning and require
+  an explicit user-invoked reconcile command.
 
 State management
 ~~~~~~~~~~~~~~~~
