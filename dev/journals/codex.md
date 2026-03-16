@@ -1802,3 +1802,19 @@ Reflection/state of mind: explicitness is cleaner here. Probe-vs-modify semantic
 Risk/tradeoff: requires callsite discipline; missing `sudo_action` at a new probe callsite can still inherit broader action context and produce noisy wording. However, this is preferable to a silent global assumption.
 
 Validation: `pytest -q tests/test_util.py tests/test_vm_helpers.py tests/test_cli_vm_attach.py tests/test_cli_vm_update.py tests/test_cli_helpers.py tests/test_e2e_full.py` -> `89 passed, 1 skipped`; compile checks for touched files pass.
+## 2026-03-16 15:05:44 +0000
+
+Reviewed and reduced sudo logging redundancy after a user report that privileged probe loops were too noisy. The duplicated pattern in loops was: `INFO Planned ...`, `DEBUG Running with sudo ...`, and `DEBUG RUN: sudo ...` for every probe. I kept the execution-visible `RUN:` line and adjusted verbosity so we still satisfy policy intent while reducing repetitive output.
+
+Implementation details:
+- In `aivm/util.py::_ensure_sudo_ready(...)`, I now log `Planned privileged ...` at `INFO` when confirmation is required or when action is state-changing.
+- For auto-approved read-only probes, I demoted that `Planned ...` line to `TRACE` to avoid flooding polling loops.
+- In `aivm/util.py::run_cmd(...)`, I demoted the extra `Running with sudo: ...` line to `TRACE`; `RUN: ...` remains the primary visible execution line.
+
+Reflection/state of mind: this felt like an observability calibration problem, not a correctness bug. The important part is preserving trust in what command actually ran while avoiding log spam that obscures meaningful events.
+
+Uncertainties/risks: callers that rely on `INFO` for every read-only sudo probe will now need `TRACE` if they want per-probe planning detail. I think this is acceptable because state-changing and approval-gated intent remains prominently visible.
+
+Tradeoffs and what might break: no command behavior changes, only log-level changes. Any tests asserting exact log levels/messages for read-only probe planning may need updates.
+
+What I am confident about: focused suites covering util + CLI helper/attach/update behavior remain green after the change (`pytest -q tests/test_util.py tests/test_cli_helpers.py tests/test_vm_helpers.py tests/test_cli_vm_attach.py tests/test_cli_vm_update.py` -> `89 passed`).

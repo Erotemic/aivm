@@ -97,8 +97,15 @@ def _ensure_sudo_ready(intent: SudoIntent, cmd: Sequence[str]) -> None:
         if str(intent.action).strip().lower() == 'read'
         else 'state-changing'
     )
-    local_log.info(f'Planned privileged {mode} command: {cmd_line}')
-    if os.geteuid() == 0:
+    as_root = os.geteuid() == 0
+    needs_confirm = (not as_root) and (not intent.yes)
+    if needs_confirm or mode == 'state-changing':
+        local_log.info(f'Planned privileged {mode} command: {cmd_line}')
+    else:
+        # Auto-approved read-only probes can be very chatty in polling loops.
+        # Keep intent visible at TRACE while DEBUG shows the concrete RUN line.
+        local_log.trace(f'Planned privileged {mode} command: {cmd_line}')
+    if as_root:
         return
     if intent.yes:
         return
@@ -171,7 +178,7 @@ def run_cmd(
         # Use interactive sudo when stdin is a TTY so the user sees/authenticates
         # on the actual command. In non-interactive mode, fail fast.
         cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
-        local_log.debug('Running with sudo: {}', shell_join(original_cmd))
+        local_log.trace('Running with sudo: {}', shell_join(original_cmd))
     run_line = shell_join(cmd)
     if check:
         # check=True generally corresponds to imperative setup/change steps.
