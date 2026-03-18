@@ -48,4 +48,7 @@ Notes
 * ``status --sudo`` enables privileged checks (libvirt/network/firewall/image).
 * Privileged operations prompt unless ``--yes`` or ``--yes-sudo`` is used.
 * Approvals normally happen once per grouped step, not once per command.
+* Step previews show both semantic summaries and the exact commands to be run.
+* ``y`` approves the current step only; ``a`` approves the current and all
+  later steps.
 * Raw commands are still visible at higher verbosity levels.

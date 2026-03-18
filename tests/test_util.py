@@ -91,6 +91,41 @@ def test_plan_prompts_once_for_multiple_sudo_commands(monkeypatch) -> None:
     assert calls[1][0][:2] == ['sudo', 'virsh']
 
 
+def test_approved_plan_skips_legacy_compat_prompt(monkeypatch) -> None:
+    _activate_manager()
+    compat_calls = []
+
+    class P:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr(builtins, 'input', lambda prompt: 'y')
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: P(),
+    )
+
+    mgr = CommandManager.current()
+    monkeypatch.setattr(
+        mgr,
+        '_ensure_compat_sudo_ready',
+        lambda spec, *, within_plan=False: compat_calls.append(within_plan),
+    )
+
+    with PlanScope(mgr, 'Install packages'):
+        mgr.submit(
+            ['apt-get', 'update'],
+            sudo=True,
+            role='modify',
+            summary='Refresh apt metadata',
+        )
+
+    assert compat_calls == [True]
+
+
 def test_command_handle_result_flushes_through_handle(monkeypatch) -> None:
     _activate_manager(yes_sudo=True)
     calls = []
@@ -123,6 +158,70 @@ def test_command_handle_result_flushes_through_handle(monkeypatch) -> None:
     assert second.done() is True
 
 
+def test_plan_yes_approves_current_block_only(monkeypatch) -> None:
+    _activate_manager()
+    prompts = []
+
+    class P:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    answers = iter(['y', 'y'])
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr(
+        builtins,
+        'input',
+        lambda prompt: (prompts.append(prompt) or next(answers)),
+    )
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: P(),
+    )
+
+    mgr = CommandManager.current()
+    with PlanScope(mgr, 'Step one'):
+        mgr.submit(['true'], sudo=True, role='modify', summary='step one')
+    with PlanScope(mgr, 'Step two'):
+        mgr.submit(['true'], sudo=True, role='modify', summary='step two')
+
+    assert prompts == [
+        'Approve this step? [y]es/[a]ll/[N]o: ',
+        'Approve this step? [y]es/[a]ll/[N]o: ',
+    ]
+
+
+def test_plan_all_approves_current_and_future_blocks(monkeypatch) -> None:
+    _activate_manager()
+    prompts = []
+
+    class P:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr(
+        builtins,
+        'input',
+        lambda prompt: (prompts.append(prompt) or 'a'),
+    )
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: P(),
+    )
+
+    mgr = CommandManager.current()
+    with PlanScope(mgr, 'Step one'):
+        mgr.submit(['true'], sudo=True, role='modify', summary='step one')
+    with PlanScope(mgr, 'Step two'):
+        mgr.submit(['true'], sudo=True, role='modify', summary='step two')
+
+    assert prompts == ['Approve this step? [y]es/[a]ll/[N]o: ']
+
+
 def test_run_cmd_compatibility_shim_uses_manager(monkeypatch) -> None:
     _activate_manager()
     calls = []
@@ -142,6 +241,47 @@ def test_run_cmd_compatibility_shim_uses_manager(monkeypatch) -> None:
     arm_sudo_intent(yes=True, purpose='compat test', action='modify')
     run_cmd(['virsh', 'dominfo', 'vm'], sudo=True, check=True, capture=True)
     assert calls == [['sudo', 'virsh', 'dominfo', 'vm']]
+
+
+def test_plan_preview_includes_summary_and_command(monkeypatch) -> None:
+    _activate_manager(yes_sudo=True)
+    messages = []
+
+    class P:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    class _FakeLog:
+        def info(self, fmt: str, *args) -> None:
+            messages.append(fmt.format(*args))
+
+        def debug(self, fmt: str, *args) -> None:
+            messages.append(fmt.format(*args))
+
+        def trace(self, fmt: str, *args) -> None:
+            return None
+
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: P(),
+    )
+
+    mgr = CommandManager.current()
+    with PlanScope(mgr, 'Enable service'):
+        mgr.submit(
+            ['systemctl', 'enable', '--now', 'libvirtd'],
+            sudo=True,
+            role='modify',
+            summary='Enable and start libvirtd service',
+        )
+
+    joined = '\n'.join(messages)
+    assert '  1. Enable and start libvirtd service' in joined
+    assert 'command: sudo systemctl enable --now libvirtd' in joined
 
 
 def test_read_only_command_stays_read_inside_modify_intent(

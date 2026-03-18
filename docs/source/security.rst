@@ -436,6 +436,8 @@ Operational UX note:
 * The approved privilege boundary is still the exact set of commands shown in
   that step preview; grouped approval is intended to reduce prompt fatigue, not
   to hide additional commands.
+* Interactive approval uses ``y`` for the current step only and ``a`` for the
+  current plus later steps.
 * Raw command lines remain available at higher verbosity for audit/debug use.
 
 Risks introduced:

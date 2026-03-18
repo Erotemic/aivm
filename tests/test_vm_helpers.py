@@ -407,6 +407,7 @@ def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
 def test_fetch_image_uses_atomic_temp_then_move(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -421,13 +422,19 @@ def test_fetch_image_uses_atomic_temp_then_move(
         '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
     )
 
-    def fake_run_cmd(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd[:1] == ['sha256sum']:
-            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
-        return CmdResult(0, '', '')
+    def fake_subprocess_run(cmd, **kwargs):
+        del kwargs
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
     assert out.name == 'noble-base.img'
     curl_calls = [c for c in calls if c and c[0] == 'curl']
@@ -445,6 +452,7 @@ def test_fetch_image_uses_atomic_temp_then_move(
 def test_fetch_image_revalidates_cached_image_before_reuse(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -457,14 +465,19 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
 
     monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: True)
 
-    def fake_run_cmd(cmd, **kwargs):
+    def fake_subprocess_run(cmd, **kwargs):
         del kwargs
-        calls.append(cmd)
-        if cmd[:1] == ['sha256sum']:
-            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
-        return CmdResult(0, '', '')
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
     assert out.name == 'noble-base.img'
     assert any(c[:1] == ['sha256sum'] for c in calls)
@@ -475,6 +488,7 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
 def test_fetch_image_redownloads_when_cached_hash_is_stale(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -491,19 +505,24 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
         'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
     )
 
-    def fake_run_cmd(cmd, **kwargs):
+    def fake_subprocess_run(cmd, **kwargs):
         nonlocal sha_calls
         del kwargs
-        calls.append(cmd)
-        if cmd[:1] == ['sha256sum']:
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:1] == ['sha256sum']:
             sha_calls += 1
             digest = 'bad' * 21 + 'b' if sha_calls == 1 else expected
-            return CmdResult(0, f'{digest[:64]}  {cmd[-1]}\n', '')
-        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return CmdResult(0, '', '')
-        return CmdResult(0, '', '')
+            return _Proc(0, f'{digest[:64]}  {normalized[-1]}\n', '')
+        if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            return _Proc(0, '', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
     assert out.name == 'noble-base.img'
     assert sha_calls >= 2
@@ -515,6 +534,7 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
 def test_fetch_image_validates_ubuntu_checksum(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -529,16 +549,21 @@ def test_fetch_image_validates_ubuntu_checksum(
         '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
     )
 
-    def fake_run_cmd(cmd, **kwargs):
+    def fake_subprocess_run(cmd, **kwargs):
         del kwargs
-        calls.append(cmd)
-        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return CmdResult(0, '', '')
-        if cmd[:1] == ['sha256sum']:
-            return CmdResult(0, f'{expected}  {cmd[-1]}\n', '')
-        return CmdResult(0, '', '')
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            return _Proc(0, '', '')
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
     assert out.name == 'noble-base.img'
     assert any(c[:1] == ['sha256sum'] for c in calls)
@@ -547,6 +572,7 @@ def test_fetch_image_validates_ubuntu_checksum(
 def test_fetch_image_raises_on_checksum_mismatch(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -559,16 +585,21 @@ def test_fetch_image_raises_on_checksum_mismatch(
     calls = []
     actual = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
 
-    def fake_run_cmd(cmd, **kwargs):
+    def fake_subprocess_run(cmd, **kwargs):
         del kwargs
-        calls.append(cmd)
-        if cmd[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return CmdResult(0, '', '')
-        if cmd[:1] == ['sha256sum']:
-            return CmdResult(0, f'{actual}  {cmd[-1]}\n', '')
-        return CmdResult(0, '', '')
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
+            return _Proc(0, '', '')
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{actual}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     with pytest.raises(RuntimeError, match='checksum mismatch'):
         fetch_image(cfg, dry_run=False)
     assert any(c[:2] == ['rm', '-f'] for c in calls)
@@ -592,6 +623,7 @@ def test_fetch_image_rejects_unsupported_url(
 def test_fetch_image_accepts_supported_file_url(
     monkeypatch, tmp_path: Path
 ) -> None:
+    _activate_manager()
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -611,18 +643,82 @@ def test_fetch_image_accepts_supported_file_url(
 
     calls = []
 
-    def fake_run_cmd(cmd, **kwargs):
+    def fake_subprocess_run(cmd, **kwargs):
         del kwargs
-        calls.append(cmd)
-        if cmd[:1] == ['sha256sum']:
-            return CmdResult(0, f'{digest}  {cmd[-1]}\n', '')
-        return CmdResult(0, '', '')
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        calls.append(normalized)
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{digest}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.lifecycle.run_cmd', fake_run_cmd)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
     assert out.name == 'noble-base.img'
     assert any(c[:2] == ['cp', '--reflink=auto'] for c in calls)
     assert any(c[:2] == ['mv', '-f'] for c in calls)
+
+
+def test_fetch_image_preview_uses_grouped_block_summaries(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _activate_manager()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    cfg.image.cache_name = 'noble-base.img'
+    cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
+    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr(
+        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+    )
+    messages: list[str] = []
+    expected = (
+        '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
+    )
+
+    class _FakeLog:
+        def info(self, fmt: str, *args) -> None:
+            messages.append(fmt.format(*args))
+
+        def debug(self, fmt: str, *args) -> None:
+            return None
+
+        def trace(self, fmt: str, *args) -> None:
+            return None
+
+        def warning(self, fmt: str, *args) -> None:
+            messages.append(fmt.format(*args))
+
+        def error(self, fmt: str, *args) -> None:
+            messages.append(fmt.format(*args))
+
+    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+
+    def fake_subprocess_run(cmd, **kwargs):
+        del kwargs
+        normalized = [str(part) for part in cmd]
+        if normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['-n']:
+            normalized = normalized[1:]
+        if normalized[:1] == ['sha256sum']:
+            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
+        return _Proc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    fetch_image(cfg, dry_run=False)
+
+    assert 'Step: Fetch and verify base image' in messages
+    assert '  1. Create VM image directory' in messages
+    assert '  2. Remove stale partial image file' in messages
+    assert '  3. Download base image into staging file' in messages
+    assert '  4. Move staged base image into cache' in messages
+    assert '  5. Compute base image checksum' in messages
 
 
 def test_fetch_image_rejects_unsupported_file_url_digest(

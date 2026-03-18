@@ -74,8 +74,9 @@ opens VS Code.
 
 During setup and reconcile flows, subprocess logging is now organized around
 user-meaningful steps instead of isolated commands. ``aivm`` shows the current
-step, why it exists, and the planned command summaries for that step before it
-runs them. Raw commands still appear at higher verbosity.
+step, why it exists, a semantic summary for each planned command, and the exact
+command line that will run before it executes the step. Full raw commands still
+appear at higher verbosity.
 
 If you prefer an explicit flow, ``aivm config init`` is required before
 ``aivm vm create``.
@@ -113,8 +114,13 @@ When running interactively, expect step previews such as:
 * current context / breadcrumb
 * current step title
 * why the step exists
-* summaries of the commands in that step
+* semantic summaries plus exact commands for the current step
 * a single approval prompt for the whole step when required
+
+Interactive approval semantics:
+
+* ``y`` approves the current step only
+* ``a`` approves the current step and all later steps
 
 For example, the default ``shared-root`` path used by ``aivm ssh .`` /
 ``aivm code .`` now groups attachment reconciliation into named steps such as

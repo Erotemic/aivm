@@ -283,19 +283,28 @@ def _verify_image_sha256(
 ) -> None:
     if not expected_sha256:
         return
+    mgr = CommandManager.current()
     log.info('Verifying base image checksum (source: {})', source)
-    out = run_cmd(
-        ['sha256sum', str(image_path)], sudo=True, check=True, capture=True
+    out = mgr.submit(
+        ['sha256sum', str(image_path)],
+        sudo=True,
+        role='read',
+        check=True,
+        capture=True,
+        summary='Compute base image checksum',
+        detail=f'path={image_path} source={source}',
     ).stdout
     actual = out.strip().split()[0].lower() if out.strip() else ''
     if actual != expected_sha256:
-        run_cmd(
+        mgr.submit(
             ['rm', '-f', str(image_path)],
             sudo=True,
-            sudo_action='modify',
+            role='modify',
             check=False,
             capture=True,
-        )
+            summary='Remove invalid base image after checksum mismatch',
+            detail=f'path={image_path}',
+        ).result()
         raise RuntimeError(
             'Downloaded base image checksum mismatch; removed invalid image.\n'
             f'Path: {image_path}\n'
@@ -322,6 +331,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         if parsed.scheme == 'file'
         else None
     )
+    mgr = CommandManager.current()
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         if dry_run:
             log.info('Base image cached: {}', base_img)
@@ -329,11 +339,29 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         # Re-verify named cache hits so interrupted downloads or stale local
         # files do not silently poison later VM creation runs.
         try:
-            _verify_image_sha256(
-                image_path=base_img,
-                expected_sha256=expected_sha256,
-                source=f'cached base image ({checksum_source})',
-            )
+            with IntentScope(
+                mgr,
+                'Fetch base image',
+                why=(
+                    'VM creation needs a verified Ubuntu cloud image cached on '
+                    'the host before the VM disk can be prepared.'
+                ),
+                role='modify',
+            ):
+                with PlanScope(
+                    mgr,
+                    'Verify cached base image',
+                    why=(
+                        'Revalidate the cached image so interrupted downloads or '
+                        'stale local files do not silently poison later VM runs.'
+                    ),
+                    approval_scope=f'image-verify-cache:{cfg.vm.name}',
+                ):
+                    _verify_image_sha256(
+                        image_path=base_img,
+                        expected_sha256=expected_sha256,
+                        source=f'cached base image ({checksum_source})',
+                    )
             log.info('Base image cached: {}', base_img)
             return base_img
         except RuntimeError as ex:
@@ -360,33 +388,53 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
         return base_img
     _ensure_qemu_access(cfg, dry_run=False)
-    run_cmd(
-        ['mkdir', '-p', str(p['img_dir'])], sudo=True, check=True, capture=True
-    )
-    run_cmd(
-        ['rm', '-f', str(tmp_img)],
-        sudo=True,
-        sudo_action='modify',
-        check=False,
-        capture=True,
-    )
     if local_file_src is not None:
         log.info(
             'Copying local base image to {} via atomic temp file', base_img
         )
     else:
         log.info('Downloading base image to {} (showing progress)', base_img)
-    try:
-        if local_file_src is not None:
-            run_cmd(
-                ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)],
+    with IntentScope(
+        mgr,
+        'Fetch base image',
+        why=(
+            'VM creation needs a verified Ubuntu cloud image cached on the '
+            'host before the VM disk can be prepared.'
+        ),
+        role='modify',
+    ):
+        with PlanScope(
+            mgr,
+            'Fetch and verify base image',
+            why=(
+                'Prepare the image directory, refresh any stale partial file, '
+                'transfer the image atomically, and verify its checksum before '
+                'it is reused.'
+            ),
+            approval_scope=f'image-fetch:{cfg.vm.name}',
+        ):
+            mkdir_handle = mgr.submit(
+                ['mkdir', '-p', str(p['img_dir'])],
                 sudo=True,
+                role='modify',
                 check=True,
                 capture=True,
+                summary='Create VM image directory',
+                detail=f'target={p["img_dir"]}',
             )
-        else:
-            run_cmd(
-                [
+            cleanup_tmp_handle = mgr.submit(
+                ['rm', '-f', str(tmp_img)],
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=True,
+                summary='Remove stale partial image file',
+                detail=f'target={tmp_img}',
+            )
+            transfer_cmd = (
+                ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
+                if local_file_src is not None
+                else [
                     'curl',
                     '-L',
                     '--fail',
@@ -394,31 +442,82 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     '-o',
                     str(tmp_img),
                     url,
-                ],
-                sudo=True,
-                check=True,
-                capture=False,
+                ]
             )
-        run_cmd(
-            ['mv', '-f', str(tmp_img), str(base_img)],
-            sudo=True,
-            check=True,
-            capture=True,
-        )
-    except CmdError:
-        run_cmd(
-            ['rm', '-f', str(tmp_img)],
-            sudo=True,
-            sudo_action='modify',
-            check=False,
-            capture=True,
-        )
-        raise
-    _verify_image_sha256(
-        image_path=base_img,
-        expected_sha256=expected_sha256,
-        source=checksum_source,
-    )
+            transfer_handle = mgr.submit(
+                transfer_cmd,
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=(local_file_src is not None),
+                summary=(
+                    'Copy local base image into staging file'
+                    if local_file_src is not None
+                    else 'Download base image into staging file'
+                ),
+                    detail=(
+                        f'source={local_file_src} destination={tmp_img}'
+                        if local_file_src is not None
+                        else f'url={url} destination={tmp_img}'
+                    ),
+                )
+            move_handle = mgr.submit(
+                ['mv', '-f', str(tmp_img), str(base_img)],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Move staged base image into cache',
+                detail=f'source={tmp_img} destination={base_img}',
+            )
+            checksum_handle = mgr.submit(
+                ['sha256sum', str(base_img)],
+                sudo=True,
+                role='read',
+                check=True,
+                capture=True,
+                summary='Compute base image checksum',
+                detail=f'path={base_img} source={checksum_source}',
+            )
+            mkdir_handle.result()
+            cleanup_tmp_handle.result()
+            transfer_res = transfer_handle.result()
+            if transfer_res.code != 0:
+                mgr.submit(
+                    ['rm', '-f', str(tmp_img)],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary='Remove incomplete staging image after transfer failure',
+                    detail=f'target={tmp_img}',
+                ).result()
+                raise CmdError(transfer_cmd, transfer_res)
+            move_handle.result()
+            checksum_out = checksum_handle.stdout
+            actual = (
+                checksum_out.strip().split()[0].lower()
+                if checksum_out.strip()
+                else ''
+            )
+            if expected_sha256 and actual != expected_sha256:
+                mgr.submit(
+                    ['rm', '-f', str(base_img)],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary='Remove invalid base image after checksum mismatch',
+                    detail=f'path={base_img}',
+                ).result()
+                raise RuntimeError(
+                    'Downloaded base image checksum mismatch; removed invalid image.\n'
+                    f'Path: {base_img}\n'
+                    f'Expected: {expected_sha256}\n'
+                    f'Actual:   {actual}\n'
+                    'Re-run to retry download, or use a supported pinned image URL.'
+                )
+            log.info('Base image checksum verified: {}', base_img)
     log.info('Downloaded base image: {}', base_img)
     return base_img
 

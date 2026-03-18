@@ -179,13 +179,14 @@ Decision:
     approval, logging, and result handling
   * ``IntentScope`` for nested narrative context (high-level goal plus current
     sub-step)
-  * ``PlanScope`` for grouped user-visible steps that preview command summaries
-    and usually approve once per step
+  * ``PlanScope`` for grouped user-visible steps that preview command
+    summaries plus exact commands and usually approve once per step
   * ``CommandHandle`` for deferred but deterministic execution
 
   The manager should show the current step title, breadcrumb/context, why the
-  step exists, and the command summaries in the step preview. Raw command lines
-  remain available in debug/trace output.
+  step exists, and both the semantic meaning and exact command for each planned
+  action in the step preview. Full raw command lines remain available in
+  debug/trace output.
 Consequences:
   Sudo approval now normally happens at the plan/step boundary rather than for
   each command in a multi-command workflow. This reduces prompt fatigue while
@@ -218,6 +219,12 @@ Plan and approval semantics
   approved plan preview.
 * Read-only sudo plans may still auto-approve by policy; mutating sudo plans
   should require approval unless ``--yes`` / ``--yes-sudo`` applies.
+* Interactive approval semantics are:
+
+  * ``y`` approves the current plan/block only
+  * ``a`` approves the current plan/block and all later plans/blocks too
+* Once a plan is approved, legacy per-command sudo prompting must not fire for
+  commands inside that approved plan.
 
 Migration expectations
 ~~~~~~~~~~~~~~~~~~~~~~

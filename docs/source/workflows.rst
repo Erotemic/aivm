@@ -12,8 +12,9 @@ Open project in VM
    aivm vm code . --sync_settings
 
 These shortcut flows now report progress as grouped steps. Expect a current
-step title, a short explanation of why that step is happening, and one approval
-prompt for the whole step when privileged host changes are required.
+step title, a short explanation of why that step is happening, semantic command
+summaries, and the exact commands that will run. Privileged host changes prompt
+once for the whole step when approval is required.
 
 For the default ``shared-root`` attachment path, the current implementation
 usually breaks reconciliation into:
@@ -137,13 +138,18 @@ Workflow logging model
 
 * nested intent context, which keeps the larger goal visible
 * step/plan previews, which describe what the current sequence of commands is
-  about to do
+  about to do and show the exact commands that will run
 * raw commands, which remain visible for deeper inspection at higher verbosity
 
 This is meant to make multi-command workflows easier to follow and safer to
 approve than a stream of isolated sudo command prompts. Shared-root
 attach/reconcile is the most complete example today; some older helper flows
 still rely on the compatibility shim while migration continues.
+
+Interactive approval semantics:
+
+* ``y`` approves the current block only
+* ``a`` approves the current block and all later blocks
 
 Get command tree
 ----------------

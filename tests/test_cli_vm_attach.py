@@ -936,9 +936,15 @@ def test_shared_root_host_bind_prompts_once_per_prepare_step(
 
     assert len(prompts) == 1
     assert 'Step: Prepare host bind targets' in messages
-    assert '  1. sudo Create shared-root parent directory' in messages
-    assert '  2. sudo Create project-specific host bind target' in messages
-    assert '  3. sudo Bind requested host folder to shared-root target' in messages
+    assert '  1. Create shared-root parent directory' in messages
+    assert '  2. Create project-specific host bind target' in messages
+    assert '  3. Bind requested host folder to shared-root target' in messages
+    assert any(
+        msg.startswith('     command: sudo mkdir -p ') for msg in messages
+    )
+    assert any(
+        msg.startswith('     command: sudo mount --bind ') for msg in messages
+    )
 
 
 def test_shared_root_vm_mapping_uses_named_steps_and_single_prompt(
@@ -982,9 +988,10 @@ def test_shared_root_vm_mapping_uses_named_steps_and_single_prompt(
     assert len(prompts) == 1
     assert 'Step: Inspect shared-root VM mapping' in messages
     assert 'Step: Ensure VM virtiofs mapping' in messages
-    assert (
-        '  1. sudo Attach virtiofs device to running VM vm-shared-root-map'
-        in messages
+    assert '  1. Attach virtiofs device to running VM vm-shared-root-map' in messages
+    assert any(
+        msg.startswith('     command: sudo virsh attach-device ')
+        for msg in messages
     )
 
 
@@ -1031,6 +1038,10 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
     assert (
         '  2. Bind guest destination to shared source and verify source/options'
         in messages
+    )
+    assert any(
+        msg.startswith('     command: ssh -i /tmp/id_ed25519 agent@10.0.0.2 ')
+        for msg in messages
     )
     assert all('set -euo pipefail; if [ ! -d' not in msg for msg in messages)
 

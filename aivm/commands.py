@@ -424,19 +424,14 @@ class CommandManager:
         for idx, item in enumerate(plan.commands, start=1):
             summary = item.spec.summary or shell_join(item.spec.cmd)
             role = self._effective_role(item.spec)
-            prefix = 'sudo ' if item.spec.sudo else ''
-            local_log.info(
-                '  {}. {}{}',
-                idx,
-                prefix,
-                summary,
-            )
+            preview_cmd = self._preview_command(item.spec)
+            local_log.info('  {}. {}', idx, summary)
+            local_log.info('     command: {}', preview_cmd)
             if item.spec.detail:
                 local_log.debug('     detail: {}', item.spec.detail)
-            local_log.trace(
-                '     raw: {}',
-                shell_join(item.spec.cmd),
-            )
+            raw_cmd = self._raw_command(item.spec)
+            if raw_cmd != preview_cmd:
+                local_log.debug('     raw command: {}', raw_cmd)
             local_log.trace('     role={} capture={}', role, item.spec.capture)
         plan.rendered_preview = True
 
@@ -469,8 +464,42 @@ class CommandManager:
             if through_command_id is not None and item.command_id >= through_command_id:
                 break
 
-    def _ensure_compat_sudo_ready(self, spec: CommandSpec) -> None:
+    def _raw_command(self, spec: CommandSpec) -> str:
+        cmd = list(spec.cmd)
+        if spec.sudo and os.geteuid() != 0:
+            cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
+        return shell_join(cmd)
+
+    def _preview_command(self, spec: CommandSpec, *, max_len: int = 160) -> str:
+        cmd = list(spec.cmd)
+        if spec.sudo and os.geteuid() != 0:
+            cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
+        display_parts: list[str] = []
+        for idx, part in enumerate(cmd):
+            text = str(part)
+            prev = str(cmd[idx - 1]) if idx > 0 else ''
+            prev2 = str(cmd[idx - 2]) if idx > 1 else ''
+            if len(text) > 80:
+                if prev == '-lc' and prev2 in {'bash', 'sh'}:
+                    text = '<shell script omitted>'
+                elif idx == len(cmd) - 1 and 'ssh' in {str(cmd[0]), str(cmd[1]) if len(cmd) > 1 else ''}:
+                    text = '<remote command omitted>'
+                else:
+                    text = text[:57] + '...'
+            display_parts.append(shlex.quote(text))
+        preview_cmd = ' '.join(display_parts)
+        if len(preview_cmd) <= max_len:
+            return preview_cmd
+        if max_len <= 3:
+            return preview_cmd[:max_len]
+        return preview_cmd[: max_len - 3] + '...'
+
+    def _ensure_compat_sudo_ready(
+        self, spec: CommandSpec, *, within_plan: bool = False
+    ) -> None:
         if not spec.sudo or os.geteuid() == 0:
+            return
+        if within_plan:
             return
         intent = self._compat_sudo_intent
         if intent is None:
@@ -518,18 +547,18 @@ class CommandManager:
     ) -> CommandResult:
         local_log = log.opt(depth=3)
         cmd = list(spec.cmd)
-        self._ensure_compat_sudo_ready(spec)
+        self._ensure_compat_sudo_ready(spec, within_plan=within_plan)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
 
         run_line = shell_join(cmd)
-        
-        # Always log privledged commands to info
-        if spec.sudo:
-           logger = local_log.info
-        else:
-           logger = local_log.debug
 
+        # Keep mutating or privileged work visible at INFO while leaving
+        # unprivileged plumbing at DEBUG unless a plan preview already framed it.
+        if spec.sudo:
+            logger = local_log.info
+        else:
+            logger = local_log.debug
 
         if within_plan and ordinal is not None:
             current, total = ordinal
