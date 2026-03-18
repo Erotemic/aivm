@@ -1944,3 +1944,16 @@ Reflection/state of mind: this is the version that feels much closer to what an 
 Uncertainties/risks: this is an inference, not a direct libvirt fact, so I made sure the wording stays explicit about where the uncertainty remains (`libvirt state unavailable without --sudo`). I think that is the right balance between honesty and usefulness.
 
 What I am confident about: the new render-level behavior is covered by the updated status helper regression test, the focused suites still pass, and the touched files compile.
+## 2026-03-18 21:01:34 +0000
+
+Added an SSH bootstrap improvement for fresh machines: when an interactive workflow needs VM SSH access but `aivm` cannot find an identity/public-key pair, it now offers to create a dedicated keypair at `~/.ssh/id_aivm_ed25519` instead of assuming the user already has `id_ed25519` or silently failing later. I threaded this through the places where the user is already in a setup-minded flow: `aivm config init`, the running-VM attach path, and the `aivm ssh .` / `aivm code .` session-preparation path.
+
+Implementation-wise, I kept the behavior aligned with the newer command UX rather than slipping back into ad hoc shelling out. The new helper lives in `aivm/cli/_common.py` so the policy is centralized: respect explicitly configured custom paths, adopt the dedicated `id_aivm_ed25519` key automatically if it already exists, prompt only in interactive mode unless `--yes` is present, and create the key through a small `CommandManager` plan (`mkdir ~/.ssh`, `chmod 700 ~/.ssh`, `ssh-keygen ...`). That keeps the operation readable and consistent with the broader step-oriented direction of the repo.
+
+I also updated the config-init warning text to stop suggesting the generic `~/.ssh/id_ed25519` command, since that would undercut the whole “distinct name” intent. Focused tests now cover both the helper itself and the interactive `config init` flow that accepts the prompt and persists `id_aivm_ed25519` into config.
+
+Reflection/state of mind: this one felt like a small UX affordance with outsized practical value. Fresh-machine setup failures are the exact moment where users are least interested in manually reverse-engineering missing prerequisites, so offering a distinct aivm-scoped keypair is a nice combination of convenience and safety. The only thing I stayed cautious about was not overriding partially configured custom SSH paths, because that crosses the line from helpful automation into surprising behavior.
+
+Uncertainties/risks: right now the auto-create offer is deliberately limited to interactive setup/attach/session flows, not read-only commands like `status`. That feels right to me, but if there are other entry points that implicitly require guest SSH we may want to reuse the helper there too. I’m also assuming `ed25519` remains the preferred default for this project; that matches the existing guidance and tests.
+
+What I am confident about: the dedicated-name behavior is implemented, it persists into config in the setup path, the focused tests pass (`pytest -q tests/test_cli_helpers.py tests/test_cli_config_init.py -q`), and the touched Python files compile.

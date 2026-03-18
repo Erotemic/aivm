@@ -72,6 +72,7 @@ from ._common import (
     _confirm_sudo_block,
     _load_cfg,
     _load_cfg_with_path,
+    _maybe_offer_create_ssh_identity,
     _record_vm,
     _resolve_cfg_for_code,
     log,
@@ -902,6 +903,15 @@ class VMAttachCLI(_BaseCommand):
             force=bool(args.force),
         )
         if vm_running:
+            if _maybe_offer_create_ssh_identity(
+                cfg,
+                yes=bool(args.yes),
+                prompt_reason=(
+                    'Generate a dedicated SSH keypair so aivm can reconcile '
+                    'the running VM guest attachment state.'
+                ),
+            ):
+                _record_vm(cfg, cfg_path)
             log.info(
                 'VM {} is running; reconciling attachment in guest: {} (mode={} access={})',
                 cfg.vm.name,
@@ -3177,6 +3187,16 @@ def _prepare_attached_session(
     )
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip
+
+    if (not dry_run) and _maybe_offer_create_ssh_identity(
+        cfg,
+        yes=bool(yes),
+        prompt_reason=(
+            'Generate a dedicated SSH keypair so aivm can open SSH/VS Code '
+            'sessions and provision the guest.'
+        ),
+    ):
+        _record_vm(cfg, cfg_path)
 
     if dry_run:
         return PreparedSession(

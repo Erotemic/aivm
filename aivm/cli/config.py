@@ -48,6 +48,7 @@ from ._common import (
     _cfg_path,
     _confirm_sudo_block,
     _load_cfg_with_path,
+    _maybe_offer_create_ssh_identity,
     _resolve_cfg_for_code,
 )
 
@@ -74,6 +75,14 @@ class InitCLI(_BaseCommand):
         path = _cfg_path(args.config)
         reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
+        _maybe_offer_create_ssh_identity(
+            cfg,
+            yes=bool(args.yes),
+            prompt_reason=(
+                'Generate a dedicated SSH keypair so aivm can access and '
+                'provision VMs without reusing a generic personal key name.'
+            ),
+        )
         if not bool(args.yes) and not bool(args.defaults):
             cfg = _review_init_defaults_interactive(cfg, path)
         else:
@@ -136,7 +145,7 @@ def _ssh_key_setup_warning_lines(cfg: AgentVMConfig) -> list[str]:
         '⚠️ SSH keypair not detected for this VM config.',
         '  `aivm` expects an SSH identity + public key for VM access/provisioning.',
         '  Quick setup:',
-        '    ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ""',
+        '    ssh-keygen -t ed25519 -f ~/.ssh/id_aivm_ed25519 -N ""',
         '  (Advisory only: config init will continue.)',
     ]
 
