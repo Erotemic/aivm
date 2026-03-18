@@ -1837,3 +1837,16 @@ Uncertainties/risks: with this guard, some stale shared-root host bind mismatche
 Tradeoffs and what might break: no destructive auto-fix in restore means fewer accidental disruptions, but potentially more warnings and manual follow-up. Explicit attach flows still allow disruptive repair when the user directly requests it.
 
 What I am confident about: targeted suites pass after the change (`pytest -q tests/test_cli_vm_attach.py tests/test_cli_vm_update.py tests/test_cli_helpers.py tests/test_util.py` -> `69 passed`) and touched files compile.
+## 2026-03-18 15:34:11 +0000
+
+Worked on a fresh-machine bootstrap regression in the shortcut startup path (`aivm ssh .` / `aivm code .`). The user report was very specific and helpful: top-level parse logs showed `yes=False`, but deeper bootstrap logs claimed `--yes was provided`, which caused missing dependency detection to skip the normal install prompt and then fail later when `sudo virsh ...` ran against an unprepared host.
+
+Root cause was in `aivm/cli/vm.py::_prepare_attached_session(...)`. After the initial "No managed VM found for this folder" confirmation, the code unconditionally called `InitCLI.main(... yes=True, defaults=True)` and `VMCreateCLI.main(... yes=True)`. That flattened the user's actual intent into global auto-approval for the rest of bootstrap, so nested prompt-aware helpers behaved as if the user had explicitly passed `--yes` on the command line.
+
+I changed that handoff to preserve the original top-level approval state: `yes=bool(yes)` now flows into both nested CLI calls, and `defaults=bool(yes)` only bypasses interactive config-init review when the user truly invoked the startup path with `--yes`. This keeps the existing fully non-interactive behavior for explicit `--yes`, while allowing the normal config/vm/dependency prompts to appear during interactive bootstrap on a fresh machine.
+
+I added a regression test in `tests/test_cli_vm_update.py` that simulates the missing-store bootstrap path with interactive consent and asserts the nested `InitCLI` / `VMCreateCLI` calls receive `yes=False` and `defaults=False`. I also re-ran the focused VM update test module (`pytest -q tests/test_cli_vm_update.py -q`), which passed cleanly.
+
+Reflection/state of mind: this was a satisfying bug to fix because the user-provided trace narrowed it down to an intent-propagation mistake rather than a detection failure. The key tradeoff is that interactive bootstrap may now show a couple more standard prompts than before, but that is the correct UX here because those prompts carry meaningful choices the user did not auto-approve globally.
+
+Uncertainties/risks: low, but worth watching whether anyone had come to rely on the old "single high-level yes implies silent nested defaults acceptance" behavior during interactive runs. I think preserving literal `--yes` semantics is the safer contract, and the added test should keep that boundary stable.

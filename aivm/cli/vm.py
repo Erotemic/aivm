@@ -2982,15 +2982,15 @@ def _prepare_attached_session(
             InitCLI.main(
                 argv=False,
                 config=config_opt,
-                yes=True,
-                defaults=True,
+                yes=bool(yes),
+                defaults=bool(yes),
                 force=False,
             )
         VMCreateCLI.main(
             argv=False,
             config=config_opt,
             vm=vm_opt,
-            yes=True,
+            yes=bool(yes),
             dry_run=bool(dry_run),
             force=False,
         )
