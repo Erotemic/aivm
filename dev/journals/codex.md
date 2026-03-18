@@ -1933,3 +1933,14 @@ Reflection/state of mind: this was a good reminder that tri-state status systems
 Uncertainties/risks: the VM shared-folder line is still conservative in one respect: without sudo, if the VM is known to exist but `dumpxml` is unavailable, the current text says `none detected or unavailable without --sudo`. That is honest, but if we want a more exact tri-state there too, a dedicated shared-folder probe helper would be the next cleanup.
 
 What I am confident about: the user-visible contradiction is fixed in logic and covered by tests (`pytest -q tests/test_cli_status_helpers.py tests/test_util.py tests/test_cli_helpers.py -q`), and the touched files compile.
+## 2026-03-18 20:42:26 +0000
+
+Did a second pass on non-sudo status after seeing fresh real output. The first fix preserved the tri-state correctly, but the UX was still too pessimistic: we were showing `VM state` as unavailable even when the same status run had just successfully SSHed into the guest and checked provisioning. That was technically non-contradictory, but still not a good synthesis of the available evidence.
+
+I updated `aivm/status.py::render_status(...)` so it computes SSH readiness before finalizing the VM summary and uses that as an inference signal. If libvirt VM state is unavailable without sudo but cached IP + SSH probe succeed, status now upgrades the VM line to something like `reachable over SSH (libvirt state unavailable without --sudo)`. In the same case, cached IP becomes a normal positive signal again, and the shared-folder line explicitly says the guest is reachable but host mapping inspection still needs privileged VM checks.
+
+Reflection/state of mind: this is the version that feels much closer to what an operator actually wants. The point of status is not to preserve internal probe boundaries at all costs; it is to present the best justified picture of the system. If SSH is working, pretending we still have no idea whether the VM is effectively up is not helpful.
+
+Uncertainties/risks: this is an inference, not a direct libvirt fact, so I made sure the wording stays explicit about where the uncertainty remains (`libvirt state unavailable without --sudo`). I think that is the right balance between honesty and usefulness.
+
+What I am confident about: the new render-level behavior is covered by the updated status helper regression test, the focused suites still pass, and the touched files compile.

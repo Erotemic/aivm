@@ -367,10 +367,29 @@ def render_status(
         )
 
     vm_out, vm_defined = probe_vm_state(cfg, use_sudo=use_sudo)
-    if vm_out.ok is not None:
+    ip = get_ip_cached(cfg)
+    cached_ip = ip
+    if ip and vm_defined is False:
+        ip = None
+
+    ssh = ProbeOutcome(False, 'VM/IP not ready', '')
+    if ip:
+        ssh = probe_ssh_ready(cfg, ip)
+
+    vm_display = vm_out
+    vm_defined_effective = vm_defined
+    if vm_out.ok is None and ssh.ok:
+        vm_display = ProbeOutcome(
+            True,
+            f'{cfg.vm.name} reachable over SSH (libvirt state unavailable without --sudo)',
+            vm_out.diag,
+        )
+        vm_defined_effective = True
+
+    if vm_display.ok is not None:
         total += 1
-        done += int(vm_out.ok)
-    lines.append(status_line(vm_out.ok, 'VM state', vm_out.detail))
+        done += int(bool(vm_display.ok))
+    lines.append(status_line(vm_display.ok, 'VM state', vm_display.detail))
 
     share_mappings: list[tuple[str, str]] = []
     if vm_defined is True:
@@ -383,10 +402,15 @@ def render_status(
                 f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
             )
         )
-    elif vm_defined is True:
-        share_detail = 'none detected'
-        if not use_sudo:
-            share_detail = 'none detected or unavailable without --sudo'
+    elif vm_defined_effective is True:
+        if vm_defined is None:
+            share_detail = (
+                'guest is reachable, but host mappings need privileged VM checks'
+            )
+        else:
+            share_detail = 'none detected'
+            if not use_sudo:
+                share_detail = 'none detected or unavailable without --sudo'
         lines.append(status_line(None, 'VM shared folders', share_detail))
     elif vm_defined is None:
         lines.append(
@@ -399,16 +423,20 @@ def render_status(
     else:
         lines.append(status_line(None, 'VM shared folders', 'VM not defined'))
 
-    ip = get_ip_cached(cfg)
-    ip_ok = bool(ip) and (vm_defined is not False)
-    if vm_out.ok is not None:
+    ip_ok = bool(ip) and (vm_defined_effective is not False)
+    if vm_display.ok is not None:
         total += 1
         done += int(ip_ok)
-    if ip and vm_defined is False:
+    if cached_ip and vm_defined is False:
         lines.append(
-            status_line(False, 'Cached VM IP', f'{ip} (stale: VM not defined)')
+            status_line(
+                False,
+                'Cached VM IP',
+                f'{cached_ip} (stale: VM not defined)',
+            )
         )
-        ip = None
+    elif ip and ssh.ok:
+        lines.append(status_line(True, 'Cached VM IP', ip))
     elif ip and vm_defined is None:
         lines.append(
             status_line(
@@ -422,9 +450,6 @@ def render_status(
             status_line(bool(ip), 'Cached VM IP', ip or 'no cached IP yet')
         )
 
-    ssh = ProbeOutcome(False, 'VM/IP not ready', '')
-    if ip:
-        ssh = probe_ssh_ready(cfg, ip)
     total += 1
     done += int(bool(ssh.ok))
     lines.append(status_line(bool(ssh.ok), 'SSH readiness', ssh.detail))

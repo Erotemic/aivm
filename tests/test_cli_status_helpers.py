@@ -153,9 +153,15 @@ def test_render_status_non_sudo_keeps_vm_unknown_distinct_from_missing(
     )
 
     text = render_status(cfg, tmp_path / 'config.toml', use_sudo=False)
-    assert 'VM state - aivm-2404 unavailable' in text
-    assert 'VM shared folders - unverified without privileged VM checks' in text
-    assert 'Cached VM IP - 10.77.0.166 (not verified without privileged VM checks)' in text
+    assert (
+        'VM state - aivm-2404 reachable over SSH (libvirt state unavailable without --sudo)'
+        in text
+    )
+    assert (
+        'VM shared folders - guest is reachable, but host mappings need privileged VM checks'
+        in text
+    )
+    assert 'Cached VM IP - 10.77.0.166' in text
     assert 'SSH readiness - ready' in text
     assert 'Provisioning - one or more configured packages missing' in text
     assert 'stale: VM not defined' not in text
