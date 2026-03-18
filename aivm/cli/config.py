@@ -287,6 +287,12 @@ class ConfigEditCLI(_BaseCommand):
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
 
+    visual = scfg.Value(
+        '',
+        help='If true, then prever $VISUAL over $EDITOR',
+        isflag=True,
+    )
+
     @classmethod
     def main(cls, argv=True, **kwargs):
         args = cls.cli(argv=argv, data=kwargs)
@@ -294,11 +300,13 @@ class ConfigEditCLI(_BaseCommand):
         if not path.exists():
             reg = load_store(path)
             save_store(reg, path)
-        editor_cmd = (
-            args.editor.strip()
-            if str(args.editor or '').strip()
-            else (os.environ.get('EDITOR') or os.environ.get('VISUAL') or '')
-        )
+
+        order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
+        candidates = [
+            str(args.editor or '').strip(),
+            *(os.environ.get(key, '') for key in order),
+        ]
+        editor_cmd = next((x for x in candidates if x), '')
         if not editor_cmd:
             editor_cmd = which('nano') or which('vi') or ''
         if not editor_cmd:
