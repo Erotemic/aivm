@@ -1916,3 +1916,20 @@ Uncertainties/risks: the biggest tradeoff is that some stale-host-bind repair no
 What might break: tests that monkeypatch `run_cmd()`-level seams will continue to need migration as shared-root paths move onto the manager. I already had to rewrite several helper tests to patch `aivm.commands.subprocess.run` and to assert on step previews instead of raw command loops.
 
 What I am confident about: the shared-root happy path is substantially more step-oriented now, the focused and adjacent command-manager/CLI suites are green (`pytest -q tests/test_util.py tests/test_host.py tests/test_net.py tests/test_firewall.py tests/test_cli_helpers.py tests/test_vm_helpers.py tests/test_cli_vm_attach.py tests/test_cli_vm_update.py -q`), and touched Python files compile. The lingering pytest tempdir cleanup warning around the cloud-init test fixture is still present but remains non-fatal and unrelated to this migration.
+## 2026-03-18 20:28:53 +0000
+
+Fixed a status-reporting regression in the non-sudo path. The user report was very clear: `aivm status` was honestly saying the VM/libvirt probes were unavailable without sudo, but then it immediately turned that inconclusive state into `VM not defined`, marked the cached IP as stale, and skipped SSH/provisioning checks that could still succeed without privileges. That made the output feel broken and self-contradictory next to `aivm status --sudo`.
+
+Implementation details:
+- In `aivm/status.py::probe_vm_state(...)`, I changed the second return value from effectively boolean to tri-state (`True` / `False` / `None`). Permission-denied / auth-failed / non-sudo-inconclusive VM probes now return `defined=None` instead of pretending the VM is absent.
+- In `aivm/status.py::render_status(...)`, I updated downstream handling so:
+  - `VM shared folders` says `unverified without privileged VM checks` instead of `VM not defined` when the VM state is unknown without sudo.
+  - cached IP is kept as a neutral/inconclusive fact (`not verified without privileged VM checks`) instead of being marked stale.
+  - SSH readiness and provisioning now still run when a cached IP exists, even if VM/libvirt state was inconclusive without sudo.
+- Added a new regression in `tests/test_cli_status_helpers.py` that exercises the full rendered non-sudo status text and locks in the distinction between “unknown without sudo” and “actually not defined”.
+
+Reflection/state of mind: this was a good reminder that tri-state status systems only help if we preserve the third state all the way to the UI. The bug wasn’t that the probes were conservative; it was that the renderer collapsed uncertainty into a stronger negative claim than the code had actually established.
+
+Uncertainties/risks: the VM shared-folder line is still conservative in one respect: without sudo, if the VM is known to exist but `dumpxml` is unavailable, the current text says `none detected or unavailable without --sudo`. That is honest, but if we want a more exact tri-state there too, a dedicated shared-folder probe helper would be the next cleanup.
+
+What I am confident about: the user-visible contradiction is fixed in logic and covered by tests (`pytest -q tests/test_cli_status_helpers.py tests/test_util.py tests/test_cli_helpers.py -q`), and the touched files compile.

@@ -197,7 +197,7 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
 
 def probe_vm_state(
     cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[ProbeOutcome, bool]:
+) -> tuple[ProbeOutcome, bool | None]:
     """Return VM run-state probe plus explicit domain-defined flag."""
     dom = run_cmd(
         virsh_system_cmd('dominfo', cfg.vm.name),
@@ -214,7 +214,7 @@ def probe_vm_state(
                     None,
                     f'{cfg.vm.name} unavailable (run status --sudo for privileged checks)',
                 ),
-                False,
+                None,
             )
         if not use_sudo:
             return (
@@ -222,7 +222,7 @@ def probe_vm_state(
                     None,
                     f'{cfg.vm.name} probe inconclusive without sudo ({raw_detail or "unknown error"})',
                 ),
-                False,
+                None,
             )
         return ProbeOutcome(False, f'{cfg.vm.name} not defined'), False
     state = run_cmd(
@@ -373,9 +373,9 @@ def render_status(
     lines.append(status_line(vm_out.ok, 'VM state', vm_out.detail))
 
     share_mappings: list[tuple[str, str]] = []
-    if vm_defined:
+    if vm_defined is True:
         share_mappings = vm_share_mappings(cfg, use_sudo=use_sudo)
-    if vm_defined and share_mappings:
+    if vm_defined is True and share_mappings:
         lines.append(
             status_line(
                 True,
@@ -383,34 +383,53 @@ def render_status(
                 f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
             )
         )
-    elif vm_defined:
-        lines.append(status_line(None, 'VM shared folders', 'none detected'))
+    elif vm_defined is True:
+        share_detail = 'none detected'
+        if not use_sudo:
+            share_detail = 'none detected or unavailable without --sudo'
+        lines.append(status_line(None, 'VM shared folders', share_detail))
+    elif vm_defined is None:
+        lines.append(
+            status_line(
+                None,
+                'VM shared folders',
+                'unverified without privileged VM checks',
+            )
+        )
     else:
         lines.append(status_line(None, 'VM shared folders', 'VM not defined'))
 
     ip = get_ip_cached(cfg)
-    ip_ok = bool(ip) and bool(vm_defined)
+    ip_ok = bool(ip) and (vm_defined is not False)
     if vm_out.ok is not None:
         total += 1
         done += int(ip_ok)
-    if ip and not vm_defined:
+    if ip and vm_defined is False:
         lines.append(
             status_line(False, 'Cached VM IP', f'{ip} (stale: VM not defined)')
         )
         ip = None
+    elif ip and vm_defined is None:
+        lines.append(
+            status_line(
+                None,
+                'Cached VM IP',
+                f'{ip} (not verified without privileged VM checks)',
+            )
+        )
     else:
         lines.append(
             status_line(bool(ip), 'Cached VM IP', ip or 'no cached IP yet')
         )
 
     ssh = ProbeOutcome(False, 'VM/IP not ready', '')
-    if vm_out.ok is True and ip:
+    if ip:
         ssh = probe_ssh_ready(cfg, ip)
     total += 1
     done += int(bool(ssh.ok))
     lines.append(status_line(bool(ssh.ok), 'SSH readiness', ssh.detail))
 
-    if vm_out.ok is True and ip and ssh.ok:
+    if ip and ssh.ok:
         prov = probe_provisioned(cfg, ip)
     else:
         prov = ProbeOutcome(

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from aivm.cli.vm import _parse_dominfo_hardware, _vm_hardware_drift
 from aivm.config import AgentVMConfig
-from aivm.status import probe_firewall, probe_network, probe_vm_state
+from aivm.status import (
+    ProbeOutcome,
+    probe_firewall,
+    probe_network,
+    probe_vm_state,
+    render_status,
+)
 from aivm.util import CmdResult
 
 
@@ -62,7 +68,7 @@ def test_check_vm_state_branches(monkeypatch) -> None:
     )
     out, defined = probe_vm_state(cfg, use_sudo=False)
     assert out.ok is None
-    assert defined is False
+    assert defined is None
     assert 'status --sudo' in out.detail
 
     calls = []
@@ -79,6 +85,80 @@ def test_check_vm_state_branches(monkeypatch) -> None:
     assert defined is True
     assert 'state=running' in out.detail
     assert len(calls) == 2
+
+
+def test_render_status_non_sudo_keeps_vm_unknown_distinct_from_missing(
+    monkeypatch, tmp_path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    cfg.vm.user = 'agent'
+    cfg.firewall.enabled = True
+    cfg.provision.enabled = True
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+
+    monkeypatch.setattr(
+        'aivm.status.check_commands',
+        lambda: ([], []),
+    )
+    monkeypatch.setattr(
+        'aivm.status.probe_runtime_environment',
+        lambda: ProbeOutcome(None, 'unable to determine host vs guest', ''),
+    )
+    monkeypatch.setattr(
+        'aivm.status.probe_network',
+        lambda *a, **k: ProbeOutcome(
+            None,
+            'aivm-net unavailable (run status --sudo for privileged checks)',
+            '',
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.status.probe_firewall',
+        lambda *a, **k: ProbeOutcome(
+            None,
+            'requires privileges (run status --sudo for firewall checks)',
+            '',
+        ),
+    )
+
+    def fake_run_cmd(cmd, **kwargs):
+        del kwargs
+        if cmd[:2] == ['test', '-f']:
+            return CmdResult(1, '', '')
+        raise AssertionError(f'unexpected command: {cmd}')
+
+    monkeypatch.setattr('aivm.status.run_cmd', fake_run_cmd)
+    monkeypatch.setattr(
+        'aivm.status.probe_vm_state',
+        lambda *a, **k: (
+            ProbeOutcome(
+                None,
+                'aivm-2404 unavailable (run status --sudo for privileged checks)',
+                '',
+            ),
+            None,
+        ),
+    )
+    monkeypatch.setattr('aivm.status.get_ip_cached', lambda *_a, **_k: '10.77.0.166')
+    monkeypatch.setattr(
+        'aivm.status.probe_ssh_ready',
+        lambda *_a, **_k: ProbeOutcome(True, 'ready', ''),
+    )
+    monkeypatch.setattr(
+        'aivm.status.probe_provisioned',
+        lambda *_a, **_k: ProbeOutcome(
+            False, 'one or more configured packages missing', ''
+        ),
+    )
+
+    text = render_status(cfg, tmp_path / 'config.toml', use_sudo=False)
+    assert 'VM state - aivm-2404 unavailable' in text
+    assert 'VM shared folders - unverified without privileged VM checks' in text
+    assert 'Cached VM IP - 10.77.0.166 (not verified without privileged VM checks)' in text
+    assert 'SSH readiness - ready' in text
+    assert 'Provisioning - one or more configured packages missing' in text
+    assert 'stale: VM not defined' not in text
 
 
 def test_parse_dominfo_hardware() -> None:

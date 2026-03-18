@@ -523,13 +523,21 @@ class CommandManager:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
 
         run_line = shell_join(cmd)
+        
+        # Always log privledged commands to info
+        if spec.sudo:
+           logger = local_log.info
+        else:
+           logger = local_log.debug
+
+
         if within_plan and ordinal is not None:
             current, total = ordinal
-            local_log.debug('RUN [{}/{}]: {}', current, total, run_line)
+            logger('RUN [{}/{}]: {}', current, total, run_line)
         elif spec.check:
             local_log.info('RUN: {}', run_line)
         else:
-            local_log.debug('RUN: {}', run_line)
+            logger('RUN: {}', run_line)
 
         try:
             proc = subprocess.run(
