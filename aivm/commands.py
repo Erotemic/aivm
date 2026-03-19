@@ -283,7 +283,10 @@ class CommandManager:
     ) -> None:
         role = self._normalize_role(action)
         self._compat_sudo_intent = CompatSudoIntent(
-            yes=bool(yes), purpose=str(purpose), action=role, sticky=bool(sticky)
+            yes=bool(yes),
+            purpose=str(purpose),
+            action=role,
+            sticky=bool(sticky),
         )
         if sticky:
             self._approve_all_remaining = True
@@ -411,7 +414,8 @@ class CommandManager:
 
     def _plan_needs_approval(self, plan: CommandPlan) -> bool:
         return any(
-            item.spec.sudo and self._needs_sudo_approval(self._effective_role(item.spec))
+            item.spec.sudo
+            and self._needs_sudo_approval(self._effective_role(item.spec))
             for item in plan.commands
         )
 
@@ -428,9 +432,11 @@ class CommandManager:
                 'Re-run with --yes or --yes-sudo.'
             )
         while True:
-            ans = input(
-                'Approve this step? [y]es/[a]ll/[s]how/[N]o: '
-            ).strip().lower()
+            ans = (
+                input('Approve this step? [y]es/[a]ll/[s]how/[N]o: ')
+                .strip()
+                .lower()
+            )
             if ans in {'s', 'show'}:
                 self._render_plan_full_commands(plan)
                 continue
@@ -491,7 +497,10 @@ class CommandManager:
             )
             item.handle._set_result(res)
             plan.executed_upto = idx
-            if through_command_id is not None and item.command_id >= through_command_id:
+            if (
+                through_command_id is not None
+                and item.command_id >= through_command_id
+            ):
                 break
 
     def _flush_loose_commands(
@@ -502,7 +511,10 @@ class CommandManager:
             res = self._execute_one(item.spec, within_plan=False)
             item.handle._set_result(res)
             self._loose_commands.pop(0)
-            if through_command_id is not None and item.command_id >= through_command_id:
+            if (
+                through_command_id is not None
+                and item.command_id >= through_command_id
+            ):
                 break
 
     def _raw_command(self, spec: CommandSpec) -> str:
@@ -523,7 +535,10 @@ class CommandManager:
             if len(text) > 80:
                 if prev == '-lc' and prev2 in {'bash', 'sh'}:
                     text = '<shell script omitted>'
-                elif idx == len(cmd) - 1 and 'ssh' in {str(cmd[0]), str(cmd[1]) if len(cmd) > 1 else ''}:
+                elif idx == len(cmd) - 1 and 'ssh' in {
+                    str(cmd[0]),
+                    str(cmd[1]) if len(cmd) > 1 else '',
+                }:
                     text = '<remote command omitted>'
                 else:
                     text = text[:57] + '...'
@@ -653,7 +668,9 @@ class CommandManager:
                 stdout = stdout.decode(errors='replace')
             if not isinstance(stderr, str):
                 stderr = stderr.decode(errors='replace')
-            res = CommandResult(124, stdout, (stderr + '\ncommand timed out').strip())
+            res = CommandResult(
+                124, stdout, (stderr + '\ncommand timed out').strip()
+            )
             local_log.warning(
                 'Command timed out after {}s cmd={}',
                 spec.timeout,

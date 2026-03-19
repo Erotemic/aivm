@@ -1233,8 +1233,6 @@ class VMModalCLI(scfg.ModalCLI):
     code = VMCodeCLI
 
 
-
-
 @dataclass(frozen=True)
 class ReconcilePolicy:
     ensure_firewall_opt: bool
@@ -2273,7 +2271,6 @@ def _ensure_attachment_available_in_guest(
         dry_run=dry_run,
     )
 
-
     if res.code != 0:
         return None
     state = (res.stdout or '').strip().lower()
@@ -2357,7 +2354,9 @@ def _maybe_warn_hardware_drift(cfg: AgentVMConfig) -> None:
     print(f'  sudo virsh shutdown {cfg.vm.name}   # if VM is running')
     for item in report.items:
         if item.key == 'cpus':
-            print(f'  sudo virsh setvcpus {cfg.vm.name} {item.expected} --config')
+            print(
+                f'  sudo virsh setvcpus {cfg.vm.name} {item.expected} --config'
+            )
         elif item.key == 'ram_mb':
             kib = int(item.expected) * 1024
             print(f'  sudo virsh setmaxmem {cfg.vm.name} {kib} --config')
@@ -2438,9 +2437,7 @@ def _resolve_attachment(
     att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
     if att is not None:
         saved_mode = _normalize_attachment_mode(att.mode)
-        saved_access = _normalize_attachment_access(
-            getattr(att, 'access', '')
-        )
+        saved_access = _normalize_attachment_access(getattr(att, 'access', ''))
         if mode_opt and mode != saved_mode:
             raise RuntimeError(
                 'Attachment mode mismatch for existing folder attachment.\n'

@@ -92,9 +92,7 @@ class _BaseCommand(scfg.DataConfig):
             CommandManager(
                 yes=bool(getattr(parsed, 'yes', False)),
                 yes_sudo=bool(effective_yes_sudo),
-                auto_approve_readonly_sudo=bool(
-                    cfg_auto_approve_readonly_sudo
-                ),
+                auto_approve_readonly_sudo=bool(cfg_auto_approve_readonly_sudo),
             )
         )
         args_verbose = int(getattr(parsed, 'verbose', 0) or 0)
@@ -252,10 +250,14 @@ def _maybe_offer_create_ssh_identity(
     else:
         if not sys.stdin.isatty():
             return False
-        ans = input(
-            'No SSH identity/public key was detected for aivm VM access. '
-            f'Create a dedicated keypair now at {default_priv}? [Y/n]: '
-        ).strip().lower()
+        ans = (
+            input(
+                'No SSH identity/public key was detected for aivm VM access. '
+                f'Create a dedicated keypair now at {default_priv}? [Y/n]: '
+            )
+            .strip()
+            .lower()
+        )
         approved = ans in {'', 'y', 'yes'}
     if not approved:
         return False
@@ -495,10 +497,7 @@ def _confirm_sudo_block(
     )
     sticky_all = sudo_intent_auto_yes()
     eff_yes = bool(
-        yes
-        or _CURRENT_YES_SUDO.get(False)
-        or sticky_all
-        or auto_yes_read
+        yes or _CURRENT_YES_SUDO.get(False) or sticky_all or auto_yes_read
     )
     # Preserve "accept all" across later confirm blocks in the same command.
     arm_sudo_intent(

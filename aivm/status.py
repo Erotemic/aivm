@@ -405,9 +405,7 @@ def render_status(
         )
     elif vm_defined_effective is True:
         if vm_defined is None:
-            share_detail = (
-                'guest is reachable, but host mappings need privileged VM checks'
-            )
+            share_detail = 'guest is reachable, but host mappings need privileged VM checks'
         else:
             share_detail = 'none detected'
             if not use_sudo:
@@ -443,7 +441,9 @@ def render_status(
                 if detail:
                     lines.append('Config Drift Details:')
                     for item in drift.items:
-                        lines.append(f'  - {item.key}: expected={item.expected}, actual={item.actual}')
+                        lines.append(
+                            f'  - {item.key}: expected={item.expected}, actual={item.actual}'
+                        )
             # Count this check
             total += 1
             done += int(drift.ok)

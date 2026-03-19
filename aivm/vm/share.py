@@ -36,9 +36,10 @@ SHARED_ROOT_VIRTIOFS_TAG = 'aivm-shared-root'
 @dataclass(frozen=True)
 class ResolvedAttachment:
     """A resolved attachment with all fields computed for VM access.
-    
+
     This is used throughout the drift detection and attachment reconcile flows.
     """
+
     vm_name: str
     mode: str = ATTACHMENT_MODE_SHARED
     access: str = ATTACHMENT_ACCESS_RW
@@ -49,11 +50,13 @@ class ResolvedAttachment:
 
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
     """Generate a unique tag for a host path that doesn't conflict with existing tags.
-    
+
     This is used for tag alignment when attaching shares to avoid virtiofs conflicts.
     """
     max_len = 36
-    raw = re.sub(r'[^A-Za-z0-9_.-]+', '-', host_src.name or 'hostcode').strip('-')
+    raw = re.sub(r'[^A-Za-z0-9_.-]+', '-', host_src.name or 'hostcode').strip(
+        '-'
+    )
     base = f'hostcode-{raw}' if raw else 'hostcode'
     base = base[:max_len]
     if base not in existing_tags:
@@ -71,14 +74,16 @@ def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
         idx += 1
 
 
-def _ensure_share_tag_len(tag: str, host_src: Path, existing_tags: set[str]) -> str:
+def _ensure_share_tag_len(
+    tag: str, host_src: Path, existing_tags: set[str]
+) -> str:
     """Ensure a tag is within the 36-character limit, generating a new one if needed.
-    
+
     Args:
         tag: The proposed tag.
         host_src: The host source path (used for tag generation if needed).
         existing_tags: Set of tags already in use.
-    
+
     Returns:
         A tag that is at most 36 characters and doesn't conflict with existing tags.
     """
@@ -92,15 +97,15 @@ def align_attachment_tag_with_mappings(
     att: 'ResolvedAttachment', host_src: Path, mappings: list[tuple[str, str]]
 ) -> 'ResolvedAttachment':
     """Align an attachment's tag with existing mappings to avoid conflicts.
-    
+
     This ensures consistent tagging across multiple attachments and avoids
     tag collisions that could cause virtiofs issues.
-    
+
     Args:
         att: The attachment to align.
         host_src: The host source path (used for tag generation if needed).
         mappings: Current VM mappings.
-    
+
     Returns:
         A new ResolvedAttachment with an aligned tag.
     """

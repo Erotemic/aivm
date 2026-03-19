@@ -60,19 +60,23 @@ def run_cmd(
     timeout: float | None = None,
 ) -> CmdResult:
     """Compatibility wrapper around the centralized command manager."""
-    return CommandManager.current().submit(
-        cmd,
-        sudo=sudo,
-        role=sudo_action,  # type: ignore[arg-type]
-        check=check,
-        capture=capture,
-        text=text,
-        input_text=input_text,
-        env=env,
-        timeout=timeout,
-        eager=True,
-        summary=shell_join(cmd),
-    ).result()
+    return (
+        CommandManager.current()
+        .submit(
+            cmd,
+            sudo=sudo,
+            role=sudo_action,  # type: ignore[arg-type]
+            check=check,
+            capture=capture,
+            text=text,
+            input_text=input_text,
+            env=env,
+            timeout=timeout,
+            eager=True,
+            summary=shell_join(cmd),
+        )
+        .result()
+    )
 
 
 def which(cmd: str) -> Optional[str]:

@@ -35,7 +35,7 @@ from .share import (
 
 def _shared_root_host_dir(cfg: AgentVMConfig) -> Path:
     """Get the shared-root host directory for a VM.
-    
+
     Note: This is a simple path computation based on config, not a libvirt query.
     """
     return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
@@ -54,7 +54,7 @@ class DriftItem:
     actual: object
     """The actual value observed from libvirt."""
 
-    reason: str = ""
+    reason: str = ''
     """Optional human-readable explanation for why this drift exists."""
 
 
@@ -74,7 +74,7 @@ class DriftReport:
     available: bool
     summary: str
     items: tuple[DriftItem, ...] = ()
-    diag: str = ""
+    diag: str = ''
 
     @property
     def ok(self) -> bool | None:
@@ -114,7 +114,9 @@ def parse_dominfo_hardware(dominfo_text: str) -> tuple[int | None, int | None]:
             m = re.search(r'(\d+)\s*(kib|kb|mib|mb|gib|gb)?', val, flags=re.I)
             if m:
                 amount = int(m.group(1))
-                unit = (m.group(2) or 'kib').lower()  # Default to KiB if no unit
+                unit = (
+                    m.group(2) or 'kib'
+                ).lower()  # Default to KiB if no unit
                 if unit in ('kib', 'kb'):
                     max_mem_mib = amount // 1024
                 elif unit in ('mib', 'mb'):
@@ -195,8 +197,12 @@ def attachment_has_mapping(
     if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
         expected_src = str(_shared_root_host_dir(cfg))
         expected_tag = SHARED_ROOT_VIRTIOFS_TAG
-        return any(src == expected_src and tag == expected_tag for src, tag in mappings)
-    return any(src == att.source_dir and tag == att.tag for src, tag in mappings)
+        return any(
+            src == expected_src and tag == expected_tag for src, tag in mappings
+        )
+    return any(
+        src == att.source_dir and tag == att.tag for src, tag in mappings
+    )
 
 
 def read_actual_vm_mappings(
@@ -219,9 +225,7 @@ def read_actual_vm_mappings(
     return mappings, ''
 
 
-def hardware_drift_report(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> DriftReport:
+def hardware_drift_report(cfg: AgentVMConfig, *, use_sudo: bool) -> DriftReport:
     """Compute a drift report for VM hardware (CPU, RAM).
 
     This compares the desired hardware from config against the actual
@@ -234,7 +238,9 @@ def hardware_drift_report(
     Returns:
         A DriftReport with hardware drift items if available.
     """
-    cur_cpus, cur_mem_mib, error_type, error_detail = read_actual_vm_hardware(cfg, use_sudo=use_sudo)
+    cur_cpus, cur_mem_mib, error_type, error_detail = read_actual_vm_hardware(
+        cfg, use_sudo=use_sudo
+    )
 
     # If the command failed, classify the error
     if error_type:
@@ -359,7 +365,9 @@ def attachment_drift_report(
         )
 
     req_src, req_tag = virtiofs_mapping
-    has_mapping = any(src == req_src and tag == req_tag for src, tag in mappings)
+    has_mapping = any(
+        src == req_src and tag == req_tag for src, tag in mappings
+    )
 
     if has_mapping:
         return DriftReport(
@@ -412,7 +420,9 @@ def _compare_expected_vs_actual_mappings(
 
     # Missing expected mappings (iterate over set difference to avoid duplicates)
     for req_src, req_tag in sorted(expected_set - actual_set):
-        current_for_src = [(src, tag) for src, tag in actual_mappings if src == req_src]
+        current_for_src = [
+            (src, tag) for src, tag in actual_mappings if src == req_src
+        ]
         items.append(
             DriftItem(
                 key=f'share_mapping:{req_tag or "unnamed"}',
@@ -526,7 +536,9 @@ def desired_saved_vm_mappings(cfg: AgentVMConfig, reg) -> list[tuple[str, str]]:
                     desired.add((src, tag))
             elif mode == 'shared-root':
                 # For shared-root mode, use canonical path and tag
-                desired.add((str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG))
+                desired.add(
+                    (str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG)
+                )
     # Return sorted list for stable ordering
     return sorted(desired, key=lambda x: (x[0], x[1]))
 

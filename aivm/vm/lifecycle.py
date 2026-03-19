@@ -145,7 +145,7 @@ def _submit_qemu_dir_prepare(
         summary=f'Create {summary_prefix}',
     )
     mgr.submit(
-        ['chown', *( ['-R'] if recursive else [] ), f'root:{group}', str(path)],
+        ['chown', *(['-R'] if recursive else []), f'root:{group}', str(path)],
         sudo=True,
         role='modify',
         check=True,
@@ -456,12 +456,12 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     if local_file_src is not None
                     else 'Download base image into staging file'
                 ),
-                    detail=(
-                        f'source={local_file_src} destination={tmp_img}'
-                        if local_file_src is not None
-                        else f'url={url} destination={tmp_img}'
-                    ),
-                )
+                detail=(
+                    f'source={local_file_src} destination={tmp_img}'
+                    if local_file_src is not None
+                    else f'url={url} destination={tmp_img}'
+                ),
+            )
             move_handle = mgr.submit(
                 ['mv', '-f', str(tmp_img), str(base_img)],
                 sudo=True,
