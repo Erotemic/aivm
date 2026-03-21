@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 
 from loguru import logger
 
+from ..commands import CommandManager, IntentScope, PlanScope
 from ..config import (
     DEFAULT_UBUNTU_NOBLE_IMG_URL,
     SUPPORTED_IMAGE_SHA256,
@@ -123,6 +124,41 @@ def _vm_defined(name: str) -> bool:
             capture=True,
         ).code
         == 0
+    )
+
+
+def _submit_qemu_dir_prepare(
+    mgr: CommandManager,
+    path: Path,
+    *,
+    group: str,
+    mode: str,
+    summary_prefix: str,
+    recursive: bool,
+) -> None:
+    mgr.submit(
+        ['mkdir', '-p', str(path)],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Create {summary_prefix}',
+    )
+    mgr.submit(
+        ['chown', *(['-R'] if recursive else []), f'root:{group}', str(path)],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Set libvirt ownership for {summary_prefix}',
+    )
+    mgr.submit(
+        ['chmod', mode, str(path)],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Set permissions for {summary_prefix}',
     )
 
 
@@ -248,19 +284,28 @@ def _verify_image_sha256(
 ) -> None:
     if not expected_sha256:
         return
+    mgr = CommandManager.current()
     log.info('Verifying base image checksum (source: {})', source)
-    out = run_cmd(
-        ['sha256sum', str(image_path)], sudo=True, check=True, capture=True
+    out = mgr.submit(
+        ['sha256sum', str(image_path)],
+        sudo=True,
+        role='read',
+        check=True,
+        capture=True,
+        summary='Compute base image checksum',
+        detail=f'path={image_path} source={source}',
     ).stdout
     actual = out.strip().split()[0].lower() if out.strip() else ''
     if actual != expected_sha256:
-        run_cmd(
+        mgr.submit(
             ['rm', '-f', str(image_path)],
             sudo=True,
-            sudo_action='modify',
+            role='modify',
             check=False,
             capture=True,
-        )
+            summary='Remove invalid base image after checksum mismatch',
+            detail=f'path={image_path}',
+        ).result()
         raise RuntimeError(
             'Downloaded base image checksum mismatch; removed invalid image.\n'
             f'Path: {image_path}\n'
@@ -287,6 +332,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         if parsed.scheme == 'file'
         else None
     )
+    mgr = CommandManager.current()
     if _sudo_file_exists(base_img) and not cfg.image.redownload:
         if dry_run:
             log.info('Base image cached: {}', base_img)
@@ -294,11 +340,29 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         # Re-verify named cache hits so interrupted downloads or stale local
         # files do not silently poison later VM creation runs.
         try:
-            _verify_image_sha256(
-                image_path=base_img,
-                expected_sha256=expected_sha256,
-                source=f'cached base image ({checksum_source})',
-            )
+            with IntentScope(
+                mgr,
+                'Fetch base image',
+                why=(
+                    'VM creation needs a verified Ubuntu cloud image cached on '
+                    'the host before the VM disk can be prepared.'
+                ),
+                role='modify',
+            ):
+                with PlanScope(
+                    mgr,
+                    'Verify cached base image',
+                    why=(
+                        'Revalidate the cached image so interrupted downloads or '
+                        'stale local files do not silently poison later VM runs.'
+                    ),
+                    approval_scope=f'image-verify-cache:{cfg.vm.name}',
+                ):
+                    _verify_image_sha256(
+                        image_path=base_img,
+                        expected_sha256=expected_sha256,
+                        source=f'cached base image ({checksum_source})',
+                    )
             log.info('Base image cached: {}', base_img)
             return base_img
         except RuntimeError as ex:
@@ -325,33 +389,53 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
         return base_img
     _ensure_qemu_access(cfg, dry_run=False)
-    run_cmd(
-        ['mkdir', '-p', str(p['img_dir'])], sudo=True, check=True, capture=True
-    )
-    run_cmd(
-        ['rm', '-f', str(tmp_img)],
-        sudo=True,
-        sudo_action='modify',
-        check=False,
-        capture=True,
-    )
     if local_file_src is not None:
         log.info(
             'Copying local base image to {} via atomic temp file', base_img
         )
     else:
         log.info('Downloading base image to {} (showing progress)', base_img)
-    try:
-        if local_file_src is not None:
-            run_cmd(
-                ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)],
+    with IntentScope(
+        mgr,
+        'Fetch base image',
+        why=(
+            'VM creation needs a verified Ubuntu cloud image cached on the '
+            'host before the VM disk can be prepared.'
+        ),
+        role='modify',
+    ):
+        with PlanScope(
+            mgr,
+            'Fetch and verify base image',
+            why=(
+                'Prepare the image directory, refresh any stale partial file, '
+                'transfer the image atomically, and verify its checksum before '
+                'it is reused.'
+            ),
+            approval_scope=f'image-fetch:{cfg.vm.name}',
+        ):
+            mkdir_handle = mgr.submit(
+                ['mkdir', '-p', str(p['img_dir'])],
                 sudo=True,
+                role='modify',
                 check=True,
                 capture=True,
+                summary='Create VM image directory',
+                detail=f'target={p["img_dir"]}',
             )
-        else:
-            run_cmd(
-                [
+            cleanup_tmp_handle = mgr.submit(
+                ['rm', '-f', str(tmp_img)],
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=True,
+                summary='Remove stale partial image file',
+                detail=f'target={tmp_img}',
+            )
+            transfer_cmd = (
+                ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
+                if local_file_src is not None
+                else [
                     'curl',
                     '-L',
                     '--fail',
@@ -359,31 +443,82 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     '-o',
                     str(tmp_img),
                     url,
-                ],
-                sudo=True,
-                check=True,
-                capture=False,
+                ]
             )
-        run_cmd(
-            ['mv', '-f', str(tmp_img), str(base_img)],
-            sudo=True,
-            check=True,
-            capture=True,
-        )
-    except CmdError:
-        run_cmd(
-            ['rm', '-f', str(tmp_img)],
-            sudo=True,
-            sudo_action='modify',
-            check=False,
-            capture=True,
-        )
-        raise
-    _verify_image_sha256(
-        image_path=base_img,
-        expected_sha256=expected_sha256,
-        source=checksum_source,
-    )
+            transfer_handle = mgr.submit(
+                transfer_cmd,
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=(local_file_src is not None),
+                summary=(
+                    'Copy local base image into staging file'
+                    if local_file_src is not None
+                    else 'Download base image into staging file'
+                ),
+                detail=(
+                    f'source={local_file_src} destination={tmp_img}'
+                    if local_file_src is not None
+                    else f'url={url} destination={tmp_img}'
+                ),
+            )
+            move_handle = mgr.submit(
+                ['mv', '-f', str(tmp_img), str(base_img)],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Move staged base image into cache',
+                detail=f'source={tmp_img} destination={base_img}',
+            )
+            checksum_handle = mgr.submit(
+                ['sha256sum', str(base_img)],
+                sudo=True,
+                role='read',
+                check=True,
+                capture=True,
+                summary='Compute base image checksum',
+                detail=f'path={base_img} source={checksum_source}',
+            )
+            mkdir_handle.result()
+            cleanup_tmp_handle.result()
+            transfer_res = transfer_handle.result()
+            if transfer_res.code != 0:
+                mgr.submit(
+                    ['rm', '-f', str(tmp_img)],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary='Remove incomplete staging image after transfer failure',
+                    detail=f'target={tmp_img}',
+                ).result()
+                raise CmdError(transfer_cmd, transfer_res)
+            move_handle.result()
+            checksum_out = checksum_handle.stdout
+            actual = (
+                checksum_out.strip().split()[0].lower()
+                if checksum_out.strip()
+                else ''
+            )
+            if expected_sha256 and actual != expected_sha256:
+                mgr.submit(
+                    ['rm', '-f', str(base_img)],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary='Remove invalid base image after checksum mismatch',
+                    detail=f'path={base_img}',
+                ).result()
+                raise RuntimeError(
+                    'Downloaded base image checksum mismatch; removed invalid image.\n'
+                    f'Path: {base_img}\n'
+                    f'Expected: {expected_sha256}\n'
+                    f'Actual:   {actual}\n'
+                    'Re-run to retry download, or use a supported pinned image URL.'
+                )
+            log.info('Base image checksum verified: {}', base_img)
     log.info('Downloaded base image: {}', base_img)
     return base_img
 
@@ -404,28 +539,49 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             'DRYRUN: chown/chmod {} for qemu access (group={})', base_root, grp
         )
         return
-    run_cmd(
-        ['mkdir', '-p', str(base_root)], sudo=True, check=True, capture=True
-    )
-    run_cmd(
-        ['chown', '-R', f'root:{grp}', str(base_root)],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
-    run_cmd(
-        ['chmod', '0751', str(base_root)], sudo=True, check=True, capture=True
-    )
-    for sub in ('images', 'cloud-init'):
-        d = base_root / sub
-        run_cmd(['mkdir', '-p', str(d)], sudo=True, check=True, capture=True)
-        run_cmd(
-            ['chown', '-R', f'root:{grp}', str(d)],
-            sudo=True,
-            check=True,
-            capture=True,
-        )
-        run_cmd(['chmod', '0750', str(d)], sudo=True, check=True, capture=True)
+    mgr = CommandManager.current()
+    with IntentScope(
+        mgr,
+        'Prepare VM storage',
+        why=(
+            'libvirt/qemu need host directories with predictable ownership and '
+            'permissions before images and cloud-init artifacts are written.'
+        ),
+        role='modify',
+    ):
+        with PlanScope(
+            mgr,
+            'Prepare qemu-accessible VM directories',
+            why=(
+                'Create the VM root plus image and cloud-init directories with '
+                'libvirt-readable ownership and permissions.'
+            ),
+            approval_scope=f'vm-storage:{base_root}',
+        ):
+            _submit_qemu_dir_prepare(
+                mgr,
+                base_root,
+                group=grp,
+                mode='0751',
+                summary_prefix='VM root directory',
+                recursive=False,
+            )
+            _submit_qemu_dir_prepare(
+                mgr,
+                base_root / 'images',
+                group=grp,
+                mode='0750',
+                summary_prefix='VM image directory',
+                recursive=True,
+            )
+            _submit_qemu_dir_prepare(
+                mgr,
+                base_root / 'cloud-init',
+                group=grp,
+                mode='0750',
+                summary_prefix='cloud-init directory',
+                recursive=True,
+            )
 
 
 def _write_cloud_init(
@@ -561,40 +717,78 @@ def _write_cloud_init(
             'seed_iso': seed_iso,
         }
 
-    run_cmd(['mkdir', '-p', str(ci_dir)], sudo=True, check=True, capture=True)
     _ensure_qemu_access(cfg, dry_run=False)
-    run_cmd(
-        ['bash', '-lc', f"cat > {user_data} <<'EOF'\n{cloud}\nEOF"],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
-    run_cmd(
-        ['bash', '-lc', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
-    run_cmd(
-        ['bash', '-lc', f"cat > {network_config} <<'EOF'\n{netcfg}\nEOF"],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
-    run_cmd(
-        [
-            'cloud-localds',
-            '-v',
-            '-N',
-            str(network_config),
-            str(seed_iso),
-            str(user_data),
-            str(meta_data),
-        ],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
+    mgr = CommandManager.current()
+    with IntentScope(
+        mgr,
+        'Generate cloud-init artifacts',
+        why=(
+            'VM creation needs cloud-init user-data, metadata, network config, '
+            'and a seed ISO before virt-install can define the guest.'
+        ),
+        role='modify',
+    ):
+        with PlanScope(
+            mgr,
+            'Write cloud-init files and build seed ISO',
+            why=(
+                'Materialize the rendered cloud-init files on the host and pack '
+                'them into a NoCloud seed image for the VM.'
+            ),
+            approval_scope=f'cloud-init:{cfg.vm.name}',
+        ):
+            mgr.submit(
+                ['mkdir', '-p', str(ci_dir)],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Create cloud-init artifact directory',
+            )
+            mgr.submit(
+                ['bash', '-lc', f"cat > {user_data} <<'EOF'\n{cloud}\nEOF"],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Write cloud-init user-data',
+            )
+            mgr.submit(
+                ['bash', '-lc', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Write cloud-init meta-data',
+            )
+            mgr.submit(
+                [
+                    'bash',
+                    '-lc',
+                    f"cat > {network_config} <<'EOF'\n{netcfg}\nEOF",
+                ],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Write cloud-init network config',
+            )
+            mgr.submit(
+                [
+                    'cloud-localds',
+                    '-v',
+                    '-N',
+                    str(network_config),
+                    str(seed_iso),
+                    str(user_data),
+                    str(meta_data),
+                ],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Build NoCloud seed ISO from cloud-init files',
+            )
     return {
         'user_data': user_data,
         'meta_data': meta_data,

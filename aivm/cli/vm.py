@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 
 import scriptconfig as scfg
 
+from ..commands import CommandManager, IntentScope, PlanScope
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..host import check_commands, host_is_debian_like, install_deps_debian
@@ -60,6 +61,21 @@ from ..vm import (
     wait_for_ip,
     wait_for_ssh,
 )
+from ..vm.drift import (
+    hardware_drift_report,
+    attachment_has_mapping as drift_attachment_has_mapping,
+    parse_dominfo_hardware as _parse_dominfo_hardware,
+    saved_vm_drift_report,
+)
+from ..vm.share import (
+    AttachmentAccess,
+    AttachmentMode,
+    ResolvedAttachment,
+    SHARED_ROOT_VIRTIOFS_TAG,
+    _auto_share_tag_for_path,
+    _ensure_share_tag_len,
+    align_attachment_tag_with_mappings as drift_align_attachment_tag_with_mappings,
+)
 from ..vm import (
     ssh_config as mk_ssh_config,
 )
@@ -71,27 +87,33 @@ from ._common import (
     _confirm_sudo_block,
     _load_cfg,
     _load_cfg_with_path,
+    _maybe_offer_create_ssh_identity,
     _record_vm,
     _resolve_cfg_for_code,
     log,
 )
 
-ATTACHMENT_MODE_SHARED = 'shared'
-ATTACHMENT_MODE_SHARED_ROOT = 'shared-root'
-ATTACHMENT_MODE_GIT = 'git'
+SHARED_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-shared'
+
+# Attachment mode constants (string aliases for mode values)
+ATTACHMENT_MODE_SHARED = AttachmentMode.SHARED.value
+ATTACHMENT_MODE_SHARED_ROOT = AttachmentMode.SHARED_ROOT.value
+ATTACHMENT_MODE_GIT = AttachmentMode.GIT.value
+
+# Attachment access constants (string aliases for access values)
+ATTACHMENT_ACCESS_RW = AttachmentAccess.RW.value
+ATTACHMENT_ACCESS_RO = AttachmentAccess.RO.value
+
+# Attachment mode and access sets for validation
 ATTACHMENT_MODES = {
     ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     ATTACHMENT_MODE_GIT,
 }
-ATTACHMENT_ACCESS_RW = 'rw'
-ATTACHMENT_ACCESS_RO = 'ro'
 ATTACHMENT_ACCESS_MODES = {
     ATTACHMENT_ACCESS_RW,
     ATTACHMENT_ACCESS_RO,
 }
-SHARED_ROOT_VIRTIOFS_TAG = 'aivm-shared-root'
-SHARED_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-shared'
 
 
 class VMUpCLI(_BaseCommand):
@@ -856,10 +878,10 @@ class VMAttachCLI(_BaseCommand):
                     )
                     sudo_confirmed = True
                 mappings = vm_share_mappings(cfg)
-                attachment = _align_attachment_tag_with_mappings(
+                attachment = drift_align_attachment_tag_with_mappings(
                     attachment, host_src, mappings
                 )
-                if not _attachment_has_mapping(attachment, mappings):
+                if not drift_attachment_has_mapping(cfg, attachment, mappings):
                     _confirm_sudo_block(
                         yes=bool(args.yes),
                         purpose=f"Attach this folder to existing VM '{cfg.vm.name}'.",
@@ -871,17 +893,25 @@ class VMAttachCLI(_BaseCommand):
                         dry_run=False,
                     )
             elif attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
-                _ensure_shared_root_host_bind(
-                    cfg,
-                    attachment,
-                    yes=bool(args.yes),
-                    dry_run=False,
-                )
-                _ensure_shared_root_vm_mapping(
-                    cfg,
-                    yes=bool(args.yes),
-                    dry_run=False,
-                )
+                if not vm_running:
+                    with IntentScope(
+                        CommandManager.current(),
+                        'Attach and reconcile shared-root mapping',
+                        why='Ensure the requested host folder is exposed to the VM before the next guest session uses it.',
+                        role='modify',
+                    ):
+                        _ensure_shared_root_host_bind(
+                            cfg,
+                            attachment,
+                            yes=bool(args.yes),
+                            dry_run=False,
+                        )
+                        _ensure_shared_root_vm_mapping(
+                            cfg,
+                            yes=bool(args.yes),
+                            dry_run=False,
+                            vm_running=False,
+                        )
         reg_path = _record_attachment(
             cfg,
             cfg_path,
@@ -893,6 +923,15 @@ class VMAttachCLI(_BaseCommand):
             force=bool(args.force),
         )
         if vm_running:
+            if _maybe_offer_create_ssh_identity(
+                cfg,
+                yes=bool(args.yes),
+                prompt_reason=(
+                    'Generate a dedicated SSH keypair so aivm can reconcile '
+                    'the running VM guest attachment state.'
+                ),
+            ):
+                _record_vm(cfg, cfg_path)
             log.info(
                 'VM {} is running; reconciling attachment in guest: {} (mode={} access={})',
                 cfg.vm.name,
@@ -912,7 +951,9 @@ class VMAttachCLI(_BaseCommand):
                 ip,
                 yes=bool(args.yes),
                 dry_run=False,
-                ensure_shared_root_host_side=False,
+                ensure_shared_root_host_side=(
+                    attachment.mode == ATTACHMENT_MODE_SHARED_ROOT
+                ),
             )
         print(
             f'Attached {host_src} to VM {cfg.vm.name} ({attachment.mode} mode, access={attachment.access})'
@@ -1203,16 +1244,6 @@ class VMModalCLI(scfg.ModalCLI):
 
 
 @dataclass(frozen=True)
-class ResolvedAttachment:
-    vm_name: str
-    mode: str = ATTACHMENT_MODE_SHARED
-    access: str = ATTACHMENT_ACCESS_RW
-    source_dir: str = ''
-    guest_dst: str = ''
-    tag: str = ''
-
-
-@dataclass(frozen=True)
 class ReconcilePolicy:
     ensure_firewall_opt: bool
     recreate_if_needed: bool
@@ -1225,6 +1256,7 @@ class ReconcileResult:
     attachment: ResolvedAttachment
     cached_ip: str | None
     cached_ssh_ok: bool
+    shared_root_host_side_ready: bool = False
 
 
 def _bytes_to_gib(size_bytes: int) -> float:
@@ -1704,6 +1736,80 @@ def _shared_root_host_target(cfg: AgentVMConfig, token: str) -> Path:
     return _shared_root_host_dir(cfg) / safe
 
 
+def _shared_root_guest_mount_cmd(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    read_only: bool,
+) -> list[str]:
+    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    mount_cmd = (
+        f'sudo -n mount -t virtiofs -o ro {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
+        f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
+        if read_only
+        else f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
+        f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
+    )
+    remount_cmd = (
+        f'sudo -n mount -o remount,ro {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
+        if read_only
+        else f'sudo -n mount -o remount,rw {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
+    )
+    remote = (
+        'set -euo pipefail; '
+        f'sudo -n mkdir -p {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; '
+        f'if mountpoint -q {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; then '
+        f'opts="$(findmnt -n -o OPTIONS --target {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)} 2>/dev/null || true)"; '
+        f'case ",$opts," in *,{"ro" if read_only else "rw"},*) : ;; *) {remount_cmd} ;; esac; '
+        'else '
+        f'{mount_cmd}; '
+        'fi'
+    )
+    return [
+        'ssh',
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+            connect_timeout=5,
+            batch_mode=True,
+        ),
+        f'{cfg.vm.user}@{ip}',
+        remote,
+    ]
+
+
+def _ensure_shared_root_parent_dir(
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        print(
+            f'DRYRUN: would create shared-root parent directory {_shared_root_host_dir(cfg)}'
+        )
+        return
+    mgr = CommandManager.current()
+    with IntentScope(
+        mgr,
+        'Prepare shared-root mapping',
+        why='libvirt needs the shared-root export directory to exist before the VM definition can use it.',
+        role='modify',
+    ):
+        with PlanScope(
+            mgr,
+            'Prepare shared-root parent directory',
+            why='Create the host-side shared-root export directory used by virtiofs.',
+            approval_scope=f'shared-root-parent:{cfg.vm.name}',
+        ):
+            mgr.submit(
+                ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
+                sudo=True,
+                role='modify',
+                summary='Create shared-root parent directory',
+                detail=f'target={_shared_root_host_dir(cfg)}',
+            )
+
+
 def _mount_source_compare_candidates(raw_source: str) -> list[str]:
     raw = str(raw_source or '').strip()
     if not raw:
@@ -1731,6 +1837,8 @@ def _ensure_shared_root_host_bind(
     dry_run: bool,
     allow_disruptive_rebind: bool = True,
 ) -> Path:
+    del yes
+    mgr = CommandManager.current()
     source_dir = str(Path(attachment.source_dir).resolve())
     source = Path(source_dir)
     if not source.exists() or not source.is_dir():
@@ -1738,43 +1846,30 @@ def _ensure_shared_root_host_bind(
             f'shared-root source must be an existing directory: {source_dir}'
         )
     target = _shared_root_host_target(cfg, attachment.tag)
-    purpose = (
-        f"Create/update host bind mount for shared-root attachment on VM '{cfg.vm.name}' "
-        f'(source={source_dir} target={target}).'
-    )
-    _confirm_sudo_block(yes=bool(yes), purpose=purpose)
     if dry_run:
         print(
             f'DRYRUN: would bind-mount {source_dir} -> {target} for shared-root mode'
         )
         return target
-    run_cmd(
-        ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
-    run_cmd(['mkdir', '-p', str(target)], sudo=True, check=True, capture=True)
-    is_mountpoint = (
-        run_cmd(
-            ['mountpoint', '-q', str(target)],
-            sudo=True,
-            sudo_action='read',
-            check=False,
-            capture=True,
-        ).code
-        == 0
-    )
-    if is_mountpoint:
-        probe = run_cmd(
+    with PlanScope(
+        mgr,
+        'Inspect shared-root host bind state',
+        why='Determine whether the VM-specific bind target already points at the requested host folder.',
+        approval_scope=f'shared-root-host-inspect:{cfg.vm.name}:{attachment.tag}',
+    ):
+        probe = mgr.submit(
             ['findmnt', '-n', '-o', 'SOURCE', '--target', str(target)],
             sudo=True,
-            sudo_action='read',
+            role='read',
             check=False,
             capture=True,
-        )
-        mounted_source = (probe.stdout or '').strip().splitlines()
-        current = mounted_source[0] if mounted_source else ''
+            summary='Inspect current source for host bind target',
+            detail=f'target={target}',
+        ).result()
+    mounted_source = (probe.stdout or '').strip().splitlines()
+    current = mounted_source[0] if mounted_source else ''
+    is_mountpoint = probe.code == 0 and bool(current)
+    if is_mountpoint:
         # findmnt SOURCE for bind mounts may be:
         # 1) "/src/path[/subpath]" or
         # 2) "/dev/sdXN[/src/path]".
@@ -1792,33 +1887,58 @@ def _ensure_shared_root_host_bind(
                 f'(target={target}, expected_source={source_dir}, actual_source={current or "unknown"}). '
                 'Use an explicit attach/detach command to reconcile this mount.'
             )
-        # Busy mountpoints are possible when the shared-root parent export is
-        # actively used by a running guest. Fall back to lazy unmount so we can
-        # rebind the requested host source deterministically.
-        unmount = run_cmd(
-            ['umount', str(target)],
+    with PlanScope(
+        mgr,
+        'Prepare host bind targets',
+        why='Ensure the shared-root export directories exist and the VM-specific bind target points at the requested host folder.',
+        approval_scope=f'shared-root-host-bind:{cfg.vm.name}:{attachment.tag}',
+    ):
+        mgr.submit(
+            ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
             sudo=True,
-            sudo_action='modify',
-            check=False,
-            capture=True,
+            role='modify',
+            summary='Create shared-root parent directory',
+            detail=f'target={_shared_root_host_dir(cfg)}',
         )
-        if unmount.code != 0:
-            msg = (unmount.stderr or unmount.stdout).strip().lower()
-            if 'target is busy' in msg or 'transport endpoint is not connected' in msg:
-                run_cmd(
-                    ['umount', '-l', str(target)],
-                    sudo=True,
-                    check=True,
-                    capture=True,
-                )
-            else:
-                raise CmdError(['umount', str(target)], unmount)
-    run_cmd(
-        ['mount', '--bind', source_dir, str(target)],
-        sudo=True,
-        check=True,
-        capture=True,
-    )
+        mgr.submit(
+            ['mkdir', '-p', str(target)],
+            sudo=True,
+            role='modify',
+            summary='Create project-specific host bind target',
+            detail=f'target={target}',
+        )
+        if is_mountpoint:
+            repair_script = (
+                'set -euo pipefail; '
+                f'msg="$(umount {shlex.quote(str(target))} 2>&1 || true)"; '
+                'if [ -n "$msg" ]; then '
+                'msg_lc="$(printf "%s" "$msg" | tr "[:upper:]" "[:lower:]")"; '
+                'case "$msg_lc" in '
+                '*"target is busy"*|*"transport endpoint is not connected"*) '
+                f'umount -l {shlex.quote(str(target))} ;; '
+                '*) printf "%s\\n" "$msg" >&2; exit 1 ;; '
+                'esac; '
+                'fi; '
+                f'mount --bind {shlex.quote(source_dir)} {shlex.quote(str(target))}'
+            )
+            mgr.submit(
+                ['bash', '-lc', repair_script],
+                sudo=True,
+                role='modify',
+                summary='Replace stale host bind target with requested source',
+                detail=(
+                    f'target={target} expected_source={source_dir} '
+                    f'actual_source={current or "unknown"}'
+                ),
+            )
+        else:
+            mgr.submit(
+                ['mount', '--bind', source_dir, str(target)],
+                sudo=True,
+                role='modify',
+                summary='Bind requested host folder to shared-root target',
+                detail=f'source={source_dir} target={target}',
+            )
     return target
 
 
@@ -1827,25 +1947,43 @@ def _ensure_shared_root_vm_mapping(
     *,
     yes: bool,
     dry_run: bool,
+    vm_running: bool | None = None,
 ) -> None:
+    del yes
+    mgr = CommandManager.current()
     source = str(_shared_root_host_dir(cfg))
     tag = SHARED_ROOT_VIRTIOFS_TAG
-    mappings = vm_share_mappings(cfg, use_sudo=False)
+    with PlanScope(
+        mgr,
+        'Inspect shared-root VM mapping',
+        why='Check whether the current VM definition already includes the shared-root virtiofs device.',
+        approval_scope=f'shared-root-vm-inspect:{cfg.vm.name}',
+    ):
+        mappings = vm_share_mappings(cfg, use_sudo=False)
     if any(src == source and t == tag for src, t in mappings):
         return
-    _confirm_sudo_block(
-        yes=bool(yes),
-        purpose=f"Inspect shared-root virtiofs mapping state for VM '{cfg.vm.name}'.",
-        action='read',
-    )
-    mappings = vm_share_mappings(cfg, use_sudo=True)
+    with PlanScope(
+        mgr,
+        'Inspect shared-root VM mapping with libvirt privileges',
+        why='Some hosts require privileged libvirt access to read the effective filesystem mapping state.',
+        approval_scope=f'shared-root-vm-inspect-sudo:{cfg.vm.name}',
+    ):
+        mappings = vm_share_mappings(cfg, use_sudo=True)
     if any(src == source and t == tag for src, t in mappings):
         return
-    _confirm_sudo_block(
-        yes=bool(yes),
-        purpose=f"Attach shared-root virtiofs mapping for VM '{cfg.vm.name}'.",
-    )
-    attach_vm_share(cfg, source, tag, dry_run=dry_run)
+    with PlanScope(
+        mgr,
+        'Ensure VM virtiofs mapping',
+        why='Attach the shared-root virtiofs device so the guest can reach the shared-root export.',
+        approval_scope=f'shared-root-vm-map:{cfg.vm.name}',
+    ):
+        attach_vm_share(
+            cfg,
+            source,
+            tag,
+            dry_run=dry_run,
+            vm_running=vm_running,
+        )
 
 
 def _ensure_shared_root_guest_bind(
@@ -1855,25 +1993,13 @@ def _ensure_shared_root_guest_bind(
     *,
     dry_run: bool,
 ) -> None:
-    log.info(
-        'Reconciling shared-root guest bind for VM {}: {} -> {} (access={})',
-        cfg.vm.name,
-        attachment.tag,
-        attachment.guest_dst,
-        attachment.access,
-    )
-    ensure_share_mounted(
-        cfg,
-        ip,
-        guest_dst=SHARED_ROOT_GUEST_MOUNT_ROOT,
-        tag=SHARED_ROOT_VIRTIOFS_TAG,
-        dry_run=dry_run,
-    )
+    mgr = CommandManager.current()
     source_in_guest = str(
         PurePosixPath(SHARED_ROOT_GUEST_MOUNT_ROOT)
         / (attachment.tag or '').strip()
     )
     expected_root = str(PurePosixPath('/') / (attachment.tag or '').strip())
+    expected_virtiofs_source = f'{SHARED_ROOT_VIRTIOFS_TAG}[{expected_root}]'
     if not attachment.tag:
         raise RuntimeError('shared-root attachment token is empty.')
     remount_cmd = (
@@ -1896,6 +2022,8 @@ def _ensure_shared_root_guest_bind(
         f'cur="$(findmnt -n -o SOURCE --target {shlex.quote(attachment.guest_dst)} 2>/dev/null || true)"; '
         f'cur_root="$(findmnt -n -o ROOT --target {shlex.quote(attachment.guest_dst)} 2>/dev/null || true)"; '
         f'if [ "$cur" = {shlex.quote(source_in_guest)} ]; then '
+        ':; '
+        f'elif [ "$cur" = {shlex.quote(expected_virtiofs_source)} ]; then '
         ':; '
         f'elif [ "$cur" = "none" ] && [ "$cur_root" = {shlex.quote(expected_root)} ]; then '
         ':; '
@@ -1931,6 +2059,8 @@ def _ensure_shared_root_guest_bind(
         'final_dst_stat=""; '
         'source_ok=0; '
         f'if [ "$final_src" = {shlex.quote(source_in_guest)} ]; then '
+        'source_ok=1; '
+        f'elif [ "$final_src" = {shlex.quote(expected_virtiofs_source)} ]; then '
         'source_ok=1; '
         f'elif [ "$final_src" = "none" ] && [ "$final_root" = {shlex.quote(expected_root)} ]; then '
         'source_ok=1; '
@@ -1979,7 +2109,46 @@ def _ensure_shared_root_guest_bind(
     if dry_run:
         log.info('DRYRUN: {}', ' '.join(shlex.quote(c) for c in cmd))
         return
-    res = run_cmd(cmd, sudo=False, check=False, capture=True, timeout=20)
+    mount_cmd = _shared_root_guest_mount_cmd(
+        cfg,
+        ip,
+        read_only=(attachment.access == ATTACHMENT_ACCESS_RO),
+    )
+    with PlanScope(
+        mgr,
+        'Mount and verify inside guest',
+        why='Mount the shared-root export inside the guest, bind it to the requested destination, and verify the resulting source and access mode.',
+        approval_scope=(
+            f'shared-root-guest-bind:{cfg.vm.name}:{attachment.guest_dst}'
+        ),
+    ):
+        mgr.submit(
+            mount_cmd,
+            sudo=False,
+            role='modify',
+            check=True,
+            capture=True,
+            timeout=20,
+            summary='Mount shared-root inside guest',
+            detail=(
+                f'tag={SHARED_ROOT_VIRTIOFS_TAG} '
+                f'destination={SHARED_ROOT_GUEST_MOUNT_ROOT} '
+                f'access={attachment.access}'
+            ),
+        )
+        res = mgr.submit(
+            cmd,
+            sudo=False,
+            role='modify',
+            check=False,
+            capture=True,
+            timeout=20,
+            summary='Bind guest destination to shared source and verify source/options',
+            detail=(
+                f'source={source_in_guest} destination={attachment.guest_dst} '
+                f'access={attachment.access}'
+            ),
+        ).result()
     if res.code != 0:
         raise RuntimeError(
             'Failed to bind-mount shared-root attachment inside guest.\n'
@@ -2061,8 +2230,10 @@ def _ensure_attachment_available_in_guest(
     yes: bool,
     dry_run: bool,
     ensure_shared_root_host_side: bool,
+    allow_disruptive_shared_root_rebind: bool = True,
 ) -> None:
     """Make an attachment available at its guest destination for a running VM."""
+    mgr = CommandManager.current()
     if attachment.mode == ATTACHMENT_MODE_SHARED:
         ensure_share_mounted(
             cfg,
@@ -2074,24 +2245,32 @@ def _ensure_attachment_available_in_guest(
         )
         return
     if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
-        if ensure_shared_root_host_side:
-            _ensure_shared_root_host_bind(
+        with IntentScope(
+            mgr,
+            'Attach and reconcile shared-root mapping',
+            why='Ensure the requested host folder is exposed to the VM and bound to the requested guest destination.',
+            role='modify',
+        ):
+            if ensure_shared_root_host_side:
+                _ensure_shared_root_host_bind(
+                    cfg,
+                    attachment,
+                    yes=bool(yes),
+                    dry_run=dry_run,
+                    allow_disruptive_rebind=allow_disruptive_shared_root_rebind,
+                )
+                _ensure_shared_root_vm_mapping(
+                    cfg,
+                    yes=bool(yes),
+                    dry_run=dry_run,
+                    vm_running=True,
+                )
+            _ensure_shared_root_guest_bind(
                 cfg,
+                ip,
                 attachment,
-                yes=bool(yes),
                 dry_run=dry_run,
             )
-            _ensure_shared_root_vm_mapping(
-                cfg,
-                yes=bool(yes),
-                dry_run=dry_run,
-            )
-        _ensure_shared_root_guest_bind(
-            cfg,
-            ip,
-            attachment,
-            dry_run=dry_run,
-        )
         return
     _ensure_git_clone_attachment(
         cfg,
@@ -2101,50 +2280,6 @@ def _ensure_attachment_available_in_guest(
         yes=bool(yes),
         dry_run=dry_run,
     )
-
-
-def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
-    max_len = 36
-    raw = re.sub(r'[^A-Za-z0-9_.-]+', '-', host_src.name or 'hostcode').strip(
-        '-'
-    )
-    base = f'hostcode-{raw}' if raw else 'hostcode'
-    base = base[:max_len]
-    if base not in existing_tags:
-        return base
-    suffix = hashlib.sha1(str(host_src).encode('utf-8')).hexdigest()[:8]
-    tag = f'{base[: max_len - 1 - len(suffix)]}-{suffix}'
-    if tag not in existing_tags:
-        return tag
-    idx = 2
-    while True:
-        tail = f'-{suffix[:5]}-{idx}'
-        cand = f'{base[: max_len - len(tail)]}{tail}'
-        if cand not in existing_tags:
-            return cand
-        idx += 1
-
-
-def _ensure_share_tag_len(
-    tag: str, host_src: Path, existing_tags: set[str]
-) -> str:
-    tag = (tag or '').strip()
-    if tag and len(tag) <= 36:
-        return tag
-    return _auto_share_tag_for_path(host_src, existing_tags)
-
-
-def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
-    res = run_cmd(
-        virsh_system_cmd('domstate', vm_name),
-        sudo=False,
-        check=False,
-        capture=True,
-    )
-    if res.code != 0:
-        return None
-    state = (res.stdout or '').strip().lower()
-    return 'running' in state
 
 
 def _upsert_ssh_config_entry(
@@ -2206,66 +2341,31 @@ def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
     return m.group(1) if m else None
 
 
-def _parse_dominfo_hardware(dominfo_text: str) -> tuple[int | None, int | None]:
-    cpus = None
-    max_mem_mib = None
-    for line in (dominfo_text or '').splitlines():
-        if ':' not in line:
-            continue
-        key, val = [x.strip() for x in line.split(':', 1)]
-        low = key.lower()
-        if low in {'cpu(s)', 'cpus'}:
-            m = re.search(r'(\d+)', val)
-            if m:
-                cpus = int(m.group(1))
-        elif low.startswith('max memory'):
-            m = re.search(r'(\d+)', val)
-            if m:
-                max_mem_mib = int(m.group(1)) // 1024
-    return cpus, max_mem_mib
-
-
-def _vm_hardware_drift(cfg: AgentVMConfig) -> dict[str, tuple[int, int]]:
-    res = run_cmd(
-        virsh_system_cmd('dominfo', cfg.vm.name),
-        sudo=True,
-        check=False,
-        capture=True,
-    )
-    if res.code != 0:
-        return {}
-    cur_cpus, cur_mem_mib = _parse_dominfo_hardware(res.stdout)
-    drift: dict[str, tuple[int, int]] = {}
-    if cur_cpus is not None and cur_cpus != int(cfg.vm.cpus):
-        drift['cpus'] = (cur_cpus, int(cfg.vm.cpus))
-    if cur_mem_mib is not None and cur_mem_mib != int(cfg.vm.ram_mb):
-        drift['ram_mb'] = (cur_mem_mib, int(cfg.vm.ram_mb))
-    return drift
-
-
 def _maybe_warn_hardware_drift(cfg: AgentVMConfig) -> None:
-    drift = _vm_hardware_drift(cfg)
-    if not drift:
+    """Warn about hardware drift using the shared drift report."""
+    report = hardware_drift_report(cfg, use_sudo=True)
+    if not report.available or report.ok is True:
         return
+
     print(
         f'⚠️ VM {cfg.vm.name} is already defined and differs from config for hardware settings.'
     )
-    if 'cpus' in drift:
-        cur, want = drift['cpus']
-        print(f'  - cpus: current={cur} desired={want}')
-    if 'ram_mb' in drift:
-        cur, want = drift['ram_mb']
-        print(f'  - ram_mb: current={cur} desired={want}')
+    for item in report.items:
+        if item.key == 'cpus':
+            print(f'  - cpus: current={item.actual} desired={item.expected}')
+        elif item.key == 'ram_mb':
+            print(f'  - ram_mb: current={item.actual} desired={item.expected}')
     print('Suggested non-destructive apply commands:')
     print(f'  sudo virsh shutdown {cfg.vm.name}   # if VM is running')
-    if 'cpus' in drift:
-        _, want = drift['cpus']
-        print(f'  sudo virsh setvcpus {cfg.vm.name} {want} --config')
-    if 'ram_mb' in drift:
-        _, want = drift['ram_mb']
-        kib = int(want) * 1024
-        print(f'  sudo virsh setmaxmem {cfg.vm.name} {kib} --config')
-        print(f'  sudo virsh setmem {cfg.vm.name} {kib} --config')
+    for item in report.items:
+        if item.key == 'cpus':
+            print(
+                f'  sudo virsh setvcpus {cfg.vm.name} {item.expected} --config'
+            )
+        elif item.key == 'ram_mb':
+            kib = int(item.expected) * 1024
+            print(f'  sudo virsh setmaxmem {cfg.vm.name} {kib} --config')
+            print(f'  sudo virsh setmem {cfg.vm.name} {kib} --config')
     print(
         'These updates preserve VM disk/state. Recreate is only needed for definition-level changes that cannot be edited in place.'
     )
@@ -2342,9 +2442,7 @@ def _resolve_attachment(
     att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
     if att is not None:
         saved_mode = _normalize_attachment_mode(att.mode)
-        saved_access = _normalize_attachment_access(
-            getattr(att, 'access', '')
-        )
+        saved_access = _normalize_attachment_access(getattr(att, 'access', ''))
         if mode_opt and mode != saved_mode:
             raise RuntimeError(
                 'Attachment mode mismatch for existing folder attachment.\n'
@@ -2487,10 +2585,10 @@ def _restore_saved_vm_attachments(
         mappings = vm_share_mappings(cfg, use_sudo=False)
         needs_privileged_probe = False
         for att in shared_secondary:
-            aligned = _align_attachment_tag_with_mappings(
+            aligned = drift_align_attachment_tag_with_mappings(
                 att, Path(att.source_dir), mappings
             )
-            if not _attachment_has_mapping(aligned, mappings):
+            if not drift_attachment_has_mapping(cfg, aligned, mappings):
                 needs_privileged_probe = True
                 break
 
@@ -2507,23 +2605,15 @@ def _restore_saved_vm_attachments(
         if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
             aligned = att
             try:
-                _ensure_shared_root_host_bind(
+                _ensure_attachment_available_in_guest(
                     cfg,
+                    Path(aligned.source_dir),
                     aligned,
-                    yes=bool(yes),
-                    dry_run=False,
-                    allow_disruptive_rebind=False,
-                )
-                _ensure_shared_root_vm_mapping(
-                    cfg,
-                    yes=bool(yes),
-                    dry_run=False,
-                )
-                _ensure_shared_root_guest_bind(
-                    cfg,
                     ip,
-                    aligned,
+                    yes=bool(yes),
                     dry_run=False,
+                    ensure_shared_root_host_side=True,
+                    allow_disruptive_shared_root_rebind=False,
                 )
                 _record_attachment(
                     cfg,
@@ -2560,10 +2650,10 @@ def _restore_saved_vm_attachments(
                 )
             continue
 
-        aligned = _align_attachment_tag_with_mappings(
+        aligned = drift_align_attachment_tag_with_mappings(
             att, Path(att.source_dir), mappings
         )
-        if not _attachment_has_mapping(aligned, mappings):
+        if not drift_attachment_has_mapping(cfg, aligned, mappings):
             _confirm_sudo_block(
                 yes=bool(yes),
                 purpose=f"Restore saved shared folder attachment on VM '{cfg.vm.name}'.",
@@ -2586,10 +2676,10 @@ def _restore_saved_vm_attachments(
                 )
                 continue
             mappings = vm_share_mappings(cfg, use_sudo=True)
-            aligned = _align_attachment_tag_with_mappings(
+            aligned = drift_align_attachment_tag_with_mappings(
                 aligned, Path(aligned.source_dir), mappings
             )
-            if not _attachment_has_mapping(aligned, mappings):
+            if not drift_attachment_has_mapping(cfg, aligned, mappings):
                 log.warning(
                     'Saved attachment still missing after restore attempt for VM {}: source={} guest_dst={} tag={}',
                     cfg.vm.name,
@@ -2635,30 +2725,9 @@ def _restore_saved_vm_attachments(
         )
 
 
-def _attachment_has_mapping(
-    att: ResolvedAttachment, mappings: list[tuple[str, str]]
-) -> bool:
-    return any(
-        src == att.source_dir and tag == att.tag for src, tag in mappings
-    )
-
-
-def _align_attachment_tag_with_mappings(
-    att: ResolvedAttachment, host_src: Path, mappings: list[tuple[str, str]]
-) -> ResolvedAttachment:
-    existing_tags = {tag for _, tag in mappings if tag}
-    tag = _ensure_share_tag_len(att.tag, host_src, existing_tags)
-    for src, existing_tag in mappings:
-        if src == att.source_dir and existing_tag:
-            tag = existing_tag
-            break
-    has_share = any(src == att.source_dir and t == tag for src, t in mappings)
-    if not has_share:
-        for src, existing_tag in mappings:
-            if existing_tag == tag and src != att.source_dir:
-                tag = _auto_share_tag_for_path(host_src, existing_tags)
-                break
-    return replace(att, tag=tag)
+# _attachment_has_mapping removed - use drift_attachment_has_mapping from drift.py
+# which takes cfg as first argument for proper shared-root handling
+# _align_attachment_tag_with_mappings removed - use drift_align_attachment_tag_with_mappings from drift.py
 
 
 def _virtiofs_mapping_for_attachment(
@@ -2669,6 +2738,31 @@ def _virtiofs_mapping_for_attachment(
     if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
         return str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG
     return None
+
+
+def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
+    """Probe whether a VM is running without requiring sudo.
+
+    Returns:
+        True if the VM is running, False if not defined/running,
+        None if the probe is inconclusive (e.g., permission denied).
+    """
+    from ..runtime import virsh_system_cmd
+    from ..util import run_cmd
+
+    res = run_cmd(
+        virsh_system_cmd('domstate', vm_name),
+        sudo=False,
+        check=False,
+        capture=True,
+    )
+    if res.code != 0:
+        raw_detail = (res.stderr or res.stdout or '').strip().lower()
+        if 'permission denied' in raw_detail or 'authentication failed' in raw_detail:
+            return None
+        return False
+    state = res.stdout.strip().lower()
+    return 'running' in state
 
 
 def _reconcile_attached_vm(
@@ -2727,6 +2821,7 @@ def _reconcile_attached_vm(
     vm_running = vm_running_probe
     mappings: list[tuple[str, str]] = []
     has_share = False
+    shared_root_host_side_ready = False
     virtiofs_mapping = _virtiofs_mapping_for_attachment(cfg, attachment)
     if vm_running is None and cached_ssh_ok:
         vm_running = True
@@ -2737,7 +2832,7 @@ def _reconcile_attached_vm(
     ):
         mappings = vm_share_mappings(cfg, use_sudo=False)
         if attachment.mode == ATTACHMENT_MODE_SHARED:
-            attachment = _align_attachment_tag_with_mappings(
+            attachment = drift_align_attachment_tag_with_mappings(
                 attachment, host_src, mappings
             )
             virtiofs_mapping = _virtiofs_mapping_for_attachment(cfg, attachment)
@@ -2753,17 +2848,8 @@ def _reconcile_attached_vm(
             yes=bool(policy.yes), dry_run=bool(policy.dry_run)
         )
         if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
-            _confirm_sudo_block(
-                yes=bool(policy.yes),
-                purpose=f"Ensure shared-root host directory for VM '{cfg.vm.name}'.",
-            )
             if not policy.dry_run:
-                run_cmd(
-                    ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-                    sudo=True,
-                    check=True,
-                    capture=True,
-                )
+                _ensure_shared_root_parent_dir(cfg, dry_run=False)
         _confirm_sudo_block(
             yes=bool(policy.yes),
             purpose=f"Create/start VM '{cfg.vm.name}' or update VM definition.",
@@ -2811,7 +2897,7 @@ def _reconcile_attached_vm(
         ):
             mappings = vm_share_mappings(cfg, use_sudo=False)
             if attachment.mode == ATTACHMENT_MODE_SHARED:
-                attachment = _align_attachment_tag_with_mappings(
+                attachment = drift_align_attachment_tag_with_mappings(
                     attachment, host_src, mappings
                 )
                 virtiofs_mapping = _virtiofs_mapping_for_attachment(
@@ -2847,30 +2933,39 @@ def _reconcile_attached_vm(
         else:
             try:
                 if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
+                    with IntentScope(
+                        CommandManager.current(),
+                        'Attach and reconcile shared-root mapping',
+                        why='Ensure the requested host folder is exposed to the running VM before guest-side bind reconciliation.',
+                        role='modify',
+                    ):
+                        _ensure_shared_root_host_bind(
+                            cfg,
+                            attachment,
+                            yes=bool(policy.yes),
+                            dry_run=False,
+                        )
+                        _ensure_shared_root_vm_mapping(
+                            cfg,
+                            yes=bool(policy.yes),
+                            dry_run=False,
+                            vm_running=True,
+                        )
+                    shared_root_host_side_ready = True
+                else:
                     _confirm_sudo_block(
                         yes=bool(policy.yes),
-                        purpose=f"Ensure shared-root host directory for VM '{cfg.vm.name}'.",
+                        purpose=(
+                            f"Attach this folder to existing VM '{cfg.vm.name}'."
+                        ),
                     )
-                    run_cmd(
-                        ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-                        sudo=True,
-                        check=True,
-                        capture=True,
+                    attach_vm_share(
+                        cfg,
+                        virtiofs_mapping[0],
+                        virtiofs_mapping[1],
+                        dry_run=False,
+                        vm_running=True,
                     )
-                _confirm_sudo_block(
-                    yes=bool(policy.yes),
-                    purpose=(
-                        f"Attach this folder to existing VM '{cfg.vm.name}'."
-                        if attachment.mode == ATTACHMENT_MODE_SHARED
-                        else f"Attach shared-root mapping to existing VM '{cfg.vm.name}'."
-                    ),
-                )
-                attach_vm_share(
-                    cfg,
-                    virtiofs_mapping[0],
-                    virtiofs_mapping[1],
-                    dry_run=False,
-                )
                 has_share = True
             except Exception as ex:
                 current_maps = mappings or vm_share_mappings(
@@ -2913,6 +3008,7 @@ def _reconcile_attached_vm(
         attachment=attachment,
         cached_ip=cached_ip,
         cached_ssh_ok=cached_ssh_ok,
+        shared_root_host_side_ready=shared_root_host_side_ready,
     )
 
 
@@ -2982,15 +3078,15 @@ def _prepare_attached_session(
             InitCLI.main(
                 argv=False,
                 config=config_opt,
-                yes=True,
-                defaults=True,
+                yes=bool(yes),
+                defaults=bool(yes),
                 force=False,
             )
         VMCreateCLI.main(
             argv=False,
             config=config_opt,
             vm=vm_opt,
-            yes=True,
+            yes=bool(yes),
             dry_run=bool(dry_run),
             force=False,
         )
@@ -3024,6 +3120,16 @@ def _prepare_attached_session(
     )
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip
+
+    if (not dry_run) and _maybe_offer_create_ssh_identity(
+        cfg,
+        yes=bool(yes),
+        prompt_reason=(
+            'Generate a dedicated SSH keypair so aivm can open SSH/VS Code '
+            'sessions and provision the guest.'
+        ),
+    ):
+        _record_vm(cfg, cfg_path)
 
     if dry_run:
         return PreparedSession(
@@ -3075,6 +3181,7 @@ def _prepare_attached_session(
             dry_run=False,
             ensure_shared_root_host_side=(
                 attachment.mode == ATTACHMENT_MODE_SHARED_ROOT
+                and not reconcile.shared_root_host_side_ready
             ),
         )
         _restore_saved_vm_attachments(
