@@ -1,20 +1,25 @@
 """Centralized command orchestration, logging, and approval handling.
 
 This module is the long-term home for subprocess execution in ``aivm``.
-It organizes command output around user-meaningful plans/steps, while still
-preserving raw command visibility for deeper debugging.
+It organizes command output around user-meaningful plans and intent
+contexts while still preserving raw command visibility for deeper
+debugging.
+
+The main entry point is :class:`CommandManager`, which coordinates
+command submission, grouped plan execution, and privileged-operation
+approval prompts.
 """
 
 from __future__ import annotations
 
+import inspect
 import os
 import shlex
 import subprocess
 import sys
-import inspect
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Sequence
+from typing import Literal, Sequence
 
 from loguru import logger
 
@@ -24,17 +29,48 @@ CommandRole = Literal['read', 'modify']
 
 
 def shell_join(cmd: Sequence[str]) -> str:
+    """Render a command sequence as a shell-escaped string.
+
+    This is intended for logging and preview output rather than direct
+    execution. Each element is converted to ``str`` and quoted with
+    :func:`shlex.quote`.
+
+    Args:
+        cmd: Command tokens to render.
+
+    Returns:
+        A shell-escaped command line string.
+    """
     return ' '.join(shlex.quote(str(c)) for c in cmd)
 
 
 @dataclass(frozen=True)
 class CommandResult:
+    """Immutable result of one executed command.
+
+    Attributes:
+        code: Process exit status.
+        stdout: Captured standard output text.
+        stderr: Captured standard error text.
+    """
+
     code: int
     stdout: str
     stderr: str
 
 
 class CommandError(RuntimeError):
+    """Error raised when a checked command finishes unsuccessfully.
+
+    The exception retains both the original command and the normalized
+    :class:`CommandResult` so callers can inspect exit status and any
+    captured output.
+
+    Attributes:
+        cmd: The command that failed.
+        result: The normalized result object for the failed command.
+    """
+
     def __init__(self, cmd: Sequence[str] | str, result: CommandResult):
         self.cmd = cmd
         self.result = result
@@ -45,6 +81,19 @@ class CommandError(RuntimeError):
 
 @dataclass(frozen=True)
 class IntentFrame:
+    """One entry in the manager's intent stack.
+
+    Intent frames describe *why* the caller is traversing a command tree.
+    Visible frames are surfaced in breadcrumbs and plan previews to help a
+    human understand the current operation at a glance.
+
+    Attributes:
+        title: Short human-readable title for this context.
+        why: Optional longer explanation for the context.
+        role: Default command role implied by this context.
+        visible: If True, include this frame in rendered breadcrumbs.
+    """
+
     title: str
     why: str = ''
     role: CommandRole = 'modify'
@@ -53,6 +102,28 @@ class IntentFrame:
 
 @dataclass
 class CommandSpec:
+    """Normalized specification for a queued command.
+
+    A ``CommandSpec`` stores the execution parameters associated with one
+    command submission. These specs are later previewed, approved, and
+    executed by :class:`CommandManager`.
+
+    Attributes:
+        cmd: Command tokens to execute.
+        sudo: If True, execute through ``sudo`` when needed.
+        role: Optional explicit command role. When omitted, the role is
+            inferred from the surrounding intent context.
+        check: If True, raise :class:`CommandError` on non-zero exit.
+        capture: If True, capture stdout and stderr.
+        text: If True, run the subprocess in text mode.
+        input_text: Optional standard input text to send to the process.
+        env: Optional process environment override.
+        timeout: Optional timeout in seconds.
+        summary: Short human-facing summary shown in previews.
+        detail: Optional longer preview detail.
+        submitted_by: Caller provenance string captured at submission time.
+    """
+
     cmd: Sequence[str]
     sudo: bool = False
     role: CommandRole | None = None
@@ -69,15 +140,36 @@ class CommandSpec:
 
 @dataclass
 class CommandHandle:
+    """Lazy handle for one submitted command.
+
+    Handles are returned from :meth:`CommandManager.submit`. They let the
+    caller defer execution until a later flush, or force execution on
+    demand by asking for the result.
+
+    Attributes:
+        manager: The owning command manager.
+        command_id: Monotonic identifier assigned at submission time.
+    """
+
     manager: 'CommandManager'
     command_id: int
     _result: CommandResult | None = None
     _executed: bool = False
 
     def done(self) -> bool:
+        """Return True if this command has already been executed."""
         return self._executed
 
     def result(self) -> CommandResult:
+        """Return the command result, executing through this handle if needed.
+
+        If the command has not run yet, this method asks the manager to
+        flush execution through this handle's command id before returning
+        the cached result.
+
+        Returns:
+            The normalized command result.
+        """
         if not self._executed:
             self.manager.flush_through(self.command_id)
         assert self._result is not None
@@ -85,27 +177,38 @@ class CommandHandle:
 
     @property
     def stdout(self) -> str:
+        """Return captured standard output for this command."""
         return self.result().stdout
 
     @property
     def stderr(self) -> str:
+        """Return captured standard error for this command."""
         return self.result().stderr
 
     @property
     def returncode(self) -> int:
+        """Return the process exit status for this command."""
         return self.result().code
 
     @property
     def code(self) -> int:
+        """Alias for :attr:`returncode`."""
         return self.result().code
 
     def _set_result(self, result: CommandResult) -> None:
+        """Record the result of execution on this handle."""
         self._result = result
         self._executed = True
 
 
 @dataclass
 class PlannedCommand:
+    """Command record stored inside a plan or loose-command queue.
+
+    This ties together a submitted specification, its public handle, and
+    the manager-assigned command id used to control partial flushing.
+    """
+
     command_id: int
     spec: CommandSpec
     handle: CommandHandle
@@ -113,6 +216,24 @@ class PlannedCommand:
 
 @dataclass
 class CommandPlan:
+    """Ordered group of commands previewed and executed as one step.
+
+    Plans are usually created indirectly through :class:`PlanScope`. They
+    collect related commands, present a plan preview, optionally request
+    approval, and then execute in order.
+
+    Attributes:
+        title: Human-facing title for the step.
+        why: Optional explanation of the step's purpose.
+        approval_scope: Optional label describing the approval boundary.
+        submitted_by: Caller provenance string for the plan.
+        commands: Commands in submission order.
+        approved: True once this plan has cleared approval.
+        executed_upto: Highest command index already executed.
+        closed: True once the plan lifecycle has ended.
+        rendered_preview: True once the preview has been logged.
+    """
+
     title: str
     why: str = ''
     approval_scope: str = ''
@@ -124,14 +245,23 @@ class CommandPlan:
     rendered_preview: bool = False
 
     def add(self, item: PlannedCommand) -> None:
+        """Append one planned command to this plan."""
         self.commands.append(item)
 
     def is_empty(self) -> bool:
+        """Return True if this plan contains no commands."""
         return not self.commands
 
 
 @dataclass(frozen=True)
 class CompatSudoIntent:
+    """Compatibility shim for legacy sudo-confirmation flows.
+
+    This stores one active privileged-operation intent used by
+    :meth:`CommandManager._ensure_compat_sudo_ready` when commands are run
+    outside an explicit plan.
+    """
+
     yes: bool
     purpose: str
     action: CommandRole = 'modify'
@@ -139,6 +269,12 @@ class CompatSudoIntent:
 
 
 class IntentScope:
+    """Context manager that temporarily pushes an intent frame.
+
+    Use this to describe the current user-visible task while building up a
+    command tree. Nested scopes form the breadcrumb shown in plan previews.
+    """
+
     def __init__(
         self,
         manager: 'CommandManager',
@@ -154,15 +290,23 @@ class IntentScope:
         )
 
     def __enter__(self) -> 'IntentScope':
+        """Push this scope's intent frame onto the manager."""
         self.manager.push_intent(self.frame)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        """Pop this scope's frame from the manager on exit."""
         self.manager.pop_intent(self.frame)
         return False
 
 
 class PlanScope:
+    """Context manager that groups submitted commands into one plan.
+
+    On successful exit, the collected plan is finalized, previewed, and
+    flushed. If the block raises an exception, the plan is aborted instead.
+    """
+
     def __init__(
         self,
         manager: 'CommandManager',
@@ -180,10 +324,12 @@ class PlanScope:
         )
 
     def __enter__(self) -> CommandPlan:
+        """Begin collecting commands into this scope's plan."""
         self.manager.begin_plan(self.plan)
         return self.plan
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        """Finish or abort the plan, then remove it from the manager."""
         try:
             if exc_type is None:
                 self.manager.finish_plan(self.plan)
@@ -200,10 +346,23 @@ _CURRENT_MANAGER: ContextVar['CommandManager | None'] = ContextVar(
 
 
 class CommandManager:
-    """Central authority for subprocess execution and sudo approval UX."""
+    """Central authority for command submission, execution, and approval.
+
+    A command manager organizes subprocess execution around human-readable
+    intent scopes and plans. Commands may be submitted either into the
+    current open plan or as loose commands. Plans can be previewed and
+    approved as a unit before execution.
+
+    Args:
+        yes: If True, auto-approve operations that would otherwise prompt.
+        yes_sudo: If True, auto-approve privileged sudo operations.
+        auto_approve_readonly_sudo: If True, allow read-only sudo commands
+            to proceed without prompting when possible.
+    """
 
     @classmethod
     def current(cls) -> 'CommandManager':
+        """Return the current context-local manager, creating one if needed."""
         current = _CURRENT_MANAGER.get()
         if current is None:
             current = cls()
@@ -212,10 +371,12 @@ class CommandManager:
 
     @classmethod
     def activate(cls, manager: 'CommandManager') -> None:
+        """Install ``manager`` as the current context-local manager."""
         _CURRENT_MANAGER.set(manager)
 
     @classmethod
     def reset_current(cls) -> None:
+        """Clear the current context-local manager."""
         _CURRENT_MANAGER.set(None)
 
     def __init__(
@@ -236,9 +397,15 @@ class CommandManager:
         self._loose_commands: list[PlannedCommand] = []
 
     def push_intent(self, frame: IntentFrame) -> None:
+        """Push one intent frame onto the active intent stack."""
         self.intent_stack.append(frame)
 
     def pop_intent(self, frame: IntentFrame) -> None:
+        """Remove ``frame`` from the active intent stack.
+
+        The most recently pushed matching frame is removed. This tolerates
+        mildly out-of-order cleanup to avoid leaking stale context.
+        """
         if self.intent_stack and self.intent_stack[-1] is frame:
             self.intent_stack.pop()
             return
@@ -248,9 +415,11 @@ class CommandManager:
                 return
 
     def begin_plan(self, plan: CommandPlan) -> None:
+        """Push an in-progress plan onto the plan stack."""
         self.plan_stack.append(plan)
 
     def end_plan(self, plan: CommandPlan) -> None:
+        """Remove ``plan`` from the active plan stack."""
         if self.plan_stack and self.plan_stack[-1] is plan:
             self.plan_stack.pop()
             return
@@ -260,9 +429,15 @@ class CommandManager:
                 return
 
     def abort_plan(self, plan: CommandPlan) -> None:
+        """Mark ``plan`` as closed without executing its commands."""
         plan.closed = True
 
     def finish_plan(self, plan: CommandPlan) -> None:
+        """Finalize, approve, and execute a plan.
+
+        Empty plans are simply marked closed. Non-empty plans are previewed,
+        approved if needed, then flushed in order.
+        """
         if plan.is_empty():
             plan.closed = True
             return
@@ -271,6 +446,7 @@ class CommandManager:
         plan.closed = True
 
     def current_plan(self) -> CommandPlan | None:
+        """Return the currently active innermost plan, if any."""
         return self.plan_stack[-1] if self.plan_stack else None
 
     def compat_arm_sudo_intent(
@@ -281,6 +457,11 @@ class CommandManager:
         action: str = 'modify',
         sticky: bool = False,
     ) -> None:
+        """Install a legacy sudo-intent hint for loose privileged commands.
+
+        This compatibility layer is useful when old call sites still rely
+        on loose command execution instead of explicit plan previews.
+        """
         role = self._normalize_role(action)
         self._compat_sudo_intent = CompatSudoIntent(
             yes=bool(yes),
@@ -292,13 +473,21 @@ class CommandManager:
             self._approve_all_remaining = True
 
     def compat_clear_sudo_intent(self) -> None:
+        """Clear any active compatibility sudo intent and sticky approval."""
         self._compat_sudo_intent = None
         self._approve_all_remaining = False
 
     def compat_auto_yes(self) -> bool:
+        """Return True if compatibility approval is currently sticky."""
         return bool(self._approve_all_remaining)
 
     def capture_submitter(self) -> str:
+        """Return a best-effort provenance string for the submitter.
+
+        The returned value is formatted as ``module:function:lineno`` and is
+        intended for debugging and log output. Frames within selected
+        internal modules are skipped so the provenance points at the caller.
+        """
         frame = inspect.currentframe()
         if frame is None:
             return ''
@@ -333,6 +522,29 @@ class CommandManager:
         detail: str = '',
         eager: bool = False,
     ) -> CommandHandle:
+        """Submit one command and return a handle to its eventual result.
+
+        If a plan is currently open, the command is appended to that plan.
+        Otherwise it is queued as a loose command. When ``eager`` is True,
+        execution is flushed through this command immediately.
+
+        Args:
+            cmd: Command tokens to execute.
+            sudo: If True, execute through ``sudo`` when needed.
+            role: Optional explicit command role.
+            check: If True, raise :class:`CommandError` on non-zero exit.
+            capture: If True, capture stdout and stderr.
+            text: If True, run the subprocess in text mode.
+            input_text: Optional standard input text.
+            env: Optional process environment override.
+            timeout: Optional timeout in seconds.
+            summary: Short human-facing summary for previews.
+            detail: Optional longer preview detail.
+            eager: If True, execute through this command immediately.
+
+        Returns:
+            A handle that can be used to inspect the eventual result.
+        """
         spec = CommandSpec(
             cmd=tuple(str(c) for c in cmd),
             sudo=bool(sudo),
@@ -366,6 +578,7 @@ class CommandManager:
         return handle
 
     def flush(self) -> None:
+        """Flush pending execution for the current plan or loose queue."""
         if self.plan_stack:
             self._flush_plan(self.plan_stack[-1])
             return
@@ -373,6 +586,15 @@ class CommandManager:
             self._flush_loose_commands()
 
     def flush_through(self, command_id: int) -> None:
+        """Flush execution through the specified command id.
+
+        This executes all earlier pending commands needed to reach the
+        requested command, whether it lives inside an active plan or in the
+        loose-command queue.
+
+        Args:
+            command_id: Identifier of the last command that must be run.
+        """
         for plan in reversed(self.plan_stack):
             if any(item.command_id == command_id for item in plan.commands):
                 self._approve_plan_if_needed(plan)
@@ -384,12 +606,14 @@ class CommandManager:
         raise RuntimeError(f'Unknown command handle id: {command_id}')
 
     def _normalize_role(self, role: str | None) -> CommandRole:
+        """Normalize a role string to ``'read'`` or ``'modify'``."""
         mode = str(role or 'modify').strip().lower()
         if mode not in {'read', 'modify'}:
             mode = 'modify'
         return mode  # type: ignore[return-value]
 
     def _effective_role(self, spec: CommandSpec) -> CommandRole:
+        """Infer the effective role for a command specification."""
         if spec.role is not None:
             return self._normalize_role(spec.role)
         if spec.sudo and not spec.check:
@@ -400,10 +624,12 @@ class CommandManager:
         return 'modify'
 
     def render_breadcrumb(self) -> str:
+        """Render the visible intent stack as a breadcrumb string."""
         parts = [f.title for f in self.intent_stack if f.visible and f.title]
         return ' > '.join(parts)
 
     def _needs_sudo_approval(self, role: CommandRole) -> bool:
+        """Return True if a sudo command with ``role`` needs confirmation."""
         if os.geteuid() == 0:
             return False
         if self.yes or self.yes_sudo or self._approve_all_remaining:
@@ -413,6 +639,7 @@ class CommandManager:
         return True
 
     def _plan_needs_approval(self, plan: CommandPlan) -> bool:
+        """Return True if any command in ``plan`` requires approval."""
         return any(
             item.spec.sudo
             and self._needs_sudo_approval(self._effective_role(item.spec))
@@ -420,6 +647,7 @@ class CommandManager:
         )
 
     def _approve_plan_if_needed(self, plan: CommandPlan) -> None:
+        """Render and approve ``plan`` if approval has not already occurred."""
         if plan.approved:
             return
         self._render_plan_preview(plan)
@@ -450,6 +678,7 @@ class CommandManager:
             raise RuntimeError('Aborted by user.')
 
     def _render_plan_preview(self, plan: CommandPlan) -> None:
+        """Log a concise preview of the commands contained in ``plan``."""
         if plan.rendered_preview:
             return
         breadcrumb = self.render_breadcrumb()
@@ -477,6 +706,7 @@ class CommandManager:
         plan.rendered_preview = True
 
     def _render_plan_full_commands(self, plan: CommandPlan) -> None:
+        """Log the full raw command lines for every item in ``plan``."""
         local_log = log.opt(depth=2)
         local_log.info('Full commands for step: {}', plan.title)
         for idx, item in enumerate(plan.commands, start=1):
@@ -488,6 +718,7 @@ class CommandManager:
         *,
         through_command_id: int | None = None,
     ) -> None:
+        """Execute pending commands in ``plan`` in submission order."""
         for idx in range(plan.executed_upto + 1, len(plan.commands)):
             item = plan.commands[idx]
             res = self._execute_one(
@@ -506,6 +737,7 @@ class CommandManager:
     def _flush_loose_commands(
         self, *, through_command_id: int | None = None
     ) -> None:
+        """Execute pending loose commands in FIFO order."""
         while self._loose_commands:
             item = self._loose_commands[0]
             res = self._execute_one(item.spec, within_plan=False)
@@ -518,12 +750,18 @@ class CommandManager:
                 break
 
     def _raw_command(self, spec: CommandSpec) -> str:
+        """Return the full shell-rendered command that would be executed."""
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         return shell_join(cmd)
 
     def _preview_command(self, spec: CommandSpec, *, max_len: int = 160) -> str:
+        """Return a shortened command preview suitable for logs.
+
+        Long shell snippets and remote command tails are abbreviated to keep
+        previews readable while still revealing the overall command shape.
+        """
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
@@ -553,6 +791,7 @@ class CommandManager:
     def _ensure_compat_sudo_ready(
         self, spec: CommandSpec, *, within_plan: bool = False
     ) -> None:
+        """Ensure loose sudo execution is allowed under compatibility rules."""
         if not spec.sudo or os.geteuid() == 0:
             return
         if within_plan:
@@ -601,6 +840,7 @@ class CommandManager:
         ordinal: tuple[int, int] | None = None,
         within_plan: bool = False,
     ) -> CommandResult:
+        """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=3)
         cmd = list(spec.cmd)
         self._ensure_compat_sudo_ready(spec, within_plan=within_plan)
@@ -696,3 +936,4 @@ class CommandManager:
             )
             raise CommandError(cmd, res)
         return res
+
