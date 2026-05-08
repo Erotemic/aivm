@@ -97,22 +97,6 @@ class ProvisionConfig:
 
 
 @dataclass
-class SyncConfig:
-    enabled: bool = False
-    overwrite: bool = True
-    paths: list[str] = field(
-        default_factory=lambda: [
-            '~/.gitconfig',
-            '~/.gitignore',
-            '~/.config/Code/User/settings.json',
-            '~/.config/Code/User/keybindings.json',
-            '~/.tmux.conf',
-            '~/.bashrc',
-        ]
-    )
-
-
-@dataclass
 class PathsConfig:
     base_dir: str = '/var/lib/libvirt/aivm'
     state_dir: str = '~/.cache/aivm'
@@ -135,7 +119,6 @@ class AgentVMConfig:
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
     image: ImageConfig = field(default_factory=ImageConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
-    sync: SyncConfig = field(default_factory=SyncConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     verbosity: int = 1
 
@@ -152,7 +135,6 @@ class AgentVMConfig:
             if self.paths.ssh_pubkey_path
             else ''
         )
-        self.sync.paths = [expand(p) for p in self.sync.paths]
         return self
 
 
@@ -195,7 +177,6 @@ def load(path: Path) -> AgentVMConfig:
         'firewall',
         'image',
         'provision',
-        'sync',
         'paths',
     ):
         if section in raw and isinstance(raw[section], dict):

@@ -281,7 +281,6 @@ def test_vm_destroy_removes_vm_and_attachments(
         vm_name='killme',
         guest_dst='/tmp/p',
         tag='hostcode-p',
-        force=True,
     )
     save_store(store, cfg_path)
     monkeypatch.setattr(

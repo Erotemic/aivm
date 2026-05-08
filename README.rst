@@ -23,6 +23,36 @@ The aivm Module
 A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM**
 designed for running coding agents with a stronger boundary than containers.
 
+Current state
+-------------
+
+``aivm`` is experimental and best understood as a local, long-lived
+libvirt/KVM development VM manager for agent workflows. The actively maintained
+daily path is:
+
+.. code-block:: bash
+
+   aivm code .
+   aivm ssh .
+   aivm attach .
+   aivm status
+
+The current attachment model is centered on explicit host-folder registration:
+
+* ``shared-root`` is the default for new attachments. It uses one VM-level
+  virtiofs export plus host/guest bind mounts.
+* ``persistent`` is an opt-in successor path with persisted attachment
+  declarations and replay helpers. It mitigates repeated mount churn, but it is
+  still built on virtiofs.
+* ``shared`` is the older direct per-folder virtiofs mode and is mostly useful
+  for simple/small attachment sets.
+* ``git`` bootstraps a guest-local Git repo and host remote plumbing. It is not
+  a live filesystem sync engine.
+
+The old settings-sync story has been removed for now. It was too flaky to keep
+as a supported workflow. Project handoff should use explicit attachments,
+manual Git operations, or a future redesigned synchronization feature.
+
 What it provides
 ----------------
 
@@ -31,7 +61,6 @@ What it provides
 * Ubuntu cloud-image VM provisioning via cloud-init
 * SSH + VS Code Remote-SSH workflows
 * Optional virtiofs folder sharing (explicit trust extension)
-* Optional settings sync into the guest user profile
 * A single config store for defaults, VMs, networks, and attachments
 
 .. note::
@@ -151,9 +180,9 @@ VS Code and SSH
 
 .. code-block:: bash
 
-   aivm code . --sync_settings
-   aivm vm code --host_src . --sync_settings
-   aivm vm code . --sync_settings
+   aivm code .
+   aivm vm code --host_src .
+   aivm vm code .
    aivm vm ssh .
 
 Folder attachment
@@ -180,7 +209,8 @@ Attachment modes:
   every attachment from scratch.
 * ``shared``: direct per-folder virtiofs mapping from host source to guest. This
   is simpler but consumes one VM virtiofs device slot per folder.
-* ``git``: guest-local Git clone, synced via host/guest remotes.
+* ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing. It
+  does not automatically synchronize worktree contents.
 
 In ``shared``, ``shared-root``, ``persistent``, and ``git`` modes, attached folders
 mount to the same absolute path inside the guest by default unless
@@ -189,7 +219,7 @@ live-attached when possible.
 ``aivm code`` and ``aivm ssh`` remount the selected folder and best-effort
 restore other folders already saved for that VM after guest startup.
 
-For ``persistent`` attachments, explicit unshare updates the stored declaration
+For ``persistent`` attachments, explicit detach updates the stored declaration
 and refreshes the replay manifest instead of depending on interactive teardown
 of the stable host-side staged bind mount.
 If the guest can mount the persistent-root export but the host manifest is
@@ -220,8 +250,8 @@ Use ``--mode git`` to keep a normal Git repo on guest disk instead of exposing
 a writable virtiofs share. In that mode, ``aivm`` configures the guest repo to
 accept host pushes via ``receive.denyCurrentBranch=updateInstead`` and
 registers a host-side remote pointing at the guest repo over the VM SSH alias.
-The host can push committed branch state into the VM and fetch guest commits
-back later. Uncommitted host changes stay on the host until you commit them.
+That remote is plumbing for explicit Git handoff; ``aivm`` no longer tries to
+push or pull project contents automatically for git-mode attachments.
 
 ``aivm code --mode git .`` behavior:
 
@@ -254,7 +284,34 @@ Mode selection behavior:
    aivm detach .
    aivm attach . --mode git
 
+Known issue: long-lived virtiofs FD growth
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Long-lived VMs that use ``shared-root`` or ``persistent`` can still hit a
+virtiofs-related file-descriptor failure mode. The observed symptom is ordinary
+guest or host traversal failing with errors like ``OSError: [Errno 24] Too many
+open files`` / ``Too many open files`` even when the shell's normal
+``ulimit -n`` is high.
+
+The best current interpretation is that one or more host-side ``virtiofsd``
+workers can retain a large number of path-backed file descriptors across the
+export tree after heavy traversal of long-lived shared folders. Restarting the
+VM usually clears the bad runtime state. The ``persistent`` mode reduces mount
+churn and stale declaration problems, but it does not eliminate the underlying
+virtiofs/submount behavior.
+
+Current mitigations and guidance:
+
+* prefer fewer, narrower shared folders
+* detach stale attachments and avoid leaving old token trees exposed
+* use ``--mode git`` for repos that do not need live writable host sharing
+* restart the VM if traversal begins failing with ``Too many open files``
+* use ``dev/devcheck/debug-harness.sh`` when collecting host/guest evidence
+
+This is a known limitation, not a solved problem.
+
 Inventory and visibility
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: bash
 
@@ -272,7 +329,6 @@ Config-store lifecycle (explicit flow)
 
    aivm config init
    aivm vm create
-   aivm vm sync_settings
    aivm vm update
    aivm config discover
    aivm config show
@@ -282,30 +338,21 @@ Config-store lifecycle (explicit flow)
    aivm help completion
    aivm host doctor
 
-Settings sync configuration
+Alternatives and related projects
+---------------------------------
 
-.. code-block:: toml
+Depending on the threat model and workflow, these projects may be a better fit:
 
-   [sync]
-   enabled = true
-   overwrite = true
-   paths = [
-     "~/.gitconfig",
-     "~/.gitignore",
-     "~/.config/Code/User/settings.json",
-     "~/.config/Code/User/keybindings.json",
-     "~/.tmux.conf",
-     "~/.bashrc",
-   ]
+* `Matchlock <https://github.com/jingkaihe/matchlock>`_ runs AI-agent workloads
+  in ephemeral microVMs with network allowlisting and host-side secret
+  injection.
+* `JAI <https://github.com/stanford-scs/jai>`_ is a lightweight Linux jail for
+  AI CLIs, giving the current directory direct access while keeping the rest of
+  home copy-on-write or more restricted depending on mode.
 
-Ad hoc override:
-
-.. code-block:: bash
-
-   aivm vm sync-settings \
-     --paths "~/.gitconfig,~/.config/Code/User/settings.json,~/.tmux.conf"
-
-When ``[sync].enabled=true``, ``aivm vm code ...`` syncs before launching VS Code.
+``aivm`` is different: it favors a persistent libvirt/KVM Ubuntu VM that can be
+re-entered for local development with VS Code/SSH and explicit folder
+attachments.
 
 Command Groups
 --------------

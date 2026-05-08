@@ -1,4 +1,4 @@
-"""VM operation exports for lifecycle, share, and sync helpers."""
+"""VM operation exports for lifecycle and share helpers."""
 
 from __future__ import annotations
 
@@ -37,7 +37,6 @@ from .share import (
     vm_has_virtiofs_shared_memory,
     vm_share_mappings,
 )
-from .sync import sync_settings
 
 __all__ = [
     '_ensure_disk',
@@ -64,7 +63,6 @@ __all__ = [
     'SHARED_ROOT_VIRTIOFS_TAG',
     'shutdown_vm',
     'ssh_config',
-    'sync_settings',
     'vm_exists',
     'vm_has_share',
     'vm_has_virtiofs_shared_memory',

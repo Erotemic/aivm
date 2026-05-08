@@ -15,18 +15,12 @@ from aivm.cli._common import (
 )
 from aivm.cli.help import HelpCompletionCLI, HelpRawCLI, PlanCLI
 from aivm.cli.vm import (
-    _parse_sync_paths_arg,
     _upsert_ssh_config_entry,
 )
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.store import Store, save_store, upsert_attachment, upsert_vm
 from aivm.vm.share import _auto_share_tag_for_path
-
-
-def test_parse_sync_paths_arg() -> None:
-    got = _parse_sync_paths_arg(' ~/.gitconfig, ,~/.bashrc,')
-    assert got == ['~/.gitconfig', '~/.bashrc']
 
 
 def test_auto_share_tag_collision() -> None:

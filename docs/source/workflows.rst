@@ -54,7 +54,8 @@ Attachment modes:
   staged binds stable and restores guest-visible bind mounts at boot or during
   reconcile.
 * ``shared``: direct per-folder virtiofs mapping.
-* ``git``: guest-local Git clone synced by host/guest remotes.
+* ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
+  It does not automatically synchronize worktree contents.
 
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
@@ -77,6 +78,30 @@ persistent virtiofs mapping per VM.
 
 If this happens, prefer ``--mode git`` for some folders, detach unused shared
 folders, or split the workload across multiple VMs.
+
+Major limitation: long-lived virtiofs FD growth
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Long-lived ``shared-root`` and ``persistent`` VMs can still run into a
+virtiofs/submount file-descriptor problem. The visible error is often
+``Too many open files`` or ``OSError: [Errno 24]`` from normal traversal tools
+inside the guest or from host tools walking the attached tree.
+
+Current investigation points at host-side ``virtiofsd`` workers retaining many
+path-backed file descriptors across exported token trees after heavy traversal.
+The ``persistent`` backend reduces repeated mount teardown/rebuild churn, but
+it does not remove the shared virtiofs export design and therefore should be
+treated as a mitigation rather than a fix.
+
+Operational guidance:
+
+* keep attachments narrow and remove stale attachment records when possible
+* prefer ``--mode git`` for repositories that can tolerate explicit Git
+  handoff instead of live host sharing
+* restart the VM when the failure appears; this usually resets the hot
+  ``virtiofsd`` state
+* use ``dev/devcheck/debug-harness.sh`` to collect comparable host/guest
+  evidence when debugging the issue
 
 Attachment mode rules:
 
@@ -137,14 +162,6 @@ Manage config store
    aivm config edit
    aivm config discover
 
-Sync host settings into guest
------------------------------
-
-.. code-block:: bash
-
-   aivm vm sync_settings
-   aivm vm sync-settings --paths "~/.gitconfig,~/.tmux.conf"
-
 Reconcile VM drift
 ------------------
 
@@ -186,3 +203,16 @@ Get command tree
    aivm help plan
    aivm help raw
    aivm help completion
+
+Related projects
+----------------
+
+* `Matchlock <https://github.com/jingkaihe/matchlock>`_: ephemeral microVMs for
+  AI-agent workloads with network allowlisting and host-side secret injection.
+* `JAI <https://github.com/stanford-scs/jai>`_: lightweight Linux jail for AI
+  CLIs with current-directory access and copy-on-write or stricter home
+  handling.
+
+These tools make different tradeoffs than ``aivm``. ``aivm`` emphasizes a
+persistent libvirt/KVM Ubuntu VM with explicit folder attachments and
+VS Code/SSH-oriented local development workflows.

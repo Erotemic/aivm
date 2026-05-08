@@ -79,12 +79,19 @@ Safety and Trust Boundaries
 
    Read/write host-folder sharing is the practical default today, but
    isolation-oriented modes should remain first-class. Git-backed attachment is
-   now one supported alternative, and future modes (for example read-only
-   attachment) should continue to support secret-sensitive host repos and
-   cleaner guest environments.
-   Current implementation limitation: each shared-folder attach uses a VM
-   virtiofs device mapping and can exhaust device-slot capacity (for example
-   PCI/PCIe slots) when many folders are attached to one VM.
+   now one supported alternative for explicit repo handoff, not automatic
+   worktree synchronization. Read-only attachment support should continue to
+   support secret-sensitive host repos and cleaner guest environments.
+
+   Current implementation limitations:
+
+   * direct ``shared`` attaches use one VM virtiofs device mapping per folder
+     and can exhaust device-slot capacity (for example PCI/PCIe slots) when
+     many folders are attached to one VM
+   * ``shared-root`` and ``persistent`` reduce device-slot pressure by using a
+     single export, but long-lived exports can still trigger virtiofsd
+     file-descriptor retention/growth and downstream ``Too many open files``
+     failures
 
 
 Reliability Principles
@@ -96,6 +103,11 @@ Idempotency
 * Lifecycle operations (network create/destroy, VM create/start/destroy,
   attachment reconcile) should tolerate retries and partially completed prior
   runs.
+* Persistent attachment replay is a mitigation for mount churn and stale
+  declaration handling. It is not proof that the underlying virtiofs/submount
+  file-descriptor issue has been solved.
+* Settings-copy helpers are optional convenience behavior and must not become a
+  hidden project synchronization contract.
 
 Atomic operations
 ~~~~~~~~~~~~~~~~~
@@ -240,6 +252,8 @@ Design constraints
   bind-mounted exports.
 * New attachment backends should preserve the single shared-root virtiofs
   export model when they only need different replay / reconcile semantics.
+* New non-virtiofs backends should be considered if they materially reduce the
+  long-lived virtiofsd FD-retention risk.
 
 State management
 ~~~~~~~~~~~~~~~~
@@ -318,6 +332,14 @@ should be evolved in these areas:
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
   limits (see ``dev/design/future/flexible-folder-sharing.md``).
+* Long-lived virtiofs FD growth:
+  continue investigating ``virtiofsd`` FD retention/growth on ``shared-root``
+  and ``persistent`` exports. ``dev/devcheck/debug-harness.sh`` is the current
+  evidence-gathering tool, but the root cause is not solved.
+* Settings sync:
+  the previous ``aivm vm sync_settings`` feature has been removed. Reconsider
+  synchronization later only with an explicit design for reliability,
+  conflict behavior, and user intent.
 
 
 Non-goals

@@ -749,7 +749,6 @@ def test_git_mode_in_prepare_session_gets_companion_symlink(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=False,
-        force=False,
         dry_run=False,
         yes=True,
     )
@@ -858,7 +857,6 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=False,
-        force=False,
         dry_run=False,
         yes=True,
     )

@@ -1,4 +1,4 @@
-"""CLI commands for VM lifecycle, attach/code/ssh workflows, and sync/provision."""
+"""CLI commands for VM lifecycle, attach/code/ssh workflows, and provision."""
 
 from __future__ import annotations
 
@@ -63,7 +63,6 @@ from ..vm import (
     refresh_cloud_init_seed_for_next_boot,
     restart_vm,
     shutdown_vm,
-    sync_settings,
     vm_share_mappings,
     vm_status,
     wait_for_ip,
@@ -364,58 +363,6 @@ class VMProvisionCLI(_BaseCommand):
         return 0
 
 
-class VMSyncSettingsCLI(_BaseCommand):
-    """Copy host user settings/files into the VM user home."""
-
-    paths: Any = scfg.Value(
-        '',
-        help=(
-            'Optional comma-separated host paths to sync. '
-            'Defaults to [sync].paths from config.'
-        ),
-    )
-    overwrite: Any = scfg.Value(
-        True,
-        isflag=True,
-        help='Overwrite existing files in VM (default true).',
-    )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
-    )
-
-    @classmethod
-    def main(cls, argv: bool = True, **kwargs: Any) -> int:
-        args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
-        if args.dry_run:
-            ip = '0.0.0.0'
-        else:
-            ip = _resolve_ip_for_ssh_ops(
-                cfg,
-                yes=bool(args.yes),
-                purpose='Query VM networking state before settings sync.',
-            )
-        chosen_paths = _parse_sync_paths_arg(args.paths) if args.paths else None
-        result = sync_settings(
-            cfg,
-            ip,
-            paths=chosen_paths,
-            overwrite=bool(args.overwrite),
-            dry_run=args.dry_run,
-        )
-        print('🧩 Settings sync summary')
-        print(f'  copied: {len(result.copied)}')
-        print(f'  skipped_missing: {len(result.skipped_missing)}')
-        print(f'  skipped_exists: {len(result.skipped_exists)}')
-        print(f'  failed: {len(result.failed)}')
-        for k in ('copied', 'skipped_missing', 'skipped_exists', 'failed'):
-            for item in getattr(result, k):
-                print(f'  - {k}: {item}')
-        if result.failed:
-            return 2
-        return 0
-
-
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
@@ -450,23 +397,6 @@ class VMCodeCLI(_BaseCommand):
         isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    sync_settings: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Sync host settings files into VM before launching VS Code.',
-    )
-    sync_paths: Any = scfg.Value(
-        '',
-        help=(
-            'Optional comma-separated paths used when --sync_settings is set. '
-            'Defaults to [sync].paths.'
-        ),
-    )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -492,7 +422,6 @@ class VMCodeCLI(_BaseCommand):
                 attach_access_opt=args.access,
                 recreate_if_needed=bool(args.recreate_if_needed),
                 ensure_firewall_opt=bool(args.ensure_firewall),
-                force=bool(args.force),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
             )
@@ -508,26 +437,6 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
-
-        do_sync = bool(args.sync_settings or cfg.sync.enabled)
-        if do_sync:
-            chosen_paths = (
-                _parse_sync_paths_arg(args.sync_paths)
-                if args.sync_paths
-                else None
-            )
-            sync_result = sync_settings(
-                cfg,
-                ip,
-                paths=chosen_paths,
-                overwrite=cfg.sync.overwrite,
-                dry_run=False,
-            )
-            if sync_result.failed:
-                raise RuntimeError(
-                    'Failed syncing one or more settings files:\n'
-                    + '\n'.join(sync_result.failed)
-                )
 
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
             cfg, dry_run=False, yes=bool(args.yes)
@@ -587,11 +496,6 @@ class VMSSHCLI(_BaseCommand):
         isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -617,7 +521,6 @@ class VMSSHCLI(_BaseCommand):
                 attach_access_opt=args.access,
                 recreate_if_needed=bool(args.recreate_if_needed),
                 ensure_firewall_opt=bool(args.ensure_firewall),
-                force=bool(args.force),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
             )
@@ -683,11 +586,6 @@ class VMAttachCLI(_BaseCommand):
         '',
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -696,13 +594,12 @@ class VMAttachCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         log.trace(
-            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} force={} dry_run={} yes={}',
+            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} dry_run={} yes={}',
             args.host_src,
             args.vm,
             args.guest_dst,
             args.mode,
             args.access,
-            bool(args.force),
             bool(args.dry_run),
             bool(args.yes),
         )
@@ -809,7 +706,6 @@ class VMAttachCLI(_BaseCommand):
             access=attachment.access,
             guest_dst=attachment.guest_dst,
             tag=attachment.tag,
-            force=bool(args.force),
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _sync_persistent_attachment_manifest_on_host(
@@ -1253,7 +1149,6 @@ class VMModalCLI(scfg.ModalCLI):
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI
     ssh = VMSSHCLI
-    sync_settings = VMSyncSettingsCLI
     attach = VMAttachCLI
     detach = VMDetachCLI
     persistent_host_replay = VMPersistentHostReplayCLI
@@ -1261,8 +1156,3 @@ class VMModalCLI(scfg.ModalCLI):
         VMInstallPersistentHostReplayServiceCLI
     )
     code = VMCodeCLI
-
-
-def _parse_sync_paths_arg(paths_arg: str) -> list[str]:
-    items = [p.strip() for p in (paths_arg or '').split(',')]
-    return [p for p in items if p]

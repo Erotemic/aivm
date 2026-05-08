@@ -12,12 +12,10 @@ from aivm.attachments.guest import (
     _apply_guest_derived_symlinks,
     _ensure_guest_symlink,
     _git_attachment_remote_name,
-    _git_current_branch,
     _upsert_host_git_remote,
 )
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
-from aivm.util import CmdResult
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
 
 
@@ -59,38 +57,6 @@ def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
     return messages
-
-
-def test_git_current_branch_returns_named_branch(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    repo = tmp_path / 'repo'
-    repo.mkdir()
-
-    monkeypatch.setattr(
-        'aivm.cli.vm.CommandManager.run',
-        lambda self, *a, **k: CmdResult(0, 'feature-x\n', ''),
-    )
-
-    branch = _git_current_branch(repo)
-    assert branch == 'feature-x'
-
-
-def test_git_current_branch_raises_on_git_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    repo = tmp_path / 'repo'
-    repo.mkdir()
-
-    monkeypatch.setattr(
-        'aivm.cli.vm.CommandManager.run',
-        lambda self, *a, **k: CmdResult(128, '', 'fatal: not a git repository'),
-    )
-
-    with pytest.raises(
-        RuntimeError, match='Could not determine current Git branch'
-    ):
-        _git_current_branch(repo)
 
 
 def test_upsert_host_git_remote_adds_remote(

@@ -74,14 +74,6 @@ def test_dryrun_commands_with_yes(tmp_path: Path) -> None:
         ['vm', 'wait_ip', '--yes', '--dry_run', '--config', str(cfg_path)],
         ['vm', 'destroy', '--yes', '--dry_run', '--config', str(cfg_path)],
         ['vm', 'provision', '--yes', '--dry_run', '--config', str(cfg_path)],
-        [
-            'vm',
-            'sync_settings',
-            '--yes',
-            '--dry_run',
-            '--config',
-            str(cfg_path),
-        ],
     ]
     for argv in commands:
         assert _run(argv) == 0

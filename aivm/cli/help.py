@@ -58,10 +58,8 @@ class PlanCLI(_BaseCommand):
            aivm vm ssh_config{cfg_flag}   # VS Code Remote-SSH
         8. 🧰 Optional provisioning (docker + dev tools)
            aivm vm provision{cfg_flag}
-        9. 🧩 Optional settings sync from host user profile
-           aivm vm sync_settings{cfg_flag}
-        10. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
-           aivm vm code{cfg_flag} --host_src . --sync_settings
+        9. 🧑‍💻 Optional VS Code one-shot open (share + remote launch)
+           aivm vm code{cfg_flag} --host_src .
         """).strip()
         print(steps)
         return 0

@@ -1,6 +1,8 @@
 # Flexible Folder Sharing: Future Design Notes
 
-Status: **Partially implemented (v0.4.0)** — bind-mount single-export strategy is the default `shared-root` attachment mode.
+Status: **Partially implemented (v0.4.1-dev)** — bind-mount single-export
+strategy is the default `shared-root` attachment mode, and `persistent` adds a
+separate replay-oriented single-export path. Both still rely on virtiofs.
 
 ## Why this exists
 
@@ -21,9 +23,28 @@ This is a major scaling limitation for workflows that need many host folders.
 - `shared-root` mode (v0.4.0+):
   - single virtiofs export with host-side bind mounts for each attachment.
   - scales to many folders without per-folder virtiofs device slots.
+- `persistent` mode (v0.4.1-dev):
+  - separate `persistent-root` virtiofs export with stable host-side staged
+    binds and persisted guest-visible attachment declarations.
+  - improves replay/recovery behavior but does not remove the underlying
+    virtiofs/submount failure mode.
 - `git` mode:
   - avoids virtiofs device pressure.
-  - syncs committed Git state, not full live filesystem semantics.
+  - bootstraps guest repo/remote plumbing, but does not automatically sync
+    worktree contents.
+
+## Known unresolved issue: long-lived virtiofs FD growth
+
+Long-lived `shared-root` and `persistent` exports can still produce
+`Too many open files` / `OSError: [Errno 24]` failures during ordinary
+filesystem traversal. Current evidence points at host-side `virtiofsd` workers
+retaining large numbers of path-backed file descriptors across exported token
+trees after traversal-heavy workloads. Restarting the VM usually clears the
+runtime state.
+
+`persistent` is a mitigation for mount churn and stale replay state, not a fix
+for this virtiofs behavior. Future backend work should explicitly evaluate
+whether an option reduces or avoids long-lived `virtiofsd` FD retention.
 
 ## Future goal
 
@@ -144,7 +165,7 @@ The following backends and features remain unimplemented as of v0.4.0:
 | `unison` sync | unison | Not implemented | Bidirectional sync with conflict resolution; not live filesystem |
 | NFS server | NFSv4 | Not implemented | Requires host NFS service; firewall/trust policy complexity |
 | 9p server | 9p/virtio-9p | Not implemented | Alternative to virtiofs; requires guest kernel support |
-| Multiplexed single-share workspace | — | Partially implemented | Implemented as `shared-root`; other backends would provide alternatives |
+| Multiplexed single-share workspace | — | Partially implemented | Implemented as `shared-root` and `persistent`; still subject to virtiofs FD-retention risk |
 
 ### Implementation gaps
 

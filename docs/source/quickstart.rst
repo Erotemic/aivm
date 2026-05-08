@@ -57,3 +57,21 @@ Notes
   at higher verbosity levels.
 * Shared-root setup is designed to avoid changing ownership/perms of your host
   source tree.
+* ``shared-root`` is the default attachment mode. ``persistent`` is available
+  with ``aivm attach . --mode persistent`` and preserves attachment intent with
+  replay helpers, but both modes still rely on virtiofs.
+* Settings sync has been removed for now because it was too flaky. Use explicit
+  attachments or manual Git operations until a replacement is designed.
+
+Known virtiofs limitation
+-------------------------
+
+Long-lived VMs with virtiofs-backed attachments can accumulate host-side
+``virtiofsd`` file descriptors after heavy traversal of shared folders. The
+symptom is usually ``Too many open files`` / ``OSError: [Errno 24]`` from
+ordinary filesystem tools even when user limits look high.
+
+``persistent`` mode mitigates attachment replay and mount churn, but it has not
+solved this underlying virtiofs behavior. Restarting the VM usually clears the
+bad runtime state. Prefer narrow attachments, detach stale folders, and use
+``--mode git`` when live writable host sharing is not required.
