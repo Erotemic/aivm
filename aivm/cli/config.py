@@ -28,7 +28,6 @@ from ..config import (
     NetworkConfig,
     PathsConfig,
     ProvisionConfig,
-    SyncConfig,
     VMConfig,
     dump_toml,
 )
@@ -494,7 +493,6 @@ def _lint_store_file(path: Path) -> list[str]:
         'vm',
         'image',
         'provision',
-        'sync',
         'paths',
     }
     section_allowed: dict[str, set[str]] = {
@@ -503,7 +501,6 @@ def _lint_store_file(path: Path) -> list[str]:
         'firewall': _field_names(FirewallConfig),
         'image': _field_names(ImageConfig),
         'provision': _field_names(ProvisionConfig),
-        'sync': _field_names(SyncConfig),
         'paths': _field_names(PathsConfig),
     }
     behavior = raw.get('behavior', None)
@@ -531,7 +528,6 @@ def _lint_store_file(path: Path) -> list[str]:
                 'firewall',
                 'image',
                 'provision',
-                'sync',
                 'paths',
             }
             for key in sorted(defaults.keys()):

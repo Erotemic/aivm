@@ -2267,3 +2267,66 @@ Uncertainties / risks: if the guest remains unstable for longer than the retry b
 Tradeoffs: this adds a few extra SSH attempts only in the persistent replay path. That is a deliberate latency tradeoff for a path that is already expensive and fragile under nested virtualization. I kept the generic readiness probe untouched so normal SSH workflows do not inherit slower behavior.
 
 What I’m confident about: the persistent attach/replay path now retries the exact helper command that was failing, the guest-side rsync path is still hardened, and the focused attach/persistent tests pass after the change.
+## 2026-05-08 15:30:33 +0000
+
+Worked on bringing the README and Sphinx docs back in line with the current
+state of `aivm`. The main correction was to make the docs describe the
+attachment-first workflow honestly: `aivm code .`, `aivm ssh .`, explicit
+folder attachments, `shared-root` as the default, `persistent` as a replay
+mitigation, and git mode as repo/remote bootstrap rather than an automatic sync
+engine. I also added a separate alternatives page for Matchlock and JAI because
+they solve adjacent AI-agent isolation problems with very different tradeoffs.
+
+State of mind / reflection: this was a slightly uncanny docs pass because the
+workspace itself reproduced the known `Too many open files` symptom while I was
+auditing it. That made the documentation feel less theoretical. I wanted the
+docs to be frank without sounding alarmist: persistent mode is real progress,
+but calling it a fix for the long-lived virtiofs FD issue would mislead the
+next maintainer or user.
+
+Uncertainties / risks: I did not run the full docs build yet because the local
+Python environment was missing runtime dependencies (`loguru`) and broad file
+traversal is currently affected by the same FD issue being documented. There
+may still be stale phrasing in older changelog entries or deep dev notes, but
+the user-facing README and Sphinx pages now carry the current caveats.
+
+Tradeoffs: I kept `sync_settings` documented because the command still exists,
+but reframed it as an experimental dotfile copy helper and explicitly noted
+that it is a candidate for removal or redesign. I avoided rewriting command
+behavior in this pass; the change is intentionally documentation-only.
+
+What I am confident about: the top-level docs now describe current daily usage,
+the known virtiofs FD growth problem, practical mitigations, the non-core status
+of settings sync, and related alternatives. The changes also update the design
+contract and future folder-sharing notes so future implementation work has the
+right warning label attached.
+## 2026-05-08 15:47:42 +0000
+
+Removed the user-facing settings-sync feature after the follow-up decision that
+it is too flaky to keep around. The change removes `aivm vm sync_settings`,
+`aivm code --sync_settings`, `--sync_paths`, the `[sync]` config schema, and the
+old SSH/SCP helper module. I left the persistent-attachment manifest transfer
+alone because that is internal replay plumbing, not the abandoned settings-copy
+workflow.
+
+State of mind / reflection: this felt like a healthy pruning step. The previous
+docs pass was careful to warn users that settings sync was experimental, but a
+warned footgun is still a footgun when it sits in the command tree. Removing the
+feature makes the CLI tell the truth: attachments and explicit Git operations
+are the supported handoff paths for now.
+
+Uncertainties / risks: old config stores may still contain `[sync]` sections.
+Normal config loading now ignores them because the config object no longer has
+that section, while `config lint` treats them as stale/unknown. That is the
+right pressure for cleanup, but it is a compatibility break for anyone still
+depending on automatic dotfile copies.
+
+Tradeoffs: I also removed an unused git-current-branch helper whose only
+remaining purpose was tied to the older automatic git-sync story. Git mode now
+stays focused on repo/remote setup, which matches the current docs and avoids
+quietly reintroducing synchronization semantics under another name.
+
+What I am confident about: focused tests for config round-tripping, CLI helper
+behavior, dry-run command coverage, config lint, and guest attachment helpers
+pass in the project virtualenv. The touched modules also compile with
+`python3 -S -m py_compile`.

@@ -300,23 +300,6 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
         assert shared_root_att is not None
         assert shared_root_att.mode == 'shared-root'
 
-        # sync a tiny settings file to ensure the sync code path runs
-        test_sync = tmp_path / 'testrc'
-        test_sync.write_text('echo hi', encoding='utf-8')
-        _run_cli(
-            [
-                'vm',
-                'sync_settings',
-                '--yes',
-                '--paths',
-                str(test_sync),
-                '--config',
-                str(cfg_path),
-            ],
-            cwd=repo_root,
-            timeout_s=timeout_s,
-            env=env,
-        )
     finally:
         # teardown
         _run_cli(

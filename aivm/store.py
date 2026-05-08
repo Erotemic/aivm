@@ -92,7 +92,6 @@ def _cfg_from_dict(raw: dict[str, object]) -> AgentVMConfig:
         'firewall',
         'image',
         'provision',
-        'sync',
         'paths',
     ):
         body = raw.get(section, None)
@@ -243,7 +242,6 @@ def save_store(
             'firewall',
             'image',
             'provision',
-            'sync',
             'paths',
         ):
             body = d.get(section, {})
@@ -277,7 +275,7 @@ def save_store(
         verbosity = int(d.get('verbosity', 1))
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
-        for section in ('vm', 'image', 'provision', 'sync', 'paths'):
+        for section in ('vm', 'image', 'provision', 'paths'):
             body = d.get(section, {})
             if not isinstance(body, dict):
                 continue

@@ -203,6 +203,28 @@ References:
 
 * QEMU security guide notes cgroups/resource limits as a control: `QEMU Security`_
 
+6) Long-lived virtiofs file-descriptor retention
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Current ``aivm`` attachment modes that use ``shared-root`` or ``persistent``
+rely on a long-lived virtiofs export containing host-side bind-mounted
+subtrees. In real use this has produced intermittent ``Too many open files`` /
+``OSError: [Errno 24]`` failures during ordinary filesystem traversal.
+
+The working interpretation is that host-side ``virtiofsd`` workers can retain a
+large number of path-backed file descriptors across exported token trees. This
+is currently treated as a reliability and availability risk rather than a
+solved security boundary issue. Restarting the VM usually clears the bad
+runtime state; ``persistent`` mode reduces mount churn but does not remove the
+underlying virtiofs/submount design.
+
+Operator guidance:
+
+* keep shared folders narrow and explicit
+* avoid leaving stale attachments exposed
+* prefer Git-mode handoff when live writable sharing is unnecessary
+* restart long-lived VMs when traversal begins failing with ``Too many open files``
+
 
 Historical examples (selected)
 ------------------------------
@@ -252,6 +274,9 @@ The current ``aivm`` security posture is intentionally pragmatic:
   explicit trust extension.
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
+* Long-lived virtiofs-backed shares have a known file-descriptor growth/retention
+  failure mode that has been mitigated through persistent replay and better
+  cleanup paths, but not solved.
 
 Security consequence:
 
@@ -468,6 +493,8 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 * Share only minimal project subtrees; keep secrets outside shared trees.
 * Treat shared content as untrusted: do not auto-execute artifacts from shares.
 * Use disposable VMs for unknown workloads.
+* Restart or recreate long-lived VMs when virtiofs traversal begins reporting
+  ``Too many open files``.
 * If using additional host hardening controls (AppArmor/SELinux/cgroups), treat
   them as defense-in-depth external to ``aivm``.
 

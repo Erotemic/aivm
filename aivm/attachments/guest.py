@@ -233,7 +233,7 @@ def _ensure_attachment_available_in_guest(
 
     * ensure a standard virtiofs share is mounted in the guest,
     * reconcile shared-root host and guest bind mounts, or
-    * synchronize a git-mode clone into the guest.
+    * prepare guest-local Git plumbing for a git-mode attachment.
 
     The shared-root flags allow callers to distinguish between explicit attach
     flows, where disruptive host-side repair is acceptable, and automatic
@@ -428,28 +428,6 @@ def _upsert_host_git_remote(
     return git_cfg, True
 
 
-def _git_current_branch(repo_root: Path) -> str:
-    branch = CommandManager.current().run(
-        ['git', '-C', str(repo_root), 'rev-parse', '--abbrev-ref', 'HEAD'],
-        sudo=False,
-        check=False,
-        capture=True,
-    )
-    if branch.code != 0:
-        msg = (branch.stderr or branch.stdout).strip()
-        raise RuntimeError(
-            'Could not determine current Git branch for attachment sync.\n'
-            f'Repo: {repo_root}\n'
-            f'Git said: {msg}'
-        )
-    name = (branch.stdout or '').strip()
-    if not name or name == 'HEAD':
-        raise RuntimeError(
-            f'Git attachment mode requires a named branch in {repo_root}; detached HEAD is not supported.'
-        )
-    return name
-
-
 def _ensure_guest_git_repo(
     cfg: AgentVMConfig,
     guest_repo_root: str,
@@ -481,7 +459,7 @@ def _ensure_guest_git_repo(
     )
     if res.code != 0:
         raise RuntimeError(
-            'Failed to prepare guest Git repo for attachment sync.\n'
+            'Failed to prepare guest Git repo for attachment.\n'
             f'Guest repo: {guest_repo_root}\n'
             f'Error: {(res.stderr or res.stdout).strip()}'
         )
