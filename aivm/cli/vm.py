@@ -397,11 +397,6 @@ class VMCodeCLI(_BaseCommand):
         isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -427,7 +422,6 @@ class VMCodeCLI(_BaseCommand):
                 attach_access_opt=args.access,
                 recreate_if_needed=bool(args.recreate_if_needed),
                 ensure_firewall_opt=bool(args.ensure_firewall),
-                force=bool(args.force),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
             )
@@ -502,11 +496,6 @@ class VMSSHCLI(_BaseCommand):
         isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -532,7 +521,6 @@ class VMSSHCLI(_BaseCommand):
                 attach_access_opt=args.access,
                 recreate_if_needed=bool(args.recreate_if_needed),
                 ensure_firewall_opt=bool(args.ensure_firewall),
-                force=bool(args.force),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
             )
@@ -598,11 +586,6 @@ class VMAttachCLI(_BaseCommand):
         '',
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    force: Any = scfg.Value(
-        False,
-        isflag=True,
-        help='Deprecated no-op; multiple VMs may attach the same folder.',
-    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -611,13 +594,12 @@ class VMAttachCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         log.trace(
-            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} force={} dry_run={} yes={}',
+            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} dry_run={} yes={}',
             args.host_src,
             args.vm,
             args.guest_dst,
             args.mode,
             args.access,
-            bool(args.force),
             bool(args.dry_run),
             bool(args.yes),
         )
@@ -724,7 +706,6 @@ class VMAttachCLI(_BaseCommand):
             access=attachment.access,
             guest_dst=attachment.guest_dst,
             tag=attachment.tag,
-            force=bool(args.force),
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _sync_persistent_attachment_manifest_on_host(

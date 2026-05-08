@@ -2330,3 +2330,31 @@ What I am confident about: focused tests for config round-tripping, CLI helper
 behavior, dry-run command coverage, config lint, and guest attachment helpers
 pass in the project virtualenv. The touched modules also compile with
 `python3 -S -m py_compile`.
+## 2026-05-08 17:01:55 +0000
+
+Removed the deprecated attachment `--force` option and its no-op plumbing. The
+flag was still exposed on `code`, `ssh`, and `attach`, threaded into
+`_prepare_attached_session()` / `_record_attachment()`, and finally discarded by
+`upsert_attachment()`. I removed that path without changing attachment upsert
+semantics, and left unrelated `force` flags alone where they still mean
+something (`config init`, `vm create`, network destroy, and persistent replay
+internals).
+
+State of mind / reflection: this was a small cleanup, but a useful one after
+the larger settings-sync removal. Dead flags make a CLI feel wider than it is;
+removing this one makes the attachment surface easier to reason about and keeps
+the command tree honest.
+
+Uncertainties / risks: the main risk was accidentally touching meaningful
+`force` behavior elsewhere, especially VM creation bootstrap calls from
+session preparation. I kept those intact and scoped the removal to attachment
+registration/session plumbing only.
+
+Tradeoffs: I did not add compatibility warnings or hidden aliases because the
+feature was explicitly deprecated/no-op and there are no external users yet.
+Passing `--force` to attachment commands should now fail as an unknown option,
+which is the intended cleanup.
+
+What I am confident about: focused tests for attachment sessions, config, CLI
+helpers, and dry-run behavior pass; the full test suite passes; and
+`python -m compileall aivm tests` succeeds.

@@ -166,7 +166,6 @@ def _record_attachment(
     access: str,
     guest_dst: str,
     tag: str,
-    force: bool = False,
 ) -> Path:
     # Persist the lexical (unresolved) host path when it differs from the
     # resolved path so that restore can recreate companion guest symlinks.
@@ -187,7 +186,6 @@ def _record_attachment(
         guest_dst=guest_dst,
         tag=tag,
         host_lexical_path=host_lexical_path,
-        force=force,
     )
     if reg == before:
         log.debug(
@@ -800,7 +798,6 @@ def _prepare_attached_session(
     attach_access_opt: str = '',
     recreate_if_needed: bool,
     ensure_firewall_opt: bool,
-    force: bool,
     dry_run: bool,
     yes: bool,
 ) -> PreparedSession:
@@ -940,7 +937,6 @@ def _prepare_attached_session(
         access=attachment.access,
         guest_dst=attachment.guest_dst,
         tag=attachment.tag,
-        force=bool(force),
     )
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)

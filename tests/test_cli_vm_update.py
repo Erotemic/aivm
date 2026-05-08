@@ -322,7 +322,6 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=True,
-        force=False,
         dry_run=False,
         yes=True,
     )
@@ -418,7 +417,6 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=True,
-        force=False,
         dry_run=False,
         yes=False,
     )
@@ -531,7 +529,6 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=True,
-        force=False,
         dry_run=False,
         yes=True,
     )
@@ -657,9 +654,8 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
         access: str,
         guest_dst: str,
         tag: str,
-        force: bool = False,
     ) -> Path:
-        del cfg_arg, cfg_path_arg, force
+        del cfg_arg, cfg_path_arg
         recorded.append(
             {
                 'host_src': str(host_src),
@@ -682,7 +678,6 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=True,
-        force=False,
         dry_run=False,
         yes=True,
     )
@@ -819,9 +814,8 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
         access: str,
         guest_dst: str,
         tag: str,
-        force: bool = False,
     ) -> Path:
-        del cfg_arg, cfg_path_arg, force
+        del cfg_arg, cfg_path_arg
         recorded.append(
             {
                 'host_src': str(host_src),
@@ -844,7 +838,6 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
         guest_dst_opt='',
         recreate_if_needed=False,
         ensure_firewall_opt=True,
-        force=False,
         dry_run=False,
         yes=True,
     )

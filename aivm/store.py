@@ -427,9 +427,7 @@ def upsert_attachment(
     guest_dst: str = '',
     tag: str = '',
     host_lexical_path: str = '',
-    force: bool = False,
 ) -> None:
-    del force
     norm = _norm_dir(host_path)
     existing = [
         a
