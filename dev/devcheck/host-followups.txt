@@ -1,0 +1,288 @@
+
+============================================================
+host followups for VM=aivm-2404
+============================================================
+host:            toothbrush
+date:            2026-05-11T19:12:30-04:00
+persistent-root: /var/lib/libvirt/aivm/aivm-2404/persistent-root
+config file:     /home/joncrall/.config/aivm/config.toml
+
+============================================================
+0. virtiofsd inventory
+============================================================
+
+--- virtiofsd --version
+>> /usr/libexec/virtiofsd
+    virtiofsd 1.10.0
+
+--- running virtiofsd processes (matched by exe basename)
+    PID      FDS      NOFILE(soft/hard)      SOURCE
+    3821116  7        1000000/1000000        source=/var/lib/libvirt/aivm/aivm-2404/shared-root
+    3821119  21       1000000/1000000        source=/var/lib/libvirt/aivm/aivm-2404/shared-root
+    3821125  7        1000000/1000000        source=/var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+    3821128  21       1000000/1000000        source=/var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+    3821134  7        1000000/1000000        source=/var/lib/libvirt/aivm/aivm-2404/persistent-root
+    3821138  47478    1000000/1000000        source=/var/lib/libvirt/aivm/aivm-2404/persistent-root
+
+============================================================
+1. FD target audit for busiest persistent-root virtiofsd (pid=3821138, fds=47478)
+============================================================
+
+--- fd-target prefix breakdown (top 40, host paths)
+  19998 /hostcode-xcookie-97a25ccb/.venv/lib...
+   3525 /hostcode-aivm-90d38f9a/.git/objects...
+   2818 /hostcode-aivm-90d38f9a/.mypy_cache/3.13...
+   2811 /hostcode-aivm-90d38f9a/.mypy_cache/3.11...
+   2611 /hostcode-aivm-90d38f9a/.venv/lib...
+   2587 /hostcode-xcookie-97a25ccb/.mypy_cache/3.11...
+   2272 /hostcode-geowatch-5f1a05ef/geowatch_tpl/submodules...
+   1781 /hostcode-xcookie-97a25ccb/.git/objects...
+   1066 /hostcode-geowatch-5f1a05ef/geowatch/tasks...
+   1017 /hostcode-geowatch-5f1a05ef/geowatch_tpl/submodules_static...
+    909 /hostcode-geowatch-5f1a05ef/.git/modules...
+    491 /hostcode-geowatch-5f1a05ef/watch/tasks...
+    433 /hostcode-geowatch-5f1a05ef/docs/source...
+    328 /hostcode-geowatch-5f1a05ef/.git/objects...
+    314 /hostcode-geowatch-5f1a05ef/geowatch/utils...
+    259 /hostcode-geowatch-5f1a05ef/geowatch/cli...
+    254 /hostcode-geowatch-5f1a05ef/geowatch_tpl/modules...
+    227 /hostcode-geowatch-5f1a05ef/dev/experiments...
+    148 /hostcode-geowatch-5f1a05ef/tests/__pycache__...
+    136 /hostcode-geowatch-5f1a05ef/watch/cli...
+    122 /hostcode-geowatch-5f1a05ef/watch/utils...
+    110 /hostcode-aivm-90d38f9a/tests/__pycache__...
+     77 /hostcode-geowatch-5f1a05ef/demo_train/lightning_logs...
+     71 /hostcode-xcookie-97a25ccb/.venv/bin...
+     69 /hostcode-geowatch-5f1a05ef/.git/logs...
+     66 /hostcode-geowatch-5f1a05ef/dev/mwe...
+     63 /hostcode-geowatch-5f1a05ef/geowatch/rc...
+     59 /hostcode-geowatch-5f1a05ef/geowatch/mlops...
+     55 /hostcode-aivm-90d38f9a/build/lib...
+     54 /hostcode-aivm-90d38f9a/.git/refs...
+     51 /hostcode-xcookie-97a25ccb/xcookie/builders...
+     51 /hostcode-geowatch-5f1a05ef/geowatch/monkey...
+     51 /hostcode-aivm-90d38f9a/.git/logs...
+     49 /hostcode-xcookie-97a25ccb/.git/refs...
+     46 /hostcode-xcookie-97a25ccb/.git/logs...
+     45 /hostcode-geowatch-5f1a05ef/geowatch/demo...
+     43 /hostcode-geowatch-5f1a05ef/dev/oneoffs...
+     37 /hostcode-geowatch-5f1a05ef/dev/poc...
+     37 /hostcode-aivm-90d38f9a/aivm/__pycache__...
+     34 /hostcode-geowatch-5f1a05ef/dev/demo_train...
+
+--- fd-target kinds (sockets / pipes / files etc.)
+    sockets    : 2
+    pipes      : 2
+    anon_inode : 9
+    memfd      : 3
+    regular fs : 47465
+    other      : 0
+
+============================================================
+2. virtiofsd FD distribution by persistent-root token
+============================================================
+
+============================================================
+3. token directories on disk vs configured attachments
+============================================================
+
+--- token directories present under persistent-root
+    hostcode-aiq-magnet-36e91c94
+    hostcode-aivm-90d38f9a
+    hostcode-ambition-144244d0
+    hostcode-cc_templates-28df1b58
+    hostcode-cmd_queue-a9d08ae2
+    hostcode-Contextual-Drag-3d5638e9
+    hostcode-crfm-helm-audit-f1d7f137
+    hostcode-crfm-helm-audit-st-8bd60e77
+    hostcode-crfm-helm-public-c32520e2
+    hostcode-dtool_ibeis-2d6d7352
+    hostcode-EEE_datastore-dc672c36
+    hostcode-geowatch-5f1a05ef
+    hostcode-helm-647a8c86
+    hostcode-helm_audit-3bb1a84d
+    hostcode-joncrall-0d9afa44
+    hostcode-kwcoco-9135e4b4
+    hostcode-kwcoco_dataloader-050a3f1c
+    hostcode-kwcoco_detector_ki-d48e0cfa
+    hostcode-kwconf-6fffdcc0
+    hostcode-kwdagger-8395f087
+    hostcode-labelme-738cf148
+    hostcode-scriptconfig-ee3686e4
+    hostcode-service-repo-4d485863
+    hostcode-shitspotter_dvc-f2f6742d
+    hostcode-shitspotter_expt_d-3b46e56f
+    hostcode-tmp-9e3e37df
+    hostcode-ubelt-df3ef1b0
+    hostcode-vllm_service-b4b1906b
+    hostcode-vllm_service-cfc20148
+    hostcode-xcookie-97a25ccb
+    hostcode-xdev-d3371bc9
+    hostcode-xdoctest-e3bb652d
+
+--- tags referenced in current aivm config
+    hostcode-aiq-magnet-36e91c94
+    hostcode-aivm-90d38f9a
+    hostcode-ambition-144244d0
+    hostcode-cmd_queue-a9d08ae2
+    hostcode-Contextual-Drag-3d5638e9
+    hostcode-crfm-helm-audit-f1d7f137
+    hostcode-crfm-helm-audit-st-8bd60e77
+    hostcode-crfm-helm-public-c32520e2
+    hostcode-EEE_datastore-dc672c36
+    hostcode-geowatch-5f1a05ef
+    hostcode-helm_audit-3bb1a84d
+    hostcode-kwcoco-9135e4b4
+    hostcode-kwcoco_dataloader-050a3f1c
+    hostcode-kwcoco_detector_ki-d48e0cfa
+    hostcode-kwconf-6fffdcc0
+    hostcode-shitspotter_dvc-f2f6742d
+    hostcode-shitspotter_expt_d-3b46e56f
+    hostcode-tmp-9e3e37df
+    hostcode-vllm_service-cfc20148
+    hostcode-xcookie-97a25ccb
+    hostcode-xdoctest-e3bb652d
+
+--- tokens on disk but NOT in current config (likely leftover staged binds)
+    hostcode-cc_templates-28df1b58
+    hostcode-dtool_ibeis-2d6d7352
+    hostcode-helm-647a8c86
+    hostcode-joncrall-0d9afa44
+    hostcode-kwdagger-8395f087
+    hostcode-labelme-738cf148
+    hostcode-scriptconfig-ee3686e4
+    hostcode-service-repo-4d485863
+    hostcode-ubelt-df3ef1b0
+    hostcode-vllm_service-b4b1906b
+    hostcode-xdev-d3371bc9
+
+--- active bind mounts under persistent-root (findmnt)
+
+============================================================
+4. systemd LimitNOFILE config + history
+============================================================
+
+--- systemctl cat virtqemud (unit + drop-ins)
+    No files found for virtqemud.service.
+
+--- systemctl cat libvirtd (unit + drop-ins)
+    # /usr/lib/systemd/system/libvirtd.service
+    [Unit]
+    Description=libvirt legacy monolithic daemon
+    Documentation=man:libvirtd(8)
+    Documentation=https://libvirt.org/
+    # Use Wants instead of Requires so that users
+    # can disable these three .socket units to revert
+    # to a traditional non-activation deployment setup
+    Wants=libvirtd.socket
+    Wants=libvirtd-ro.socket
+    Wants=libvirtd-admin.socket
+    After=libvirtd.socket
+    After=libvirtd-ro.socket
+    After=libvirtd-admin.socket
+    Requires=virtlogd.socket
+    Wants=virtlockd.socket
+    After=virtlogd.socket
+    After=virtlockd.socket
+    Wants=systemd-machined.service
+    After=network.target
+    After=dbus.service
+    After=iscsid.service
+    After=apparmor.service
+    After=remote-fs.target
+    After=systemd-machined.service
+    After=xencommons.service
+    After=qemu-kvm.service
+    Conflicts=xendomains.service
+    
+    [Service]
+    Type=notify
+    Environment=LIBVIRTD_ARGS="--timeout 120"
+    EnvironmentFile=-/etc/default/libvirtd
+    ExecStart=/usr/sbin/libvirtd $LIBVIRTD_ARGS
+    ExecReload=/bin/kill -HUP $MAINPID
+    KillMode=process
+    Restart=on-failure
+    # Raise hard limits to match behaviour of systemd >= 240.
+    # During startup, daemon will set soft limit to match hard limit
+    # per systemd recommendations
+    LimitNOFILE=1024:524288
+    # The cgroups pids controller can limit the number of tasks started by
+    # the daemon, which can limit the number of domains for some hypervisors.
+    # A conservative default of 8 tasks per guest results in a TasksMax of
+    # 32k to support 4096 guests.
+    TasksMax=32768
+    # With cgroups v2 there is no devices controller anymore, we have to use
+    # eBPF to control access to devices. In order to do that we create a eBPF
+    # hash MAP which locks memory. The default map size for 64 devices together
+    # with program takes 12k per guest. After rounding up we will get 64M to
+    # support 4096 guests.
+    LimitMEMLOCK=64M
+    
+    [Install]
+    WantedBy=multi-user.target
+    Also=virtlockd.socket
+    Also=virtlogd.socket
+    Also=libvirtd.socket
+    Also=libvirtd-ro.socket
+    Also=libvirtd-admin.socket
+
+--- current effective limits
+    virtqemud: LimitNOFILE=1048576 LimitNOFILESoft=1048576 
+    libvirtd: LimitNOFILE=524288 LimitNOFILESoft=1024 
+
+--- journal hits for NOFILE / EMFILE in last 90 days
+    (no matching journal events)
+
+--- virtqemud/libvirtd recent restart timestamps (last 10)
+    May 07 15:38:45 toothbrush systemd[1]: Starting libvirtd.service - libvirt legacy monolithic daemon...
+    May 07 15:38:45 toothbrush systemd[1]: Started libvirtd.service - libvirt legacy monolithic daemon.
+    May 07 15:38:46 toothbrush dnsmasq[3356]: started, version 2.90 cachesize 150
+    May 07 15:38:46 toothbrush dnsmasq[3395]: started, version 2.90 cachesize 150
+
+============================================================
+5. inode-touchable working set per token (host-side find)
+============================================================
+
+--- regular-file count per token (sorted by count)
+        457768  hostcode-shitspotter_expt_d-3b46e56f
+        303979  hostcode-crfm-helm-public-c32520e2
+        284704  hostcode-crfm-helm-audit-st-8bd60e77
+        104957  hostcode-helm_audit-3bb1a84d
+         82600  hostcode-tmp-9e3e37df
+         75141  hostcode-aiq-magnet-36e91c94
+         69577  hostcode-ambition-144244d0
+         40487  hostcode-EEE_datastore-dc672c36
+         21675  hostcode-xcookie-97a25ccb
+         19348  hostcode-xdoctest-e3bb652d
+         17442  hostcode-shitspotter_dvc-f2f6742d
+         11616  hostcode-aivm-90d38f9a
+          8679  hostcode-crfm-helm-audit-f1d7f137
+          8670  hostcode-geowatch-5f1a05ef
+          8277  hostcode-kwcoco-9135e4b4
+          6990  hostcode-cmd_queue-a9d08ae2
+          3120  hostcode-kwconf-6fffdcc0
+          2184  hostcode-kwcoco_dataloader-050a3f1c
+          1252  hostcode-Contextual-Drag-3d5638e9
+           747  hostcode-kwcoco_detector_ki-d48e0cfa
+           123  hostcode-vllm_service-cfc20148
+             0  hostcode-xdev-d3371bc9
+             0  hostcode-vllm_service-b4b1906b
+             0  hostcode-ubelt-df3ef1b0
+             0  hostcode-service-repo-4d485863
+             0  hostcode-scriptconfig-ee3686e4
+             0  hostcode-labelme-738cf148
+             0  hostcode-kwdagger-8395f087
+             0  hostcode-joncrall-0d9afa44
+             0  hostcode-helm-647a8c86
+             0  hostcode-dtool_ibeis-2d6d7352
+             0  hostcode-cc_templates-28df1b58
+
+--- totals
+    regular files: 1529337
+    directories:   436772
+    all entries:   2161225  <- upper bound on virtiofsd inode cache for a full traversal
+
+============================================================
+done
+============================================================

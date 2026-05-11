@@ -1,0 +1,92 @@
+(uvpy3.13.13) joncrall@toothbrush:~/code$ cd aivm/
+(uvpy3.13.13) joncrall@toothbrush:~/code/aivm$ sudo python3 dev/devcheck/virtiofsd_emfile_mwe.py host probe
+[sudo] password for joncrall: 
+[HOST] one-shot snapshot of virtiofsd processes
+[HOST] (run on the libvirt/KVM host, not inside a VM)
+
+[HOST] --- virtiofsd pid=3821116
+[HOST]     source                = /var/lib/libvirt/aivm/aivm-2404/shared-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 7
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm/aivm-2404/shared-root
+
+[HOST] --- virtiofsd pid=3821119
+[HOST]     source                = /var/lib/libvirt/aivm/aivm-2404/shared-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 21
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm/aivm-2404/shared-root
+
+[HOST] --- virtiofsd pid=3821125
+[HOST]     source                = /var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 7
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+
+[HOST] --- virtiofsd pid=3821128
+[HOST]     source                = /var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 21
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm-fd-mwe/aivm-2404/shared-root
+
+[HOST] --- virtiofsd pid=3821134
+[HOST]     source                = /var/lib/libvirt/aivm/aivm-2404/persistent-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 7
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm/aivm-2404/persistent-root
+
+[HOST] --- virtiofsd pid=3821138
+[HOST]     source                = /var/lib/libvirt/aivm/aivm-2404/persistent-root
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1000000
+[HOST]     RLIMIT_NOFILE (hard)  = 1000000
+[HOST]     open FDs now          = 12536
+[HOST]     cmdline               = /usr/libexec/virtiofsd --fd=34 -o source=/var/lib/libvirt/aivm/aivm-2404/persistent-root
+
+[HOST] --- virtiofsd pid=3962969
+[HOST]     source                = <unknown>
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1024
+[HOST]     RLIMIT_NOFILE (hard)  = 1048576
+[HOST]     open FDs now          = 11
+[HOST]     cmdline               = sudo python3 dev/devcheck/virtiofsd_emfile_mwe.py host probe
+
+[HOST] --- virtiofsd pid=3962997
+[HOST]     source                = <unknown>
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1024
+[HOST]     RLIMIT_NOFILE (hard)  = 1048576
+[HOST]     open FDs now          = 12
+[HOST]     cmdline               = sudo python3 dev/devcheck/virtiofsd_emfile_mwe.py host probe
+
+[HOST] --- virtiofsd pid=3962998
+[HOST]     source                = <unknown>
+[HOST]     --inode-file-handles  = <unset: default per-fd inode caching>
+[HOST]     RLIMIT_NOFILE (soft)  = 1024
+[HOST]     RLIMIT_NOFILE (hard)  = 1048576
+[HOST]     open FDs now          = 4
+[HOST]     cmdline               = python3 dev/devcheck/virtiofsd_emfile_mwe.py host probe
+
+[HOST] inherited systemd NOFILE for libvirt daemons:
+[HOST]     libvirtd: LimitNOFILE=524288
+[HOST]     libvirtd: LimitNOFILESoft=1024
+[HOST]     virtqemud: LimitNOFILE=1048576
+[HOST]     virtqemud: LimitNOFILESoft=1048576
+
+[HOST] interpretation hints:
+[HOST]   - If NOFILE soft <= 8192 for any virtiofsd that serves a
+[HOST]     directory the guest actively traverses, EMFILE is very
+[HOST]     plausible. Production-grade values are >= 1048576.
+[HOST]   - If --inode-file-handles is unset, virtiofsd holds one
+[HOST]     host FD per cached inode; that is the worst case for
+[HOST]     this failure mode.
+(uvpy3.13.13) joncrall@toothbrush:~/code/aivm$ 

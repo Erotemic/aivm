@@ -1,0 +1,18 @@
+[GUEST] demo target      = /mnt/aivm-persistent/hostcode-geowatch-5f1a05ef
+[GUEST] guest soft RLIMIT_NOFILE = 1048576
+[GUEST] self open FDs at start   = 5
+[GUEST] will hold up to 50000 files open
+
+[GUEST]    progress i=2000 self_fd_count=2005
+[GUEST]    progress i=4000 self_fd_count=4005
+[GUEST]    progress i=6000 self_fd_count=6005
+[GUEST]    progress i=8000 self_fd_count=8005
+[GUEST] held 8670 files open without error.
+[GUEST] self_fd_count=8675
+[GUEST] running post-hold listdir/statx probes...
+[GUEST]    listdir probe:
+[GUEST]      listdir(/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef) -> 47 entries (OK)
+[GUEST]    statx probe (os.stat on a few entries):
+[GUEST]      stat(/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef/dockerfiles) -> OK
+[GUEST]      stat(/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef/emissions.csv) -> OK
+[GUEST]      stat(/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef/.mailmap) -> OK
