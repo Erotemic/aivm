@@ -20,6 +20,7 @@ from ..config import (
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
+from ..detect import detect_host_timezone
 from ..persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
@@ -695,6 +696,18 @@ def _write_cloud_init(
     lock_passwd = 'false' if cfg.vm.allow_password_login else 'true'
     passwd_block = ''
     sshd_pw = 'yes' if cfg.vm.allow_password_login else 'no'
+
+    # Resolve the guest timezone. Explicit cfg.vm.timezone wins (so users
+    # who pin to UTC stay pinned even when run on a non-UTC host); empty
+    # means "match the host at create time". If host detection also
+    # comes up empty (cloud image, container, etc.) we omit the directive
+    # and let the cloud image's default stand.
+    effective_tz = (cfg.vm.timezone or '').strip() or detect_host_timezone()
+    # Inserted right after `disable_root: true`; no trailing newline so
+    # the blank line that follows in the template is preserved.
+    timezone_line = (
+        f'\n        timezone: {effective_tz}' if effective_tz else ''
+    )
     sshd_kbd = 'yes' if cfg.vm.allow_password_login else 'no'
 
     if cfg.vm.allow_password_login:
@@ -726,7 +739,7 @@ def _write_cloud_init(
               - {pubkey}
 
         ssh_pwauth: {ssh_pwauth}
-        disable_root: true
+        disable_root: true{timezone_line}
 
 {passwd_block}
         # cloud-localds already seeds NoCloud; repeating datasource keys in the

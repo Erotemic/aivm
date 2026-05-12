@@ -75,6 +75,11 @@ class VMConfig:
     disk_gb: int = 40
     allow_password_login: bool = False
     password: str = 'agent'
+    # IANA timezone name for the guest (e.g. "America/New_York"). Empty
+    # means "match the host at cloud-init time"; see
+    # aivm.detect.detect_host_timezone. Set explicitly (e.g. "UTC") to
+    # pin the guest to a specific timezone regardless of the host's.
+    timezone: str = ''
 
 
 @dataclass

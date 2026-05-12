@@ -110,6 +110,71 @@ def detect_ssh_identity() -> tuple[str, str]:
     return '', ''
 
 
+def _looks_like_iana_tz(value: str) -> bool:
+    """Reject obvious garbage from filesystem probes.
+
+    Accepts non-empty strings whose chars are alnum / ``+-_/`` (which
+    matches every real IANA zone name including ``UTC``, ``Etc/GMT+5``,
+    ``America/Argentina/Buenos_Aires``). Rejects empty, whitespace-laden,
+    or chars-not-allowed-in-zone-names input.
+    """
+    if not value:
+        return False
+    return all(c.isalnum() or c in '+-_/' for c in value)
+
+
+def detect_host_timezone() -> str:
+    """Best-effort IANA timezone name of the host (e.g. "America/New_York").
+
+    Returns an empty string when no timezone can be confidently determined.
+    Callers can fall back to the distro default (typically UTC in cloud
+    images).
+
+    Probes in order:
+      1. ``/etc/timezone`` -- Debian/Ubuntu convention; one IANA name per line.
+      2. ``readlink /etc/localtime`` -- modern systemd; symlink target ends
+         with ``zoneinfo/<region>/<city>``.
+      3. ``timedatectl show -p Timezone --value`` -- last resort because it
+         shells out; only used when both files above are unhelpful.
+    """
+    # 1. /etc/timezone
+    try:
+        tz = Path('/etc/timezone').read_text(encoding='utf-8').strip()
+        if _looks_like_iana_tz(tz):
+            return tz
+    except OSError:
+        pass
+    # 2. /etc/localtime symlink
+    try:
+        target = os.readlink('/etc/localtime')
+        marker = 'zoneinfo/'
+        idx = target.find(marker)
+        if idx != -1:
+            candidate = target[idx + len(marker):].strip('/')
+            if _looks_like_iana_tz(candidate):
+                return candidate
+    except OSError:
+        pass
+    # 3. timedatectl
+    if which('timedatectl') is not None:
+        try:
+            res = CommandManager.current().run(
+                ['timedatectl', 'show', '-p', 'Timezone', '--value'],
+                sudo=False,
+                check=False,
+                capture=True,
+                role='read',
+                summary='Detect host timezone via timedatectl',
+            )
+            if res.code == 0:
+                tz = (res.stdout or '').strip()
+                if _looks_like_iana_tz(tz):
+                    return tz
+        except Exception as ex:
+            log.debug('timedatectl probe failed: {}', ex)
+    return ''
+
+
 def existing_ipv4_routes() -> list[ipaddress.IPv4Network]:
     log.debug('introspecting existing_ipv4_routes')
     if which('ip') is None:
