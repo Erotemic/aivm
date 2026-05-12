@@ -353,16 +353,16 @@ def test_create_vm_fallback_when_uefi_firmware_missing(
     monkeypatch: MonkeyPatch,
 ) -> None:
     cfg = AgentVMConfig()
-    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+        'aivm.vm.create.fetch_image', lambda *a, **k: Path('/tmp/base.img')
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._write_cloud_init',
+        'aivm.vm.create._write_cloud_init',
         lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+        'aivm.vm.create._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
     )
 
     calls = []
@@ -400,16 +400,16 @@ def test_create_vm_prefers_uefi_even_when_host_looks_nested(
     monkeypatch: MonkeyPatch,
 ) -> None:
     cfg = AgentVMConfig()
-    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+        'aivm.vm.create.fetch_image', lambda *a, **k: Path('/tmp/base.img')
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._write_cloud_init',
+        'aivm.vm.create._write_cloud_init',
         lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+        'aivm.vm.create._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
     )
 
     calls = []
@@ -435,7 +435,7 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-existing'
-    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: True)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
 
     CommandManager.activate(CommandManager(yes_sudo=True))
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
@@ -500,7 +500,7 @@ def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
     heredocs: dict[str, str] = {}
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
     )
 
     class P:
@@ -557,7 +557,7 @@ def test_refresh_cloud_init_seed_for_next_boot_bumps_instance_id(
     heredocs: dict[str, str] = {}
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
     )
 
     class P:
@@ -596,9 +596,9 @@ def test_fetch_image_uses_atomic_temp_then_move(
     cfg.paths.base_dir = str(tmp_path)
     cfg.image.cache_name = 'noble-base.img'
     cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
     calls = []
     expected = (
@@ -646,7 +646,7 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
     )
     calls = []
 
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: True)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: True)
 
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
         del kwargs
@@ -683,9 +683,9 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
     calls = []
     sha_calls = 0
 
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: True)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: True)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
 
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
@@ -723,9 +723,9 @@ def test_fetch_image_validates_ubuntu_checksum(
     cfg.paths.base_dir = str(tmp_path)
     cfg.image.cache_name = 'noble-base.img'
     cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
     calls = []
     expected = (
@@ -761,9 +761,9 @@ def test_fetch_image_raises_on_checksum_mismatch(
     cfg.paths.base_dir = str(tmp_path)
     cfg.image.cache_name = 'noble-base.img'
     cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
     calls = []
     actual = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
@@ -796,7 +796,7 @@ def test_fetch_image_rejects_unsupported_url(
     cfg.paths.base_dir = str(tmp_path)
     cfg.image.cache_name = 'base.img'
     cfg.image.ubuntu_img_url = 'https://example.com/custom.img'
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     with pytest.raises(
         RuntimeError, match='not in the built-in verified image registry'
     ):
@@ -816,12 +816,12 @@ def test_fetch_image_accepts_supported_file_url(
     digest = sha256(local_img.read_bytes()).hexdigest()
     cfg.image.ubuntu_img_url = f'file://{local_img}'
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.SUPPORTED_IMAGE_SHA256',
+        'aivm.vm.images.SUPPORTED_IMAGE_SHA256',
         {DEFAULT_UBUNTU_NOBLE_IMG_URL: digest},
     )
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
 
     calls = []
@@ -854,9 +854,9 @@ def test_fetch_image_preview_uses_grouped_block_summaries(
     cfg.paths.base_dir = str(tmp_path)
     cfg.image.cache_name = 'noble-base.img'
     cfg.image.ubuntu_img_url = DEFAULT_UBUNTU_NOBLE_IMG_URL
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_qemu_access', lambda *a, **k: None
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
     messages: list[str] = []
     expected = (
@@ -968,7 +968,7 @@ def test_fetch_image_rejects_unsupported_file_url_digest(
     local_img = tmp_path / 'bad.img'
     local_img.write_bytes(b'corrupt-partial')
     cfg.image.ubuntu_img_url = f'file://{local_img}'
-    monkeypatch.setattr('aivm.vm.lifecycle._sudo_file_exists', lambda p: False)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: False)
     with pytest.raises(
         RuntimeError,
         match='digest is not in the built-in verified image registry',
@@ -986,14 +986,14 @@ def test_wait_for_ssh_uses_generous_probe_timeout(
     calls = {'n': 0}
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.require_ssh_identity',
+        'aivm.vm.connectivity.require_ssh_identity',
         lambda p: p or '/tmp/id_ed25519',
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.ssh_base_args',
+        'aivm.vm.connectivity.ssh_base_args',
         lambda *a, **k: ['-i', '/tmp/id_ed25519'],
     )
-    monkeypatch.setattr('aivm.vm.lifecycle.time.sleep', lambda s: None)
+    monkeypatch.setattr('aivm.vm.connectivity.time.sleep', lambda s: None)
 
     def fake_run_cmd(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
         del cmd
@@ -1019,14 +1019,14 @@ def test_wait_for_ssh_fails_fast_on_host_key_mismatch(
     calls = {'n': 0}
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.require_ssh_identity',
+        'aivm.vm.connectivity.require_ssh_identity',
         lambda p: p or '/tmp/id_ed25519',
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.ssh_base_args',
+        'aivm.vm.connectivity.ssh_base_args',
         lambda *a, **k: ['-i', '/tmp/id_ed25519'],
     )
-    monkeypatch.setattr('aivm.vm.lifecycle.time.sleep', lambda s: None)
+    monkeypatch.setattr('aivm.vm.connectivity.time.sleep', lambda s: None)
 
     def fake_run_cmd(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
         del self, cmd, kwargs
@@ -1060,14 +1060,14 @@ def test_wait_for_ssh_retries_transient_startup_errors(
     calls = {'n': 0}
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.require_ssh_identity',
+        'aivm.vm.connectivity.require_ssh_identity',
         lambda p: p or '/tmp/id_ed25519',
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.ssh_base_args',
+        'aivm.vm.connectivity.ssh_base_args',
         lambda *a, **k: ['-i', '/tmp/id_ed25519'],
     )
-    monkeypatch.setattr('aivm.vm.lifecycle.time.sleep', lambda s: None)
+    monkeypatch.setattr('aivm.vm.connectivity.time.sleep', lambda s: None)
 
     def fake_run_cmd(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
         del self, cmd, kwargs
@@ -1094,16 +1094,16 @@ def test_create_vm_raises_clear_error_when_virtiofsd_missing(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     source_dir = str(tmp_path)
-    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+        'aivm.vm.create.fetch_image', lambda *a, **k: Path('/tmp/base.img')
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._write_cloud_init',
+        'aivm.vm.create._write_cloud_init',
         lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+        'aivm.vm.create._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
     )
 
     def fake_run_cmd(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
@@ -1136,16 +1136,16 @@ def test_create_vm_raises_clear_error_when_guest_memory_unavailable(
     cfg.vm.name = 'vmx'
     cfg.vm.ram_mb = 8192
     cfg.vm.cpus = 4
-    monkeypatch.setattr('aivm.vm.lifecycle.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+        'aivm.vm.create.fetch_image', lambda *a, **k: Path('/tmp/base.img')
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._write_cloud_init',
+        'aivm.vm.create._write_cloud_init',
         lambda *a, **k: {'seed_iso': Path('/tmp/seed.iso')},
     )
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+        'aivm.vm.create._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
     )
 
     calls = []
@@ -1621,10 +1621,10 @@ def test_restart_vm_when_running_shutdowns_then_starts(
         lambda self, **k: None,
     )
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     # Mock _wait_for_vm_state to avoid actual polling
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._wait_for_vm_state', lambda *a, **k: None
+        'aivm.vm.domain._wait_for_vm_state', lambda *a, **k: None
     )
 
     calls: list[list[str]] = []
@@ -1684,14 +1684,14 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
         lambda self, **k: None,
     )
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     # Mock _wait_for_vm_not_state to avoid actual polling
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._wait_for_vm_not_state', lambda *a, **k: None
+        'aivm.vm.domain._wait_for_vm_not_state', lambda *a, **k: None
     )
     # Mock _wait_for_vm_state to avoid actual polling
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._wait_for_vm_state', lambda *a, **k: None
+        'aivm.vm.domain._wait_for_vm_state', lambda *a, **k: None
     )
 
     calls: list[list[str]] = []
@@ -1755,14 +1755,14 @@ def test_restart_vm_when_pmsuspended_resumes_then_finds_inactive(
         lambda self, **k: None,
     )
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     # Mock _wait_for_vm_not_state to avoid actual polling
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._wait_for_vm_not_state', lambda *a, **k: None
+        'aivm.vm.domain._wait_for_vm_not_state', lambda *a, **k: None
     )
     # Mock _wait_for_vm_state to avoid actual polling
     monkeypatch.setattr(
-        'aivm.vm.lifecycle._wait_for_vm_state', lambda *a, **k: None
+        'aivm.vm.domain._wait_for_vm_state', lambda *a, **k: None
     )
 
     calls: list[list[str]] = []
@@ -1835,7 +1835,7 @@ def test_restart_vm_when_not_running_just_starts(
         lambda self, **k: None,
     )
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
 
     calls: list[list[str]] = []
 
@@ -1899,7 +1899,7 @@ def test_restart_vm_raises_when_vm_undefined(
     cfg.vm.name = 'vm-restart-undefined'
     CommandManager.activate(CommandManager(yes_sudo=True))
     # Mock _vm_defined to return False (VM doesn't exist)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: False)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: False)
 
     with pytest.raises(RuntimeError, match='does not exist'):
         restart_vm(cfg, dry_run=False)
@@ -1913,7 +1913,7 @@ def test_restart_vm_raises_on_domstate_failure(
     cfg.vm.name = 'vm-restart-badstate'
     CommandManager.activate(CommandManager(yes_sudo=True))
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1945,7 +1945,7 @@ def test_restart_vm_raises_with_stderr_error_message(
     cfg.vm.name = 'vm-restart-badstate'
     CommandManager.activate(CommandManager(yes_sudo=True))
     # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.lifecycle._vm_defined', lambda name: True)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',

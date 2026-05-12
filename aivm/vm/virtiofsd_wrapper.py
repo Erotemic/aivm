@@ -143,6 +143,14 @@ def ensure_wrapper_installed(
         return None
     target = wrapper_path(base_dir, m)
     desired = wrapper_content(m)
+    if dry_run:
+        log.info(
+            'DRYRUN: would ensure virtiofsd wrapper at {} (mode={})',
+            target,
+            m,
+        )
+        return target
+
     mgr = CommandManager.current()
 
     read = mgr.run(
@@ -154,14 +162,6 @@ def ensure_wrapper_installed(
         summary=f'Inspect existing virtiofsd wrapper at {target}',
     )
     if read.code == 0 and read.stdout == desired:
-        return target
-
-    if dry_run:
-        log.info(
-            'DRYRUN: would install virtiofsd wrapper at {} (mode={})',
-            target,
-            m,
-        )
         return target
 
     with tempfile.NamedTemporaryFile(
