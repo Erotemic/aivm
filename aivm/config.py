@@ -102,6 +102,24 @@ class ProvisionConfig:
 
 
 @dataclass
+class ToolsConfig:
+    """Guest developer tools managed outside apt/snap packaging.
+
+    ``uv`` is a small declarative spec:
+      * ``"latest"`` installs/keeps uv available via Astral's standalone installer.
+      * a version like ``"0.6.14"`` pins the installer URL.
+      * ``"off"`` disables uv management.
+
+    TODO(tools): add a first-class non-snap VS Code CLI installer here so
+    tunnel workflows can be bootstrapped in the VM without relying on the
+    snap store. Prefer Microsoft's deb/apt repository or a verified tarball.
+    """
+
+    uv: str = 'latest'
+    bin_dir: str = '~/.local/bin'
+
+
+@dataclass
 class PathsConfig:
     base_dir: str = '/var/lib/libvirt/aivm'
     state_dir: str = '~/.cache/aivm'
@@ -147,6 +165,7 @@ class AgentVMConfig:
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
     image: ImageConfig = field(default_factory=ImageConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     virtiofs: VirtiofsConfig = field(default_factory=VirtiofsConfig)
     verbosity: int = 1
@@ -206,6 +225,7 @@ def load(path: Path) -> AgentVMConfig:
         'firewall',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
     ):

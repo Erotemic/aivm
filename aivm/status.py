@@ -333,6 +333,16 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     return ProbeOutcome(res.code == 0, detail, diag)
 
 
+def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
+    """Return whether status should expect uv in the guest."""
+    tools = getattr(cfg, 'tools', None)
+    raw = getattr(tools, 'uv', 'latest')
+    if isinstance(raw, bool):
+        return raw
+    spec = str(raw or '').strip().lower()
+    return spec not in {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
+
+
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Check whether configured guest packages appear to be installed."""
     if not cfg.provision.enabled:
@@ -344,13 +354,17 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     needed = list(cfg.provision.packages)
     if cfg.provision.install_docker:
         needed.extend(['docker.io', 'docker-compose-v2'])
-    quoted = ' '.join(f"'{p}'" for p in needed)
-    remote = (
-        'set -e; '
-        f'for p in {quoted}; do '
-        "dpkg-query -W -f='${Status}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || exit 10; "
-        'done'
-    )
+    checks = ['set -e']
+    if needed:
+        quoted = ' '.join(shlex.quote(p) for p in needed)
+        checks.append(
+            f'for p in {quoted}; do '
+            "dpkg-query -W -f='${Status}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || exit 10; "
+            'done'
+        )
+    if _guest_tool_uv_enabled(cfg):
+        checks.append('command -v uv >/dev/null 2>&1 || exit 11')
+    remote = '; '.join(checks)
     cmd = [
         'ssh',
         *ssh_base_args(
@@ -367,9 +381,9 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         cmd, sudo=False, check=False, capture=True
     )
     if res.code == 0:
-        return ProbeOutcome(True, 'configured packages appear present', '')
+        return ProbeOutcome(True, 'configured packages/tools appear present', '')
     diag = (res.stdout + '\n' + res.stderr).strip()
-    return ProbeOutcome(False, 'one or more configured packages missing', diag)
+    return ProbeOutcome(False, 'one or more configured packages/tools missing', diag)
 
 
 def anticipated_status_sudo_commands(

@@ -1,3 +1,8 @@
+* Add managed guest tool installation for VS Code CLI without relying on snap.
+  Tunnel-based `aivm code` workflows need `code tunnel` inside the VM, so
+  aivm should provide a safe installer path, preferably Microsoft's deb/apt
+  repository or a verified tarball, under the same `[tools]` model used for uv.
+
 * It might be a good idea to distinguish read-only sudo commands versus state modification sudo commands. If we say "yes" to a sudo command perhaps we have a behavior policy that by default says yes to the rest of the read-only sudo commands. If the policy is super-strict we use the current ask every time behavior, but the default should be a yes means continue to ask for commands that will modify some state, but if are just doing a sudo query log it as we currently do, but don't prompt the user, just run the query.
 
 The way we tag the names of the folders that we attach might need to be reworked.
@@ -54,20 +59,3 @@ We should be careful when we request attaching nested directories like:
 and then attaching
 
 /home/joncrall/code/paper-g1-and-mcc
-
-----
-
-VS Code tunnel ergonomics:
-
-* Add an aivm-managed way to install the VS Code CLI inside the guest VM so
-  `aivm code .` can offer a one-command tunnel flow when the host command is
-  run from a remote hypervisor over SSH. Avoid relying on the Snap Store for
-  this; prefer a documented Microsoft `.deb` / apt repository install or a
-  verified archive install path.
-* Consider adding `aivm vm code --tunnel` / `aivm code --tunnel` that ensures
-  the VM exists, verifies that `code` is installed in the guest, starts
-  `code tunnel --name <vm>-<hypervisor> --accept-server-license-terms` inside
-  the VM, and prints local VS Code Desktop connection instructions.
-* Consider a guest-side diagnostic that reports whether the local VS Code
-  Desktop has the Remote - Tunnels extension (`ms-vscode.remote-server`) and
-  whether the user is signed into the same GitHub/Microsoft account.
