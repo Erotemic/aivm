@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -374,22 +375,29 @@ def _vscode_can_open_locally() -> tuple[bool, str | None]:
     recipe instead so the user can connect from their actual workstation.
 
     Rule:
-      * Inside a VS Code integrated terminal (``VSCODE_IPC_HOOK_CLI`` set):
-        the IPC hook routes ``code --remote ...`` to the user's workstation
-        VS Code, even when the shell itself is on a remote host. Allow.
-      * Otherwise, ``SSH_CONNECTION`` set means we are on a remote machine
-        in a plain shell; launching ``code`` here will either fail or
-        open a window the user can't see. Skip.
+      * ``SSH_CONNECTION`` set means this process is running on a remote
+        machine. Even when ``VSCODE_IPC_HOOK_CLI`` is also set, the target VM
+        is usually behind libvirt NAT on that remote host, so a local
+        ``ssh-remote+<vm>`` connection from the user's workstation probably
+        cannot reach the VM IP or the remote host's SSH config entry. Skip the
+        direct launch and print tunnel / ProxyJump guidance instead.
       * Otherwise, missing ``code`` on PATH: nothing to launch. Skip.
       * Otherwise: assume local desktop; launch.
     """
-    if os.environ.get('VSCODE_IPC_HOOK_CLI'):
-        return True, None
     if os.environ.get('SSH_CONNECTION'):
         return False, 'running in an SSH session (SSH_CONNECTION set)'
     if which('code') is None:
         return False, 'VS Code CLI `code` not found on PATH'
     return True, None
+
+
+def _remote_tunnel_name(cfg: Any) -> str:
+    """Return a stable VS Code tunnel name for a VM on this hypervisor."""
+    host_name = socket.gethostname().split('.')[0] or 'host'
+    # VS Code accepts names like ``aivm-2404-namek``. Keep the generated name
+    # conservative so it is easy to scan in the Remote Explorer UI.
+    safe_host = ''.join(ch if ch.isalnum() or ch == '-' else '-' for ch in host_name)
+    return f'{cfg.vm.name}-{safe_host}'
 
 
 def _print_remote_session_recipe(
@@ -402,24 +410,46 @@ def _print_remote_session_recipe(
     """Print a connect-from-workstation recipe in lieu of launching code."""
     vm_name = cfg.vm.name
     guest_path = session.share_guest_dst
+    tunnel_name = _remote_tunnel_name(cfg)
+    tunnel_cmd = (
+        f'cd {shlex.quote(guest_path)} && '
+        f'code tunnel --name {shlex.quote(tunnel_name)} '
+        '--accept-server-license-terms'
+    )
     print()
     print(f'Skipping VS Code launch: {reason}.')
-    print('The VM is up and the share is attached; connect from your '
-          'workstation using one of:')
+    print('The VM is up and the share is attached, but this shell appears to')
+    print("be on a remote hypervisor. The VM IP is usually on that host's")
+    print('private libvirt/NAT network, so a direct Remote-SSH connection from')
+    print('your workstation may not be able to reach it.')
     print()
-    print('  # VS Code Remote-SSH (paste into a local shell with the')
-    print('  # Remote-SSH extension installed):')
-    print(f'  code --remote ssh-remote+{vm_name} {guest_path}')
+    print('Recommended: use a VS Code tunnel hosted from inside the VM.')
     print()
-    print('  # Plain SSH shell on the guest:')
+    print('  # Run this on the remote host to start the tunnel inside the VM:')
+    print(f'  ssh {shlex.quote(vm_name)} {shlex.quote(tunnel_cmd)}')
+    print()
+    print('  # Then, on your local VS Code Desktop:')
+    print('  #   1. Install/enable the Remote - Tunnels extension:')
+    print('  #        code --install-extension ms-vscode.remote-server')
+    print('  #   2. Sign in with the same GitHub/Microsoft account used by the tunnel.')
+    print('  #   3. Open: Remote Explorer: Focus on Remotes (Tunnels/SSH) View')
+    print(f'  #   4. Under Tunnels, connect to: {tunnel_name}')
+    print()
+    print('Alternative: Remote-SSH can work only if your workstation can reach')
+    print('the VM, for example with a local SSH config entry that uses ProxyJump')
+    print('through this remote host. The plain VM IP below is normally reachable')
+    print('from the remote host, not directly from your workstation.')
+    print()
+    print('  # Plain SSH shell on the guest from this remote host:')
     print(f'  ssh {vm_name}')
     print()
-    print(f'  VM:    {vm_name}')
-    print(f'  Host:  {session.ip}')
-    print(f'  User:  {cfg.vm.user}')
-    print(f'  Path:  {guest_path}')
+    print(f'  VM:      {vm_name}')
+    print(f'  Host:    {session.ip}')
+    print(f'  User:    {cfg.vm.user}')
+    print(f'  Path:    {guest_path}')
+    print(f'  Tunnel:  {tunnel_name}')
     if ssh_cfg_updated:
-        print(f'SSH entry updated in {ssh_cfg}')
+        print(f'SSH entry updated on this host in {ssh_cfg}')
     print(f'Folder registered in {session.reg_path}')
 
 

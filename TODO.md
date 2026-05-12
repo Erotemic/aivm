@@ -54,3 +54,20 @@ We should be careful when we request attaching nested directories like:
 and then attaching
 
 /home/joncrall/code/paper-g1-and-mcc
+
+----
+
+VS Code tunnel ergonomics:
+
+* Add an aivm-managed way to install the VS Code CLI inside the guest VM so
+  `aivm code .` can offer a one-command tunnel flow when the host command is
+  run from a remote hypervisor over SSH. Avoid relying on the Snap Store for
+  this; prefer a documented Microsoft `.deb` / apt repository install or a
+  verified archive install path.
+* Consider adding `aivm vm code --tunnel` / `aivm code --tunnel` that ensures
+  the VM exists, verifies that `code` is installed in the guest, starts
+  `code tunnel --name <vm>-<hypervisor> --accept-server-license-terms` inside
+  the VM, and prints local VS Code Desktop connection instructions.
+* Consider a guest-side diagnostic that reports whether the local VS Code
+  Desktop has the Remote - Tunnels extension (`ms-vscode.remote-server`) and
+  whether the user is signed into the same GitHub/Microsoft account.

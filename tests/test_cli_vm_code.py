@@ -14,6 +14,7 @@ import pytest
 
 from aivm.cli.vm import (
     _print_remote_session_recipe,
+    _remote_tunnel_name,
     _vscode_can_open_locally,
 )
 
@@ -47,19 +48,23 @@ def test_vscode_skipped_when_ssh_connection_set(
     assert 'SSH_CONNECTION' in (reason or '')
 
 
-def test_vscode_allowed_when_inside_vscode_terminal_over_ssh(
+def test_vscode_skipped_when_inside_vscode_terminal_over_ssh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """VSCODE_IPC_HOOK_CLI takes precedence over SSH_CONNECTION: the user
-    is inside a VS Code integrated terminal (possibly remote-ssh'd), so
-    `code --remote` will route to their workstation correctly."""
+    """SSH_CONNECTION still wins over VSCODE_IPC_HOOK_CLI.
+
+    The ``code`` IPC hook may be able to talk back to a local VS Code window,
+    but the generated ``ssh-remote+<vm>`` target still needs a VM IP / SSH
+    config alias that is reachable from the user's workstation. For a libvirt
+    NAT VM on a remote hypervisor, that assumption is usually false.
+    """
     _scrub_env(monkeypatch)
     monkeypatch.setenv('SSH_CONNECTION', '10.0.0.1 22 10.0.0.2 49152')
     monkeypatch.setenv('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc.sock')
     monkeypatch.setattr('aivm.cli.vm.which', lambda name: '/usr/bin/code')
     can, reason = _vscode_can_open_locally()
-    assert can is True
-    assert reason is None
+    assert can is False
+    assert 'SSH_CONNECTION' in (reason or '')
 
 
 def test_vscode_skipped_when_code_binary_missing(
@@ -72,8 +77,17 @@ def test_vscode_skipped_when_code_binary_missing(
     assert '`code`' in (reason or '')
 
 
-def test_print_remote_session_recipe_includes_connect_command(
+def test_remote_tunnel_name_uses_vm_and_hypervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
+    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek.kitware.com')
+    assert _remote_tunnel_name(cfg) == 'aivm-2404-namek'
+
+
+def test_print_remote_session_recipe_includes_tunnel_command(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
     session = SimpleNamespace(
@@ -81,6 +95,7 @@ def test_print_remote_session_recipe_includes_connect_command(
         share_guest_dst='/home/joncrall/code/aivm',
         reg_path='/home/joncrall/.config/aivm/config.toml',
     )
+    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek')
     _print_remote_session_recipe(
         cfg,
         session,
@@ -89,14 +104,22 @@ def test_print_remote_session_recipe_includes_connect_command(
         reason='running in an SSH session (SSH_CONNECTION set)',
     )
     out = capsys.readouterr().out
-    # User's primary case must produce a paste-able remote-ssh recipe.
+    # User's primary remote-hypervisor case must prefer a VS Code tunnel,
+    # because the VM IP usually lives behind libvirt NAT on the remote host.
     assert (
-        'code --remote ssh-remote+aivm-2404 /home/joncrall/code/aivm'
+        'ssh aivm-2404 '
+        "'cd /home/joncrall/code/aivm && "
+        "code tunnel --name aivm-2404-namek --accept-server-license-terms'"
         in out
     )
+    assert 'Remote - Tunnels extension' in out
+    assert 'ms-vscode.remote-server' in out
+    assert 'connect to: aivm-2404-namek' in out
+    assert 'ProxyJump' in out
     assert 'ssh aivm-2404' in out
     # And report the basics they need to verify the session is ready.
     assert '10.77.0.103' in out
     assert 'agent' in out
-    # ssh_cfg_updated=True should be surfaced.
-    assert 'SSH entry updated in ~/.ssh/config' in out
+    assert 'Tunnel:  aivm-2404-namek' in out
+    # ssh_cfg_updated=True should be surfaced as host-local state.
+    assert 'SSH entry updated on this host in ~/.ssh/config' in out
