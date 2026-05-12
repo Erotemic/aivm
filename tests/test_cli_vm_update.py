@@ -17,8 +17,11 @@ from aivm.status import ProbeOutcome
 from aivm.util import CmdResult
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
 from aivm.vm.update_ops import (
+    RestartKind,
+    VirtiofsBinaryDrift,
     VMUpdateDrift,
     _apply_vm_update,
+    _escalate,
     _parse_qemu_img_virtual_size,
     _parse_vm_disk_path_from_dumpxml,
     _parse_vm_network_from_dumpxml,
@@ -68,6 +71,97 @@ def test_apply_vm_update_rejects_disk_shrink() -> None:
         assert 'Disk shrink is not supported safely' in str(ex)
     else:
         raise AssertionError('Expected RuntimeError on disk shrink')
+
+
+def test_escalate_orders_none_soft_hard() -> None:
+    assert _escalate(RestartKind.NONE, RestartKind.NONE) == RestartKind.NONE
+    assert _escalate(RestartKind.NONE, RestartKind.SOFT) == RestartKind.SOFT
+    assert _escalate(RestartKind.SOFT, RestartKind.NONE) == RestartKind.SOFT
+    assert _escalate(RestartKind.SOFT, RestartKind.HARD) == RestartKind.HARD
+    assert _escalate(RestartKind.HARD, RestartKind.SOFT) == RestartKind.HARD
+    assert _escalate(RestartKind.HARD, RestartKind.HARD) == RestartKind.HARD
+
+
+def test_apply_vm_update_no_drift_yields_none_kind() -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-noop'
+    changed, kind = _apply_vm_update(cfg, VMUpdateDrift(), dry_run=True)
+    assert changed is False
+    assert kind == RestartKind.NONE
+
+
+def test_apply_vm_update_cpu_drift_requires_hard_cycle() -> None:
+    """setvcpus --config writes the persistent XML only; the live qemu
+    keeps the old vCPU count, so a guest reboot is not enough — we need
+    a full power cycle. The dry-run path lets us check this without
+    actually invoking virsh.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-cpu'
+    drift = VMUpdateDrift(cpus=(2, 4))
+    changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
+    assert changed is True
+    assert kind == RestartKind.HARD
+
+
+def test_apply_vm_update_ram_drift_requires_hard_cycle() -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ram'
+    drift = VMUpdateDrift(ram_mb=(8192, 16384))
+    changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
+    assert changed is True
+    assert kind == RestartKind.HARD
+
+
+def test_apply_vm_update_disk_grow_requires_no_restart() -> None:
+    """qemu-img resize on the backing file is honoured live. Guest may
+    want to rescan its partition table, but no qemu-layer restart is
+    needed.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-disk'
+    drift = VMUpdateDrift(
+        disk_bytes=(40 * 1024**3, 60 * 1024**3),
+        disk_path='/tmp/vm-disk.qcow2',
+    )
+    changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
+    assert changed is True
+    assert kind == RestartKind.NONE
+
+
+def test_apply_vm_update_virtiofs_drift_requires_hard_cycle() -> None:
+    """vhost-user-fs <binary path> only changes when libvirt spawns a
+    fresh virtiofsd: a full power cycle is required.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-vfs'
+    drift = VMUpdateDrift(
+        virtiofs_binary=(
+            VirtiofsBinaryDrift(
+                tag='aivm-persistent-root',
+                current='',
+                desired='/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh',
+            ),
+        ),
+        virtiofsd_mode='prefer',
+    )
+    changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
+    assert changed is True
+    assert kind == RestartKind.HARD
+
+
+def test_apply_vm_update_combined_drift_escalates_to_hard() -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-combined'
+    drift = VMUpdateDrift(
+        cpus=(2, 4),
+        disk_bytes=(40 * 1024**3, 60 * 1024**3),
+        disk_path='/tmp/vm-combined.qcow2',
+    )
+    changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
+    assert changed is True
+    # CPU drift demands HARD; combined with disk's NONE, escalate keeps HARD.
+    assert kind == RestartKind.HARD
 
 
 def test_vm_update_no_changes(

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from ..commands import CommandManager
@@ -15,6 +16,33 @@ from ..config import AgentVMConfig
 from ..runtime import virsh_system_cmd
 from ..vm import virtiofsd_wrapper
 from ..vm.drift import parse_dominfo_hardware as _parse_dominfo_hardware
+
+
+class RestartKind(StrEnum):
+    """How invasive a post-update restart needs to be.
+
+    NONE  - no restart required (e.g. disk grow via qemu-img is live)
+    SOFT  - guest-OS reboot only; qemu process persists
+            (``virsh reboot``). Right for changes the guest reads on its
+            own boot.
+    HARD  - full power cycle; kill qemu and respawn it
+            (``virsh shutdown`` + ``virsh start``). Required when the
+            change is at the qemu/virtiofsd layer rather than inside the
+            guest: CPU and RAM are configured with ``--config`` only and
+            so are picked up on next qemu start, not on guest reboot;
+            virtiofsd's ``<binary path>`` likewise can only change when
+            qemu spawns a fresh virtiofsd.
+    """
+
+    NONE = 'none'
+    SOFT = 'soft'
+    HARD = 'hard'
+
+
+def _escalate(current: RestartKind, candidate: RestartKind) -> RestartKind:
+    """Return whichever of the two is "more invasive"."""
+    order = {RestartKind.NONE: 0, RestartKind.SOFT: 1, RestartKind.HARD: 2}
+    return current if order[current] >= order[candidate] else candidate
 
 
 @dataclass(frozen=True)
@@ -402,11 +430,16 @@ def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
 
 def _apply_vm_update(
     cfg: AgentVMConfig, drift: VMUpdateDrift, *, dry_run: bool
-) -> tuple[bool, bool]:
+) -> tuple[bool, RestartKind]:
+    """Apply each drift type and report the most invasive restart needed.
+
+    See ``RestartKind`` for which drift types need which kind of restart
+    and why. Returns ``(changed, restart_kind)``.
+    """
     changed = False
+    restart = RestartKind.NONE
 
     # TODO: Should we check for network config drift here too?
-    restart_required = False
     if drift.cpus is not None:
         _, want = drift.cpus
         cmd = virsh_system_cmd('setvcpus', cfg.vm.name, str(want), '--config')
@@ -418,7 +451,10 @@ def _apply_vm_update(
             )
             print(f'Updated CPU count to {want}.')
         changed = True
-        restart_required = True
+        # --config writes the persistent XML only; live qemu keeps the old
+        # vCPU count. Picked up on next qemu start, so a guest reboot
+        # would NOT see it: we need a full power cycle.
+        restart = _escalate(restart, RestartKind.HARD)
     if drift.ram_mb is not None:
         _, want = drift.ram_mb
         kib = int(want) * 1024
@@ -435,7 +471,8 @@ def _apply_vm_update(
             mgr.run(mem_cmd, sudo=True, check=True, capture=True)
             print(f'Updated RAM to {want} MiB.')
         changed = True
-        restart_required = True
+        # Same reasoning as CPU: setmem --config is persistent-only.
+        restart = _escalate(restart, RestartKind.HARD)
     if drift.disk_bytes is not None:
         cur, want = drift.disk_bytes
         if want < cur:
@@ -454,13 +491,17 @@ def _apply_vm_update(
                     f'Expanded disk to {_bytes_to_gib(want):.2f} GiB at {drift.disk_path}.'
                 )
             changed = True
+            # qemu-img resize on the backing file is honoured live; the
+            # guest may want to rescan its partition table, but no
+            # power cycle is required at the qemu layer.
     if drift.virtiofs_binary:
         if _apply_virtiofs_binary_drift(cfg, drift, dry_run=dry_run):
             changed = True
-            # vhost-user-fs device hot-swap is unreliable; require restart so
-            # libvirt respawns virtiofsd via the new <binary path>.
-            restart_required = True
-    return changed, restart_required
+            # vhost-user-fs <binary path> changes only take effect when
+            # libvirt spawns a fresh virtiofsd, which requires a full
+            # qemu power cycle. virsh reboot would NOT swap the binary.
+            restart = _escalate(restart, RestartKind.HARD)
+    return changed, restart
 
 
 def _apply_virtiofs_binary_drift(
@@ -480,6 +521,18 @@ def _apply_virtiofs_binary_drift(
         virtiofsd_wrapper.ensure_wrapper_installed(
             cfg.paths.base_dir, mode, dry_run=dry_run
         )
+
+    if dry_run:
+        # In dry-run we don't actually touch libvirt: just describe the diff
+        # already captured in `drift.virtiofs_binary` and report success.
+        for d in drift.virtiofs_binary:
+            cur = d.current or '(default)'
+            new = d.desired or '(default)'
+            print(
+                f"DRYRUN: would set <binary path={new!r}> on virtiofs "
+                f"device tag={d.tag!r} (was {cur!r})"
+            )
+        return True
 
     dumpxml = mgr.run(
         virsh_system_cmd('dumpxml', cfg.vm.name),
@@ -524,12 +577,6 @@ def _apply_virtiofs_binary_drift(
         return False
 
     new_xml = ET.tostring(root, encoding='unicode')
-    if dry_run:
-        print(
-            f'DRYRUN: would redefine VM {cfg.vm.name} with updated virtiofs '
-            f'<binary path> on {touched} device(s).'
-        )
-        return True
 
     with tempfile.NamedTemporaryFile(
         'w', delete=False, suffix='.xml', prefix=f'aivm-{cfg.vm.name}-'
@@ -559,33 +606,74 @@ def _apply_virtiofs_binary_drift(
 
 
 def _maybe_restart_vm_after_update(
-    cfg: AgentVMConfig, *, restart_policy: str, dry_run: bool, yes: bool
+    cfg: AgentVMConfig,
+    *,
+    kind: RestartKind,
+    restart_policy: str,
+    dry_run: bool,
+    yes: bool,
 ) -> None:
+    """Restart the VM if needed, picking the right command for the drift kind.
+
+    ``kind`` comes from ``_apply_vm_update``. For NONE this is a no-op.
+    SOFT does a guest-OS reboot (``virsh reboot``). HARD does a full
+    power cycle via the existing ``restart_vm`` helper, which handles
+    the ACPI shutdown, polling for ``shut off``, and ``virsh start``
+    (including pmsuspended corner cases).
+    """
+    if kind == RestartKind.NONE:
+        return
+
+    label = {
+        RestartKind.SOFT: 'guest reboot',
+        RestartKind.HARD: 'full power cycle (shutdown + start)',
+    }[kind]
+
     should_restart = False
     if restart_policy == 'always':
         should_restart = True
     elif restart_policy == 'never':
         should_restart = False
-    else:
-        if yes:
-            should_restart = True
-        elif sys.stdin.isatty():
-            ans = (
-                input(
-                    'A restart is needed for CPU/RAM changes to take effect now. Restart VM now? [y/N]: '
-                )
-                .strip()
-                .lower()
+    elif yes:
+        should_restart = True
+    elif sys.stdin.isatty():
+        ans = (
+            input(
+                f'A {label} is needed for the applied changes to take '
+                f'effect now. Restart VM now? [y/N]: '
             )
-            should_restart = ans in {'y', 'yes'}
+            .strip()
+            .lower()
+        )
+        should_restart = ans in {'y', 'yes'}
+
     if not should_restart:
         print(
-            f'CPU/RAM updates are saved, but VM {cfg.vm.name} must be restarted for them to take effect.'
+            f'Updates saved, but VM {cfg.vm.name} needs a {label} for them '
+            f'to take effect.'
         )
         return
-    cmd = virsh_system_cmd('reboot', cfg.vm.name)
+
+    if kind == RestartKind.SOFT:
+        cmd = virsh_system_cmd('reboot', cfg.vm.name)
+        if dry_run:
+            print(f'DRYRUN: {" ".join(cmd)}')
+        else:
+            CommandManager.current().run(
+                cmd, sudo=True, check=True, capture=True
+            )
+            print(f'Rebooted VM {cfg.vm.name}.')
+        return
+
+    # HARD: shutdown + start. Local import keeps this module decoupled from
+    # the full lifecycle import chain at module load.
+    from .lifecycle import restart_vm
+
     if dry_run:
-        print(f'DRYRUN: {" ".join(cmd)}')
-    else:
-        CommandManager.current().run(cmd, sudo=True, check=True, capture=True)
-        print(f'Restarted VM {cfg.vm.name}.')
+        print(
+            f'DRYRUN: virsh shutdown {cfg.vm.name} (wait for off) && virsh '
+            f'start {cfg.vm.name}'
+        )
+        return
+    restart_vm(cfg, dry_run=False)
+    print(f'Power-cycled VM {cfg.vm.name}.')

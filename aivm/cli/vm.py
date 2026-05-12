@@ -83,6 +83,7 @@ from ..vm.share import (
     align_attachment_tag_with_mappings as drift_align_attachment_tag_with_mappings,
 )
 from ..vm.update_ops import (
+    RestartKind,
     _apply_vm_update,
     _maybe_restart_vm_after_update,
     _print_vm_update_plan,
@@ -1119,12 +1120,13 @@ class VMUpdateCLI(_BaseCommand):
             why='Apply editable libvirt hardware changes so the VM matches config.',
             role='modify',
         ):
-            changed, restart_required = _apply_vm_update(
+            changed, restart_kind = _apply_vm_update(
                 cfg, drift, dry_run=bool(args.dry_run)
             )
-        if changed and restart_required and vm_running:
+        if changed and restart_kind != RestartKind.NONE and vm_running:
             _maybe_restart_vm_after_update(
                 cfg,
+                kind=restart_kind,
                 restart_policy=restart_policy,
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
