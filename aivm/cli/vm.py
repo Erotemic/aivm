@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 from typing import Any
@@ -364,6 +365,64 @@ class VMProvisionCLI(_BaseCommand):
         return 0
 
 
+def _vscode_can_open_locally() -> tuple[bool, str | None]:
+    """Decide whether launching VS Code locally with ``code --remote`` makes sense.
+
+    Returns ``(True, None)`` when we should run the local ``code`` binary.
+    Returns ``(False, reason)`` when the launch would either fail or open a
+    window on the wrong machine — in that case the CLI prints a connection
+    recipe instead so the user can connect from their actual workstation.
+
+    Rule:
+      * Inside a VS Code integrated terminal (``VSCODE_IPC_HOOK_CLI`` set):
+        the IPC hook routes ``code --remote ...`` to the user's workstation
+        VS Code, even when the shell itself is on a remote host. Allow.
+      * Otherwise, ``SSH_CONNECTION`` set means we are on a remote machine
+        in a plain shell; launching ``code`` here will either fail or
+        open a window the user can't see. Skip.
+      * Otherwise, missing ``code`` on PATH: nothing to launch. Skip.
+      * Otherwise: assume local desktop; launch.
+    """
+    if os.environ.get('VSCODE_IPC_HOOK_CLI'):
+        return True, None
+    if os.environ.get('SSH_CONNECTION'):
+        return False, 'running in an SSH session (SSH_CONNECTION set)'
+    if which('code') is None:
+        return False, 'VS Code CLI `code` not found on PATH'
+    return True, None
+
+
+def _print_remote_session_recipe(
+    cfg: Any,
+    session: Any,
+    ssh_cfg: Any,
+    ssh_cfg_updated: bool,
+    reason: str,
+) -> None:
+    """Print a connect-from-workstation recipe in lieu of launching code."""
+    vm_name = cfg.vm.name
+    guest_path = session.share_guest_dst
+    print()
+    print(f'Skipping VS Code launch: {reason}.')
+    print('The VM is up and the share is attached; connect from your '
+          'workstation using one of:')
+    print()
+    print('  # VS Code Remote-SSH (paste into a local shell with the')
+    print('  # Remote-SSH extension installed):')
+    print(f'  code --remote ssh-remote+{vm_name} {guest_path}')
+    print()
+    print('  # Plain SSH shell on the guest:')
+    print(f'  ssh {vm_name}')
+    print()
+    print(f'  VM:    {vm_name}')
+    print(f'  Host:  {session.ip}')
+    print(f'  User:  {cfg.vm.user}')
+    print(f'  Path:  {guest_path}')
+    if ssh_cfg_updated:
+        print(f'SSH entry updated in {ssh_cfg}')
+    print(f'Folder registered in {session.reg_path}')
+
+
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
@@ -443,10 +502,13 @@ class VMCodeCLI(_BaseCommand):
             cfg, dry_run=False, yes=bool(args.yes)
         )
 
-        if which('code') is None:
-            raise RuntimeError(
-                'VS Code CLI `code` not found in PATH. Install VS Code and enable the shell command.'
+        can_open_local, reason = _vscode_can_open_locally()
+        if not can_open_local:
+            _print_remote_session_recipe(
+                cfg, session, ssh_cfg, ssh_cfg_updated, reason or ''
             )
+            return 0
+
         remote_target = f'ssh-remote+{cfg.vm.name}'
         CommandManager.current().run(
             ['code', '--remote', remote_target, session.share_guest_dst],
