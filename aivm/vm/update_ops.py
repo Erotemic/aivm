@@ -333,7 +333,18 @@ def _vm_update_drift(
                 f'Network drift detected (live={live_network}, config={want_network}); auto-update is not implemented for network rebinding.'
             )
 
-    virtiofsd_mode, virtiofs_binary = _virtiofs_binary_drift(cfg, xml.stdout if xml.code == 0 else '')
+    virtiofsd_mode, virtiofs_binary = _virtiofs_binary_drift(
+        cfg, xml.stdout if xml.code == 0 else ''
+    )
+    requested_inode_mode = str(
+        getattr(cfg.virtiofs, 'inode_file_handles', '') or ''
+    ).strip()
+    if requested_inode_mode:
+        notes.append(
+            'virtiofs.inode_file_handles is currently ignored in managed-libvirt mode; '
+            'AIVM no longer installs generated host-side virtiofsd wrappers. '
+            'Existing AIVM wrapper paths will be removed from domain XML.'
+        )
 
     return (
         VMUpdateDrift(
@@ -507,19 +518,23 @@ def _apply_vm_update(
 def _apply_virtiofs_binary_drift(
     cfg: AgentVMConfig, drift: VMUpdateDrift, *, dry_run: bool
 ) -> bool:
-    """Install the wrapper (if needed) and rewrite the domain XML.
+    """Rewrite virtiofs ``<binary path>`` entries in persistent XML.
+
+    Current normal use is cleanup-only: remove legacy AIVM-generated wrapper
+    paths and return to libvirt's managed virtiofsd invocation. The old path
+    that installed host-side wrappers is intentionally disabled.
 
     The vhost-user-fs binary path cannot be changed live, so we update the
     persistent config only; the change takes effect on the next VM start.
     Returns True if any change was applied (or would be in dry-run).
     """
     mgr = CommandManager.current()
-    mode = drift.virtiofsd_mode
-    # Install / refresh the wrapper if any drift entry needs it.
     needs_wrapper = any(d.desired for d in drift.virtiofs_binary)
-    if needs_wrapper and mode:
-        virtiofsd_wrapper.ensure_wrapper_installed(
-            cfg.paths.base_dir, mode, dry_run=dry_run
+    if needs_wrapper:
+        raise RuntimeError(
+            'Refusing to configure AIVM-generated host-side virtiofsd wrappers. '
+            'Managed libvirt mode now only removes old AIVM wrapper paths. '
+            'See dev/design/future/virtiofsd-inode-file-handles.md.'
         )
 
     if dry_run:

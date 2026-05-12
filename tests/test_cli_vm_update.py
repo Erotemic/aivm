@@ -129,9 +129,9 @@ def test_apply_vm_update_disk_grow_requires_no_restart() -> None:
     assert kind == RestartKind.NONE
 
 
-def test_apply_vm_update_virtiofs_drift_requires_hard_cycle() -> None:
-    """vhost-user-fs <binary path> only changes when libvirt spawns a
-    fresh virtiofsd: a full power cycle is required.
+def test_apply_vm_update_virtiofs_cleanup_requires_hard_cycle() -> None:
+    """vhost-user-fs <binary path> changes only when libvirt spawns a
+    fresh virtiofsd, even when the update is removing an old wrapper path.
     """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-vfs'
@@ -139,11 +139,11 @@ def test_apply_vm_update_virtiofs_drift_requires_hard_cycle() -> None:
         virtiofs_binary=(
             VirtiofsBinaryDrift(
                 tag='aivm-persistent-root',
-                current='',
-                desired='/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh',
+                current='/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh',
+                desired='',
             ),
         ),
-        virtiofsd_mode='prefer',
+        virtiofsd_mode='',
     )
     changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
     assert changed is True
