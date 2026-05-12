@@ -22,6 +22,7 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..util import CmdError
+from . import virtiofsd_wrapper
 
 log = logger
 
@@ -271,6 +272,28 @@ def vm_share_mappings(
     return mappings
 
 
+def _resolve_virtiofs_binary_for_attach(
+    cfg: AgentVMConfig, *, dry_run: bool = False
+) -> str | None:
+    """Resolve the libvirt ``<binary path='...'>`` for new virtiofs attach.
+
+    Reads ``cfg.virtiofs.inode_file_handles``; if set to one of the
+    supported modes, returns the expected wrapper path. Otherwise returns
+    None and no ``<binary>`` element is emitted.
+
+    Does *not* install the wrapper. Installation is owned by ``aivm vm
+    update`` so that the attach hot path stays free of stateful host-side
+    side effects and remains easy to unit-test.
+    """
+    del dry_run  # kept for symmetry with prior signature; no side effects here
+    mode = virtiofsd_wrapper.normalize_mode(
+        getattr(cfg.virtiofs, 'inode_file_handles', '')
+    )
+    if not mode:
+        return None
+    return virtiofsd_wrapper.desired_binary_path(cfg.paths.base_dir, mode)
+
+
 def attach_vm_share(
     cfg: AgentVMConfig,
     source_dir: str,
@@ -288,17 +311,24 @@ def attach_vm_share(
         raise RuntimeError(
             'Share tag is empty; cannot attach filesystem mapping.'
         )
+    binary_path = _resolve_virtiofs_binary_for_attach(cfg, dry_run=dry_run)
     if dry_run:
         log.info(
-            'DRYRUN: attach virtiofs share source={} tag={}', source_dir, tag
+            'DRYRUN: attach virtiofs share source={} tag={} binary={}',
+            source_dir, tag, binary_path or '(libvirt default)',
         )
         return
-    xml = f"""<filesystem type='mount' accessmode='passthrough'>
-  <driver type='virtiofs'/>
-  <source dir='{source_dir}'/>
-  <target dir='{tag}'/>
-</filesystem>
-"""
+    binary_xml = (
+        f"  <binary path='{binary_path}'/>\n" if binary_path else ''
+    )
+    xml = (
+        "<filesystem type='mount' accessmode='passthrough'>\n"
+        "  <driver type='virtiofs'/>\n"
+        f"{binary_xml}"
+        f"  <source dir='{source_dir}'/>\n"
+        f"  <target dir='{tag}'/>\n"
+        "</filesystem>\n"
+    )
     with tempfile.NamedTemporaryFile('w', delete=False) as f:
         f.write(xml)
         tmp = f.name

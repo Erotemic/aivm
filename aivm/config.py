@@ -113,6 +113,29 @@ class BehaviorConfig:
 
 
 @dataclass
+class VirtiofsConfig:
+    """Per-VM knobs that affect how virtiofsd is invoked.
+
+    These translate into the libvirt domain XML for each ``<filesystem>``
+    device on the VM. They are per-VM because the libvirt XML records them
+    per-device, even when the underlying host capability is shared.
+    """
+
+    # Mode for virtiofsd's --inode-file-handles flag, applied via a small
+    # wrapper script installed under paths.base_dir. Valid values:
+    #
+    #   ''           - disabled; emit no <binary> override, use libvirt default
+    #   'never'      - explicit current libvirt default (per-FD inode caching)
+    #   'prefer'     - file handles where supported, FD fallback per filesystem
+    #   'mandatory'  - file handles required; refuses to start otherwise
+    #
+    # 'prefer' is the safe default and removes the per-inode host-FD cost
+    # that produces guest-side OSError(EMFILE) on large persistent-root
+    # exports. See aivm/vm/virtiofsd_wrapper.py for full rationale.
+    inode_file_handles: str = 'prefer'
+
+
+@dataclass
 class AgentVMConfig:
     vm: VMConfig = field(default_factory=VMConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
@@ -120,6 +143,7 @@ class AgentVMConfig:
     image: ImageConfig = field(default_factory=ImageConfig)
     provision: ProvisionConfig = field(default_factory=ProvisionConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
+    virtiofs: VirtiofsConfig = field(default_factory=VirtiofsConfig)
     verbosity: int = 1
 
     def expanded_paths(self) -> 'AgentVMConfig':
@@ -178,6 +202,7 @@ def load(path: Path) -> AgentVMConfig:
         'image',
         'provision',
         'paths',
+        'virtiofs',
     ):
         if section in raw and isinstance(raw[section], dict):
             sec = raw[section]
