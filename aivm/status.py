@@ -333,14 +333,27 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     return ProbeOutcome(res.code == 0, detail, diag)
 
 
-def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
-    """Return whether status should expect uv in the guest."""
+_TOOL_DISABLED_SPECS = {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
+
+
+def _guest_tool_enabled(cfg: AgentVMConfig, name: str, *, default: str) -> bool:
+    """Return whether status should expect a managed guest tool."""
     tools = getattr(cfg, 'tools', None)
-    raw = getattr(tools, 'uv', 'latest')
+    raw = getattr(tools, name, default)
     if isinstance(raw, bool):
         return raw
     spec = str(raw or '').strip().lower()
-    return spec not in {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
+    return spec not in _TOOL_DISABLED_SPECS
+
+
+def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
+    """Return whether status should expect uv in the guest."""
+    return _guest_tool_enabled(cfg, 'uv', default='latest')
+
+
+def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
+    """Return whether status should expect Rust in the guest."""
+    return _guest_tool_enabled(cfg, 'rust', default='off')
 
 
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
@@ -364,6 +377,12 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         )
     if _guest_tool_uv_enabled(cfg):
         checks.append('command -v uv >/dev/null 2>&1 || exit 11')
+    if _guest_tool_rust_enabled(cfg):
+        checks.append(
+            'command -v rustup >/dev/null 2>&1 || exit 12; '
+            'command -v cargo >/dev/null 2>&1 || exit 13; '
+            'command -v rustc >/dev/null 2>&1 || exit 14'
+        )
     remote = '; '.join(checks)
     cmd = [
         'ssh',

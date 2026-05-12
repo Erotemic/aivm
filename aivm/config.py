@@ -105,10 +105,14 @@ class ProvisionConfig:
 class ToolsConfig:
     """Guest developer tools managed outside apt/snap packaging.
 
-    ``uv`` is a small declarative spec:
-      * ``"latest"`` installs/keeps uv available via Astral's standalone installer.
-      * a version like ``"0.6.14"`` pins the installer URL.
-      * ``"off"`` disables uv management.
+    Tool fields are compact declarative specs:
+      * ``"off"`` disables management.
+      * ``"latest"`` means the upstream default current release.
+      * a version/channel string pins the requested tool.
+
+    ``uv`` uses Astral's standalone installer. ``rust`` uses rustup, not
+    distro Rust packages or snap. Rust is off by default because it is a
+    larger toolchain; set ``rust = "stable"`` to manage it.
 
     TODO(tools): add a first-class non-snap VS Code CLI installer here so
     tunnel workflows can be bootstrapped in the VM without relying on the
@@ -116,6 +120,7 @@ class ToolsConfig:
     """
 
     uv: str = 'latest'
+    rust: str = 'off'
     bin_dir: str = '~/.local/bin'
 
 

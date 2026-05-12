@@ -1796,10 +1796,38 @@ def _guest_tool_uv_spec(cfg: AgentVMConfig) -> str:
     return str(raw or '').strip()
 
 
+_TOOL_DISABLED_SPECS = {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
+
+
+def _guest_tool_spec(cfg: AgentVMConfig, name: str, *, default: str) -> str:
+    """Normalize a compact ``[tools]`` spec to a string."""
+    raw = getattr(cfg.tools, name, default)
+    if isinstance(raw, bool):
+        return default if raw else 'off'
+    return str(raw or '').strip()
+
+
+def _guest_tool_enabled(cfg: AgentVMConfig, name: str, *, default: str) -> bool:
+    """Return whether a compact ``[tools]`` spec enables management."""
+    return _guest_tool_spec(cfg, name, default=default).lower() not in _TOOL_DISABLED_SPECS
+
+
 def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
     """Return whether aivm should keep uv available in the guest."""
-    spec = _guest_tool_uv_spec(cfg).lower()
-    return spec not in {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
+    return _guest_tool_enabled(cfg, 'uv', default='latest')
+
+
+def _guest_tool_rust_spec(cfg: AgentVMConfig) -> str:
+    """Normalize ``[tools].rust`` into a rustup toolchain spec."""
+    spec = _guest_tool_spec(cfg, 'rust', default='off')
+    if spec.lower() == 'latest':
+        return 'stable'
+    return spec
+
+
+def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
+    """Return whether aivm should keep Rust available in the guest."""
+    return _guest_tool_enabled(cfg, 'rust', default='off')
 
 
 def _uv_installer_url(spec: str) -> str:
@@ -1876,6 +1904,73 @@ uv --version
     return textwrap.dedent(script).strip()
 
 
+def _guest_ensure_rust_script(
+    cfg: AgentVMConfig,
+    *,
+    ensure_transport: bool = False,
+) -> str:
+    """Build an idempotent guest-side shell script that installs Rust.
+
+    The script uses rustup, not apt/snap Rust packages. It avoids upstream
+    profile mutation with ``--no-modify-path`` and owns a small marked PATH
+    block for Cargo's bin directory.
+    """
+    toolchain = _guest_tool_rust_spec(cfg) or 'stable'
+    rustup_url = 'https://sh.rustup.rs'
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    script = f"""
+set -euo pipefail
+RUST_TOOLCHAIN={shlex.quote(toolchain)}
+RUSTUP_URL={shlex.quote(rustup_url)}
+export CARGO_HOME="${{CARGO_HOME:-$HOME/.cargo}}"
+export RUSTUP_HOME="${{RUSTUP_HOME:-$HOME/.rustup}}"
+export PATH="$CARGO_HOME/bin:$PATH"
+{transport_bootstrap}
+mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+if ! command -v rustup >/dev/null 2>&1; then
+    if command -v curl >/dev/null 2>&1; then
+        curl --proto '=https' --tlsv1.2 -sSf "$RUSTUP_URL" | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --no-modify-path
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$RUSTUP_URL" | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --no-modify-path
+    else
+        echo 'Neither curl nor wget is installed; cannot install Rust via rustup.' >&2
+        exit 1
+    fi
+else
+    rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+    rustup default "$RUST_TOOLCHAIN"
+fi
+if ! command -v rustup >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+    echo 'Rust installation completed, but rustup/cargo/rustc was not found in PATH.' >&2
+    exit 1
+fi
+PROFILE="$HOME/.profile"
+if ! grep -Fq '# >>> aivm rust PATH >>>' "$PROFILE" 2>/dev/null; then
+    {{
+        echo ''
+        echo '# >>> aivm rust PATH >>>'
+        printf '%s\n' "case ':\\$PATH:' in"
+        printf '%s\n' "  *':$CARGO_HOME/bin:'*) ;;"
+        printf '%s\n' "  *) PATH='$CARGO_HOME/bin':\\$PATH ;;"
+        printf '%s\n' 'esac'
+        printf '%s\n' 'export PATH'
+        echo '# <<< aivm rust PATH <<<'
+    }} >> "$PROFILE"
+fi
+rustup --version
+rustc --version
+cargo --version
+"""
+    return textwrap.dedent(script).strip()
+
+
 def wait_for_ssh(
     cfg: AgentVMConfig,
     ip: str,
@@ -1945,6 +2040,11 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         else []
     )
     install_pkgs = docker_pkgs + pkgs
+    if _guest_tool_rust_enabled(cfg):
+        # Keep the rustup-managed toolchain usable for native crate builds.
+        for pkg in ['build-essential', 'pkg-config', 'libssl-dev']:
+            if pkg not in install_pkgs:
+                install_pkgs.append(pkg)
     install_cmd = ':'
     if install_pkgs:
         quoted_pkgs = ' '.join(shlex.quote(pkg) for pkg in install_pkgs)
@@ -1962,6 +2062,8 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     ]
     if _guest_tool_uv_enabled(cfg):
         remote_parts.append(_guest_ensure_uv_script(cfg, ensure_transport=False))
+    if _guest_tool_rust_enabled(cfg):
+        remote_parts.append(_guest_ensure_rust_script(cfg, ensure_transport=False))
     remote = '\n'.join(remote_parts)
     cmd = [
         'ssh',
