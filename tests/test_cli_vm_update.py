@@ -172,7 +172,7 @@ def test_vm_update_no_changes(
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_update._vm_update_drift',
+        'aivm.ops.vm_update._vm_update_drift',
         lambda *a, **k: (VMUpdateDrift(), False),
     )
     rc = VMUpdateCLI.main(argv=False, config=str(tmp_path / 'config.toml'))
@@ -192,11 +192,11 @@ def test_vm_update_restarts_when_required(
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_update._vm_update_drift',
+        'aivm.ops.vm_update._vm_update_drift',
         lambda *a, **k: (drift, True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_update._apply_vm_update',
+        'aivm.ops.vm_update._apply_vm_update',
         lambda *a, **k: (True, True),
     )
     called: dict[str, object] = {}  # type: ignore[assignment]
@@ -205,7 +205,7 @@ def test_vm_update_restarts_when_required(
         called['kwargs'] = k  # type: ignore[index]
 
     monkeypatch.setattr(
-        'aivm.cli.vm_update._maybe_restart_vm_after_update', fake_restart
+        'aivm.ops.vm_update._maybe_restart_vm_after_update', fake_restart
     )
     rc = VMUpdateCLI.main(
         argv=False,
@@ -273,7 +273,7 @@ def test_vm_update_drift_escalates_for_disk_probe(
             return CmdResult(0, '{"virtual-size": 42949672960}', '')
         raise AssertionError(f'Unexpected cmd={cmd!r} sudo={sudo}')
 
-    monkeypatch.setattr('aivm.cli.vm_update.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
     drift, running = _vm_update_drift(cfg, yes=False)
     assert running is True
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -328,7 +328,7 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
             return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
         raise AssertionError(f'Unexpected command: {cmd!r}')
 
-    monkeypatch.setattr('aivm.cli.vm_update.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
     assert any('falling back to virsh domblkinfo' in n for n in drift.notes)

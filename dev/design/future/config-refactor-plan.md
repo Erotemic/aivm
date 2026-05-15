@@ -61,7 +61,14 @@ yes_sudo = false
 auto_approve_readonly_sudo = true
 verbose = 1
 mirror_shared_home_folders = false
+```
 
+### `defaults.toml`
+
+Owns reusable defaults. Defaults are split out because they are rarely the
+primary edit target once VM files exist.
+
+```toml
 [defaults.vm]
 user = "agent"
 cpus = 4
@@ -97,7 +104,7 @@ extra_block_cidrs = []
 ```
 
 Networks are separate from VM files because one or two VMs will often share a
-single managed network.  Keeping the shared network in one file avoids silent
+single managed network. Keeping the shared network in one file avoids silent
 copy/paste drift between VM configs.
 
 ### `vms/{vm_name}.toml`
@@ -224,7 +231,7 @@ Support nested VM attachment config
 
 ### Chunk 3: add split-layout read support and user-facing inspection
 
-Status: not implemented.
+Status: implemented.
 
 Goal: make the split layout readable without migrating or rewriting users'
 configs automatically.
@@ -289,7 +296,7 @@ Read concatenation-friendly split config layouts
 
 ### Chunk 4: write and migrate to the split layout
 
-Status: not implemented.
+Status: implemented.
 
 Goal: make the new config layout real and preferred while keeping monolith
 compatibility.
@@ -297,7 +304,8 @@ compatibility.
 Scope:
 
 - Add a split writer:
-  - `config.toml` gets schema, active VM, behavior, and defaults.
+  - `config.toml` gets schema, active VM, and behavior.
+  - `defaults.toml` gets `[defaults.*]` tables.
   - `networks.toml` gets all `[[networks]]` entries.
   - `vms/{name}.toml` gets exactly one `[[vms]]` entry with nested
     `[[vms.attachments]]` records.

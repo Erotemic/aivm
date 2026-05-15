@@ -100,3 +100,27 @@ pytest tests/test_cli_vm_create.py \
        tests/test_attachment_shared_root.py \
        tests/test_cli_helpers.py
 ```
+
+## Checkpoint: VM update operation extraction
+
+The next CLI cleanup step moved the update workflow out of
+`aivm/cli/vm_update.py` and into `aivm/ops/vm_update.py`.
+
+Current ownership:
+
+- `aivm/cli/vm_update.py`
+  - parses CLI arguments
+  - validates the `--restart` option via the operation helper
+  - loads the selected VM config
+  - calls `run_vm_update(...)`
+
+- `aivm/ops/vm_update.py`
+  - owns the high-level update workflow
+  - computes drift
+  - renders the update plan
+  - applies drift inside the update intent
+  - handles post-update restart policy
+
+This keeps the CLI command public behavior unchanged while making the workflow
+usable by future non-CLI callers and easier to test at the operation layer.
+Private tests should patch `aivm.ops.vm_update.*` for update workflow seams.

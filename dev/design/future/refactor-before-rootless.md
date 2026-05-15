@@ -136,3 +136,13 @@ strategy and rationale.
 The VM CLI has been split into focused modules while keeping
 `aivm.cli.vm` as the compatibility facade and ModalCLI registration point.
 See `dev/design/future/cli-refactor.md` for details and the follow-up plan.
+
+## Current checkpoint: config, CLI, and update cleanup
+
+The config refactor now supports canonical split formatting with `config.toml`,
+`defaults.toml`, `networks.toml`, and `vms/{name}.toml`.  The VM CLI has been
+split into focused modules, and VM update has an operation layer plus focused
+`aivm/vm/update/*` implementation modules.
+
+The command execution engine remains intentionally untouched.  Future rootless
+work should build on these seams rather than editing `commands.py` first.
