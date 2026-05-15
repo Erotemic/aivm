@@ -20,7 +20,7 @@ from .config_store.io import (
     load_config_document as _load_config_document,
     render_split_fragments,
     save_store_split as _save_store_split,
-    split_existing_config as _split_existing_config,
+    format_existing_config as _format_existing_config,
     split_fragment_paths,
     split_source_paths,
 )
@@ -39,6 +39,7 @@ from .config_store.parse import _cfg_from_dict, _norm_dir, parse_store_toml
 from .config_store.render import (
     _emit_toml_kv,
     _toml_escape,
+    render_store_defaults_toml,
     render_store_networks_toml,
     render_store_root_toml,
     render_store_toml,
@@ -117,14 +118,14 @@ def save_store_split(
     )
 
 
-def split_existing_config(
+def format_existing_config(
     path: Path | None = None,
     *,
     backup: bool = True,
     dry_run: bool = False,
     force: bool = False,
 ) -> list[Path]:
-    return _split_existing_config(
+    return _format_existing_config(
         path or store_path(),
         backup=backup,
         dry_run=dry_run,
@@ -167,8 +168,9 @@ __all__ = [
     'remove_vm',
     'render_split_fragments',
     'save_store_split',
-    'split_existing_config',
+    'format_existing_config',
     'split_fragment_paths',
+    'render_store_defaults_toml',
     'render_store_networks_toml',
     'render_store_root_toml',
     'render_store_vm_toml',

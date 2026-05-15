@@ -103,6 +103,7 @@ from ._common import (
     _resolve_cfg_for_code,
     log,
 )
+from .config import _edit_path, _resolve_config_edit_target
 
 
 class VMUpCLI(_BaseCommand):
@@ -1204,6 +1205,32 @@ class VMConfigPathCLI(_BaseCommand):
         return 0
 
 
+class VMEditCLI(_BaseCommand):
+    """Edit the active or named VM config fragment in $EDITOR."""
+
+    vm: Any = scfg.Value('', help='VM name override.', position=1)
+    editor: Any = scfg.Value(
+        '',
+        help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
+    )
+    visual: Any = scfg.Value(
+        '',
+        help='If true, then prefer $VISUAL over $EDITOR.',
+        isflag=True,
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        path = _resolve_config_edit_target(
+            config_opt=args.config,
+            target='vm',
+            name=str(args.vm or ''),
+        )
+        _edit_path(path, args)
+        return 0
+
+
 class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live libvirt settings."""
 
@@ -1267,6 +1294,7 @@ class VMModalCLI(scfg.ModalCLI):
     status = VMStatusCLI
     update = VMUpdateCLI
     config_path = VMConfigPathCLI
+    edit = VMEditCLI
     destroy = VMDestroyCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI

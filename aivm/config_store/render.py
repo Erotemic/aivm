@@ -38,6 +38,34 @@ def _emit_attachment(
             f'host_lexical_path = "{_toml_escape(att.host_lexical_path)}"'
         )
 
+def _emit_defaults(lines: list[str], reg: Store) -> None:
+    """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""
+    if reg.defaults is None:
+        return
+    d = asdict(reg.defaults)
+    verbosity = int(d.get('verbosity', 1))
+    if verbosity != 1:
+        lines.append('[defaults]')
+        lines.append(f'verbosity = {verbosity}')
+        lines.append('')
+    for section in (
+        'vm',
+        'network',
+        'firewall',
+        'image',
+        'provision',
+        'paths',
+        'virtiofs',
+    ):
+        body = d.get(section, {})
+        if not isinstance(body, dict):
+            continue
+        lines.append(f'[defaults.{section}]')
+        for k, v in body.items():
+            _emit_toml_kv(lines, k, v)
+        lines.append('')
+
+
 
 def render_store_toml(
     reg: Store, *, attachment_style: str = 'legacy'
@@ -75,29 +103,7 @@ def render_store_toml(
     )
     lines.append('')
 
-    if reg.defaults is not None:
-        d = asdict(reg.defaults)
-        verbosity = int(d.get('verbosity', 1))
-        if verbosity != 1:
-            lines.append('[defaults]')
-            lines.append(f'verbosity = {verbosity}')
-            lines.append('')
-        for section in (
-            'vm',
-            'network',
-            'firewall',
-            'image',
-            'provision',
-            'paths',
-            'virtiofs',
-        ):
-            body = d.get(section, {})
-            if not isinstance(body, dict):
-                continue
-            lines.append(f'[defaults.{section}]')
-            for k, v in body.items():
-                _emit_toml_kv(lines, k, v)
-            lines.append('')
+    _emit_defaults(lines, reg)
 
     for net in sorted(reg.networks, key=lambda n: n.name):
         lines.append('[[networks]]')
@@ -162,17 +168,26 @@ def render_store_root_toml(reg: Store) -> str:
     """Render only singleton/global config tables for split layout.
 
     The result is intended for ``~/.config/aivm/config.toml``.  It may define
-    schema/global behavior/default tables, but it intentionally emits no
+    schema/global behavior, but it intentionally emits no defaults,
     ``[[networks]]``, ``[[vms]]``, or ``[[attachments]]`` records so it can be
-    concatenated with split fragments.
+    concatenated with split fragments.  Defaults live in ``defaults.toml``.
     """
     root = Store(
         schema_version=reg.schema_version,
         active_vm=reg.active_vm,
         behavior=reg.behavior,
-        defaults=reg.defaults,
+        defaults=None,
     )
     return render_store_toml(root, attachment_style='nested')
+
+
+def render_store_defaults_toml(reg: Store) -> str:
+    """Render only ``[defaults.*]`` tables for split layout."""
+    lines: list[str] = []
+    _emit_defaults(lines, reg)
+    if not lines:
+        return '# No AIVM defaults are configured yet.\n'
+    return '\n'.join(lines).rstrip() + '\n'
 
 
 def render_store_networks_toml(reg: Store) -> str:

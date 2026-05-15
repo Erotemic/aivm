@@ -339,6 +339,7 @@ def test_save_store_split_writes_concatenation_friendly_fragments(tmp_path: Path
     written = save_store_split(store, root)
 
     assert root in written
+    assert tmp_path / 'defaults.toml' in written
     assert tmp_path / 'networks.toml' in written
     assert tmp_path / 'vms' / 'vm-a.toml' in written
     vm_text = (tmp_path / 'vms' / 'vm-a.toml').read_text(encoding='utf-8')
@@ -368,6 +369,7 @@ def test_save_store_updates_existing_split_layout(tmp_path: Path) -> None:
     store.vms[0].cfg.vm.cpus = 12
     save_store(store, root)
 
+    assert (tmp_path / 'defaults.toml').exists()
     assert (tmp_path / 'vms' / 'vm-a.toml').exists()
     assert '[[vms]]' in (tmp_path / 'vms' / 'vm-a.toml').read_text(
         encoding='utf-8'
@@ -377,8 +379,8 @@ def test_save_store_updates_existing_split_layout(tmp_path: Path) -> None:
     assert loaded.store.vms[0].cfg.vm.cpus == 12
 
 
-def test_split_existing_config_migrates_monolith(tmp_path: Path) -> None:
-    """Migration rewrites config.toml as root fragment and creates VM files."""
+def test_format_existing_config_migrates_monolith(tmp_path: Path) -> None:
+    """Formatting rewrites config.toml as root fragment and creates split files."""
     store = Store()
     store.defaults = AgentVMConfig()
     cfg = AgentVMConfig()
@@ -391,16 +393,20 @@ def test_split_existing_config_migrates_monolith(tmp_path: Path) -> None:
     root = tmp_path / 'config.toml'
     save_store(store, root)
 
-    from aivm.store import load_config_document, split_existing_config
+    from aivm.store import format_existing_config, load_config_document
 
-    split_existing_config(root)
+    format_existing_config(root)
 
     assert (tmp_path / 'config.toml.bak').exists()
+    assert (tmp_path / 'defaults.toml').exists()
     assert (tmp_path / 'networks.toml').exists()
     assert (tmp_path / 'vms' / 'vm-a.toml').exists()
     root_text = root.read_text(encoding='utf-8')
     assert '[[vms]]' not in root_text
     assert '[[attachments]]' not in root_text
+    assert '[defaults.vm]' not in root_text
+    defaults_text = (tmp_path / 'defaults.toml').read_text(encoding='utf-8')
+    assert '[defaults.vm]' in defaults_text
     vm_text = (tmp_path / 'vms' / 'vm-a.toml').read_text(encoding='utf-8')
     assert '[[vms.attachments]]' in vm_text
 

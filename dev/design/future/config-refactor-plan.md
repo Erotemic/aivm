@@ -15,6 +15,7 @@ The intended endpoint is a concatenation-friendly split config layout:
 ```text
 ~/.config/aivm/
   config.toml
+  defaults.toml
   networks.toml
   vms/
     aivm-2404.toml
@@ -24,7 +25,7 @@ The intended endpoint is a concatenation-friendly split config layout:
 The important invariant is:
 
 ```text
-cat config.toml networks.toml vms/*.toml
+cat config.toml defaults.toml networks.toml vms/*.toml
 ```
 
 should be valid TOML that parses as the canonical AIVM desired-state document.
@@ -236,11 +237,12 @@ Scope:
   - layout value such as `"monolith"` or `"split"`
 - Teach the loader to read either:
   - current monolith: `~/.config/aivm/config.toml`
-  - split layout: `config.toml`, optional `networks.toml`, sorted `vms/*.toml`
+  - split layout: `config.toml`, optional `defaults.toml`, optional `networks.toml`, sorted `vms/*.toml`
 - Implement deterministic concatenation in the loader:
   1. `config.toml`
-  2. `networks.toml`, if present
-  3. `vms/*.toml`, sorted by filename
+  2. `defaults.toml`, if present
+  3. `networks.toml`, if present
+  4. `vms/*.toml`, sorted by filename
 - Parse the concatenated TOML as the same canonical desired-state document.
 - Detect duplicate VM or network definitions loudly.
 - Preserve old monolithic config behavior when split files do not exist.
@@ -300,8 +302,8 @@ Scope:
   - `vms/{name}.toml` gets exactly one `[[vms]]` entry with nested
     `[[vms.attachments]]` records.
 - Add migration commands:
-  - `aivm config split --dry-run`
-  - `aivm config split`
+  - `aivm config format --dry-run`
+  - `aivm config format`
 - Migration behavior:
   - read the current logical store;
   - write a timestamped backup of the monolith;
@@ -430,7 +432,7 @@ Implemented pieces:
 - A guard that refuses monolith writes when split fragments are present.
 
 Chunk 4 remains responsible for writing split fragments and implementing
-`aivm config split`.
+`aivm config format`.
 
 ## Chunk 4 checkpoint: split writes and migration
 
@@ -447,10 +449,10 @@ compatible:
   - `networks.toml` for all `[[networks]]`, and
   - `vms/{vm_name}.toml` for exactly one `[[vms]]` record plus nested
     `[[vms.attachments]]`.
-- `aivm config split` migrates the currently loaded logical store to split
+- `aivm config format` migrates the currently loaded logical store to split
   fragments and backs up the old monolithic `config.toml` first.
-- `aivm config split --dry-run` reports the target files without writing.
-- `aivm config split --force` rewrites existing split fragments from the loaded
+- `aivm config format --dry-run` reports the target files without writing.
+- `aivm config format --force` rewrites existing split fragments from the loaded
   logical document.
 
 The important invariant remains: concatenating `config.toml`, `networks.toml`,
@@ -469,3 +471,24 @@ pytest tests/test_store.py \
 
 The e2e SSH readiness failure seen after chunk 2 remains an open investigation
 item unless it reproduces consistently after the config-only changes.
+
+## Follow-up naming checkpoint: config format and defaults.toml
+
+Updated: 2026-05-15 15:40:00 America/New_York
+
+The public migration/canonicalization command should be `aivm config format`.
+There should be no `aivm config split` alias.  Formatting is the stable concept:
+it reads any supported layout and writes the canonical fragment layout.
+
+The canonical fragment layout now includes `defaults.toml`:
+
+```text
+~/.config/aivm/config.toml
+~/.config/aivm/defaults.toml
+~/.config/aivm/networks.toml
+~/.config/aivm/vms/{vm_name}.toml
+```
+
+`aivm config edit` should default to the global/root config.  Targeted editing is
+provided by `aivm config edit defaults`, `aivm config edit networks`,
+`aivm config edit vm [NAME]`, and the shorthand `aivm vm edit [NAME]`.

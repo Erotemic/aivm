@@ -41,7 +41,8 @@ from ..store import (
     load_config_document,
     load_store,
     save_store,
-    split_existing_config,
+    format_existing_config,
+    split_fragment_paths,
     upsert_network,
     upsert_vm_with_network,
 )
@@ -247,7 +248,7 @@ class ConfigShowCLI(_BaseCommand):
 
     By default this prints the canonical source document.  For split layouts,
     that source document is the deterministic concatenation of config.toml,
-    networks.toml, and sorted vms/*.toml fragments.
+    defaults.toml, networks.toml, and sorted vms/*.toml fragments.
     """
 
     vm = scfg.Value(
@@ -295,8 +296,8 @@ class ConfigShowCLI(_BaseCommand):
         return 0
 
 
-class ConfigSplitCLI(_BaseCommand):
-    """Migrate the config store to concatenation-friendly split files."""
+class ConfigFormatCLI(_BaseCommand):
+    """Format config into the canonical split-file layout."""
 
     dry_run = scfg.Value(
         False,
@@ -306,7 +307,7 @@ class ConfigSplitCLI(_BaseCommand):
     force = scfg.Value(
         False,
         isflag=True,
-        help='Rewrite existing split fragments from the loaded logical document.',
+        help='Rewrite existing formatted fragments from the loaded logical document.',
     )
     no_backup = scfg.Value(
         False,
@@ -318,16 +319,16 @@ class ConfigSplitCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         path = _cfg_path(args.config)
-        targets = split_existing_config(
+        targets = format_existing_config(
             path,
             backup=not bool(args.no_backup),
             dry_run=bool(args.dry_run),
             force=bool(args.force),
         )
         if args.dry_run:
-            print('Would write split config files:')
+            print('Would write formatted config files:')
         else:
-            print('Wrote split config files:')
+            print('Wrote formatted config files:')
         for fpath in targets:
             print(f'  {fpath}')
         if not args.dry_run:
@@ -352,42 +353,126 @@ class ConfigFilesCLI(_BaseCommand):
         return 0
 
 
-class ConfigEditCLI(_BaseCommand):
-    """Edit global config store in $EDITOR."""
+def _editor_command(args: Any) -> list[str]:
+    """Return the editor command prefix selected by CLI args/environment."""
+    order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
+    candidates = [
+        str(args.editor or '').strip(),
+        *(os.environ.get(key, '') for key in order),
+    ]
+    editor_cmd = next((x for x in candidates if x), '')
+    if not editor_cmd:
+        editor_cmd = which('nano') or which('vi') or ''
+    if not editor_cmd:
+        raise RuntimeError('No editor found. Set $EDITOR or pass --editor.')
+    return shlex.split(editor_cmd)
 
+
+def _edit_path(path: Path, args: Any) -> None:
+    """Open a config path in the selected editor."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text('', encoding='utf-8')
+    parts = _editor_command(args) + [str(path)]
+    CommandManager.current().run(
+        parts, sudo=False, check=True, capture=False
+    )
+
+
+def _role_source(loaded: Any, role: str) -> Path | None:
+    for src in loaded.sources:
+        if src.role == role:
+            return src.path
+    return None
+
+
+def _resolve_config_edit_target(
+    *, config_opt: str, target: str, name: str = ''
+) -> Path:
+    """Resolve a user-facing config edit target to a physical file."""
+    root = _cfg_path(config_opt)
+    loaded = load_config_document(root)
+    cfg_dir = root.parent
+    target_norm = (target or 'global').strip().lower().replace('_', '-')
+    name = str(name or '').strip()
+
+    if target_norm in {'global', 'root', 'base', 'config', ''}:
+        return root
+
+    if target_norm in {'defaults', 'default'}:
+        src = _role_source(loaded, 'defaults')
+        if src is not None:
+            return src
+        return cfg_dir / 'defaults.toml' if loaded.layout == 'split' else root
+
+    if target_norm in {'networks', 'network', 'net'}:
+        src = _role_source(loaded, 'networks')
+        if src is not None:
+            return src
+        return cfg_dir / 'networks.toml' if loaded.layout == 'split' else root
+
+    if target_norm in {'vm', 'vms', 'active-vm', 'active'}:
+        vm_name = name or loaded.store.active_vm
+    else:
+        # Convenience: `aivm config edit aivm-2404` means that VM if it exists.
+        vm_name = target
+
+    if not vm_name:
+        raise RuntimeError('No VM specified and active_vm is unset.')
+    if find_vm(loaded.store, vm_name) is None:
+        raise RuntimeError(f'VM not found in config: {vm_name}')
+    src = loaded.vm_sources.get(vm_name)
+    if src is not None:
+        return src
+    if loaded.layout == 'split':
+        paths = split_fragment_paths(loaded.store, root)
+        return paths.get(f'vm:{vm_name}', cfg_dir / 'vms' / f'{vm_name}.toml')
+    return root
+
+
+class ConfigEditCLI(_BaseCommand):
+    """Edit a config fragment in $EDITOR.
+
+    Targets:
+      global/root/base/config  -> config.toml
+      defaults                 -> defaults.toml when formatted
+      networks                 -> networks.toml when formatted
+      vm [NAME]                -> the named VM fragment, defaulting to active_vm
+      NAME                     -> shorthand for `vm NAME` when NAME is a VM
+    """
+
+    target: Any = scfg.Value(
+        'global',
+        help='Edit target: global, defaults, networks, vm, active-vm, or VM name.',
+        position=1,
+    )
+    name: Any = scfg.Value(
+        '',
+        help='Optional name for targets that need one, e.g. `vm aivm-2404`.',
+        position=2,
+    )
     editor: Any = scfg.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
-
     visual: Any = scfg.Value(
         '',
-        help='If true, then prever $VISUAL over $EDITOR',
+        help='If true, then prefer $VISUAL over $EDITOR.',
         isflag=True,
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
-        if not path.exists():
+        path = _resolve_config_edit_target(
+            config_opt=args.config,
+            target=str(args.target or 'global'),
+            name=str(args.name or ''),
+        )
+        if path == _cfg_path(args.config) and not path.exists():
             reg = load_store(path)
             save_store(reg, path)
-
-        order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
-        candidates = [
-            str(args.editor or '').strip(),
-            *(os.environ.get(key, '') for key in order),
-        ]
-        editor_cmd = next((x for x in candidates if x), '')
-        if not editor_cmd:
-            editor_cmd = which('nano') or which('vi') or ''
-        if not editor_cmd:
-            raise RuntimeError('No editor found. Set $EDITOR or pass --editor.')
-        parts = shlex.split(editor_cmd) + [str(path)]
-        CommandManager.current().run(
-            parts, sudo=False, check=True, capture=False
-        )
+        _edit_path(path, args)
         return 0
 
 
@@ -752,7 +837,7 @@ class ConfigModalCLI(scfg.ModalCLI):
     lint = ConfigLintCLI
     path = ConfigPathCLI
     files = ConfigFilesCLI
-    split = ConfigSplitCLI
+    format = ConfigFormatCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
 

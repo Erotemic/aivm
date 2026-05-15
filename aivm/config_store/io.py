@@ -4,11 +4,11 @@ This module currently supports two physical layouts that parse into the same
 logical :class:`Store` model:
 
 * legacy monolith: ``config.toml`` contains the whole document;
-* split fragments: ``config.toml`` + ``networks.toml`` + ``vms/*.toml``
-  concatenate into the canonical document.
+* split fragments: ``config.toml`` + ``defaults.toml`` + ``networks.toml``
+  + ``vms/*.toml`` concatenate into the canonical document.
 
 Split layouts can now be read and written.  Existing monolithic configs stay
-supported, and `aivm config split` can migrate a monolith into fragments.
+supported, and `aivm config format` can canonicalize a monolith into fragments.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from .models import Store
 from .parse import parse_store_toml
 from .paths import store_path
 from .render import (
+    render_store_defaults_toml,
     render_store_networks_toml,
     render_store_root_toml,
     render_store_toml,
@@ -65,14 +66,18 @@ def split_source_paths(path: Path | None = None) -> list[ConfigSource]:
     Load order is the concatenation contract:
 
     1. root ``config.toml``;
-    2. sibling ``networks.toml``;
-    3. sorted sibling ``vms/*.toml``.
+    2. sibling ``defaults.toml``;
+    3. sibling ``networks.toml``;
+    4. sorted sibling ``vms/*.toml``.
     """
     root = (path or store_path()).expanduser().resolve()
     cfg_dir = root.parent
     sources: list[ConfigSource] = []
     if root.exists():
         sources.append(ConfigSource(root, 'root'))
+    defaults = cfg_dir / 'defaults.toml'
+    if defaults.exists():
+        sources.append(ConfigSource(defaults, 'defaults'))
     networks = cfg_dir / 'networks.toml'
     if networks.exists():
         sources.append(ConfigSource(networks, 'networks'))
@@ -209,6 +214,7 @@ def split_fragment_paths(reg: Store, path: Path | None = None) -> dict[str, Path
     cfg_dir = root.parent
     paths: dict[str, Path] = {
         'root': root,
+        'defaults': cfg_dir / 'defaults.toml',
         'networks': cfg_dir / 'networks.toml',
     }
     vms_dir = cfg_dir / 'vms'
@@ -227,7 +233,7 @@ def split_fragment_paths(reg: Store, path: Path | None = None) -> dict[str, Path
 def _fragment_write_order(keys: Iterable[str]) -> list[str]:
     key_set = set(keys)
     ordered: list[str] = []
-    for key in ('root', 'networks'):
+    for key in ('root', 'defaults', 'networks'):
         if key in key_set:
             ordered.append(key)
     ordered.extend(sorted(k for k in key_set if k.startswith('vm:')))
@@ -253,6 +259,7 @@ def render_split_fragments(reg: Store) -> dict[str, str]:
     _validate_no_orphaned_attachments(reg)
     fragments: dict[str, str] = {
         'root': render_store_root_toml(reg),
+        'defaults': render_store_defaults_toml(reg),
         'networks': render_store_networks_toml(reg),
     }
     for vm in sorted(reg.vms, key=lambda v: v.name):
@@ -338,7 +345,7 @@ def save_store(
     return fpath
 
 
-def split_existing_config(
+def format_existing_config(
     path: Path | None = None,
     *,
     backup: bool = True,
@@ -346,17 +353,14 @@ def split_existing_config(
     force: bool = False,
     logger=log,
 ) -> list[Path]:
-    """Migrate the current logical store to split layout.
+    """Format the current logical store into canonical split fragments.
 
     Existing monolithic configs are backed up before the root file is rewritten.
-    If split fragments already exist, ``force`` is required to rewrite them.
+    Existing split layouts are rewritten in place, like a formatter.  ``force``
+    is accepted for API compatibility but is not required.
     """
     root = (path or store_path()).expanduser().resolve()
-    if is_split_layout(root) and not force:
-        raise RuntimeError(
-            'Split config fragments already exist. Re-run with --force to '
-            'rewrite them from the currently loaded logical document.'
-        )
+    was_split = is_split_layout(root)
     loaded = load_config_document(root, logger=logger)
     reg = loaded.store
     fragments = render_split_fragments(reg)
@@ -366,7 +370,7 @@ def split_existing_config(
         return [paths[key] for key in _fragment_write_order(fragments.keys())]
 
     root.parent.mkdir(parents=True, exist_ok=True)
-    if backup and root.exists():
+    if backup and root.exists() and not was_split:
         backup_path = root.with_suffix(root.suffix + '.bak')
         idx = 1
         while backup_path.exists():
@@ -375,5 +379,5 @@ def split_existing_config(
         shutil.copy2(root, backup_path)
         logger.info('Backed up monolithic config to {}', backup_path)
     return save_store_split(
-        reg, root, reason='Migrate config store to split layout.', logger=logger
+        reg, root, reason='Format config store into canonical split layout.', logger=logger
     )
