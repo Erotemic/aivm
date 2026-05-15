@@ -102,42 +102,30 @@ Before designing rootless VMs, continue with structural cleanup:
    privilege policy, storage policy, command manager, and dry-run state.
 4. Improve command/log rendering once the major boundaries are easier to follow.
 
-## Follow-up fix: 2026-05-12 17:02:00 America/New_York
+## Follow-up correction: virtiofsd inode-file-handles wrappers
 
-A real `aivm vm update` run on the `toothbrush` host showed that the first
-virtiofsd inode-file-handles wrapper could make a VM fail to start:
+A real `aivm vm update` run on the `toothbrush` host showed that the previous
+virtiofsd inode-file-handles strategy crossed an unsafe host trust boundary.
+The implementation had pointed libvirt at an AIVM-generated host-side wrapper
+script under `/var/lib/libvirt/aivm/`.  The host virtiofsd binary did advertise
+`--inode-file-handles`, but the generated wrapper still caused libvirt startup
+to fail with `virtiofsd died unexpectedly` and a vhost-user handshake error.
 
-- the host `/usr/libexec/virtiofsd` advertises `--inode-file-handles`, so the
-  desired `inode_file_handles = "prefer"` setting is valid in principle;
-- the failing XML pointed libvirt at the generated shell script wrapper;
-- libvirt then reported `virtiofsd died unexpectedly` and the qemu log showed
-  `libvirtd quit during handshake: Input/output error`.
+A compiled helper was considered and rejected.  Generated host-side executable
+wrappers should not be part of normal AIVM operation.  AIVM may generate
+guest-side helper scripts, but the host-side libvirt/QEMU execution path should
+use known system binaries, admin-owned services, or first-class libvirt XML
+features.
 
-The implementation now keeps `prefer` as the default goal, but replaces the
-shell wrapper with a compiled C exec-wrapper.  The compiled helper preserves
-libvirt's inherited vhost-user file descriptors and execs the real
-`/usr/libexec/virtiofsd` with `--inode-file-handles=<mode>` injected.  When the
-host binary advertises `--modcaps`, the helper also injects
-`--modcaps=+dac_read_search` so file handles can actually reduce virtiofsd FD
-pressure instead of immediately falling back.
+The current direction is:
 
-The wrapper path intentionally changed from:
+- generated host-side virtiofsd wrappers are disabled in normal update paths;
+- old AIVM wrapper paths are treated as legacy drift that should be removed
+  from VM XML;
+- `virtiofs.inode_file_handles` remains a desired future capability, not
+  something forced through generated host executables;
+- clean options are first-class libvirt support, admin-owned external
+  virtiofsd services, or non-virtiofs fallbacks for pathological FD workloads.
 
-```text
-/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh
-```
-
-to:
-
-```text
-/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer
-```
-
-Drift detection still recognizes the old `*.sh` wrapper names so existing VM
-XML can be migrated or removed safely.
-
-The update restart path now also receives the virtiofs binary drift entries. If
-a hard restart fails after applying only those XML changes, AIVM rolls the
-virtiofs `<binary path>` entries back to their previously observed values and
-tries to start the VM again.  This keeps an experimental virtiofsd helper from
-turning a config update into a stuck powered-off VM.
+See `dev/design/future/virtiofsd-inode-file-handles.md` for the detailed
+strategy and rationale.
