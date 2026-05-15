@@ -18,6 +18,10 @@ from .config_store.io import (
     LoadedStore,
     is_split_layout,
     load_config_document as _load_config_document,
+    render_split_fragments,
+    save_store_split as _save_store_split,
+    split_existing_config as _split_existing_config,
+    split_fragment_paths,
     split_source_paths,
 )
 from .config_store import paths as _paths
@@ -32,7 +36,14 @@ from .config_store.mutate import (
     upsert_vm_with_network,
 )
 from .config_store.parse import _cfg_from_dict, _norm_dir, parse_store_toml
-from .config_store.render import _emit_toml_kv, _toml_escape, render_store_toml
+from .config_store.render import (
+    _emit_toml_kv,
+    _toml_escape,
+    render_store_networks_toml,
+    render_store_root_toml,
+    render_store_toml,
+    render_store_vm_toml,
+)
 from .config_store.resolve import (
     find_attachment,
     find_attachment_for_vm,
@@ -90,8 +101,36 @@ def load_store(path: Path | None = None) -> Store:
 def save_store(
     reg: Store, path: Path | None = None, *, reason: str = ''
 ) -> Path:
-    """Save the current single-file config store."""
+    """Save the config store using the active physical layout."""
     return _io.save_store(reg, path or store_path(), reason=reason, logger=log)
+
+
+def save_store_split(
+    reg: Store,
+    path: Path | None = None,
+    *,
+    reason: str = '',
+    dry_run: bool = False,
+) -> list[Path]:
+    return _save_store_split(
+        reg, path or store_path(), reason=reason, dry_run=dry_run, logger=log
+    )
+
+
+def split_existing_config(
+    path: Path | None = None,
+    *,
+    backup: bool = True,
+    dry_run: bool = False,
+    force: bool = False,
+) -> list[Path]:
+    return _split_existing_config(
+        path or store_path(),
+        backup=backup,
+        dry_run=dry_run,
+        force=force,
+        logger=log,
+    )
 
 
 __all__ = [
@@ -126,6 +165,13 @@ __all__ = [
     'remove_attachment',
     'remove_network',
     'remove_vm',
+    'render_split_fragments',
+    'save_store_split',
+    'split_existing_config',
+    'split_fragment_paths',
+    'render_store_networks_toml',
+    'render_store_root_toml',
+    'render_store_vm_toml',
     'render_store_toml',
     'save_store',
     'store_path',

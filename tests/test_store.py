@@ -310,3 +310,114 @@ network_name = "aivm-net"
 
     with raises(ValueError, match='duplicate VM definition'):
         load_config_document(config)
+
+
+
+def test_save_store_split_writes_concatenation_friendly_fragments(tmp_path: Path) -> None:
+    """Split writer decomposes the logical store without changing meaning."""
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.vm.cpus = 2
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-a'
+    cfg.vm.cpus = 8
+    cfg.vm.ram_mb = 32768
+    upsert_vm(store, cfg)
+    project = tmp_path / 'project'
+    project.mkdir()
+    upsert_attachment(
+        store,
+        host_path=project,
+        vm_name='vm-a',
+        mode='shared-root',
+        guest_dst='/home/agent/code/project',
+    )
+
+    from aivm.store import load_config_document, save_store_split
+
+    root = tmp_path / 'config.toml'
+    written = save_store_split(store, root)
+
+    assert root in written
+    assert tmp_path / 'networks.toml' in written
+    assert tmp_path / 'vms' / 'vm-a.toml' in written
+    vm_text = (tmp_path / 'vms' / 'vm-a.toml').read_text(encoding='utf-8')
+    assert vm_text.startswith('[[vms]]')
+    assert '[[vms.attachments]]' in vm_text
+    assert '[[attachments]]' not in vm_text
+
+    loaded = load_config_document(root)
+    assert loaded.layout == 'split'
+    assert [vm.name for vm in loaded.store.vms] == ['vm-a']
+    assert loaded.store.vms[0].cfg.vm.cpus == 8
+    assert loaded.store.attachments[0].vm_name == 'vm-a'
+    assert loaded.store.attachments[0].host_path == str(project.resolve())
+
+
+def test_save_store_updates_existing_split_layout(tmp_path: Path) -> None:
+    """Layout-aware save_store preserves split layout once fragments exist."""
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-a'
+    upsert_vm(store, cfg)
+    root = tmp_path / 'config.toml'
+
+    from aivm.store import load_config_document, save_store, save_store_split
+
+    save_store_split(store, root)
+    store.vms[0].cfg.vm.cpus = 12
+    save_store(store, root)
+
+    assert (tmp_path / 'vms' / 'vm-a.toml').exists()
+    assert '[[vms]]' in (tmp_path / 'vms' / 'vm-a.toml').read_text(
+        encoding='utf-8'
+    )
+    loaded = load_config_document(root)
+    assert loaded.layout == 'split'
+    assert loaded.store.vms[0].cfg.vm.cpus == 12
+
+
+def test_split_existing_config_migrates_monolith(tmp_path: Path) -> None:
+    """Migration rewrites config.toml as root fragment and creates VM files."""
+    store = Store()
+    store.defaults = AgentVMConfig()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-a'
+    cfg.vm.disk_gb = 80
+    upsert_vm(store, cfg)
+    project = tmp_path / 'project'
+    project.mkdir()
+    upsert_attachment(store, host_path=project, vm_name='vm-a')
+    root = tmp_path / 'config.toml'
+    save_store(store, root)
+
+    from aivm.store import load_config_document, split_existing_config
+
+    split_existing_config(root)
+
+    assert (tmp_path / 'config.toml.bak').exists()
+    assert (tmp_path / 'networks.toml').exists()
+    assert (tmp_path / 'vms' / 'vm-a.toml').exists()
+    root_text = root.read_text(encoding='utf-8')
+    assert '[[vms]]' not in root_text
+    assert '[[attachments]]' not in root_text
+    vm_text = (tmp_path / 'vms' / 'vm-a.toml').read_text(encoding='utf-8')
+    assert '[[vms.attachments]]' in vm_text
+
+    loaded = load_config_document(root)
+    assert loaded.layout == 'split'
+    assert loaded.store.vms[0].cfg.vm.disk_gb == 80
+    assert loaded.store.attachments[0].vm_name == 'vm-a'
+
+
+def test_save_store_split_rejects_orphaned_attachment(tmp_path: Path) -> None:
+    """Split layout must not silently drop attachment records."""
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(host_path=str(tmp_path), vm_name='missing-vm')
+    )
+    from pytest import raises
+    from aivm.store import save_store_split
+
+    with raises(ValueError, match='orphaned|attachment records'):
+        save_store_split(store, tmp_path / 'config.toml')

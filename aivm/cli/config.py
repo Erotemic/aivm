@@ -41,6 +41,7 @@ from ..store import (
     load_config_document,
     load_store,
     save_store,
+    split_existing_config,
     upsert_network,
     upsert_vm_with_network,
 )
@@ -291,6 +292,46 @@ class ConfigShowCLI(_BaseCommand):
 
         text = ub.highlight_code(toml_text, lexer_name='toml')
         print(text, end='')
+        return 0
+
+
+class ConfigSplitCLI(_BaseCommand):
+    """Migrate the config store to concatenation-friendly split files."""
+
+    dry_run = scfg.Value(
+        False,
+        isflag=True,
+        help='Show the files that would be written without modifying them.',
+    )
+    force = scfg.Value(
+        False,
+        isflag=True,
+        help='Rewrite existing split fragments from the loaded logical document.',
+    )
+    no_backup = scfg.Value(
+        False,
+        isflag=True,
+        help='Do not make a config.toml.bak backup before rewriting config.toml.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        path = _cfg_path(args.config)
+        targets = split_existing_config(
+            path,
+            backup=not bool(args.no_backup),
+            dry_run=bool(args.dry_run),
+            force=bool(args.force),
+        )
+        if args.dry_run:
+            print('Would write split config files:')
+        else:
+            print('Wrote split config files:')
+        for fpath in targets:
+            print(f'  {fpath}')
+        if not args.dry_run:
+            print('Validate with: aivm config files && aivm config show')
         return 0
 
 
@@ -711,6 +752,7 @@ class ConfigModalCLI(scfg.ModalCLI):
     lint = ConfigLintCLI
     path = ConfigPathCLI
     files = ConfigFilesCLI
+    split = ConfigSplitCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
 

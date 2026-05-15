@@ -7,12 +7,14 @@ logical :class:`Store` model:
 * split fragments: ``config.toml`` + ``networks.toml`` + ``vms/*.toml``
   concatenate into the canonical document.
 
-Writing split layouts is intentionally not implemented here yet.  Chunk 3 is
-read-only split support; chunk 4 will add migration and split writes.
+Split layouts can now be read and written.  Existing monolithic configs stay
+supported, and `aivm config split` can migrate a monolith into fragments.
 """
 
 from __future__ import annotations
 
+import re
+import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +25,12 @@ from loguru import logger as log
 from .models import Store
 from .parse import parse_store_toml
 from .paths import store_path
-from .render import render_store_toml
+from .render import (
+    render_store_networks_toml,
+    render_store_root_toml,
+    render_store_toml,
+    render_store_vm_toml,
+)
 
 
 @dataclass(frozen=True)
@@ -186,6 +193,132 @@ def load_store(path: Path | None = None, *, logger=log) -> Store:
     return load_config_document(path, logger=logger).store
 
 
+
+def _safe_fragment_stem(name: str) -> str:
+    """Return a conservative filename stem for a config fragment."""
+    stem = re.sub(r'[^A-Za-z0-9_.-]+', '_', name.strip())
+    stem = stem.strip('._')
+    if not stem:
+        raise ValueError(f'Cannot derive config fragment filename from {name!r}')
+    return stem
+
+
+def split_fragment_paths(reg: Store, path: Path | None = None) -> dict[str, Path]:
+    """Return target split-layout paths for the given logical store."""
+    root = (path or store_path()).expanduser().resolve()
+    cfg_dir = root.parent
+    paths: dict[str, Path] = {
+        'root': root,
+        'networks': cfg_dir / 'networks.toml',
+    }
+    vms_dir = cfg_dir / 'vms'
+    used: set[str] = set()
+    for vm in sorted(reg.vms, key=lambda v: v.name):
+        stem = _safe_fragment_stem(vm.name)
+        if stem in used:
+            raise ValueError(
+                f'Multiple VM names map to the same config fragment stem {stem!r}'
+            )
+        used.add(stem)
+        paths[f'vm:{vm.name}'] = vms_dir / f'{stem}.toml'
+    return paths
+
+
+def _fragment_write_order(keys: Iterable[str]) -> list[str]:
+    key_set = set(keys)
+    ordered: list[str] = []
+    for key in ('root', 'networks'):
+        if key in key_set:
+            ordered.append(key)
+    ordered.extend(sorted(k for k in key_set if k.startswith('vm:')))
+    ordered.extend(sorted(k for k in key_set if k not in set(ordered)))
+    return ordered
+
+
+def _validate_no_orphaned_attachments(reg: Store) -> None:
+    vm_names = {vm.name for vm in reg.vms}
+    orphaned = sorted(
+        {att.vm_name for att in reg.attachments if att.vm_name not in vm_names}
+    )
+    if orphaned:
+        names = ', '.join(orphaned)
+        raise ValueError(
+            'Cannot write split config with attachment records whose vm_name '
+            f'does not match a configured VM: {names}'
+        )
+
+
+def render_split_fragments(reg: Store) -> dict[str, str]:
+    """Render the logical store as concatenation-friendly TOML fragments."""
+    _validate_no_orphaned_attachments(reg)
+    fragments: dict[str, str] = {
+        'root': render_store_root_toml(reg),
+        'networks': render_store_networks_toml(reg),
+    }
+    for vm in sorted(reg.vms, key=lambda v: v.name):
+        fragments[f'vm:{vm.name}'] = render_store_vm_toml(reg, vm.name)
+    return fragments
+
+
+def _validate_split_fragments(fragments: dict[str, str]) -> None:
+    """Validate that rendered fragments concatenate and parse."""
+    pieces: list[str] = []
+    for key in _fragment_write_order(fragments.keys()):
+        text = fragments.get(key, '')
+        pieces.append(text.rstrip())
+        pieces.append('\n')
+    parse_store_toml('\n'.join(pieces))
+
+
+def save_store_split(
+    reg: Store,
+    path: Path | None = None,
+    *,
+    reason: str = '',
+    logger=log,
+    dry_run: bool = False,
+) -> list[Path]:
+    """Save a store as split config fragments.
+
+    The physical files are a decomposition of the canonical desired-state
+    document.  Concatenating root, networks, and sorted VM fragments yields TOML
+    that parses as the same logical :class:`Store` shape.
+    """
+    target_paths = split_fragment_paths(reg, path)
+    fragments = render_split_fragments(reg)
+    _validate_split_fragments(fragments)
+
+    ordered_keys = _fragment_write_order(fragments.keys())
+    written: list[Path] = []
+    root = target_paths['root']
+    cfg_dir = root.parent
+    vms_dir = cfg_dir / 'vms'
+    logger.info('Writing split config store under {}', cfg_dir)
+    if reason.strip():
+        logger.info('  Reason: {}', reason.strip())
+    if dry_run:
+        return [target_paths[key] for key in ordered_keys]
+
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    vms_dir.mkdir(parents=True, exist_ok=True)
+
+    for key in ordered_keys:
+        text = fragments[key]
+        fpath = target_paths[key]
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_text(text, encoding='utf-8')
+        written.append(fpath)
+
+    expected_vm_paths = {
+        target_paths[key] for key in target_paths if key.startswith('vm:')
+    }
+    if vms_dir.exists():
+        for old in sorted(vms_dir.glob('*.toml')):
+            if old not in expected_vm_paths:
+                old.unlink()
+    return written
+
+
 def save_store(
     reg: Store,
     path: Path | None = None,
@@ -195,14 +328,52 @@ def save_store(
 ) -> Path:
     fpath = (path or store_path()).expanduser().resolve()
     if is_split_layout(fpath):
-        raise RuntimeError(
-            'Refusing to save split AIVM config layout with monolith writer. '
-            'Split-layout read support is available, but split writes/migration '
-            'belong to the next config refactor chunk.'
-        )
+        save_store_split(reg, fpath, reason=reason, logger=logger)
+        return fpath
     fpath.parent.mkdir(parents=True, exist_ok=True)
     logger.info('Writing config store to {}', fpath)
     if reason.strip():
         logger.info('  Reason: {}', reason.strip())
     fpath.write_text(render_store_toml(reg), encoding='utf-8')
     return fpath
+
+
+def split_existing_config(
+    path: Path | None = None,
+    *,
+    backup: bool = True,
+    dry_run: bool = False,
+    force: bool = False,
+    logger=log,
+) -> list[Path]:
+    """Migrate the current logical store to split layout.
+
+    Existing monolithic configs are backed up before the root file is rewritten.
+    If split fragments already exist, ``force`` is required to rewrite them.
+    """
+    root = (path or store_path()).expanduser().resolve()
+    if is_split_layout(root) and not force:
+        raise RuntimeError(
+            'Split config fragments already exist. Re-run with --force to '
+            'rewrite them from the currently loaded logical document.'
+        )
+    loaded = load_config_document(root, logger=logger)
+    reg = loaded.store
+    fragments = render_split_fragments(reg)
+    _validate_split_fragments(fragments)
+    if dry_run:
+        paths = split_fragment_paths(reg, root)
+        return [paths[key] for key in _fragment_write_order(fragments.keys())]
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    if backup and root.exists():
+        backup_path = root.with_suffix(root.suffix + '.bak')
+        idx = 1
+        while backup_path.exists():
+            backup_path = root.with_suffix(root.suffix + f'.bak{idx}')
+            idx += 1
+        shutil.copy2(root, backup_path)
+        logger.info('Backed up monolithic config to {}', backup_path)
+    return save_store_split(
+        reg, root, reason='Migrate config store to split layout.', logger=logger
+    )

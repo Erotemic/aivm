@@ -156,3 +156,80 @@ def render_store_toml(
         lines.append('')
 
     return '\n'.join(lines).rstrip() + '\n'
+
+
+def render_store_root_toml(reg: Store) -> str:
+    """Render only singleton/global config tables for split layout.
+
+    The result is intended for ``~/.config/aivm/config.toml``.  It may define
+    schema/global behavior/default tables, but it intentionally emits no
+    ``[[networks]]``, ``[[vms]]``, or ``[[attachments]]`` records so it can be
+    concatenated with split fragments.
+    """
+    root = Store(
+        schema_version=reg.schema_version,
+        active_vm=reg.active_vm,
+        behavior=reg.behavior,
+        defaults=reg.defaults,
+    )
+    return render_store_toml(root, attachment_style='nested')
+
+
+def render_store_networks_toml(reg: Store) -> str:
+    """Render only ``[[networks]]`` records for split layout."""
+    lines: list[str] = []
+    for net in sorted(reg.networks, key=lambda n: n.name):
+        lines.append('[[networks]]')
+        lines.append(f'name = "{_toml_escape(net.name)}"')
+        net_d = asdict(net.network)
+        lines.append('[networks.network]')
+        for k, v in net_d.items():
+            if k == 'name':
+                continue
+            _emit_toml_kv(lines, k, v)
+        fw_d = asdict(net.firewall)
+        lines.append('[networks.firewall]')
+        for k, v in fw_d.items():
+            _emit_toml_kv(lines, k, v)
+        lines.append('')
+    if not lines:
+        return '# No AIVM networks are configured yet.\n'
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+def render_store_vm_toml(reg: Store, vm_name: str) -> str:
+    """Render one ``[[vms]]`` record plus nested attachments.
+
+    This is the fragment format used by ``vms/{vm_name}.toml``.  Parsed alone,
+    it is a list with one VM; concatenated with root/network fragments, it is a
+    normal canonical AIVM desired-state document.
+    """
+    matches = [vm for vm in reg.vms if vm.name == vm_name]
+    if not matches:
+        raise KeyError(f'VM not found in store: {vm_name}')
+    vm = matches[0]
+    lines: list[str] = []
+    lines.append('[[vms]]')
+    lines.append(f'name = "{_toml_escape(vm.name)}"')
+    lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
+    d = asdict(vm.cfg)
+    verbosity = int(d.get('verbosity', 1))
+    if verbosity != 1:
+        lines.append(f'verbosity = {verbosity}')
+    for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
+        body = d.get(section, {})
+        if not isinstance(body, dict):
+            continue
+        lines.append(f'[vms.{section}]')
+        for k, v in body.items():
+            _emit_toml_kv(lines, k, v)
+
+    nested = sorted(
+        (att for att in reg.attachments if att.vm_name == vm.name),
+        key=lambda a: (a.host_path, a.guest_dst, a.tag),
+    )
+    for att in nested:
+        lines.append('[[vms.attachments]]')
+        _emit_attachment(lines, att, include_vm_name=False)
+    lines.append('')
+    return '\n'.join(lines).rstrip() + '\n'

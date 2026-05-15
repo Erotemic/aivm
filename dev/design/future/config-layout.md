@@ -234,3 +234,36 @@ Normal writes still use the legacy monolith writer.  If split fragments exist,
 `save_store()` refuses to write with the monolith writer rather than silently
 collapsing or clobbering the split layout.  Split writes and migration belong to
 chunk 4.
+
+## Migration and write behavior
+
+Chunk 4 adds the first split-layout writer. The migration command is:
+
+```bash
+aivm config split
+```
+
+It reads the current logical desired-state document, writes a backup beside the
+old root config, and emits the split fragments:
+
+```text
+~/.config/aivm/config.toml
+~/.config/aivm/networks.toml
+~/.config/aivm/vms/{vm_name}.toml
+```
+
+After split fragments exist, ordinary store writes preserve the split layout:
+`save_store()` routes to the split writer instead of rewriting a monolithic
+file. This allows existing VM create/update/attach/detach flows to continue
+using the same logical store mutation APIs while the physical layout changes.
+
+The writer intentionally emits nested attachment records under the owning VM:
+
+```toml
+[[vms.attachments]]
+host_path = "/home/example/project"
+mode = "shared-root"
+```
+
+Legacy top-level `[[attachments]]` remains readable for compatibility, but the
+split writer should not produce it for normal VM-owned attachment records.

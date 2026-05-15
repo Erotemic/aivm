@@ -431,3 +431,41 @@ Implemented pieces:
 
 Chunk 4 remains responsible for writing split fragments and implementing
 `aivm config split`.
+
+## Chunk 4 checkpoint: split writes and migration
+
+Status: implemented as an overlay after chunk 3.
+
+Chunk 4 makes the split layout writable while keeping monolithic configs
+compatible:
+
+- `save_store()` is now layout-aware. If `networks.toml` or `vms/*.toml`
+  fragments exist beside `config.toml`, writes are routed back to split files
+  instead of refusing or collapsing the layout.
+- `save_store_split()` writes:
+  - `config.toml` for singleton/global tables,
+  - `networks.toml` for all `[[networks]]`, and
+  - `vms/{vm_name}.toml` for exactly one `[[vms]]` record plus nested
+    `[[vms.attachments]]`.
+- `aivm config split` migrates the currently loaded logical store to split
+  fragments and backs up the old monolithic `config.toml` first.
+- `aivm config split --dry-run` reports the target files without writing.
+- `aivm config split --force` rewrites existing split fragments from the loaded
+  logical document.
+
+The important invariant remains: concatenating `config.toml`, `networks.toml`,
+and sorted `vms/*.toml` produces a canonical desired-state TOML document that
+parses through the same logical `Store` model used by drift detection.
+
+Recommended validation after applying chunk 4:
+
+```bash
+pytest tests/test_store.py \
+       tests/test_config.py \
+       tests/test_cli_config_init.py \
+       tests/test_cli_config_lint.py \
+       tests/test_cli_helpers.py
+```
+
+The e2e SSH readiness failure seen after chunk 2 remains an open investigation
+item unless it reproduces consistently after the config-only changes.
