@@ -29,6 +29,7 @@ from ..config import (
     PathsConfig,
     ProvisionConfig,
     VMConfig,
+    VirtiofsConfig,
     dump_toml,
 )
 from ..detect import auto_defaults
@@ -37,6 +38,7 @@ from ..runtime import virsh_system_cmd
 from ..store import (
     find_attachments,
     find_vm,
+    load_config_document,
     load_store,
     save_store,
     upsert_network,
@@ -240,12 +242,22 @@ def _review_init_defaults_interactive(
 
 
 class ConfigShowCLI(_BaseCommand):
-    """Show resolved VM config content."""
+    """Show AIVM config content.
+
+    By default this prints the canonical source document.  For split layouts,
+    that source document is the deterministic concatenation of config.toml,
+    networks.toml, and sorted vms/*.toml fragments.
+    """
 
     vm = scfg.Value(
         '',
-        help='Optional VM name override.',
+        help='Optional VM name override for --resolved output.',
         position=1,
+    )
+    resolved = scfg.Value(
+        False,
+        isflag=True,
+        help='Show effective VM config after defaults/network resolution.',
     )
 
     @classmethod
@@ -253,28 +265,49 @@ class ConfigShowCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         path = _cfg_path(args.config)
         vm_name = str(args.vm or '').strip()
-        if not vm_name:
-            if path.exists():
-                toml_text = path.read_text(encoding='utf-8')
-            else:
-                store = load_store(path)
-                save_store(store, path)
-                toml_text = path.read_text(encoding='utf-8')
-        else:
-            cfg, _ = _load_cfg_with_path(
+        if bool(args.resolved) or vm_name:
+            cfg, cfg_path = _load_cfg_with_path(
                 args.config, vm_opt=vm_name, host_src=Path.cwd()
             )
             toml_text = '\n'.join(
                 [
-                    '# Store: {path}',
-                    '# VM: {cfg.vm.name}',
+                    f'# Store: {cfg_path}',
+                    f'# VM: {cfg.vm.name}',
                     dump_toml(cfg),
                 ]
             )
+        else:
+            loaded = load_config_document(path)
+            if loaded.sources:
+                toml_text = loaded.source_text
+            else:
+                store = loaded.store
+                save_store(store, path)
+                loaded = load_config_document(path)
+                toml_text = loaded.source_text or path.read_text(
+                    encoding='utf-8'
+                )
         import ubelt as ub
 
         text = ub.highlight_code(toml_text, lexer_name='toml')
         print(text, end='')
+        return 0
+
+
+class ConfigFilesCLI(_BaseCommand):
+    """Show physical config source files in deterministic load order."""
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        path = _cfg_path(args.config)
+        loaded = load_config_document(path)
+        if not loaded.sources:
+            print(f'{path} (missing)')
+            return 0
+        print(f'layout = {loaded.layout}')
+        for src in loaded.sources:
+            print(f'{src.role}: {src.path}')
         return 0
 
 
@@ -446,14 +479,16 @@ class ConfigLintCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         path = _cfg_path(args.config)
-        if not path.exists():
+        loaded = load_config_document(path)
+        if not loaded.sources:
             print(f'Config store not found: {path}', file=sys.stderr)
             return 2
-        problems = _lint_store_file(path)
+        problems = _lint_store_text(loaded.source_text or path.read_text(encoding='utf-8'))
+        label = path if loaded.layout != 'split' else f'{path.parent} (split layout)'
         if not problems:
-            print(f'✅ Config lint passed: {path}')
+            print(f'✅ Config lint passed: {label}')
             return 0
-        print(f'❌ Config lint found {len(problems)} issue(s): {path}')
+        print(f'❌ Config lint found {len(problems)} issue(s): {label}')
         for item in problems:
             print(f'  - {item}')
         return 2
@@ -465,12 +500,17 @@ def _field_names(cls: type) -> set[str]:
 
 
 def _lint_store_file(path: Path) -> list[str]:
-    """Return schema/shape problems for the config store file.
+    """Return schema/shape problems for the config store file."""
+    return _lint_store_text(path.read_text(encoding='utf-8'))
+
+
+def _lint_store_text(text: str) -> list[str]:
+    """Return schema/shape problems for a canonical config document.
 
     Lint focuses on unknown or structurally invalid keys so users can catch
     typos and stale fields after format evolution.
     """
-    raw = tomllib.loads(path.read_text(encoding='utf-8'))
+    raw = tomllib.loads(text)
     problems: list[str] = []
 
     allowed_top = {
@@ -494,6 +534,8 @@ def _lint_store_file(path: Path) -> list[str]:
         'image',
         'provision',
         'paths',
+        'virtiofs',
+        'attachments',
     }
     section_allowed: dict[str, set[str]] = {
         'vm': _field_names(VMConfig),
@@ -502,6 +544,7 @@ def _lint_store_file(path: Path) -> list[str]:
         'image': _field_names(ImageConfig),
         'provision': _field_names(ProvisionConfig),
         'paths': _field_names(PathsConfig),
+        'virtiofs': _field_names(VirtiofsConfig),
     }
     behavior = raw.get('behavior', None)
     if behavior is not None:
@@ -512,6 +555,7 @@ def _lint_store_file(path: Path) -> list[str]:
                 'yes_sudo',
                 'auto_approve_readonly_sudo',
                 'verbose',
+                'mirror_shared_home_folders',
             }
             for key in sorted(behavior.keys()):
                 if key not in allowed_behavior:
@@ -529,6 +573,7 @@ def _lint_store_file(path: Path) -> list[str]:
                 'image',
                 'provision',
                 'paths',
+                'virtiofs',
             }
             for key in sorted(defaults.keys()):
                 if key not in allowed_defaults_record:
@@ -587,6 +632,16 @@ def _lint_store_file(path: Path) -> list[str]:
                             )
     elif networks is not None:
         problems.append('top-level key "networks" should be an array of tables')
+
+    allowed_attachment = {
+        'host_path',
+        'vm_name',
+        'mode',
+        'access',
+        'guest_dst',
+        'tag',
+        'host_lexical_path',
+    }
     vms = raw.get('vms', [])
     if isinstance(vms, list):
         for idx, item in enumerate(vms):
@@ -611,17 +666,26 @@ def _lint_store_file(path: Path) -> list[str]:
                         problems.append(
                             f'vms[{idx}].{sec_name} unknown key: {key!r}'
                         )
+            nested_atts = item.get('attachments', [])
+            if isinstance(nested_atts, list):
+                for att_idx, att in enumerate(nested_atts):
+                    if not isinstance(att, dict):
+                        problems.append(
+                            f'vms[{idx}].attachments[{att_idx}] is not a table/object'
+                        )
+                        continue
+                    for key in sorted(att.keys()):
+                        if key not in allowed_attachment:
+                            problems.append(
+                                f'vms[{idx}].attachments[{att_idx}] unknown key: {key!r}'
+                            )
+            elif nested_atts is not None:
+                problems.append(
+                    f'vms[{idx}].attachments should be an array of tables'
+                )
     elif vms is not None:
         problems.append('top-level key "vms" should be an array of tables')
 
-    allowed_attachment = {
-        'host_path',
-        'vm_name',
-        'mode',
-        'access',
-        'guest_dst',
-        'tag',
-    }
     atts = raw.get('attachments', [])
     if isinstance(atts, list):
         for idx, item in enumerate(atts):
@@ -646,6 +710,7 @@ class ConfigModalCLI(scfg.ModalCLI):
     discover = ConfigDiscoverCLI
     lint = ConfigLintCLI
     path = ConfigPathCLI
+    files = ConfigFilesCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
 

@@ -221,3 +221,92 @@ host_path = "{project}"
 
     with raises(ValueError, match='vm_name mismatch'):
         parse_store_toml(text)
+
+
+def test_load_split_layout_by_literal_concatenation(tmp_path: Path) -> None:
+    """Split fragments load as the same canonical desired-state document."""
+    config = tmp_path / 'config.toml'
+    networks = tmp_path / 'networks.toml'
+    vms_dir = tmp_path / 'vms'
+    vms_dir.mkdir()
+    project = tmp_path / 'project'
+    project.mkdir()
+
+    config.write_text(
+        '''
+schema_version = 5
+active_vm = "vm-a"
+
+[behavior]
+yes_sudo = true
+'''.lstrip(),
+        encoding='utf-8',
+    )
+    networks.write_text(
+        '''
+[[networks]]
+name = "aivm-net"
+
+[networks.network]
+subnet_cidr = "10.77.0.0/24"
+'''.lstrip(),
+        encoding='utf-8',
+    )
+    (vms_dir / 'vm-a.toml').write_text(
+        f'''
+[[vms]]
+name = "vm-a"
+network_name = "aivm-net"
+
+[vms.vm]
+cpus = 6
+ram_mb = 12000
+
+[[vms.attachments]]
+host_path = "{project}"
+mode = "shared-root"
+'''.lstrip(),
+        encoding='utf-8',
+    )
+
+    from aivm.store import load_config_document
+
+    loaded = load_config_document(config)
+
+    assert loaded.layout == 'split'
+    assert [src.role for src in loaded.sources] == ['root', 'networks', 'vm']
+    assert loaded.vm_sources['vm-a'] == vms_dir / 'vm-a.toml'
+    assert loaded.network_sources['aivm-net'] == networks
+    assert loaded.store.active_vm == 'vm-a'
+    assert loaded.store.behavior.yes_sudo is True
+    assert loaded.store.vms[0].cfg.vm.cpus == 6
+    assert loaded.store.attachments[0].vm_name == 'vm-a'
+    assert loaded.store.attachments[0].host_path == str(project.resolve())
+
+
+def test_split_layout_rejects_duplicate_vm_definitions(tmp_path: Path) -> None:
+    config = tmp_path / 'config.toml'
+    vms_dir = tmp_path / 'vms'
+    vms_dir.mkdir()
+    config.write_text(
+        '''
+[[vms]]
+name = "vm-a"
+network_name = "aivm-net"
+'''.lstrip(),
+        encoding='utf-8',
+    )
+    (vms_dir / 'vm-a.toml').write_text(
+        '''
+[[vms]]
+name = "vm-a"
+network_name = "aivm-net"
+'''.lstrip(),
+        encoding='utf-8',
+    )
+
+    from pytest import raises
+    from aivm.store import load_config_document
+
+    with raises(ValueError, match='duplicate VM definition'):
+        load_config_document(config)

@@ -49,6 +49,7 @@ from ..status import (
 from ..store import (
     find_attachment_for_vm,
     find_network,
+    load_config_document,
     load_store,
     network_users,
     remove_attachment,
@@ -1178,6 +1179,31 @@ class VMListCLI(_BaseCommand):
         )
 
 
+class VMConfigPathCLI(_BaseCommand):
+    """Show the physical config source for a managed VM."""
+
+    vm: Any = scfg.Value('', help='VM name override.', position=1)
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg_path = _cfg_path(args.config)
+        loaded = load_config_document(cfg_path)
+        vm_name = str(args.vm or '').strip() or loaded.store.active_vm
+        if not vm_name:
+            raise RuntimeError('No VM specified and active_vm is unset.')
+        src = loaded.vm_sources.get(vm_name)
+        if src is None:
+            rec_names = sorted(v.name for v in loaded.store.vms)
+            if vm_name not in rec_names:
+                raise RuntimeError(f'VM not found in config: {vm_name}')
+            # Monolithic configs may not have per-source VM metadata when the
+            # file was missing and defaulted.  Fall back to the root path.
+            src = cfg_path
+        print(src)
+        return 0
+
+
 class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live libvirt settings."""
 
@@ -1240,6 +1266,7 @@ class VMModalCLI(scfg.ModalCLI):
     wait_ip = VMWaitIPCLI
     status = VMStatusCLI
     update = VMUpdateCLI
+    config_path = VMConfigPathCLI
     destroy = VMDestroyCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI

@@ -202,3 +202,35 @@ The renderer now has two attachment styles:
 
 This chunk does not change physical config layout or default write behavior.
 It only makes the logical document schema ready for the split layout.
+
+## Chunk 3 checkpoint: read-only split layout support
+
+Implemented: 2026-05-15 13:02:00 America/New_York
+
+The config store can now load either the legacy monolithic file or the future
+split layout.  Split layout loading is intentionally read-only at this stage.
+The deterministic source order is:
+
+```text
+config.toml
+networks.toml
+vms/*.toml sorted by filename
+```
+
+The loader records the physical source files that contributed to the logical
+Store document so commands can report where a VM came from.  Duplicate VM or
+network names across source fragments are errors.
+
+New inspection commands are intended to make the split layout understandable:
+
+```bash
+aivm config show              # print canonical source document
+aivm config show --resolved   # print effective config for selected/active VM
+aivm config files             # print physical source files in load order
+aivm vm config-path <vm>      # print the source file that defines a VM
+```
+
+Normal writes still use the legacy monolith writer.  If split fragments exist,
+`save_store()` refuses to write with the monolith writer rather than silently
+collapsing or clobbering the split layout.  Split writes and migration belong to
+chunk 4.

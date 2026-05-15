@@ -399,3 +399,35 @@ pytest tests/test_e2e_full.py::test_e2e_full_cycle -s
 
 4. If continuing implementation, start chunk 3.  Do not start chunk 4 until
    read-only split layout support and source-file inspection commands are solid.
+
+## Chunk 3 checkpoint: read-only split layout support
+
+Status: implemented as overlay after chunk 2.
+
+This chunk adds read-only support for the target physical layout:
+
+```text
+~/.config/aivm/config.toml
+~/.config/aivm/networks.toml
+~/.config/aivm/vms/{vm_name}.toml
+```
+
+The split files are read by deterministic literal concatenation and parsed as the
+same canonical desired-state document that the monolithic config already uses.
+Each `vms/{name}.toml` fragment should contain exactly one `[[vms]]` entry with
+nested `[[vms.attachments]]` records.
+
+Implemented pieces:
+
+- `ConfigSource` and `LoadedStore` source metadata.
+- `load_config_document()` for monolith or split layouts.
+- Transparent `load_store()` support for split fragments.
+- Duplicate VM/network definition detection across fragments.
+- `aivm config show` for the canonical source document.
+- `aivm config show --resolved` for the effective selected VM config.
+- `aivm config files` for physical source files in load order.
+- `aivm vm config-path <vm>` for the source file that defines a VM.
+- A guard that refuses monolith writes when split fragments are present.
+
+Chunk 4 remains responsible for writing split fragments and implementing
+`aivm config split`.

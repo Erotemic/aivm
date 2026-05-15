@@ -13,6 +13,13 @@ from pathlib import Path
 from loguru import logger as log
 
 from .config_store import io as _io
+from .config_store.io import (
+    ConfigSource,
+    LoadedStore,
+    is_split_layout,
+    load_config_document as _load_config_document,
+    split_source_paths,
+)
 from .config_store import paths as _paths
 from .config_store.models import AttachmentEntry, NetworkEntry, Store, VMEntry
 from .config_store.mutate import (
@@ -62,6 +69,15 @@ def store_path() -> Path:
     return _appdir('aivm', 'config') / 'config.toml'
 
 
+def load_config_document(path: Path | None = None) -> LoadedStore:
+    """Load monolith or split config sources with source metadata.
+
+    The facade supplies ``store_path()`` so historical monkeypatches of
+    ``aivm.store._appdir`` continue to affect default path resolution.
+    """
+    return _load_config_document(path or store_path(), logger=log)
+
+
 def load_store(path: Path | None = None) -> Store:
     """Load the current single-file config store.
 
@@ -80,6 +96,11 @@ def save_store(
 
 __all__ = [
     'AttachmentEntry',
+    'split_source_paths',
+    'load_config_document',
+    'is_split_layout',
+    'LoadedStore',
+    'ConfigSource',
     'NetworkEntry',
     'Store',
     'VMEntry',

@@ -1,6 +1,14 @@
 """Implementation modules for AIVM's desired-state config store."""
 
-from .io import load_store, save_store
+from .io import (
+    ConfigSource,
+    LoadedStore,
+    is_split_layout,
+    load_config_document,
+    load_store,
+    save_store,
+    split_source_paths,
+)
 from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
 from .mutate import (
     remove_attachment,
@@ -26,6 +34,11 @@ from .resolve import (
 
 __all__ = [
     'AttachmentEntry',
+    'split_source_paths',
+    'load_config_document',
+    'is_split_layout',
+    'LoadedStore',
+    'ConfigSource',
     'NetworkEntry',
     'Store',
     'VMEntry',
