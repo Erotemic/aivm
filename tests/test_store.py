@@ -131,3 +131,93 @@ def test_remove_attachment_removes_single_vm_mapping(tmp_path: Path) -> None:
     remaining = find_attachments(store, host)
     assert len(remaining) == 1
     assert remaining[0].vm_name == 'vm2'
+
+
+def test_parse_nested_vm_attachments_equivalent_to_global(tmp_path: Path) -> None:
+    """The future split-friendly nested schema keeps the flat model."""
+    project = tmp_path / 'project'
+    project.mkdir()
+    text = f'''
+schema_version = 5
+active_vm = "vm-a"
+
+[[vms]]
+name = "vm-a"
+network_name = "aivm-net"
+
+[vms.vm]
+cpus = 4
+
+[[vms.attachments]]
+host_path = "{project}"
+mode = "shared-root"
+access = "rw"
+guest_dst = "/home/agent/code/project"
+tag = "aivm-project"
+host_lexical_path = "~/code/project"
+'''
+    from aivm.store import parse_store_toml
+
+    store = parse_store_toml(text)
+
+    assert [vm.name for vm in store.vms] == ['vm-a']
+    assert len(store.attachments) == 1
+    att = store.attachments[0]
+    assert att.vm_name == 'vm-a'
+    assert att.host_path == str(project.resolve())
+    assert att.mode == 'shared-root'
+    assert att.guest_dst == '/home/agent/code/project'
+    assert att.tag == 'aivm-project'
+    assert att.host_lexical_path == '~/code/project'
+    assert find_attachments_for_vm(store, 'vm-a') == [att]
+
+
+def test_render_nested_vm_attachments_roundtrip(tmp_path: Path) -> None:
+    """Nested rendering emits [[vms.attachments]] and parses back flat."""
+    project = tmp_path / 'project'
+    project.mkdir()
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-a'
+    upsert_vm(store, cfg)
+    upsert_attachment(
+        store,
+        host_path=project,
+        vm_name='vm-a',
+        mode='shared-root',
+        guest_dst='/home/agent/code/project',
+        tag='tag-a',
+    )
+    from aivm.store import parse_store_toml, render_store_toml
+
+    text = render_store_toml(store, attachment_style='nested')
+    assert '[[vms.attachments]]' in text
+    assert '[[attachments]]' not in text
+    assert 'vm_name =' not in text
+
+    loaded = parse_store_toml(text)
+    assert [vm.name for vm in loaded.vms] == ['vm-a']
+    assert len(loaded.attachments) == 1
+    assert loaded.attachments[0].vm_name == 'vm-a'
+    assert loaded.attachments[0].host_path == str(project.resolve())
+    assert loaded.attachments[0].mode == 'shared-root'
+
+
+def test_nested_attachment_rejects_conflicting_vm_name(tmp_path: Path) -> None:
+    """Nested ownership should not silently disagree with vm_name."""
+    project = tmp_path / 'project'
+    project.mkdir()
+    text = f'''
+[[vms]]
+name = "vm-a"
+network_name = "aivm-net"
+
+[[vms.attachments]]
+vm_name = "vm-b"
+host_path = "{project}"
+'''
+    from pytest import raises
+    from aivm.store import parse_store_toml
+
+    with raises(ValueError, match='vm_name mismatch'):
+        parse_store_toml(text)

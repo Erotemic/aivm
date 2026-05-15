@@ -168,3 +168,37 @@ The transition should proceed in chunks:
 
 During the transition, duplicate VM or network definitions across fragments
 should be loud errors, not silently merged.
+
+## Chunk 2 checkpoint: nested VM attachments
+
+Implemented: 2026-05-15 12:06:00 America/New_York
+
+The parser now accepts the future split-friendly nested attachment form while
+keeping the in-memory model flat for existing callers:
+
+```toml
+[[vms]]
+name = "aivm-2404"
+network_name = "aivm-net"
+
+[[vms.attachments]]
+host_path = "/home/joncrall/code/aivm"
+mode = "shared-root"
+access = "rw"
+guest_dst = "/home/agent/code/aivm"
+```
+
+Nested records inherit `vm_name` from the owning `[[vms]]` entry.  If a nested
+attachment redundantly specifies `vm_name`, it must match the owning VM; a
+mismatch is treated as an error rather than silently changing ownership.
+
+The renderer now has two attachment styles:
+
+- `attachment_style="legacy"` keeps the current top-level `[[attachments]]`
+  output and remains the default for compatibility.
+- `attachment_style="nested"` emits VM-owned attachments as
+  `[[vms.attachments]]`, which is the form needed by future
+  `vms/{vm_name}.toml` fragments.
+
+This chunk does not change physical config layout or default write behavior.
+It only makes the logical document schema ready for the split layout.
