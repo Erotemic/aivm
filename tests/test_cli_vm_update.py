@@ -170,11 +170,11 @@ def test_vm_update_no_changes(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-noop'
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.cli.vm_update._load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._vm_update_drift',
+        'aivm.cli.vm_update._vm_update_drift',
         lambda *a, **k: (VMUpdateDrift(), False),
     )
     rc = VMUpdateCLI.main(argv=False, config=str(tmp_path / 'config.toml'))
@@ -190,15 +190,15 @@ def test_vm_update_restarts_when_required(
     cfg.vm.name = 'vm-update'
     drift = VMUpdateDrift(cpus=(2, 4))
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.cli.vm_update._load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._vm_update_drift',
+        'aivm.cli.vm_update._vm_update_drift',
         lambda *a, **k: (drift, True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._apply_vm_update',
+        'aivm.cli.vm_update._apply_vm_update',
         lambda *a, **k: (True, True),
     )
     called: dict[str, object] = {}  # type: ignore[assignment]
@@ -207,7 +207,7 @@ def test_vm_update_restarts_when_required(
         called['kwargs'] = k  # type: ignore[index]
 
     monkeypatch.setattr(
-        'aivm.cli.vm._maybe_restart_vm_after_update', fake_restart
+        'aivm.cli.vm_update._maybe_restart_vm_after_update', fake_restart
     )
     rc = VMUpdateCLI.main(
         argv=False,

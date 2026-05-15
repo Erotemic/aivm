@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.cli.vm import _ensure_shared_root_host_bind
+from aivm.attachments.shared_root import _ensure_shared_root_host_bind
 from aivm.commands import CommandManager
 from aivm.config import (
     DEFAULT_UBUNTU_NOBLE_IMG_URL,

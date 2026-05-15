@@ -77,12 +77,12 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.cli.vm_attach._load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm._resolve_attachment',
+        'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
@@ -93,26 +93,26 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
         ),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._record_attachment', lambda *a, **k: cfg_path
+        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
     )
 
     host_bind_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_shared_root_host_bind',
+        'aivm.cli.vm_attach._ensure_shared_root_host_bind',
         lambda *a, **k: host_bind_calls.append((a, k)) or Path('/tmp/token'),
     )
     vm_mapping_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_shared_root_vm_mapping',
+        'aivm.cli.vm_attach._ensure_shared_root_vm_mapping',
         lambda *a, **k: vm_mapping_calls.append((a, k)) or None,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._resolve_ip_for_ssh_ops',
+        'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.99',
     )
     guest_ready_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_attachment_available_in_guest',
+        'aivm.cli.vm_attach._ensure_attachment_available_in_guest',
         lambda *a, **k: guest_ready_calls.append((a, k)) or None,
     )
 
