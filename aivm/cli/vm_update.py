@@ -61,7 +61,6 @@ class VMUpdateCLI(_BaseCommand):
                 restart_policy=restart_policy,
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
-                rollback_virtiofs_binary=drift.virtiofs_binary,
             )
         elif changed:
             print('Update complete.')
