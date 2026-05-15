@@ -129,3 +129,10 @@ The current direction is:
 
 See `dev/design/future/virtiofsd-inode-file-handles.md` for the detailed
 strategy and rationale.
+
+## VM CLI split checkpoint
+
+
+The VM CLI has been split into focused modules while keeping
+`aivm.cli.vm` as the compatibility facade and ModalCLI registration point.
+See `dev/design/future/cli-refactor.md` for details and the follow-up plan.
