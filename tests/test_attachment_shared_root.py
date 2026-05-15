@@ -61,7 +61,7 @@ def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_vm_attach_shared_root_running_ensures_guest_ready(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.cli.vm import VMAttachCLI
+    from aivm.cli.vm_attach import VMAttachCLI
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shared-root'
@@ -86,7 +86,7 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(True, 'vm-shared-root state=running'),
             True,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pytest import MonkeyPatch
 
-from aivm.cli.vm import VMDetachCLI
+from aivm.cli.vm_attach import VMDetachCLI
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
 from aivm.store import AttachmentEntry, Store, find_attachment_for_vm
@@ -37,19 +37,19 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         'aivm.cli.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'running'), True),
     )
     detached: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
+        'aivm.cli.vm_attach.detach_vm_share',
         lambda *a, **k: detached.append((a, k)) or True,
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
+        'aivm.cli.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -89,20 +89,20 @@ def test_vm_detach_git_only_updates_store(
         'aivm.cli.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(False, 'shut off'), True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
+        'aivm.cli.vm_attach.detach_vm_share',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError('detach_vm_share should not be called for git mode')
         ),
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
+        'aivm.cli.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -141,9 +141,9 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         'aivm.cli.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'running'), True),
     )
     monkeypatch.setattr(
@@ -161,7 +161,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         lambda *a, **k: host_detaches.append((a, k)) or None,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
+        'aivm.cli.vm_attach.detach_vm_share',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError(
                 'detach_vm_share should not be called for shared-root mode'
@@ -170,7 +170,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
+        'aivm.cli.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -188,7 +188,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
 def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.cli.vm import VMDetachCLI
+    from aivm.cli.vm_attach import VMDetachCLI
     from aivm.store import AttachmentEntry, Store, save_store
 
     cfg = AgentVMConfig()
@@ -214,7 +214,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(True, 'vm-persistent-detach state=running'),
             True,

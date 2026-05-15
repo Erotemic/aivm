@@ -81,7 +81,7 @@ def test_remote_tunnel_name_uses_vm_and_hypervisor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
-    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek.kitware.com')
+    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek.kitware.com')
     assert _remote_tunnel_name(cfg) == 'aivm-2404-namek'
 
 
@@ -95,7 +95,7 @@ def test_print_remote_session_recipe_includes_tunnel_command(
         share_guest_dst='/home/joncrall/code/aivm',
         reg_path='/home/joncrall/.config/aivm/config.toml',
     )
-    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek')
+    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek')
     _print_remote_session_recipe(
         cfg,
         session,

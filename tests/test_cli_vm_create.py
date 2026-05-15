@@ -8,7 +8,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.cli import AgentVMModalCLI
-from aivm.cli.vm import VMCreateCLI, VMDestroyCLI
+from aivm.cli.vm_lifecycle import VMCreateCLI, VMDestroyCLI
 from aivm.config import AgentVMConfig
 from aivm.store import (
     Store,
@@ -287,7 +287,7 @@ def test_vm_destroy_removes_vm_and_attachments(
         'aivm.cli.vm_lifecycle._load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm.destroy_vm', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
     rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     loaded = load_store(cfg_path)
@@ -310,9 +310,9 @@ def test_vm_destroy_warns_when_network_becomes_unused(
         'aivm.cli.vm_lifecycle._load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm.destroy_vm', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
     monkeypatch.setattr(
-        'aivm.cli.vm.log.warning',
+        'aivm.cli.vm_lifecycle.log.warning',
         lambda *a, **k: warns.append((a, k)),
     )
     rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
@@ -334,7 +334,7 @@ def test_vm_destroy_accepts_positional_vm_name(
 
     captured: dict[str, str] = {}
     monkeypatch.setattr(
-        'aivm.cli.vm.destroy_vm',
+        'aivm.cli.vm_lifecycle.destroy_vm',
         lambda destroy_cfg, **kwargs: captured.setdefault(
             'vm_name', destroy_cfg.vm.name
         ),

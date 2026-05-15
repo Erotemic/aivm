@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 
 from aivm.attachments.session import _record_attachment
-from aivm.cli.vm import VMSSHCLI, VMAttachCLI, VMCodeCLI
+from aivm.cli.vm_attach import VMAttachCLI
+from aivm.cli.vm_connect import VMCodeCLI, VMSSHCLI
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
@@ -118,14 +119,14 @@ def test_vm_attach_mounts_share_when_vm_running(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'vm-running state=running'), True),
     )
-    monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])
+    monkeypatch.setattr('aivm.cli.vm_attach.vm_share_mappings', lambda *a, **k: [])
 
     attached: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.attach_vm_share',
+        'aivm.cli.vm_attach.attach_vm_share',
         lambda *a, **k: attached.append((a, k)),
     )
     monkeypatch.setattr(
@@ -186,14 +187,14 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(False, 'vm-stopped state=shut off'),
             True,
         ),
     )
-    monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])
-    monkeypatch.setattr('aivm.cli.vm.attach_vm_share', lambda *a, **k: None)
+    monkeypatch.setattr('aivm.cli.vm_attach.vm_share_mappings', lambda *a, **k: [])
+    monkeypatch.setattr('aivm.cli.vm_attach.attach_vm_share', lambda *a, **k: None)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
     )
@@ -205,7 +206,7 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
     )
     refreshes: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.refresh_cloud_init_seed_for_next_boot',
+        'aivm.cli.vm_attach.refresh_cloud_init_seed_for_next_boot',
         lambda *a, **k: refreshes.append((a, k)) or None,
     )
     monkeypatch.setattr(
@@ -250,7 +251,7 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(True, 'vm-persistent-running state=running'),
             True,
@@ -321,7 +322,7 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(False, 'vm-persistent-stopped state=shut off'),
             True,
@@ -348,7 +349,7 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     )
     refreshes: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.refresh_cloud_init_seed_for_next_boot',
+        'aivm.cli.vm_attach.refresh_cloud_init_seed_for_next_boot',
         lambda *a, **k: refreshes.append((a, k)) or None,
     )
 
@@ -397,14 +398,14 @@ def test_vm_attach_escalates_when_nonsudo_probe_inconclusive(
         (ProbeOutcome(True, 'vm-needs-sudo state=running'), True),
     ]
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: states.pop(0),
     )
-    monkeypatch.setattr('aivm.cli.vm.vm_share_mappings', lambda *a, **k: [])
+    monkeypatch.setattr('aivm.cli.vm_attach.vm_share_mappings', lambda *a, **k: [])
 
     attached: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm.attach_vm_share',
+        'aivm.cli.vm_attach.attach_vm_share',
         lambda *a, **k: attached.append((a, k)),
     )
     monkeypatch.setattr(
@@ -458,7 +459,7 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.cli.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'vm-git state=running'), True),
     )
     monkeypatch.setattr(
@@ -469,13 +470,13 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
         lambda *a, **k: '10.77.0.88',
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.vm_share_mappings',
+        'aivm.cli.vm_attach.vm_share_mappings',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError('vm_share_mappings should not be called in git mode')
         ),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.attach_vm_share',
+        'aivm.cli.vm_attach.attach_vm_share',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError('attach_vm_share should not be called in git mode')
         ),
