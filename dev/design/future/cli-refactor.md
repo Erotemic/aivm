@@ -123,3 +123,28 @@ Current ownership:
 This keeps the CLI command public behavior unchanged while making the workflow
 usable by future non-CLI callers and easier to test at the operation layer.
 Private tests should patch `aivm.ops.vm_update.*` for update workflow seams.
+
+## Checkpoint: VM attach/detach operation extraction
+
+The attach/detach CLI workflow has now been moved out of
+`aivm/cli/vm_attach.py` and into `aivm/ops/vm_attach.py`.
+
+Current ownership:
+
+- `aivm/cli/vm_attach.py`
+  - parses CLI arguments
+  - builds request dataclasses
+  - delegates to operation functions
+
+- `aivm/ops/vm_attach.py`
+  - owns attach, detach, persistent host replay, and persistent replay service
+    workflows
+  - resolves config for attach/detach operations
+  - probes VM state
+  - records/removes attachment intent
+  - reconciles guest and host attachment state
+
+This keeps CLI behavior unchanged while reducing CLI module size and creating a
+clear seam for future attachment-internal refactors.  Tests that need to patch
+private attach/detach workflow helpers should patch `aivm.ops.vm_attach.*`, not
+`aivm.cli.vm_attach.*`.

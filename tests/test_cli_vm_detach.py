@@ -34,22 +34,22 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.ops.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.ops.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.probe_vm_state',
+        'aivm.ops.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'running'), True),
     )
     detached: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.detach_vm_share',
+        'aivm.ops.vm_attach.detach_vm_share',
         lambda *a, **k: detached.append((a, k)) or True,
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.save_store',
+        'aivm.ops.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -86,23 +86,23 @@ def test_vm_detach_git_only_updates_store(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.ops.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.ops.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.probe_vm_state',
+        'aivm.ops.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(False, 'shut off'), True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.detach_vm_share',
+        'aivm.ops.vm_attach.detach_vm_share',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError('detach_vm_share should not be called for git mode')
         ),
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.save_store',
+        'aivm.ops.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -138,30 +138,30 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.ops.vm_attach._resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
+    monkeypatch.setattr('aivm.ops.vm_attach.load_store', lambda path: store)
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.probe_vm_state',
+        'aivm.ops.vm_attach.probe_vm_state',
         lambda *a, **k: (ProbeOutcome(True, 'running'), True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
+        'aivm.ops.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.42',
     )
     guest_detaches: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._detach_shared_root_guest_bind',
+        'aivm.ops.vm_attach._detach_shared_root_guest_bind',
         lambda *a, **k: guest_detaches.append((a, k)) or None,
     )
     host_detaches: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._detach_shared_root_host_bind',
+        'aivm.ops.vm_attach._detach_shared_root_host_bind',
         lambda *a, **k: host_detaches.append((a, k)) or None,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.detach_vm_share',
+        'aivm.ops.vm_attach.detach_vm_share',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError(
                 'detach_vm_share should not be called for shared-root mode'
@@ -170,7 +170,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
     )
     saved: list[Path] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.save_store',
+        'aivm.ops.vm_attach.save_store',
         lambda reg, path, **kwargs: saved.append(path) or path,
     )
 
@@ -210,28 +210,28 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     save_store(reg, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.ops.vm_attach._resolve_cfg_for_code',
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.probe_vm_state',
+        'aivm.ops.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(True, 'vm-persistent-detach state=running'),
             True,
         ),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
+        'aivm.ops.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.0.0.11',
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._detach_shared_root_host_bind',
+        'aivm.ops.vm_attach._detach_shared_root_host_bind',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError('persistent detach should not tear down host bind')
         ),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._detach_shared_root_guest_bind',
+        'aivm.ops.vm_attach._detach_shared_root_guest_bind',
         lambda *a, **k: (_ for _ in ()).throw(
             AssertionError(
                 'persistent detach should use replay reconcile instead'
@@ -240,12 +240,12 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     )
     syncs: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
+        'aivm.ops.vm_attach._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: syncs.append((a, k)) or cfg_path,
     )
     replays: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._reconcile_persistent_attachments_in_guest',
+        'aivm.ops.vm_attach._reconcile_persistent_attachments_in_guest',
         lambda *a, **k: replays.append((a, k)) or None,
     )
 
