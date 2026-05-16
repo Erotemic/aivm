@@ -35,14 +35,19 @@ from ..config import (
 from ..detect import auto_defaults
 from ..resource_checks import vm_resource_warning_lines
 from ..runtime import virsh_system_cmd
+from ..persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
+from ..vm.paths import _paths as _vm_runtime_paths
 from ..store import (
     find_attachments,
     find_vm,
+    materialize_vm_cfg,
     load_config_document,
     load_store,
     save_store,
     format_existing_config,
     split_fragment_paths,
+    app_data_dir,
+    persistent_host_state_dir,
     upsert_network,
     upsert_vm_with_network,
 )
@@ -326,108 +331,100 @@ class ConfigFormatCLI(_BaseCommand):
             force=bool(args.force),
         )
         if args.dry_run:
-            print('Would write formatted config files:')
+            print('Would write formatted config paths:')
         else:
-            print('Wrote formatted config files:')
+            print('Wrote formatted config paths:')
         for fpath in targets:
             print(f'  {fpath}')
         if not args.dry_run:
-            print('Validate with: aivm config files && aivm config show')
+            print('Validate with: aivm config paths && aivm config show')
         return 0
 
 
-class ConfigFilesCLI(_BaseCommand):
-    """Show physical config source files in deterministic load order."""
+class ConfigPathsCLI(_BaseCommand):
+    """Show AIVM config, data, and libvirt-related paths.
+
+    This command replaces the older narrow config-location commands. It reports
+    both editable config fragments and the host-side paths
+    AIVM/libvirt use for VM disks, cloud-init seeds, cached connection state,
+    and persistent attachment manifests.
+    """
+
+    target: Any = scfg.Value(
+        'all',
+        help=(
+            'Path group to show: all, config, global, defaults, networks, '
+            'vms, vm, libvirt, data. `vm` defaults to active_vm.'
+        ),
+        position=1,
+    )
+    name: Any = scfg.Value(
+        '',
+        help='Optional VM name for `vm`/`libvirt` path groups.',
+        position=2,
+    )
+    vm: Any = scfg.Value('', help='Optional VM name filter.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
-        loaded = load_config_document(path)
-        if not loaded.sources:
-            print(f'{path} (missing)')
-            return 0
-        print(f'layout = {loaded.layout}')
-        for src in loaded.sources:
-            print(f'{src.role}: {src.path}')
+        root = _cfg_path(args.config)
+        loaded = load_config_document(root)
+        target = str(args.target or 'all').strip().lower().replace('_', '-')
+        vm_name = str(args.vm or args.name or '').strip()
+        if target in {'active', 'active-vm'}:
+            target = 'vm'
+        if target == 'vm' and not vm_name:
+            vm_name = loaded.store.active_vm
+        if target == 'libvirt' and not vm_name:
+            # Without an explicit VM, libvirt output includes global paths plus
+            # all configured VM-specific paths.
+            vm_name = ''
+
+        valid = {
+            'all',
+            'config',
+            'global',
+            'root',
+            'defaults',
+            'networks',
+            'network',
+            'vms',
+            'vm',
+            'libvirt',
+            'data',
+        }
+        if target not in valid:
+            raise RuntimeError(
+                f'Unknown path group {target!r}. Expected one of: '
+                + ', '.join(sorted(valid))
+            )
+
+        print('AIVM paths')
+        print(f'layout: {loaded.layout}')
+        print(f'active_vm: {loaded.store.active_vm or "(unset)"}')
+
+        show_config = target in {
+            'all',
+            'config',
+            'global',
+            'root',
+            'defaults',
+            'networks',
+            'network',
+            'vms',
+            'vm',
+        }
+        show_data = target in {'all', 'data'}
+        show_libvirt = target in {'all', 'libvirt', 'vms', 'vm'}
+
+        if show_config:
+            _print_config_paths(root, loaded, target=target, vm_name=vm_name)
+        if show_data:
+            _print_data_paths(loaded, vm_name=vm_name)
+        if show_libvirt:
+            _print_libvirt_paths(root, loaded, target=target, vm_name=vm_name)
         return 0
-
-
-def _editor_command(args: Any) -> list[str]:
-    """Return the editor command prefix selected by CLI args/environment."""
-    order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
-    candidates = [
-        str(args.editor or '').strip(),
-        *(os.environ.get(key, '') for key in order),
-    ]
-    editor_cmd = next((x for x in candidates if x), '')
-    if not editor_cmd:
-        editor_cmd = which('nano') or which('vi') or ''
-    if not editor_cmd:
-        raise RuntimeError('No editor found. Set $EDITOR or pass --editor.')
-    return shlex.split(editor_cmd)
-
-
-def _edit_path(path: Path, args: Any) -> None:
-    """Open a config path in the selected editor."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text('', encoding='utf-8')
-    parts = _editor_command(args) + [str(path)]
-    CommandManager.current().run(
-        parts, sudo=False, check=True, capture=False
-    )
-
-
-def _role_source(loaded: Any, role: str) -> Path | None:
-    for src in loaded.sources:
-        if src.role == role:
-            return src.path
-    return None
-
-
-def _resolve_config_edit_target(
-    *, config_opt: str, target: str, name: str = ''
-) -> Path:
-    """Resolve a user-facing config edit target to a physical file."""
-    root = _cfg_path(config_opt)
-    loaded = load_config_document(root)
-    cfg_dir = root.parent
-    target_norm = (target or 'global').strip().lower().replace('_', '-')
-    name = str(name or '').strip()
-
-    if target_norm in {'global', 'root', 'base', 'config', ''}:
-        return root
-
-    if target_norm in {'defaults', 'default'}:
-        src = _role_source(loaded, 'defaults')
-        if src is not None:
-            return src
-        return cfg_dir / 'defaults.toml' if loaded.layout == 'split' else root
-
-    if target_norm in {'networks', 'network', 'net'}:
-        src = _role_source(loaded, 'networks')
-        if src is not None:
-            return src
-        return cfg_dir / 'networks.toml' if loaded.layout == 'split' else root
-
-    if target_norm in {'vm', 'vms', 'active-vm', 'active'}:
-        vm_name = name or loaded.store.active_vm
-    else:
-        # Convenience: `aivm config edit aivm-2404` means that VM if it exists.
-        vm_name = target
-
-    if not vm_name:
-        raise RuntimeError('No VM specified and active_vm is unset.')
-    if find_vm(loaded.store, vm_name) is None:
-        raise RuntimeError(f'VM not found in config: {vm_name}')
-    src = loaded.vm_sources.get(vm_name)
-    if src is not None:
-        return src
-    if loaded.layout == 'split':
-        paths = split_fragment_paths(loaded.store, root)
-        return paths.get(f'vm:{vm_name}', cfg_dir / 'vms' / f'{vm_name}.toml')
-    return root
 
 
 class ConfigEditCLI(_BaseCommand):
@@ -476,50 +473,232 @@ class ConfigEditCLI(_BaseCommand):
         return 0
 
 
-class ConfigPathCLI(_BaseCommand):
-    """Show config store path and resolved VM selection context."""
+def _editor_command(args: Any) -> list[str]:
+    """Return the editor command prefix selected by CLI args/environment."""
+    order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
+    candidates = [
+        str(args.editor or '').strip(),
+        *(os.environ.get(key, '') for key in order),
+    ]
+    editor_cmd = next((x for x in candidates if x), '')
+    if not editor_cmd:
+        editor_cmd = which('nano') or which('vi') or ''
+    if not editor_cmd:
+        raise RuntimeError('No editor found. Set $EDITOR or pass --editor.')
+    return shlex.split(editor_cmd)
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    host_src: Any = scfg.Value('.', help='Host directory scope to inspect.')
 
-    @classmethod
-    def main(cls, argv: bool = True, **kwargs: Any) -> int:
-        args = cls.cli(argv=argv, data=kwargs)
-        host_src = Path(args.host_src).resolve()
-        store = _cfg_path(args.config)
-        reg = load_store(store)
-        atts = find_attachments(reg, host_src)
-        resolved_cfg_path: Path | None = None
-        resolved_vm = ''
-        resolve_error = ''
-        try:
-            resolved_cfg, resolved_cfg_path = _resolve_cfg_for_code(
-                config_opt=args.config,
-                vm_opt=args.vm,
-                host_src=host_src,
-            )
-            resolved_vm = resolved_cfg.vm.name
-        except Exception as ex:
-            resolve_error = str(ex)
+def _edit_path(path: Path, args: Any) -> None:
+    """Open a config path in the selected editor."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text('', encoding='utf-8')
+    parts = _editor_command(args) + [str(path)]
+    CommandManager.current().run(
+        parts, sudo=False, check=True, capture=False
+    )
 
-        print('🧭 AIVM Config Paths')
-        print(f'cwd = {host_src}')
-        print(
-            f'config_store = {store} ({"exists" if store.exists() else "missing"})'
+
+def _path_status(path: Path) -> str:
+    try:
+        if path.exists():
+            return 'exists'
+    except PermissionError:
+        return 'permission-denied'
+    except OSError as ex:
+        return f'error:{ex.__class__.__name__}'
+    return 'missing'
+
+
+def _print_path(label: str, path: Path | str, *, kind: str = 'path') -> None:
+    raw = str(path)
+    if '*' in raw or '?' in raw or '[' in raw:
+        status = 'glob'
+    else:
+        status = _path_status(Path(raw).expanduser())
+    print(f'  {label} ({kind}, {status}): {raw}')
+
+
+def _role_source(loaded: Any, role: str) -> Path | None:
+    for src in loaded.sources:
+        if src.role == role:
+            return src.path
+    return None
+
+
+def _vm_config_source(root: Path, loaded: Any, vm_name: str) -> Path:
+    src = loaded.vm_sources.get(vm_name)
+    if src is not None:
+        return src
+    if loaded.layout == 'split':
+        paths = split_fragment_paths(loaded.store, root)
+        return paths.get(
+            f'vm:{vm_name}', root.parent / 'vms' / f'{vm_name}.toml'
         )
-        print(f'active_vm = {reg.active_vm or "(unset)"}')
-        if atts:
-            vm_names = ', '.join(sorted({att.vm_name for att in atts}))
-            print(f'attachment_vms = {vm_names}')
-        if resolved_cfg_path is not None:
-            print(f'resolved_store = {resolved_cfg_path}')
-            if resolved_vm:
-                print(f'resolved_vm = {resolved_vm}')
+    return root
+
+
+def _print_config_paths(
+    root: Path, loaded: Any, *, target: str, vm_name: str
+) -> None:
+    cfg_dir = root.parent
+    show_all = target in {'all', 'config'}
+    print('config:')
+    if show_all or target in {'global', 'root'}:
+        _print_path('global', root, kind='file')
+    if show_all or target == 'defaults':
+        _print_path(
+            'defaults',
+            _role_source(loaded, 'defaults') or cfg_dir / 'defaults.toml',
+            kind='file',
+        )
+    if show_all or target in {'networks', 'network'}:
+        _print_path(
+            'networks',
+            _role_source(loaded, 'networks') or cfg_dir / 'networks.toml',
+            kind='file',
+        )
+    if show_all or target == 'vms':
+        if loaded.store.vms:
+            for vm in sorted(loaded.store.vms, key=lambda rec: rec.name):
+                _print_path(
+                    f'vm:{vm.name}',
+                    _vm_config_source(root, loaded, vm.name),
+                    kind='file',
+                )
         else:
-            print('resolved_vm = (unresolved)')
-            if resolve_error:
-                print(f'resolution_error = {resolve_error}')
-        return 0
+            _print_path('vms_dir', cfg_dir / 'vms', kind='dir')
+    if target == 'vm':
+        if not vm_name:
+            raise RuntimeError('No VM specified and active_vm is unset.')
+        if find_vm(loaded.store, vm_name) is None:
+            raise RuntimeError(f'VM not found in config: {vm_name}')
+        _print_path(
+            f'vm:{vm_name}',
+            _vm_config_source(root, loaded, vm_name),
+            kind='file',
+        )
+
+
+def _print_data_paths(loaded: Any, *, vm_name: str) -> None:
+    print('data:')
+    _print_path('app_data_dir', app_data_dir(), kind='dir')
+    names = (
+        [vm_name]
+        if vm_name
+        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+    )
+    for name in names:
+        if not name:
+            continue
+        state_dir = persistent_host_state_dir(name)
+        _print_path(
+            f'vm:{name}:persistent_host_state_dir', state_dir, kind='dir'
+        )
+        _print_path(
+            f'vm:{name}:persistent_host_manifest',
+            state_dir / PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME,
+            kind='file',
+        )
+
+
+def _print_libvirt_paths(
+    root: Path, loaded: Any, *, target: str, vm_name: str
+) -> None:
+    names = (
+        [vm_name]
+        if vm_name
+        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+    )
+    cfgs = []
+    for name in names:
+        if not name:
+            continue
+        if find_vm(loaded.store, name) is None:
+            if target == 'vm':
+                raise RuntimeError(f'VM not found in config: {name}')
+            continue
+        cfgs.append(materialize_vm_cfg(loaded.store, name).expanded_paths())
+
+    print('libvirt:')
+    base_dirs = sorted({cfg.paths.base_dir for cfg in cfgs})
+    if not base_dirs and loaded.store.defaults is not None:
+        base_dirs = [loaded.store.defaults.expanded_paths().paths.base_dir]
+    if not base_dirs:
+        base_dirs = [AgentVMConfig().expanded_paths().paths.base_dir]
+    for base in base_dirs:
+        base_path = Path(base)
+        _print_path('base_dir', base_path, kind='dir')
+        _print_path(
+            'legacy_virtiofsd_wrappers',
+            base_path / 'virtiofsd-wrapper-*',
+            kind='glob',
+        )
+
+    for cfg in cfgs:
+        p = _vm_runtime_paths(cfg)
+        vm = cfg.vm.name
+        print(f'libvirt.vm:{vm}:')
+        _print_path('vm_dir', p['base_dir'], kind='dir')
+        _print_path('image_dir', p['img_dir'], kind='dir')
+        _print_path(
+            'base_image', p['img_dir'] / cfg.image.cache_name, kind='file'
+        )
+        _print_path('vm_disk', p['img_dir'] / f'{vm}.qcow2', kind='file')
+        _print_path('cloud_init_dir', p['ci_dir'], kind='dir')
+        _print_path(
+            'cloud_init_seed', p['ci_dir'] / f'{vm}-seed.iso', kind='file'
+        )
+        _print_path('runtime_state_dir', p['state_dir'], kind='dir')
+        _print_path('ip_file', p['ip_file'], kind='file')
+        _print_path('known_hosts', p['known_hosts'], kind='file')
+        _print_path(
+            'persistent_host_state_dir', persistent_host_state_dir(vm), kind='dir'
+        )
+        _print_path(
+            'persistent_host_manifest',
+            persistent_host_state_dir(vm)
+            / PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME,
+            kind='file',
+        )
+
+
+def _resolve_config_edit_target(
+    *, config_opt: str, target: str, name: str = ''
+) -> Path:
+    """Resolve a user-facing config edit target to a physical file."""
+    root = _cfg_path(config_opt)
+    loaded = load_config_document(root)
+    cfg_dir = root.parent
+    target_norm = (target or 'global').strip().lower().replace('_', '-')
+    name = str(name or '').strip()
+
+    if target_norm in {'global', 'root', 'base', 'config', ''}:
+        return root
+
+    if target_norm in {'defaults', 'default'}:
+        src = _role_source(loaded, 'defaults')
+        if src is not None:
+            return src
+        return cfg_dir / 'defaults.toml' if loaded.layout == 'split' else root
+
+    if target_norm in {'networks', 'network', 'net'}:
+        src = _role_source(loaded, 'networks')
+        if src is not None:
+            return src
+        return cfg_dir / 'networks.toml' if loaded.layout == 'split' else root
+
+    if target_norm in {'vm', 'vms', 'active-vm', 'active'}:
+        vm_name = name or loaded.store.active_vm
+    else:
+        # Convenience: `aivm config edit aivm-2404` means that VM if it exists.
+        vm_name = target
+
+    if not vm_name:
+        raise RuntimeError('No VM specified and active_vm is unset.')
+    if find_vm(loaded.store, vm_name) is None:
+        raise RuntimeError(f'VM not found in config: {vm_name}')
+    return _vm_config_source(root, loaded, vm_name)
 
 
 class ConfigDiscoverCLI(_BaseCommand):
@@ -835,8 +1014,7 @@ class ConfigModalCLI(scfg.ModalCLI):
     init = InitCLI
     discover = ConfigDiscoverCLI
     lint = ConfigLintCLI
-    path = ConfigPathCLI
-    files = ConfigFilesCLI
+    paths = ConfigPathsCLI
     format = ConfigFormatCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI

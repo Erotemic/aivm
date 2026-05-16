@@ -145,6 +145,20 @@ aivm config edit vm [NAME]    # edit a VM fragment, defaulting to active_vm
 aivm vm edit [NAME]           # shorthand for editing a VM fragment
 ```
 
+Useful path inspection commands:
+
+```bash
+aivm config paths             # show config, data, and libvirt-related paths
+aivm config paths config      # show editable config fragments
+aivm config paths vm [NAME]   # show one VM config plus VM host paths
+aivm config paths libvirt     # show /var/lib/libvirt/aivm-style paths
+```
+
+There is intentionally no separate `config files`, `config path`, or `vm
+config-path` command.  `config paths` is the single inspection surface because
+it reports both editable config fragments and the host directories/files AIVM
+expects libvirt to use.
+
 ## Desired-state boundaries
 
 This design concerns editable desired state only.  Runtime observations and

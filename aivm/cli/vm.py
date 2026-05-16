@@ -16,7 +16,7 @@ from .vm_attach import (
     VMInstallPersistentHostReplayServiceCLI,
     VMPersistentHostReplayCLI,
 )
-from .vm_config import VMConfigPathCLI, VMEditCLI
+from .vm_config import VMEditCLI
 from .vm_connect import VMCodeCLI, VMSSHCLI, VMSshConfigCLI, VMWaitIPCLI
 from .vm_lifecycle import (
     VMCreateCLI,
@@ -42,7 +42,6 @@ class VMModalCLI(scfg.ModalCLI):
     wait_ip = VMWaitIPCLI
     status = VMStatusCLI
     update = VMUpdateCLI
-    config_path = VMConfigPathCLI
     edit = VMEditCLI
     destroy = VMDestroyCLI
     ssh_config = VMSshConfigCLI
@@ -75,7 +74,6 @@ __all__ = [
     'VMPersistentHostReplayCLI',
     'VMInstallPersistentHostReplayServiceCLI',
     'VMListCLI',
-    'VMConfigPathCLI',
     'VMEditCLI',
     'VMUpdateCLI',
 ]

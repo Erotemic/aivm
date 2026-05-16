@@ -44,7 +44,6 @@ Focused modules:
   - `VMInstallPersistentHostReplayServiceCLI`
 
 - `aivm/cli/vm_config.py`
-  - `VMConfigPathCLI`
   - `VMEditCLI`
 
 - `aivm/cli/vm_update.py`

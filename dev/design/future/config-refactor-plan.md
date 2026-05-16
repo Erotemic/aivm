@@ -256,8 +256,8 @@ Scope:
 - Add or adjust inspection commands:
   - `aivm config show`
   - `aivm config show --resolved`
-  - `aivm config files`
-  - `aivm vm config-path <name>`
+  - `aivm config paths`
+  - `aivm config paths vm <name>`
 
 Suggested behavior:
 
@@ -269,11 +269,11 @@ aivm config show
 aivm config show --resolved
   Print effective desired state after defaults and references are materialized.
 
-aivm config files
-  Print physical source files in load order.
+aivm config paths
+  Print editable config paths plus host/libvirt-related directories and files.
 
-aivm vm config-path aivm-2404
-  In split layout, print ~/.config/aivm/vms/aivm-2404.toml.
+aivm config paths vm aivm-2404
+  In split layout, print ~/.config/aivm/vms/aivm-2404.toml along with relevant VM paths.
   In monolith layout, print ~/.config/aivm/config.toml with a note that the VM
   still lives in the monolith.
 ```
@@ -435,8 +435,8 @@ Implemented pieces:
 - Duplicate VM/network definition detection across fragments.
 - `aivm config show` for the canonical source document.
 - `aivm config show --resolved` for the effective selected VM config.
-- `aivm config files` for physical source files in load order.
-- `aivm vm config-path <vm>` for the source file that defines a VM.
+- `aivm config paths` for editable config paths plus host/libvirt-related paths.
+- `aivm config paths vm <vm>` for the source file that defines a VM.
 - A guard that refuses monolith writes when split fragments are present.
 
 Chunk 4 remains responsible for writing split fragments and implementing

@@ -246,7 +246,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         printf 'bootstrap test\\n' > README.txt
         python -m aivm help tree
         python -m aivm config init {' '.join(cli_verbosity_args)} --defaults --yes --force
-        python -m aivm config path
+        python -m aivm config paths
         python -m aivm vm create {' '.join(cli_verbosity_args)} --yes --force
         # Nested guests can take materially longer to reach DHCP than the
         # direct-host e2e path, so give the bootstrap workflow its own budget.
