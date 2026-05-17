@@ -187,6 +187,20 @@ NOFILE almost certainly makes the symptom harder to hit; it does not
 prevent the working set from eventually exceeding 1M as more attachments
 accumulate.
 
+
+
+## 2026-05-17 follow-up
+
+A later incident reached the end state hypothesized here: one long-lived
+`aivm-2404` `persistent-root` `virtiofsd` worker reached roughly 1,000,000
+path-backed host file descriptors while peer workers stayed small.  The FD
+aggregate was dominated by generated/cache/build/report trees across many
+`hostcode-*` token mounts, especially `hostcode-crfm-helm-audit-st-8bd60e77`.
+
+See [virtiofsd_emfile_case_report_2026_05_17.md](virtiofsd_emfile_case_report_2026_05_17.md)
+for the updated case report and [virtiofsd_fd_postmortem.py](virtiofsd_fd_postmortem.py)
+for the post-mortem collection and experiment helpers.
+
 ## Recommended follow-ups
 
 In approximate priority order:
