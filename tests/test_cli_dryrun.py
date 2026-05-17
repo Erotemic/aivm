@@ -72,6 +72,7 @@ def test_dryrun_commands_with_yes(tmp_path: Path) -> None:
             str(cfg_path),
         ],
         ['vm', 'wait_ip', '--yes', '--dry_run', '--config', str(cfg_path)],
+        ['vm', 'flush_caches', '--yes', '--dry_run', '--config', str(cfg_path)],
         ['vm', 'destroy', '--yes', '--dry_run', '--config', str(cfg_path)],
         ['vm', 'provision', '--yes', '--dry_run', '--config', str(cfg_path)],
     ]

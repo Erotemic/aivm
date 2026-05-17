@@ -333,6 +333,102 @@ def write_counter(path: Path, counter: collections.Counter[str], limit: int = 80
         f.write(f"SHOWN\t{pct:.4f}\t{shown}\n")
 
 
+def human_section_name(name: str) -> str:
+    return name.replace("_", " ")
+
+
+def render_counter_section(
+    name: str,
+    counter: collections.Counter[str],
+    limit: int = 40,
+) -> str:
+    total = sum(counter.values())
+    shown = 0
+    lines = []
+    lines.append("")
+    lines.append("=" * 80)
+    lines.append(human_section_name(name))
+    lines.append("=" * 80)
+    if not total:
+        lines.append("         0    0.00%  <empty>")
+        return "\n".join(lines)
+    for key, value in counter.most_common(limit):
+        shown += value
+        lines.append(f"{value:10d}  {100.0 * value / total:6.2f}%  {key}")
+    lines.append(f"{'SHOWN':>10s}  {100.0 * shown / total:6.2f}%")
+    lines.append(f"{'TOTAL':>10s}  {100.0:6.2f}%  {total}")
+    return "\n".join(lines)
+
+
+def render_aggregate_report(
+    counters: dict[str, collections.Counter[str]],
+    *,
+    title: str = "virtiofsd FD target aggregate",
+    source: str | None = None,
+    pid: int | None = None,
+    report_limit: int = 40,
+) -> str:
+    lines = []
+    lines.append(title)
+    lines.append("=" * len(title))
+    lines.append("")
+    lines.append(f"date: {_datetime.datetime.now().astimezone().isoformat()}")
+    if source:
+        lines.append(f"source: {source}")
+    if pid is not None:
+        lines.append(f"pid: {pid}")
+    total = max((sum(c.values()) for c in counters.values()), default=0)
+    lines.append(f"targets: {total}")
+    lines.append("")
+    lines.append(
+        "This is a shareable text summary.  The TSV files beside it contain "
+        "the same aggregate counters in machine-readable form."
+    )
+    for name in [
+        "by_hostcode_token",
+        "by_token_topdir",
+        "by_token_topdir_seconddir",
+        "by_suffix",
+        "other_special_kinds",
+    ]:
+        if name in counters:
+            lines.append(render_counter_section(name, counters[name], limit=report_limit))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_aggregate_bundle(
+    out: Path,
+    counters: dict[str, collections.Counter[str]],
+    *,
+    source: str | None = None,
+    pid: int | None = None,
+    aggregate_limit: int = 80,
+    report_limit: int = 40,
+) -> Path:
+    out.mkdir(parents=True, exist_ok=True)
+    for name, counter in counters.items():
+        write_counter(out / f"aggregate-{name}.tsv", counter, limit=aggregate_limit)
+    report = render_aggregate_report(
+        counters,
+        source=source,
+        pid=pid,
+        report_limit=report_limit,
+    )
+    report_path = out / "aggregate-report.txt"
+    report_path.write_text(report)
+    return report_path
+
+
+def default_aggregate_outdir(fd_targets: Path) -> Path:
+    # Avoid writing multiple files into the caller's current working directory by
+    # default.  Keep derived aggregate artifacts next to the evidence input, in
+    # their own timestamped subfolder.
+    parent = fd_targets.resolve().parent
+    stem = fd_targets.stem or "fd-targets"
+    return parent / f"{stem}-aggregate-{now_stamp()}"
+
+
 def render_inventory(procs: list[VirtiofsdProc]) -> str:
     lines = []
     lines.append("PID\tPPID\tFDS\tNOFILE_SOFT\tNOFILE_HARD\tCAP_EFF\tCAP_BND\tSOURCE\tCMDLINE")
@@ -408,8 +504,14 @@ def command_collect(args: argparse.Namespace) -> int:
                 break
 
     counters = aggregate_targets(targets)
-    for name, counter in counters.items():
-        write_counter(out / f"aggregate-{name}.tsv", counter, limit=args.aggregate_limit)
+    report_path = write_aggregate_bundle(
+        out / "aggregate",
+        counters,
+        source=str(fd_target_path),
+        pid=pid,
+        aggregate_limit=args.aggregate_limit,
+        report_limit=args.report_limit,
+    )
 
     readme = out / "README.txt"
     readme.write_text(
@@ -417,32 +519,58 @@ def command_collect(args: argparse.Namespace) -> int:
         "The evidence is a post-mortem snapshot of a live virtiofsd process, not\n"
         "a cold-start reproducer.  Use ../virtiofsd_emfile_mwe.py for controlled\n"
         "reproduction experiments from a clean VM.\n"
+        "\n"
+        "The aggregate/ subdirectory contains aggregate-report.txt, which is the\n"
+        "compact shareable report to paste into an issue or chat, plus TSV counter\n"
+        "files for machine-readable follow-up.\n"
     )
     print(f"wrote {out}")
     print(f"hot_pid={pid} hot_fds={hot.fds} hot_source={hot.source}")
+    print(f"aggregate_report={report_path}")
+    if args.print_report:
+        print()
+        print(report_path.read_text())
     return 0
 
 
 def read_targets_file(path: Path) -> list[str]:
     targets: list[str] = []
     for idx, line in enumerate(path.read_text(errors="replace").splitlines()):
+        line = line.rstrip("\n")
         if idx == 0 and line.startswith("fd\t"):
             continue
         if "\t" in line:
-            targets.append(line.split("\t", 1)[1])
-        elif " -> " in line:
-            targets.append(line.split(" -> ", 1)[1])
+            left, target = line.split("\t", 1)
+            if left == "fd" or left.strip().isdigit():
+                targets.append(target)
+            continue
+        if " -> " in line:
+            left, target = line.split(" -> ", 1)
+            left = left.strip()
+            # Accept normal `find /proc/$pid/fd -printf '%p -> %l'` output,
+            # but ignore shell commands pasted in front of that output.
+            if re.search(r"/proc/[0-9]+/fd/[0-9]+$", left) or left.isdigit():
+                targets.append(target)
     return targets
 
 
 def command_aggregate(args: argparse.Namespace) -> int:
-    targets = read_targets_file(Path(args.fd_targets))
-    out = Path(args.out or ".")
-    out.mkdir(parents=True, exist_ok=True)
+    fd_targets = Path(args.fd_targets)
+    targets = read_targets_file(fd_targets)
+    out = Path(args.out) if args.out else default_aggregate_outdir(fd_targets)
     counters = aggregate_targets(targets)
-    for name, counter in counters.items():
-        write_counter(out / f"aggregate-{name}.tsv", counter, limit=args.aggregate_limit)
+    report_path = write_aggregate_bundle(
+        out,
+        counters,
+        source=str(fd_targets),
+        aggregate_limit=args.aggregate_limit,
+        report_limit=args.report_limit,
+    )
     print(f"aggregated {len(targets)} targets into {out}")
+    print(f"aggregate_report={report_path}")
+    if args.print_report:
+        print()
+        print(report_path.read_text())
     return 0
 
 
@@ -542,14 +670,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pid", type=int, default=None, help="virtiofsd PID; default is busiest persistent-root worker")
     p.add_argument("--out", default=None, help="output directory")
     p.add_argument("--sample-limit", type=int, default=0, help="limit FD target audit for quick samples; 0 means all")
-    p.add_argument("--aggregate-limit", type=int, default=80)
-    p.set_defaults(func=command_collect)
+    p.add_argument("--aggregate-limit", type=int, default=80, help="rows to write in each aggregate TSV")
+    p.add_argument("--report-limit", type=int, default=40, help="rows to show in the shareable text report")
+    p.add_argument("--no-print-report", dest="print_report", action="store_false", help="do not print the shareable aggregate report to stdout")
+    p.set_defaults(func=command_collect, print_report=True)
 
     p = sub.add_parser("aggregate", help="Aggregate an existing fd-targets.tsv or 'fd -> target' file")
     p.add_argument("fd_targets")
-    p.add_argument("--out", default=None)
-    p.add_argument("--aggregate-limit", type=int, default=80)
-    p.set_defaults(func=command_aggregate)
+    p.add_argument("--out", default=None, help="output directory; default is a timestamped subfolder next to fd_targets")
+    p.add_argument("--aggregate-limit", type=int, default=80, help="rows to write in each aggregate TSV")
+    p.add_argument("--report-limit", type=int, default=40, help="rows to show in the shareable text report")
+    p.add_argument("--no-print-report", dest="print_report", action="store_false", help="write report files but do not print the report to stdout")
+    p.set_defaults(func=command_aggregate, print_report=True)
 
     p = sub.add_parser("watch", help="Watch FD count for a virtiofsd process")
     p.add_argument("--vm", default=os.environ.get("AIVM_VM", "aivm-2404"))

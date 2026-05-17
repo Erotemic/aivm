@@ -246,19 +246,26 @@ sudo python3 dev/devcheck/virtiofsd-emfile/fd_postmortem.py collect \
     --out virtiofsd-incident-$(date +%Y%m%dT%H%M%S)
 ```
 
-Outputs include:
+Outputs are bundled under the requested incident directory.  The aggregate
+files are grouped in a subdirectory so the command does not scatter report files
+into the caller's current working directory.
 
 ```text
 summary.txt
 virtiofsd-inventory.tsv
 fd-targets.tsv
-aggregate-by_hostcode_token.tsv
-aggregate-by_token_topdir.tsv
-aggregate-by_token_topdir_seconddir.tsv
-aggregate-by_suffix.tsv
-aggregate-other_special_kinds.tsv
+aggregate/aggregate-report.txt
+aggregate/aggregate-by_hostcode_token.tsv
+aggregate/aggregate-by_token_topdir.tsv
+aggregate/aggregate-by_token_topdir_seconddir.tsv
+aggregate/aggregate-by_suffix.tsv
+aggregate/aggregate-other_special_kinds.tsv
 README.txt
 ```
+
+By default `collect` also prints `aggregate/aggregate-report.txt` to stdout, so
+the operator has a compact report that can be pasted into an issue or chat.  Use
+`--no-print-report` to suppress that stdout report.
 
 Use `--sample-limit N` for a quick sample instead of reading every FD target.
 Do not use a sample when making a final incident report.
@@ -270,9 +277,13 @@ The script can aggregate either its own `fd-targets.tsv` format or the common
 
 ```bash
 python3 dev/devcheck/virtiofsd-emfile/fd_postmortem.py aggregate \
-    virtiofsd-incident-20260517T102128/fd-targets.tsv \
-    --out virtiofsd-incident-20260517T102128/reaggregate
+    virtiofsd-incident-20260517T102128/fd-targets.tsv
 ```
+
+By default this creates a timestamped subdirectory beside the input, for example
+`virtiofsd-incident-20260517T102128/fd-targets-aggregate-.../`, writes the TSV
+counters there, and prints `aggregate-report.txt` to stdout.  Pass `--out DIR`
+when a specific output directory is desired.
 
 ### Watch the hot daemon
 
@@ -331,6 +342,12 @@ Interpretation:
 | FDs drop by only hundreds/thousands | some forget/release traffic happens, but not enough for recovery |
 | no meaningful drop | backend restart / VM power cycle is probably required |
 
+Observed 2026-05-17 result after the live `NOFILE` bump: the hot worker dropped
+from `999778` to `4162` and then `1479` FDs within about 15 seconds after the
+guest cache eviction probe.  This showed that most of the retained FD set was
+reclaimable by guest inode/dentry cache eviction, likely because eviction caused
+virtiofs/FUSE forget/release traffic back to the daemon.
+
 ### Capability check
 
 Decode the live daemon's capabilities:
@@ -372,6 +389,14 @@ Interpretation:
 |---|---|
 | guest operations resume | strong evidence guest-visible `EMFILE` came from host-side daemon FD exhaustion |
 | guest operations still fail | another worker/state may be wedged; preserve evidence before restarting |
+
+Observed 2026-05-17 result: host `fs.nr_open` started at `1048576`.  Raising it
+to `2097152` and applying `prlimit --nofile=2000000:2000000` to the hot worker
+succeeded without restarting the VM.  The worker remained around `999778` FDs,
+so the operation created headroom but did not reclaim retained descriptors.  A
+small guest `os.stat()` probe succeeded afterward, which supports the conclusion
+that the previous guest-visible `EMFILE` was caused by the host-side daemon
+hitting its FD ceiling.
 
 This should be documented as a temporary workaround, not the structural fix.
 
@@ -457,3 +482,37 @@ count; check whether --inode-file-handles=prefer can be made effective.
    it reclaims live daemon FDs on this host.
 5. Make file-handle mode measurable: record command-line flag, effective caps,
    and a before/after FD growth experiment from a clean VM.
+
+## Recovery command added after the post-drop experiment
+
+The 2026-05-17 incident showed that guest-side inode/dentry cache eviction can
+reclaim the vast majority of the hot daemon's retained FD set: the saturated
+`persistent-root` worker fell from about 999,778 FDs to 4,162 and then 1,479 FDs
+shortly after `drop_caches` was run inside the guest.  A post-drop aggregate
+then showed only 395 FD targets, with the former 517,765-FD top token reduced to
+a single descriptor.
+
+This justifies a first-class recovery command:
+
+```bash
+aivm vm flush_caches
+```
+
+The command runs inside the guest over SSH.  Its default action is deliberately
+`drop_caches=2`, which evicts dentries and inodes without also discarding the
+page cache.  That is the targeted recovery action for the observed virtiofsd FD
+pressure.  Operators can request a broader cache drop when needed:
+
+```bash
+aivm vm flush_caches --levels 2,3 --settle_seconds 30
+```
+
+This is a recovery lever, not a structural fix.  It does not prevent the same
+working set from being rediscovered by future broad traversals.  Long-term
+prevention still needs one or more of:
+
+- effective `--inode-file-handles=prefer` support;
+- warnings or exclusions for huge generated/cache/build/report trees;
+- narrower persistent live shares;
+- `git`/snapshot attachment modes for repos that do not need live host sharing;
+- stale-token cleanup and attachment garbage collection.

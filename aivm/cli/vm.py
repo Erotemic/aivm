@@ -17,6 +17,7 @@ from .vm_attach import (
     VMPersistentHostReplayCLI,
 )
 from .vm_config import VMEditCLI
+from .vm_cache import VMFlushCachesCLI
 from .vm_connect import VMCodeCLI, VMSSHCLI, VMSshConfigCLI, VMWaitIPCLI
 from .vm_lifecycle import (
     VMCreateCLI,
@@ -54,6 +55,7 @@ class VMModalCLI(scfg.ModalCLI):
         VMInstallPersistentHostReplayServiceCLI
     )
     code = VMCodeCLI
+    flush_caches = VMFlushCachesCLI
 
 
 __all__ = [
@@ -76,4 +78,5 @@ __all__ = [
     'VMListCLI',
     'VMEditCLI',
     'VMUpdateCLI',
+    'VMFlushCachesCLI',
 ]

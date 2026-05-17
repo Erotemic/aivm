@@ -242,3 +242,29 @@ mechanically prevent the regression mode that produced the Apr-2 report.
 - Are there any other on-disk artefacts that get left behind by detach
   (cloud-init seed entries, systemd helper unit fragments, etc.)?
   Same garbage-collection question, broader scope.
+
+## 2026-05-17 recovery update: guest cache eviction works
+
+A follow-up incident showed one `aivm-2404` `persistent-root` `virtiofsd` worker
+near `NOFILE=1,000,000` with roughly 999,778 FDs.  Raising host `fs.nr_open` and
+live `prlimit` to 2,000,000 succeeded and basic guest filesystem operations
+resumed, but the FD count did not drop by itself.
+
+The critical recovery experiment was then run from the guest:
+
+```bash
+sync
+sudo sh -c 'echo 2 > /proc/sys/vm/drop_caches'
+sleep 30
+sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+```
+
+The hot host-side `virtiofsd` worker dropped from about 999,778 FDs to 4,162 and
+then 1,479 FDs within seconds.  A post-drop aggregate contained only 395 targets.
+This means the million-FD state was largely tied to guest-cached inode/dentry
+state and was recoverable without restarting the VM or killing `virtiofsd`.
+
+A first-class command, `aivm vm flush_caches`, now captures the targeted version
+of that recovery action.  It defaults to `drop_caches=2` because the observed
+failure mode was inode/dentry retention rather than a need to discard page
+cache.
