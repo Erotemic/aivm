@@ -61,7 +61,7 @@ def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_vm_attach_shared_root_running_ensures_guest_ready(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.cli.vm import VMAttachCLI
+    from aivm.cli.vm_attach import VMAttachCLI
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shared-root'
@@ -77,42 +77,42 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.ops.vm_attach._load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.ops.vm_attach._record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm._resolve_attachment',
+        'aivm.ops.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
+        'aivm.ops.vm_attach.probe_vm_state',
         lambda *a, **k: (
             ProbeOutcome(True, 'vm-shared-root state=running'),
             True,
         ),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._record_attachment', lambda *a, **k: cfg_path
+        'aivm.ops.vm_attach._record_attachment', lambda *a, **k: cfg_path
     )
 
     host_bind_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_shared_root_host_bind',
+        'aivm.ops.vm_attach._ensure_shared_root_host_bind',
         lambda *a, **k: host_bind_calls.append((a, k)) or Path('/tmp/token'),
     )
     vm_mapping_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_shared_root_vm_mapping',
+        'aivm.ops.vm_attach._ensure_shared_root_vm_mapping',
         lambda *a, **k: vm_mapping_calls.append((a, k)) or None,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._resolve_ip_for_ssh_ops',
+        'aivm.ops.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.99',
     )
     guest_ready_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm._ensure_attachment_available_in_guest',
+        'aivm.ops.vm_attach._ensure_attachment_available_in_guest',
         lambda *a, **k: guest_ready_calls.append((a, k)) or None,
     )
 

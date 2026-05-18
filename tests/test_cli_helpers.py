@@ -14,7 +14,7 @@ from aivm.cli._common import (
     _maybe_offer_create_ssh_identity,
 )
 from aivm.cli.help import HelpCompletionCLI, HelpRawCLI, PlanCLI
-from aivm.cli.vm import (
+from aivm.attachments.guest import (
     _upsert_ssh_config_entry,
 )
 from aivm.commands import CommandManager

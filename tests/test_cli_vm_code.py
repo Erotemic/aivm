@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aivm.cli.vm import (
+from aivm.cli.vm_connect import (
     _print_remote_session_recipe,
     _remote_tunnel_name,
     _vscode_can_open_locally,
@@ -28,7 +28,7 @@ def test_vscode_can_open_locally_when_local_and_code_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _scrub_env(monkeypatch)
-    monkeypatch.setattr('aivm.cli.vm.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
     can, reason = _vscode_can_open_locally()
     assert can is True
     assert reason is None
@@ -42,7 +42,7 @@ def test_vscode_skipped_when_ssh_connection_set(
     _scrub_env(monkeypatch)
     monkeypatch.setenv('SSH_CONNECTION', '10.0.0.1 22 10.0.0.2 49152')
     # `which('code')` could return either; SSH should take precedence.
-    monkeypatch.setattr('aivm.cli.vm.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
     can, reason = _vscode_can_open_locally()
     assert can is False
     assert 'SSH_CONNECTION' in (reason or '')
@@ -61,7 +61,7 @@ def test_vscode_skipped_when_inside_vscode_terminal_over_ssh(
     _scrub_env(monkeypatch)
     monkeypatch.setenv('SSH_CONNECTION', '10.0.0.1 22 10.0.0.2 49152')
     monkeypatch.setenv('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc.sock')
-    monkeypatch.setattr('aivm.cli.vm.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
     can, reason = _vscode_can_open_locally()
     assert can is False
     assert 'SSH_CONNECTION' in (reason or '')
@@ -71,7 +71,7 @@ def test_vscode_skipped_when_code_binary_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _scrub_env(monkeypatch)
-    monkeypatch.setattr('aivm.cli.vm.which', lambda name: None)
+    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: None)
     can, reason = _vscode_can_open_locally()
     assert can is False
     assert '`code`' in (reason or '')
@@ -81,7 +81,7 @@ def test_remote_tunnel_name_uses_vm_and_hypervisor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
-    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek.kitware.com')
+    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek.kitware.com')
     assert _remote_tunnel_name(cfg) == 'aivm-2404-namek'
 
 
@@ -95,7 +95,7 @@ def test_print_remote_session_recipe_includes_tunnel_command(
         share_guest_dst='/home/joncrall/code/aivm',
         reg_path='/home/joncrall/.config/aivm/config.toml',
     )
-    monkeypatch.setattr('aivm.cli.vm.socket.gethostname', lambda: 'namek')
+    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek')
     _print_remote_session_recipe(
         cfg,
         session,

@@ -9,9 +9,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.attachments.session import ReconcileResult, _prepare_attached_session
-from aivm.cli.vm import (
-    VMUpdateCLI,
-)
+from aivm.cli.vm_update import VMUpdateCLI
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
 from aivm.util import CmdResult
@@ -129,9 +127,9 @@ def test_apply_vm_update_disk_grow_requires_no_restart() -> None:
     assert kind == RestartKind.NONE
 
 
-def test_apply_vm_update_virtiofs_drift_requires_hard_cycle() -> None:
-    """vhost-user-fs <binary path> only changes when libvirt spawns a
-    fresh virtiofsd: a full power cycle is required.
+def test_apply_vm_update_virtiofs_cleanup_requires_hard_cycle() -> None:
+    """vhost-user-fs <binary path> changes only when libvirt spawns a
+    fresh virtiofsd, even when the update is removing an old wrapper path.
     """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-vfs'
@@ -139,11 +137,11 @@ def test_apply_vm_update_virtiofs_drift_requires_hard_cycle() -> None:
         virtiofs_binary=(
             VirtiofsBinaryDrift(
                 tag='aivm-persistent-root',
-                current='',
-                desired='/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh',
+                current='/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh',
+                desired='',
             ),
         ),
-        virtiofsd_mode='prefer',
+        virtiofsd_mode='',
     )
     changed, kind = _apply_vm_update(cfg, drift, dry_run=True)
     assert changed is True
@@ -170,11 +168,11 @@ def test_vm_update_no_changes(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-noop'
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.cli.vm_update._load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._vm_update_drift',
+        'aivm.ops.vm_update._vm_update_drift',
         lambda *a, **k: (VMUpdateDrift(), False),
     )
     rc = VMUpdateCLI.main(argv=False, config=str(tmp_path / 'config.toml'))
@@ -190,15 +188,15 @@ def test_vm_update_restarts_when_required(
     cfg.vm.name = 'vm-update'
     drift = VMUpdateDrift(cpus=(2, 4))
     monkeypatch.setattr(
-        'aivm.cli.vm._load_cfg_with_path',
+        'aivm.cli.vm_update._load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._vm_update_drift',
+        'aivm.ops.vm_update._vm_update_drift',
         lambda *a, **k: (drift, True),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm._apply_vm_update',
+        'aivm.ops.vm_update._apply_vm_update',
         lambda *a, **k: (True, True),
     )
     called: dict[str, object] = {}  # type: ignore[assignment]
@@ -207,7 +205,7 @@ def test_vm_update_restarts_when_required(
         called['kwargs'] = k  # type: ignore[index]
 
     monkeypatch.setattr(
-        'aivm.cli.vm._maybe_restart_vm_after_update', fake_restart
+        'aivm.ops.vm_update._maybe_restart_vm_after_update', fake_restart
     )
     rc = VMUpdateCLI.main(
         argv=False,
@@ -275,7 +273,7 @@ def test_vm_update_drift_escalates_for_disk_probe(
             return CmdResult(0, '{"virtual-size": 42949672960}', '')
         raise AssertionError(f'Unexpected cmd={cmd!r} sudo={sudo}')
 
-    monkeypatch.setattr('aivm.cli.vm.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
     drift, running = _vm_update_drift(cfg, yes=False)
     assert running is True
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -330,7 +328,7 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
             return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
         raise AssertionError(f'Unexpected command: {cmd!r}')
 
-    monkeypatch.setattr('aivm.cli.vm.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
     assert any('falling back to virsh domblkinfo' in n for n in drift.notes)
@@ -371,7 +369,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.vm.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
     monkeypatch.setattr(
         'aivm.attachments.session._resolve_attachment',
         lambda *a, **k: ResolvedAttachment(
@@ -462,7 +460,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         return 0
 
     monkeypatch.setattr('aivm.cli.config.InitCLI.main', fake_init)
-    monkeypatch.setattr('aivm.cli.vm.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
     monkeypatch.setattr(
         'aivm.attachments.session.sys.stdin.isatty', lambda: True
     )
@@ -578,7 +576,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.vm.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
     monkeypatch.setattr(
         'aivm.attachments.session._resolve_attachment',
         lambda *a, **k: ResolvedAttachment(

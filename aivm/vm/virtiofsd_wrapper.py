@@ -1,191 +1,140 @@
-"""Generate and install the virtiofsd wrapper that injects
-``--inode-file-handles``.
+"""Helpers for recognizing legacy AIVM virtiofsd wrapper paths.
 
-Why this exists
----------------
-The default virtiofsd inode cache holds one host file descriptor per
-cached inode. With large persistent-root exports the cumulative FD count
-on the host can grow past virtiofsd's NOFILE soft limit, which surfaces
-inside the guest as ``OSError(EMFILE)`` from a single
-``listdir``/``statx`` call even though the guest process itself has very
-few FDs open.
+A previous implementation attempted to pass virtiofsd's
+``--inode-file-handles`` option by generating host-side wrapper scripts under
+``paths.base_dir`` and pointing libvirt ``<filesystem>/<binary path=...>`` at
+those scripts. That violated AIVM's host trust model: normal VM updates should
+use well-known, distro-provided host binaries, not AIVM-generated privileged
+host executables/scripts.
 
-Passing ``--inode-file-handles=prefer`` to virtiofsd switches inode
-caching to ``name_to_handle_at`` / ``open_by_handle_at`` — kernel file
-handles instead of long-lived FDs — which removes the per-inode FD cost.
-``prefer`` is safe on mixed filesystems: any fs that does not support
-handles transparently falls back to FD caching.
+Current managed-libvirt mode therefore does **not** install wrappers and does
+**not** request wrapper paths for new virtiofs attachments. This module remains
+only so update drift detection can recognize old AIVM-managed wrapper paths and
+remove them from existing VM XML.
 
-See ``dev/devcheck/virtiofsd_emfile_findings.md`` for the investigation
-that motivated the change.
-
-How aivm uses it
-----------------
-We do not pass the flag through libvirt XML directly because libvirt does
-not expose ``--inode-file-handles`` as a first-class ``<binary>`` child
-element. Instead, aivm installs a tiny shell wrapper at
-``<base_dir>/virtiofsd-wrapper.sh`` and the domain XML's
-``<filesystem>/<binary path='...'>`` points at the wrapper. This is one
-shared wrapper per host (lives under ``paths.base_dir``).
-
-The behaviour is controlled by ``Store.behavior.virtiofsd_inode_file_handles``
-(persisted in ``[behavior]`` of the global aivm config). Valid values:
-
-  * ``""`` (or anything else) -> no wrapper; emit no ``<binary>`` element.
-  * ``"never"``                -> wrapper passes ``--inode-file-handles=never``
-                                  (explicit current default behaviour).
-  * ``"prefer"``               -> wrapper passes ``--inode-file-handles=prefer``
-                                  (recommended; the new default).
-  * ``"mandatory"``            -> wrapper passes ``--inode-file-handles=mandatory``
-                                  (fails to start on filesystems without
-                                  handle support; not recommended unless
-                                  every fs is verified).
+See ``dev/design/future/virtiofsd-inode-file-handles.md`` before reintroducing
+any inode-file-handles strategy.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
-
-from loguru import logger as log
-
-from ..commands import CommandManager
 
 VALID_MODES = ('never', 'prefer', 'mandatory')
 DEFAULT_VIRTIOFSD_BINARY = '/usr/libexec/virtiofsd'
-# Wrapper filenames are mode-suffixed so VMs that ask for different modes
-# (e.g. one VM on 'prefer' for A/B testing while others stay on 'never')
-# do not collide on a single shared script.
 WRAPPER_BASENAME_TEMPLATE = 'virtiofsd-wrapper-{mode}.sh'
+WRAPPER_BASENAME_NOEXT_TEMPLATE = 'virtiofsd-wrapper-{mode}'
 ALL_WRAPPER_BASENAMES = tuple(
-    WRAPPER_BASENAME_TEMPLATE.format(mode=m) for m in VALID_MODES
+    name
+    for mode in VALID_MODES
+    for name in (
+        WRAPPER_BASENAME_TEMPLATE.format(mode=mode),
+        WRAPPER_BASENAME_NOEXT_TEMPLATE.format(mode=mode),
+    )
 )
 
 
 def normalize_mode(value: str | None) -> str:
-    """Return one of VALID_MODES, or '' if the value is unset/invalid.
+    """Return the currently supported managed-libvirt override mode.
 
-    Centralised so config drift, CLI input, and stored values agree on
-    what counts as "wrapper enabled".
+    All values intentionally resolve to ``''``. The old non-empty modes are
+    retained in config parsing only for backward compatibility and migration;
+    normal AIVM-managed libvirt operation must not generate host-side wrapper
+    scripts.
     """
-    if not value:
-        return ''
-    v = str(value).strip().lower()
-    return v if v in VALID_MODES else ''
+    del value
+    return ''
 
 
 def wrapper_path(base_dir: str, mode: str) -> str:
-    """Filesystem path to the wrapper script for a specific mode.
+    """Return the legacy wrapper path for a historical mode.
 
-    Raises ValueError on an invalid mode so we never produce paths like
-    ``virtiofsd-wrapper-.sh``.
+    This helper is intentionally for tests/migration diagnostics only. It does
+    not imply that AIVM should install or use the returned path.
     """
-    m = normalize_mode(mode)
-    if not m:
+    m = str(mode or '').strip().lower()
+    if m not in VALID_MODES:
         raise ValueError(f'invalid virtiofsd inode-file-handles mode: {mode!r}')
     return str(Path(base_dir) / WRAPPER_BASENAME_TEMPLATE.format(mode=m))
 
 
 def is_managed_wrapper_path(base_dir: str, path: str) -> bool:
-    """True iff `path` looks like a wrapper aivm would install under base_dir.
+    """True iff ``path`` is one of AIVM's legacy wrapper paths.
 
-    Used by drift detection so we know whether to leave or remove a
-    ``<binary path>`` that points inside base_dir.
+    Older cleanup logic matched only exact paths under the *current*
+    ``cfg.paths.base_dir``. That was too narrow for repair: if a local config
+    changed ``base_dir`` or an old experiment wrote a wrapper at the historical
+    default, ``aivm vm update`` could incorrectly report the VM as in sync while
+    libvirt still tried to spawn ``virtiofsd-wrapper-prefer.sh``.
+
+    Keep the exact base-dir check, but also recognize the legacy wrapper
+    basenames under AIVM-owned libvirt locations. This is intentionally still
+    scoped to AIVM-looking paths; it does not remove arbitrary user binaries.
     """
     if not path:
         return False
-    bd = str(Path(base_dir))
-    return any(
-        path == str(Path(bd) / name) for name in ALL_WRAPPER_BASENAMES
-    )
+
+    candidate = Path(path)
+    name = candidate.name
+    if name not in ALL_WRAPPER_BASENAMES:
+        return False
+
+    bd = Path(base_dir)
+    if path == str(bd / name):
+        return True
+
+    # Historical default used by the old wrapper implementation. This lets the
+    # repair path work even if the user's current config has a different
+    # ``paths.base_dir``.
+    if path == str(Path('/var/lib/libvirt/aivm') / name):
+        return True
+
+    # Compiled-wrapper experiments and other interrupted patches may have left
+    # the same basename under a VM-specific AIVM directory. Treat paths under
+    # /var/lib/libvirt/aivm as AIVM-owned legacy wrappers, but avoid matching
+    # arbitrary paths elsewhere.
+    try:
+        candidate.relative_to('/var/lib/libvirt/aivm')
+    except ValueError:
+        return False
+    else:
+        return True
 
 
 def desired_binary_path(base_dir: str, mode: str) -> str | None:
-    """libvirt ``<binary path='...'>`` to emit for the given mode.
+    """Return the managed-libvirt ``<binary path>`` override for ``mode``.
 
-    Returns None when the mode is unset/invalid (meaning: emit no
-    ``<binary>`` element at all and let libvirt use its built-in default
-    path).
+    The only supported normal behavior is no override. The arguments are kept
+    for compatibility with older callers and to make rollback overlays safe to
+    apply over partially-refactored trees.
     """
-    m = normalize_mode(mode)
-    if not m:
-        return None
-    return wrapper_path(base_dir, m)
+    del base_dir, mode
+    return None
 
 
 def wrapper_content(mode: str, real_binary: str = DEFAULT_VIRTIOFSD_BINARY) -> str:
-    """The exact bytes the wrapper script should contain.
+    """Do not generate host-side virtiofsd wrapper scripts.
 
-    Pure function so tests can assert content without touching the disk.
+    Kept as an explicit failure point so stale callers fail loudly instead of
+    silently reintroducing the unsafe host-wrapper strategy.
     """
-    m = normalize_mode(mode)
-    if not m:
-        raise ValueError(f'invalid virtiofsd inode-file-handles mode: {mode!r}')
-    return (
-        '#!/bin/bash\n'
-        '# Generated by aivm. Manual edits will be overwritten on next "aivm vm update".\n'
-        '# Injects --inode-file-handles to reduce virtiofsd FD pressure.\n'
-        f'exec {real_binary} --inode-file-handles={m} "$@"\n'
+    del real_binary
+    raise RuntimeError(
+        'AIVM-generated host-side virtiofsd wrappers are disabled. '
+        f'Requested inode-file-handles mode was {mode!r}. See '
+        'dev/design/future/virtiofsd-inode-file-handles.md.'
     )
 
 
 def ensure_wrapper_installed(
     base_dir: str, mode: str, *, dry_run: bool = False
 ) -> str | None:
-    """Idempotently install the wrapper at ``<base_dir>/virtiofsd-wrapper.sh``.
-
-    Returns the wrapper path on success, or None if ``mode`` is empty /
-    invalid (no wrapper needed).
-    """
-    m = normalize_mode(mode)
-    if not m:
+    """Never install a generated host-side virtiofsd wrapper."""
+    del base_dir, dry_run
+    if not str(mode or '').strip():
         return None
-    target = wrapper_path(base_dir, m)
-    desired = wrapper_content(m)
-    mgr = CommandManager.current()
-
-    read = mgr.run(
-        ['cat', target],
-        sudo=True,
-        check=False,
-        capture=True,
-        role='read',
-        summary=f'Inspect existing virtiofsd wrapper at {target}',
+    raise RuntimeError(
+        'AIVM-generated host-side virtiofsd wrappers are disabled. '
+        f'Requested inode-file-handles mode was {mode!r}. See '
+        'dev/design/future/virtiofsd-inode-file-handles.md.'
     )
-    if read.code == 0 and read.stdout == desired:
-        return target
-
-    if dry_run:
-        log.info(
-            'DRYRUN: would install virtiofsd wrapper at {} (mode={})',
-            target,
-            m,
-        )
-        return target
-
-    with tempfile.NamedTemporaryFile(
-        'w',
-        delete=False,
-        suffix='.sh',
-        prefix='aivm-virtiofsd-wrapper-',
-    ) as f:
-        f.write(desired)
-        tmp = f.name
-    try:
-        mgr.run(
-            ['install', '-m', '0755', tmp, target],
-            sudo=True,
-            check=True,
-            capture=True,
-            role='modify',
-            summary=f'Install virtiofsd wrapper at {target}',
-            detail=f'inode-file-handles={m}',
-        )
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-    log.info('Installed virtiofsd wrapper at {} (mode={})', target, m)
-    return target

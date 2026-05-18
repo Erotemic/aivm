@@ -134,7 +134,7 @@ def test_cloud_init_resolution_explicit_overrides_host(
         called['n'] += 1
         return 'America/New_York'
 
-    monkeypatch.setattr('aivm.vm.lifecycle.detect_host_timezone', fake_detect)
+    monkeypatch.setattr('aivm.vm.cloudinit.detect_host_timezone', fake_detect)
 
     cfg = AgentVMConfig()
     cfg.vm.timezone = 'UTC'
@@ -154,7 +154,7 @@ def test_cloud_init_resolution_empty_falls_back_to_host(
     from aivm.config import AgentVMConfig
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.detect_host_timezone',
+        'aivm.vm.cloudinit.detect_host_timezone',
         lambda: 'America/Los_Angeles',
     )
 

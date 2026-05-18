@@ -22,7 +22,6 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..util import CmdError
-from . import virtiofsd_wrapper
 
 log = logger
 
@@ -277,21 +276,13 @@ def _resolve_virtiofs_binary_for_attach(
 ) -> str | None:
     """Resolve the libvirt ``<binary path='...'>`` for new virtiofs attach.
 
-    Reads ``cfg.virtiofs.inode_file_handles``; if set to one of the
-    supported modes, returns the expected wrapper path. Otherwise returns
-    None and no ``<binary>`` element is emitted.
-
-    Does *not* install the wrapper. Installation is owned by ``aivm vm
-    update`` so that the attach hot path stays free of stateful host-side
-    side effects and remains easy to unit-test.
+    Normal managed-libvirt mode deliberately emits no ``<binary>`` override.
+    Older config files may still contain ``virtiofs.inode_file_handles`` from
+    the experimental wrapper strategy, but AIVM no longer translates that into
+    a generated host-side wrapper script.
     """
-    del dry_run  # kept for symmetry with prior signature; no side effects here
-    mode = virtiofsd_wrapper.normalize_mode(
-        getattr(cfg.virtiofs, 'inode_file_handles', '')
-    )
-    if not mode:
-        return None
-    return virtiofsd_wrapper.desired_binary_path(cfg.paths.base_dir, mode)
+    del cfg, dry_run
+    return None
 
 
 def attach_vm_share(
