@@ -76,7 +76,7 @@ set -euo pipefail
 INSTALL_DIR={shlex.quote(install_dir)}
 case "$INSTALL_DIR" in
     '~') INSTALL_DIR="$HOME" ;;
-    '~/'*) INSTALL_DIR="$HOME/${{INSTALL_DIR#~/}}" ;;
+    '~/'*) INSTALL_DIR="$HOME/${{INSTALL_DIR#'~/'}}" ;;
 esac
 {transport_bootstrap}
 mkdir -p "$INSTALL_DIR"

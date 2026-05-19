@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
+import pytest
+
 from aivm.config import AgentVMConfig, dump_toml, load
 from aivm.vm.lifecycle import (
     _guest_ensure_rust_script,
@@ -43,6 +48,40 @@ def test_guest_ensure_uv_script_is_standalone_and_not_snap() -> None:
     assert 'apt-get install -y ca-certificates curl' in script
     assert '~/.local/aivm/bin' in script
     assert 'snap' not in script.lower()
+
+
+@pytest.mark.parametrize(
+    ('bin_dir', 'expected'),
+    [
+        ('~/.local/bin', '/tmp/aivm-fakehome/.local/bin'),
+        ('~/.local/aivm/bin', '/tmp/aivm-fakehome/.local/aivm/bin'),
+        ('~', '/tmp/aivm-fakehome'),
+        ('/opt/aivm/bin', '/opt/aivm/bin'),
+    ],
+)
+def test_guest_ensure_uv_script_expands_tilde_install_dir(
+    bin_dir: str, expected: str
+) -> None:
+    """Regression: ``${INSTALL_DIR#~/}`` tilde-expanded the pattern itself,
+    so the prefix never matched and provision created a literal ``~``
+    directory under ``$HOME``."""
+    if shutil.which('bash') is None:
+        pytest.skip('bash not available')
+    cfg = AgentVMConfig()
+    cfg.tools.bin_dir = bin_dir
+    script = _guest_ensure_uv_script(cfg, ensure_transport=False)
+    # Run only the tilde-resolution prologue so the test never invokes
+    # curl/wget or the real uv installer.
+    prologue_end = script.index('esac') + len('esac')
+    prologue = script[:prologue_end] + '\necho "$INSTALL_DIR"\n'
+    result = subprocess.run(
+        ['bash', '-c', prologue],
+        env={'HOME': '/tmp/aivm-fakehome', 'PATH': '/usr/bin:/bin'},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == expected
 
 
 def test_guest_rust_tool_spec_can_be_enabled_or_disabled() -> None:
