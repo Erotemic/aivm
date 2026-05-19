@@ -857,15 +857,19 @@ def _prepare_attached_session(
                 defaults=bool(yes),
                 force=False,
             )
-        from ..cli.vm import VMCreateCLI
+        from ..vm.create_ops import create_vm_from_defaults
 
-        VMCreateCLI.main(
-            argv=False,
-            config=config_opt,
-            vm=vm_opt,
-            yes=bool(yes),
-            dry_run=bool(dry_run),
+        create_vm_from_defaults(
+            missing_store_path,
+            vm_override=vm_opt if vm_opt else None,
+            set_default=False,
             force=False,
+            dry_run=bool(dry_run),
+            yes=bool(yes),
+            initial_attachment_host_src=host_src,
+            initial_attachment_guest_dst=guest_dst_opt,
+            initial_attachment_mode=attach_mode_opt,
+            initial_attachment_access=attach_access_opt,
         )
         cfg, cfg_path = _resolve_cfg_for_code(
             config_opt=config_opt,

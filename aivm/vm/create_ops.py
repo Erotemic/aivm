@@ -177,6 +177,80 @@ def _resolve_create_config(
     return cfg, reg
 
 
+def _initial_share_mapping_for_create(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    host_src: Path | None,
+    guest_dst_opt: str = '',
+    mode_opt: str = '',
+    access_opt: str = '',
+) -> tuple[str, str, str]:
+    """Return the initial virtiofs mapping for a first attached VM create.
+
+    Folder-oriented entry points such as ``aivm code .`` can bootstrap a VM
+    and immediately need the requested folder available in the guest.  Resolve
+    that attachment after interactive VM-name edits, then pass the mapping into
+    ``virt-install`` so fresh creates do not depend on live virtiofs hotplug.
+    """
+    if host_src is None:
+        return '', '', ''
+
+    from ..attachments.persistent import _persistent_root_host_dir
+    from ..attachments.resolve import (
+        ATTACHMENT_MODE_PERSISTENT,
+        ATTACHMENT_MODE_SHARED,
+        ATTACHMENT_MODE_SHARED_ROOT,
+        _resolve_attachment,
+    )
+    from ..attachments.shared_root import (
+        SHARED_ROOT_VIRTIOFS_TAG,
+        _shared_root_host_dir,
+    )
+    from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
+
+    attachment = _resolve_attachment(
+        cfg,
+        cfg_path,
+        host_src,
+        guest_dst_opt,
+        mode_opt,
+        access_opt,
+    )
+    if attachment.mode == ATTACHMENT_MODE_SHARED:
+        return attachment.source_dir, attachment.tag, str(attachment.mode)
+    if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
+        return (
+            str(_shared_root_host_dir(cfg)),
+            SHARED_ROOT_VIRTIOFS_TAG,
+            str(attachment.mode),
+        )
+    if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
+        return (
+            str(_persistent_root_host_dir(cfg)),
+            PERSISTENT_ROOT_VIRTIOFS_TAG,
+            str(attachment.mode),
+        )
+    return '', '', str(attachment.mode)
+
+
+def _ensure_initial_share_source_for_create(
+    cfg: AgentVMConfig,
+    *,
+    attachment_mode: str,
+    dry_run: bool,
+) -> None:
+    """Create VM-level share export parents needed by initial virtiofs."""
+    if attachment_mode == 'persistent':
+        from ..attachments.persistent import _ensure_persistent_root_parent_dir
+
+        _ensure_persistent_root_parent_dir(cfg, dry_run=dry_run)
+    elif attachment_mode == 'shared-root':
+        from ..attachments.shared_root import _ensure_shared_root_parent_dir
+
+        _ensure_shared_root_parent_dir(cfg, dry_run=dry_run)
+
+
 def create_vm_from_defaults(
     cfg_path: Path,
     *,
@@ -185,6 +259,10 @@ def create_vm_from_defaults(
     force: bool = False,
     dry_run: bool = False,
     yes: bool = False,
+    initial_attachment_host_src: Path | None = None,
+    initial_attachment_guest_dst: str = '',
+    initial_attachment_mode: str = '',
+    initial_attachment_access: str = '',
 ) -> int:
     """Create a managed VM from config-store defaults and start it.
 
@@ -205,6 +283,16 @@ def create_vm_from_defaults(
         force: Whether to overwrite existing VM entry.
         dry_run: Whether to print actions without running.
         yes: Whether to skip all prompts.
+        initial_attachment_host_src: Optional host folder that should be
+            present in the initial VM domain definition. Used by fresh
+            ``aivm code`` / ``aivm ssh`` bootstrap flows to avoid live
+            virtiofs hotplug immediately after first create.
+        initial_attachment_guest_dst: Guest path override for the initial
+            attachment, if any.
+        initial_attachment_mode: Attachment mode override for the initial
+            attachment, if any.
+        initial_attachment_access: Attachment access override for the initial
+            attachment, if any.
 
     Returns:
         0 on success, 1 on error.
@@ -252,6 +340,19 @@ def create_vm_from_defaults(
         )
         return 1
 
+    (
+        initial_share_source_dir,
+        initial_share_tag,
+        initial_attachment_resolved_mode,
+    ) = _initial_share_mapping_for_create(
+        cfg,
+        cfg_path,
+        host_src=initial_attachment_host_src,
+        guest_dst_opt=initial_attachment_guest_dst,
+        mode_opt=initial_attachment_mode,
+        access_opt=initial_attachment_access,
+    )
+
     # Install host dependencies
     _maybe_install_missing_host_deps(yes=yes, dry_run=dry_run)
 
@@ -265,10 +366,17 @@ def create_vm_from_defaults(
         ensure_network(cfg, recreate=False, dry_run=dry_run)
         if cfg.firewall.enabled:
             apply_firewall(cfg, dry_run=dry_run)
+        _ensure_initial_share_source_for_create(
+            cfg,
+            attachment_mode=initial_attachment_resolved_mode,
+            dry_run=dry_run,
+        )
         create_or_start_vm(
             cfg,
             dry_run=dry_run,
             recreate=bool(force and existing is not None),
+            share_source_dir=initial_share_source_dir,
+            share_tag=initial_share_tag,
         )
 
     # Persist the new VM record

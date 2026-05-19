@@ -563,3 +563,74 @@ def test_vm_create_errors_when_resources_physically_impossible(
     )
     with pytest.raises(RuntimeError, match='not feasible on this host'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
+
+
+def test_vm_create_initial_persistent_share_uses_final_vm_name(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Attached fresh-create resolves the initial share after VM-name edits."""
+    from aivm.vm.create_ops import create_vm_from_defaults
+
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    base_dir = tmp_path / 'libvirt-aivm'
+
+    store = Store()
+    defaults = AgentVMConfig()
+    defaults.vm.name = 'template-vm'
+    defaults.paths.base_dir = str(base_dir)
+    store.defaults = defaults
+    save_store(store, cfg_path)
+
+    def fake_review(cfg: AgentVMConfig, path: Path) -> AgentVMConfig:
+        cfg.vm.name = 'fresh-vm'
+        return cfg
+
+    monkeypatch.setattr(
+        'aivm.vm.create_ops._review_vm_create_overrides_interactive',
+        fake_review,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
+    )
+
+    prepared: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.persistent._ensure_persistent_root_parent_dir',
+        lambda cfg, *, dry_run: prepared.append((cfg.vm.name, dry_run)),
+    )
+    created: list[tuple[AgentVMConfig, dict]] = []
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_or_start_vm',
+        lambda cfg, **kwargs: created.append((cfg, dict(kwargs))),
+    )
+
+    rc = create_vm_from_defaults(
+        cfg_path,
+        set_default=True,
+        yes=False,
+        initial_attachment_host_src=host_src,
+        initial_attachment_mode='persistent',
+    )
+
+    assert rc == 0
+    assert prepared == [('fresh-vm', False)]
+    assert created
+    created_cfg, kwargs = created[0]
+    assert created_cfg.vm.name == 'fresh-vm'
+    assert kwargs['share_source_dir'] == str(base_dir / 'fresh-vm' / 'persistent-root')
+    assert kwargs['share_tag'] == 'aivm-persistent-root'

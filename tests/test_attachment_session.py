@@ -1389,3 +1389,92 @@ def test_restore_non_symlink_attachment_unchanged(
     assert len(derived_calls) == 1
     # Falls back to source_dir (resolved) since no lexical path stored
     assert derived_calls[0]['host_src'] == Path(str(real_dir))
+
+
+def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fresh attached bootstrap should create the VM with the requested share."""
+    from aivm.attachments.session import _prepare_attached_session
+
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+
+    store = Store()
+    store.defaults = AgentVMConfig()
+    save_store(store, cfg_path)
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'fresh-vm'
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst='/workspace/proj',
+        tag='hostcode-proj',
+    )
+
+    resolve_calls = {'count': 0}
+
+    def fake_resolve_cfg_for_code(**kwargs: Any) -> tuple[AgentVMConfig, Path]:
+        resolve_calls['count'] += 1
+        if resolve_calls['count'] == 1:
+            raise RuntimeError(
+                f'No VM definitions found in config store: {cfg_path}. '
+                'Run `aivm config init` then `aivm vm create` first.'
+            )
+        return cfg, cfg_path
+
+    create_calls: list[dict] = []
+
+    def fake_create_vm_from_defaults(path: Path, **kwargs: Any) -> int:
+        create_calls.append({'path': path, **kwargs})
+        return 0
+
+    monkeypatch.setattr(
+        'aivm.attachments.session._resolve_cfg_for_code',
+        fake_resolve_cfg_for_code,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_vm_from_defaults',
+        fake_create_vm_from_defaults,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._resolve_attachment',
+        lambda *a, **k: attachment,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_attached_vm',
+        lambda *a, **k: type(
+            'R',
+            (),
+            {
+                'attachment': attachment,
+                'cached_ip': None,
+                'shared_root_host_side_ready': False,
+            },
+        )(),
+    )
+
+    session = _prepare_attached_session(
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='/workspace/proj',
+        attach_mode_opt='persistent',
+        attach_access_opt='ro',
+        recreate_if_needed=False,
+        ensure_firewall_opt=False,
+        dry_run=True,
+        yes=True,
+    )
+
+    assert session.cfg is cfg
+    assert create_calls
+    create_kwargs = create_calls[0]
+    assert create_kwargs['path'] == cfg_path
+    assert create_kwargs['initial_attachment_host_src'] == host_src
+    assert create_kwargs['initial_attachment_guest_dst'] == '/workspace/proj'
+    assert create_kwargs['initial_attachment_mode'] == 'persistent'
+    assert create_kwargs['initial_attachment_access'] == 'ro'
