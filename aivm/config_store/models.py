@@ -34,7 +34,7 @@ class AttachmentEntry:
 
 @dataclass
 class Store:
-    schema_version: int = 5
+    schema_version: int = 6
     active_vm: str = ''
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     defaults: AgentVMConfig | None = None

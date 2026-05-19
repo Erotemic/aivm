@@ -71,7 +71,7 @@ def _compute_mirror_home_symlink(
     *,
     is_default_dst: bool,
 ) -> str | None:
-    """Compute the mirror-home symlink path if behavior.mirror_shared_home_folders is enabled.
+    """Compute the mirror-home symlink path if vm.mirror_shared_home_folders is enabled.
 
     Returns the guest symlink path to create (pointing to guest_dst), or None if
     the mirror should not be created.

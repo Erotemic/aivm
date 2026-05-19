@@ -427,3 +427,72 @@ def test_save_store_split_rejects_orphaned_attachment(tmp_path: Path) -> None:
 
     with raises(ValueError, match='orphaned|attachment records'):
         save_store_split(store, tmp_path / 'config.toml')
+
+
+def test_legacy_behavior_mirror_shared_home_folders_migrates_to_vmconfig(
+    tmp_path: Path,
+) -> None:
+    """schema_version<6 stores keep mirror_shared_home_folders under [behavior].
+    Loading such a file must lift the value onto defaults.vm and every VM."""
+    cfg_path = tmp_path / 'config.toml'
+    cfg_path.write_text(
+        'schema_version = 5\n'
+        'active_vm = ""\n'
+        '[behavior]\n'
+        'yes_sudo = false\n'
+        'auto_approve_readonly_sudo = true\n'
+        'verbose = 1\n'
+        'mirror_shared_home_folders = true\n'
+        '[[vms]]\n'
+        'name = "vm-old"\n'
+        'network_name = "aivm-net"\n'
+        '[vms.vm]\n'
+        'name = "vm-old"\n',
+        encoding='utf-8',
+    )
+    loaded = load_store(cfg_path)
+    assert loaded.schema_version == 6
+    assert loaded.defaults is not None
+    assert loaded.defaults.vm.mirror_shared_home_folders is True
+    assert loaded.vms[0].cfg.vm.mirror_shared_home_folders is True
+    # The legacy key must not survive on BehaviorConfig.
+    assert not hasattr(loaded.behavior, 'mirror_shared_home_folders')
+
+
+def test_explicit_per_vm_override_wins_over_legacy_behavior_value(
+    tmp_path: Path,
+) -> None:
+    """A hand-edited mixed file with both legacy and per-VM keys must honor the per-VM one."""
+    cfg_path = tmp_path / 'config.toml'
+    cfg_path.write_text(
+        'schema_version = 5\n'
+        'active_vm = ""\n'
+        '[behavior]\n'
+        'mirror_shared_home_folders = true\n'
+        '[[vms]]\n'
+        'name = "vm-explicit"\n'
+        'network_name = "aivm-net"\n'
+        '[vms.vm]\n'
+        'name = "vm-explicit"\n'
+        'mirror_shared_home_folders = false\n',
+        encoding='utf-8',
+    )
+    loaded = load_store(cfg_path)
+    assert loaded.vms[0].cfg.vm.mirror_shared_home_folders is False
+
+
+def test_match_host_user_ids_round_trips_per_vm(tmp_path: Path) -> None:
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-uid-match'
+    cfg.vm.match_host_user_ids = False
+    cfg.vm.mirror_shared_home_folders = True
+    upsert_vm(store, cfg)
+    fpath = tmp_path / 'config.toml'
+    save_store(store, fpath)
+
+    loaded = load_store(fpath)
+    assert loaded.schema_version == 6
+    [vm] = loaded.vms
+    assert vm.cfg.vm.match_host_user_ids is False
+    assert vm.cfg.vm.mirror_shared_home_folders is True

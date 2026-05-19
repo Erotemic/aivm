@@ -82,16 +82,32 @@ def parse_store_toml(text: str) -> Store:
     """Parse a canonical AIVM desired-state TOML document."""
     raw = tomllib.loads(text)
     reg = Store()
-    reg.schema_version = int(raw.get('schema_version', 5))
+    parsed_schema_version = int(raw.get('schema_version', 5))
+    reg.schema_version = parsed_schema_version
     reg.active_vm = str(raw.get('active_vm', '')).strip()
+    # Legacy (schema_version < 6) stored mirror_shared_home_folders under
+    # [behavior]. Newer schemas store it per-VM under [vms.vm]. Capture
+    # the legacy value so we can lift it onto defaults.vm and each
+    # [[vms]].vm below; do not preserve it on reg.behavior.
+    legacy_mirror_home: bool | None = None
     behavior_raw = raw.get('behavior', None)
     if isinstance(behavior_raw, dict):
         for k, v in behavior_raw.items():
+            if k == 'mirror_shared_home_folders':
+                legacy_mirror_home = bool(v)
+                continue
             if hasattr(reg.behavior, k):
                 setattr(reg.behavior, k, v)
     defaults_raw = raw.get('defaults', None)
     if isinstance(defaults_raw, dict):
         reg.defaults = _cfg_from_dict(defaults_raw).expanded_paths()
+        if legacy_mirror_home is not None:
+            reg.defaults.vm.mirror_shared_home_folders = legacy_mirror_home
+    elif legacy_mirror_home is not None:
+        # No [defaults] section: synthesize one so the migrated value is
+        # not silently dropped on round-trip.
+        reg.defaults = AgentVMConfig()
+        reg.defaults.vm.mirror_shared_home_folders = legacy_mirror_home
 
     for item in raw.get('networks', []):
         if not isinstance(item, dict):
@@ -124,6 +140,17 @@ def parse_store_toml(text: str) -> Store:
             continue
         cfg = _cfg_from_dict(item).expanded_paths()
         cfg.vm.name = name
+        if legacy_mirror_home is not None:
+            # Honor the legacy [behavior] value unless the per-VM block
+            # already overrides it. A schema_version<6 document cannot
+            # have set the per-VM key intentionally, but a hand-edited
+            # mixed file might; respect any explicit override.
+            vm_block = item.get('vm', {})
+            if not (
+                isinstance(vm_block, dict)
+                and 'mirror_shared_home_folders' in vm_block
+            ):
+                cfg.vm.mirror_shared_home_folders = legacy_mirror_home
         network_name = str(item.get('network_name', '')).strip()
         if not network_name:
             network_name = str(cfg.network.name or '').strip()
@@ -144,4 +171,8 @@ def parse_store_toml(text: str) -> Store:
         att = _attachment_from_dict(item)
         if att is not None:
             reg.attachments.append(att)
+    # If we migrated legacy fields, upgrade the on-disk schema_version so
+    # the next write reflects the new layout.
+    if legacy_mirror_home is not None:
+        reg.schema_version = max(reg.schema_version, 6)
     return reg

@@ -80,6 +80,16 @@ class VMConfig:
     # aivm.detect.detect_host_timezone. Set explicitly (e.g. "UTC") to
     # pin the guest to a specific timezone regardless of the host's.
     timezone: str = ''
+    # Create the guest user with the host invoking-user's numeric UID/GID
+    # so files shared via virtiofs have matching ownership on both sides.
+    # The host UID is captured at create-time and baked into cloud-init;
+    # changing this on an existing VM requires recreation.
+    match_host_user_ids: bool = True
+    # Maintain a host-side symlink that mirrors the layout of folders
+    # shared into the guest, so guest-side absolute paths resolve to the
+    # same host-side filesystem location. Off by default for backwards
+    # compatibility with existing setups.
+    mirror_shared_home_folders: bool = False
 
 
 @dataclass
@@ -137,7 +147,6 @@ class BehaviorConfig:
     yes_sudo: bool = False
     auto_approve_readonly_sudo: bool = True
     verbose: int = 1
-    mirror_shared_home_folders: bool = False
 
 
 @dataclass

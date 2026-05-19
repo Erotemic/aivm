@@ -860,11 +860,15 @@ def _lint_store_text(text: str) -> list[str]:
                 'yes_sudo',
                 'auto_approve_readonly_sudo',
                 'verbose',
-                'mirror_shared_home_folders',
             }
+            # mirror_shared_home_folders moved to VMConfig in schema 6;
+            # tolerate the legacy key here so older files lint cleanly
+            # and are migrated on parse.
+            legacy_behavior = {'mirror_shared_home_folders'}
             for key in sorted(behavior.keys()):
-                if key not in allowed_behavior:
-                    problems.append(f'behavior unknown key: {key!r}')
+                if key in allowed_behavior or key in legacy_behavior:
+                    continue
+                problems.append(f'behavior unknown key: {key!r}')
     defaults = raw.get('defaults', None)
     if defaults is not None:
         if not isinstance(defaults, dict):

@@ -953,7 +953,7 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = bool(load_store(cfg_path).behavior.mirror_shared_home_folders)
+    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
         ATTACHMENT_MODE_SHARED,

@@ -133,8 +133,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         request.mode,
         request.access,
     )
-    reg = load_store(cfg_path)
-    mirror_home = bool(reg.behavior.mirror_shared_home_folders)
+    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
 
     if request.dry_run:
         print(

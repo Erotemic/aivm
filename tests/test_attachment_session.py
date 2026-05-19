@@ -776,6 +776,7 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git-mirror'
     cfg.vm.user = 'agent'
+    cfg.vm.mirror_shared_home_folders = True
     cfg_path = tmp_path / 'config.toml'
 
     host_src = tmp_path / 'code' / 'myproject'
@@ -785,7 +786,6 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
     from aivm.store import save_store as _save_store
 
     store = Store()
-    store.behavior.mirror_shared_home_folders = True
     _save_store(store, cfg_path)
 
     guest_dst = str(host_src.expanduser().absolute())
