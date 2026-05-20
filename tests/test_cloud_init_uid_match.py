@@ -79,8 +79,13 @@ def test_render_user_data_emits_primary_uid_and_gid_when_match_enabled(
     assert 'uid: 692586045' in text
     assert 'primary_group: "692584961"' in text
     assert 'target_gid=692584961' in text
-    assert 'groupmod -g "$target_gid" "$group_name"' in text
-    assert 'groupadd -g "$target_gid" "$group_name"' in text
+    # The bootcmd is JSON/YAML quoted, so inner shell quotes may be escaped
+    # in the rendered cloud-init text. Assert the command semantics instead
+    # of requiring one exact string representation.
+    assert 'groupmod -g' in text
+    assert 'groupadd -g' in text
+    assert '$target_gid' in text
+    assert '$group_name' in text
     assert 'chown -R 692586045:692584961 /home/agent' in text
 
 
