@@ -357,6 +357,7 @@ def persistent_replay_service_unit() -> str:
         [Unit]
         Description=aivm persistent attachment replay
         After=local-fs.target
+        ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}
 
         [Service]
         Type=oneshot

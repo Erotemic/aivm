@@ -187,8 +187,8 @@ class VMStatusCLI(_BaseCommand):
         return 0
 
 
-class VMDestroyCLI(_BaseCommand):
-    """Destroy and undefine the VM (shared host directories are not deleted)."""
+class VMDeleteCLI(_BaseCommand):
+    """Delete the managed VM domain (shared host directories are not deleted)."""
 
     vm: Any = scfg.Value(
         '',
@@ -205,7 +205,7 @@ class VMDestroyCLI(_BaseCommand):
         cfg, cfg_path = _load_cfg_with_path(args.config, vm_opt=args.vm)
         mgr = CommandManager.current()
         with mgr.intent(
-            f'Destroy VM {cfg.vm.name}',
+            f'Delete VM {cfg.vm.name}',
             why=(
                 'Remove the managed VM domain while leaving host project directories intact.'
             ),
@@ -219,7 +219,7 @@ class VMDestroyCLI(_BaseCommand):
                 reg,
                 cfg_path,
                 reason=(
-                    f'Remove VM record for {cfg.vm.name} after destroying the '
+                    f'Remove VM record for {cfg.vm.name} after deleting the '
                     'managed libvirt domain.'
                 ),
             )

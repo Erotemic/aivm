@@ -100,7 +100,7 @@ Reliability Principles
 Idempotency
 ~~~~~~~~~~~
 
-* Lifecycle operations (network create/destroy, VM create/start/destroy,
+* Lifecycle operations (network create/destroy, VM create/start/delete,
   attachment reconcile) should tolerate retries and partially completed prior
   runs.
 * Persistent attachment replay is a mitigation for mount churn and stale

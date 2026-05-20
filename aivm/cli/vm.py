@@ -22,7 +22,7 @@ from .vm_connect import VMCodeCLI, VMSSHCLI, VMSshConfigCLI, VMWaitIPCLI
 from .vm_lifecycle import (
     VMCreateCLI,
     VMDownCLI,
-    VMDestroyCLI,
+    VMDeleteCLI,
     VMListCLI,
     VMProvisionCLI,
     VMRestartCLI,
@@ -44,7 +44,7 @@ class VMModalCLI(scfg.ModalCLI):
     status = VMStatusCLI
     update = VMUpdateCLI
     edit = VMEditCLI
-    destroy = VMDestroyCLI
+    delete = VMDeleteCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI
     ssh = VMSSHCLI
@@ -66,7 +66,7 @@ __all__ = [
     'VMCreateCLI',
     'VMWaitIPCLI',
     'VMStatusCLI',
-    'VMDestroyCLI',
+    'VMDeleteCLI',
     'VMSshConfigCLI',
     'VMProvisionCLI',
     'VMCodeCLI',

@@ -11,7 +11,7 @@ from aivm.vm.cloudinit import _invoking_host_uid_gid, _render_user_data_text
 # -- SUDO_UID/SUDO_GID resolution ------------------------------------------
 
 
-def test_invoking_host_uid_gid_prefers_sudo_env(
+def test_invoking_host_uid_gid_prefers_complete_sudo_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv('SUDO_UID', '12345')
@@ -29,11 +29,21 @@ def test_invoking_host_uid_gid_falls_back_to_process_ids(
     assert _invoking_host_uid_gid() == (4242, 4243)
 
 
+def test_invoking_host_uid_gid_does_not_mix_partial_sudo_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv('SUDO_UID', '12345')
+    monkeypatch.setenv('SUDO_GID', '')
+    monkeypatch.setattr('aivm.vm.cloudinit.os.getuid', lambda: 7)
+    monkeypatch.setattr('aivm.vm.cloudinit.os.getgid', lambda: 8)
+    assert _invoking_host_uid_gid() == (7, 8)
+
+
 def test_invoking_host_uid_gid_ignores_non_numeric_sudo_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv('SUDO_UID', 'nope')
-    monkeypatch.setenv('SUDO_GID', '')
+    monkeypatch.setenv('SUDO_GID', '54321')
     monkeypatch.setattr('aivm.vm.cloudinit.os.getuid', lambda: 7)
     monkeypatch.setattr('aivm.vm.cloudinit.os.getgid', lambda: 8)
     assert _invoking_host_uid_gid() == (7, 8)
@@ -60,40 +70,59 @@ def _render_with_uid(
     return _render_user_data_text(cfg, pubkey='ssh-ed25519 AAAA test')
 
 
-def test_render_user_data_emits_uid_when_match_enabled(
+def test_render_user_data_emits_primary_uid_and_gid_when_match_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.match_host_user_ids = True
     text = _render_with_uid(monkeypatch, host_uid=692586045, host_gid=692584961, cfg=cfg)
     assert 'uid: 692586045' in text
-    assert 'groupmod -g 692584961 agent' in text
-    assert 'groupadd -g 692584961 agent' in text
+    assert 'primary_group: "692584961"' in text
+    assert 'target_gid=692584961' in text
+    assert 'groupmod -g "$target_gid" "$group_name"' in text
+    assert 'groupadd -g "$target_gid" "$group_name"' in text
     assert 'chown -R 692586045:692584961 /home/agent' in text
 
 
-def test_render_user_data_omits_uid_when_match_disabled(
+def test_render_user_data_omits_uid_gid_when_match_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.match_host_user_ids = False
     text = _render_with_uid(monkeypatch, host_uid=1234, host_gid=5678, cfg=cfg)
     assert 'uid: 1234' not in text
+    assert 'primary_group:' not in text
     assert 'groupmod' not in text
     assert 'groupadd' not in text
     assert 'chown -R' not in text
 
 
-def test_render_user_data_skips_match_when_host_uid_is_root(
+def test_render_user_data_skips_root_uid_but_can_still_match_nonroot_gid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Refuse to bake uid: 0 into the guest account (that's root)."""
+    """Never bake root's UID into the guest account."""
     cfg = AgentVMConfig()
     cfg.vm.match_host_user_ids = True
-    text = _render_with_uid(monkeypatch, host_uid=0, host_gid=0, cfg=cfg)
+    text = _render_with_uid(monkeypatch, host_uid=0, host_gid=3001, cfg=cfg)
     assert 'uid: 0' not in text
+    assert 'primary_group: "3001"' in text
+    assert 'target_gid=3001' in text
+    assert 'chown -R 0:3001' not in text
+
+
+def test_render_user_data_preserves_uid_when_gid_is_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UID matching is the primary invariant; do not drop it for root GID."""
+    cfg = AgentVMConfig()
+    cfg.vm.match_host_user_ids = True
+    text = _render_with_uid(monkeypatch, host_uid=2001, host_gid=0, cfg=cfg)
+    assert 'uid: 2001' in text
+    assert 'primary_group:' not in text
     assert 'groupmod' not in text
-    assert 'chown -R 0:0' not in text
+    assert 'groupadd' not in text
+    assert 'chown -R 2001 /home/agent' in text
+    assert 'chown -R 2001:0' not in text
 
 
 def test_render_user_data_respects_custom_guest_user(
@@ -104,5 +133,35 @@ def test_render_user_data_respects_custom_guest_user(
     cfg.vm.match_host_user_ids = True
     text = _render_with_uid(monkeypatch, host_uid=2001, host_gid=3001, cfg=cfg)
     assert '- name: devuser' in text
-    assert 'groupmod -g 3001 devuser' in text
+    assert 'uid: 2001' in text
+    assert 'primary_group: "3001"' in text
+    assert 'group_name=\\"devuser\\"' in text
     assert 'chown -R 2001:3001 /home/devuser' in text
+
+
+def test_render_user_data_defaults_to_password_login_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.password = 'agent:debug'
+    text = _render_with_uid(monkeypatch, host_uid=1234, host_gid=5678, cfg=cfg)
+    assert 'lock_passwd: false' in text
+    assert 'ssh_pwauth: true' in text
+    assert 'PasswordAuthentication yes' in text
+    assert 'KbdInteractiveAuthentication yes' in text
+    assert 'chpasswd:' in text
+    assert 'password: "agent:debug"' in text
+    assert 'type: text' in text
+
+
+def test_render_user_data_can_disable_password_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.allow_password_login = False
+    text = _render_with_uid(monkeypatch, host_uid=1234, host_gid=5678, cfg=cfg)
+    assert 'lock_passwd: true' in text
+    assert 'ssh_pwauth: false' in text
+    assert 'PasswordAuthentication no' in text
+    assert 'KbdInteractiveAuthentication no' in text
+    assert 'chpasswd:' not in text

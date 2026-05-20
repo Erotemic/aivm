@@ -301,7 +301,7 @@ def test_e2e_nested_smoke(tmp_path: Path) -> None:
         assert 'vm state' in combined
     finally:
         _run_cli(
-            ['vm', 'destroy', '--yes', '--config', str(cfg_path)],
+            ['vm', 'delete', '--yes', '--config', str(cfg_path)],
             cwd=repo_root,
             timeout_s=timeout_s,
             env=env,

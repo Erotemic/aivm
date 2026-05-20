@@ -59,7 +59,7 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     * provisioning
     * firewall inspection
     * attaching a host folder
-    * session cleanup (vm destroy, network destroy)
+    * session cleanup (vm delete, network destroy)
 
     The test is fairly slow and requires a host with libvirt/KVM and
     passwordless sudo; it is skipped unless ``AIVM_E2E=1``.
@@ -303,7 +303,7 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     finally:
         # teardown
         _run_cli(
-            ['vm', 'destroy', '--yes', '--config', str(cfg_path)],
+            ['vm', 'delete', '--yes', '--config', str(cfg_path)],
             cwd=repo_root,
             timeout_s=timeout_s,
             env=env,

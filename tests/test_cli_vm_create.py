@@ -1,4 +1,4 @@
-"""Tests for VM create/destroy store behavior with defaults-driven init."""
+"""Tests for VM create/delete store behavior with defaults-driven init."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.cli import AgentVMModalCLI
-from aivm.cli.vm_lifecycle import VMCreateCLI, VMDestroyCLI
+from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI
 from aivm.config import AgentVMConfig
 from aivm.store import (
     Store,
@@ -308,7 +308,15 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
     assert loaded.active_vm == 'current-default'
 
 
-def test_vm_destroy_removes_vm_and_attachments(
+
+def test_vm_delete_is_registered_without_destroy_alias() -> None:
+    from aivm.cli.vm import VMModalCLI
+
+    assert hasattr(VMModalCLI, 'delete')
+    assert not hasattr(VMModalCLI, 'destroy')
+
+
+def test_vm_delete_removes_vm_and_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
@@ -329,14 +337,14 @@ def test_vm_destroy_removes_vm_and_attachments(
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
-    rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
+    rc = VMDeleteCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     loaded = load_store(cfg_path)
     assert all(v.name != 'killme' for v in loaded.vms)
     assert all(a.vm_name != 'killme' for a in loaded.attachments)
 
 
-def test_vm_destroy_warns_when_network_becomes_unused(
+def test_vm_delete_warns_when_network_becomes_unused(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
@@ -356,14 +364,14 @@ def test_vm_destroy_warns_when_network_becomes_unused(
         'aivm.cli.vm_lifecycle.log.warning',
         lambda *a, **k: warns.append((a, k)),
     )
-    rc = VMDestroyCLI.main(argv=False, config=str(cfg_path), yes=True)
+    rc = VMDeleteCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     assert any(
         "Network '{}'" in args[0] and args[1] == 'solo-net' for args, _ in warns
     )
 
 
-def test_vm_destroy_accepts_positional_vm_name(
+def test_vm_delete_accepts_positional_vm_name(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
@@ -383,7 +391,7 @@ def test_vm_destroy_accepts_positional_vm_name(
     rc = AgentVMModalCLI.main(
         argv=[
             'vm',
-            'destroy',
+            'delete',
             'from-positional',
             '--yes',
             '--dry_run',

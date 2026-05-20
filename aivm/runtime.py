@@ -31,6 +31,7 @@ def ssh_base_args(
     connect_timeout: int | None = None,
     batch_mode: bool = False,
     user_known_hosts_file: str | None = None,
+    identities_only: bool = True,
 ) -> list[str]:
     args: list[str] = []
     if batch_mode:
@@ -40,5 +41,11 @@ def ssh_base_args(
     args.extend(['-o', f'StrictHostKeyChecking={strict_host_key_checking}'])
     if user_known_hosts_file:
         args.extend(['-o', f'UserKnownHostsFile={user_known_hosts_file}'])
+    if identities_only:
+        # Match the generated ~/.ssh/config entry. Without this, ssh may try
+        # keys from the agent or earlier Host blocks before the configured
+        # IdentityFile, and sshd can disconnect with "Too many authentication
+        # failures" before the aivm key is ever offered.
+        args.extend(['-o', 'IdentitiesOnly=yes'])
     args.extend(['-i', ident])
     return args

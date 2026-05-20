@@ -205,6 +205,17 @@ def test_persistent_replay_templates_are_deterministic_across_processes() -> Non
     assert first == second
 
 
+def test_persistent_replay_service_unit_waits_for_guest_manifest() -> None:
+    from aivm.persistent_replay import (
+        PERSISTENT_ATTACHMENT_GUEST_STATE_PATH,
+        persistent_replay_service_unit,
+    )
+
+    unit = persistent_replay_service_unit()
+
+    assert f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+
+
 def test_persistent_host_replay_service_unit_renders_values() -> None:
     from aivm.persistent_replay import (
         PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX,

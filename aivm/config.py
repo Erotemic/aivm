@@ -73,7 +73,7 @@ class VMConfig:
     cpus: int = 4
     ram_mb: int = 8192
     disk_gb: int = 40
-    allow_password_login: bool = False
+    allow_password_login: bool = True
     password: str = 'agent'
     # IANA timezone name for the guest (e.g. "America/New_York"). Empty
     # means "match the host at cloud-init time"; see

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import textwrap
 from pathlib import Path
@@ -25,15 +26,16 @@ log = logger
 def _invoking_host_uid_gid() -> tuple[int, int]:
     """Resolve the host UID/GID to bake into the guest user account.
 
-    Prefers ``SUDO_UID``/``SUDO_GID`` so aivm running under sudo still
-    targets the human user's IDs rather than root's. Falls back to the
-    current process IDs when those are unset.
+    Prefer the ``SUDO_UID``/``SUDO_GID`` pair only when both values are
+    present and numeric. Treat them as an atomic identity pair so a partially
+    sanitized sudo environment cannot accidentally combine a human UID with
+    root's GID. Fall back to the current process IDs otherwise.
     """
     sudo_uid = os.environ.get('SUDO_UID')
     sudo_gid = os.environ.get('SUDO_GID')
-    uid = int(sudo_uid) if sudo_uid and sudo_uid.isdigit() else os.getuid()
-    gid = int(sudo_gid) if sudo_gid and sudo_gid.isdigit() else os.getgid()
-    return uid, gid
+    if sudo_uid and sudo_uid.isdigit() and sudo_gid and sudo_gid.isdigit():
+        return int(sudo_uid), int(sudo_gid)
+    return os.getuid(), os.getgid()
 
 
 def _cloud_init_instance_id_token_path(cfg: AgentVMConfig) -> Path:
@@ -105,33 +107,60 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
     sshd_kbd = 'yes' if cfg.vm.allow_password_login else 'no'
 
     uid_line = ''
+    primary_group_line = ''
     matched_uid_gid_bootcmd = ''
     matched_uid_gid_runcmd = ''
     if cfg.vm.match_host_user_ids:
         host_uid, host_gid = _invoking_host_uid_gid()
         if host_uid != 0:
             uid_line = f'\n            uid: {host_uid}'
+        if host_gid != 0:
+            # Pre-create a group with the host GID before cloud-init's
+            # users-groups module runs, then ask cloud-init to use that
+            # numeric GID as the user's primary group. This avoids relying on
+            # a post-hoc groupmod repair and prevents useradd from creating an
+            # arbitrary guest-private GID. If the GID already exists in the
+            # image, useradd can use it directly by number.
+            primary_group_line = f'\n            primary_group: "{host_gid}"'
+            group_script = (
+                'set -eu; '
+                f'target_gid={host_gid}; '
+                f'group_name={json.dumps(cfg.vm.user)}; '
+                'if ! getent group "$target_gid" >/dev/null; then '
+                'if getent group "$group_name" >/dev/null; then '
+                'groupmod -g "$target_gid" "$group_name"; '
+                'else '
+                'groupadd -g "$target_gid" "$group_name"; '
+                'fi; '
+                'fi'
+            )
             matched_uid_gid_bootcmd = (
-                f'\n          - [bash, -c, "getent group {cfg.vm.user} '
-                f'>/dev/null && groupmod -g {host_gid} {cfg.vm.user} '
-                f'|| groupadd -g {host_gid} {cfg.vm.user}"]'
+                f'\n          - [bash, -c, {json.dumps(group_script)}]'
+            )
+        if host_uid != 0:
+            chown_owner = (
+                f'{host_uid}:{host_gid}' if host_gid != 0 else f'{host_uid}'
             )
             matched_uid_gid_runcmd = (
-                f'\n          - chown -R {host_uid}:{host_gid} /home/{cfg.vm.user}'
+                f'\n          - [bash, -c, "test -d /home/{cfg.vm.user} '
+                f'&& chown -R {chown_owner} /home/{cfg.vm.user} '
+                f'|| true"]'
             )
 
     if cfg.vm.allow_password_login:
-        if ':' in cfg.vm.password or '\n' in cfg.vm.password:
+        if '\n' in cfg.vm.password:
             raise RuntimeError(
-                "VM password must not contain ':' or newlines (cloud-init chpasswd format)."
+                'VM password must not contain newlines (cloud-init chpasswd format).'
             )
+        password_yaml = json.dumps(cfg.vm.password)
         passwd_block = textwrap.dedent(
             f"""\
             chpasswd:
               expire: false
               users:
                 - name: {cfg.vm.user}
-                  password: {cfg.vm.password}
+                  password: {password_yaml}
+                  type: text
             """
         )
         passwd_block = textwrap.indent(passwd_block.rstrip('\n'), '        ')
@@ -140,7 +169,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
         f"""\
         #cloud-config
         users:
-          - name: {cfg.vm.user}{uid_line}
+          - name: {cfg.vm.user}{uid_line}{primary_group_line}
             groups: [sudo]
             shell: /bin/bash
             sudo: ["ALL=(ALL) NOPASSWD:ALL"]
@@ -191,7 +220,6 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
         runcmd:
           - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
           - systemctl daemon-reload
-          - systemctl enable {PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
           - systemctl enable --now ssh
           - systemctl enable --now unattended-upgrades || true{matched_uid_gid_runcmd}
         """

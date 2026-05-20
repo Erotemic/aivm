@@ -235,7 +235,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         . "$HOME/.venvs/aivm-e2e/bin/activate"
         uv pip install -e .
         cleanup() {{
-          python -m aivm vm destroy {' '.join(cli_verbosity_args)} --yes || true
+          python -m aivm vm delete {' '.join(cli_verbosity_args)} --yes || true
           python -m aivm host net destroy {' '.join(cli_verbosity_args)} --yes || true
         }}
         trap cleanup EXIT
@@ -338,7 +338,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         _run_cli(
             [
                 'vm',
-                'destroy',
+                'delete',
                 *cli_verbosity_args,
                 '--yes',
                 '--config',

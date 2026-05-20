@@ -39,3 +39,8 @@ def test_expanded_paths_expands_env(
     out = cfg.expanded_paths()
     assert out.paths.state_dir == '/tmp/aivm-x/state'
     assert out.paths.ssh_identity_file == '/tmp/aivm-x/id_ed25519'
+
+def test_default_allows_password_login() -> None:
+    cfg = AgentVMConfig()
+    assert cfg.vm.allow_password_login is True
+
