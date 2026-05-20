@@ -23,7 +23,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Set up Python 3.14 for linting
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: '3.14'
     - name: Install dependencies
@@ -50,7 +50,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Set up Python 3.14
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: '3.14'
     - name: Upgrade pip
@@ -124,7 +124,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Setup Python
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: ${{ matrix.python-version }}
     - name: Build pure wheel
@@ -162,40 +162,42 @@ jobs:
           install-extras: tests
           os: ubuntu-latest
           arch: auto
-          uv-resolution: lowest-direct
+          use-lockfile: 'true'
+          lock-requirements: requirements/locks/tests.txt
         - python-version: '3.14'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
-          uv-resolution: lowest-direct
+          use-lockfile: 'true'
+          lock-requirements: requirements/locks/tests-optional.txt
         - python-version: '3.11'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
-          uv-resolution: highest
+          use-lockfile: 'false'
         - python-version: '3.12'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
-          uv-resolution: highest
+          use-lockfile: 'false'
         - python-version: '3.13'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
-          uv-resolution: highest
+          use-lockfile: 'false'
         - python-version: '3.14'
           install-extras: tests,optional
           os: ubuntu-latest
           arch: auto
-          uv-resolution: highest
+          use-lockfile: 'false'
     steps:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Setup Python
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: ${{ matrix.python-version }}
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download wheels
       with:
         pattern: wheels-*
@@ -205,7 +207,8 @@ jobs:
       shell: bash
       env:
         INSTALL_EXTRAS: ${{ matrix.install-extras }}
-        UV_RESOLUTION: ${{ matrix.uv-resolution }}
+        USE_UV_LOCK: ${{ matrix.use-lockfile }}
+        LOCK_REQUIREMENTS: ${{ matrix.lock-requirements }}
       run: |-
         echo "Finding the path to the wheel"
         ls wheelhouse || echo "wheelhouse does not exist"
@@ -241,8 +244,29 @@ jobs:
         ")
         echo "WHEEL_FPATH=$WHEEL_FPATH"
         echo "INSTALL_EXTRAS=$INSTALL_EXTRAS"
-        echo "UV_RESOLUTION=$UV_RESOLUTION"
-        python -m pip install --prefer-binary "${WHEEL_FPATH}[${INSTALL_EXTRAS}]"
+        echo "USE_UV_LOCK=$USE_UV_LOCK"
+        echo "LOCK_REQUIREMENTS=$LOCK_REQUIREMENTS"
+        if [[ -n "${INSTALL_EXTRAS:-}" ]]; then
+            INSTALL_TARGET="${WHEEL_FPATH}[${INSTALL_EXTRAS}]"
+        else
+            INSTALL_TARGET="${WHEEL_FPATH}"
+        fi
+        echo "INSTALL_TARGET=$INSTALL_TARGET"
+        LOCK_ARGS=()
+        if [[ "${USE_UV_LOCK:-false}" == "true" ]]; then
+            if [[ -z "${LOCK_REQUIREMENTS:-}" ]]; then
+                echo "USE_UV_LOCK=true but LOCK_REQUIREMENTS is empty"
+                exit 1
+            fi
+            if [[ ! -f "$LOCK_REQUIREMENTS" ]]; then
+                echo "Missing checked-in lock requirements: $LOCK_REQUIREMENTS"
+                exit 1
+            fi
+            echo "Using checked-in lock requirements: $LOCK_REQUIREMENTS"
+            cat "$LOCK_REQUIREMENTS"
+            LOCK_ARGS=(--constraint "$LOCK_REQUIREMENTS")
+        fi
+        python -m uv pip install --prerelease=allow --prefer-binary "${LOCK_ARGS[@]}" "${INSTALL_TARGET}"
         echo "Install finished."
     - name: Test wheel ${{ matrix.install-extras }}
       shell: bash

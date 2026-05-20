@@ -23,7 +23,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Set up Python 3.14
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: '3.14'
     - name: Build sdist
@@ -60,7 +60,7 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
     - name: Setup Python
-      uses: actions/setup-python@v5.6.0
+      uses: actions/setup-python@v6.2.0
       with:
         python-version: ${{ matrix.python-version }}
     - name: Build pure wheel
@@ -88,13 +88,13 @@ jobs:
     steps:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download wheels
       with:
         pattern: wheels-*
         merge-multiple: true
         path: wheelhouse
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download sdist
       with:
         name: sdist_wheels
@@ -124,7 +124,7 @@ jobs:
         IMPORTED_FPR=$($GPG_EXECUTABLE --list-keys --with-colons "$GPG_KEYID" | awk -F: '/^fpr/ { print $10; exit }')
         if [[ "$IMPORTED_FPR" != "$GPG_KEYID" ]]; then echo "ERROR: imported GPG fingerprint $IMPORTED_FPR does not match pinned $GPG_KEYID"; exit 1; fi
         echo "GPG fingerprint verified: $IMPORTED_FPR"
-        VERSION=$(python -c "import setup; print(setup.VERSION)")
+        VERSION=$(python -c 'import ast, pathlib; tree = ast.parse(pathlib.Path('"'"'aivm/__init__.py'"'"').read_text()); print(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "__version__" for t in n.targets)))')
         python -m pip install pip uv -U
         python -m pip install packaging twine -U
         python -m pip install urllib3 requests[security]
@@ -184,13 +184,13 @@ jobs:
     steps:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download wheels
       with:
         pattern: wheels-*
         merge-multiple: true
         path: wheelhouse
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download sdist
       with:
         name: sdist_wheels
@@ -220,7 +220,7 @@ jobs:
         IMPORTED_FPR=$($GPG_EXECUTABLE --list-keys --with-colons "$GPG_KEYID" | awk -F: '/^fpr/ { print $10; exit }')
         if [[ "$IMPORTED_FPR" != "$GPG_KEYID" ]]; then echo "ERROR: imported GPG fingerprint $IMPORTED_FPR does not match pinned $GPG_KEYID"; exit 1; fi
         echo "GPG fingerprint verified: $IMPORTED_FPR"
-        VERSION=$(python -c "import setup; print(setup.VERSION)")
+        VERSION=$(python -c 'import ast, pathlib; tree = ast.parse(pathlib.Path('"'"'aivm/__init__.py'"'"').read_text()); print(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "__version__" for t in n.targets)))')
         python -m pip install pip uv -U
         python -m pip install packaging twine -U
         python -m pip install urllib3 requests[security]
@@ -280,7 +280,7 @@ jobs:
     steps:
     - name: Checkout source
       uses: actions/checkout@v6.0.2
-    - uses: actions/download-artifact@v4.1.8
+    - uses: actions/download-artifact@v7.0.0
       name: Download artifacts
       with:
         name: deploy_artifacts
@@ -292,7 +292,7 @@ jobs:
     - name: Tag Release Commit
       if: (startsWith(github.event.ref, 'refs/heads/release'))
       run: |-
-        export VERSION=$(python -c "import setup; print(setup.VERSION)")
+        export VERSION=$(python -c 'import ast, pathlib; tree = ast.parse(pathlib.Path('"'"'aivm/__init__.py'"'"').read_text()); print(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "__version__" for t in n.targets)))')
         git tag "v$VERSION"
         git push origin "v$VERSION"
     - uses: softprops/action-gh-release@v1
