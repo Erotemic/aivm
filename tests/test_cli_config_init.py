@@ -211,6 +211,7 @@ def test_config_init_interactive_edit_updates_hardware(
             '2',  # vm.cpus
             '3072',  # vm.ram_mb
             '24',  # vm.disk_gb
+            'n',  # vm.allow_password_login
             '',  # network.name
             '',  # network.subnet_cidr
             '',  # network.gateway_ip
@@ -255,3 +256,51 @@ def test_config_init_logs_resource_warnings_from_shared_checker(
     )
     assert rc == 0
     assert any('resource warning test' in str(args) for args, _ in logged)
+
+
+def test_config_init_summary_shows_password_login_default(tmp_path: Path) -> None:
+    from aivm.cli.config import _render_init_default_summary
+
+    cfg = _fake_defaults_cfg(tmp_path)
+    cfg.vm.allow_password_login = True
+    text = _render_init_default_summary(cfg, tmp_path / 'config.toml')
+    assert 'vm.allow_password_login: true' in text
+    assert 'enables password login on console and SSH' in text
+    assert 'vm.password: (configured)' in text
+
+
+def test_config_init_interactive_edit_updates_password_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr(
+        'aivm.cli.config.auto_defaults',
+        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    )
+    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    answers = iter([
+        'e',  # edit values
+        '',  # vm.user
+        '',  # vm.cpus
+        '',  # vm.ram_mb
+        '',  # vm.disk_gb
+        'y',  # vm.allow_password_login
+        'debug-pass',  # vm.password
+        '',  # network.name
+        '',  # network.subnet_cidr
+        '',  # network.gateway_ip
+        '',  # network.dhcp_start
+        '',  # network.dhcp_end
+        '',  # paths.ssh_identity_file
+        '',  # paths.ssh_pubkey_path
+        'y',  # confirm
+    ])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+    assert rc == 0
+    text = cfg_path.read_text(encoding='utf-8')
+    assert 'allow_password_login = true' in text
+    assert 'password = "debug-pass"' in text

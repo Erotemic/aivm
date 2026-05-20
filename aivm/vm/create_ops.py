@@ -35,23 +35,71 @@ if TYPE_CHECKING:
     from ..store import Store
 
 
-def _render_vm_create_summary(cfg: AgentVMConfig, path: Path) -> str:
-    """Render a summary of VM create defaults for interactive review."""
-    lines = [
-        'Create VM from defaults:',
-        f'  config_store: {path}',
-        f'  vm.name: {cfg.vm.name}',
-        f'  vm.user: {cfg.vm.user}',
-        f'  vm.cpus: {cfg.vm.cpus}',
-        f'  vm.ram_mb: {cfg.vm.ram_mb}',
-        f'  vm.disk_gb: {cfg.vm.disk_gb}',
-        f'  network.name: {cfg.network.name}',
-        f'  network.subnet_cidr: {cfg.network.subnet_cidr}',
-        f'  network.gateway_ip: {cfg.network.gateway_ip}',
-        f'  network.dhcp_start: {cfg.network.dhcp_start}',
-        f'  network.dhcp_end: {cfg.network.dhcp_end}',
+def _format_bool(value: bool) -> str:
+    """Return a stable human-readable boolean for review prompts."""
+    return 'true' if bool(value) else 'false'
+
+
+def _format_secret(value: str) -> str:
+    """Avoid echoing configured passwords in review summaries."""
+    return '(configured)' if str(value or '') else '(empty)'
+
+
+def _vm_create_summary_rows(
+    cfg: AgentVMConfig, path: Path
+) -> list[tuple[str, str, str]]:
+    """Return rows for the VM-create review summary."""
+    password_note = (
+        'used for console/SSH password auth when vm.allow_password_login=true'
+    )
+    return [
+        ('config_store', str(path), 'config source'),
+        ('vm.name', cfg.vm.name, 'libvirt domain name'),
+        ('vm.user', cfg.vm.user, 'guest login user'),
+        ('vm.cpus', str(cfg.vm.cpus), 'virtual CPUs'),
+        ('vm.ram_mb', str(cfg.vm.ram_mb), 'RAM in MiB'),
+        ('vm.disk_gb', str(cfg.vm.disk_gb), 'root disk size'),
+        (
+            'vm.allow_password_login',
+            _format_bool(cfg.vm.allow_password_login),
+            'enables password login on console and SSH',
+        ),
+        ('vm.password', _format_secret(cfg.vm.password), password_note),
+        ('network.name', cfg.network.name, 'libvirt network'),
+        ('network.subnet_cidr', cfg.network.subnet_cidr, 'guest subnet'),
+        ('network.gateway_ip', cfg.network.gateway_ip, 'guest gateway'),
+        ('network.dhcp_start', cfg.network.dhcp_start, 'DHCP range start'),
+        ('network.dhcp_end', cfg.network.dhcp_end, 'DHCP range end'),
     ]
+
+
+def _render_vm_create_summary(cfg: AgentVMConfig, path: Path) -> str:
+    """Render a plain-text summary of VM create defaults for tests/fallback."""
+    lines = ['Create VM from defaults:']
+    for key, value, note in _vm_create_summary_rows(cfg, path):
+        if note:
+            lines.append(f'  {key}: {value}  # {note}')
+        else:
+            lines.append(f'  {key}: {value}')
     return '\n'.join(lines)
+
+
+def _print_vm_create_summary(cfg: AgentVMConfig, path: Path) -> None:
+    """Print the VM-create review summary, using Rich when available."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except Exception:  # pragma: no cover - exercised only without rich
+        print(_render_vm_create_summary(cfg, path))
+        return
+
+    table = Table(title='Create VM from defaults', show_header=True)
+    table.add_column('Setting', style='bold cyan', no_wrap=True)
+    table.add_column('Value', overflow='fold')
+    table.add_column('Meaning', style='dim', overflow='fold')
+    for key, value, note in _vm_create_summary_rows(cfg, path):
+        table.add_row(key, value, note)
+    Console().print(table)
 
 
 def _prompt_with_default(prompt: str, default: str) -> str:
@@ -75,6 +123,20 @@ def _prompt_int_with_default(prompt: str, default: int) -> int:
             print('Please enter a positive integer.')
             continue
         return value
+
+
+def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
+    """Prompt for a boolean value with a default."""
+    default_label = 'Y/n' if default else 'y/N'
+    while True:
+        raw = input(f'{prompt} [{default_label}]: ').strip().lower()
+        if not raw:
+            return bool(default)
+        if raw in {'1', 'true', 't', 'y', 'yes', 'on'}:
+            return True
+        if raw in {'0', 'false', 'f', 'n', 'no', 'off'}:
+            return False
+        print("Please answer 'y' or 'n'.")
 
 
 def _prompt_set_created_vm_default(vm_name: str) -> bool:
@@ -103,7 +165,7 @@ def _review_vm_create_overrides_interactive(
             'VM create defaults require confirmation in interactive mode. '
             'Re-run with --yes.'
         )
-    print(_render_vm_create_summary(cfg, path))
+    _print_vm_create_summary(cfg, path)
     while True:
         ans = input('Use these values? [Y/e/n] (e=edit): ').strip().lower()
         if ans in {'', 'y', 'yes'}:
@@ -118,6 +180,13 @@ def _review_vm_create_overrides_interactive(
             cfg.vm.disk_gb = _prompt_int_with_default(
                 'vm.disk_gb', cfg.vm.disk_gb
             )
+            cfg.vm.allow_password_login = _prompt_bool_with_default(
+                'vm.allow_password_login', cfg.vm.allow_password_login
+            )
+            if cfg.vm.allow_password_login:
+                cfg.vm.password = _prompt_with_default(
+                    'vm.password', cfg.vm.password
+                )
             cfg.network.name = _prompt_with_default(
                 'network.name', cfg.network.name
             )
@@ -134,7 +203,7 @@ def _review_vm_create_overrides_interactive(
                 'network.dhcp_end', cfg.network.dhcp_end
             )
             print('')
-            print(_render_vm_create_summary(cfg, path))
+            _print_vm_create_summary(cfg, path)
             continue
         print("Please answer 'y', 'e', or 'n'.")
 

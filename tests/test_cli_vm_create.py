@@ -20,6 +20,47 @@ from aivm.store import (
 )
 
 
+def test_vm_create_summary_shows_password_login_default(tmp_path: Path) -> None:
+    from aivm.vm.create_ops import _render_vm_create_summary
+
+    cfg = AgentVMConfig()
+    cfg.vm.allow_password_login = True
+    text = _render_vm_create_summary(cfg, tmp_path / 'config.toml')
+    assert 'vm.allow_password_login: true' in text
+    assert 'enables password login on console and SSH' in text
+    assert 'vm.password: (configured)' in text
+
+
+def test_vm_create_interactive_edit_updates_password_login(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.vm.create_ops import _review_vm_create_overrides_interactive
+
+    cfg = AgentVMConfig()
+    cfg.vm.allow_password_login = False
+    answers = iter([
+        'e',  # edit values
+        '',  # vm.name
+        '',  # vm.user
+        '',  # vm.cpus
+        '',  # vm.ram_mb
+        '',  # vm.disk_gb
+        'y',  # vm.allow_password_login
+        'debug-pass',  # vm.password
+        '',  # network.name
+        '',  # network.subnet_cidr
+        '',  # network.gateway_ip
+        '',  # network.dhcp_start
+        '',  # network.dhcp_end
+        'y',  # confirm
+    ])
+    monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    out = _review_vm_create_overrides_interactive(cfg, tmp_path / 'config.toml')
+    assert out.vm.allow_password_login is True
+    assert out.vm.password == 'debug-pass'
+
+
 def test_vm_create_uses_defaults_and_adds_vm(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -379,6 +420,7 @@ def test_vm_create_interactive_edit_overrides_defaults(
             '2',
             '3072',
             '24',
+            'n',
             'custom-net',
             '10.90.0.0/24',
             '10.90.0.1',
