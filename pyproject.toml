@@ -23,7 +23,7 @@ keywords = [
   "vm",
   "vscode",
 ]
-license.text = "Apache 2"
+license = "Apache-2.0"
 license-files = [
   "LICENSE",
 ]
