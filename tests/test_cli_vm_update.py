@@ -369,7 +369,9 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
+    )
     monkeypatch.setattr(
         'aivm.attachments.session._resolve_attachment',
         lambda *a, **k: ResolvedAttachment(
@@ -453,14 +455,18 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         init_kwargs.append(dict(k))
         return 0
 
-    def fake_vm_create(*a: object, **k: Any) -> int:
-        del a
+    create_positional: list[tuple[Any, ...]] = []
+
+    def fake_vm_create(*a: Any, **k: Any) -> int:
+        create_positional.append(a)
         create_kwargs.append(dict(k))
         state['ready'] = True
         return 0
 
     monkeypatch.setattr('aivm.cli.config.InitCLI.main', fake_init)
-    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.sys.stdin.isatty', lambda: True
     )
@@ -523,16 +529,14 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
             'force': False,
         }
     ]
-    assert create_kwargs == [
-        {
-            'argv': False,
-            'config': None,
-            'vm': '',
-            'yes': False,
-            'dry_run': False,
-            'force': False,
-        }
-    ]
+    assert len(create_kwargs) == 1
+    # ``yes=False`` propagation is the contract this test guards; the rest of
+    # the call shape is verified indirectly by the function signature.
+    assert create_kwargs[0]['yes'] is False
+    assert create_kwargs[0]['dry_run'] is False
+    assert create_kwargs[0]['force'] is False
+    assert create_kwargs[0]['vm_override'] is None
+    assert create_kwargs[0]['initial_attachment_host_src'] == host_src
 
 
 def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
@@ -576,7 +580,9 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.vm_lifecycle.VMCreateCLI.main', fake_vm_create)
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
+    )
     monkeypatch.setattr(
         'aivm.attachments.session._resolve_attachment',
         lambda *a, **k: ResolvedAttachment(

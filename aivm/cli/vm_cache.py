@@ -83,6 +83,7 @@ class VMFlushCachesCLI(_BaseCommand):
     )
     levels: Any = scfg.Value(
         '2',
+        type=str,
         help=_DROP_CACHES_HELP,
     )
     settle_seconds: Any = scfg.Value(

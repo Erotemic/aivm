@@ -220,6 +220,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
         runcmd:
           - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
           - systemctl daemon-reload
+          - systemctl enable {PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
           - systemctl enable --now ssh
           - systemctl enable --now unattended-upgrades || true{matched_uid_gid_runcmd}
         """
