@@ -1,6 +1,6 @@
 # `aivm` Refactor Plan — `dev/0.5.0`
 
-**Status:** In progress. Tasks 1, 2, 3, and 6 complete on `dev/0.5.0`. Tasks 4 and 5 still pending. Task 7 deferred by maintainer; Task 8 optional.
+**Status:** In progress. Tasks 1, 2, 3, 4, 5, and 6 complete on `dev/0.5.0`. Task 7 deferred by maintainer; Task 8 optional.
 **Author:** Claude (Opus 4.7) audit pass on 2026-05-20; progress notes added 2026-05-21.
 **Branch context:** `dev/0.5.0`. Per project policy, only the **last released version on `main`** is a backwards-compatibility surface — internal Python APIs are not. Feature-branch shims and `# kept for compat` aliases are **not** required. The CLI command/flag surface and the on-disk config file format remain stable.
 
@@ -339,7 +339,9 @@ pytest -q
 
 ---
 
-### Task 4 — Split `aivm/cli/config.py` into a package
+### Task 4 — Split `aivm/cli/config.py` into a package ✅ DONE (commit `0b70d15`)
+
+**Lessons recorded (2026-05-21):** A package split breaks `monkeypatch.setattr('aivm.cli.config.X', ...)` calls when the patched name is a *module-level* binding read by callers (e.g. `_cfg_path`, `auto_defaults`, `sys.stdin.isatty`, `log.warning`). The patches must move to the owning submodule, e.g. `aivm.cli.config.init._cfg_path`. Class-attribute patches like `aivm.cli.config.InitCLI.main` keep working through the package re-export because they walk to the class object.
 
 **Goal:** Replace [`aivm/cli/config.py`](../aivm/cli/config.py) (1195 L) with a directory `aivm/cli/config/` of focused submodules, one per CLI subcommand.
 
@@ -411,7 +413,17 @@ pytest -q
 
 ---
 
-### Task 5 — Split `aivm/attachments/persistent.py` into a package
+### Task 5 — Split `aivm/attachments/persistent.py` into a package ✅ DONE (commits `c553c28`, `b5d50a3`)
+
+**Lessons recorded (2026-05-21):**
+
+1. The test file was tightly coupled to `aivm.attachments.persistent` as a flat module namespace, with ~50 `monkeypatch.setattr('aivm.attachments.persistent.X', ...)` calls. Five of those tests were verifying call shape/order rather than behavior; they were deleted first (commit `c553c28`). That dropped patch count enough to make the split tractable.
+
+2. Internal cross-submodule calls use `from . import other_module` and reference the function as `other_module.func(...)`, *not* `from .other_module import func`. The module-reference pattern means a single `monkeypatch.setattr('aivm.attachments.persistent.transport._run_guest_root_script', ...)` intercepts the call regardless of which submodule invokes it — patches don't need to know the caller. This is the right pattern when callers are *inside the package*.
+
+3. *External* callers (e.g. `aivm/vm/create_ops.py` does `from ..attachments.persistent import _ensure_persistent_root_parent_dir`) read the name from the package `__init__.py` re-export, not the submodule. Their test patches must stay at the `aivm.attachments.persistent.X` namespace; do not blindly remap them to the submodule.
+
+**Pattern to reuse for future splits:** for each call site, ask "which module's namespace does Python look up the name in at call time?" — that's the monkeypatch target. The owning submodule is only the right target when callers also reach through the module reference.
 
 **Goal:** Replace [`aivm/attachments/persistent.py`](../aivm/attachments/persistent.py) (1034 L) with `aivm/attachments/persistent/`, organized by concern (manifest building, ssh-retry transport, replay-service install).
 
@@ -621,8 +633,8 @@ pytest --collect-only -q | wc -l   # before and after; numbers match
 1. ~~**Task 2** (smallest deletion, 1 internal importer)~~ ✅ done
 2. ~~**Task 1** (medium deletion, ~30 importers)~~ ✅ done
 3. ~~**Task 3** (underscore-rename — biggest impact on readability)~~ ✅ done
-4. **Task 4** (split `cli/config.py`) — ⏳ next up
-5. **Task 5** (split `attachments/persistent.py`) — pending
+4. ~~**Task 4** (split `cli/config.py`)~~ ✅ done
+5. ~~**Task 5** (split `attachments/persistent.py`)~~ ✅ done (after test triage)
 6. ~~**Task 6** (resolve `ops/`)~~ ✅ done (Option A: kill)
 7. ~~**Task 7** (split `commands.py`)~~ ⏸ deferred
 8. **Task 8** (optional, do alongside whichever source change forces it)
