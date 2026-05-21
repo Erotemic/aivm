@@ -372,7 +372,7 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     save_store(Store(), cfg_path)
     _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
     _activate_manager(monkeypatch)
-    monkeypatch.setattr('aivm.attachments.persistent.time.sleep', lambda s: None)
+    monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
 
     calls: list[list[str]] = []
     rsync_calls = {'n': 0}
@@ -463,7 +463,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
         raise AssertionError(f'unexpected summary: {summary}')
 
     monkeypatch.setattr(
-        'aivm.attachments.persistent._run_guest_root_script',
+        'aivm.attachments.persistent.transport._run_guest_root_script',
         fake_run,
     )
 
@@ -504,20 +504,20 @@ def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: calls.append(('host', a, k))
         or _persistent_host_manifest_path(cfg),
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
         lambda *a, **k: calls.append(('guest-sync', a, k)) or False,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._install_persistent_attachment_replay',
+        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
         lambda *a, **k: calls.append(('install', a, k)) or False,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._run_guest_root_script',
+        'aivm.attachments.persistent.transport._run_guest_root_script',
         lambda *a, **k: calls.append(('replay', a, k)) or None,
     )
 
@@ -588,20 +588,20 @@ def test_persistent_reconcile_propagates_primary_failures(
     _activate_manager(monkeypatch)
 
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: cfg_path,
     )
     if phase == 'sync':
         monkeypatch.setattr(
-            'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError('sync boom')),
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._install_persistent_attachment_replay',
+            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
             lambda *a, **k: False,
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._run_guest_root_script',
+            'aivm.attachments.persistent.transport._run_guest_root_script',
             lambda *a, **k: None,
         )
         with pytest.raises(RuntimeError, match='sync boom'):
@@ -613,15 +613,15 @@ def test_persistent_reconcile_propagates_primary_failures(
             )
     elif phase == 'install':
         monkeypatch.setattr(
-            'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
             lambda *a, **k: False,
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._install_persistent_attachment_replay',
+            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError('install boom')),
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._run_guest_root_script',
+            'aivm.attachments.persistent.transport._run_guest_root_script',
             lambda *a, **k: None,
         )
         with pytest.raises(RuntimeError, match='install boom'):
@@ -633,11 +633,11 @@ def test_persistent_reconcile_propagates_primary_failures(
             )
     else:
         monkeypatch.setattr(
-            'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
             lambda *a, **k: False,
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._install_persistent_attachment_replay',
+            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
             lambda *a, **k: False,
         )
 
@@ -651,7 +651,7 @@ def test_persistent_reconcile_propagates_primary_failures(
             return SimpleNamespace(stdout='')
 
         monkeypatch.setattr(
-            'aivm.attachments.persistent._run_guest_root_script',
+            'aivm.attachments.persistent.transport._run_guest_root_script',
             fake_run,
         )
         with pytest.raises(RuntimeError, match='replay boom'):
@@ -677,15 +677,15 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
 
     warnings: list[str] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent.log.warning',
+        'aivm.attachments.persistent.replay.log.warning',
         lambda fmt, *args: warnings.append(fmt.format(*args)),
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: cfg_path,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError('sync boom')),
     )
 
@@ -715,29 +715,29 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues_on_late_failu
 
     warnings: list[str] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent.log.warning',
+        'aivm.attachments.persistent.replay.log.warning',
         lambda fmt, *args: warnings.append(fmt.format(*args)),
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: cfg_path,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
         lambda *a, **k: False,
     )
     if phase == 'install':
         monkeypatch.setattr(
-            'aivm.attachments.persistent._install_persistent_attachment_replay',
+            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError('install boom')),
         )
         monkeypatch.setattr(
-            'aivm.attachments.persistent._run_guest_root_script',
+            'aivm.attachments.persistent.transport._run_guest_root_script',
             lambda *a, **k: None,
         )
     else:
         monkeypatch.setattr(
-            'aivm.attachments.persistent._install_persistent_attachment_replay',
+            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
             lambda *a, **k: False,
         )
 
@@ -751,7 +751,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues_on_late_failu
             return SimpleNamespace(stdout='')
 
         monkeypatch.setattr(
-            'aivm.attachments.persistent._run_guest_root_script',
+            'aivm.attachments.persistent.transport._run_guest_root_script',
             fake_run,
         )
 
@@ -787,24 +787,24 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
 
     warnings: list[str] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent.log.warning',
+        'aivm.attachments.persistent.replay.log.warning',
         lambda fmt, *args: warnings.append(fmt.format(*args)),
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: cfg_path,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
         lambda *a, **k: False,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._install_persistent_attachment_replay',
+        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
         lambda *a, **k: False,
     )
     replay_calls: list[dict] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent._run_guest_root_script',
+        'aivm.attachments.persistent.transport._run_guest_root_script',
         lambda *a, **k: replay_calls.append(k)
         or SimpleNamespace(code=1, stdout='', stderr='replay boom'),
     )
@@ -875,7 +875,7 @@ def test_persistent_guest_root_script_retries_transient_banner_failures(
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
     _activate_manager(monkeypatch)
-    monkeypatch.setattr('aivm.attachments.persistent.time.sleep', lambda s: None)
+    monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
 
     calls: list[list[str]] = []
     attempts = {'n': 0}
@@ -929,20 +929,20 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_on_host',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: calls.append(('host', a, k))
         or _persistent_host_manifest_path(cfg),
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._sync_persistent_attachment_manifest_to_guest',
+        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
         lambda *a, **k: calls.append(('guest-sync', a, k)) or True,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._install_persistent_attachment_replay',
+        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
         lambda *a, **k: calls.append(('install', a, k)) or False,
     )
     monkeypatch.setattr(
-        'aivm.attachments.persistent._run_guest_root_script',
+        'aivm.attachments.persistent.transport._run_guest_root_script',
         lambda *a, **k: calls.append(('replay', a, k)) or None,
     )
 
@@ -1661,7 +1661,7 @@ def test_install_persistent_host_bind_replay_enables_service(
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent._install_host_text_if_changed',
+        'aivm.attachments.persistent.transport._install_host_text_if_changed',
         lambda *a, **k: calls.append(('install-host-text', a, k)) or True,
     )
 
