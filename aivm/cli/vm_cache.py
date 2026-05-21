@@ -122,7 +122,7 @@ class VMFlushCachesCLI(_BaseCommand):
             print('Guest script:')
             print(script)
             print('SSH shape:')
-            print(f'ssh <ssh-options> {cfg.vm.user}@<vm-ip> sh -lc {remote_script_arg}')
+            print(f'ssh <ssh-options> {cfg.vm.user}@<vm-ip> sh -c {remote_script_arg}')
             return 0
 
         mgr = CommandManager.current()
@@ -151,7 +151,7 @@ class VMFlushCachesCLI(_BaseCommand):
                 ),
                 f'{cfg.vm.user}@{ip}',
                 'sh',
-                '-lc',
+                '-c',
                 script,
             ]
             log.debug('Running guest cache flush command: {}', shell_join(cmd))
