@@ -14,7 +14,7 @@ from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
 from aivm.util import CmdResult
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
-from aivm.vm.update_ops import (
+from aivm.vm.update import (
     RestartKind,
     VirtiofsBinaryDrift,
     VMUpdateDrift,

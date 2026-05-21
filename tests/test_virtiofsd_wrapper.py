@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from aivm import config, store
-from aivm.vm import update_ops, virtiofsd_wrapper
+from aivm.vm import update, virtiofsd_wrapper
 
 BASE = '/var/lib/libvirt/aivm'
 PREFER_PATH = f'{BASE}/virtiofsd-wrapper-prefer.sh'
@@ -150,7 +150,7 @@ def _cfg_with_mode(mode: str) -> config.AgentVMConfig:
 
 def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> None:
     cfg = _cfg_with_mode('prefer')
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=None)
     )
     assert mode == ''
@@ -159,7 +159,7 @@ def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> N
 
 def test_drift_detection_removes_old_wrapper_even_if_config_requests_prefer() -> None:
     cfg = _cfg_with_mode('prefer')
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=PREFER_PATH)
     )
     assert mode == ''
@@ -173,7 +173,7 @@ def test_drift_detection_reverse_when_wrapper_disabled() -> None:
     cfg = _cfg_with_mode('')
     # Even a different-mode wrapper counts as "managed" and should be
     # reverted to default when the config disables overrides.
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=NEVER_PATH)
     )
     assert mode == ''
@@ -187,7 +187,7 @@ def test_drift_detection_reverse_when_wrapper_disabled() -> None:
 def test_drift_detection_repairs_wrapper_even_when_base_dir_changed() -> None:
     cfg = _cfg_with_mode('')
     cfg.paths.base_dir = '/custom/aivm-base'
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=PREFER_PATH)
     )
     assert mode == ''

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..vm.update_ops import (
+from ..vm.update import (
     RestartKind,
     _apply_vm_update,
     _maybe_restart_vm_after_update,
