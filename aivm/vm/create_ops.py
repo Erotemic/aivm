@@ -20,7 +20,7 @@ from ..resource_checks import (
     vm_resource_impossible_lines,
     vm_resource_warning_lines,
 )
-from ..store import (
+from ..config_store import (
     find_network,
     find_vm,
     load_store,
@@ -32,7 +32,7 @@ from ..store import (
 from ..vm import create_or_start_vm
 
 if TYPE_CHECKING:
-    from ..store import Store
+    from ..config_store import Store
 
 
 def _format_bool(value: bool) -> str:

@@ -27,7 +27,7 @@ from ..status import (
     probe_network,
     probe_ssh_ready,
 )
-from ..store import (
+from ..config_store import (
     find_attachments_for_vm,
     load_store,
     save_store,

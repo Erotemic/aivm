@@ -21,7 +21,7 @@ from aivm.status import (
     render_global_status,
     render_status,
 )
-from aivm.store import Store, upsert_attachment
+from aivm.config_store import Store, upsert_attachment
 from aivm.util import CmdResult
 from aivm.vm.drift import saved_vm_drift_report
 

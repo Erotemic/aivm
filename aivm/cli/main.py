@@ -20,7 +20,7 @@ from ..status import (
     render_global_status,
     render_status,
 )
-from ..store import load_store
+from ..config_store import load_store
 from ._common import (
     _BaseCommand,
     _cfg_path,

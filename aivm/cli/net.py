@@ -6,12 +6,12 @@ from typing import Any
 
 import scriptconfig as scfg
 
-from aivm.store import Store
+from aivm.config_store import Store
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..net import destroy_network, ensure_network, network_status
-from ..store import (
+from ..config_store import (
     find_network,
     load_store,
     network_users,

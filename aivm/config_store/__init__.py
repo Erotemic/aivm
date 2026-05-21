@@ -14,6 +14,7 @@ from .io import (
     split_source_paths,
 )
 from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from .parse import parse_store_toml
 from .mutate import (
     remove_attachment,
     remove_network,
@@ -63,6 +64,7 @@ __all__ = [
     'load_store',
     'materialize_vm_cfg',
     'network_users',
+    'parse_store_toml',
     'persistent_host_state_dir',
     'remove_attachment',
     'remove_network',

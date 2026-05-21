@@ -39,7 +39,7 @@ from ..attachments.shared_root import (
 )
 from ..commands import CommandManager
 from ..status import probe_vm_state
-from ..store import (
+from ..config_store import (
     find_attachment_for_vm,
     load_store,
     remove_attachment,

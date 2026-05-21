@@ -15,7 +15,7 @@ from typing import Any
 import scriptconfig as scfg
 import ubelt as ub
 
-from ..store import find_vm, load_store
+from ..config_store import find_vm, load_store
 from ._common import _BaseCommand, _cfg_path
 
 

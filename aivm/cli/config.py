@@ -37,7 +37,7 @@ from ..resource_checks import vm_resource_warning_lines
 from ..runtime import virsh_system_cmd
 from ..persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
 from ..vm.paths import _paths as _vm_runtime_paths
-from ..store import (
+from ..config_store import (
     find_attachments,
     find_vm,
     materialize_vm_cfg,

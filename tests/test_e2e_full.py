@@ -35,7 +35,7 @@ from test_e2e_nested import (
 )
 
 from aivm.config import AgentVMConfig
-from aivm.store import (
+from aivm.config_store import (
     Store,
     find_attachment_for_vm,
     load_store,

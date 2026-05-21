@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 
 from ..config import AgentVMConfig
-from ..store import find_attachment_for_vm, load_store
+from ..config_store import find_attachment_for_vm, load_store
 from ..vm.share import (
     AttachmentAccess,
     AttachmentMode,

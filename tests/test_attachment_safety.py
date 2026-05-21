@@ -240,7 +240,7 @@ def test_run_vm_attach_aborts_on_declined_sensitive(
 ) -> None:
     from aivm.config import AgentVMConfig
     from aivm.ops.vm_attach import VMAttachRequest, run_vm_attach
-    from aivm.store import Store, save_store, upsert_vm
+    from aivm.config_store import Store, save_store, upsert_vm
 
     fake_home = tmp_path / 'home' / 'agent'
     ssh_dir = fake_home / '.ssh'
@@ -284,7 +284,7 @@ def test_run_vm_attach_aborts_on_declined_overlap(
 ) -> None:
     from aivm.config import AgentVMConfig
     from aivm.ops.vm_attach import VMAttachRequest, run_vm_attach
-    from aivm.store import Store, save_store, upsert_vm
+    from aivm.config_store import Store, save_store, upsert_vm
 
     parent = tmp_path / 'work'
     child = parent / 'subproj'

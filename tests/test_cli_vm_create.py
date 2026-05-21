@@ -10,7 +10,7 @@ from pytest import MonkeyPatch
 from aivm.cli import AgentVMModalCLI
 from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI
 from aivm.config import AgentVMConfig
-from aivm.store import (
+from aivm.config_store import (
     Store,
     find_network,
     load_store,

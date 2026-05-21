@@ -548,7 +548,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
     cfg.vm.name = 'bootstrap-vm'
     cfg_path = tmp_path / 'config.toml'
 
-    from aivm.store import Store, save_store
+    from aivm.config_store import Store, save_store
 
     store = Store()
     store.defaults = AgentVMConfig()
@@ -637,7 +637,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
 def test_prepare_attached_session_restores_saved_vm_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.store import Store, save_store, upsert_attachment, upsert_vm
+    from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 
     host_src = tmp_path / 'proj'
     other_src = tmp_path / 'docs'
@@ -798,7 +798,7 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
 def test_prepare_attached_session_restores_saved_shared_root_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.store import Store, save_store, upsert_attachment, upsert_vm
+    from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 
     host_src = tmp_path / 'proj'
     other_src = tmp_path / 'docs'

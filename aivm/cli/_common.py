@@ -16,7 +16,7 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..detect import detect_ssh_identity
 from ..host import check_commands, host_is_debian_like, install_deps_debian
-from ..store import (
+from ..config_store import (
     find_attachments,
     find_vm,
     load_store,

@@ -16,7 +16,7 @@ from ..attachments.session import (
     _resolve_ip_for_ssh_ops,
 )
 from ..commands import CommandManager
-from ..store import (
+from ..config_store import (
     find_network,
     load_store,
     network_users,

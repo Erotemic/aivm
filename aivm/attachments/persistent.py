@@ -38,7 +38,7 @@ from ..persistent_replay import (
     persistent_replay_service_unit,
 )
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..store import (
+from ..config_store import (
     find_attachments_for_vm,
     load_store,
     persistent_host_state_dir,

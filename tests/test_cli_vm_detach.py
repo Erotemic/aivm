@@ -9,7 +9,7 @@ from pytest import MonkeyPatch
 from aivm.cli.vm_attach import VMDetachCLI
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
-from aivm.store import AttachmentEntry, Store, find_attachment_for_vm
+from aivm.config_store import AttachmentEntry, Store, find_attachment_for_vm
 from aivm.vm.share import AttachmentMode
 
 
@@ -189,7 +189,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from aivm.cli.vm_attach import VMDetachCLI
-    from aivm.store import AttachmentEntry, Store, save_store
+    from aivm.config_store import AttachmentEntry, Store, save_store
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-detach'

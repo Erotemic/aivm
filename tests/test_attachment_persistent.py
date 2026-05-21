@@ -27,7 +27,7 @@ from aivm.attachments.persistent import (
 )
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
-from aivm.store import Store, save_store
+from aivm.config_store import Store, save_store
 
 
 def _activate_manager(
@@ -280,7 +280,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
     # serializes plain dataclass instances; building via load/save keeps the
     # test close to the real store format.
     reg = Store()
-    from aivm.store import AttachmentEntry
+    from aivm.config_store import AttachmentEntry
 
     reg.attachments = [AttachmentEntry(**item) for item in store.attachments]
     save_store(reg, cfg_path)
@@ -322,7 +322,7 @@ def test_persistent_host_manifest_path_uses_app_data_dir(
         calls.append((appname, kind))
         return tmp_path / kind
 
-    monkeypatch.setattr('aivm.store._appdir', fake_appdir)
+    monkeypatch.setattr('aivm.config_store.paths._appdir', fake_appdir)
 
     path = _persistent_host_manifest_path(cfg)
 

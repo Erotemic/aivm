@@ -19,7 +19,7 @@ from aivm.attachments.guest import (
 )
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
-from aivm.store import Store, save_store, upsert_attachment, upsert_vm
+from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 from aivm.vm.share import _auto_share_tag_for_path
 
 

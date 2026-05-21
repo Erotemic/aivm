@@ -13,7 +13,7 @@ from aivm.cli.vm_connect import VMCodeCLI, VMSSHCLI
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
-from aivm.store import (
+from aivm.config_store import (
     AttachmentEntry,
     Store,
     load_store,
@@ -668,8 +668,8 @@ def test_git_mode_in_prepare_session_gets_companion_symlink(
     link_dir = tmp_path / 'link'
     link_dir.symlink_to(real_dir)
 
-    from aivm.store import Store
-    from aivm.store import save_store as _save_store
+    from aivm.config_store import Store
+    from aivm.config_store import save_store as _save_store
 
     store = Store()
     store.attachments.append(
@@ -782,8 +782,8 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
     host_src = tmp_path / 'code' / 'myproject'
     host_src.mkdir(parents=True)
 
-    from aivm.store import Store
-    from aivm.store import save_store as _save_store
+    from aivm.config_store import Store
+    from aivm.config_store import save_store as _save_store
 
     store = Store()
     _save_store(store, cfg_path)

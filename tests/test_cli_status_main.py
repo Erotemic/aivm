@@ -14,7 +14,7 @@ from aivm.status import (
     anticipated_status_sudo_commands,
     render_global_status,
 )
-from aivm.store import Store
+from aivm.config_store import Store
 
 main_mod = importlib.import_module('aivm.cli.main')
 

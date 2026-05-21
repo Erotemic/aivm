@@ -7,7 +7,7 @@ from pathlib import Path
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
-from aivm.store import (
+from aivm.config_store import (
     AttachmentEntry,
     Store,
     find_attachment,
@@ -66,7 +66,7 @@ def test_save_store_logs_reason(
     def fake_info(fmt: str, *args: object) -> None:
         messages.append(fmt.format(*args))
 
-    monkeypatch.setattr('aivm.store.log.info', fake_info)
+    monkeypatch.setattr('aivm.config_store.io.log.info', fake_info)
     save_store(
         store,
         tmp_path / 'config.toml',
@@ -156,7 +156,7 @@ guest_dst = "/home/agent/code/project"
 tag = "aivm-project"
 host_lexical_path = "~/code/project"
 '''
-    from aivm.store import parse_store_toml
+    from aivm.config_store import parse_store_toml
 
     store = parse_store_toml(text)
 
@@ -188,7 +188,7 @@ def test_render_nested_vm_attachments_roundtrip(tmp_path: Path) -> None:
         guest_dst='/home/agent/code/project',
         tag='tag-a',
     )
-    from aivm.store import parse_store_toml, render_store_toml
+    from aivm.config_store import parse_store_toml, render_store_toml
 
     text = render_store_toml(store, attachment_style='nested')
     assert '[[vms.attachments]]' in text
@@ -217,7 +217,7 @@ vm_name = "vm-b"
 host_path = "{project}"
 '''
     from pytest import raises
-    from aivm.store import parse_store_toml
+    from aivm.config_store import parse_store_toml
 
     with raises(ValueError, match='vm_name mismatch'):
         parse_store_toml(text)
@@ -269,7 +269,7 @@ mode = "shared-root"
         encoding='utf-8',
     )
 
-    from aivm.store import load_config_document
+    from aivm.config_store import load_config_document
 
     loaded = load_config_document(config)
 
@@ -306,7 +306,7 @@ network_name = "aivm-net"
     )
 
     from pytest import raises
-    from aivm.store import load_config_document
+    from aivm.config_store import load_config_document
 
     with raises(ValueError, match='duplicate VM definition'):
         load_config_document(config)
@@ -333,7 +333,7 @@ def test_save_store_split_writes_concatenation_friendly_fragments(tmp_path: Path
         guest_dst='/home/agent/code/project',
     )
 
-    from aivm.store import load_config_document, save_store_split
+    from aivm.config_store import load_config_document, save_store_split
 
     root = tmp_path / 'config.toml'
     written = save_store_split(store, root)
@@ -363,7 +363,7 @@ def test_save_store_updates_existing_split_layout(tmp_path: Path) -> None:
     upsert_vm(store, cfg)
     root = tmp_path / 'config.toml'
 
-    from aivm.store import load_config_document, save_store, save_store_split
+    from aivm.config_store import load_config_document, save_store, save_store_split
 
     save_store_split(store, root)
     store.vms[0].cfg.vm.cpus = 12
@@ -393,7 +393,7 @@ def test_format_existing_config_migrates_monolith(tmp_path: Path) -> None:
     root = tmp_path / 'config.toml'
     save_store(store, root)
 
-    from aivm.store import format_existing_config, load_config_document
+    from aivm.config_store import format_existing_config, load_config_document
 
     format_existing_config(root)
 
@@ -423,7 +423,7 @@ def test_save_store_split_rejects_orphaned_attachment(tmp_path: Path) -> None:
         AttachmentEntry(host_path=str(tmp_path), vm_name='missing-vm')
     )
     from pytest import raises
-    from aivm.store import save_store_split
+    from aivm.config_store import save_store_split
 
     with raises(ValueError, match='orphaned|attachment records'):
         save_store_split(store, tmp_path / 'config.toml')

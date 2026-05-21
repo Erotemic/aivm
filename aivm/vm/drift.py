@@ -23,7 +23,7 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..firewall import read_firewall_tcp_ports
 from ..runtime import virsh_system_cmd
-from ..store import Store, find_attachments_for_vm
+from ..config_store import Store, find_attachments_for_vm
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
     AttachmentMode,

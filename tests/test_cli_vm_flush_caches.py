@@ -15,7 +15,7 @@ from aivm.cli.vm_cache import (
 )
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
-from aivm.store import Store, save_store, upsert_vm
+from aivm.config_store import Store, save_store, upsert_vm
 
 
 def _write_cfg(tmp_path: Path) -> Path:

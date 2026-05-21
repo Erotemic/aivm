@@ -18,7 +18,7 @@ from aivm.config import (
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
-from aivm.store import Store, save_store, upsert_vm
+from aivm.config_store import Store, save_store, upsert_vm
 
 
 def _host_context_enabled() -> bool:

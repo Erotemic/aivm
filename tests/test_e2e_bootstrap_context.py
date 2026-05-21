@@ -24,7 +24,7 @@ from test_e2e_nested import (
 )
 
 from aivm.config import AgentVMConfig
-from aivm.store import Store, save_store, upsert_vm
+from aivm.config_store import Store, save_store, upsert_vm
 
 
 def _bootstrap_context_enabled() -> bool:

@@ -13,7 +13,7 @@ from aivm.attachments.resolve import (
     _resolve_attachment,
 )
 from aivm.config import AgentVMConfig
-from aivm.store import (
+from aivm.config_store import (
     AttachmentEntry,
     Store,
     save_store,
