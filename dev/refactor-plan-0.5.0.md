@@ -1,7 +1,7 @@
 # `aivm` Refactor Plan — `dev/0.5.0`
 
-**Status:** Draft. Audit complete, tasks not yet started.
-**Author:** Claude (Opus 4.7) audit pass on 2026-05-20.
+**Status:** In progress. Tasks 1, 2, 3, and 6 complete on `dev/0.5.0`. Tasks 4 and 5 still pending. Task 7 deferred by maintainer; Task 8 optional.
+**Author:** Claude (Opus 4.7) audit pass on 2026-05-20; progress notes added 2026-05-21.
 **Branch context:** `dev/0.5.0`. Per project policy, only the **last released version on `main`** is a backwards-compatibility surface — internal Python APIs are not. Feature-branch shims and `# kept for compat` aliases are **not** required. The CLI command/flag surface and the on-disk config file format remain stable.
 
 ---
@@ -86,7 +86,7 @@ Each task is sized so a small/fast model can execute it in one session. Tasks 1 
 
 ---
 
-### Task 1 — Delete the `aivm/store.py` facade
+### Task 1 — Delete the `aivm/store.py` facade ✅ DONE (commit `797ff64`)
 
 **Goal:** Remove the `aivm.store` module. Callers import directly from `aivm.config_store`.
 
@@ -167,7 +167,7 @@ aivm list
 
 ---
 
-### Task 2 — Delete the `aivm/vm/update_ops.py` facade
+### Task 2 — Delete the `aivm/vm/update_ops.py` facade ✅ DONE (commit `b77bf2b`)
 
 **Goal:** Remove the `aivm.vm.update_ops` module. Callers import from `aivm.vm.update` directly.
 
@@ -217,7 +217,9 @@ pytest -q
 
 ---
 
-### Task 3 — Normalize underscore re-exports
+### Task 3 — Normalize underscore re-exports ✅ DONE (commit `121c6f0`)
+
+**Decision recorded (2026-05-21):** Tests are allowed to import `_`-prefixed names from submodules. The `__init__.py` files were shrunk to only the public names; private helpers stay in their owning submodule and are imported from there. No public renames were needed.
 
 **Goal:** Stop re-exporting underscore-prefixed names from `aivm/attachments/__init__.py` and `aivm/vm/__init__.py`. Pick one truth per name: either it's public (rename without underscore) or it's internal (keep the underscore, import directly from the owning submodule, don't re-export).
 
@@ -478,7 +480,9 @@ pytest -q
 
 ---
 
-### Task 6 — Resolve `aivm/ops/` ambivalence
+### Task 6 — Resolve `aivm/ops/` ambivalence ✅ DONE (commit `826c041`)
+
+**Decision recorded (2026-05-21):** Option A (kill `ops/`). Rationale: scriptconfig CLI classes are also the programmatic API (`CliClass.main(argv=False, **kwargs)`), so the Request/Result layer was redundant for a CLI-only tool with no second consumer. `ops/vm_attach.py` and `ops/vm_update.py` were inlined into their `cli/` siblings; the `ops/` directory is gone.
 
 **Goal:** Decide whether `aivm/ops/` is the canonical home for VM operation business logic. **Recommend: inline `ops/vm_attach.py` and `ops/vm_update.py` back into their CLI siblings** because (a) only two of ~12 VM commands use this pattern, (b) the request/response layer adds plumbing without paying off when the CLI class is the only caller.
 
@@ -532,7 +536,9 @@ aivm vm update --help
 
 ---
 
-### Task 7 — Split `aivm/commands.py` into a package
+### Task 7 — Split `aivm/commands.py` into a package ⏸ DEFERRED
+
+**Decision recorded (2026-05-21):** Maintainer prefers `commands.py` stays a single file for now. The module is critical to get right, and keeping the data classes + manager in one place makes that easier than spreading them across submodules. Revisit only if the file starts attracting unrelated concerns.
 
 **Goal:** Replace [`aivm/commands.py`](../aivm/commands.py) (1238 L) with `aivm/commands/` directory: data types in one file, the manager in another.
 
@@ -612,13 +618,13 @@ pytest --collect-only -q | wc -l   # before and after; numbers match
 
 ## 3. Suggested execution order
 
-1. **Task 2** (smallest deletion, 1 internal importer)
-2. **Task 1** (medium deletion, ~30 importers)
-3. **Task 3** (underscore-rename — biggest impact on readability)
-4. **Task 4** (split `cli/config.py`)
-5. **Task 5** (split `attachments/persistent.py`)
-6. **Task 6** (resolve `ops/`)
-7. **Task 7** (split `commands.py`)
+1. ~~**Task 2** (smallest deletion, 1 internal importer)~~ ✅ done
+2. ~~**Task 1** (medium deletion, ~30 importers)~~ ✅ done
+3. ~~**Task 3** (underscore-rename — biggest impact on readability)~~ ✅ done
+4. **Task 4** (split `cli/config.py`) — ⏳ next up
+5. **Task 5** (split `attachments/persistent.py`) — pending
+6. ~~**Task 6** (resolve `ops/`)~~ ✅ done (Option A: kill)
+7. ~~**Task 7** (split `commands.py`)~~ ⏸ deferred
 8. **Task 8** (optional, do alongside whichever source change forces it)
 
 Tasks 4 and 5 are independent and can be done in parallel by different agents.
@@ -747,10 +753,8 @@ aivm/
 
 ## 6. Open questions for the human reviewer
 
-Answer these before kicking off Task 3 (the underscore-rename pass), since they shape the rename map:
+All three open questions have been answered (2026-05-21):
 
-1. **Are tests allowed to import private (underscore-prefixed) names from submodules** (e.g., `from aivm.attachments.session import _record_attachment`)? If yes, the rename pass can keep more functions private. If no, almost everything currently used by tests becomes public-named.
-2. **Should the `aivm/ops/` directory be killed (Task 6 recommendation) or built out?** Killing is the recommended path; building out is more work and creates more boilerplate but standardizes the CLI-vs-business-logic split.
-3. **Should `aivm/commands.py` be split (Task 7)?** It's the largest single file but internally cohesive. Skipping Task 7 is reasonable.
-
-Once these are answered, the plan is fully concrete and each task can be handed to a small model independently.
+1. ✅ **Tests may import `_`-prefixed names from submodules.** Task 3 followed this path — `__init__.py` files were shrunk; private helpers stay in their owning submodule.
+2. ✅ **Kill `ops/` (Option A).** scriptconfig already serves as the programmatic API, so a Request/Result layer is redundant. Task 6 inlined `ops/*.py` into `cli/*.py` and deleted the directory.
+3. ✅ **Keep `commands.py` unified.** Task 7 deferred — the module is critical and easier to reason about as one file.
