@@ -7,7 +7,7 @@ from typing import Any
 import scriptconfig as scfg
 
 from ._common import _BaseCommand
-from .config import _edit_path, _resolve_config_edit_target
+from .config.edit import _edit_path, _resolve_config_edit_target
 
 
 class VMEditCLI(_BaseCommand):

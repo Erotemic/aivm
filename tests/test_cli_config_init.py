@@ -23,12 +23,12 @@ def test_config_init_noninteractive_requires_yes_or_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: False)
     with pytest.raises(RuntimeError, match='--yes or --defaults'):
         InitCLI.main(
             argv=False, config=str(cfg_path), yes=False, defaults=False
@@ -39,12 +39,12 @@ def test_config_init_noninteractive_defaults_flag_bypasses_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: False)
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=True
     )
@@ -62,12 +62,12 @@ def test_config_init_interactive_shows_summary_and_accepts(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: '')
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=False
@@ -119,11 +119,11 @@ def test_config_init_interactive_can_create_dedicated_aivm_key(
         raise AssertionError(f'unexpected command: {cmd}')
 
     answers = iter(['', ''])
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults', fake_defaults_missing_keys
+        'aivm.cli.config.init.auto_defaults', fake_defaults_missing_keys
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(
@@ -149,15 +149,15 @@ def test_config_init_defaults_warns_when_ssh_keys_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: False)
     log_calls = []
     monkeypatch.setattr(
-        'aivm.cli.config.log.warning',
+        'aivm.cli.config.init.log.warning',
         lambda *a, **k: log_calls.append((a, k)),
     )
     rc = InitCLI.main(
@@ -174,12 +174,12 @@ def test_config_init_prompt_mentions_edit_shortcut(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
     prompts = []
 
     def fake_input(prompt: str) -> str:
@@ -198,12 +198,12 @@ def test_config_init_interactive_edit_updates_hardware(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
     answers = iter(
         [
             'e',  # use edit flow
@@ -237,18 +237,18 @@ def test_config_init_logs_resource_warnings_from_shared_checker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
     monkeypatch.setattr(
-        'aivm.cli.config.vm_resource_warning_lines',
+        'aivm.cli.config.init.vm_resource_warning_lines',
         lambda cfg: ['resource warning test'],
     )
     logged = []
     monkeypatch.setattr(
-        'aivm.cli.config.log.warning',
+        'aivm.cli.config.init.log.warning',
         lambda *a, **k: logged.append((a, k)),
     )
     rc = InitCLI.main(
@@ -273,12 +273,12 @@ def test_config_init_interactive_edit_updates_password_login(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.config.init._cfg_path', lambda p: cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
+        'aivm.cli.config.init.auto_defaults',
         lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
     answers = iter([
         'e',  # edit values
         '',  # vm.user
