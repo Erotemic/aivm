@@ -577,12 +577,14 @@ def test_record_attachment_passes_reason_to_save_store(
     ]
 
 
-def test_vm_code_passes_lexical_host_src_to_session(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize('cli_cls', [VMCodeCLI, VMSSHCLI], ids=['code', 'ssh'])
+def test_vm_connect_clis_pass_lexical_host_src_to_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_cls
 ) -> None:
-    """VMCodeCLI should pass the lexical (non-resolved) host_src so symlink detection works."""
+    """Both VMCodeCLI and VMSSHCLI must pass the lexical (non-resolved)
+    host_src so downstream symlink detection works."""
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-code-lexical'
+    cfg.vm.name = f'vm-{cli_cls.__name__.lower()}-lexical'
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
@@ -600,45 +602,8 @@ def test_vm_code_passes_lexical_host_src_to_session(
         _fake_prepare_session(cfg, cfg_path, host_src, attachment, captured),
     )
 
-    # dry_run=True exits immediately after getting the session — no subprocess needed
-    VMCodeCLI.main(
-        argv=False,
-        config=str(cfg_path),
-        host_src=str(host_src),
-        yes=True,
-        dry_run=True,
-    )
-
-    assert captured, 'expected _prepare_attached_session to be called'
-    passed = captured[0]['host_src']
-    # Must be the lexical absolute path (expanduser+absolute), not pre-resolved
-    assert passed == host_src.expanduser().absolute()
-
-
-def test_vm_ssh_passes_lexical_host_src_to_session(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """VMSSHCLI should pass the lexical host_src so symlink detection works."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-ssh-lexical'
-    cfg_path = tmp_path / 'config.toml'
-    host_src = tmp_path / 'proj'
-    host_src.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
-        source_dir=str(host_src.resolve()),
-        guest_dst=str(host_src),
-        tag='hostcode-proj-abc12345',
-    )
-
-    captured: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm_connect._prepare_attached_session',
-        _fake_prepare_session(cfg, cfg_path, host_src, attachment, captured),
-    )
-
-    VMSSHCLI.main(
+    # dry_run=True exits immediately after getting the session - no subprocess needed
+    cli_cls.main(
         argv=False,
         config=str(cfg_path),
         host_src=str(host_src),
