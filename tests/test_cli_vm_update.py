@@ -172,7 +172,7 @@ def test_vm_update_no_changes(
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.ops.vm_update._vm_update_drift',
+        'aivm.cli.vm_update._vm_update_drift',
         lambda *a, **k: (VMUpdateDrift(), False),
     )
     rc = VMUpdateCLI.main(argv=False, config=str(tmp_path / 'config.toml'))
@@ -192,11 +192,11 @@ def test_vm_update_restarts_when_required(
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
-        'aivm.ops.vm_update._vm_update_drift',
+        'aivm.cli.vm_update._vm_update_drift',
         lambda *a, **k: (drift, True),
     )
     monkeypatch.setattr(
-        'aivm.ops.vm_update._apply_vm_update',
+        'aivm.cli.vm_update._apply_vm_update',
         lambda *a, **k: (True, True),
     )
     called: dict[str, object] = {}  # type: ignore[assignment]
@@ -205,7 +205,7 @@ def test_vm_update_restarts_when_required(
         called['kwargs'] = k  # type: ignore[index]
 
     monkeypatch.setattr(
-        'aivm.ops.vm_update._maybe_restart_vm_after_update', fake_restart
+        'aivm.cli.vm_update._maybe_restart_vm_after_update', fake_restart
     )
     rc = VMUpdateCLI.main(
         argv=False,

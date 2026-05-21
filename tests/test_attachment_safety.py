@@ -239,7 +239,7 @@ def test_run_vm_attach_aborts_on_declined_sensitive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from aivm.config import AgentVMConfig
-    from aivm.ops.vm_attach import VMAttachRequest, run_vm_attach
+    from aivm.cli.vm_attach import VMAttachRequest, run_vm_attach
     from aivm.config_store import Store, save_store, upsert_vm
 
     fake_home = tmp_path / 'home' / 'agent'
@@ -257,12 +257,12 @@ def test_run_vm_attach_aborts_on_declined_sensitive(
 
     # Force the prompt to refuse, simulating an interactive abort.
     monkeypatch.setattr(
-        'aivm.ops.vm_attach.confirm_sensitive_attach',
+        'aivm.cli.vm_attach.confirm_sensitive_attach',
         lambda *_a, **_k: False,
     )
     # The other guard shouldn't even be reached.
     monkeypatch.setattr(
-        'aivm.ops.vm_attach.confirm_overlapping_attach',
+        'aivm.cli.vm_attach.confirm_overlapping_attach',
         lambda *_a, **_k: (_ for _ in ()).throw(
             AssertionError('overlap prompt should not run')
         ),
@@ -283,7 +283,7 @@ def test_run_vm_attach_aborts_on_declined_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from aivm.config import AgentVMConfig
-    from aivm.ops.vm_attach import VMAttachRequest, run_vm_attach
+    from aivm.cli.vm_attach import VMAttachRequest, run_vm_attach
     from aivm.config_store import Store, save_store, upsert_vm
 
     parent = tmp_path / 'work'
@@ -306,11 +306,11 @@ def test_run_vm_attach_aborts_on_declined_overlap(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.ops.vm_attach.confirm_sensitive_attach',
+        'aivm.cli.vm_attach.confirm_sensitive_attach',
         lambda *_a, **_k: True,
     )
     monkeypatch.setattr(
-        'aivm.ops.vm_attach.confirm_overlapping_attach',
+        'aivm.cli.vm_attach.confirm_overlapping_attach',
         lambda *_a, **_k: False,
     )
 
