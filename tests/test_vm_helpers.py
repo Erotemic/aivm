@@ -18,9 +18,6 @@ from aivm.config import (
 from aivm.util import CmdError, CmdResult
 from aivm.vm import (
     ResolvedAttachment,
-    _ensure_qemu_access,
-    _mac_for_vm,
-    _write_cloud_init,
     attach_vm_share,
     create_or_start_vm,
     ensure_share_mounted,
@@ -34,6 +31,9 @@ from aivm.vm import (
     vm_share_mappings,
     wait_for_ssh,
 )
+from aivm.vm.cloudinit import _write_cloud_init
+from aivm.vm.connectivity import _mac_for_vm
+from aivm.vm.host_access import _ensure_qemu_access
 from aivm.vm.share import AttachmentAccess, AttachmentMode
 
 
