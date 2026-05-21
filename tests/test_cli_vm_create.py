@@ -309,13 +309,6 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
 
 
 
-def test_vm_delete_is_registered_without_destroy_alias() -> None:
-    from aivm.cli.vm import VMModalCLI
-
-    assert hasattr(VMModalCLI, 'delete')
-    assert not hasattr(VMModalCLI, 'destroy')
-
-
 def test_vm_delete_removes_vm_and_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

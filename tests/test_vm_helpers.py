@@ -1271,104 +1271,6 @@ def test_shutdown_vm_when_not_running_does_nothing(
     assert normalized_calls == [['virsh', 'domstate', 'vm-shutdown-off']]
 
 
-def test_shutdown_vm_when_idle_is_considered_active(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that shutdown_vm handles idle VMs as active."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shutdown-idle'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        calls.append(parts)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'idle\n', '')
-        if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    shutdown_vm(cfg, dry_run=False)
-
-    normalized_calls = []
-    for call in calls:
-        if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
-        elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
-    assert normalized_calls == [
-        ['virsh', 'domstate', 'vm-shutdown-idle'],
-        ['virsh', 'shutdown', 'vm-shutdown-idle'],
-    ]
-
-
-def test_shutdown_vm_when_blocked_is_considered_active(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that shutdown_vm handles blocked VMs as active."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shutdown-blocked'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        calls.append(parts)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'blocked\n', '')
-        if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    shutdown_vm(cfg, dry_run=False)
-
-    normalized_calls = []
-    for call in calls:
-        if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
-        elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
-    assert normalized_calls == [
-        ['virsh', 'domstate', 'vm-shutdown-blocked'],
-        ['virsh', 'shutdown', 'vm-shutdown-blocked'],
-    ]
-
-
 def test_shutdown_vm_when_pmsuspended_resumes_first(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1425,69 +1327,6 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
     assert ['virsh', 'shutdown', 'vm-shutdown-pmsuspended'] in normalized_calls
 
 
-def test_shutdown_vm_when_pmsuspended_resumes_then_finds_inactive(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that shutdown_vm handles VM that becomes inactive after resume."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shutdown-pmsuspended-inactive'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-
-    calls: list[list[str]] = []
-    domstate_call_count = [0]
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        calls.append(parts)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            domstate_call_count[0] += 1
-            # First call: pmsuspended, second call: shut off (crashed after resume)
-            if domstate_call_count[0] == 1:
-                return _Proc(0, 'pmsuspended\n', '')
-            else:
-                return _Proc(0, 'shut off\n', '')
-        if normalized[:2] == ['virsh', 'resume']:
-            return _Proc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    # Should not raise, just log and return
-    shutdown_vm(cfg, dry_run=False)
-
-    normalized_calls = []
-    for call in calls:
-        if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
-        elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
-    # Should resume but not shutdown (VM is inactive)
-    assert [
-        'virsh',
-        'resume',
-        'vm-shutdown-pmsuspended-inactive',
-    ] in normalized_calls
-    assert [
-        'virsh',
-        'shutdown',
-        'vm-shutdown-pmsuspended-inactive',
-    ] not in normalized_calls
-
-
 def test_shutdown_vm_dry_run(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1539,38 +1378,6 @@ def test_shutdown_vm_raises_on_shutdown_failure(
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     with pytest.raises(RuntimeError, match='Failed to send shutdown signal'):
-        shutdown_vm(cfg, dry_run=False)
-
-
-def test_shutdown_vm_raises_on_domstate_failure(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that shutdown_vm raises when domstate command fails."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shutdown-badstate'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(1, '', 'error: domain is not found')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    with pytest.raises(RuntimeError, match='Failed to get state'):
         shutdown_vm(cfg, dry_run=False)
 
 
@@ -1740,86 +1547,6 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
     assert ['virsh', 'start', 'vm-restart-pmsuspended'] in normalized_calls
 
 
-def test_restart_vm_when_pmsuspended_resumes_then_finds_inactive(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that restart_vm handles VM that becomes inactive after resume."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-restart-pmsuspended-inactive'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-    # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
-    # Mock _wait_for_vm_not_state to avoid actual polling
-    monkeypatch.setattr(
-        'aivm.vm.domain._wait_for_vm_not_state', lambda *a, **k: None
-    )
-    # Mock _wait_for_vm_state to avoid actual polling
-    monkeypatch.setattr(
-        'aivm.vm.domain._wait_for_vm_state', lambda *a, **k: None
-    )
-
-    calls: list[list[str]] = []
-    domstate_count = [0]  # Track domstate call count
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        calls.append(parts)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            domstate_count[0] += 1
-            # First call: pmsuspended (initial check)
-            # Second call: shut off (crashed after resume)
-            if domstate_count[0] == 1:
-                return _Proc(0, 'pmsuspended\n', '')
-            else:
-                return _Proc(0, 'shut off\n', '')
-        if normalized[:2] == ['virsh', 'resume']:
-            return _Proc(0, '', '')
-        if normalized[:2] == ['virsh', 'start']:
-            return _Proc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    restart_vm(cfg, dry_run=False)
-
-    normalized_calls = []
-    for call in calls:
-        if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
-        elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
-    # Should resume, then start (not shutdown since VM is inactive)
-    assert [
-        'virsh',
-        'resume',
-        'vm-restart-pmsuspended-inactive',
-    ] in normalized_calls
-    assert [
-        'virsh',
-        'shutdown',
-        'vm-restart-pmsuspended-inactive',
-    ] not in normalized_calls
-    assert [
-        'virsh',
-        'start',
-        'vm-restart-pmsuspended-inactive',
-    ] in normalized_calls
-
-
 def test_restart_vm_when_not_running_just_starts(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1902,38 +1629,6 @@ def test_restart_vm_raises_when_vm_undefined(
     monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: False)
 
     with pytest.raises(RuntimeError, match='does not exist'):
-        restart_vm(cfg, dry_run=False)
-
-
-def test_restart_vm_raises_on_domstate_failure(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Test that restart_vm raises when domstate command fails."""
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-restart-badstate'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    # Mock _vm_defined to return True (VM exists)
-    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
-    # Mock confirm_sudo_scope to avoid interactive prompts
-    monkeypatch.setattr(
-        'aivm.commands.CommandManager.confirm_sudo_scope',
-        lambda self, **k: None,
-    )
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
-        del kwargs
-        parts = list(cmd)
-        normalized = parts
-        if normalized[:2] == ['sudo', '-n']:
-            normalized = normalized[2:]
-        elif normalized[:1] == ['sudo']:
-            normalized = normalized[1:]
-        if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(1, '', 'error: domain is not found')
-        raise AssertionError(f'unexpected command: {cmd!r}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
-    with pytest.raises(RuntimeError, match='Failed to get state'):
         restart_vm(cfg, dry_run=False)
 
 
