@@ -1,6 +1,6 @@
 # `aivm` Refactor Plan — `dev/0.5.0`
 
-**Status:** In progress. Tasks 1, 2, 3, 4, 5, and 6 complete on `dev/0.5.0`. Task 7 deferred by maintainer; Task 8 optional.
+**Status:** In progress. Tasks 1, 2, 3, 4, 5, and 6 complete on `dev/0.5.0`. Task 7 deferred by maintainer; Task 8 still optional. Test-sprawl reduction pass (§7) also done and paused at the easy-win line.
 **Author:** Claude (Opus 4.7) audit pass on 2026-05-20; progress notes added 2026-05-21.
 **Branch context:** `dev/0.5.0`. Per project policy, only the **last released version on `main`** is a backwards-compatibility surface — internal Python APIs are not. Feature-branch shims and `# kept for compat` aliases are **not** required. The CLI command/flag surface and the on-disk config file format remain stable.
 
@@ -597,7 +597,9 @@ pytest -q
 
 ---
 
-### Task 8 (optional) — Split `tests/test_vm_helpers.py`
+### Task 8 (optional) — Split `tests/test_vm_helpers.py` ⏸ DEFERRED
+
+**Decision recorded (2026-05-21):** Not done in this refactor pass. After the §7 test-sprawl pruning, `tests/test_vm_helpers.py` is down to 1664 L / 41 tests / 139 patches. Still the biggest test file but no longer a stop-the-presses problem. Revisit when the next source-side change in `aivm/vm/` would otherwise force a giant test-file diff.
 
 **Goal:** Break `tests/test_vm_helpers.py` (1969 L) into focused test modules so future moves of source code don't require editing one giant file.
 
@@ -763,7 +765,62 @@ aivm/
 
 ---
 
-## 6. Open questions for the human reviewer
+## 6. Test-sprawl reduction pass (2026-05-21)
+
+Triggered by Task 5: the persistent split was blocked by ~50 monkeypatches in `tests/test_attachment_persistent.py` that targeted the flat module namespace. Maintainer chose Option B from the triage proposal — refactor tests first, delete useless niche tests as we go.
+
+### What was deleted
+
+12 redundant test functions, ~580 lines, 0 behavior coverage lost. All commits on `dev/0.5.0`.
+
+**`tests/test_attachment_persistent.py` (commit `c553c28`, 5 deletions / 225 lines):** All five were verifying implementation call sequences (`assert [calls] == ['host', 'guest-sync', 'install', 'replay']`) rather than externally observable behavior. The behavior is exercised by the live install path and the guest-helper exec tests.
+
+- `test_persistent_replay_templates_are_deterministic_across_processes` — duplicate of the in-process determinism test that spawns subprocesses.
+- `test_persistent_replay_install_refreshes_when_unit_changes` / `..._skips_refresh_when_unchanged` — asserted "daemon-reload was called".
+- `test_persistent_reconcile_reruns_replay_when_guest_manifest_unchanged` — pure call-order test.
+- `test_persistent_reconcile_repairs_host_binds_before_guest_sync` — same.
+
+**`tests/test_vm_helpers.py` (commit `e353c0b`, 6 deletions / 305 lines):**
+
+- `test_shutdown_vm_when_idle_is_considered_active`, `..._when_blocked_..._active` — `idle` and `blocked` are just other active states that go through the same code path as `running`. The running test covers the path.
+- `test_shutdown_vm_when_pmsuspended_resumes_then_finds_inactive`, `test_restart_vm_when_pmsuspended_resumes_then_finds_inactive` — niche race where the VM becomes inactive between resume and shutdown. ~70 lines of mocking each for an edge that may never fire.
+- `test_shutdown_vm_raises_on_domstate_failure`, `test_restart_vm_raises_on_domstate_failure` — redundant error tests. Each family keeps `*_raises_with_stderr_error_message` which verifies the error message content (more behavioral).
+
+**`tests/test_cli_vm_create.py` (commit `e353c0b`, 1 deletion / 7 lines):**
+
+- `test_vm_delete_is_registered_without_destroy_alias` — asserts `hasattr(VMModalCLI, 'delete') and not hasattr(VMModalCLI, 'destroy')`. The rename landed in `7a688c7` and the assertion passes regardless of behavior changes.
+
+### What was consolidated
+
+**`tests/test_attachment_session.py` (commit `6aa9c38`):** `test_vm_code_passes_lexical_host_src_to_session` and `test_vm_ssh_passes_lexical_host_src_to_session` were 36-line copies differing only in the CLI class. Combined into one parametrized test `test_vm_connect_clis_pass_lexical_host_src_to_session`.
+
+### What was structurally improved
+
+**`aivm/attachments/persistent/` (commit `b5d50a3`):** Internal cross-submodule calls use `from . import other_module` + `other_module.func(...)`, not `from .other_module import func`. The module-reference pattern means one `monkeypatch.setattr` target intercepts the call regardless of which submodule exercises it. Tests now patch a single canonical location instead of guessing the caller's local binding.
+
+### What was left as harder future work
+
+These three would meaningfully reduce remaining test brittleness but they're not easy wins:
+
+1. **Build a `RecordingCommandManager` fixture** that captures `mgr.submit`/`mgr.run` calls instead of patching individual helpers. Would remove ~50–80 patches across `test_attachment_session.py`, `test_cli_vm_create.py`, and `test_attachment_guest.py`. Substantial test-infra work.
+
+2. **Reshape behavioral tests to assert on observable artifacts** (config-store contents, files written, intent log) rather than function-call shapes. Per-test redesign; cannot be mechanical.
+
+3. **Task 8** — split `tests/test_vm_helpers.py` (1664 L) into focused modules. Pure file move, deferred above.
+
+### Patches/test ratios after this pass
+
+| File | Before | After | Notes |
+|---|---:|---:|---|
+| `test_attachment_persistent.py` | 1.7 | n/a | submodule-targeted patches; not directly comparable |
+| `test_vm_helpers.py` | 3.5 | 3.4 | 6 tests removed |
+| `test_cli_vm_detach.py` | — | 6.25 | 4 distinct attachment modes, all kept |
+| `test_attachment_session.py` | 5.7 | 5.7 | mostly necessary behavioral mocks |
+| `test_cli_vm_create.py` | 5.0 | 5.3 | denominator dropped after one prune |
+
+---
+
+## 7. Open questions for the human reviewer
 
 All three open questions have been answered (2026-05-21):
 
