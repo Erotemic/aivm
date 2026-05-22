@@ -160,6 +160,8 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
             return _Proc(0, '', '')
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return _Proc(1, '', '')
+        if normalized[:2] == ['mount', '--bind']:
+            return _Proc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
             return _Proc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
@@ -551,6 +553,8 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
             return _Proc(1, '', '')
         if normalized[:2] == ['mkdir', '-p']:
             return _Proc(0, '', '')
+        if normalized[:2] == ['mount', '--bind']:
+            return _Proc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
             return _Proc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
@@ -574,7 +578,7 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
         msg.startswith('     command: sudo mkdir -p ') for msg in messages
     )
     assert any(
-        msg.startswith('     command: sudo bash -c ') for msg in messages
+        msg.startswith('     command: sudo mount --bind ') for msg in messages
     )
 
 
@@ -613,6 +617,8 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return _Proc(1, '', '')
         if normalized[:2] == ['mkdir', '-p']:
+            return _Proc(0, '', '')
+        if normalized[:2] == ['mount', '--bind']:
             return _Proc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
             return _Proc(0, '', '')

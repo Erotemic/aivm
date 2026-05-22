@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
 from loguru import logger as log
@@ -18,7 +17,11 @@ from ...persistent_replay import (
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.share import AttachmentMode, ResolvedAttachment
 from ..resolve import _normalize_attachment_access
-from ..shared_root import _shared_root_host_target
+from ..shared_root import (
+    _needs_privileged_mkdir,
+    _shared_root_host_target,
+    _target_is_bind_of,
+)
 from . import manifest, transport
 
 
@@ -125,16 +128,8 @@ def _ensure_persistent_root_parent_dir(
     if dry_run:
         print(f'DRYRUN: would create persistent-root parent directory {target}')
         return
-    # Read-only fast path: skip the sudo mkdir prompt when the directory is
-    # already there. /var/lib/libvirt/aivm is world-readable, so an
-    # unprivileged stat is enough on the common case; if a PermissionError or
-    # other OSError prevents us from telling, fall through to the privileged
-    # mkdir so we behave correctly on hardened hosts.
-    try:
-        if target.is_dir():
-            return
-    except OSError:
-        pass
+    if not _needs_privileged_mkdir(target):
+        return
     mgr = CommandManager.current()
     with mgr.step(
         'Prepare persistent-root parent directory',
@@ -183,44 +178,45 @@ def _ensure_persistent_root_host_bind(
     # dedicated persistent-root export tree so the two backends never share the
     # same virtiofs device or host export directory.
     source = Path(attachment.source_dir).resolve()
-    target = (
-        manifest._persistent_root_host_dir(cfg)
-        / Path(_shared_root_host_target(cfg, attachment.tag)).name
-    )
+    parent = manifest._persistent_root_host_dir(cfg)
+    target = parent / Path(_shared_root_host_target(cfg, attachment.tag)).name
     if dry_run:
         print(
             f'DRYRUN: would bind-mount {source} -> {target} for persistent mode'
         )
         return target
+    # Read-only fast path: when the target is already a bind of the requested
+    # source, the whole step is a no-op and the user does not need to be
+    # prompted for sudo. _target_is_bind_of is a pure stat check that doesn't
+    # need sudo and won't false-positive on unrelated mounts.
+    if _target_is_bind_of(source, target):
+        return target
     mgr = CommandManager.current()
+    needs_parent = _needs_privileged_mkdir(parent)
+    needs_target = _needs_privileged_mkdir(target)
     with mgr.step(
         'Prepare persistent-root host bind target',
         why='Ensure the persistent-root staged bind exists without tearing down stable host-side state.',
         approval_scope=f'persistent-root-host-bind:{cfg.vm.name}:{attachment.tag}',
     ):
+        if needs_parent:
+            mgr.submit(
+                ['mkdir', '-p', str(parent)],
+                sudo=True,
+                role='modify',
+                summary='Create persistent-root parent directory',
+                detail=f'target={parent}',
+            )
+        if needs_target:
+            mgr.submit(
+                ['mkdir', '-p', str(target)],
+                sudo=True,
+                role='modify',
+                summary='Create persistent-root bind target',
+                detail=f'target={target}',
+            )
         mgr.submit(
-            ['mkdir', '-p', str(manifest._persistent_root_host_dir(cfg))],
-            sudo=True,
-            role='modify',
-            summary='Create persistent-root parent directory',
-            detail=f'target={manifest._persistent_root_host_dir(cfg)}',
-        )
-        mgr.submit(
-            ['mkdir', '-p', str(target)],
-            sudo=True,
-            role='modify',
-            summary='Create persistent-root bind target',
-            detail=f'target={target}',
-        )
-        script = (
-            'set -euo pipefail; '
-            f'src_stat="$(stat -Lc %d:%i {shlex.quote(str(source))} 2>/dev/null || true)"; '
-            f'dst_stat="$(stat -Lc %d:%i {shlex.quote(str(target))} 2>/dev/null || true)"; '
-            f'if mountpoint -q {shlex.quote(str(target))} && [ -n "$src_stat" ] && [ "$src_stat" = "$dst_stat" ]; then exit 0; fi; '
-            f'mount --bind {shlex.quote(str(source))} {shlex.quote(str(target))}'
-        )
-        mgr.submit(
-            ['bash', '-c', script],
+            ['mount', '--bind', str(source), str(target)],
             sudo=True,
             role='modify',
             summary='Bind requested host folder into persistent-root target',

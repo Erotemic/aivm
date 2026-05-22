@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os.path
 import re
 import shlex
 from dataclasses import dataclass
@@ -81,14 +82,8 @@ def _ensure_shared_root_parent_dir(
             f'DRYRUN: would create shared-root parent directory {target}'
         )
         return
-    # Read-only fast path: skip the sudo mkdir prompt when the directory is
-    # already there. Fall through to the privileged mkdir if we cannot stat
-    # the path (e.g. hardened host with restrictive parent perms).
-    try:
-        if target.is_dir():
-            return
-    except OSError:
-        pass
+    if not _needs_privileged_mkdir(target):
+        return
     mgr = CommandManager.current()
     with mgr.intent(
         'Prepare shared-root mapping',
@@ -204,6 +199,49 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
     )
 
 
+def _needs_privileged_mkdir(path: Path) -> bool:
+    """Return True when a privileged ``mkdir -p`` should still be submitted.
+
+    Skip the mkdir only when we can confirm the directory is already there.
+    Any unreadable / unknown state falls back to issuing the privileged mkdir;
+    under sudo it succeeds either way and we stay correct on hardened hosts.
+    """
+    try:
+        return not path.is_dir()
+    except OSError:
+        return True
+
+
+def _target_is_bind_of(source: Path, target: Path) -> bool:
+    """Cheap, unprivileged check that ``target`` is already a bind of ``source``.
+
+    Returns True when ``target`` is a mountpoint AND its (device, inode) pair
+    matches ``source``. That is the exact invariant a working ``mount --bind``
+    produces, so callers can skip the privileged repair path when this holds.
+
+    Only stat-equality is consulted here; this does not consider non-literal
+    ``findmnt SOURCE`` forms (e.g. ``device[/subpath]``). When this returns
+    False, callers must fall back to the slower, sudo-backed findmnt probe
+    rather than assuming the bind is stale.
+    """
+    try:
+        if not target.is_dir():
+            return False
+        # os.path.ismount mirrors `mountpoint -q`: it compares ``target``'s
+        # st_dev to its parent's st_dev. No sudo required; only traverse
+        # permission on the parent chain, which the libvirt aivm tree allows.
+        if not os.path.ismount(target):
+            return False
+        source_stat = source.stat()
+        target_stat = target.stat()
+    except OSError:
+        return False
+    return (
+        source_stat.st_dev == target_stat.st_dev
+        and source_stat.st_ino == target_stat.st_ino
+    )
+
+
 def _shared_root_host_bind_matches_source(
     expected_source: Path,
     target: Path,
@@ -275,6 +313,12 @@ def _ensure_shared_root_host_bind(
         )
         return target
 
+    # Cheap, unprivileged pre-check: if the bind is already correct, return
+    # without touching sudo or running findmnt. Covers the common "already
+    # attached" path that `aivm code .` and repeated `aivm attach .` runs hit.
+    if _target_is_bind_of(source, target):
+        return target
+
     probe = _probe_findmnt_target_source(target)
     is_mountpoint = probe.is_mountpoint
 
@@ -293,44 +337,37 @@ def _ensure_shared_root_host_bind(
                 'Use an explicit attach/detach command to reconcile this mount.'
             )
 
+    parent_dir = _shared_root_host_dir(cfg)
+    needs_parent = _needs_privileged_mkdir(parent_dir)
+    needs_target = _needs_privileged_mkdir(target)
+
+    # The repair branch (stale mountpoint) still needs shell-quoted operands
+    # because its umount fallback logic is a single bash script. New code
+    # paths use plain argv lists.
     source_q = shlex.quote(source_dir)
     target_q = shlex.quote(str(target))
-
-    # Final shell-side idempotence guard: if target is already a mountpoint and
-    # stat(source) == stat(target), do not issue another bind mount. This avoids
-    # stacking duplicate identical layers even if a prior probe was stale or a
-    # concurrent path already repaired the target.
-    mount_if_needed_script = (
-        'set -euo pipefail; '
-        f'if mountpoint -q {target_q}; then '
-        f'src_stat="$(stat -Lc %d:%i {source_q} 2>/dev/null || true)"; '
-        f'dst_stat="$(stat -Lc %d:%i {target_q} 2>/dev/null || true)"; '
-        'if [ -n "$src_stat" ] && [ "$src_stat" = "$dst_stat" ]; then '
-        'exit 0; '
-        'fi; '
-        'fi; '
-        f'mount --bind {source_q} {target_q}'
-    )
 
     with mgr.step(
         'Prepare host bind targets',
         why='Ensure the shared-root export directories exist and the VM-specific bind target points at the requested host folder.',
         approval_scope=f'shared-root-host-bind:{cfg.vm.name}:{attachment.tag}',
     ):
-        mgr.submit(
-            ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-            sudo=True,
-            role='modify',
-            summary='Create shared-root parent directory',
-            detail=f'target={_shared_root_host_dir(cfg)}',
-        )
-        mgr.submit(
-            ['mkdir', '-p', str(target)],
-            sudo=True,
-            role='modify',
-            summary='Create project-specific host bind target',
-            detail=f'target={target}',
-        )
+        if needs_parent:
+            mgr.submit(
+                ['mkdir', '-p', str(parent_dir)],
+                sudo=True,
+                role='modify',
+                summary='Create shared-root parent directory',
+                detail=f'target={parent_dir}',
+            )
+        if needs_target:
+            mgr.submit(
+                ['mkdir', '-p', str(target)],
+                sudo=True,
+                role='modify',
+                summary='Create project-specific host bind target',
+                detail=f'target={target}',
+            )
 
         if is_mountpoint:
             repair_script = (
@@ -375,8 +412,12 @@ def _ensure_shared_root_host_bind(
                 ),
             )
         else:
+            # We reached this branch only after _target_is_bind_of returned
+            # False AND _probe_findmnt_target_source reported no mountpoint,
+            # so a plain `mount --bind` is correct; no shell-side guard is
+            # needed.
             mgr.submit(
-                ['bash', '-c', mount_if_needed_script],
+                ['mount', '--bind', source_dir, str(target)],
                 sudo=True,
                 role='modify',
                 summary='Bind requested host folder to shared-root target',

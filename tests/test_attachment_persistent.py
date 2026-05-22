@@ -1693,3 +1693,97 @@ def test_install_persistent_host_bind_replay_enables_service(
         'enable',
         'aivm-persistent-host-bind-replay-vm-persistent-host-service.service',
     ) in submit_cmds
+
+
+class _Proc:
+    def __init__(
+        self, returncode: int = 0, stdout: str = '', stderr: str = ''
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_persistent_root_host_bind_short_circuits_when_already_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Skip the privileged step entirely when target is already bound to source."""
+    from aivm.attachments.persistent.host_bind import (
+        _ensure_persistent_root_host_bind,
+    )
+    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-bound'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    _activate_manager(monkeypatch)
+
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind._target_is_bind_of',
+        lambda *_a, **_k: True,
+    )
+
+    def _fail_subprocess(*_a: object, **_k: object) -> _Proc:
+        raise AssertionError(
+            'no subprocess should run when the bind is already in place'
+        )
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', _fail_subprocess)
+
+    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+
+
+def test_persistent_root_host_bind_issues_direct_mount_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When binding is needed, use a plain `mount --bind` argv (no bash script)."""
+    from aivm.attachments.persistent.host_bind import (
+        _ensure_persistent_root_host_bind,
+    )
+    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-bind'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    _activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind._target_is_bind_of',
+        lambda *_a, **_k: False,
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> _Proc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        calls.append(normalized)
+        return _Proc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+
+    flat = [' '.join(c) for c in calls]
+    assert any(line.startswith('mount --bind ') for line in flat), flat
+    assert all(not line.startswith('bash -c ') for line in flat), flat
