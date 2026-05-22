@@ -485,6 +485,84 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
     ]
 
 
+@pytest.mark.parametrize('paused_state', ['paused', 'pmsuspended'])
+def test_create_or_start_paused_vm_resumes_instead_of_starting(
+    monkeypatch: MonkeyPatch, paused_state: str
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-paused'
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+
+    CommandManager.activate(CommandManager(yes_sudo=True))
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+
+    calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+        del kwargs
+        parts = list(cmd)
+        calls.append(parts)
+        normalized = parts
+        if normalized[:2] == ['sudo', '-n']:
+            normalized = normalized[2:]
+        elif normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:2] == ['virsh', 'domstate']:
+            return _Proc(0, f'{paused_state}\n', '')
+        if normalized[:2] == ['virsh', 'resume']:
+            return _Proc(0, '', '')
+        raise AssertionError(f'unexpected command: {cmd!r}')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    create_or_start_vm(cfg, dry_run=False, recreate=False)
+
+    normalized_calls = []
+    for call in calls:
+        if call[:2] == ['sudo', '-n']:
+            normalized_calls.append(call[2:])
+        elif call[:1] == ['sudo']:
+            normalized_calls.append(call[1:])
+        else:
+            normalized_calls.append(call)
+    assert normalized_calls == [
+        ['virsh', 'domstate', 'vm-paused'],
+        ['virsh', 'resume', 'vm-paused'],
+    ]
+    assert not any(
+        c[:2] == ['virsh', 'start'] for c in normalized_calls
+    ), 'paused VM must be resumed, not started'
+
+
+def test_create_or_start_shutting_down_vm_raises_friendly_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shutting-down'
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+
+    CommandManager.activate(CommandManager(yes_sudo=True))
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+        del kwargs
+        parts = list(cmd)
+        normalized = parts
+        if normalized[:2] == ['sudo', '-n']:
+            normalized = normalized[2:]
+        elif normalized[:1] == ['sudo']:
+            normalized = normalized[1:]
+        if normalized[:2] == ['virsh', 'domstate']:
+            return _Proc(0, 'in shutdown\n', '')
+        raise AssertionError(f'unexpected command: {cmd!r}')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    with pytest.raises(RuntimeError, match='shutting down'):
+        create_or_start_vm(cfg, dry_run=False, recreate=False)
+
+
 def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

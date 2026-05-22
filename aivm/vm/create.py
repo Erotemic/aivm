@@ -110,8 +110,8 @@ def create_or_start_vm(
                 with mgr.step(
                     'Ensure existing VM is running',
                     why=(
-                        'Inspect the current domain state and start the '
-                        'existing VM only if it is defined but stopped.'
+                        'Inspect the current domain state and start, resume, '
+                        'or no-op the existing VM based on its current state.'
                     ),
                     approval_scope=f'vm-start:{cfg.vm.name}',
                 ):
@@ -128,22 +128,58 @@ def create_or_start_vm(
                         .stdout.strip()
                         .lower()
                     )
-                    if 'running' in st:
-                        log.info('VM already running: {}', cfg.vm.name)
+                    if 'running' in st or 'idle' in st or 'blocked' in st:
+                        log.info(
+                            'VM already running: {} (state={})',
+                            cfg.vm.name,
+                            st,
+                        )
                         return
-                    if dry_run:
-                        log.info('DRYRUN: virsh start {}', cfg.vm.name)
+                    if 'paused' in st or 'pmsuspended' in st:
+                        if dry_run:
+                            log.info('DRYRUN: virsh resume {}', cfg.vm.name)
+                            return
+                        log.info(
+                            'VM {} is {}; resuming instead of starting',
+                            cfg.vm.name,
+                            st,
+                        )
+                        mgr.submit(
+                            ['virsh', 'resume', cfg.vm.name],
+                            sudo=True,
+                            role='modify',
+                            check=True,
+                            capture=True,
+                            summary=f'Resume {st} VM {cfg.vm.name}',
+                        )
+                        log.info('VM resumed: {}', cfg.vm.name)
                         return
-                    mgr.submit(
-                        ['virsh', 'start', cfg.vm.name],
-                        sudo=True,
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary=f'Start existing VM {cfg.vm.name}',
+                    if 'in shutdown' in st or 'shutting down' in st:
+                        raise RuntimeError(
+                            f'VM {cfg.vm.name!r} is currently shutting down '
+                            f'(state={st!r}). Wait for it to finish, or run '
+                            f'`aivm vm destroy {cfg.vm.name}` to force it off, '
+                            f'then retry.'
+                        )
+                    if 'shut off' in st or 'crashed' in st or st == '':
+                        if dry_run:
+                            log.info('DRYRUN: virsh start {}', cfg.vm.name)
+                            return
+                        mgr.submit(
+                            ['virsh', 'start', cfg.vm.name],
+                            sudo=True,
+                            role='modify',
+                            check=True,
+                            capture=True,
+                            summary=f'Start existing VM {cfg.vm.name}',
+                        )
+                        log.info('VM started: {}', cfg.vm.name)
+                        return
+                    raise RuntimeError(
+                        f'VM {cfg.vm.name!r} is in unexpected state '
+                        f'{st!r}; refusing to start or resume. Inspect with '
+                        f'`virsh domstate {cfg.vm.name}` and recover manually.'
                     )
-                log.info('VM started: {}', cfg.vm.name)
-                return
             if dry_run:
                 log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
             else:
