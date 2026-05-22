@@ -31,6 +31,7 @@ from ..attachments.resolve import (
     _normalize_attachment_access,
     _normalize_attachment_mode,
     _resolve_attachment,
+    logical_absolute_path,
 )
 from ..attachments.safety import attachment_safety_preflight
 from ..attachments.session import (
@@ -122,7 +123,7 @@ def _validate_host_directory(path: Path) -> None:
 
 def run_vm_attach(request: VMAttachRequest) -> int:
     """Attach/register a host directory to an existing managed VM."""
-    host_src = Path(request.host_src).expanduser().absolute()
+    host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
 
     if request.config_opt:
@@ -286,6 +287,13 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             yes=bool(request.yes),
             purpose='Query VM networking state before reconciling attached folder.',
         )
+        # Look up the persisted record (matched by resolved host_path) so
+        # any aliases recorded earlier are also surfaced as guest symlinks.
+        _reg_for_aliases = load_store(cfg_path)
+        _saved = find_attachment_for_vm(
+            _reg_for_aliases, host_src, cfg.vm.name
+        )
+        _aliases = list(_saved.host_lexical_paths) if _saved else []
         _ensure_attachment_available_in_guest(
             cfg,
             host_src,
@@ -298,6 +306,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}
             ),
             mirror_home=mirror_home,
+            host_lexical_paths=_aliases,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _reconcile_persistent_attachments_in_guest(
@@ -337,7 +346,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
 
 def run_vm_detach(request: VMDetachRequest) -> int:
     """Detach/unregister a host directory from a managed VM."""
-    host_src = Path(request.host_src).resolve()
+    host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
 
     cfg, cfg_path = _resolve_cfg_for_code(

@@ -74,8 +74,44 @@ def _attachment_from_dict(
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
-        host_lexical_path=str(item.get('host_lexical_path', '')).strip(),
+        host_lexical_paths=_parse_host_lexical_paths(item),
     )
+
+
+def _parse_host_lexical_paths(item: dict) -> list[str]:
+    """Read the lexical-alias list, accepting both new and legacy field names.
+
+    The new schema (>= 7) stores ``host_lexical_paths`` as a TOML array. The
+    legacy form ``host_lexical_path`` (a single string from schema 6 / earlier
+    schema-6 attach records) is still accepted but produces a deprecation
+    warning. If both keys are present the new list-form wins and the singular
+    value is folded into it for forward-compat.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    plural_raw = item.get('host_lexical_paths', None)
+    if isinstance(plural_raw, (list, tuple)):
+        for v in plural_raw:
+            s = str(v).strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+    legacy_raw = item.get('host_lexical_path', None)
+    if legacy_raw is not None:
+        legacy_str = str(legacy_raw).strip()
+        if legacy_str:
+            from loguru import logger as _log
+
+            _log.warning(
+                'Attachment field "host_lexical_path" is deprecated; '
+                'use "host_lexical_paths = [...]" (schema 7+). '
+                'Migrated value: {}',
+                legacy_str,
+            )
+            if legacy_str not in seen:
+                seen.add(legacy_str)
+                out.append(legacy_str)
+    return out
 
 
 def parse_store_toml(text: str) -> Store:
@@ -175,4 +211,11 @@ def parse_store_toml(text: str) -> Store:
     # the next write reflects the new layout.
     if legacy_mirror_home is not None:
         reg.schema_version = max(reg.schema_version, 6)
+    # Schema 7 introduced host_lexical_paths (list). If any attachment was
+    # parsed via the legacy singular form and the file's schema is below 7,
+    # bump it so the next save uses the new shape.
+    if reg.schema_version < 7 and any(
+        att.host_lexical_paths for att in reg.attachments
+    ):
+        reg.schema_version = 7
     return reg

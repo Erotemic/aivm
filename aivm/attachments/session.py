@@ -28,6 +28,7 @@ from ..status import (
     probe_ssh_ready,
 )
 from ..config_store import (
+    find_attachment_for_vm,
     find_attachments_for_vm,
     load_store,
     save_store,
@@ -167,25 +168,33 @@ def _record_attachment(
     guest_dst: str,
     tag: str,
 ) -> Path:
-    # Persist the lexical (unresolved) host path when it differs from the
-    # resolved path so that restore can recreate companion guest symlinks.
+    # The canonical attachment key (host_path) is always the resolved real
+    # path so that re-attaching via a different symlink chain (or via the
+    # canonical path itself) updates the same record. The lexical form the
+    # user typed — if it differs — is recorded as an alias so the guest can
+    # mirror it via a symlink. Aliases accumulate across re-attaches.
     lexical_str = str(host_src.expanduser().absolute())
     resolved_str = str(host_src.resolve())
-    host_lexical_path = lexical_str if lexical_str != resolved_str else ''
-
     reg = load_store(cfg_path)
+    existing = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    aliases: list[str] = []
+    if existing is not None:
+        aliases = list(existing.host_lexical_paths or [])
+    if lexical_str != resolved_str and lexical_str not in aliases:
+        aliases.append(lexical_str)
+
     before = deepcopy(reg)
     upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
     upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
     upsert_attachment(
         reg,
-        host_path=host_src,
+        host_path=resolved_str,
         vm_name=cfg.vm.name,
         mode=mode,
         access=access,
         guest_dst=guest_dst,
         tag=tag,
-        host_lexical_path=host_lexical_path,
+        host_lexical_paths=aliases,
     )
     if reg == before:
         log.debug(
@@ -320,14 +329,15 @@ def _restore_saved_vm_attachments(
                 ex,
             )
 
-    # Build a map from resolved source_dir -> lexical host path so restore can
-    # recreate companion guest symlinks when the original attachment was made
-    # through a host symlink.
+    # Build a map from resolved source_dir -> list of lexical host paths so
+    # restore can recreate companion guest symlinks when the original
+    # attachment was made through one or more host symlinks. Each attachment
+    # may carry several aliases since schema 7.
     _restore_reg = load_store(cfg_path)
-    _lexical_by_source: dict[str, str] = {
-        e.host_path: e.host_lexical_path
+    _lexical_by_source: dict[str, list[str]] = {
+        e.host_path: list(e.host_lexical_paths)
         for e in find_attachments_for_vm(_restore_reg, cfg.vm.name)
-        if e.host_lexical_path
+        if e.host_lexical_paths
     }
     shared_secondary = [
         att
@@ -355,8 +365,8 @@ def _restore_saved_vm_attachments(
             continue
         if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
             aligned = att
-            _lx = _lexical_by_source.get(aligned.source_dir)
-            _restore_src = Path(_lx) if _lx else Path(aligned.source_dir)
+            _lx = _lexical_by_source.get(aligned.source_dir) or []
+            _restore_src = Path(_lx[0]) if _lx else Path(aligned.source_dir)
             try:
                 _ensure_attachment_available_in_guest(
                     cfg,
@@ -368,6 +378,7 @@ def _restore_saved_vm_attachments(
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
                     mirror_home=mirror_home,
+                    host_lexical_paths=_lx,
                 )
                 _record_attachment(
                     cfg,
@@ -404,8 +415,8 @@ def _restore_saved_vm_attachments(
                 )
             continue
 
-        _lx = _lexical_by_source.get(att.source_dir)
-        _restore_src = Path(_lx) if _lx else Path(att.source_dir)
+        _lx = _lexical_by_source.get(att.source_dir) or []
+        _restore_src = Path(_lx[0]) if _lx else Path(att.source_dir)
         aligned = drift_align_attachment_tag_with_mappings(
             att, Path(att.source_dir), mappings
         )
@@ -988,6 +999,13 @@ def _prepare_attached_session(
         ATTACHMENT_MODE_SHARED,
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
+        _reg_for_aliases = load_store(cfg_path)
+        _saved = find_attachment_for_vm(
+            _reg_for_aliases, host_src, cfg.vm.name
+        )
+        _primary_aliases = (
+            list(_saved.host_lexical_paths) if _saved else []
+        )
         _ensure_attachment_available_in_guest(
             cfg,
             host_src,
@@ -1001,6 +1019,7 @@ def _prepare_attached_session(
                 and not reconcile.shared_root_host_side_ready
             ),
             mirror_home=mirror_home,
+            host_lexical_paths=_primary_aliases,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _reconcile_persistent_attachments_in_guest(

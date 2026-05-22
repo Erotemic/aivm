@@ -33,10 +33,11 @@ def _emit_attachment(
     lines.append(f'access = "{_toml_escape(att.access)}"')
     lines.append(f'guest_dst = "{_toml_escape(att.guest_dst)}"')
     lines.append(f'tag = "{_toml_escape(att.tag)}"')
-    if att.host_lexical_path:
-        lines.append(
-            f'host_lexical_path = "{_toml_escape(att.host_lexical_path)}"'
-        )
+    if att.host_lexical_paths:
+        parts = [
+            f'"{_toml_escape(p)}"' for p in att.host_lexical_paths
+        ]
+        lines.append(f'host_lexical_paths = [{", ".join(parts)}]')
 
 def _emit_defaults(lines: list[str], reg: Store) -> None:
     """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""

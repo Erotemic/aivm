@@ -228,7 +228,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
                 access='rw',
                 guest_dst='/workspace/rw',
                 tag='hostcode-rw',
-                host_lexical_path='',
+                host_lexical_paths=[],
             ),
             dict(
                 host_path=str((tmp_path / 'proj-ro').resolve()),
@@ -237,7 +237,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
                 access='ro',
                 guest_dst='/workspace/ro',
                 tag='hostcode-ro',
-                host_lexical_path=str(tmp_path / 'link-ro'),
+                host_lexical_paths=[str(tmp_path / 'link-ro')],
             ),
             dict(
                 host_path=str((tmp_path / 'legacy').resolve()),
@@ -246,7 +246,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
                 access='rw',
                 guest_dst='/workspace/legacy',
                 tag='hostcode-legacy',
-                host_lexical_path='',
+                host_lexical_paths=[],
             ),
         ]
     )
@@ -268,9 +268,9 @@ def test_persistent_manifest_persists_records_and_access_modes(
         'hostcode-rw',
     ]
     assert [item['access'] for item in payload['records']] == ['ro', 'rw']
-    assert payload['records'][0]['host_lexical_path'] == str(
-        tmp_path / 'link-ro'
-    )
+    assert payload['records'][0]['host_lexical_paths'] == [
+        str(tmp_path / 'link-ro')
+    ]
 
 
 def test_persistent_manifest_write_is_byte_for_byte_noop(

@@ -11,6 +11,7 @@ from typing import Any
 import scriptconfig as scfg
 
 from ..attachments.guest import _upsert_ssh_config_entry
+from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -290,7 +291,7 @@ class VMCodeCLI(_BaseCommand):
             session = _prepare_attached_session(
                 config_opt=args.config,
                 vm_opt=args.vm,
-                host_src=Path(args.host_src).expanduser().absolute(),
+                host_src=logical_absolute_path(args.host_src),
                 guest_dst_opt=args.guest_dst,
                 attach_mode_opt=args.mode,
                 attach_access_opt=args.access,
@@ -424,7 +425,7 @@ class VMSSHCLI(_BaseCommand):
             session = _prepare_attached_session(
                 config_opt=args.config,
                 vm_opt=args.vm,
-                host_src=Path(args.host_src).expanduser().absolute(),
+                host_src=logical_absolute_path(args.host_src),
                 guest_dst_opt=args.guest_dst,
                 attach_mode_opt=args.mode,
                 attach_access_opt=args.access,

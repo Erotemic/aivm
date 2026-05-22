@@ -11,6 +11,7 @@ from aivm.attachments.resolve import (
     _default_primary_guest_dst,
     _host_symlink_lexical_path,
     _resolve_attachment,
+    logical_absolute_path,
 )
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
@@ -549,3 +550,103 @@ def test_compute_mirror_home_returns_none_when_mirror_equals_primary(
     )
     # guest home == host home so returns None
     assert result is None
+
+
+def test_host_symlink_lexical_path_intermediate_symlink(tmp_path: Path) -> None:
+    """An intermediate-component symlink in host_src must be detected.
+
+    Regression: previously this helper only detected terminal-component
+    symlinks, so a path like ``/data/users/.../proj`` where ``/data`` was a
+    symlink would silently resolve through ``Path.absolute()`` and the
+    lexical form was lost. The new check compares lexical vs resolved and
+    returns the lexical typed path whenever they differ.
+    """
+    real_parent = tmp_path / 'real_parent'
+    real_parent.mkdir()
+    real_child = real_parent / 'child'
+    real_child.mkdir()
+    link_parent = tmp_path / 'link_parent'
+    link_parent.symlink_to(real_parent)
+
+    typed = link_parent / 'child'
+    # The leaf 'child' is NOT a symlink, but link_parent IS. The old
+    # terminal-only check would miss this; the new one must catch it.
+    assert not typed.is_symlink()
+    result = _host_symlink_lexical_path(typed)
+    assert result == str(typed)
+    assert result != str(typed.resolve())
+
+
+def test_default_primary_guest_dst_intermediate_symlink_returns_resolved(
+    tmp_path: Path,
+) -> None:
+    """With the new design, guest_dst is always the canonical resolved path.
+
+    Intermediate symlinks no longer affect the primary guest_dst — they
+    become aliases instead. This locks that contract in.
+    """
+    real_parent = tmp_path / 'real_parent'
+    real_parent.mkdir()
+    real_child = real_parent / 'child'
+    real_child.mkdir()
+    link_parent = tmp_path / 'link_parent'
+    link_parent.symlink_to(real_parent)
+    typed = link_parent / 'child'
+
+    assert _default_primary_guest_dst(typed) == str(real_child.resolve())
+
+
+def test_logical_absolute_path_absolute_input_preserves_typed_form(
+    tmp_path: Path,
+) -> None:
+    """An absolute input is returned via expanduser only, no resolve()."""
+    real = tmp_path / 'real'
+    real.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(real)
+    typed = link / 'sub'
+    # Path inside a symlinked parent. Logical capture must NOT canonicalize.
+    result = logical_absolute_path(str(typed))
+    assert str(result) == str(typed)
+
+
+def test_logical_absolute_path_relative_uses_validated_pwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``cd /data/proj && aivm attach .`` keeps ``/data/proj`` when $PWD agrees.
+
+    Reproduces the original symptom: relative ``.`` joined against
+    ``os.getcwd()`` would already be the canonical path (symlinks resolved).
+    The helper joins against ``$PWD`` when ``Path($PWD).resolve() ==
+    Path(getcwd())``, preserving the typed lexical form.
+    """
+    import os
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(real)
+
+    monkeypatch.chdir(real)  # actual kernel cwd = real
+    monkeypatch.setenv('PWD', str(link))  # shell-view = link
+
+    result = logical_absolute_path('.')
+    assert str(result) == str(link)
+
+
+def test_logical_absolute_path_stale_pwd_falls_back_to_getcwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A $PWD that does not resolve to getcwd() is treated as untrusted."""
+    import os
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+
+    monkeypatch.chdir(real)
+    monkeypatch.setenv('PWD', str(elsewhere))  # diverges from kernel cwd
+
+    result = logical_absolute_path('.')
+    assert str(result) == str(real.resolve())

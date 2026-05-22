@@ -961,7 +961,8 @@ def test_restore_shared_root_attachment_passes_mirror_home(
         dry_run,
         ensure_shared_root_host_side,
         allow_disruptive_shared_root_rebind,
-        mirror_home: (
+        mirror_home,
+        host_lexical_paths=(): (
             ensure_calls.append(
                 {
                     'allow_disruptive': allow_disruptive_shared_root_rebind,
@@ -1102,7 +1103,9 @@ def test_record_attachment_persists_lexical_path_for_symlink(
     reg = load_store(cfg_path)
     entries = [a for a in reg.attachments if a.vm_name == cfg.vm.name]
     assert len(entries) == 1
-    assert entries[0].host_lexical_path == str(link_dir.expanduser().absolute())
+    assert entries[0].host_lexical_paths == [
+        str(link_dir.expanduser().absolute())
+    ]
     # host_path (the resolved canonical key) must be the real path
     assert entries[0].host_path == str(real_dir.resolve())
 
@@ -1134,7 +1137,7 @@ def test_record_attachment_no_lexical_path_for_non_symlink(
     reg = load_store(cfg_path)
     entries = [a for a in reg.attachments if a.vm_name == cfg.vm.name]
     assert len(entries) == 1
-    assert entries[0].host_lexical_path == ''
+    assert entries[0].host_lexical_paths == []
 
 
 def test_store_backward_compat_missing_lexical_path(
@@ -1165,7 +1168,7 @@ def test_store_backward_compat_missing_lexical_path(
     assert len(reg.attachments) == 1
     att = reg.attachments[0]
     assert att.host_path == '/some/real/path'
-    assert att.host_lexical_path == ''  # graceful default
+    assert att.host_lexical_paths == []  # graceful default
 
 
 def test_restore_uses_lexical_path_for_companion_symlink(

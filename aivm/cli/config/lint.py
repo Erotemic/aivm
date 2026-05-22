@@ -193,6 +193,10 @@ def _lint_store_text(text: str) -> list[str]:
         'access',
         'guest_dst',
         'tag',
+        'host_lexical_paths',
+        # Legacy schema-6 singular form. Still accepted by the parser with a
+        # deprecation warning; allow it here so lint doesn't reject existing
+        # configs that haven't been rewritten yet.
         'host_lexical_path',
     }
     vms = raw.get('vms', [])

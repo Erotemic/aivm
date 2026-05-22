@@ -40,7 +40,7 @@ class PersistentAttachmentRecord:
     attachment_id: str
     mode: str
     source_dir: str
-    host_lexical_path: str
+    host_lexical_paths: tuple[str, ...]
     shared_root_token: str
     guest_dst: str
     access: str
@@ -79,7 +79,7 @@ def _persistent_attachment_records_for_vm(
                 attachment_id=str(att.tag or att.host_path),
                 mode=str(att.mode or ATTACHMENT_MODE_PERSISTENT),
                 source_dir=str(att.host_path),
-                host_lexical_path=str(att.host_lexical_path or ''),
+                host_lexical_paths=tuple(att.host_lexical_paths or ()),
                 shared_root_token=str(att.tag or ''),
                 guest_dst=str(att.guest_dst or ''),
                 access=str(att.access or 'rw'),

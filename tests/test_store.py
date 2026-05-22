@@ -168,7 +168,11 @@ host_lexical_path = "~/code/project"
     assert att.mode == 'shared-root'
     assert att.guest_dst == '/home/agent/code/project'
     assert att.tag == 'aivm-project'
-    assert att.host_lexical_path == '~/code/project'
+    # Legacy singular `host_lexical_path` migrates into the new list field.
+    assert att.host_lexical_paths == ['~/code/project']
+    # Loading legacy data triggers a schema bump so the next save uses the
+    # canonical plural shape.
+    assert store.schema_version >= 7
     assert find_attachments_for_vm(store, 'vm-a') == [att]
 
 
@@ -492,7 +496,100 @@ def test_match_host_user_ids_round_trips_per_vm(tmp_path: Path) -> None:
     save_store(store, fpath)
 
     loaded = load_store(fpath)
-    assert loaded.schema_version == 6
+    assert loaded.schema_version == 7
     [vm] = loaded.vms
     assert vm.cfg.vm.match_host_user_ids is False
     assert vm.cfg.vm.mirror_shared_home_folders is True
+
+
+def test_host_lexical_paths_roundtrip(tmp_path: Path) -> None:
+    """Schema 7 stores host_lexical_paths as a TOML array."""
+    from aivm.config_store import (
+        AttachmentEntry,
+        Store,
+        load_store,
+        save_store,
+    )
+
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path='/media/raid/proj',
+            vm_name='vm-aliases',
+            mode='persistent',
+            guest_dst='/media/raid/proj',
+            host_lexical_paths=['/data/proj', '/old/data/proj'],
+        )
+    )
+    fpath = tmp_path / 'config.toml'
+    save_store(store, fpath)
+
+    loaded = load_store(fpath)
+    assert loaded.schema_version >= 7
+    [att] = loaded.attachments
+    assert att.host_lexical_paths == ['/data/proj', '/old/data/proj']
+
+
+def test_find_attachment_for_vm_matches_by_alias(tmp_path: Path) -> None:
+    """Looking up an attachment by an alias path returns the same record."""
+    from aivm.config_store import (
+        AttachmentEntry,
+        Store,
+        find_attachment_for_vm,
+    )
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    link = tmp_path / 'link'
+    link.symlink_to(real)
+
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=str(real.resolve()),
+            vm_name='vm-a',
+            mode='persistent',
+            guest_dst=str(real.resolve()),
+            host_lexical_paths=[str(link)],
+        )
+    )
+    # Direct match by canonical path
+    canonical = find_attachment_for_vm(store, real.resolve(), 'vm-a')
+    assert canonical is not None and canonical.host_path == str(real.resolve())
+    # Match by stored alias
+    via_alias = find_attachment_for_vm(store, link, 'vm-a')
+    assert via_alias is canonical
+
+
+def test_find_attachment_for_vm_matches_by_resolved_path(tmp_path: Path) -> None:
+    """If a user later attaches a different symlink chain that resolves to the same
+    canonical host_path, lookup must find the existing record so it can be updated
+    rather than duplicated."""
+    from aivm.config_store import (
+        AttachmentEntry,
+        Store,
+        find_attachment_for_vm,
+    )
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    link_a = tmp_path / 'link-a'
+    link_a.symlink_to(real)
+    link_b = tmp_path / 'link-b'
+    link_b.symlink_to(real)
+
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=str(real.resolve()),
+            vm_name='vm-b',
+            mode='persistent',
+            guest_dst=str(real.resolve()),
+            host_lexical_paths=[str(link_a)],
+        )
+    )
+
+    # link_b is not in aliases yet, but resolves to the same canonical path.
+    via_other_symlink = find_attachment_for_vm(store, link_b, 'vm-b')
+    assert via_other_symlink is not None
+    assert via_other_symlink.host_path == str(real.resolve())

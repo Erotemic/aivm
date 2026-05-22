@@ -69,10 +69,36 @@ def find_attachments_for_vm(reg: Store, vm_name: str) -> list[AttachmentEntry]:
 def find_attachment_for_vm(
     reg: Store, host_path: str | Path, vm_name: str
 ) -> AttachmentEntry | None:
+    """Locate an attachment for ``vm_name`` by host path.
+
+    Match precedence:
+
+    1. Exact lexical match against ``att.host_path``.
+    2. Match against any of ``att.host_lexical_paths`` aliases.
+    3. Match where ``resolve(input) == resolve(att.host_path)`` — handles the
+       case where the user later attaches via the canonical path that an
+       existing record was registered as a symlinked alias of (or vice
+       versa). Resolving on every comparison would be slow on stores with
+       many attachments; we only resolve when (1) and (2) miss.
+    """
     norm = _norm_dir(host_path)
-    for att in reg.attachments:
-        if att.host_path == norm and att.vm_name == vm_name:
+    candidates = [a for a in reg.attachments if a.vm_name == vm_name]
+    for att in candidates:
+        if att.host_path == norm:
             return att
+    for att in candidates:
+        if norm in (att.host_lexical_paths or []):
+            return att
+    try:
+        target_resolved = str(Path(norm).resolve())
+    except OSError:
+        return None
+    for att in candidates:
+        try:
+            if str(Path(att.host_path).resolve()) == target_resolved:
+                return att
+        except OSError:
+            continue
     return None
 
 

@@ -90,8 +90,35 @@ def upsert_attachment(
     access: str = 'rw',
     guest_dst: str = '',
     tag: str = '',
-    host_lexical_path: str = '',
+    host_lexical_paths: list[str] | tuple[str, ...] | None = None,
+    host_lexical_path: str | None = None,
 ) -> None:
+    """Insert or replace an attachment record.
+
+    ``host_lexical_paths`` is the canonical list of lexical aliases (typed
+    paths that resolve to ``host_path``). ``host_lexical_path`` (singular)
+    is accepted for backwards compatibility with code written against the
+    pre-schema-7 API but is deprecated and emits a warning.
+    """
+    paths: list[str] = []
+    seen: set[str] = set()
+    if host_lexical_paths:
+        for p in host_lexical_paths:
+            s = str(p).strip()
+            if s and s not in seen:
+                seen.add(s)
+                paths.append(s)
+    if host_lexical_path is not None:
+        from loguru import logger as _log
+
+        _log.warning(
+            'upsert_attachment kwarg "host_lexical_path" is deprecated; '
+            'pass "host_lexical_paths" instead.'
+        )
+        legacy = str(host_lexical_path).strip()
+        if legacy and legacy not in seen:
+            seen.add(legacy)
+            paths.append(legacy)
     norm = _norm_dir(host_path)
     existing = [
         a
@@ -105,7 +132,7 @@ def upsert_attachment(
         access=access,
         guest_dst=guest_dst,
         tag=tag,
-        host_lexical_path=host_lexical_path,
+        host_lexical_paths=paths,
     )
     if existing:
         i = reg.attachments.index(existing[0])

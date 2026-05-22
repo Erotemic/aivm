@@ -955,3 +955,111 @@ def test_apply_guest_derived_symlinks_custom_dst_suppresses_all_mirrors(
     )
     # No mirror-home symlinks should be created when guest_dst is custom
     assert mirror_calls == [], f'Expected no mirror calls, got: {mirror_calls}'
+
+
+def test_apply_guest_derived_symlinks_multi_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every alias in extra_lexical_paths becomes a guest symlink.
+
+    Regression for the intermediate-symlink case: the user attaches
+    /data/proj (where /data is a symlink to /media/raid) and later attaches
+    /old/data/proj (also resolving to the same canonical dir). Both lexical
+    paths should be materialized in the guest as symlinks to the canonical
+    guest_dst.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-multi-alias'
+    cfg.vm.user = 'agent'
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    link_a = tmp_path / 'link-a'
+    link_a.symlink_to(real)
+    link_b = tmp_path / 'link-b'
+    link_b.symlink_to(real)
+
+    resolved_dst = str(real)
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=resolved_dst,
+        guest_dst=resolved_dst,
+        tag='tag-multi',
+    )
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        'aivm.attachments.guest._ensure_guest_symlink',
+        lambda c, ip, *, symlink_path, target_path: calls.append(
+            {'symlink_path': symlink_path, 'target_path': target_path}
+        ),
+    )
+
+    _apply_guest_derived_symlinks(
+        cfg,
+        '10.0.0.1',
+        real,  # canonical host_src; aliases come from extra
+        attachment,
+        mirror_home=False,
+        extra_lexical_paths=[str(link_a), str(link_b)],
+    )
+
+    symlink_paths = [c['symlink_path'] for c in calls]
+    assert str(link_a) in symlink_paths
+    assert str(link_b) in symlink_paths
+    # All point at the canonical guest_dst
+    for c in calls:
+        assert c['target_path'] == resolved_dst
+
+
+def test_apply_guest_derived_symlinks_warns_on_stale_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Stale alias (resolves elsewhere now) still creates symlink but warns."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-stale'
+    cfg.vm.user = 'agent'
+
+    real = tmp_path / 'real'
+    real.mkdir()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    stale_link = tmp_path / 'stale'
+    stale_link.symlink_to(elsewhere)  # points away from `real`
+
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(real),
+        guest_dst=str(real),
+        tag='tag-stale',
+    )
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        'aivm.attachments.guest._ensure_guest_symlink',
+        lambda c, ip, *, symlink_path, target_path: calls.append(
+            {'symlink_path': symlink_path, 'target_path': target_path}
+        ),
+    )
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'aivm.attachments.guest.log.warning',
+        lambda fmt, *args, **kw: warnings.append(fmt.format(*args, **kw)),
+    )
+
+    _apply_guest_derived_symlinks(
+        cfg,
+        '10.0.0.1',
+        real,
+        attachment,
+        mirror_home=False,
+        extra_lexical_paths=[str(stale_link)],
+    )
+
+    # Symlink IS still created (mount is at canonical; we mirror the typed path)
+    assert any(c['symlink_path'] == str(stale_link) for c in calls)
+    # And a drift warning was emitted
+    assert any('no longer resolves to canonical' in w for w in warnings)

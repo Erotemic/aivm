@@ -29,12 +29,12 @@ class AttachmentEntry:
     access: str = 'rw'
     guest_dst: str = ''
     tag: str = ''
-    host_lexical_path: str = ''
+    host_lexical_paths: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Store:
-    schema_version: int = 6
+    schema_version: int = 7
     active_vm: str = ''
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     defaults: AgentVMConfig | None = None
