@@ -124,12 +124,15 @@ class ToolsConfig:
     distro Rust packages or snap. Rust is off by default because it is a
     larger toolchain; set ``rust = "stable"`` to manage it. ``code`` installs
     the VS Code CLI from Microsoft's apt repository (not snap) so
-    ``code tunnel`` workflows can run inside the VM.
+    ``code tunnel`` workflows can run inside the VM; it is off by default
+    because it is only useful for VS Code Remote Tunnels users. Enable it
+    persistently with ``code = "latest"`` in this section, or one-shot via
+    ``aivm vm provision code``.
     """
 
     uv: str = 'latest'
     rust: str = 'off'
-    code: str = 'latest'
+    code: str = 'off'
     bin_dir: str = '~/.local/bin'
 
 

@@ -118,8 +118,12 @@ def test_guest_ensure_rust_script_uses_rustup_and_not_snap() -> None:
     assert 'snap' not in script.lower()
 
 
-def test_guest_code_tool_default_enabled_and_disabled() -> None:
+def test_guest_code_tool_default_off_and_opt_in() -> None:
     cfg = AgentVMConfig()
+    # code is off by default — it is only useful for VS Code Remote Tunnels
+    # users and should not be installed into every VM.
+    assert _guest_tool_code_enabled(cfg) is False
+    cfg.tools.code = 'latest'
     assert _guest_tool_code_enabled(cfg) is True
     cfg.tools.code = 'off'
     assert _guest_tool_code_enabled(cfg) is False
@@ -143,7 +147,7 @@ def test_tools_config_roundtrip(tmp_path) -> None:
     cfg = AgentVMConfig()
     cfg.tools.uv = '0.11.11'
     cfg.tools.rust = 'stable'
-    cfg.tools.code = 'latest'
+    cfg.tools.code = 'latest'  # opt in (default is "off")
     cfg.tools.bin_dir = '~/.local/aivm/bin'
     text = dump_toml(cfg)
     assert '[tools]' in text
@@ -161,3 +165,12 @@ def test_tools_config_roundtrip(tmp_path) -> None:
     assert loaded.tools.rust == 'stable'
     assert loaded.tools.code == 'latest'
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
+
+
+def test_tools_config_default_dumps_code_off(tmp_path) -> None:
+    cfg = AgentVMConfig()
+    text = dump_toml(cfg)
+    assert 'code = "off"' in text
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text(text, encoding='utf-8')
+    assert load(fpath).tools.code == 'off'

@@ -116,7 +116,7 @@ def _build_tunnel_remote_script(guest_path: str, tunnel_name: str) -> str:
         '    exit 1\n'
         'fi\n'
         'if ! command -v code >/dev/null 2>&1; then\n'
-        '    echo "VS Code CLI is not installed in the guest; run `aivm vm provision` first" >&2\n'
+        '    echo "VS Code CLI is not installed in the guest; run `aivm vm provision code` first" >&2\n'
         '    exit 1\n'
         f'fi\n'
         f'if tmux has-session -t {qsession} 2>/dev/null; then\n'

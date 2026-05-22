@@ -236,9 +236,33 @@ class VMDeleteCLI(_BaseCommand):
         return 0
 
 
-class VMProvisionCLI(_BaseCommand):
-    """Provision the VM with optional developer packages."""
+_TOOL_OVERRIDE_DEFAULTS: dict[str, str] = {
+    'uv': 'latest',
+    'rust': 'stable',
+    'code': 'latest',
+}
 
+
+class VMProvisionCLI(_BaseCommand):
+    """Provision the VM with optional developer packages.
+
+    Positional ``tools`` arguments are tool names to enable for this
+    invocation in addition to whatever is already enabled in
+    ``[tools]`` config. Known tools: ``uv``, ``rust``, ``code``. Each
+    enables the tool at its sensible default (``latest`` for ``uv`` and
+    ``code``, ``stable`` for ``rust``). To pin a version, set the value
+    in config.toml instead.
+    """
+
+    tools: Any = scfg.Value(
+        [],
+        position=1,
+        nargs='*',
+        help=(
+            'Names of additional tools to install for this run (e.g. '
+            '`aivm vm provision code`). Known tools: uv, rust, code.'
+        ),
+    )
     vm: Any = scfg.Value(
         '',
         help='Optional VM name override.',
@@ -258,6 +282,18 @@ class VMProvisionCLI(_BaseCommand):
                 vm_opt=args.vm,
                 host_src=Path.cwd(),
             )
+        requested = list(args.tools or [])
+        unknown = [t for t in requested if t not in _TOOL_OVERRIDE_DEFAULTS]
+        if unknown:
+            known = ', '.join(sorted(_TOOL_OVERRIDE_DEFAULTS))
+            log.error(
+                'Unknown tool name(s): {}. Known tools: {}.',
+                ', '.join(unknown),
+                known,
+            )
+            return 2
+        for name in requested:
+            setattr(cfg.tools, name, _TOOL_OVERRIDE_DEFAULTS[name])
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,
