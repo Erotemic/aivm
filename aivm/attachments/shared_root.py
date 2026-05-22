@@ -75,11 +75,20 @@ def _ensure_shared_root_parent_dir(
     *,
     dry_run: bool,
 ) -> None:
+    target = _shared_root_host_dir(cfg)
     if dry_run:
         print(
-            f'DRYRUN: would create shared-root parent directory {_shared_root_host_dir(cfg)}'
+            f'DRYRUN: would create shared-root parent directory {target}'
         )
         return
+    # Read-only fast path: skip the sudo mkdir prompt when the directory is
+    # already there. Fall through to the privileged mkdir if we cannot stat
+    # the path (e.g. hardened host with restrictive parent perms).
+    try:
+        if target.is_dir():
+            return
+    except OSError:
+        pass
     mgr = CommandManager.current()
     with mgr.intent(
         'Prepare shared-root mapping',
@@ -92,11 +101,11 @@ def _ensure_shared_root_parent_dir(
             approval_scope=f'shared-root-parent:{cfg.vm.name}',
         ):
             mgr.submit(
-                ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
+                ['mkdir', '-p', str(target)],
                 sudo=True,
                 role='modify',
                 summary='Create shared-root parent directory',
-                detail=f'target={_shared_root_host_dir(cfg)}',
+                detail=f'target={target}',
             )
 
 

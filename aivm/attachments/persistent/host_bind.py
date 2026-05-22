@@ -125,6 +125,16 @@ def _ensure_persistent_root_parent_dir(
     if dry_run:
         print(f'DRYRUN: would create persistent-root parent directory {target}')
         return
+    # Read-only fast path: skip the sudo mkdir prompt when the directory is
+    # already there. /var/lib/libvirt/aivm is world-readable, so an
+    # unprivileged stat is enough on the common case; if a PermissionError or
+    # other OSError prevents us from telling, fall through to the privileged
+    # mkdir so we behave correctly on hardened hosts.
+    try:
+        if target.is_dir():
+            return
+    except OSError:
+        pass
     mgr = CommandManager.current()
     with mgr.step(
         'Prepare persistent-root parent directory',
