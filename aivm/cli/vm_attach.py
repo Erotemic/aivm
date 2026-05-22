@@ -32,12 +32,7 @@ from ..attachments.resolve import (
     _normalize_attachment_mode,
     _resolve_attachment,
 )
-from ..attachments.safety import (
-    confirm_overlapping_attach,
-    confirm_sensitive_attach,
-    detect_overlapping_attachments,
-    detect_sensitive_paths,
-)
+from ..attachments.safety import attachment_safety_preflight
 from ..attachments.session import (
     _record_attachment,
     _resolve_ip_for_ssh_ops,
@@ -153,43 +148,30 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     )
     mirror_home = bool(cfg.vm.mirror_shared_home_folders)
 
-    sensitive_hits = detect_sensitive_paths(host_src)
     existing_reg = load_store(cfg_path)
-    overlap_hits = detect_overlapping_attachments(
-        host_src, existing_reg.attachments, cfg.vm.name
+    ok, report = attachment_safety_preflight(
+        host_src,
+        existing_attachments=existing_reg.attachments,
+        vm_name=cfg.vm.name,
+        yes=bool(request.yes),
+        dry_run=bool(request.dry_run),
     )
 
     if request.dry_run:
-        if sensitive_hits:
-            log.warning(
-                'DRYRUN: real attach would warn about sensitive path(s) at {}: {}',
-                host_src,
-                ', '.join(hit.label for hit in sensitive_hits),
-            )
-        if overlap_hits:
-            log.warning(
-                'DRYRUN: real attach would warn about overlapping attachment(s) for {}: {}',
-                host_src,
-                ', '.join(str(hit.other_path) for hit in overlap_hits),
-            )
         print(
             f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {attachment.guest_dst} ({attachment.mode} mode, access={attachment.access})'
         )
         return 0
 
-    if not confirm_sensitive_attach(
-        host_src, sensitive_hits, yes=bool(request.yes)
-    ):
-        print(
-            f'Aborted: declined to attach sensitive path {host_src} to VM {cfg.vm.name}.'
-        )
-        return 2
-    if not confirm_overlapping_attach(
-        host_src, overlap_hits, yes=bool(request.yes)
-    ):
-        print(
-            f'Aborted: declined to add overlapping attachment {host_src} to VM {cfg.vm.name}.'
-        )
+    if not ok:
+        if report.sensitive_hits:
+            print(
+                f'Aborted: declined to attach sensitive path {host_src} to VM {cfg.vm.name}.'
+            )
+        else:
+            print(
+                f'Aborted: declined to add overlapping attachment {host_src} to VM {cfg.vm.name}.'
+            )
         return 2
 
     _record_vm(

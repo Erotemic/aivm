@@ -10,12 +10,22 @@ import pytest
 from aivm.attachments.safety import (
     OverlapHit,
     SensitiveHit,
+    _reset_sensitive_approval_cache,
+    attachment_safety_preflight,
     confirm_overlapping_attach,
     confirm_sensitive_attach,
     detect_overlapping_attachments,
     detect_sensitive_paths,
 )
 from aivm.config_store import AttachmentEntry
+
+
+@pytest.fixture(autouse=True)
+def _clear_safety_cache() -> Any:
+    """Reset the in-process sensitive-approval cache between tests."""
+    _reset_sensitive_approval_cache()
+    yield
+    _reset_sensitive_approval_cache()
 
 
 def test_detect_sensitive_paths_flags_home_directly(
@@ -80,6 +90,23 @@ def test_detect_sensitive_paths_ignores_unrelated_directory(
     unrelated.mkdir(parents=True)
 
     assert detect_sensitive_paths(unrelated) == []
+
+
+def test_detect_sensitive_paths_does_not_flag_plain_subdir_of_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal project directory inside ``~`` (e.g. ``~/code/foo``) must NOT
+    trip the home-directory guard. Only credential subdirs (``~/.ssh`` etc.)
+    should flag, and the home directory only when attached *as* home or as a
+    parent of home.
+    """
+    fake_home = tmp_path / 'home' / 'agent'
+    project = fake_home / 'code' / 'myproject'
+    project.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
+
+    assert detect_sensitive_paths(project) == []
 
 
 def test_detect_overlapping_attachments_finds_child(tmp_path: Path) -> None:
@@ -257,12 +284,12 @@ def test_run_vm_attach_aborts_on_declined_sensitive(
 
     # Force the prompt to refuse, simulating an interactive abort.
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.confirm_sensitive_attach',
+        'aivm.attachments.safety.confirm_sensitive_attach',
         lambda *_a, **_k: False,
     )
     # The other guard shouldn't even be reached.
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.confirm_overlapping_attach',
+        'aivm.attachments.safety.confirm_overlapping_attach',
         lambda *_a, **_k: (_ for _ in ()).throw(
             AssertionError('overlap prompt should not run')
         ),
@@ -277,6 +304,91 @@ def test_run_vm_attach_aborts_on_declined_sensitive(
         )
     )
     assert rc == 2
+
+
+def test_attachment_safety_preflight_caches_sensitive_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second call with the same host_src must not re-prompt the user."""
+    fake_home = tmp_path / 'home' / 'agent'
+    ssh_dir = fake_home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
+
+    class _TTY:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    monkeypatch.setattr('aivm.attachments.safety.sys.stdin', _TTY())
+
+    prompts: list[str] = []
+
+    def _record_prompt(*_a: Any, **_k: Any) -> str:
+        prompts.append('asked')
+        return 'yes'
+
+    monkeypatch.setattr('builtins.input', _record_prompt)
+
+    ok1, _ = attachment_safety_preflight(ssh_dir, yes=False)
+    ok2, _ = attachment_safety_preflight(ssh_dir, yes=False)
+
+    assert ok1 is True
+    assert ok2 is True
+    # User should have been prompted exactly once across the two calls.
+    assert prompts == ['asked']
+
+
+def test_attachment_safety_preflight_dry_run_does_not_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / 'home' / 'agent'
+    ssh_dir = fake_home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
+
+    def _boom(*_a: Any, **_k: Any) -> str:
+        raise AssertionError('dry-run must not prompt')
+
+    monkeypatch.setattr('builtins.input', _boom)
+
+    ok, report = attachment_safety_preflight(ssh_dir, yes=False, dry_run=True)
+    assert ok is True
+    assert any(hit.label == '~/.ssh' for hit in report.sensitive_hits)
+
+
+def test_prepare_attached_session_aborts_on_declined_sensitive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shared session preflight (used by `aivm code`) must enforce the
+    sensitive-path guard — not only the `aivm vm attach` CLI path.
+    """
+    from aivm.attachments.session import _prepare_attached_session
+
+    fake_home = tmp_path / 'home' / 'agent'
+    ssh_dir = fake_home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
+
+    monkeypatch.setattr(
+        'aivm.attachments.safety.confirm_sensitive_attach',
+        lambda *_a, **_k: False,
+    )
+
+    with pytest.raises(RuntimeError, match='declined to attach sensitive path'):
+        _prepare_attached_session(
+            config_opt=str(tmp_path / 'config.toml'),
+            vm_opt='vm-x',
+            host_src=ssh_dir,
+            guest_dst_opt='',
+            recreate_if_needed=False,
+            ensure_firewall_opt=False,
+            dry_run=False,
+            yes=False,
+        )
 
 
 def test_run_vm_attach_aborts_on_declined_overlap(
@@ -306,11 +418,11 @@ def test_run_vm_attach_aborts_on_declined_overlap(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.confirm_sensitive_attach',
+        'aivm.attachments.safety.confirm_sensitive_attach',
         lambda *_a, **_k: True,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.confirm_overlapping_attach',
+        'aivm.attachments.safety.confirm_overlapping_attach',
         lambda *_a, **_k: False,
     )
 

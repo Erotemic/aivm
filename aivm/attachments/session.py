@@ -812,6 +812,22 @@ def _prepare_attached_session(
     if not host_src.is_dir():
         raise RuntimeError(f'Host source path is not a directory: {host_src}')
 
+    # Run the sensitive-path guard before we resolve config or potentially
+    # bootstrap a brand-new VM — refusing here avoids creating a VM only to
+    # block on the attachment. Overlap checks run later, once we know which
+    # VM and store we're targeting.
+    from .safety import attachment_safety_preflight
+
+    ok, _report = attachment_safety_preflight(
+        host_src,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
+    )
+    if not ok:
+        raise RuntimeError(
+            f'Aborted: declined to attach sensitive path {host_src}.'
+        )
+
     try:
         cfg, cfg_path = _resolve_cfg_for_code(
             config_opt=config_opt,
@@ -875,6 +891,19 @@ def _prepare_attached_session(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
+        )
+
+    existing_store = load_store(cfg_path)
+    ok, _report = attachment_safety_preflight(
+        host_src,
+        existing_attachments=existing_store.attachments,
+        vm_name=cfg.vm.name,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
+    )
+    if not ok:
+        raise RuntimeError(
+            f'Aborted: declined to add overlapping attachment {host_src} to VM {cfg.vm.name}.'
         )
 
     if attach_mode_opt or attach_access_opt:

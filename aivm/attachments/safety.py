@@ -106,6 +106,12 @@ def detect_sensitive_paths(host_src: Path) -> list[SensitiveHit]:
     Only sensitive paths that actually exist on disk are reported, with one
     exception: the home directory itself is always reported so attempting to
     attach ``~`` always trips the guard even on minimally provisioned hosts.
+
+    The home directory is also treated specially in the *other* direction:
+    being merely *inside* ``~`` (e.g. ``~/code/myproject``) is not by itself
+    sensitive, so the ``child-of`` relation is suppressed for ``~``. Specific
+    credential subdirs like ``~/.ssh`` still trip ``child-of`` because
+    descending into them is itself attaching key material.
     """
     host_src = Path(host_src).expanduser().absolute()
     hits: list[SensitiveHit] = []
@@ -124,7 +130,7 @@ def detect_sensitive_paths(host_src: Path) -> list[SensitiveHit]:
             relation = 'is'
         elif _is_same_or_under(candidate_abs, host_src):
             relation = 'parent-of'  # host_src is the parent of candidate
-        elif _is_same_or_under(host_src, candidate_abs):
+        elif not is_home and _is_same_or_under(host_src, candidate_abs):
             relation = 'child-of'  # host_src is inside candidate
         else:
             continue
@@ -267,6 +273,100 @@ def confirm_sensitive_attach(
     return ans == 'yes'
 
 
+@dataclass(frozen=True)
+class AttachmentSafetyReport:
+    """Aggregated result of the attachment preflight checks."""
+
+    sensitive_hits: list[SensitiveHit]
+    overlap_hits: list[OverlapHit]
+
+
+# Process-level cache: once the user has approved a sensitive host_src, we
+# trust that approval for the remainder of the process so a single flow
+# (e.g. `aivm code .`) that calls the preflight more than once does not
+# re-prompt. The same approval is treated as valid across (host_src, vm_name)
+# pairs since the credential-exposure risk is a property of host_src alone.
+_APPROVED_SENSITIVE_HOSTS: set[Path] = set()
+
+
+def _reset_sensitive_approval_cache() -> None:
+    """Clear the in-process sensitive-attach approval cache. Test helper."""
+    _APPROVED_SENSITIVE_HOSTS.clear()
+
+
+def attachment_safety_preflight(
+    host_src: Path,
+    *,
+    existing_attachments: list[AttachmentEntry] | None = None,
+    vm_name: str | None = None,
+    yes: bool,
+    dry_run: bool = False,
+) -> tuple[bool, AttachmentSafetyReport]:
+    """Run every attachment-safety check the project requires, in one place.
+
+    This is the single chokepoint every code path that registers or applies a
+    host->guest attachment must call before doing so. Centralizing the
+    sequence here means callers cannot accidentally enforce the sensitive
+    check while skipping the overlap check (or vice versa), and ensures any
+    future safety guard added here lights up for every entry point.
+
+    Sensitive-path approvals are cached in-process: a single flow that calls
+    the preflight twice (e.g. once before VM bootstrap, once after) only
+    prompts once. Overlap checks always re-run because the store state can
+    change between calls.
+
+    Args:
+        host_src: The host directory being attached.
+        existing_attachments: The store's attachment list. If ``None``, the
+            overlap check is skipped (use this only when no store has been
+            loaded yet — e.g. before a fresh VM bootstrap).
+        vm_name: Target VM name for overlap scoping. Required if
+            ``existing_attachments`` is provided.
+        yes: Bypass interactive prompts (still logs the warning).
+        dry_run: When True, log hits as warnings but never prompt or refuse.
+
+    Returns:
+        ``(ok, report)``. When ``ok`` is False the caller MUST abort —
+        the user declined, or the environment is non-interactive and lacked
+        ``--yes``. In dry-run mode ``ok`` is always True.
+    """
+    host_src_abs = Path(host_src).expanduser().absolute()
+    sensitive_hits = detect_sensitive_paths(host_src)
+    if existing_attachments is not None and vm_name is not None:
+        overlap_hits = detect_overlapping_attachments(
+            host_src, existing_attachments, vm_name
+        )
+    else:
+        overlap_hits = []
+    report = AttachmentSafetyReport(
+        sensitive_hits=sensitive_hits, overlap_hits=overlap_hits
+    )
+    if dry_run:
+        if sensitive_hits:
+            log.warning(
+                'DRYRUN: real attach would warn about sensitive path(s) at {}: {}',
+                host_src,
+                ', '.join(hit.label for hit in sensitive_hits),
+            )
+        if overlap_hits:
+            log.warning(
+                'DRYRUN: real attach would warn about overlapping attachment(s) for {}: {}',
+                host_src,
+                ', '.join(str(hit.other_path) for hit in overlap_hits),
+            )
+        return True, report
+    if sensitive_hits and host_src_abs in _APPROVED_SENSITIVE_HOSTS:
+        pass  # already approved earlier in this process
+    elif not confirm_sensitive_attach(host_src, sensitive_hits, yes=yes):
+        return False, report
+    else:
+        if sensitive_hits:
+            _APPROVED_SENSITIVE_HOSTS.add(host_src_abs)
+    if not confirm_overlapping_attach(host_src, overlap_hits, yes=yes):
+        return False, report
+    return True, report
+
+
 def confirm_overlapping_attach(
     host_src: Path,
     hits: list[OverlapHit],
@@ -306,8 +406,10 @@ def confirm_overlapping_attach(
 
 
 __all__ = [
+    'AttachmentSafetyReport',
     'OverlapHit',
     'SensitiveHit',
+    'attachment_safety_preflight',
     'confirm_overlapping_attach',
     'confirm_sensitive_attach',
     'detect_overlapping_attachments',
