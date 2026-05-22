@@ -73,8 +73,11 @@ from .domain import (
     vm_status,
 )
 from .guest_tools import (
+    _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
+    _guest_tool_code_enabled,
+    _guest_tool_code_spec,
     _guest_tool_enabled,
     _guest_tool_rust_enabled,
     _guest_tool_rust_spec,
@@ -138,8 +141,11 @@ __all__ = [
     '_ensure_qemu_access',
     '_failed_command_name',
     '_get_vm_state',
+    '_guest_ensure_code_script',
     '_guest_ensure_rust_script',
     '_guest_ensure_uv_script',
+    '_guest_tool_code_enabled',
+    '_guest_tool_code_spec',
     '_guest_tool_enabled',
     '_guest_tool_rust_enabled',
     '_guest_tool_rust_spec',

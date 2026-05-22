@@ -92,6 +92,80 @@ def _remote_tunnel_name(cfg: Any) -> str:
     return f'{cfg.vm.name}-{safe_host}'
 
 
+_TUNNEL_TMUX_SESSION = 'aivm-tunnel'
+
+
+def _build_tunnel_remote_script(guest_path: str, tunnel_name: str) -> str:
+    """Build the remote shell snippet that ensures the tunnel tmux session is up.
+
+    Idempotent: if the session already exists, the script exits 0 without
+    starting a second ``code tunnel``. Otherwise it starts ``code tunnel`` in a
+    detached tmux session running in ``guest_path``.
+    """
+    qpath = shlex.quote(guest_path)
+    qname = shlex.quote(tunnel_name)
+    qsession = shlex.quote(_TUNNEL_TMUX_SESSION)
+    inner = (
+        f'cd {qpath} && '
+        f'exec code tunnel --name {qname} --accept-server-license-terms'
+    )
+    return (
+        'set -eu\n'
+        'if ! command -v tmux >/dev/null 2>&1; then\n'
+        '    echo "tmux is not installed in the guest; run `aivm vm provision` first" >&2\n'
+        '    exit 1\n'
+        'fi\n'
+        'if ! command -v code >/dev/null 2>&1; then\n'
+        '    echo "VS Code CLI is not installed in the guest; run `aivm vm provision` first" >&2\n'
+        '    exit 1\n'
+        f'fi\n'
+        f'if tmux has-session -t {qsession} 2>/dev/null; then\n'
+        '    echo "aivm-tunnel session already running"\n'
+        '    exit 0\n'
+        'fi\n'
+        f'tmux new-session -d -s {qsession} {shlex.quote(inner)}\n'
+        f'echo "Started aivm-tunnel session running: code tunnel --name {tunnel_name}"\n'
+    )
+
+
+def _start_remote_tunnel_session(
+    cfg: Any,
+    ip: str,
+    guest_path: str,
+    tunnel_name: str,
+) -> None:
+    """Idempotently start the ``code tunnel`` tmux session inside the guest."""
+    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    remote = _build_tunnel_remote_script(guest_path, tunnel_name)
+    cmd = [
+        'ssh',
+        *ssh_base_args(ident),
+        f'{cfg.vm.user}@{ip}',
+        remote,
+    ]
+    CommandManager.current().run(
+        cmd, sudo=False, check=True, capture=False
+    )
+
+
+def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
+    """Interactively attach to the ``aivm-tunnel`` tmux session in the guest.
+
+    Replaces the current process so stdio, signals, and TTY handling match
+    a plain ``ssh -t`` invocation. Returns nonzero only if exec fails.
+    """
+    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    cmd = [
+        'ssh',
+        '-t',
+        *ssh_base_args(ident),
+        f'{cfg.vm.user}@{ip}',
+        f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
+    ]
+    os.execvp(cmd[0], cmd)
+    return 1  # unreachable; execvp replaces the process
+
+
 def _print_remote_session_recipe(
     cfg: Any,
     session: Any,
@@ -179,6 +253,23 @@ class VMCodeCLI(_BaseCommand):
         isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
+    tunnel: Any = scfg.Value(
+        False,
+        isflag=True,
+        help=(
+            'Start (if needed) a `code tunnel` inside the VM under tmux and '
+            'attach so first-run device auth is interactive. Subsequent runs '
+            'reconnect to the existing tunnel session.'
+        ),
+    )
+    no_attach: Any = scfg.Value(
+        False,
+        isflag=True,
+        help=(
+            'With --tunnel, only ensure the tunnel session is running; do not '
+            'attach. Useful for scripts / non-interactive callers.'
+        ),
+    )
     dry_run: Any = scfg.Value(
         False, isflag=True, help='Print actions without running.'
     )
@@ -187,12 +278,13 @@ class VMCodeCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         log.trace(
-            'VMCodeCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
+            'VMCodeCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={} tunnel={}',
             args.host_src,
             args.vm,
             args.guest_dst,
             bool(args.dry_run),
             bool(args.yes),
+            bool(args.tunnel),
         )
         try:
             session = _prepare_attached_session(
@@ -213,9 +305,16 @@ class VMCodeCLI(_BaseCommand):
             return 1
         cfg = session.cfg
         if args.dry_run:
-            print(
-                f'DRYRUN: would open {session.share_guest_dst} in VS Code via host {cfg.vm.name}'
-            )
+            if args.tunnel:
+                print(
+                    f'DRYRUN: would ensure `code tunnel` running under tmux '
+                    f'session {_TUNNEL_TMUX_SESSION!r} in {cfg.vm.name} at '
+                    f'{session.share_guest_dst}'
+                )
+            else:
+                print(
+                    f'DRYRUN: would open {session.share_guest_dst} in VS Code via host {cfg.vm.name}'
+                )
             return 0
         ip = session.ip
         assert ip is not None
@@ -223,6 +322,31 @@ class VMCodeCLI(_BaseCommand):
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
             cfg, dry_run=False, yes=bool(args.yes)
         )
+
+        if args.tunnel:
+            tunnel_name = _remote_tunnel_name(cfg)
+            _start_remote_tunnel_session(
+                cfg, ip, session.share_guest_dst, tunnel_name
+            )
+            print(f'Tunnel name: {tunnel_name}')
+            print(f'VM:          {cfg.vm.name}')
+            print(f'Guest path:  {session.share_guest_dst}')
+            print(
+                f'Attach later with: ssh {cfg.vm.name} -t tmux attach -t '
+                f'{_TUNNEL_TMUX_SESSION}'
+            )
+            print(
+                'In VS Code Desktop, install the "Remote - Tunnels" extension '
+                'and sign in with the same account used by the tunnel; the '
+                'tunnel will then appear under Remote Explorer -> Tunnels.'
+            )
+            if ssh_cfg_updated:
+                print(f'SSH entry updated in {ssh_cfg}')
+            if args.no_attach:
+                return 0
+            # Replaces this process with `ssh -t` so the tmux UI is interactive
+            # (device-code auth on first run; tunnel log thereafter).
+            return _attach_remote_tunnel_session(cfg, ip)
 
         can_open_local, reason = _vscode_can_open_locally()
         if not can_open_local:

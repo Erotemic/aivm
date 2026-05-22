@@ -11,8 +11,10 @@ from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import (
+    _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
+    _guest_tool_code_enabled,
     _guest_tool_rust_enabled,
     _guest_tool_uv_enabled,
 )
@@ -63,6 +65,8 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         remote_parts.append(_guest_ensure_uv_script(cfg, ensure_transport=False))
     if _guest_tool_rust_enabled(cfg):
         remote_parts.append(_guest_ensure_rust_script(cfg, ensure_transport=False))
+    if _guest_tool_code_enabled(cfg):
+        remote_parts.append(_guest_ensure_code_script(cfg, ensure_transport=False))
     remote = '\n'.join(remote_parts)
     cmd = [
         'ssh',

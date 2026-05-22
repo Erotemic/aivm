@@ -122,15 +122,14 @@ class ToolsConfig:
 
     ``uv`` uses Astral's standalone installer. ``rust`` uses rustup, not
     distro Rust packages or snap. Rust is off by default because it is a
-    larger toolchain; set ``rust = "stable"`` to manage it.
-
-    TODO(tools): add a first-class non-snap VS Code CLI installer here so
-    tunnel workflows can be bootstrapped in the VM without relying on the
-    snap store. Prefer Microsoft's deb/apt repository or a verified tarball.
+    larger toolchain; set ``rust = "stable"`` to manage it. ``code`` installs
+    the VS Code CLI from Microsoft's apt repository (not snap) so
+    ``code tunnel`` workflows can run inside the VM.
     """
 
     uv: str = 'latest'
     rust: str = 'off'
+    code: str = 'latest'
     bin_dir: str = '~/.local/bin'
 
 

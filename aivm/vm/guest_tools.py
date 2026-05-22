@@ -42,6 +42,14 @@ def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
     """Return whether aivm should keep Rust available in the guest."""
     return _guest_tool_enabled(cfg, 'rust', default='off')
 
+def _guest_tool_code_spec(cfg: AgentVMConfig) -> str:
+    """Normalize ``[tools].code`` into a compact string spec."""
+    return _guest_tool_spec(cfg, 'code', default='latest')
+
+def _guest_tool_code_enabled(cfg: AgentVMConfig) -> bool:
+    """Return whether aivm should keep the VS Code CLI available in the guest."""
+    return _guest_tool_enabled(cfg, 'code', default='latest')
+
 def _uv_installer_url(spec: str) -> str:
     """Return Astral's standalone installer URL for latest or a version."""
     version = str(spec or '').strip().strip('/')
@@ -111,6 +119,60 @@ if ! grep -Fq '# >>> aivm tools PATH >>>' "$PROFILE" 2>/dev/null; then
     }} >> "$PROFILE"
 fi
 uv --version
+"""
+    return textwrap.dedent(script).strip()
+
+def _guest_ensure_code_script(
+    cfg: AgentVMConfig,
+    *,
+    ensure_transport: bool = False,
+) -> str:
+    """Build an idempotent guest-side shell script that installs the VS Code CLI.
+
+    The script registers Microsoft's official ``packages.microsoft.com``
+    apt repository (signed with ``microsoft.gpg``) and installs the ``code``
+    deb package, which provides the ``code`` CLI used by
+    ``code tunnel`` workflows. Snap is intentionally avoided.
+    """
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    # The MS-recommended install steps for the ``code`` deb on Ubuntu 24.04.
+    # Use printf into a tempfile then sudo install so the keyring drops in
+    # with mode 0644 and the source list is owned by root.
+    script = f"""
+set -euo pipefail
+{transport_bootstrap}
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wget gpg apt-transport-https ca-certificates
+KEYRING=/etc/apt/keyrings/packages.microsoft.gpg
+SOURCE=/etc/apt/sources.list.d/vscode.sources
+sudo install -d -m 0755 /etc/apt/keyrings
+if [ ! -s "$KEYRING" ]; then
+    TMPKEY=$(mktemp)
+    wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > "$TMPKEY"
+    sudo install -m 0644 "$TMPKEY" "$KEYRING"
+    rm -f "$TMPKEY"
+fi
+if [ ! -s "$SOURCE" ]; then
+    sudo tee "$SOURCE" >/dev/null <<EOF
+Types: deb
+URIs: https://packages.microsoft.com/repos/code
+Suites: stable
+Components: main
+Architectures: amd64,arm64,armhf
+Signed-By: $KEYRING
+EOF
+fi
+sudo apt-get update -y
+if ! command -v code >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y code
+fi
+code --version
 """
     return textwrap.dedent(script).strip()
 

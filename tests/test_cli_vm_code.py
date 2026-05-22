@@ -13,6 +13,8 @@ from types import SimpleNamespace
 import pytest
 
 from aivm.cli.vm_connect import (
+    _TUNNEL_TMUX_SESSION,
+    _build_tunnel_remote_script,
     _print_remote_session_recipe,
     _remote_tunnel_name,
     _vscode_can_open_locally,
@@ -123,3 +125,33 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     assert 'Tunnel:  aivm-2404-namek' in out
     # ssh_cfg_updated=True should be surfaced as host-local state.
     assert 'SSH entry updated on this host in ~/.ssh/config' in out
+
+
+def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
+    script = _build_tunnel_remote_script(
+        guest_path='/home/agent/code/aivm',
+        tunnel_name='aivm-2404-namek',
+    )
+    # Guard: required guest binaries.
+    assert 'command -v tmux' in script
+    assert 'command -v code' in script
+    # Idempotency: existing session is a no-op.
+    assert f'tmux has-session -t {_TUNNEL_TMUX_SESSION}' in script
+    # New session command runs `code tunnel` in the share dir.
+    assert f'tmux new-session -d -s {_TUNNEL_TMUX_SESSION}' in script
+    assert 'cd /home/agent/code/aivm' in script
+    assert 'code tunnel --name aivm-2404-namek --accept-server-license-terms' in script
+    # Tunnel session name is the constant — must not vary by VM/host name.
+    assert _TUNNEL_TMUX_SESSION == 'aivm-tunnel'
+
+
+def test_build_tunnel_remote_script_quotes_unusual_paths() -> None:
+    """Spaces or shell metachars in the share path must not break the script."""
+    script = _build_tunnel_remote_script(
+        guest_path="/home/agent/projects/has space; rm -rf /tmp",
+        tunnel_name='aivm-2404-namek',
+    )
+    # The path appears only as a single shell-quoted argument to ``cd``.
+    assert "'/home/agent/projects/has space; rm -rf /tmp'" in script
+    # And there is no unquoted occurrence of the injection payload.
+    assert 'rm -rf /tmp\n' not in script
