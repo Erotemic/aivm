@@ -11,6 +11,7 @@ import pytest
 from aivm.attachments.shared_root import (
     _ensure_shared_root_guest_bind,
     _ensure_shared_root_host_bind,
+    _target_is_bind_of,
 )
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
@@ -752,3 +753,56 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
         for msg in messages
     )
     assert all('set -euo pipefail; if [ ! -d' not in msg for msg in messages)
+
+
+def test_target_is_bind_of_detects_same_filesystem_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Same-fs bind mounts must be detected by stat equality alone.
+
+    Bind mounts within a single filesystem leave the target's st_dev equal to
+    its parent's, so an `os.path.ismount`-based check would return False even
+    when the bind is healthy. The detector must rely on (st_dev, st_ino)
+    equality between source and target instead. This regression test fakes
+    that exact situation: ``target.stat()`` returns the same dev+ino as
+    ``source.stat()`` while target's parent has its own dev+ino unchanged.
+    """
+    import os
+
+    source = tmp_path / 'source'
+    target = tmp_path / 'export' / 'tgt'
+    source.mkdir()
+    target.parent.mkdir()
+    target.mkdir()
+
+    real_stat = os.stat
+
+    def fake_stat(path: Any, *, follow_symlinks: bool = True) -> os.stat_result:
+        # Pretend `target` was bind-mounted from `source`: same dev+ino.
+        path_str = os.fspath(path)
+        if path_str == str(target):
+            return real_stat(source, follow_symlinks=follow_symlinks)
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(os, 'stat', fake_stat)
+
+    assert _target_is_bind_of(source, target) is True
+
+
+def test_target_is_bind_of_returns_false_for_unrelated_dirs(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / 'source'
+    target = tmp_path / 'target'
+    source.mkdir()
+    target.mkdir()
+    assert _target_is_bind_of(source, target) is False
+
+
+def test_target_is_bind_of_returns_false_on_missing_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / 'source'
+    source.mkdir()
+    target = tmp_path / 'does-not-exist'
+    assert _target_is_bind_of(source, target) is False

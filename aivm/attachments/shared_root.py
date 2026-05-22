@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os.path
 import re
 import shlex
 from dataclasses import dataclass
@@ -215,23 +214,22 @@ def _needs_privileged_mkdir(path: Path) -> bool:
 def _target_is_bind_of(source: Path, target: Path) -> bool:
     """Cheap, unprivileged check that ``target`` is already a bind of ``source``.
 
-    Returns True when ``target`` is a mountpoint AND its (device, inode) pair
-    matches ``source``. That is the exact invariant a working ``mount --bind``
-    produces, so callers can skip the privileged repair path when this holds.
+    Returns True when ``stat(target)`` and ``stat(source)`` report the same
+    ``(st_dev, st_ino)`` pair. That equality is the exact signature
+    ``mount --bind`` produces: after binding, ``stat(target)`` resolves to the
+    source's underlying inode on the source's filesystem, so the device and
+    inode numbers match. Crucially this works for *same-filesystem* binds —
+    ``os.path.ismount`` does not, because it only compares ``target``'s
+    ``st_dev`` to its parent's and same-fs binds leave that unchanged.
 
-    Only stat-equality is consulted here; this does not consider non-literal
-    ``findmnt SOURCE`` forms (e.g. ``device[/subpath]``). When this returns
-    False, callers must fall back to the slower, sudo-backed findmnt probe
-    rather than assuming the bind is stale.
+    Without a bind in place, two distinct directories on different paths
+    cannot share an inode, so a False negative is not a concern.
+
+    Stat-only by design; ``findmnt`` SOURCE-quirk forms aren't considered.
+    Callers with non-literal mount metadata to handle must layer a slower
+    sudo-backed probe on top.
     """
     try:
-        if not target.is_dir():
-            return False
-        # os.path.ismount mirrors `mountpoint -q`: it compares ``target``'s
-        # st_dev to its parent's st_dev. No sudo required; only traverse
-        # permission on the parent chain, which the libvirt aivm tree allows.
-        if not os.path.ismount(target):
-            return False
         source_stat = source.stat()
         target_stat = target.stat()
     except OSError:
