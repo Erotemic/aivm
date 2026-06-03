@@ -71,6 +71,44 @@ def test_apply_vm_update_rejects_disk_shrink() -> None:
         raise AssertionError('Expected RuntimeError on disk shrink')
 
 
+def test_apply_vm_update_disk_resize_lock_error_is_graceful(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A write-lock failure during resize surfaces as a clean AIVMError."""
+    from aivm.commands import CommandError
+    from aivm.errors import AIVMError
+
+    cfg = AgentVMConfig()
+    cfg.vm.disk_gb = 60
+    drift = VMUpdateDrift(
+        disk_bytes=(40 * 1024**3, 60 * 1024**3),
+        disk_path='/var/lib/libvirt/aivm/vm/images/vm.qcow2',
+    )
+
+    def fake_run(
+        self: object, cmd: list[str], **kwargs: Any
+    ) -> CmdResult:
+        del kwargs
+        if cmd[:2] == ['qemu-img', 'resize']:
+            raise CommandError(
+                cmd,
+                CmdResult(
+                    1,
+                    '',
+                    'qemu-img: Could not open: Failed to get "write" lock\n'
+                    'Is another process using the image?',
+                ),
+            )
+        raise AssertionError(f'Unexpected command: {cmd!r}')
+
+    monkeypatch.setattr('aivm.vm.update.apply.CommandManager.run', fake_run)
+    with pytest.raises(AIVMError) as excinfo:
+        _apply_vm_update(cfg, drift, dry_run=False)
+    msg = str(excinfo.value)
+    assert 'VM is currently running' in msg
+    assert 'write' in msg  # original qemu-img message is resurfaced
+
+
 def test_escalate_orders_none_soft_hard() -> None:
     assert _escalate(RestartKind.NONE, RestartKind.NONE) == RestartKind.NONE
     assert _escalate(RestartKind.NONE, RestartKind.SOFT) == RestartKind.SOFT

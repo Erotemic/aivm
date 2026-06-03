@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
-from ...commands import CommandManager
+from ...commands import CommandError, CommandManager
 from ...config import AgentVMConfig
+from ...errors import AIVMError
 from ...runtime import virsh_system_cmd
 from .models import RestartKind, VMUpdateDrift, _escalate
 from .util import _bytes_to_gib
 from .virtiofs import _apply_virtiofs_binary_drift
+
+
+def _disk_resize_error(
+    drift: VMUpdateDrift, ex: CommandError
+) -> AIVMError:
+    """Translate a raw ``qemu-img resize`` failure into a domain error.
+
+    The most common failure is a ``"write" lock`` contention: qemu-img cannot
+    grab the image lock while the VM is running and holding it. We surface the
+    underlying qemu-img message but prepend an actionable explanation instead
+    of letting the raw :class:`CommandError` escape as an unhandled traceback.
+    """
+    raw = (ex.result.stderr or ex.result.stdout or '').strip()
+    if 'lock' in raw.lower():
+        hint = (
+            f"Could not resize disk '{drift.disk_path}': the image is locked, "
+            'most likely because the VM is currently running. Shut the VM '
+            'down (`aivm vm down`) and retry `aivm vm update`, or resize the '
+            'running disk via `virsh blockresize`.'
+        )
+    else:
+        hint = f"Could not resize disk '{drift.disk_path}'."
+    return AIVMError(f'{hint}\n\nUnderlying error: {raw}')
 
 
 def _apply_vm_update(
@@ -66,9 +90,12 @@ def _apply_vm_update(
             if dry_run:
                 print(f'DRYRUN: {" ".join(cmd)}')
             else:
-                CommandManager.current().run(
-                    cmd, sudo=True, check=True, capture=True
-                )
+                try:
+                    CommandManager.current().run(
+                        cmd, sudo=True, check=True, capture=True
+                    )
+                except CommandError as ex:
+                    raise _disk_resize_error(drift, ex) from ex
                 print(
                     f'Expanded disk to {_bytes_to_gib(want):.2f} GiB at {drift.disk_path}.'
                 )

@@ -15,6 +15,7 @@ from typing import Any
 import scriptconfig as scfg
 
 from ..commands import CommandManager
+from ..errors import AIVMError
 from ..status import (
     anticipated_status_sudo_commands,
     render_global_status,
@@ -195,11 +196,16 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
+    except AIVMError as ex:
+        # Domain-level failures are expected error conditions: surface the
+        # message cleanly without dumping an internal traceback.
+        print(f'ERROR: {ex}', file=sys.stderr)
+        log.error('aivm error: {}', ex)
+        sys.exit(2)
     except Exception as ex:
         print(f'ERROR: {ex}', file=sys.stderr)
         log.error('Unhandled aivm error: {}', ex)
         raise
-        sys.exit(2)
 
     # if any(flag in argv for flag in ('-h', '--help')):
     #     sys.exit(0)
