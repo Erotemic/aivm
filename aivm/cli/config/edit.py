@@ -93,7 +93,7 @@ def _edit_path(path: Path, args: Any) -> None:
 
 
 def _resolve_config_edit_target(
-    *, config_opt: str, target: str, name: str = ''
+    *, config_opt: str | None, target: str, name: str = ''
 ) -> Path:
     """Resolve a user-facing config edit target to a physical file."""
     root = _cfg_path(config_opt)

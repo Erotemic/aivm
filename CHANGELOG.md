@@ -16,6 +16,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 * Attaching directories now uses consistent guest locations between different attach modes 
 * Read-only access is now documented and wired through the new persistent attachment replay path.
+* Tightened local annotations in firewall, VM update rendering, and persistent attachment transport helpers so the package is clean for the reported mypy diagnostics.
 
 
 ## [Version 0.4.0] - Released 2026-03-27

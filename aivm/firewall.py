@@ -273,7 +273,6 @@ def read_firewall_tcp_ports(
     import json
 
     text = res.stdout or ''
-    ports = set()
     data = json.loads(text)
 
     def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
@@ -365,7 +364,7 @@ def read_firewall_tcp_ports(
                 return True
         return False
 
-    ports = set()
+    ports: set[int] = set()
 
     for item in data.get('nftables', []):
         if not _is_json_obj(item):

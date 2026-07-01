@@ -2358,3 +2358,27 @@ which is the intended cleanup.
 What I am confident about: focused tests for attachment sessions, config, CLI
 helpers, and dry-run behavior pass; the full test suite passes; and
 `python -m compileall aivm tests` succeeds.
+
+## 2026-07-01 13:57:07 -0400
+
+Fixed a narrow set of mypy diagnostics that surfaced after the kwconf CLI typing
+pass. The changes are intentionally local: annotate firewall TCP port sets,
+avoid reusing VM update rendering variable names across incompatible inferred
+types, keep retry helpers' last-result variables typed as `CommandResult | None`,
+and split guest hash status line lists from their final string status values.
+
+State of mind / reflection: this felt like cleanup fallout from adding more type
+coverage rather than a behavior bug hunt. The best fix was to make the existing
+intent explicit and avoid forcing casts or broader ignores.
+
+Uncertainties / risks: I could not run mypy in this sandbox because it is not
+installed here, so the fix is based on the exact diagnostics reported by the
+user and local syntax checks. The changes do not alter runtime control flow.
+
+Tradeoffs: I left larger transport typing oddities alone, including the existing
+`getattr` compatibility pattern around command results, because the request was
+for the six reported diagnostics and not a broader transport refactor.
+
+What I am confident about: the touched Python modules compile with
+`python -m py_compile`, and each edit directly addresses one of the reported
+mypy error sites without changing behavior.

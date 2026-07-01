@@ -27,6 +27,6 @@ def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
             f'{len(drift.virtiofs_binary)} <filesystem> device(s) to update'
         )
         for d in drift.virtiofs_binary:
-            cur = d.current or '(default)'
-            new = d.desired or '(default)'
-            print(f'      tag={d.tag}: {cur} -> {new}')
+            cur_path = d.current or '(default)'
+            new_path = d.desired or '(default)'
+            print(f'      tag={d.tag}: {cur_path} -> {new_path}')

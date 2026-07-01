@@ -216,7 +216,7 @@ def _run_guest_ssh_script_with_retry(
         )
         return None
     mgr = CommandManager.current()
-    last_result: object | None = None
+    last_result: CommandResult | None = None
     for attempt in range(retries + 1):
         result = mgr.run(
             cmd,
@@ -271,7 +271,7 @@ def _run_rsync_with_retry(
         )
         return None
     mgr = CommandManager.current()
-    last_result: object | None = None
+    last_result: CommandResult | None = None
     for attempt in range(retries + 1):
         result = mgr.run(
             cmd,
@@ -424,8 +424,8 @@ def _install_guest_text_if_changed(
         )
     if dry_run or check_result is None:
         return False
-    status = str(getattr(check_result, 'stdout', '') or '').strip().splitlines()
-    status = status[-1].strip().upper() if status else ''
+    status_lines = str(getattr(check_result, 'stdout', '') or '').strip().splitlines()
+    status = status_lines[-1].strip().upper() if status_lines else ''
     if status not in {'MATCH', 'MISSING', 'MISMATCH'}:
         raise RuntimeError(
             f'Unexpected guest file hash check result for {target}: {status or "<empty>"}'
@@ -463,12 +463,14 @@ def _install_guest_text_if_changed(
             check=False,
         )
         if verify_result is not None:
-            verify_status = (
+            verify_status_lines = (
                 str(getattr(verify_result, 'stdout', '') or '')
                 .strip()
                 .splitlines()
             )
-            verify_status = verify_status[-1].strip().upper() if verify_status else ''
+            verify_status = (
+                verify_status_lines[-1].strip().upper() if verify_status_lines else ''
+            )
             if verify_status != 'MATCH':
                 _diagnose_guest_text_mismatch(
                     cfg,
