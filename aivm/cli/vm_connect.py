@@ -8,7 +8,7 @@ import socket
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..attachments.guest import _upsert_ssh_config_entry
 from ..attachments.resolve import logical_absolute_path
@@ -24,9 +24,9 @@ from ._common import _BaseCommand, _load_cfg, log
 class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
-    timeout: Any = scfg.Value(360, type=int, help='Timeout seconds.')
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    timeout: Any = kwconf.Value(360, parser=int, help='Timeout seconds.')
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -223,56 +223,52 @@ def _print_remote_session_recipe(
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
-    host_src: Any = scfg.Value(
+    host_src: Any = kwconf.Value(
         '.',
         position=1,
         help='Host project directory to share and open (default: current directory).',
     )
-    vm: Any = scfg.Value(
+    vm: Any = kwconf.Value(
         '',
         help='VM name override.',
     )
-    guest_dst: Any = scfg.Value(
+    guest_dst: Any = kwconf.Value(
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Any = scfg.Value(
+    mode: Any = kwconf.Value(
         '',
         help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = scfg.Value(
+    access: Any = kwconf.Value(
         '',
         help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    recreate_if_needed: Any = scfg.Value(
+    recreate_if_needed: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Recreate VM if existing definition lacks the requested share mapping.',
     )
-    ensure_firewall: Any = scfg.Value(
+    ensure_firewall: Any = kwconf.Flag(
         True,
-        isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    tunnel: Any = scfg.Value(
+    tunnel: Any = kwconf.Flag(
         False,
-        isflag=True,
         help=(
             'Start (if needed) a `code tunnel` inside the VM under tmux and '
             'attach so first-run device auth is interactive. Subsequent runs '
             'reconnect to the existing tunnel session.'
         ),
     )
-    no_attach: Any = scfg.Value(
+    no_attach: Any = kwconf.Flag(
         False,
-        isflag=True,
         help=(
             'With --tunnel, only ensure the tunnel session is running; do not '
             'attach. Useful for scripts / non-interactive callers.'
         ),
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -375,39 +371,37 @@ class VMCodeCLI(_BaseCommand):
 class VMSSHCLI(_BaseCommand):
     """SSH into the VM and start a shell in the mapped guest directory."""
 
-    host_src: Any = scfg.Value(
+    host_src: Any = kwconf.Value(
         '.',
         position=1,
         help='Host project directory to share and open (default: current directory).',
     )
-    vm: Any = scfg.Value(
+    vm: Any = kwconf.Value(
         '',
         help='VM name override.',
     )
-    guest_dst: Any = scfg.Value(
+    guest_dst: Any = kwconf.Value(
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Any = scfg.Value(
+    mode: Any = kwconf.Value(
         '',
         help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = scfg.Value(
+    access: Any = kwconf.Value(
         '',
         help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    recreate_if_needed: Any = scfg.Value(
+    recreate_if_needed: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Recreate VM if existing definition lacks the requested share mapping.',
     )
-    ensure_firewall: Any = scfg.Value(
+    ensure_firewall: Any = kwconf.Flag(
         True,
-        isflag=True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod

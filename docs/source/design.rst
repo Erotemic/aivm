@@ -158,7 +158,7 @@ CLI and Code Architecture
 CLI framework conventions
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* Use ``scriptconfig`` for command structure and argument definitions.
+* Use ``kwconf`` for command structure and argument definitions.
 * Keep command modules thin: parse/dispatch/orchestrate in CLI modules, place
   operational logic in domain modules.
 * Prefer explicit command return codes and stable CLI behavior for scripting.

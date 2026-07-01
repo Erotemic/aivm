@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self, cast
 
-import scriptconfig as scfg
+import kwconf
 from loguru import logger
 
 from ..commands import CommandManager
@@ -40,29 +40,27 @@ _CURRENT_AUTO_APPROVE_READONLY_SUDO: ContextVar[bool] = ContextVar(
 )
 
 
-class _BaseCommand(scfg.DataConfig):
+class _BaseCommand(kwconf.Config):
     """Base options shared by all commands."""
 
     __special_options__ = False
 
-    config: Any = scfg.Value(
+    config: Any = kwconf.Value(
         None,
         help='Path to global aivm config store (default: ~/.config/aivm/config.toml).',
     )
-    verbose: Any = scfg.Value(
+    verbose: Any = kwconf.Value(
         0,
         short_alias=['v'],
         isflag='counter',
         help='Increase verbosity (-v, -vv).',
     )
-    yes: Any = scfg.Value(
+    yes: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Auto-approve interactive confirmations.',
     )
-    yes_sudo: Any = scfg.Value(
+    yes_sudo: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Auto-approve sudo confirmation prompts only.',
     )
 

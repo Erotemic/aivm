@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ...config import dump_toml
 from ...config_store import (
@@ -24,14 +24,13 @@ class ConfigShowCLI(_BaseCommand):
     defaults.toml, networks.toml, and sorted vms/*.toml fragments.
     """
 
-    vm = scfg.Value(
+    vm = kwconf.Value(
         '',
         help='Optional VM name override for --resolved output.',
         position=1,
     )
-    resolved = scfg.Value(
+    resolved = kwconf.Flag(
         False,
-        isflag=True,
         help='Show effective VM config after defaults/network resolution.',
     )
 
@@ -72,19 +71,16 @@ class ConfigShowCLI(_BaseCommand):
 class ConfigFormatCLI(_BaseCommand):
     """Format config into the canonical split-file layout."""
 
-    dry_run = scfg.Value(
+    dry_run = kwconf.Flag(
         False,
-        isflag=True,
         help='Show the files that would be written without modifying them.',
     )
-    force = scfg.Value(
+    force = kwconf.Flag(
         False,
-        isflag=True,
         help='Rewrite existing formatted fragments from the loaded logical document.',
     )
-    no_backup = scfg.Value(
+    no_backup = kwconf.Flag(
         False,
-        isflag=True,
         help='Do not make a config.toml.bak backup before rewriting config.toml.',
     )
 

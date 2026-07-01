@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ._common import _BaseCommand
 from .config.edit import _edit_path, _resolve_config_edit_target
@@ -13,15 +13,14 @@ from .config.edit import _edit_path, _resolve_config_edit_target
 class VMEditCLI(_BaseCommand):
     """Edit the active or named VM config fragment in $EDITOR."""
 
-    vm: Any = scfg.Value('', help='VM name override.', position=1)
-    editor: Any = scfg.Value(
+    vm: Any = kwconf.Value('', help='VM name override.', position=1)
+    editor: Any = kwconf.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
-    visual: Any = scfg.Value(
-        '',
+    visual: Any = kwconf.Flag(
+        False,
         help='If true, then prefer $VISUAL over $EDITOR.',
-        isflag=True,
     )
 
     @classmethod

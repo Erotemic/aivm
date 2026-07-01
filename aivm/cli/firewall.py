@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..firewall import apply_firewall, firewall_status, remove_firewall
 from ._common import (
@@ -16,8 +16,8 @@ from ._common import (
 class FirewallApplyCLI(_BaseCommand):
     """Apply nftables isolation rules for the VM network."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -42,8 +42,8 @@ class FirewallStatusCLI(_BaseCommand):
 class FirewallRemoveCLI(_BaseCommand):
     """Remove nftables rules managed by aivm."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -54,7 +54,7 @@ class FirewallRemoveCLI(_BaseCommand):
         return 0
 
 
-class FirewallModalCLI(scfg.ModalCLI):
+class FirewallModalCLI(kwconf.ModalCLI):
     """Firewall subcommands."""
 
     apply = FirewallApplyCLI

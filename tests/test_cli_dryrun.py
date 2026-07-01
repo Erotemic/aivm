@@ -92,7 +92,7 @@ def test_help_tree_includes_one_line_descriptions(
         in out
     )
     assert (
-        'aivm help completion - Show shell-completion setup for aivm (argcomplete/scriptconfig).'
+        'aivm help completion - Show shell-completion setup for aivm (argcomplete/kwconf).'
         in out
     )
     assert (

@@ -7,7 +7,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ...commands import CommandManager
 from ...config_store import (
@@ -32,24 +32,23 @@ class ConfigEditCLI(_BaseCommand):
       NAME                     -> shorthand for `vm NAME` when NAME is a VM
     """
 
-    target: Any = scfg.Value(
+    target: Any = kwconf.Value(
         'global',
         help='Edit target: global, defaults, networks, vm, active-vm, or VM name.',
         position=1,
     )
-    name: Any = scfg.Value(
+    name: Any = kwconf.Value(
         '',
         help='Optional name for targets that need one, e.g. `vm aivm-2404`.',
         position=2,
     )
-    editor: Any = scfg.Value(
+    editor: Any = kwconf.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
-    visual: Any = scfg.Value(
-        '',
+    visual: Any = kwconf.Flag(
+        False,
         help='If true, then prefer $VISUAL over $EDITOR.',
-        isflag=True,
     )
 
     @classmethod

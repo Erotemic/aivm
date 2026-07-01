@@ -1,6 +1,6 @@
 """VM update CLI command implementation.
 
-Owns both the scriptconfig CLI and the business logic — scriptconfig is
+Owns both the kwconf CLI and the business logic — kwconf is
 the programmatic entry point too, so no separate Request/Result layer
 in a sibling ``ops/`` module is needed.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
@@ -79,13 +79,13 @@ def run_vm_update(request: VMUpdateRequest) -> int:
 class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live libvirt settings."""
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    restart: Any = scfg.Value(
+    vm: Any = kwconf.Value('', help='Optional VM name override.')
+    restart: Any = kwconf.Value(
         'auto',
         help='Restart policy when changes require reboot to take effect: auto, always, never.',
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod

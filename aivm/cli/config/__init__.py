@@ -9,7 +9,7 @@ couple of helpers that tests import directly.
 
 from __future__ import annotations
 
-import scriptconfig as scfg
+import kwconf
 
 from .discover import ConfigDiscoverCLI
 from .edit import ConfigEditCLI
@@ -22,7 +22,7 @@ from .paths import ConfigPathsCLI
 from .show import ConfigFormatCLI, ConfigShowCLI
 
 
-class ConfigModalCLI(scfg.ModalCLI):
+class ConfigModalCLI(kwconf.ModalCLI):
     """Config store management commands."""
 
     init = InitCLI

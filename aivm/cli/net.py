@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from aivm.config_store import Store
 
@@ -27,16 +27,16 @@ from ._common import (
 class NetCreateCLI(_BaseCommand):
     """Create or recreate the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: Any = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    recreate: Any = scfg.Value(
-        False, isflag=True, help='Destroy and recreate if it exists.'
+    recreate: Any = kwconf.Flag(
+        False, help='Destroy and recreate if it exists.'
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -56,7 +56,7 @@ class NetCreateCLI(_BaseCommand):
 class NetStatusCLI(_BaseCommand):
     """Print detailed status of the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: Any = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
@@ -79,18 +79,17 @@ class NetStatusCLI(_BaseCommand):
 class NetDestroyCLI(_BaseCommand):
     """Destroy and undefine the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: Any = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    force: Any = scfg.Value(
+    force: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Allow destroying network even if referenced by managed VMs.',
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -121,7 +120,7 @@ class NetDestroyCLI(_BaseCommand):
         return 0
 
 
-class NetModalCLI(scfg.ModalCLI):
+class NetModalCLI(kwconf.ModalCLI):
     """Network subcommands."""
 
     create = NetCreateCLI

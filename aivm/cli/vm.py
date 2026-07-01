@@ -8,7 +8,7 @@ and monkeypatched at their owning modules, not through this facade.
 
 from __future__ import annotations
 
-import scriptconfig as scfg
+import kwconf
 
 from .vm_attach import (
     VMAttachCLI,
@@ -32,7 +32,7 @@ from .vm_lifecycle import (
 from .vm_update import VMUpdateCLI
 
 
-class VMModalCLI(scfg.ModalCLI):
+class VMModalCLI(kwconf.ModalCLI):
     """VM lifecycle subcommands."""
 
     list = VMListCLI

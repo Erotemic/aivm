@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..commands import CommandManager, shell_join
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -77,28 +77,27 @@ def _guest_drop_caches_script(
 class VMFlushCachesCLI(_BaseCommand):
     """Flush guest inode/dentry caches to recover virtiofsd FD pressure."""
 
-    vm: Any = scfg.Value(
+    vm: Any = kwconf.Value(
         '',
         help='VM name override.',
     )
-    levels: Any = scfg.Value(
+    levels: Any = kwconf.Value(
         '2',
-        type=str,
+        parser=str,
         help=_DROP_CACHES_HELP,
     )
-    settle_seconds: Any = scfg.Value(
+    settle_seconds: Any = kwconf.Value(
         0,
-        type=int,
+        parser=int,
         help='Seconds to wait between multiple drop_caches levels.',
     )
-    timeout: Any = scfg.Value(
+    timeout: Any = kwconf.Value(
         60,
-        type=int,
+        parser=int,
         help='SSH command timeout in seconds.',
     )
-    dry_run: Any = scfg.Value(
+    dry_run: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Print the guest command without running it.',
     )
 

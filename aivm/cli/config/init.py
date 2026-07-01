@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 from loguru import logger
 
 from ...config import AgentVMConfig
@@ -25,14 +25,12 @@ log = logger
 class InitCLI(_BaseCommand):
     """Initialize global config-store defaults (without creating a VM)."""
 
-    force = scfg.Value(
+    force = kwconf.Flag(
         False,
-        isflag=True,
         help='Overwrite existing VM definition if the same name already exists.',
     )
-    defaults = scfg.Value(
+    defaults = kwconf.Flag(
         False,
-        isflag=True,
         help='Accept detected defaults without interactive review.',
     )
 

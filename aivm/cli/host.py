@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..commands import CommandManager
 from ..host import (
@@ -30,9 +30,8 @@ from .net import NetModalCLI
 class DoctorCLI(_BaseCommand):
     """Check host prerequisites and list missing required tools."""
 
-    sudo: Any = scfg.Value(
+    sudo: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Also verify required commands are available under sudo -n.',
     )
 
@@ -91,8 +90,8 @@ class HostInstallDepsCLI(_BaseCommand):
 class ImageFetchCLI(_BaseCommand):
     """Download/cache the configured Ubuntu base image."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -109,7 +108,7 @@ class ImageFetchCLI(_BaseCommand):
         return 0
 
 
-class HostModalCLI(scfg.ModalCLI):
+class HostModalCLI(kwconf.ModalCLI):
     """Host preparation and host-level operations."""
 
     doctor = DoctorCLI

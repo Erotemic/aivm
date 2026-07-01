@@ -7,7 +7,7 @@ import sys
 import xml.etree.ElementTree as ET
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
@@ -25,9 +25,8 @@ from .._common import _BaseCommand, _cfg_path
 class ConfigDiscoverCLI(_BaseCommand):
     """Discover existing libvirt VMs and add them to config store."""
 
-    dry_run = scfg.Value(
+    dry_run = kwconf.Flag(
         False,
-        isflag=True,
         help='Print actions without writing config store.',
     )
 

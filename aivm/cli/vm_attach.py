@@ -1,8 +1,8 @@
 """VM attachment CLI command implementations.
 
-This module owns both the scriptconfig CLI surface for ``aivm vm attach``,
+This module owns both the kwconf CLI surface for ``aivm vm attach``,
 ``aivm vm detach``, and the persistent-host-replay commands, and the
-business logic those commands invoke. scriptconfig classes are the
+business logic those commands invoke. kwconf classes are the
 programmatic entry point as well — call ``VMAttachCLI.main(argv=False,
 host_src=..., yes=True, ...)`` from Python instead of going through a
 separate Request/Result layer.
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..attachments.guest import _ensure_attachment_available_in_guest
 from ..attachments.persistent import (
@@ -596,21 +596,21 @@ def run_install_persistent_host_replay_service(
 class VMAttachCLI(_BaseCommand):
     """Attach/register a host directory to an existing managed VM."""
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    host_src: Any = scfg.Value(
+    vm: Any = kwconf.Value('', help='Optional VM name override.')
+    host_src: Any = kwconf.Value(
         '.', position=1, help='Host directory to attach.'
     )
-    guest_dst: Any = scfg.Value('', help='Guest mount path override.')
-    mode: Any = scfg.Value(
+    guest_dst: Any = kwconf.Value('', help='Guest mount path override.')
+    mode: Any = kwconf.Value(
         '',
         help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = scfg.Value(
+    access: Any = kwconf.Value(
         '',
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -643,12 +643,12 @@ class VMAttachCLI(_BaseCommand):
 class VMDetachCLI(_BaseCommand):
     """Detach/unregister a host directory from a managed VM."""
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    host_src: Any = scfg.Value(
+    vm: Any = kwconf.Value('', help='Optional VM name override.')
+    host_src: Any = kwconf.Value(
         '.', position=1, help='Host directory to detach.'
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -668,9 +668,9 @@ class VMDetachCLI(_BaseCommand):
 class VMPersistentHostReplayCLI(_BaseCommand):
     """Replay host-side persistent bind mounts from the saved manifest."""
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    vm: Any = kwconf.Value('', help='Optional VM name override.')
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -688,9 +688,9 @@ class VMPersistentHostReplayCLI(_BaseCommand):
 class VMInstallPersistentHostReplayServiceCLI(_BaseCommand):
     """Install and enable a host systemd service for persistent bind replay."""
 
-    vm: Any = scfg.Value('', help='Optional VM name override.')
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    vm: Any = kwconf.Value('', help='Optional VM name override.')
+    dry_run: Any = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod

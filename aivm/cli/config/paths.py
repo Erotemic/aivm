@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ...config import AgentVMConfig
 from ...config_store import (
@@ -30,7 +30,7 @@ class ConfigPathsCLI(_BaseCommand):
     and persistent attachment manifests.
     """
 
-    target: Any = scfg.Value(
+    target: Any = kwconf.Value(
         'all',
         help=(
             'Path group to show: all, config, global, defaults, networks, '
@@ -38,12 +38,12 @@ class ConfigPathsCLI(_BaseCommand):
         ),
         position=1,
     )
-    name: Any = scfg.Value(
+    name: Any = kwconf.Value(
         '',
         help='Optional VM name for `vm`/`libvirt` path groups.',
         position=2,
     )
-    vm: Any = scfg.Value('', help='Optional VM name filter.')
+    vm: Any = kwconf.Value('', help='Optional VM name filter.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

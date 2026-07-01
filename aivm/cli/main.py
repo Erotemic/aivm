@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..commands import CommandManager
 from ..errors import AIVMError
@@ -38,7 +38,7 @@ from .vm import VMSSHCLI, VMAttachCLI, VMCodeCLI, VMDetachCLI, VMModalCLI
 class ListCLI(_BaseCommand):
     """List managed VMs, managed networks, and attached host folders."""
 
-    section: Any = scfg.Value(
+    section: Any = kwconf.Value(
         'all',
         help='One of: all, vms, networks, folders.',
     )
@@ -113,18 +113,16 @@ class ListCLI(_BaseCommand):
 class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
 
-    sudo: Any = scfg.Value(
+    sudo: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Run privileged status checks (virsh/nft/image) with sudo.',
     )
-    vm: Any = scfg.Value(
+    vm: Any = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    detail: Any = scfg.Value(
+    detail: Any = kwconf.Flag(
         False,
-        isflag=True,
         help='Include raw diagnostics (virsh/nft/ssh probe outputs).',
         alias=['details'],
     )
@@ -175,7 +173,7 @@ class StatusCLI(_BaseCommand):
         return 0
 
 
-class AgentVMModalCLI(scfg.ModalCLI):
+class AgentVMModalCLI(kwconf.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents."""
 
     help = HelpModalCLI
