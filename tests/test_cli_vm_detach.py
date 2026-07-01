@@ -186,7 +186,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
 
 
 def test_vm_detach_persistent_updates_manifest_without_host_unbind(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     from aivm.cli.vm_attach import VMDetachCLI
     from aivm.config_store import AttachmentEntry, Store, save_store

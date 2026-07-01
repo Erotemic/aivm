@@ -9,6 +9,7 @@ from contextlib import nullcontext, redirect_stderr
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,7 @@ from aivm.attachments.persistent import (
 )
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
-from aivm.config_store import Store, save_store
+from aivm.config_store import AttachmentEntry, Store, save_store
 
 
 def _activate_manager(
@@ -38,8 +39,8 @@ def _activate_manager(
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
 
 
-def _exec_guest_replay_helper(source: str) -> dict[str, object]:
-    ns: dict[str, object] = {'__name__': 'not_main'}
+def _exec_guest_replay_helper(source: str) -> dict[str, Any]:
+    ns: dict[str, Any] = {'__name__': 'not_main'}
     exec(source, ns)
     real_subprocess = ns.get('subprocess')
     ns['subprocess'] = SimpleNamespace(
@@ -59,7 +60,7 @@ class _FakeSubprocessResult:
 
 def _make_guest_replay_fake_run(
     mounts: dict[str, dict[str, str]],
-):
+) -> Any:
     root_mount: str = ''
 
     def fake_run(
@@ -132,7 +133,7 @@ def _make_guest_replay_fake_run(
             return _FakeSubprocessResult()
         raise AssertionError(f'unhandled fake command: {cmd}')
 
-    fake_run.mounts = mounts  # type: ignore[attr-defined]
+    setattr(fake_run, 'mounts', mounts)
     return fake_run
 
 
@@ -221,7 +222,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
     store = Store()
     store.attachments.extend(
         [
-            dict(
+            AttachmentEntry(
                 host_path=str((tmp_path / 'proj-rw').resolve()),
                 vm_name=cfg.vm.name,
                 mode='persistent',
@@ -230,7 +231,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
                 tag='hostcode-rw',
                 host_lexical_paths=[],
             ),
-            dict(
+            AttachmentEntry(
                 host_path=str((tmp_path / 'proj-ro').resolve()),
                 vm_name=cfg.vm.name,
                 mode='persistent',
@@ -239,7 +240,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
                 tag='hostcode-ro',
                 host_lexical_paths=[str(tmp_path / 'link-ro')],
             ),
-            dict(
+            AttachmentEntry(
                 host_path=str((tmp_path / 'legacy').resolve()),
                 vm_name=cfg.vm.name,
                 mode='shared-root',
@@ -250,14 +251,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
             ),
         ]
     )
-    # Store.attachments is a list of AttachmentEntry instances, but save_store
-    # serializes plain dataclass instances; building via load/save keeps the
-    # test close to the real store format.
-    reg = Store()
-    from aivm.config_store import AttachmentEntry
-
-    reg.attachments = [AttachmentEntry(**item) for item in store.attachments]
-    save_store(reg, cfg_path)
+    save_store(store, cfg_path)
 
     payload = json.loads(_persistent_attachment_manifest_text(cfg, cfg_path))
 

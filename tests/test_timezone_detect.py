@@ -55,10 +55,14 @@ def test_detects_via_etc_timezone(
 
     original_read_text = Path.read_text
 
-    def fake_read_text(self: Path, *args: object, **kwargs: object) -> str:
+    def fake_read_text(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
         if str(self) == '/etc/timezone':
-            return fake.read_text(*args, **kwargs)  # type: ignore[arg-type]
-        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+            return fake.read_text(encoding=encoding, errors=errors)
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, 'read_text', fake_read_text)
     assert detect.detect_host_timezone() == 'America/New_York'

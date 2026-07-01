@@ -34,7 +34,7 @@ def test_guest_uv_tool_spec_can_be_disabled() -> None:
     assert _guest_tool_uv_enabled(cfg) is True
     cfg.tools.uv = 'off'
     assert _guest_tool_uv_enabled(cfg) is False
-    cfg.tools.uv = False  # type: ignore[assignment]
+    setattr(cfg.tools, 'uv', False)
     assert _guest_tool_uv_enabled(cfg) is False
 
 
@@ -98,7 +98,7 @@ def test_guest_rust_tool_spec_can_be_enabled_or_disabled() -> None:
     assert _guest_tool_rust_spec(cfg) == '1.83.0'
     cfg.tools.rust = 'off'
     assert _guest_tool_rust_enabled(cfg) is False
-    cfg.tools.rust = False  # type: ignore[assignment]
+    setattr(cfg.tools, 'rust', False)
     assert _guest_tool_rust_enabled(cfg) is False
 
 
@@ -127,7 +127,7 @@ def test_guest_code_tool_default_off_and_opt_in() -> None:
     assert _guest_tool_code_enabled(cfg) is True
     cfg.tools.code = 'off'
     assert _guest_tool_code_enabled(cfg) is False
-    cfg.tools.code = False  # type: ignore[assignment]
+    setattr(cfg.tools, 'code', False)
     assert _guest_tool_code_enabled(cfg) is False
 
 
