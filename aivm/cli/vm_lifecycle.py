@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -47,10 +47,10 @@ from ._common import (
 class VMUpCLI(_BaseCommand):
     """Create the VM if needed, or start it if already defined."""
 
-    recreate: Any = kwconf.Flag(
+    recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -91,7 +91,7 @@ class VMUpCLI(_BaseCommand):
 class VMDownCLI(_BaseCommand):
     """Gracefully shut down the VM."""
 
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -112,7 +112,7 @@ class VMDownCLI(_BaseCommand):
 class VMRestartCLI(_BaseCommand):
     """Gracefully restart the VM (shutdown then start)."""
 
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -133,16 +133,16 @@ class VMRestartCLI(_BaseCommand):
 class VMCreateCLI(_BaseCommand):
     """Create a managed VM from config-store defaults and start it."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    set_default: Any = kwconf.Flag(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    set_default: bool = kwconf.Flag(
         False,
         help='Set the created VM as the active default VM.',
     )
-    force: Any = kwconf.Flag(
+    force: bool = kwconf.Flag(
         False,
         help='Overwrite existing VM entry and recreate VM definition if present.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -188,12 +188,12 @@ class VMStatusCLI(_BaseCommand):
 class VMDeleteCLI(_BaseCommand):
     """Delete the managed VM domain (shared host directories are not deleted)."""
 
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         position=1,
         help='Optional VM name override (positional).',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -252,7 +252,7 @@ class VMProvisionCLI(_BaseCommand):
     in config.toml instead.
     """
 
-    tools: Any = kwconf.Value(
+    tools: list[str] = kwconf.Value(
         [],
         position=1,
         nargs='*',
@@ -261,11 +261,11 @@ class VMProvisionCLI(_BaseCommand):
             '`aivm vm provision code`). Known tools: uv, rust, code.'
         ),
     )
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -305,7 +305,7 @@ class VMProvisionCLI(_BaseCommand):
 class VMListCLI(_BaseCommand):
     """List managed VM records (VM-focused view)."""
 
-    section = kwconf.Value(
+    section: Literal['all', 'vms', 'networks', 'folders'] = kwconf.Value(
         'vms',
         help='One of: all, vms, networks, folders (default: vms).',
     )

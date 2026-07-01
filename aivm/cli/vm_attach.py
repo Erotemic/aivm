@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -596,20 +596,20 @@ def run_install_persistent_host_replay_service(
 class VMAttachCLI(_BaseCommand):
     """Attach/register a host directory to an existing managed VM."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    host_src: Any = kwconf.Value(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    host_src: str = kwconf.Value(
         '.', position=1, help='Host directory to attach.'
     )
-    guest_dst: Any = kwconf.Value('', help='Guest mount path override.')
-    mode: Any = kwconf.Value(
+    guest_dst: str = kwconf.Value('', help='Guest mount path override.')
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
         '',
         help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = kwconf.Value(
+    access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -643,11 +643,11 @@ class VMAttachCLI(_BaseCommand):
 class VMDetachCLI(_BaseCommand):
     """Detach/unregister a host directory from a managed VM."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    host_src: Any = kwconf.Value(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    host_src: str = kwconf.Value(
         '.', position=1, help='Host directory to detach.'
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -668,8 +668,8 @@ class VMDetachCLI(_BaseCommand):
 class VMPersistentHostReplayCLI(_BaseCommand):
     """Replay host-side persistent bind mounts from the saved manifest."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    dry_run: Any = kwconf.Flag(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -688,8 +688,8 @@ class VMPersistentHostReplayCLI(_BaseCommand):
 class VMInstallPersistentHostReplayServiceCLI(_BaseCommand):
     """Install and enable a host systemd service for persistent bind replay."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    dry_run: Any = kwconf.Flag(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 

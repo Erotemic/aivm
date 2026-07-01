@@ -45,21 +45,21 @@ class _BaseCommand(kwconf.Config):
 
     __special_options__ = False
 
-    config: Any = kwconf.Value(
+    config: str | None = kwconf.Value(
         None,
         help='Path to global aivm config store (default: ~/.config/aivm/config.toml).',
     )
-    verbose: Any = kwconf.Value(
+    verbose: int = kwconf.Value(
         0,
         short_alias=['v'],
         isflag='counter',
         help='Increase verbosity (-v, -vv).',
     )
-    yes: Any = kwconf.Flag(
+    yes: bool = kwconf.Flag(
         False,
         help='Auto-approve interactive confirmations.',
     )
-    yes_sudo: Any = kwconf.Flag(
+    yes_sudo: bool = kwconf.Flag(
         False,
         help='Auto-approve sudo confirmation prompts only.',
     )

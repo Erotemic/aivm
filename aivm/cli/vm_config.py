@@ -13,12 +13,12 @@ from .config.edit import _edit_path, _resolve_config_edit_target
 class VMEditCLI(_BaseCommand):
     """Edit the active or named VM config fragment in $EDITOR."""
 
-    vm: Any = kwconf.Value('', help='VM name override.', position=1)
-    editor: Any = kwconf.Value(
+    vm: str = kwconf.Value('', help='VM name override.', position=1)
+    editor: str = kwconf.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
-    visual: Any = kwconf.Flag(
+    visual: bool = kwconf.Flag(
         False,
         help='If true, then prefer $VISUAL over $EDITOR.',
     )

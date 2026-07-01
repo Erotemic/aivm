@@ -25,7 +25,7 @@ from .._common import _BaseCommand, _cfg_path
 class ConfigDiscoverCLI(_BaseCommand):
     """Discover existing libvirt VMs and add them to config store."""
 
-    dry_run = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False,
         help='Print actions without writing config store.',
     )

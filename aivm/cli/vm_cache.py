@@ -77,26 +77,26 @@ def _guest_drop_caches_script(
 class VMFlushCachesCLI(_BaseCommand):
     """Flush guest inode/dentry caches to recover virtiofsd FD pressure."""
 
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='VM name override.',
     )
-    levels: Any = kwconf.Value(
+    levels: str = kwconf.Value(
         '2',
         parser=str,
         help=_DROP_CACHES_HELP,
     )
-    settle_seconds: Any = kwconf.Value(
+    settle_seconds: int = kwconf.Value(
         0,
         parser=int,
         help='Seconds to wait between multiple drop_caches levels.',
     )
-    timeout: Any = kwconf.Value(
+    timeout: int = kwconf.Value(
         60,
         parser=int,
         help='SSH command timeout in seconds.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False,
         help='Print the guest command without running it.',
     )

@@ -10,7 +10,7 @@ import shlex
 import shutil
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 import ubelt as ub
@@ -80,11 +80,11 @@ class HelpTreeCLI(_BaseCommand):
 class HelpRawCLI(_BaseCommand):
     """Print direct system-tool commands equivalent to common aivm checks."""
 
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    host_src: Any = kwconf.Value(
+    host_src: str = kwconf.Value(
         '.',
         help='Host folder for attachment/share inspection context.',
     )
@@ -149,7 +149,7 @@ class HelpRawCLI(_BaseCommand):
 class HelpCompletionCLI(_BaseCommand):
     """Show shell-completion setup for aivm (argcomplete/kwconf)."""
 
-    shell = kwconf.Value(
+    shell: Literal['', 'bash', 'zsh', 'fish'] = kwconf.Value(
         '',
         help='Optional shell override: bash, zsh, or fish.',
     )

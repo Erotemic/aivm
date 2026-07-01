@@ -30,7 +30,7 @@ class ConfigPathsCLI(_BaseCommand):
     and persistent attachment manifests.
     """
 
-    target: Any = kwconf.Value(
+    target: str = kwconf.Value(
         'all',
         help=(
             'Path group to show: all, config, global, defaults, networks, '
@@ -38,12 +38,12 @@ class ConfigPathsCLI(_BaseCommand):
         ),
         position=1,
     )
-    name: Any = kwconf.Value(
+    name: str = kwconf.Value(
         '',
         help='Optional VM name for `vm`/`libvirt` path groups.',
         position=2,
     )
-    vm: Any = kwconf.Value('', help='Optional VM name filter.')
+    vm: str = kwconf.Value('', help='Optional VM name filter.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

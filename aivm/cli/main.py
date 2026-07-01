@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -38,7 +38,7 @@ from .vm import VMSSHCLI, VMAttachCLI, VMCodeCLI, VMDetachCLI, VMModalCLI
 class ListCLI(_BaseCommand):
     """List managed VMs, managed networks, and attached host folders."""
 
-    section: Any = kwconf.Value(
+    section: Literal['all', 'vms', 'networks', 'folders'] = kwconf.Value(
         'all',
         help='One of: all, vms, networks, folders.',
     )
@@ -113,15 +113,15 @@ class ListCLI(_BaseCommand):
 class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
 
-    sudo: Any = kwconf.Flag(
+    sudo: bool = kwconf.Flag(
         False,
         help='Run privileged status checks (virsh/nft/image) with sudo.',
     )
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    detail: Any = kwconf.Flag(
+    detail: bool = kwconf.Flag(
         False,
         help='Include raw diagnostics (virsh/nft/ssh probe outputs).',
         alias=['details'],

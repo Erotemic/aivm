@@ -6,7 +6,7 @@ import os
 import shlex
 import socket
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -24,8 +24,8 @@ from ._common import _BaseCommand, _load_cfg, log
 class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
-    timeout: Any = kwconf.Value(360, parser=int, help='Timeout seconds.')
-    dry_run: Any = kwconf.Flag(
+    timeout: int = kwconf.Value(360, parser=int, help='Timeout seconds.')
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -223,36 +223,36 @@ def _print_remote_session_recipe(
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
-    host_src: Any = kwconf.Value(
+    host_src: str = kwconf.Value(
         '.',
         position=1,
         help='Host project directory to share and open (default: current directory).',
     )
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='VM name override.',
     )
-    guest_dst: Any = kwconf.Value(
+    guest_dst: str = kwconf.Value(
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Any = kwconf.Value(
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
         '',
         help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = kwconf.Value(
+    access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
         help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    recreate_if_needed: Any = kwconf.Flag(
+    recreate_if_needed: bool = kwconf.Flag(
         False,
         help='Recreate VM if existing definition lacks the requested share mapping.',
     )
-    ensure_firewall: Any = kwconf.Flag(
+    ensure_firewall: bool = kwconf.Flag(
         True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    tunnel: Any = kwconf.Flag(
+    tunnel: bool = kwconf.Flag(
         False,
         help=(
             'Start (if needed) a `code tunnel` inside the VM under tmux and '
@@ -260,14 +260,14 @@ class VMCodeCLI(_BaseCommand):
             'reconnect to the existing tunnel session.'
         ),
     )
-    no_attach: Any = kwconf.Flag(
+    no_attach: bool = kwconf.Flag(
         False,
         help=(
             'With --tunnel, only ensure the tunnel session is running; do not '
             'attach. Useful for scripts / non-interactive callers.'
         ),
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -371,36 +371,36 @@ class VMCodeCLI(_BaseCommand):
 class VMSSHCLI(_BaseCommand):
     """SSH into the VM and start a shell in the mapped guest directory."""
 
-    host_src: Any = kwconf.Value(
+    host_src: str = kwconf.Value(
         '.',
         position=1,
         help='Host project directory to share and open (default: current directory).',
     )
-    vm: Any = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='VM name override.',
     )
-    guest_dst: Any = kwconf.Value(
+    guest_dst: str = kwconf.Value(
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Any = kwconf.Value(
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
         '',
         help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
-    access: Any = kwconf.Value(
+    access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
         help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    recreate_if_needed: Any = kwconf.Flag(
+    recreate_if_needed: bool = kwconf.Flag(
         False,
         help='Recreate VM if existing definition lacks the requested share mapping.',
     )
-    ensure_firewall: Any = kwconf.Flag(
+    ensure_firewall: bool = kwconf.Flag(
         True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 

@@ -30,7 +30,7 @@ from .net import NetModalCLI
 class DoctorCLI(_BaseCommand):
     """Check host prerequisites and list missing required tools."""
 
-    sudo: Any = kwconf.Flag(
+    sudo: bool = kwconf.Flag(
         False,
         help='Also verify required commands are available under sudo -n.',
     )
@@ -90,7 +90,7 @@ class HostInstallDepsCLI(_BaseCommand):
 class ImageFetchCLI(_BaseCommand):
     """Download/cache the configured Ubuntu base image."""
 
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 

@@ -16,7 +16,7 @@ from ._common import (
 class FirewallApplyCLI(_BaseCommand):
     """Apply nftables isolation rules for the VM network."""
 
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -42,7 +42,7 @@ class FirewallStatusCLI(_BaseCommand):
 class FirewallRemoveCLI(_BaseCommand):
     """Remove nftables rules managed by aivm."""
 
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 

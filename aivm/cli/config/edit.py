@@ -32,21 +32,21 @@ class ConfigEditCLI(_BaseCommand):
       NAME                     -> shorthand for `vm NAME` when NAME is a VM
     """
 
-    target: Any = kwconf.Value(
+    target: str = kwconf.Value(
         'global',
         help='Edit target: global, defaults, networks, vm, active-vm, or VM name.',
         position=1,
     )
-    name: Any = kwconf.Value(
+    name: str = kwconf.Value(
         '',
         help='Optional name for targets that need one, e.g. `vm aivm-2404`.',
         position=2,
     )
-    editor: Any = kwconf.Value(
+    editor: str = kwconf.Value(
         '',
         help='Editor command override (default: $EDITOR/$VISUAL, then nano/vi).',
     )
-    visual: Any = kwconf.Flag(
+    visual: bool = kwconf.Flag(
         False,
         help='If true, then prefer $VISUAL over $EDITOR.',
     )

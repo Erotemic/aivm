@@ -27,15 +27,15 @@ from ._common import (
 class NetCreateCLI(_BaseCommand):
     """Create or recreate the configured libvirt network."""
 
-    network: Any = kwconf.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    recreate: Any = kwconf.Flag(
+    recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
@@ -56,7 +56,7 @@ class NetCreateCLI(_BaseCommand):
 class NetStatusCLI(_BaseCommand):
     """Print detailed status of the configured libvirt network."""
 
-    network: Any = kwconf.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
@@ -79,16 +79,16 @@ class NetStatusCLI(_BaseCommand):
 class NetDestroyCLI(_BaseCommand):
     """Destroy and undefine the configured libvirt network."""
 
-    network: Any = kwconf.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    force: Any = kwconf.Flag(
+    force: bool = kwconf.Flag(
         False,
         help='Allow destroying network even if referenced by managed VMs.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 

@@ -25,11 +25,11 @@ log = logger
 class InitCLI(_BaseCommand):
     """Initialize global config-store defaults (without creating a VM)."""
 
-    force = kwconf.Flag(
+    force: bool = kwconf.Flag(
         False,
         help='Overwrite existing VM definition if the same name already exists.',
     )
-    defaults = kwconf.Flag(
+    defaults: bool = kwconf.Flag(
         False,
         help='Accept detected defaults without interactive review.',
     )

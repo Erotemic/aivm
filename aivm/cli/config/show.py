@@ -24,12 +24,12 @@ class ConfigShowCLI(_BaseCommand):
     defaults.toml, networks.toml, and sorted vms/*.toml fragments.
     """
 
-    vm = kwconf.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override for --resolved output.',
         position=1,
     )
-    resolved = kwconf.Flag(
+    resolved: bool = kwconf.Flag(
         False,
         help='Show effective VM config after defaults/network resolution.',
     )
@@ -71,15 +71,15 @@ class ConfigShowCLI(_BaseCommand):
 class ConfigFormatCLI(_BaseCommand):
     """Format config into the canonical split-file layout."""
 
-    dry_run = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False,
         help='Show the files that would be written without modifying them.',
     )
-    force = kwconf.Flag(
+    force: bool = kwconf.Flag(
         False,
         help='Rewrite existing formatted fragments from the loaded logical document.',
     )
-    no_backup = kwconf.Flag(
+    no_backup: bool = kwconf.Flag(
         False,
         help='Do not make a config.toml.bak backup before rewriting config.toml.',
     )

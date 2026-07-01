@@ -8,7 +8,7 @@ in a sibling ``ops/`` module is needed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -79,12 +79,12 @@ def run_vm_update(request: VMUpdateRequest) -> int:
 class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live libvirt settings."""
 
-    vm: Any = kwconf.Value('', help='Optional VM name override.')
-    restart: Any = kwconf.Value(
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    restart: Literal['auto', 'always', 'never'] = kwconf.Value(
         'auto',
         help='Restart policy when changes require reboot to take effect: auto, always, never.',
     )
-    dry_run: Any = kwconf.Flag(
+    dry_run: bool = kwconf.Flag(
         False, help='Print actions without running.'
     )
 
