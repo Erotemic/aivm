@@ -603,7 +603,7 @@ class VMAttachCLI(_BaseCommand):
     guest_dst: Any = scfg.Value('', help='Guest mount path override.')
     mode: Any = scfg.Value(
         '',
-        help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode (TODO: programatic documentation of default); mode changes require detach+reattach).',
+        help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
     access: Any = scfg.Value(
         '',

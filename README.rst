@@ -39,11 +39,13 @@ daily path is:
 
 The current attachment model is centered on explicit host-folder registration:
 
-* ``shared-root`` is the default for new attachments. It uses one VM-level
-  virtiofs export plus host/guest bind mounts.
-* ``persistent`` is an opt-in successor path with persisted attachment
-  declarations and replay helpers. It mitigates repeated mount churn, but it is
-  still built on virtiofs.
+* ``persistent`` is the default for new attachments. It uses a dedicated
+  ``persistent-root`` virtiofs export, persisted attachment declarations, and
+  replay helpers so attachment intent survives VM reboot/reconcile cycles.
+* ``shared-root`` is the legacy single-export path. It still uses one VM-level
+  virtiofs export plus host/guest bind mounts, but new attachments no longer
+  choose it unless ``--mode shared-root`` is explicit or a saved attachment
+  already uses that mode.
 * ``shared`` is the older direct per-folder virtiofs mode and is mostly useful
   for simple/small attachment sets.
 * ``git`` bootstraps a guest-local Git repo and host remote plumbing. It is not
@@ -152,10 +154,11 @@ Interactive approval semantics:
 * ``a`` approves the current step and all later steps
 * ``s`` shows the full exact commands for the current step, then reprompts
 
-For example, the default ``shared-root`` path used by ``aivm ssh .`` /
-``aivm code .`` now groups attachment reconciliation into named steps such as
+For example, the default ``persistent`` path used by ``aivm ssh .`` /
+``aivm code .`` groups attachment reconciliation into named steps such as
 inspecting host bind state, preparing host bind targets, ensuring the VM
-virtiofs mapping, and mounting/verifying the bind inside the guest.
+virtiofs mapping, syncing the persisted manifest, and mounting/verifying the
+bind inside the guest.
 
 Readable previews may abbreviate long shell payloads, but the full exact
 commands are still available on demand in the approval prompt and are always
@@ -196,17 +199,18 @@ Folder attachment
 
 Attachment modes:
 
-* ``shared-root`` (default for new attachments): legacy behavior. One VM-level virtiofs mapping
-  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
-  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
-  guest.
-* ``persistent``: preferred new persistent-attachment path. It uses a dedicated
-  VM-level virtiofs export at
+* ``persistent`` (default for new attachments): the preferred persistent-
+  attachment path. It uses a dedicated VM-level virtiofs export at
   ``/var/lib/libvirt/aivm/<vm>/persistent-root`` plus stable staged host binds,
   writes a persisted attachment manifest, installs a guest systemd replay
   helper at VM bootstrap, and lets boot / ``aivm code .`` / ``aivm ssh .``
   repair guest-visible bind mounts from that manifest instead of rebuilding
   every attachment from scratch.
+* ``shared-root``: legacy single-export behavior. One VM-level virtiofs mapping
+  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
+  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
+  guest. Existing saved ``shared-root`` attachments continue to use this mode,
+  and new attachments can still request it with ``--mode shared-root``.
 * ``shared``: direct per-folder virtiofs mapping from host source to guest. This
   is simpler but consumes one VM virtiofs device slot per folder.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing. It
@@ -236,7 +240,7 @@ PCI/PCIe capacity), which surfaces from libvirt as errors like
 
 ``shared-root`` and ``persistent`` reduce this pressure by using one persistent
 virtiofs mapping per VM and per-attachment host/guest bind mounts.
-Its host-side preparation is also designed to avoid mutating the ownership or
+Their host-side preparation is also designed to avoid mutating the ownership or
 permissions of the user's source tree; ``aivm`` prepares only its own internal
 directories and does not recursively rewrite a bind-mounted project path.
 
@@ -257,22 +261,22 @@ push or pull project contents automatically for git-mode attachments.
 
 * New folder (no saved attachment): creates/uses a git-mode attachment and
   defaults the guest destination to the exact host path.
-* Folder previously attached as ``shared`` or ``shared-root``: returns an error
-  (mode mismatch). Detach + reattach is required to switch modes.
+* Folder previously attached in any non-``git`` mode, including ``shared``,
+  ``shared-root``, or ``persistent``: returns an error (mode mismatch). Detach +
+  reattach is required to switch modes.
 * ``aivm code .`` without ``--mode``: reuses saved mode if present; otherwise
-  creates a new ``shared-root`` attachment.
+  creates a new ``persistent`` attachment.
 
 Migration note:
 
-* ``persistent`` is the rollout path for eventually replacing legacy
-  ``shared-root`` attachment churn. Existing ``shared-root`` attachments keep
-  working unchanged. Reattach a folder with ``aivm detach .`` then
-  ``aivm attach . --mode persistent`` when you want the new persisted replay
-  behavior.
+* ``persistent`` has become the default path for new attachments. Existing
+  ``shared-root`` attachments keep working unchanged. Reattach a folder with
+  ``aivm detach .`` then ``aivm attach . --mode persistent`` when you want an
+  older saved attachment to move to the persisted replay behavior.
 
 Mode selection behavior:
 
-* New folder (no saved attachment record): defaults to ``shared-root`` unless
+* New folder (no saved attachment record): defaults to ``persistent`` unless
   ``--mode`` is explicitly set.
 * Existing folder attachment: omitting ``--mode`` reuses the saved mode for that
   ``(host folder, VM)`` pair.

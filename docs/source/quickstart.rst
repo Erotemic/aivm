@@ -17,8 +17,9 @@ Behavior:
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what
   the current step is doing before the commands run.
-* For default ``shared-root`` attachments, those steps usually include host
-  bind inspection/repair, VM mapping checks, and guest mount verification.
+* For default ``persistent`` attachments, those steps usually include host
+  bind inspection/repair, persistent-root VM mapping checks, manifest sync, and
+  guest mount verification.
 
 Use this path when you want minimal setup friction.
 
@@ -55,11 +56,12 @@ Notes
   later steps.
 * Full executed commands are always logged; raw commands are also still visible
   at higher verbosity levels.
-* Shared-root setup is designed to avoid changing ownership/perms of your host
-  source tree.
-* ``shared-root`` is the default attachment mode. ``persistent`` is available
-  with ``aivm attach . --mode persistent`` and preserves attachment intent with
-  replay helpers, but both modes still rely on virtiofs.
+* Persistent and shared-root setup are designed to avoid changing ownership/perms
+  of your host source tree.
+* ``persistent`` is the default attachment mode for new folders. It preserves
+  attachment intent with replay helpers. ``shared-root`` remains available with
+  ``aivm attach . --mode shared-root`` for the legacy single-export path, and
+  both modes still rely on virtiofs.
 * Settings sync has been removed for now because it was too flaky. Use explicit
   attachments or manual Git operations until a replacement is designed.
 

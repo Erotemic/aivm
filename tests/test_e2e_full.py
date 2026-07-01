@@ -214,7 +214,7 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
             env=env,
         )
 
-        # Attach with no explicit mode and verify the new default is shared-root.
+        # Attach with no explicit mode and verify the new default is persistent.
         _run_cli(
             [
                 'vm',

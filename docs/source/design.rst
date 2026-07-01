@@ -250,8 +250,9 @@ Design constraints
   the user's source tree; qemu/libvirt-access preparation should be limited to
   aivm-managed internal directories rather than applied recursively through
   bind-mounted exports.
-* New attachment backends should preserve the single shared-root virtiofs
-  export model when they only need different replay / reconcile semantics.
+* New attachment backends should prefer a single VM-level export model, like
+  ``persistent-root`` / ``shared-root``, when they only need different replay /
+  reconcile semantics.
 * New non-virtiofs backends should be considered if they materially reduce the
   long-lived virtiofsd FD-retention risk.
 

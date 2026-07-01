@@ -238,7 +238,7 @@ class VMCodeCLI(_BaseCommand):
     )
     mode: Any = scfg.Value(
         '',
-        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or shared-root; mode changes require detach+reattach).',
+        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
     access: Any = scfg.Value(
         '',
@@ -390,7 +390,7 @@ class VMSSHCLI(_BaseCommand):
     )
     mode: Any = scfg.Value(
         '',
-        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or shared-root; mode changes require detach+reattach).',
+        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
     )
     access: Any = scfg.Value(
         '',

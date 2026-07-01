@@ -16,12 +16,13 @@ step title, a short explanation of why that step is happening, semantic command
 summaries, and the exact commands that will run. Privileged host changes prompt
 once for the whole step when approval is required.
 
-For the default ``shared-root`` attachment path, the current implementation
+For the default ``persistent`` attachment path, the current implementation
 usually breaks reconciliation into:
 
-* inspect shared-root host bind state
-* prepare host bind targets
-* inspect/ensure the VM virtiofs mapping
+* inspect persistent host bind state
+* prepare persistent-root bind targets
+* inspect/ensure the VM persistent-root virtiofs mapping
+* sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
 SSH into mapped directory
@@ -47,12 +48,14 @@ remount the VM's other saved folder attachments after reboot.
 
 Attachment modes:
 
-* ``shared-root`` (default for new attachments): one persistent VM virtiofs
-  mapping and per-folder host/guest bind mounts.
-* ``persistent``: a dedicated ``persistent-root`` virtiofs export plus a persisted
-  attachment manifest and guest systemd replay helper. This keeps host-side
-  staged binds stable and restores guest-visible bind mounts at boot or during
-  reconcile.
+* ``persistent`` (default for new attachments): a dedicated ``persistent-root``
+  virtiofs export plus a persisted attachment manifest and guest systemd replay
+  helper. This keeps host-side staged binds stable and restores guest-visible
+  bind mounts at boot or during reconcile.
+* ``shared-root``: the legacy single-export backend with one VM virtiofs mapping
+  and per-folder host/guest bind mounts. Existing saved ``shared-root``
+  attachments continue to use it; new attachments can request it explicitly
+  with ``--mode shared-root``.
 * ``shared``: direct per-folder virtiofs mapping.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
@@ -105,12 +108,13 @@ Operational guidance:
 
 Attachment mode rules:
 
-* New folder defaults to ``shared-root`` when ``--mode`` is omitted.
+* New folder defaults to ``persistent`` when ``--mode`` is omitted.
 * Existing folder reuses its saved mode when ``--mode`` is omitted.
 * Changing mode for an existing folder requires explicit detach + reattach.
   Passing a different ``--mode`` directly now returns an error.
-* ``persistent`` is opt-in for now and is the preferred migration target for
-  users who want attachment replay instead of repeated host-side mount churn.
+* ``shared-root`` is still supported explicitly and for existing saved
+  attachments, but ``persistent`` is the default migration target for attachment
+  replay instead of repeated host-side mount churn.
 * The persistent replay helper is installed as part of VM bootstrap, so stopped-VM
   attaches can still replay on the next boot once the persistent-root mapping and
   manifest are in place.
@@ -119,10 +123,10 @@ Attachment mode rules:
 
 * New folder: attaches in ``git`` mode, with default guest path matching the
   exact host path.
-* Previously attached ``shared``/``shared-root`` folder: errors until you detach
-  and reattach in ``git`` mode.
+* Previously attached non-``git`` folder, including ``shared``, ``shared-root``,
+  or ``persistent``: errors until you detach and reattach in ``git`` mode.
 * No explicit mode (``aivm code .``): use saved mode when present, else create a
-  new ``shared-root`` attachment.
+  new ``persistent`` attachment.
 
 .. code-block:: bash
 
@@ -191,8 +195,9 @@ Interactive approval semantics:
 
 Normal previews are intentionally readable and may abbreviate long shell blobs,
 but the full exact commands can be shown before approval and are always logged
-when they execute. For ``shared-root`` attachments, host-side preparation is
-designed to avoid mutating ownership or permissions in the user's source tree.
+when they execute. For ``persistent`` and ``shared-root`` attachments, host-side
+preparation is designed to avoid mutating ownership or permissions in the
+user's source tree.
 
 Get command tree
 ----------------

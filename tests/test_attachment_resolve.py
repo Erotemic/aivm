@@ -54,7 +54,7 @@ def test_resolve_attachment_defaults_for_new_folder(
     tmp_path: Path,
 ) -> None:
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-default'
+    cfg.vm.name = 'vm-persistent-default'
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
