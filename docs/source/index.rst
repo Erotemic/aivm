@@ -17,6 +17,7 @@ See the repository README for current CLI usage and safety notes.
    quickstart
    runtimes
    workflows
+   wsl
    virtiofs
    security
    alternatives

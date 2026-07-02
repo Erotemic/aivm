@@ -26,6 +26,35 @@ from .util import expand, which
 log = logger
 
 
+def running_under_wsl() -> bool:
+    """Return True when this Linux userspace runs inside Windows WSL.
+
+    Both WSL1 and WSL2 brand the kernel release with "microsoft"; only
+    WSL2 has a real kernel that can host KVM, so callers that care about
+    virtualization should still check /dev/kvm separately.
+    """
+    try:
+        release = Path('/proc/version').read_text(encoding='utf-8')
+    except OSError:
+        return False
+    return 'microsoft' in release.lower()
+
+
+def systemd_is_pid1() -> bool:
+    """Return True when systemd is the init process.
+
+    Relevant on WSL2, where systemd is opt-in (``[boot] systemd=true`` in
+    ``/etc/wsl.conf``) on older installs: the system libvirt daemon is a
+    systemd service and cannot run without it. The rootless session
+    runtime does not need systemd (the per-user daemon auto-spawns).
+    """
+    try:
+        comm = Path('/proc/1/comm').read_text(encoding='utf-8').strip()
+    except OSError:
+        return False
+    return comm == 'systemd'
+
+
 def _expand_identity_path(raw: str) -> str:
     # `%d` is commonly used in ssh config for local user's home directory.
     return expand(raw.replace('%d', '~'))

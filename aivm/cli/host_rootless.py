@@ -102,16 +102,29 @@ class RootlessCheckCLI(_BaseCommand):
         ok_overall = True
 
         kvm_ok = _kvm_accessible()
-        lines.append(
-            status_line(
-                kvm_ok,
-                '/dev/kvm access',
-                'user can open the KVM device'
-                if kvm_ok
-                else f'run `sudo usermod -aG {KVM_GROUP} {getpass.getuser()}` '
-                'or `aivm host rootless setup`, then log out/in',
+        if kvm_ok:
+            kvm_detail = 'user can open the KVM device'
+        elif not KVM_DEVICE.exists():
+            from ..detect import running_under_wsl
+
+            kvm_detail = '/dev/kvm does not exist'
+            if running_under_wsl():
+                kvm_detail += (
+                    ' (WSL2: enable `nestedVirtualization=true` under '
+                    '[wsl2] in %UserProfile%\\.wslconfig, then '
+                    '`wsl --shutdown`; WSL1 cannot run KVM)'
+                )
+            else:
+                kvm_detail += (
+                    ' (enable VT-x/AMD-V in firmware; check the kvm '
+                    'kernel module)'
+                )
+        else:
+            kvm_detail = (
+                f'run `sudo usermod -aG {KVM_GROUP} {getpass.getuser()}` '
+                'or `aivm host rootless setup`, then log out/in'
             )
-        )
+        lines.append(status_line(kvm_ok, '/dev/kvm access', kvm_detail))
         ok_overall &= kvm_ok
 
         session_ok = _session_libvirt_ok()

@@ -775,7 +775,34 @@ def _reconcile_attached_vm(
                             for src, tag in current_maps
                         )
                     else:
-                        found = '  - (no filesystem mappings found)'
+                        # An unprivileged dumpxml can fail (not in the
+                        # libvirt group) and is indistinguishable from a
+                        # genuinely empty device list here; do not claim
+                        # certainty we do not have.
+                        found = (
+                            '  - none detected (or the unprivileged domain '
+                            'XML read failed; check with `aivm status --sudo`)'
+                        )
+                    next_steps = []
+                    if 'virtiofsd-wrapper-' in str(ex):
+                        # attach-device --config re-validates the whole
+                        # persistent definition, so a legacy AIVM-generated
+                        # virtiofsd wrapper left in the VM XML by an older
+                        # version fails *new* attaches. Drift reconciliation
+                        # removes it; recreating the VM is not needed.
+                        next_steps.append(
+                            '  - The VM definition references a legacy AIVM '
+                            'virtiofsd wrapper script (removed in newer '
+                            'versions). Run `aivm vm update` to strip it '
+                            'from the VM XML, then retry.'
+                        )
+                    next_steps.extend(
+                        [
+                            '  - Re-run with --recreate_if_needed to rebuild the VM definition with the new share.',
+                            '  - Or use a VM already defined with this share mapping.',
+                        ]
+                    )
+                    next_steps_text = '\n'.join(next_steps)
                     raise RuntimeError(
                         'Existing VM does not include requested share mapping, and live attach failed.\n'
                         f'VM: {cfg.vm.name}\n'
@@ -784,8 +811,7 @@ def _reconcile_attached_vm(
                         f'{found}\n'
                         f'Live attach error: {ex}\n'
                         'Next steps:\n'
-                        '  - Re-run with --recreate_if_needed to rebuild the VM definition with the new share.\n'
-                        '  - Or use a VM already defined with this share mapping.'
+                        f'{next_steps_text}'
                     )
 
         if recreate:

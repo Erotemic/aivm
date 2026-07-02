@@ -125,6 +125,7 @@ See also:
 * `Design Contract <docs/source/design.rst>`_
 * `Quickstart <docs/source/quickstart.rst>`_
 * `Workflows <docs/source/workflows.rst>`_
+* `Running under WSL2 <docs/source/wsl.rst>`_
 
 Status and sudo behavior
 ------------------------
