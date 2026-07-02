@@ -307,7 +307,9 @@ def load_cfg_with_path(
         raise AIVMError(f'VM not found in config store: {vm_name}')
     cfg = activate_cfg_runtime(materialize_vm_cfg(reg, vm_name))
     changed = (
-        hydrate_ssh_identity_defaults(cfg) if hydrate_runtime_defaults else False
+        hydrate_ssh_identity_defaults(cfg)
+        if hydrate_runtime_defaults
+        else False
     )
     if changed and persist_runtime_defaults:
         upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
