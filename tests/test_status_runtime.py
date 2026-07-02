@@ -14,6 +14,7 @@ from aivm.config import (
     PathsConfig,
     VMConfig,
 )
+from aivm.config_store import Store, upsert_attachment
 from aivm.status import (
     ProbeOutcome,
     probe_cwd_shared_with_vm,
@@ -21,7 +22,6 @@ from aivm.status import (
     render_global_status,
     render_status,
 )
-from aivm.config_store import Store, upsert_attachment
 from aivm.util import CmdResult
 from aivm.vm.drift import saved_vm_drift_report
 

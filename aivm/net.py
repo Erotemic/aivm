@@ -13,9 +13,9 @@ import textwrap
 from loguru import logger
 
 from .commands import CommandManager
+from .config import AgentVMConfig
 from .privilege import virsh_needs_sudo
 from .runtime import virsh_cmd
-from .config import AgentVMConfig
 from .util import which
 
 log = logger

@@ -22,9 +22,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..config_store import AttachmentEntry
-from ..cli._common import log
+from loguru import logger as log
 
+from ..config_store import AttachmentEntry
 
 _SENSITIVE_HOME_RELATIVE: tuple[str, ...] = (
     '.ssh',

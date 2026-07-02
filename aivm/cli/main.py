@@ -13,22 +13,18 @@ from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
+from loguru import logger as log
 
 from ..commands import CommandManager
+from ..config_store import load_store
 from ..errors import AIVMError
+from ..services import cfg_path, load_cfg_with_path, resolve_cfg_for_code
 from ..status import (
     anticipated_status_sudo_commands,
     render_global_status,
     render_status,
 )
-from ..config_store import load_store
-from ._common import (
-    _BaseCommand,
-    _cfg_path,
-    _load_cfg_with_path,
-    _resolve_cfg_for_code,
-    log,
-)
+from ._common import _BaseCommand
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
 from .host import HostModalCLI
@@ -53,7 +49,7 @@ class ListCLI(_BaseCommand):
                 f'--section must be one of: {", ".join(sorted(allowed))}'
             )
 
-        reg_path = _cfg_path(args.config)
+        reg_path = cfg_path(args.config)
         reg = load_store(reg_path)
 
         if want in {'all', 'vms'}:
@@ -133,10 +129,10 @@ class StatusCLI(_BaseCommand):
         cfg = None
         path = None
         try:
-            if args.config is not None or _cfg_path(None).exists():
-                cfg, path = _load_cfg_with_path(args.config, vm_opt=args.vm)
+            if args.config is not None or cfg_path(None).exists():
+                cfg, path = load_cfg_with_path(args.config, vm_opt=args.vm)
             else:
-                cfg, path = _resolve_cfg_for_code(
+                cfg, path = resolve_cfg_for_code(
                     config_opt=None,
                     vm_opt=args.vm,
                     host_src=Path.cwd(),

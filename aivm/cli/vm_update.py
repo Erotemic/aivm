@@ -14,6 +14,7 @@ import kwconf
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..services import load_cfg_with_path
 from ..vm.update import (
     RestartKind,
     _apply_vm_update,
@@ -21,7 +22,7 @@ from ..vm.update import (
     _print_vm_update_plan,
     _vm_update_drift,
 )
-from ._common import _BaseCommand, _load_cfg_with_path
+from ._common import _BaseCommand
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,7 @@ class VMUpdateCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         restart_policy = normalize_restart_policy(args.restart)
-        cfg, _ = _load_cfg_with_path(args.config, vm_opt=args.vm)
+        cfg, _ = load_cfg_with_path(args.config, vm_opt=args.vm)
         return run_vm_update(
             VMUpdateRequest(
                 cfg=cfg,

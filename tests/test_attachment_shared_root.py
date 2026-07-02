@@ -13,49 +13,19 @@ from aivm.attachments.shared_root import (
     _ensure_shared_root_host_bind,
     _target_is_bind_of,
 )
-from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-
-
-def _activate_manager(
-    monkeypatch: pytest.MonkeyPatch, *, yes_sudo: bool = True
-) -> None:
-    CommandManager.activate(CommandManager(yes_sudo=yes_sudo))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-
-
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+from tests.helpers import FakeLog, FakeProc, activate_manager
 
 
 def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    # The command manager calls ``log.opt(...)`` at runtime, so the patched
+    # attribute must stay callable; the shared ``capture_logs`` helper (which
+    # patches the target with a bare recorder) is not a drop-in here.
     messages: list[str] = []
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: Any) -> None:
-            return None
-
-        def trace(self, fmt: str, *args: Any) -> None:
-            return None
-
-        def warning(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-        def error(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    fake = FakeLog(messages, levels=('info', 'warning', 'error'))
+    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: fake)
     return messages
 
 
@@ -78,10 +48,10 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -149,22 +119,22 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         cmd = [str(part) for part in cmd]
         normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
         calls.append(normalized)
         if normalized[:2] == ['mkdir', '-p']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(1, '', '')
+            return FakeProc(1, '', '')
         if normalized[:2] == ['mount', '--bind']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -201,16 +171,16 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         cmd = [str(part) for part in cmd]
         normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(
+            return FakeProc(
                 0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE=""', ''
             )
         if normalized[:2] == ['umount', str(source_dir)]:
@@ -255,16 +225,16 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         cmd = [str(part) for part in cmd]
         normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(
+            return FakeProc(
                 0, f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE=""', ''
             )
         if normalized[:2] == ['umount', str(source_dir)]:
@@ -309,23 +279,23 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
     target = (
         Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root' / attachment.tag
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         cmd = [str(part) for part in cmd]
         normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
         calls.append(normalized)
         if normalized[:2] == ['mkdir', '-p']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
+            return FakeProc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
         if normalized[:2] == ['bash', '-c']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -362,16 +332,16 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         cmd = [str(part) for part in cmd]
         normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
+            return FakeProc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
         if normalized[0] == 'umount':
             raise AssertionError('unexpected unmount in non-disruptive mode')
         if normalized[:2] == ['mount', '--bind']:
@@ -416,23 +386,23 @@ def test_shared_root_host_bind_tolerates_not_mounted_during_repair(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
         normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""', '')
+            return FakeProc(0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""', '')
         if normalized[:2] == ['mkdir', '-p']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
             script = normalized[2]
             assert '"not mounted"' in script
             assert 'mount --bind' in script
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -465,7 +435,7 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
         tag='token-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     monkeypatch.setattr(
         'aivm.attachments.shared_root.require_ssh_identity',
         lambda p: p or '/tmp/id_ed25519',
@@ -477,10 +447,10 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     cmds: list[list[str]] = []
     run_kwargs: list[dict] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         cmds.append([str(c) for c in cmd])
         run_kwargs.append(dict(kwargs))
-        return _Proc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
 
@@ -532,7 +502,7 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch, yes_sudo=False)
+    activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     messages = _capture_command_logs(monkeypatch)
     prompts: list[str] = []
@@ -542,22 +512,22 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
         if parts[:3] == ['sudo', '-n', 'true']:
-            return _Proc(1, '', 'sudo: a password is required')
+            return FakeProc(1, '', 'sudo: a password is required')
         if parts[:2] == ['sudo', '-v']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         normalized = parts[1:] if parts[:1] == ['sudo'] else parts
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(1, '', '')
+            return FakeProc(1, '', '')
         if normalized[:2] == ['mkdir', '-p']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['mount', '--bind']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -599,7 +569,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch, yes_sudo=False)
+    activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     messages = _capture_command_logs(monkeypatch)
     prompts: list[str] = []
@@ -609,20 +579,20 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
         if parts[:3] == ['sudo', '-n', 'true']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         normalized = parts[1:] if parts[:1] == ['sudo'] else parts
         if normalized[:3] == ['findmnt', '-P', '-n']:
-            return _Proc(1, '', '')
+            return FakeProc(1, '', '')
         if normalized[:2] == ['mkdir', '-p']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['mount', '--bind']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['bash', '-c']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -652,7 +622,7 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
     cfg.vm.name = 'vm-shared-root-map'
     cfg.paths.base_dir = str(tmp_path / 'base')
 
-    _activate_manager(monkeypatch, yes_sudo=False)
+    activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     messages = _capture_command_logs(monkeypatch)
     prompts: list[str] = []
@@ -662,20 +632,20 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
         if parts[:3] == ['sudo', '-n', 'true']:
-            return _Proc(1, '', 'sudo: a password is required')
+            return FakeProc(1, '', 'sudo: a password is required')
         if parts[:2] == ['sudo', '-v']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         normalized = parts[1:] if parts[:1] == ['sudo'] else parts
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'dumpxml']:
-            return _Proc(1, '', 'domain not visible')
+            return FakeProc(1, '', 'domain not visible')
         if normalized[:2] == ['virsh', 'attach-device']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -722,7 +692,7 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
         tag='token-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     messages = _capture_command_logs(monkeypatch)
     monkeypatch.setattr(
         'aivm.attachments.shared_root.require_ssh_identity',
@@ -734,7 +704,7 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
     )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(0, '', ''),
+        lambda cmd, **kwargs: FakeProc(0, '', ''),
     )
 
     _ensure_shared_root_guest_bind(

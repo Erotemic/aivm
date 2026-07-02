@@ -22,18 +22,6 @@ from pathlib import Path
 
 import pytest
 
-# import helpers from the sibling smoke test; pytest adds the
-# repository root to sys.path so we can import the module directly by
-# name rather than treating `tests` as a package.
-from test_e2e_nested import (
-    _default_shared_image_path,
-    _ensure_user_cached_image,
-    _host_context_enabled,
-    _make_temp_ssh_material,
-    _require_e2e_host_dependencies,
-    _run_cli,
-)
-
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     Store,
@@ -42,6 +30,20 @@ from aivm.config_store import (
     save_store,
     upsert_vm,
 )
+
+# import helpers from the sibling smoke test; pytest adds the
+# repository root to sys.path so we can import the module directly by
+# name rather than treating `tests` as a package.
+from tests.test_e2e_nested import (
+    _default_shared_image_path,
+    _ensure_user_cached_image,
+    _host_context_enabled,
+    _make_temp_ssh_material,
+    _require_e2e_host_dependencies,
+    _run_cli,
+)
+
+pytestmark = pytest.mark.e2e
 
 # Re‑use the same helper logic from test_e2e_nested.
 

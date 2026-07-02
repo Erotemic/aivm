@@ -90,7 +90,7 @@ def test_vm_flush_caches_runs_guest_command(monkeypatch: pytest.MonkeyPatch) -> 
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_aivm'
 
-    monkeypatch.setattr('aivm.cli.vm_cache._load_cfg', lambda *a, **k: cfg)
+    monkeypatch.setattr('aivm.cli.vm_cache.load_cfg', lambda *a, **k: cfg)
     monkeypatch.setattr(
         'aivm.cli.vm_cache._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.123',

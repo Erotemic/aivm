@@ -10,7 +10,6 @@ from aivm.config_store import Store
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
-from ..net import destroy_network, ensure_network, network_status
 from ..config_store import (
     find_network,
     load_store,
@@ -19,11 +18,10 @@ from ..config_store import (
     save_store,
 )
 from ..errors import SessionRuntimeError
+from ..net import destroy_network, ensure_network, network_status
 from ..runtime import normalize_runtime_mode
-from ._common import (
-    _BaseCommand,
-    _cfg_path,
-)
+from ..services import cfg_path
+from ._common import _BaseCommand
 
 
 def _require_managed_networks_applicable(reg: Store) -> None:
@@ -71,7 +69,7 @@ class NetCreateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        _require_managed_networks_applicable(load_store(_cfg_path(args.config)))
+        _require_managed_networks_applicable(load_store(cfg_path(args.config)))
         cfg = _resolve_network_cfg(args.config, network_opt=args.network)
         mgr = CommandManager.current()
         with mgr.intent(
@@ -125,8 +123,8 @@ class NetDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg_path = _cfg_path(args.config)
-        reg = load_store(cfg_path)
+        store_fpath = cfg_path(args.config)
+        reg = load_store(store_fpath)
         cfg = _resolve_network_cfg(
             args.config, network_opt=args.network, reg=reg
         )
@@ -146,7 +144,7 @@ class NetDestroyCLI(_BaseCommand):
             destroy_network(cfg, dry_run=args.dry_run)
         if not args.dry_run:
             remove_network(reg, cfg.network.name)
-            save_store(reg, _cfg_path(args.config))
+            save_store(reg, cfg_path(args.config))
         return 0
 
 
@@ -164,7 +162,7 @@ def _resolve_network_cfg(
     network_opt: str = '',
     reg: Store | None = None,
 ) -> AgentVMConfig:
-    reg = reg if reg is not None else load_store(_cfg_path(config_opt))
+    reg = reg if reg is not None else load_store(cfg_path(config_opt))
     net_name = str(network_opt or '').strip()
     if not net_name:
         if reg.active_vm:

@@ -265,8 +265,8 @@ def test_confirm_overlap_off_ramp_default_no(
 def test_run_vm_attach_aborts_on_declined_sensitive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from aivm.config import AgentVMConfig
     from aivm.cli.vm_attach import VMAttachRequest, run_vm_attach
+    from aivm.config import AgentVMConfig
     from aivm.config_store import Store, save_store, upsert_vm
 
     fake_home = tmp_path / 'home' / 'agent'
@@ -394,8 +394,8 @@ def test_prepare_attached_session_aborts_on_declined_sensitive(
 def test_run_vm_attach_aborts_on_declined_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from aivm.config import AgentVMConfig
     from aivm.cli.vm_attach import VMAttachRequest, run_vm_attach
+    from aivm.config import AgentVMConfig
     from aivm.config_store import Store, save_store, upsert_vm
 
     parent = tmp_path / 'work'

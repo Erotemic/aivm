@@ -7,8 +7,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ...commands import CommandManager
-from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
+from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
 from .. import virtiofsd_wrapper
 from .models import VirtiofsBinaryDrift, VMUpdateDrift

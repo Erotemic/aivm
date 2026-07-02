@@ -13,8 +13,8 @@ from typing import TypeAlias, TypeGuard
 from loguru import logger
 
 from .commands import CommandManager
-from .privilege import require_sudo_allowed, sudo_allowed
 from .config import AgentVMConfig
+from .privilege import require_sudo_allowed, sudo_allowed
 from .runtime import virsh_cmd
 
 JsonObj: TypeAlias = Mapping[str, object]

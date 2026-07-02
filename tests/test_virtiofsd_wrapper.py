@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from aivm import config, config_store as store
+from aivm import config
+from aivm import config_store as store
 from aivm.vm import update, virtiofsd_wrapper
 
 BASE = '/var/lib/libvirt/aivm'

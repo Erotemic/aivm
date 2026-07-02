@@ -13,11 +13,8 @@ from ...config import AgentVMConfig
 from ...config_store import load_store, save_store
 from ...detect import auto_defaults
 from ...resource_checks import vm_resource_warning_lines
-from .._common import (
-    _BaseCommand,
-    _cfg_path,
-    _maybe_offer_create_ssh_identity,
-)
+from ...services import cfg_path, maybe_offer_create_ssh_identity
+from .._common import _BaseCommand
 
 log = logger
 
@@ -37,10 +34,10 @@ class InitCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
+        path = cfg_path(args.config)
         reg = load_store(path)
         cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
-        _maybe_offer_create_ssh_identity(
+        maybe_offer_create_ssh_identity(
             cfg,
             yes=bool(args.yes),
             prompt_reason=(

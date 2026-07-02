@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .config_store import AttachmentEntry, load_store, store_path
 from .host import check_commands
 from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
@@ -21,10 +22,9 @@ from .runtime import (
     require_ssh_identity,
     runtime_is_session,
     ssh_base_args,
-    virsh_domain_missing,
     virsh_cmd,
+    virsh_domain_missing,
 )
-from .config_store import AttachmentEntry, load_store, store_path
 from .util import which
 from .vm import get_ip_cached, ssh_port_for, vm_share_mappings
 from .vm.drift import saved_vm_drift_report

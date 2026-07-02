@@ -5,21 +5,93 @@ from __future__ import annotations
 import os
 import shlex
 import socket
+import sys
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
+from loguru import logger as log
 
 from ..attachments.guest import _upsert_ssh_config_entry
 from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
-from ..runtime import require_ssh_identity, ssh_base_args
 from ..config import default_host_label
+from ..config_store import load_store
+from ..runtime import require_ssh_identity, ssh_base_args
+from ..services import cfg_path, load_cfg
 from ..util import which
-from ..vm import ssh_port_for, wait_for_ip
+from ..vm import create_ops, ssh_port_for, wait_for_ip
 from ..vm import ssh_config as mk_ssh_config
-from ._common import _BaseCommand, _load_cfg, log
+from ._common import _BaseCommand
+
+
+def _bootstrap_vm_for_folder(
+    ex: RuntimeError,
+    *,
+    config_opt: str | None,
+    vm_opt: str,
+    host_src: Path,
+    guest_dst_opt: str,
+    attach_mode_opt: str,
+    attach_access_opt: str,
+    yes: bool,
+    dry_run: bool,
+) -> None:
+    """Consent flow for ``aivm code``/``ssh`` hitting a store with no VMs.
+
+    Offers (or, with ``--yes``, performs) ``config init`` + ``vm create`` so
+    the folder-oriented entry points can bootstrap a first VM. Passed into
+    :func:`_prepare_attached_session` as its ``bootstrap_missing_vm`` hook;
+    ``ex`` is the resolution error that triggered the bootstrap.
+    """
+    msg = str(ex)
+    prefix = 'No VM definitions found in config store: '
+    missing_store_path = cfg_path(config_opt)
+    if msg.startswith(prefix):
+        tail = msg[len(prefix) :]
+        # Avoid brittle regex parsing: split at our known guidance suffix.
+        store_str = tail.split('. Run `aivm config init`', 1)[0].strip()
+        if store_str:
+            missing_store_path = Path(store_str).expanduser().resolve()
+    missing_store = load_store(missing_store_path)
+    need_init = missing_store.defaults is None
+    if not yes:
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                'No managed VM found for this folder. Re-run with --yes to create one automatically.'
+            ) from ex
+        print('No managed VM found for this folder.')
+        if need_init:
+            prompt = 'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
+        else:
+            prompt = 'Run `aivm vm create` now using existing config defaults? [Y/n]: '
+        ans = input(prompt).strip().lower()
+        if ans not in {'', 'y', 'yes'}:
+            raise RuntimeError('Aborted by user.') from ex
+    if need_init:
+        from .config import InitCLI
+
+        InitCLI.main(
+            argv=False,
+            config=config_opt,
+            yes=bool(yes),
+            defaults=bool(yes),
+            force=False,
+        )
+    create_ops.create_vm_from_defaults(
+        missing_store_path,
+        vm_override=vm_opt if vm_opt else None,
+        set_default=False,
+        force=False,
+        dry_run=bool(dry_run),
+        yes=bool(yes),
+        initial_attachment_host_src=host_src,
+        initial_attachment_guest_dst=guest_dst_opt,
+        initial_attachment_mode=attach_mode_opt,
+        initial_attachment_access=attach_access_opt,
+    )
 
 
 class VMWaitIPCLI(_BaseCommand):
@@ -33,7 +105,7 @@ class VMWaitIPCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
+        cfg = load_cfg(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Wait for IP for {cfg.vm.name}',
@@ -56,7 +128,7 @@ class VMSshConfigCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        print(mk_ssh_config(_load_cfg(args.config)))
+        print(mk_ssh_config(load_cfg(args.config)))
         return 0
 
 
@@ -304,6 +376,17 @@ class VMCodeCLI(_BaseCommand):
                 ensure_firewall_opt=bool(args.ensure_firewall),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
+                bootstrap_missing_vm=partial(
+                    _bootstrap_vm_for_folder,
+                    config_opt=args.config,
+                    vm_opt=args.vm,
+                    host_src=logical_absolute_path(args.host_src),
+                    guest_dst_opt=args.guest_dst,
+                    attach_mode_opt=args.mode,
+                    attach_access_opt=args.access,
+                    yes=bool(args.yes),
+                    dry_run=bool(args.dry_run),
+                ),
             )
         except RuntimeError as ex:
             log.opt(exception=True).trace('Failed preparing code session')
@@ -436,6 +519,17 @@ class VMSSHCLI(_BaseCommand):
                 ensure_firewall_opt=bool(args.ensure_firewall),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
+                bootstrap_missing_vm=partial(
+                    _bootstrap_vm_for_folder,
+                    config_opt=args.config,
+                    vm_opt=args.vm,
+                    host_src=logical_absolute_path(args.host_src),
+                    guest_dst_opt=args.guest_dst,
+                    attach_mode_opt=args.mode,
+                    attach_access_opt=args.access,
+                    yes=bool(args.yes),
+                    dry_run=bool(args.dry_run),
+                ),
             )
         except RuntimeError as ex:
             log.error(str(ex))

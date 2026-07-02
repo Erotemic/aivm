@@ -17,8 +17,9 @@ from ...config_store import (
     split_fragment_paths,
 )
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
+from ...services import cfg_path
 from ...vm.paths import _paths as _vm_runtime_paths
-from .._common import _BaseCommand, _cfg_path
+from .._common import _BaseCommand
 
 
 class ConfigPathsCLI(_BaseCommand):
@@ -48,7 +49,7 @@ class ConfigPathsCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        root = _cfg_path(args.config)
+        root = cfg_path(args.config)
         loaded = load_config_document(root)
         target = str(args.target or 'all').strip().lower().replace('_', '-')
         vm_name = str(args.vm or args.name or '').strip()

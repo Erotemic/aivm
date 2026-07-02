@@ -9,12 +9,6 @@ from __future__ import annotations
 
 # Compatibility imports for callers/tests that referenced these names through
 # ``aivm.vm.lifecycle`` before the lifecycle refactor.
-import shlex
-import textwrap
-import time
-from pathlib import Path
-from urllib.parse import unquote, urlparse
-
 from loguru import logger
 
 from ..commands import CommandManager
@@ -23,14 +17,7 @@ from ..config import (
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
-from ..persistent_replay import (
-    PERSISTENT_ATTACHMENT_REPLAY_BIN,
-    PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
-    persistent_replay_python,
-    persistent_replay_service_unit,
-)
-from ..runtime import require_ssh_identity, ssh_base_args
-from ..util import CmdError, ensure_dir
+from ..util import CmdError
 from . import cloudinit as _cloudinit
 from .cloudinit import (
     _cloud_init_instance_id,
@@ -89,9 +76,9 @@ from .guest_tools import (
 )
 from .host_access import (
     _ensure_qemu_access,
+    _submit_qemu_dir_prepare,
     _sudo_file_exists,
     _sudo_path_exists,
-    _submit_qemu_dir_prepare,
 )
 from .images import (
     _resolve_expected_image_sha256,

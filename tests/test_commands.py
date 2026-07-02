@@ -2,40 +2,12 @@
 
 from __future__ import annotations
 
-import builtins
 from typing import Any
 
 from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
-
-
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-def _patch_runtime(
-    monkeypatch: MonkeyPatch,
-    fake_run: Any,
-    *,
-    isatty: bool = True,
-) -> list[str]:
-    prompts: list[str] = []
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: isatty)
-    monkeypatch.setattr(
-        builtins, 'input', lambda prompt: prompts.append(prompt) or 'y'
-    )
-    monkeypatch.setattr(
-        CommandManager, 'sudo_authentication_required', lambda self: False
-    )
-    return prompts
+from tests.helpers import FakeProc, patch_command_runtime
 
 
 def test_sudo_command_added_after_plan_approval_requires_confirmation(
@@ -48,13 +20,13 @@ def test_sudo_command_added_after_plan_approval_requires_confirmation(
     approval and must be confirmed individually.
     """
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         if cmd[0] == 'sudo':
-            return _Proc(0, 'privileged-ok', '')
-        return _Proc(1, '', 'error: access denied')
+            return FakeProc(0, 'privileged-ok', '')
+        return FakeProc(1, '', 'error: access denied')
 
-    prompts = _patch_runtime(monkeypatch, fake_run)
+    prompts = patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(auto_approve_readonly_sudo=False)
     CommandManager.activate(mgr)
     with mgr.step('inspect with escalation'):
@@ -82,11 +54,11 @@ def test_modify_sudo_command_added_after_plan_approval_prompts(
 ) -> None:
     """State-changing sudo commands appended post-approval must prompt."""
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
-        return _Proc(0, 'ok', '')
+        return FakeProc(0, 'ok', '')
 
-    prompts = _patch_runtime(monkeypatch, fake_run)
+    prompts = patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager()
     CommandManager.activate(mgr)
     with mgr.step('inspect then mutate'):
@@ -111,11 +83,11 @@ def test_yes_sudo_manager_keeps_auto_approving_late_added_commands(
 ) -> None:
     """--yes-sudo managers stay non-interactive for post-approval additions."""
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
-        return _Proc(0, 'ok', '')
+        return FakeProc(0, 'ok', '')
 
-    prompts = _patch_runtime(monkeypatch, fake_run, isatty=False)
+    prompts = patch_command_runtime(monkeypatch, fake_run, isatty=False)
     mgr = CommandManager(yes_sudo=True)
     CommandManager.activate(mgr)
     with mgr.step('inspect then mutate'):
@@ -140,11 +112,11 @@ def test_mutation_generation_bumps_only_for_modify_commands(
 ) -> None:
     """Probe caches key on mutation_generation; reads must not invalidate."""
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
-        return _Proc(0, 'ok', '')
+        return FakeProc(0, 'ok', '')
 
-    _patch_runtime(monkeypatch, fake_run)
+    patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(yes=True)
     CommandManager.activate(mgr)
     start = mgr.mutation_generation
@@ -164,11 +136,11 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
     confirmation prompt they had in the sudo era.
     """
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
-        return _Proc(0, 'ok', '')
+        return FakeProc(0, 'ok', '')
 
-    prompts = _patch_runtime(monkeypatch, fake_run)
+    prompts = patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(privilege_mode='sudoless')
     CommandManager.activate(mgr)
     # Unprivileged reads stay promptless.
@@ -202,18 +174,15 @@ def test_sudoless_plan_approval_never_touches_sudo(
 
     sudo_calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         if cmd and cmd[0] == 'sudo':
             sudo_calls.append(list(cmd))
-        return _Proc(1, '', 'should not run')
+        return FakeProc(1, '', 'should not run')
 
-    prompts = _patch_runtime(monkeypatch, fake_run)
-    # Do not pin sudo_authentication_required here: the point is that it
-    # must never be consulted with a live sudo probe.
-    monkeypatch.setattr(
-        CommandManager,
-        'sudo_authentication_required',
-        CommandManager.sudo_authentication_required,
+    # Do not bypass sudo_authentication_required here: the point is that
+    # it must never be consulted with a live sudo probe.
+    prompts = patch_command_runtime(
+        monkeypatch, fake_run, bypass_sudo_auth=False
     )
     mgr = CommandManager(privilege_mode='sudoless')
     CommandManager.activate(mgr)

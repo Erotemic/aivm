@@ -7,10 +7,8 @@ from typing import Any
 import kwconf
 
 from ..firewall import apply_firewall, firewall_status, remove_firewall
-from ._common import (
-    _BaseCommand,
-    _resolve_cfg_fallback,
-)
+from ..services import resolve_cfg_fallback
+from ._common import _BaseCommand
 
 
 class FirewallApplyCLI(_BaseCommand):
@@ -23,7 +21,7 @@ class FirewallApplyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         apply_firewall(cfg, dry_run=args.dry_run)
         return 0
 
@@ -34,7 +32,7 @@ class FirewallStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         print(firewall_status(cfg))
         return 0
 
@@ -49,7 +47,7 @@ class FirewallRemoveCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         remove_firewall(cfg, dry_run=args.dry_run)
         return 0
 

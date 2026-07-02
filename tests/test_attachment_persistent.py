@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from contextlib import nullcontext, redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -14,13 +13,11 @@ from typing import Any
 import pytest
 
 from aivm.attachments.persistent import (
-    _install_persistent_attachment_replay,
-    _install_persistent_host_bind_replay,
     _install_guest_text_if_changed,
+    _install_persistent_host_bind_replay,
     _persistent_attachment_manifest_text,
     _persistent_host_manifest_path,
     _reconcile_persistent_attachments_in_guest,
-    _reconcile_persistent_host_binds,
     _run_guest_root_script,
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_attachment_manifest_to_guest,
@@ -29,14 +26,7 @@ from aivm.attachments.persistent import (
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import AttachmentEntry, Store, save_store
-
-
-def _activate_manager(
-    monkeypatch: pytest.MonkeyPatch, *, yes_sudo: bool = True
-) -> None:
-    CommandManager.activate(CommandManager(yes_sudo=yes_sudo))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+from tests.helpers import FakeCommandManager, FakeProc, activate_manager
 
 
 def _exec_guest_replay_helper(source: str) -> dict[str, Any]:
@@ -51,40 +41,33 @@ def _exec_guest_replay_helper(source: str) -> dict[str, Any]:
     return ns
 
 
-class _FakeSubprocessResult:
-    def __init__(self, returncode: int = 0, stdout: str = '', stderr: str = ''):
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
 def _make_guest_replay_fake_run(
     mounts: dict[str, dict[str, str]],
 ) -> Any:
     root_mount: str = ''
 
     def fake_run(
-        cmd,
-        check=False,
-        capture_output=False,
-        text=False,
-        stdout=None,
-        stderr=None,
-        **kwargs,
-    ):
+        cmd: list,
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        **kwargs: Any,
+    ) -> FakeProc:
         del check, capture_output, text, stdout, stderr, kwargs
         nonlocal root_mount
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=0 if target in mounts else 1
             )
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(returncode=1)
-            return _FakeSubprocessResult(
+                return FakeProc(returncode=1)
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -93,30 +76,30 @@ def _make_guest_replay_fake_run(
         if cmd[:2] == ['mount', '-t']:
             root_mount = cmd[-1]
             mounts[root_mount] = {'source': root_mount, 'options': 'rw'}
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
             target = cmd[-1]
             source = cmd[cmd.index('--bind') + 1]
             mounts[target] = {'source': source, 'options': 'rw'}
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,ro' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'ro'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,rw' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'rw'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'findmnt' and '--target' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(
+                return FakeProc(
                     stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
                 )
-            return _FakeSubprocessResult(
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -127,10 +110,10 @@ def _make_guest_replay_fake_run(
                 f'TARGET="{target}" SOURCE="{info["source"]}"'
                 for target, info in mounts.items()
             ]
-            return _FakeSubprocessResult(stdout='\n'.join(lines))
+            return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
             mounts.pop(cmd[-1], None)
-            return _FakeSubprocessResult()
+            return FakeProc()
         raise AssertionError(f'unhandled fake command: {cmd}')
 
     setattr(fake_run, 'mounts', mounts)
@@ -317,27 +300,20 @@ def test_persistent_manifest_sync_uses_checksum_rsync(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[list[str]] = []
 
-    class FakeManager:
-        def step(self, *args, **kwargs):
-            del args, kwargs
-            return nullcontext()
-
-        def run(self, cmd, **kwargs):
-            del kwargs
-            calls.append(list(cmd))
-            if cmd and cmd[0] == 'rsync':
-                return SimpleNamespace(
-                    stdout='>f..t...... persistent-attachments.json\n'
-                )
-            return SimpleNamespace(stdout='')
+    def handler(cmd: list) -> SimpleNamespace | None:
+        if cmd and cmd[0] == 'rsync':
+            return SimpleNamespace(
+                stdout='>f..t...... persistent-attachments.json\n'
+            )
+        return SimpleNamespace(stdout='')
 
     monkeypatch.setattr(
         'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeManager(),
+        lambda: FakeCommandManager(handler, calls=calls),
     )
 
     changed = _sync_persistent_attachment_manifest_to_guest(
@@ -365,43 +341,36 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
 
     calls: list[list[str]] = []
     rsync_calls = {'n': 0}
 
-    class FakeManager:
-        def step(self, *args, **kwargs):
-            del args, kwargs
-            return nullcontext()
-
-        def run(self, cmd, **kwargs):
-            del kwargs
-            calls.append(list(cmd))
-            if cmd and cmd[0] == 'ssh':
-                return SimpleNamespace(stdout='')
-            if cmd and cmd[0] == 'rsync':
-                rsync_calls['n'] += 1
-                if rsync_calls['n'] == 1:
-                    return SimpleNamespace(
-                        stdout='',
-                        stderr=(
-                            'Connection timed out during banner exchange\n'
-                            'Connection to 10.0.0.5 port 22 timed out'
-                        ),
-                        code=255,
-                    )
-                return SimpleNamespace(
-                    stdout='>f..t...... persistent-attachments.json\n',
-                    stderr='',
-                    code=0,
-                )
+    def handler(cmd: list) -> SimpleNamespace | None:
+        if cmd and cmd[0] == 'ssh':
             return SimpleNamespace(stdout='')
+        if cmd and cmd[0] == 'rsync':
+            rsync_calls['n'] += 1
+            if rsync_calls['n'] == 1:
+                return SimpleNamespace(
+                    stdout='',
+                    stderr=(
+                        'Connection timed out during banner exchange\n'
+                        'Connection to 10.0.0.5 port 22 timed out'
+                    ),
+                    code=255,
+                )
+            return SimpleNamespace(
+                stdout='>f..t...... persistent-attachments.json\n',
+                stderr='',
+                code=0,
+            )
+        return SimpleNamespace(stdout='')
 
     monkeypatch.setattr(
         'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeManager(),
+        lambda: FakeCommandManager(handler, calls=calls),
     )
 
     changed = _sync_persistent_attachment_manifest_to_guest(
@@ -430,11 +399,11 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[tuple[str, str, str | None]] = []
 
-    def fake_run(*args, **kwargs):
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
         del args
         summary = str(kwargs.get('summary') or '')
         script = str(kwargs.get('script') or '')
@@ -494,7 +463,7 @@ def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
     cfg.vm.name = 'vm-persistent-reconcile-skip'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg_path = tmp_path / 'config.toml'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
@@ -534,25 +503,13 @@ def test_persistent_manifest_sync_returns_false_when_unchanged(
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[list[str]] = []
 
-    class FakeManager:
-        def step(self, *args, **kwargs):
-            del args, kwargs
-            return nullcontext()
-
-        def run(self, cmd, **kwargs):
-            del kwargs
-            calls.append(list(cmd))
-            if cmd and cmd[0] == 'rsync':
-                return SimpleNamespace(stdout='')
-            return SimpleNamespace(stdout='')
-
     monkeypatch.setattr(
         'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeManager(),
+        lambda: FakeCommandManager(calls=calls),
     )
 
     changed = _sync_persistent_attachment_manifest_to_guest(
@@ -579,7 +536,7 @@ def test_persistent_reconcile_propagates_primary_failures(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     monkeypatch.setattr(
         'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
@@ -635,7 +592,7 @@ def test_persistent_reconcile_propagates_primary_failures(
             lambda *a, **k: False,
         )
 
-        def fake_run(*args, **kwargs):
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
             del args
             if (
                 kwargs.get('summary')
@@ -667,7 +624,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     warnings: list[str] = []
     monkeypatch.setattr(
@@ -705,7 +662,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues_on_late_failu
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     warnings: list[str] = []
     monkeypatch.setattr(
@@ -735,7 +692,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues_on_late_failu
             lambda *a, **k: False,
         )
 
-        def fake_run(*args, **kwargs):
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
             del args
             if (
                 kwargs.get('summary')
@@ -826,11 +783,11 @@ def test_persistent_replay_script_nonchecking_path_avoids_error_log(
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd, **kwargs):
+    def fake_subprocess_run(cmd: list, **kwargs: Any) -> Any:
         del kwargs
         calls.append(list(cmd))
         return SimpleNamespace(returncode=1, stdout='', stderr='replay boom')
@@ -868,31 +825,29 @@ def test_persistent_guest_root_script_retries_transient_banner_failures(
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
 
     calls: list[list[str]] = []
     attempts = {'n': 0}
 
-    class FakeManager:
-        def run(self, cmd, **kwargs):
-            del kwargs
-            calls.append(list(cmd))
-            attempts['n'] += 1
-            if attempts['n'] == 1:
-                return SimpleNamespace(
-                    code=255,
-                    stdout='',
-                    stderr=(
-                        'Connection timed out during banner exchange\n'
-                        'Connection to 10.0.0.5 port 22 timed out'
-                    ),
-                )
-            return SimpleNamespace(code=0, stdout='ok\n', stderr='')
+    def handler(cmd: list) -> SimpleNamespace | None:
+        del cmd
+        attempts['n'] += 1
+        if attempts['n'] == 1:
+            return SimpleNamespace(
+                code=255,
+                stdout='',
+                stderr=(
+                    'Connection timed out during banner exchange\n'
+                    'Connection to 10.0.0.5 port 22 timed out'
+                ),
+            )
+        return SimpleNamespace(code=0, stdout='ok\n', stderr='')
 
     monkeypatch.setattr(
         'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeManager(),
+        lambda: FakeCommandManager(handler, calls=calls),
     )
 
     result = _run_guest_root_script(
@@ -919,7 +874,7 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
     cfg.vm.name = 'vm-persistent-reconcile-changed'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg_path = tmp_path / 'config.toml'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
@@ -1053,33 +1008,33 @@ def test_persistent_replay_helper_treats_plain_root_directory_as_unmounted(
     calls: list[list[str]] = []
 
     def fake_run(
-        cmd,
-        check=False,
-        capture_output=False,
-        text=False,
-        stdout=None,
-        stderr=None,
-        **kwargs,
-    ):
+        cmd: list,
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        **kwargs: Any,
+    ) -> FakeProc:
         del check, capture_output, text, stdout, stderr, kwargs
         calls.append(list(cmd))
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=0
                 if target == ns['PERSISTENT_ROOT_MOUNT'] or target in mounts
                 else 1
             )
         if cmd and cmd[0] == 'findmnt' and '--target' in cmd:
-            return _FakeSubprocessResult(
+            return FakeProc(
                 stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
             )
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(returncode=1)
-            return _FakeSubprocessResult(
+                return FakeProc(returncode=1)
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -1090,26 +1045,26 @@ def test_persistent_replay_helper_treats_plain_root_directory_as_unmounted(
                 f'TARGET="{target}" SOURCE="{info["source"]}"'
                 for target, info in mounts.items()
             ]
-            return _FakeSubprocessResult(stdout='\n'.join(lines))
+            return FakeProc(stdout='\n'.join(lines))
         if cmd[:2] == ['mount', '-t']:
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
             target = cmd[-1]
             source_path = cmd[cmd.index('--bind') + 1]
             mounts[target] = {'source': source_path, 'options': 'rw'}
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,ro' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'ro'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,rw' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'rw'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'umount':
-            return _FakeSubprocessResult()
+            return FakeProc()
         raise AssertionError(f'unhandled fake command: {cmd}')
 
     mounts: dict[str, dict[str, str]] = {}
@@ -1268,26 +1223,26 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
     }
 
     def fake_run(
-        cmd,
-        check=False,
-        capture_output=False,
-        text=False,
-        stdout=None,
-        stderr=None,
-        **kwargs,
-    ):
+        cmd: list,
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        **kwargs: Any,
+    ) -> FakeProc:
         del check, capture_output, text, stdout, stderr, kwargs
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=0 if target in mounts else 1
             )
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(returncode=1)
-            return _FakeSubprocessResult(
+                return FakeProc(returncode=1)
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -1297,10 +1252,10 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(
+                return FakeProc(
                     stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
                 )
-            return _FakeSubprocessResult(
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -1311,28 +1266,28 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
                 f'TARGET="{target}" SOURCE="{info["source"]}"'
                 for target, info in mounts.items()
             ]
-            return _FakeSubprocessResult(stdout='\n'.join(lines))
+            return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=16, stderr='umount: target is busy'
             )
         if cmd[:2] == ['mount', '-t']:
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
             target = cmd[-1]
             source_path = cmd[cmd.index('--bind') + 1]
             mounts[target] = {'source': source_path, 'options': 'rw'}
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,ro' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'ro'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,rw' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'rw'
-            return _FakeSubprocessResult()
+            return FakeProc()
         raise AssertionError(f'unhandled fake command: {cmd}')
 
     ns['subprocess'].run = fake_run  # type: ignore[index]
@@ -1391,26 +1346,26 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
     }
 
     def fake_run(
-        cmd,
-        check=False,
-        capture_output=False,
-        text=False,
-        stdout=None,
-        stderr=None,
-        **kwargs,
-    ):
+        cmd: list,
+        check: bool = False,
+        capture_output: bool = False,
+        text: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        **kwargs: Any,
+    ) -> FakeProc:
         del check, capture_output, text, stdout, stderr, kwargs
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=0 if target in mounts else 1
             )
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(returncode=1)
-            return _FakeSubprocessResult(
+                return FakeProc(returncode=1)
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -1420,10 +1375,10 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
             target = cmd[-1]
             info = mounts.get(target)
             if info is None:
-                return _FakeSubprocessResult(
+                return FakeProc(
                     stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
                 )
-            return _FakeSubprocessResult(
+            return FakeProc(
                 stdout=(
                     f'TARGET="{target}" SOURCE="{info["source"]}" '
                     f'OPTIONS="{info["options"]}"'
@@ -1434,28 +1389,28 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
                 f'TARGET="{target}" SOURCE="{info["source"]}"'
                 for target, info in mounts.items()
             ]
-            return _FakeSubprocessResult(stdout='\n'.join(lines))
+            return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
-            return _FakeSubprocessResult(
+            return FakeProc(
                 returncode=16, stderr='umount: target is busy'
             )
         if cmd[:2] == ['mount', '-t']:
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
             target = cmd[-1]
             source_path = cmd[cmd.index('--bind') + 1]
             mounts[target] = {'source': source_path, 'options': 'rw'}
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,ro' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'ro'
-            return _FakeSubprocessResult()
+            return FakeProc()
         if cmd and cmd[0] == 'mount' and 'remount,bind,rw' in cmd[-2]:
             target = cmd[-1]
             if target in mounts:
                 mounts[target]['options'] = 'rw'
-            return _FakeSubprocessResult()
+            return FakeProc()
         raise AssertionError(f'unhandled fake command: {cmd}')
 
     ns['subprocess'].run = fake_run  # type: ignore[index]
@@ -1651,7 +1606,7 @@ def test_install_persistent_host_bind_replay_enables_service(
     cfg.vm.name = 'vm-persistent-host-service'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg_path = tmp_path / 'config.toml'
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     calls: list[tuple[str, tuple, dict]] = []
     monkeypatch.setattr(
@@ -1660,11 +1615,11 @@ def test_install_persistent_host_bind_replay_enables_service(
     )
 
     class FakeManager:
-        def step(self, *args, **kwargs):
+        def step(self, *args: Any, **kwargs: Any) -> Any:
             del args, kwargs
             return nullcontext()
 
-        def submit(self, cmd, **kwargs):
+        def submit(self, cmd: list, **kwargs: Any) -> SimpleNamespace:
             calls.append(('submit', tuple(cmd), kwargs))
             return SimpleNamespace(code=0, stdout='', stderr='')
 
@@ -1689,15 +1644,6 @@ def test_install_persistent_host_bind_replay_enables_service(
     ) in submit_cmds
 
 
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
 def test_persistent_root_host_bind_short_circuits_when_already_bound(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1720,14 +1666,14 @@ def test_persistent_root_host_bind_short_circuits_when_already_bound(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     monkeypatch.setattr(
         'aivm.attachments.persistent.host_bind._target_is_bind_of',
         lambda *_a, **_k: True,
     )
 
-    def _fail_subprocess(*_a: object, **_k: object) -> _Proc:
+    def _fail_subprocess(*_a: object, **_k: object) -> FakeProc:
         raise AssertionError(
             'no subprocess should run when the bind is already in place'
         )
@@ -1759,7 +1705,7 @@ def test_persistent_root_host_bind_issues_direct_mount_command(
         tag='hostcode-source',
     )
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
     monkeypatch.setattr(
         'aivm.attachments.persistent.host_bind._target_is_bind_of',
         lambda *_a, **_k: False,
@@ -1767,12 +1713,12 @@ def test_persistent_root_host_bind_issues_direct_mount_command(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
         normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
         calls.append(normalized)
-        return _Proc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
 

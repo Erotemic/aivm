@@ -14,11 +14,12 @@ from ...config import (
     NetworkConfig,
     PathsConfig,
     ProvisionConfig,
-    VMConfig,
     VirtiofsConfig,
+    VMConfig,
 )
 from ...config_store import load_config_document
-from .._common import _BaseCommand, _cfg_path
+from ...services import cfg_path
+from .._common import _BaseCommand
 
 
 class ConfigLintCLI(_BaseCommand):
@@ -27,7 +28,7 @@ class ConfigLintCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
+        path = cfg_path(args.config)
         loaded = load_config_document(path)
         if not loaded.sources:
             print(f'Config store not found: {path}', file=sys.stderr)

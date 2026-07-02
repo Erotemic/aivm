@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from loguru import logger
-
 from pathlib import Path
 
+from loguru import logger
+
 from ..commands import CommandManager
+from ..config import AgentVMConfig
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, runtime_is_session, virsh_cmd
-from ..config import AgentVMConfig
 from ..util import CmdError, which
 from .cloudinit import _write_cloud_init
 from .disk import _ensure_disk

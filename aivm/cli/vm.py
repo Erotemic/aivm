@@ -16,14 +16,14 @@ from .vm_attach import (
     VMInstallPersistentHostReplayServiceCLI,
     VMPersistentHostReplayCLI,
 )
-from .vm_config import VMEditCLI
 from .vm_cache import VMFlushCachesCLI
+from .vm_config import VMEditCLI
+from .vm_connect import VMSSHCLI, VMCodeCLI, VMSshConfigCLI, VMWaitIPCLI
 from .vm_guard import VMFdGuardCLI
-from .vm_connect import VMCodeCLI, VMSSHCLI, VMSshConfigCLI, VMWaitIPCLI
 from .vm_lifecycle import (
     VMCreateCLI,
-    VMDownCLI,
     VMDeleteCLI,
+    VMDownCLI,
     VMListCLI,
     VMProvisionCLI,
     VMRestartCLI,

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
+from loguru import logger as log
 
 from ..attachments.persistent import (
     _reconcile_persistent_host_binds,
@@ -23,6 +24,14 @@ from ..config_store import (
     remove_vm,
     save_store,
 )
+from ..services import (
+    cfg_path,
+    load_cfg,
+    load_cfg_with_path,
+    maybe_install_missing_host_deps,
+    record_vm,
+    resolve_cfg_for_code,
+)
 from ..vm import (
     create_or_start_vm,
     destroy_vm,
@@ -32,16 +41,7 @@ from ..vm import (
     vm_status,
 )
 from ..vm.create_ops import create_vm_from_defaults
-from ._common import (
-    _BaseCommand,
-    _cfg_path,
-    _load_cfg,
-    _load_cfg_with_path,
-    _maybe_install_missing_host_deps,
-    _record_vm,
-    _resolve_cfg_for_code,
-    log,
-)
+from ._common import _BaseCommand
 
 
 class VMUpCLI(_BaseCommand):
@@ -57,8 +57,8 @@ class VMUpCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, cfg_path = _load_cfg_with_path(args.config)
-        _maybe_install_missing_host_deps(
+        cfg, cfg_path = load_cfg_with_path(args.config)
+        maybe_install_missing_host_deps(
             yes=bool(args.yes), dry_run=bool(args.dry_run)
         )
         mgr = CommandManager.current()
@@ -84,7 +84,7 @@ class VMUpCLI(_BaseCommand):
                 dry_run=False,
                 vm_running=True,
             )
-            _record_vm(cfg, cfg_path)
+            record_vm(cfg, cfg_path)
         return 0
 
 
@@ -98,7 +98,7 @@ class VMDownCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, cfg_path = _load_cfg_with_path(args.config)
+        cfg, cfg_path = load_cfg_with_path(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Shut down VM {cfg.vm.name}',
@@ -119,7 +119,7 @@ class VMRestartCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, cfg_path = _load_cfg_with_path(args.config)
+        cfg, cfg_path = load_cfg_with_path(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',
@@ -157,9 +157,9 @@ class VMCreateCLI(_BaseCommand):
             bool(args.dry_run),
             bool(args.yes),
         )
-        cfg_path = _cfg_path(args.config)
+        store_fpath = cfg_path(args.config)
         return create_vm_from_defaults(
-            cfg_path,
+            store_fpath,
             vm_override=args.vm if args.vm else None,
             set_default=bool(args.set_default),
             force=bool(args.force),
@@ -174,7 +174,7 @@ class VMStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg = _load_cfg(args.config)
+        cfg = load_cfg(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Inspect VM {cfg.vm.name}',
@@ -200,7 +200,7 @@ class VMDeleteCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, cfg_path = _load_cfg_with_path(args.config, vm_opt=args.vm)
+        cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Delete VM {cfg.vm.name}',
@@ -272,10 +272,10 @@ class VMProvisionCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        if args.config is not None or _cfg_path(None).exists():
-            cfg = _load_cfg(args.config)
+        if args.config is not None or cfg_path(None).exists():
+            cfg = load_cfg(args.config)
         else:
-            cfg, _ = _resolve_cfg_for_code(
+            cfg, _ = resolve_cfg_for_code(
                 config_opt=None,
                 vm_opt=args.vm,
                 host_src=Path.cwd(),

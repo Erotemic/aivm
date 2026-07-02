@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
+from loguru import logger as log
 
 from ..attachments.guest import _ensure_attachment_available_in_guest
 from ..attachments.persistent import (
@@ -57,6 +58,12 @@ from ..config_store import (
     remove_attachment,
     save_store,
 )
+from ..services import (
+    load_cfg_with_path,
+    maybe_offer_create_ssh_identity,
+    record_vm,
+    resolve_cfg_for_code,
+)
 from ..status import probe_vm_state
 from ..vm import (
     attach_vm_share,
@@ -69,14 +76,7 @@ from ..vm.share import ResolvedAttachment
 from ..vm.share import (
     align_attachment_tag_with_mappings as drift_align_attachment_tag_with_mappings,
 )
-from ._common import (
-    _BaseCommand,
-    _load_cfg_with_path,
-    _maybe_offer_create_ssh_identity,
-    _record_vm,
-    _resolve_cfg_for_code,
-    log,
-)
+from ._common import _BaseCommand
 
 
 @dataclass(frozen=True)
@@ -137,10 +137,10 @@ def _resolve_attach_config(
     attachment or the default VM for this host).
     """
     if request.config_opt:
-        return _load_cfg_with_path(request.config_opt, vm_opt=request.vm_opt)
+        return load_cfg_with_path(request.config_opt, vm_opt=request.vm_opt)
     if request.vm_opt:
-        return _load_cfg_with_path(None, vm_opt=request.vm_opt)
-    return _resolve_cfg_for_code(
+        return load_cfg_with_path(None, vm_opt=request.vm_opt)
+    return resolve_cfg_for_code(
         config_opt=None,
         vm_opt='',
         host_src=host_src,
@@ -240,7 +240,7 @@ def _reconcile_attachment_in_running_guest(
     yes: bool,
 ) -> None:
     """Reconcile a newly recorded attachment inside the running guest."""
-    if _maybe_offer_create_ssh_identity(
+    if maybe_offer_create_ssh_identity(
         cfg,
         yes=yes,
         prompt_reason=(
@@ -248,7 +248,7 @@ def _reconcile_attachment_in_running_guest(
             'the running VM guest attachment state.'
         ),
     ):
-        _record_vm(
+        record_vm(
             cfg,
             cfg_path,
             reason=(
@@ -368,7 +368,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         _print_attach_refusal(report, host_src, cfg.vm.name)
         return 2
 
-    _record_vm(
+    record_vm(
         cfg,
         cfg_path,
         reason=(
@@ -587,7 +587,7 @@ def run_vm_detach(request: VMDetachRequest) -> int:
     host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
 
-    cfg, cfg_path = _resolve_cfg_for_code(
+    cfg, cfg_path = resolve_cfg_for_code(
         config_opt=request.config_opt,
         vm_opt=request.vm_opt,
         host_src=host_src,
@@ -688,7 +688,7 @@ def run_persistent_host_replay(
     request: VMPersistentHostReplayRequest,
 ) -> int:
     """Replay host-side persistent bind mounts from the saved manifest."""
-    cfg, cfg_path = _load_cfg_with_path(
+    cfg, cfg_path = load_cfg_with_path(
         request.config_opt, vm_opt=request.vm_opt
     )
     _sync_persistent_attachment_manifest_on_host(
@@ -717,7 +717,7 @@ def run_install_persistent_host_replay_service(
     request: VMInstallPersistentHostReplayServiceRequest,
 ) -> int:
     """Install and enable a host systemd service for persistent bind replay."""
-    cfg, cfg_path = _load_cfg_with_path(
+    cfg, cfg_path = load_cfg_with_path(
         request.config_opt, vm_opt=request.vm_opt
     )
     _sync_persistent_attachment_manifest_on_host(

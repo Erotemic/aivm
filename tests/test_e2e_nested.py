@@ -20,6 +20,8 @@ from aivm.config import (
 )
 from aivm.config_store import Store, save_store, upsert_vm
 
+pytestmark = pytest.mark.e2e
+
 
 def _host_context_enabled() -> bool:
     raw = os.getenv(

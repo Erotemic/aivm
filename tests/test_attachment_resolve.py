@@ -620,7 +620,6 @@ def test_logical_absolute_path_relative_uses_validated_pwd(
     The helper joins against ``$PWD`` when ``Path($PWD).resolve() ==
     Path(getcwd())``, preserving the typed lexical form.
     """
-    import os
 
     real = tmp_path / 'real'
     real.mkdir()
@@ -638,7 +637,6 @@ def test_logical_absolute_path_stale_pwd_falls_back_to_getcwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A $PWD that does not resolve to getcwd() is treated as untrusted."""
-    import os
 
     real = tmp_path / 'real'
     real.mkdir()

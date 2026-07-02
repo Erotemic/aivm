@@ -25,11 +25,11 @@ from ..privilege import virsh_needs_sudo
 from ..runtime import (
     require_ssh_identity,
     ssh_base_args,
-    virsh_domain_missing,
     virsh_cmd,
+    virsh_domain_missing,
 )
-from .connectivity import ssh_port_for
 from ..util import CmdError
+from .connectivity import ssh_port_for
 
 log = logger
 

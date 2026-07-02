@@ -3,32 +3,15 @@
 from __future__ import annotations
 
 import re
-import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
-from ..cli._common import (
-    PreparedSession,
-    _cfg_path,
-    _maybe_install_missing_host_deps,
-    _maybe_offer_create_ssh_identity,
-    _record_vm,
-    _resolve_cfg_for_code,
-)
 from ..commands import CommandManager
-from ..privilege import sudo_allowed
 from ..config import AgentVMConfig
-from ..firewall import apply_firewall
-from ..net import ensure_network
-from ..runtime import runtime_is_session
-from ..status import (
-    probe_firewall,
-    probe_network,
-    probe_ssh_ready,
-)
 from ..config_store import (
     find_attachment_for_vm,
     find_attachments_for_vm,
@@ -37,6 +20,22 @@ from ..config_store import (
     upsert_attachment,
     upsert_network,
     upsert_vm_with_network,
+)
+from ..firewall import apply_firewall
+from ..net import ensure_network
+from ..privilege import sudo_allowed
+from ..runtime import runtime_is_session
+from ..services import (
+    PreparedSession,
+    maybe_install_missing_host_deps,
+    maybe_offer_create_ssh_identity,
+    record_vm,
+    resolve_cfg_for_code,
+)
+from ..status import (
+    probe_firewall,
+    probe_network,
+    probe_ssh_ready,
 )
 from ..util import CmdError
 from ..vm import (
@@ -628,7 +627,7 @@ def _reconcile_attached_vm(
 
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
-            _maybe_install_missing_host_deps(
+            maybe_install_missing_host_deps(
                 yes=bool(policy.yes), dry_run=bool(policy.dry_run)
             )
             if attachment.mode in {
@@ -845,12 +844,15 @@ def _prepare_attached_session(
     ensure_firewall_opt: bool,
     dry_run: bool,
     yes: bool,
+    bootstrap_missing_vm: Callable[[RuntimeError], None] | None = None,
 ) -> PreparedSession:
     """Prepare a ready-to-use VM session rooted at a host folder attachment.
 
-    If no VM context exists, this may bootstrap ``config init`` + ``vm create``
-    (with consent/non-interactive policy checks), then continue with attachment,
-    IP/SSH readiness, and in-guest mount reconciliation.
+    If no VM context exists and ``bootstrap_missing_vm`` is provided, it is
+    invoked (the CLI layer supplies the ``config init`` + ``vm create``
+    consent flow) and config resolution is retried; without a bootstrap
+    callback the resolution error propagates. Then continues with
+    attachment, IP/SSH readiness, and in-guest mount reconciliation.
     """
     if not host_src.exists():
         raise FileNotFoundError(f'Host source path does not exist: {host_src}')
@@ -874,65 +876,19 @@ def _prepare_attached_session(
         )
 
     try:
-        cfg, cfg_path = _resolve_cfg_for_code(
+        cfg, cfg_path = resolve_cfg_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
     except RuntimeError as ex:
-        msg = str(ex)
-        if 'No VM definitions found in config store' not in msg:
+        if (
+            'No VM definitions found in config store' not in str(ex)
+            or bootstrap_missing_vm is None
+        ):
             raise
-        prefix = 'No VM definitions found in config store: '
-        missing_store_path = _cfg_path(config_opt)
-        if msg.startswith(prefix):
-            tail = msg[len(prefix) :]
-            # Avoid brittle regex parsing: split at our known guidance suffix.
-            store_str = tail.split('. Run `aivm config init`', 1)[0].strip()
-            if store_str:
-                missing_store_path = Path(store_str).expanduser().resolve()
-        missing_store = load_store(missing_store_path)
-        need_init = missing_store.defaults is None
-        if not yes:
-            if not sys.stdin.isatty():
-                raise RuntimeError(
-                    'No managed VM found for this folder. Re-run with --yes to create one automatically.'
-                ) from ex
-            print('No managed VM found for this folder.')
-            if need_init:
-                prompt = (
-                    'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
-                )
-            else:
-                prompt = 'Run `aivm vm create` now using existing config defaults? [Y/n]: '
-            ans = input(prompt).strip().lower()
-            if ans not in {'', 'y', 'yes'}:
-                raise RuntimeError('Aborted by user.') from ex
-        if need_init:
-            from ..cli.config import InitCLI
-
-            InitCLI.main(
-                argv=False,
-                config=config_opt,
-                yes=bool(yes),
-                defaults=bool(yes),
-                force=False,
-            )
-        from ..vm.create_ops import create_vm_from_defaults
-
-        create_vm_from_defaults(
-            missing_store_path,
-            vm_override=vm_opt if vm_opt else None,
-            set_default=False,
-            force=False,
-            dry_run=bool(dry_run),
-            yes=bool(yes),
-            initial_attachment_host_src=host_src,
-            initial_attachment_guest_dst=guest_dst_opt,
-            initial_attachment_mode=attach_mode_opt,
-            initial_attachment_access=attach_access_opt,
-        )
-        cfg, cfg_path = _resolve_cfg_for_code(
+        bootstrap_missing_vm(ex)
+        cfg, cfg_path = resolve_cfg_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
@@ -976,7 +932,7 @@ def _prepare_attached_session(
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip
 
-    if (not dry_run) and _maybe_offer_create_ssh_identity(
+    if (not dry_run) and maybe_offer_create_ssh_identity(
         cfg,
         yes=bool(yes),
         prompt_reason=(
@@ -984,7 +940,7 @@ def _prepare_attached_session(
             'sessions and provision the guest.'
         ),
     ):
-        _record_vm(
+        record_vm(
             cfg,
             cfg_path,
             reason=(

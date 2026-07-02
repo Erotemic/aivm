@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -143,7 +144,7 @@ def test_guest_ensure_code_script_uses_microsoft_apt_repo_not_snap() -> None:
     assert 'snap' not in script.lower()
 
 
-def test_tools_config_roundtrip(tmp_path) -> None:
+def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.tools.uv = '0.11.11'
     cfg.tools.rust = 'stable'
@@ -167,7 +168,7 @@ def test_tools_config_roundtrip(tmp_path) -> None:
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
 
 
-def test_tools_config_default_dumps_code_off(tmp_path) -> None:
+def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     text = dump_toml(cfg)
     assert 'code = "off"' in text

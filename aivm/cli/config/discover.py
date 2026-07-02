@@ -19,7 +19,8 @@ from ...config_store import (
     upsert_vm_with_network,
 )
 from ...runtime import virsh_cmd
-from .._common import _BaseCommand, _cfg_path
+from ...services import cfg_path
+from .._common import _BaseCommand
 
 
 class ConfigDiscoverCLI(_BaseCommand):
@@ -56,7 +57,7 @@ class ConfigDiscoverCLI(_BaseCommand):
         vm_names = [
             n.strip() for n in names_res.stdout.splitlines() if n.strip()
         ]
-        store = _cfg_path(args.config)
+        store = cfg_path(args.config)
         reg = load_store(store)
         managed_seen = 0
         added = 0

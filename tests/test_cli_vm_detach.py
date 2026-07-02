@@ -8,8 +8,8 @@ from pytest import MonkeyPatch
 
 from aivm.cli.vm_attach import VMDetachCLI
 from aivm.config import AgentVMConfig
-from aivm.status import ProbeOutcome
 from aivm.config_store import AttachmentEntry, Store, find_attachment_for_vm
+from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentMode
 
 
@@ -34,7 +34,7 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.cli.vm_attach.resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
@@ -86,7 +86,7 @@ def test_vm_detach_git_only_updates_store(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.cli.vm_attach.resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
@@ -138,7 +138,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.cli.vm_attach.resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_attach.load_store', lambda path: store)
@@ -210,7 +210,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     save_store(reg, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._resolve_cfg_for_code',
+        'aivm.cli.vm_attach.resolve_cfg_for_code',
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr(

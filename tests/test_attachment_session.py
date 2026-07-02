@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +10,8 @@ import pytest
 
 from aivm.attachments.session import _record_attachment
 from aivm.cli.vm_attach import VMAttachCLI
-from aivm.cli.vm_connect import VMCodeCLI, VMSSHCLI
-from aivm.commands import CommandManager
+from aivm.cli.vm_connect import VMSSHCLI, VMCodeCLI, _bootstrap_vm_for_folder
 from aivm.config import AgentVMConfig
-from aivm.status import ProbeOutcome
 from aivm.config_store import (
     AttachmentEntry,
     Store,
@@ -22,47 +21,9 @@ from aivm.config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-
-
-def _activate_manager(
-    monkeypatch: pytest.MonkeyPatch, *, yes_sudo: bool = True
-) -> None:
-    CommandManager.activate(CommandManager(yes_sudo=yes_sudo))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
-
-
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    messages: list[str] = []
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: Any) -> None:
-            return None
-
-        def trace(self, fmt: str, *args: Any) -> None:
-            return None
-
-        def warning(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-        def error(self, fmt: str, *args: Any) -> None:
-            messages.append(fmt.format(*args))
-
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
-    return messages
+from tests.helpers import activate_manager
 
 
 def _fake_prepare_session(
@@ -73,7 +34,7 @@ def _fake_prepare_session(
     captured: list,
 ) -> Any:
     """Return a fake _prepare_attached_session callable that records its kwargs."""
-    from aivm.cli._common import PreparedSession
+    from aivm.services import PreparedSession
 
     def fake_prepare(**kw: Any) -> PreparedSession:
         captured.append(kw)
@@ -110,10 +71,10 @@ def test_vm_attach_mounts_share_when_vm_running(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -178,10 +139,10 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -242,10 +203,10 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -313,10 +274,10 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -386,10 +347,10 @@ def test_vm_attach_uses_single_escalating_probe(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -451,10 +412,10 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
     )
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._load_cfg_with_path',
+        'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach._record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -580,7 +541,7 @@ def test_record_attachment_passes_reason_to_save_store(
 
 @pytest.mark.parametrize('cli_cls', [VMCodeCLI, VMSSHCLI], ids=['code', 'ssh'])
 def test_vm_connect_clis_pass_lexical_host_src_to_session(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_cls
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_cls: Any
 ) -> None:
     """Both VMCodeCLI and VMSSHCLI must pass the lexical (non-resolved)
     host_src so downstream symlink detection works."""
@@ -658,7 +619,7 @@ def test_git_mode_in_prepare_session_gets_companion_symlink(
     )
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         lambda **k: (cfg, cfg_path),
     )
     monkeypatch.setattr(
@@ -678,7 +639,7 @@ def test_git_mode_in_prepare_session_gets_companion_symlink(
         )(),
     )
     monkeypatch.setattr(
-        'aivm.attachments.session._maybe_offer_create_ssh_identity',
+        'aivm.attachments.session.maybe_offer_create_ssh_identity',
         lambda *a, **k: False,
     )
     monkeypatch.setattr(
@@ -764,7 +725,7 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
     )
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         lambda **k: (cfg, cfg_path),
     )
     monkeypatch.setattr(
@@ -784,7 +745,7 @@ def test_git_mode_in_prepare_session_gets_mirror_home_symlink(
         )(),
     )
     monkeypatch.setattr(
-        'aivm.attachments.session._maybe_offer_create_ssh_identity',
+        'aivm.attachments.session.maybe_offer_create_ssh_identity',
         lambda *a, **k: False,
     )
     monkeypatch.setattr(
@@ -841,7 +802,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
     """_restore_saved_vm_attachments applies _apply_guest_derived_symlinks for shared mode."""
     from aivm.attachments.session import _restore_saved_vm_attachments
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restore-shared'
@@ -918,7 +879,7 @@ def test_restore_shared_root_attachment_passes_mirror_home(
     """_restore_saved_vm_attachments passes mirror_home to _ensure_attachment_available_in_guest for shared-root."""
     from aivm.attachments.session import _restore_saved_vm_attachments
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restore-sr'
@@ -996,7 +957,7 @@ def test_restore_persistent_secondary_failure_continues_on_error(
 ) -> None:
     from aivm.attachments.session import _restore_saved_vm_attachments
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restore-persistent-continue-on-error'
@@ -1178,7 +1139,7 @@ def test_restore_uses_lexical_path_for_companion_symlink(
     """After restore, companion guest symlink is created using the stored lexical path."""
     from aivm.attachments.session import _restore_saved_vm_attachments
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     real_dir = tmp_path / 'real' / 'proj'
     real_dir.mkdir(parents=True)
@@ -1275,7 +1236,7 @@ def test_restore_non_symlink_attachment_unchanged(
     """Non-symlink attachments without host_lexical_path use source_dir as before."""
     from aivm.attachments.session import _restore_saved_vm_attachments
 
-    _activate_manager(monkeypatch)
+    activate_manager(monkeypatch)
 
     real_dir = tmp_path / 'proj'
     real_dir.mkdir()
@@ -1402,7 +1363,7 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
         return 0
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
@@ -1437,6 +1398,17 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
         ensure_firewall_opt=False,
         dry_run=True,
         yes=True,
+        bootstrap_missing_vm=partial(
+            _bootstrap_vm_for_folder,
+            config_opt=str(cfg_path),
+            vm_opt='',
+            host_src=host_src,
+            guest_dst_opt='/workspace/proj',
+            attach_mode_opt='persistent',
+            attach_access_opt='ro',
+            yes=True,
+            dry_run=True,
+        ),
     )
 
     assert session.cfg is cfg

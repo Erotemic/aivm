@@ -26,15 +26,16 @@ from ..privilege import (
     user_can_write_path,
     user_in_libvirt_group,
 )
+from ..services import cfg_path
 from ..status import status_line
 from ..util import expand, which
-from ._common import _BaseCommand, _cfg_path
+from ._common import _BaseCommand
 
 
 def _effective_default_base_dir(config_opt: str | None) -> Path:
     """Return the base_dir new VMs would get from the config store."""
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
             if reg.defaults is not None and reg.defaults.paths.base_dir:
@@ -47,7 +48,7 @@ def _effective_default_base_dir(config_opt: str | None) -> Path:
 def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
     """Return True when any stored config still enables the nft firewall."""
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if not path.exists():
             return AgentVMConfig().firewall.enabled
         reg = load_store(path)
@@ -343,7 +344,7 @@ class SudolessSetupCLI(_BaseCommand):
                     print(f'  sudo setfacl -m u:{LIBVIRT_QEMU_USER}:x {b}')
 
         # Persist config: privilege mode, default base_dir, firewall policy.
-        store = _cfg_path(args.config)
+        store = cfg_path(args.config)
         reg = load_store(store)
         reg.behavior.privilege_mode = args.mode
         if reg.defaults is None:

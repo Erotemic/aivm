@@ -7,7 +7,6 @@ import pytest
 from aivm.config import AgentVMConfig
 from aivm.vm.cloudinit import _invoking_host_uid_gid, _render_user_data_text
 
-
 # -- SUDO_UID/SUDO_GID resolution ------------------------------------------
 
 

@@ -11,8 +11,6 @@ import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from loguru import logger as log
-
 from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...config_store import (

@@ -13,7 +13,8 @@ from ...config_store import (
     load_config_document,
     save_store,
 )
-from .._common import _BaseCommand, _cfg_path, _load_cfg_with_path
+from ...services import cfg_path, load_cfg_with_path
+from .._common import _BaseCommand
 
 
 class ConfigShowCLI(_BaseCommand):
@@ -37,15 +38,15 @@ class ConfigShowCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
+        path = cfg_path(args.config)
         vm_name = str(args.vm or '').strip()
         if bool(args.resolved) or vm_name:
-            cfg, cfg_path = _load_cfg_with_path(
+            cfg, resolved_store_path = load_cfg_with_path(
                 args.config, vm_opt=vm_name, host_src=Path.cwd()
             )
             toml_text = '\n'.join(
                 [
-                    f'# Store: {cfg_path}',
+                    f'# Store: {resolved_store_path}',
                     f'# VM: {cfg.vm.name}',
                     dump_toml(cfg),
                 ]
@@ -87,7 +88,7 @@ class ConfigFormatCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
+        path = cfg_path(args.config)
         targets = format_existing_config(
             path,
             backup=not bool(args.no_backup),

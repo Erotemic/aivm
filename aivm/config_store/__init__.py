@@ -3,18 +3,17 @@
 from .io import (
     ConfigSource,
     LoadedStore,
+    format_existing_config,
     is_split_layout,
     load_config_document,
     load_store,
     render_split_fragments,
     save_store,
     save_store_split,
-    format_existing_config,
     split_fragment_paths,
     split_source_paths,
 )
 from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
-from .parse import parse_store_toml
 from .mutate import (
     remove_attachment,
     remove_network,
@@ -24,7 +23,13 @@ from .mutate import (
     upsert_vm,
     upsert_vm_with_network,
 )
-from .paths import app_data_dir, app_data_path, persistent_host_state_dir, store_path
+from .parse import parse_store_toml
+from .paths import (
+    app_data_dir,
+    app_data_path,
+    persistent_host_state_dir,
+    store_path,
+)
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,

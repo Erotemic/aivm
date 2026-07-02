@@ -72,7 +72,7 @@ def test_vm_create_uses_defaults_and_adds_vm(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
@@ -84,7 +84,7 @@ def test_vm_create_uses_defaults_and_adds_vm(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -118,7 +118,7 @@ def test_vm_create_falls_back_to_existing_vm_when_defaults_missing(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
@@ -130,7 +130,7 @@ def test_vm_create_falls_back_to_existing_vm_when_defaults_missing(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -167,7 +167,7 @@ def test_vm_create_yes_preserves_existing_active_vm(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
@@ -179,7 +179,7 @@ def test_vm_create_yes_preserves_existing_active_vm(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -216,7 +216,7 @@ def test_vm_create_set_default_opt_in(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
@@ -228,7 +228,7 @@ def test_vm_create_set_default_opt_in(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -265,7 +265,7 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops._review_vm_create_overrides_interactive',
@@ -286,7 +286,7 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -326,7 +326,7 @@ def test_vm_delete_removes_vm_and_attachments(
     )
     save_store(store, cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._load_cfg_with_path',
+        'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
@@ -349,7 +349,7 @@ def test_vm_delete_warns_when_network_becomes_unused(
     save_store(store, cfg_path)
     warns: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._load_cfg_with_path',
+        'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
     monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
@@ -410,7 +410,7 @@ def test_vm_create_interactive_edit_overrides_defaults(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
     answers = iter(
@@ -450,7 +450,7 @@ def test_vm_create_interactive_edit_overrides_defaults(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -481,7 +481,7 @@ def test_vm_create_interactive_abort(
     store.defaults = AgentVMConfig()
     save_store(store, cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: 'n')
@@ -510,7 +510,7 @@ def test_vm_create_warns_when_requested_resources_look_too_high(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
@@ -550,7 +550,7 @@ def test_vm_create_ensures_network_before_vm_create(
     store.defaults = defaults
     save_store(store, cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
@@ -589,7 +589,7 @@ def test_vm_create_errors_when_resources_physically_impossible(
     store.defaults = defaults
     save_store(store, cfg_path)
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle._cfg_path', lambda p: cfg_path if p else cfg_path
+        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
@@ -641,7 +641,7 @@ def test_vm_create_initial_persistent_share_uses_final_vm_name(
         'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops._maybe_install_missing_host_deps',
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
         lambda **kwargs: None,
     )
     monkeypatch.setattr(
@@ -653,7 +653,7 @@ def test_vm_create_initial_persistent_share_uses_final_vm_name(
 
     prepared: list[tuple[str, bool]] = []
     monkeypatch.setattr(
-        'aivm.attachments.persistent._ensure_persistent_root_parent_dir',
+        'aivm.vm.create_ops._ensure_persistent_root_parent_dir',
         lambda cfg, *, dry_run: prepared.append((cfg.vm.name, dry_run)),
     )
     created: list[tuple[AgentVMConfig, dict]] = []

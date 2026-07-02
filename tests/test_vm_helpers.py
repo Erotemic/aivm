@@ -35,19 +35,7 @@ from aivm.vm.cloudinit import _write_cloud_init
 from aivm.vm.connectivity import _mac_for_vm
 from aivm.vm.host_access import _ensure_qemu_access
 from aivm.vm.share import AttachmentAccess, AttachmentMode
-
-
-def _activate_manager(*, yes_sudo: bool = True) -> None:
-    CommandManager.activate(CommandManager(yes_sudo=yes_sudo))
-
-
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+from tests.helpers import FakeLog, FakeProc, activate_manager
 
 
 def test_mac_for_vm_parsing(monkeypatch: MonkeyPatch) -> None:
@@ -73,9 +61,7 @@ def test_mac_for_vm_uses_step_when_ungrouped(
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-mac'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
     step_titles: list[str] = []
     orig_step = CommandManager.step
@@ -88,7 +74,7 @@ def test_mac_for_vm_uses_step_when_ungrouped(
 
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(
+        lambda cmd, **kwargs: FakeProc(
             0,
             (
                 ' Interface   Type      Source     Model    MAC\n'
@@ -135,10 +121,10 @@ def test_vm_share_helpers(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
   </devices>
 </domain>
 """
-    _activate_manager()
+    activate_manager(monkeypatch)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(0, xml, ''),
+        lambda cmd, **kwargs: FakeProc(0, xml, ''),
     )
     assert vm_has_share(cfg, source_dir, share_tag, use_sudo=False) is True
     assert vm_share_mappings(cfg, use_sudo=False) == [
@@ -150,7 +136,7 @@ def test_vm_has_virtiofs_shared_memory(
     monkeypatch: MonkeyPatch,
 ) -> None:
     cfg = AgentVMConfig()
-    _activate_manager()
+    activate_manager(monkeypatch)
     xml_with_shared = """
 <domain>
   <memoryBacking>
@@ -161,18 +147,18 @@ def test_vm_has_virtiofs_shared_memory(
 """
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(0, xml_with_shared, ''),
+        lambda cmd, **kwargs: FakeProc(0, xml_with_shared, ''),
     )
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is True
 
     xml_without_shared = '<domain><memoryBacking/></domain>'
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(0, xml_without_shared, ''),
+        lambda cmd, **kwargs: FakeProc(0, xml_without_shared, ''),
     )
     # Domain XML is cached on the manager between mutations, so start a
     # fresh manager to observe the changed XML.
-    _activate_manager()
+    activate_manager(monkeypatch)
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 
@@ -188,9 +174,7 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
 
     calls: list[list[str]] = []
 
-    _activate_manager()
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
     def fake_subprocess_run(cmd, **kwargs: Any):  # type: ignore[no-untyped-def]
         del kwargs
@@ -204,11 +188,11 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if parts[:3] == ['sudo', '-n', 'true']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'running\n', '')
+            return FakeProc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'attach-device']:
-            return _Proc(
+            return FakeProc(
                 1,
                 '',
                 'error: Requested operation is not valid: Target already exists',
@@ -439,9 +423,7 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
     cfg.vm.name = 'vm-existing'
     monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
     step_titles: list[str] = []
     orig_step = CommandManager.step
@@ -454,7 +436,7 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -466,9 +448,9 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'shut off\n', '')
+            return FakeProc(0, 'shut off\n', '')
         if normalized[:2] == ['virsh', 'start']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -498,13 +480,11 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
     cfg.vm.name = 'vm-paused'
     monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -516,9 +496,9 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, f'{paused_state}\n', '')
+            return FakeProc(0, f'{paused_state}\n', '')
         if normalized[:2] == ['virsh', 'resume']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -549,11 +529,9 @@ def test_create_or_start_shutting_down_vm_raises_friendly_error(
     cfg.vm.name = 'vm-shutting-down'
     monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         normalized = parts
@@ -564,7 +542,7 @@ def test_create_or_start_shutting_down_vm_raises_friendly_error(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'in shutdown\n', '')
+            return FakeProc(0, 'in shutdown\n', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -591,26 +569,16 @@ def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
         'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
     )
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> P:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = cmd[1:] if cmd and cmd[0] == 'sudo' else cmd
         if normalized[:2] == ['bash', '-c'] and 'cat > ' in normalized[2]:
             script = normalized[2]
             if 'user-data' in script:
                 heredocs['user-data'] = script
-        return P(0, '', '')
+        return FakeProc(0, '', '')
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     _write_cloud_init(cfg, dry_run=False)
     user_data_script = heredocs['user-data']
@@ -651,23 +619,13 @@ def test_write_cloud_init_unlinks_seed_iso_before_rebuild(
         'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
     )
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> P:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = cmd[1:] if cmd and cmd[0] == 'sudo' else cmd
         commands.append(list(normalized))
-        return P(0, '', '')
+        return FakeProc(0, '', '')
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     _write_cloud_init(cfg, dry_run=False)
     rm_idx = [
@@ -701,26 +659,16 @@ def test_refresh_cloud_init_seed_for_next_boot_bumps_instance_id(
         'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
     )
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> P:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = cmd[1:] if cmd and cmd[0] == 'sudo' else cmd
         if normalized[:2] == ['bash', '-c'] and 'cat > ' in normalized[2]:
             script = normalized[2]
             if 'meta-data' in script:
                 heredocs['meta-data'] = script
-        return P(0, '', '')
+        return FakeProc(0, '', '')
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
 
     refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
@@ -731,7 +679,7 @@ def test_refresh_cloud_init_seed_for_next_boot_bumps_instance_id(
 def test_fetch_image_uses_atomic_temp_then_move(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -746,7 +694,7 @@ def test_fetch_image_uses_atomic_temp_then_move(
         '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -755,8 +703,8 @@ def test_fetch_image_uses_atomic_temp_then_move(
             normalized = normalized[1:]
         calls.append(normalized)
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{expected}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
@@ -776,7 +724,7 @@ def test_fetch_image_uses_atomic_temp_then_move(
 def test_fetch_image_revalidates_cached_image_before_reuse(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -789,7 +737,7 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
 
     monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: True)
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -798,8 +746,8 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
             normalized = normalized[1:]
         calls.append(normalized)
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{expected}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
@@ -812,7 +760,7 @@ def test_fetch_image_revalidates_cached_image_before_reuse(
 def test_fetch_image_redownloads_when_cached_hash_is_stale(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -829,7 +777,7 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
         'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         nonlocal sha_calls
         del kwargs
         normalized = [str(part) for part in cmd]
@@ -841,10 +789,10 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
         if normalized[:1] == ['sha256sum']:
             sha_calls += 1
             digest = 'bad' * 21 + 'b' if sha_calls == 1 else expected
-            return _Proc(0, f'{digest[:64]}  {normalized[-1]}\n', '')
+            return FakeProc(0, f'{digest[:64]}  {normalized[-1]}\n', '')
         if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return _Proc(0, '', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
@@ -858,7 +806,7 @@ def test_fetch_image_redownloads_when_cached_hash_is_stale(
 def test_fetch_image_validates_ubuntu_checksum(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -873,7 +821,7 @@ def test_fetch_image_validates_ubuntu_checksum(
         '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -882,10 +830,10 @@ def test_fetch_image_validates_ubuntu_checksum(
             normalized = normalized[1:]
         calls.append(normalized)
         if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{expected}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
@@ -896,7 +844,7 @@ def test_fetch_image_validates_ubuntu_checksum(
 def test_fetch_image_raises_on_checksum_mismatch(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -909,7 +857,7 @@ def test_fetch_image_raises_on_checksum_mismatch(
     calls = []
     actual = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -918,10 +866,10 @@ def test_fetch_image_raises_on_checksum_mismatch(
             normalized = normalized[1:]
         calls.append(normalized)
         if normalized[:6] == ['curl', '-L', '--fail', '--progress-bar', '-o']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{actual}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{actual}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     with pytest.raises(RuntimeError, match='checksum mismatch'):
@@ -947,7 +895,7 @@ def test_fetch_image_rejects_unsupported_url(
 def test_fetch_image_accepts_supported_file_url(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -967,7 +915,7 @@ def test_fetch_image_accepts_supported_file_url(
 
     calls = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -976,8 +924,8 @@ def test_fetch_image_accepts_supported_file_url(
             normalized = normalized[1:]
         calls.append(normalized)
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{digest}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{digest}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     out = fetch_image(cfg, dry_run=False)
@@ -989,7 +937,7 @@ def test_fetch_image_accepts_supported_file_url(
 def test_fetch_image_preview_uses_grouped_block_summaries(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
@@ -1004,25 +952,10 @@ def test_fetch_image_preview_uses_grouped_block_summaries(
         '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21'
     )
 
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:
-            messages.append(fmt.format(*args))
+    fake_log = FakeLog(messages, levels=('info', 'warning', 'error'))
+    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: fake_log)
 
-        def debug(self, fmt: str, *args: object) -> None:
-            return None
-
-        def trace(self, fmt: str, *args: object) -> None:
-            return None
-
-        def warning(self, fmt: str, *args: object) -> None:
-            messages.append(fmt.format(*args))
-
-        def error(self, fmt: str, *args: object) -> None:
-            messages.append(fmt.format(*args))
-
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:1] == ['sudo']:
@@ -1030,8 +963,8 @@ def test_fetch_image_preview_uses_grouped_block_summaries(
         if normalized[:1] == ['-n']:
             normalized = normalized[1:]
         if normalized[:1] == ['sha256sum']:
-            return _Proc(0, f'{expected}  {normalized[-1]}\n', '')
-        return _Proc(0, '', '')
+            return FakeProc(0, f'{expected}  {normalized[-1]}\n', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
 
@@ -1048,7 +981,7 @@ def test_fetch_image_preview_uses_grouped_block_summaries(
 def test_qemu_access_does_not_recurse_vm_root_after_shared_root_bind(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch)
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-bind-safe'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -1071,15 +1004,15 @@ def test_qemu_access_does_not_recurse_vm_root_after_shared_root_bind(
             return CmdResult(0, 'libvirt-qemu:x:1:\n', '')
         return CmdResult(0, '', '')
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         normalized = [str(part) for part in cmd]
         if normalized[:2] == ['sudo', '-n']:
             normalized = normalized[2:]
         calls.append(normalized)
         if normalized[:2] == ['findmnt', '-n']:
-            return _Proc(1, '', '')
-        return _Proc(0, '', '')
+            return FakeProc(1, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.vm.lifecycle.CommandManager.run', fake_run_cmd)
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1324,9 +1257,7 @@ def test_shutdown_vm_when_running_sends_shutdown_signal(
     """Test that shutdown_vm sends ACPI shutdown signal when VM is running."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shutdown-test'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1335,7 +1266,7 @@ def test_shutdown_vm_when_running_sends_shutdown_signal(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1347,9 +1278,9 @@ def test_shutdown_vm_when_running_sends_shutdown_signal(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'running\n', '')
+            return FakeProc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1376,9 +1307,7 @@ def test_shutdown_vm_when_not_running_does_nothing(
     """Test that shutdown_vm does nothing when VM is already stopped."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shutdown-off'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1387,7 +1316,7 @@ def test_shutdown_vm_when_not_running_does_nothing(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1399,7 +1328,7 @@ def test_shutdown_vm_when_not_running_does_nothing(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'shut off\n', '')
+            return FakeProc(0, 'shut off\n', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1424,9 +1353,7 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
     """Test that shutdown_vm resumes pmsuspended VM before shutting down."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shutdown-pmsuspended'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1436,7 +1363,7 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
     calls: list[list[str]] = []
     domstate_call_count = [0]
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1451,13 +1378,13 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
             domstate_call_count[0] += 1
             # First call: pmsuspended, subsequent calls: running
             if domstate_call_count[0] == 1:
-                return _Proc(0, 'pmsuspended\n', '')
+                return FakeProc(0, 'pmsuspended\n', '')
             else:
-                return _Proc(0, 'running\n', '')
+                return FakeProc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'resume']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1487,9 +1414,9 @@ def test_shutdown_vm_dry_run(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append(list(cmd))
-        return _Proc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     shutdown_vm(cfg, dry_run=True)
@@ -1503,16 +1430,14 @@ def test_shutdown_vm_raises_on_shutdown_failure(
     """Test that shutdown_vm raises when shutdown signal fails."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shutdown-fail'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
         lambda self, **k: None,
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         normalized = parts
@@ -1523,9 +1448,9 @@ def test_shutdown_vm_raises_on_shutdown_failure(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'running\n', '')
+            return FakeProc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(1, '', 'error: failed to shut down domain')
+            return FakeProc(1, '', 'error: failed to shut down domain')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1539,16 +1464,14 @@ def test_shutdown_vm_raises_with_stderr_error_message(
     """Test that shutdown_vm uses stderr for error messages."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shutdown-badstate'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
         lambda self, **k: None,
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         normalized = parts
@@ -1559,7 +1482,7 @@ def test_shutdown_vm_raises_with_stderr_error_message(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(1, '', 'error: domain is not found')
+            return FakeProc(1, '', 'error: domain is not found')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1573,9 +1496,7 @@ def test_restart_vm_when_running_shutdowns_then_starts(
     """Test that restart_vm shuts down then starts when VM is running."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restart-test'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1591,7 +1512,7 @@ def test_restart_vm_when_running_shutdowns_then_starts(
     calls: list[list[str]] = []
     domstate_call_count = [0]  # Track how many times we check state
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1606,13 +1527,13 @@ def test_restart_vm_when_running_shutdowns_then_starts(
             domstate_call_count[0] += 1
             # First call: VM is running, second call (after shutdown): VM is off
             if domstate_call_count[0] == 1:
-                return _Proc(0, 'running\n', '')
+                return FakeProc(0, 'running\n', '')
             else:
-                return _Proc(0, 'shut off\n', '')
+                return FakeProc(0, 'shut off\n', '')
         if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['virsh', 'start']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1639,9 +1560,7 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
     """Test that restart_vm resumes pmsuspended VM before shutting down."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restart-pmsuspended'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1661,7 +1580,7 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
     calls: list[list[str]] = []
     domstate_count = [0]  # Track domstate call count
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1678,15 +1597,15 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
             # Second call: running (after resume, for _wait_for_vm_not_state)
             # Third call: running (for shutdown check)
             if domstate_count[0] == 1:
-                return _Proc(0, 'pmsuspended\n', '')
+                return FakeProc(0, 'pmsuspended\n', '')
             else:
-                return _Proc(0, 'running\n', '')
+                return FakeProc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'resume']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['virsh', 'shutdown']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         if normalized[:2] == ['virsh', 'start']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1713,9 +1632,7 @@ def test_restart_vm_when_not_running_just_starts(
     """Test that restart_vm just starts when VM is already stopped."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-restart-off'
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
     # Mock confirm_sudo_scope to avoid interactive prompts
     monkeypatch.setattr(
         'aivm.commands.CommandManager.confirm_sudo_scope',
@@ -1726,7 +1643,7 @@ def test_restart_vm_when_not_running_just_starts(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         calls.append(parts)
@@ -1738,9 +1655,9 @@ def test_restart_vm_when_not_running_just_starts(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(0, 'shut off\n', '')
+            return FakeProc(0, 'shut off\n', '')
         if normalized[:2] == ['virsh', 'start']:
-            return _Proc(0, '', '')
+            return FakeProc(0, '', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
@@ -1771,9 +1688,9 @@ def test_restart_vm_dry_run(
 
     calls: list[list[str]] = []
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append(list(cmd))
-        return _Proc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     restart_vm(cfg, dry_run=True)
@@ -1810,7 +1727,7 @@ def test_restart_vm_raises_with_stderr_error_message(
         lambda self, **k: None,
     )
 
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = list(cmd)
         normalized = parts
@@ -1821,7 +1738,7 @@ def test_restart_vm_raises_with_stderr_error_message(
         if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
             normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
-            return _Proc(1, '', 'error: domain is not found')
+            return FakeProc(1, '', 'error: domain is not found')
         raise AssertionError(f'unexpected command: {cmd!r}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)

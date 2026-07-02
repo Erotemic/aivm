@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...commands import CommandManager
-from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...config import AgentVMConfig
+from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...runtime import virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
+from .fdguard import _fdguard_drift
 from .models import VMUpdateDrift
 from .util import (
     _parse_domblkinfo_capacity,
@@ -16,7 +17,6 @@ from .util import (
     _parse_vm_disk_path_from_dumpxml,
     _parse_vm_network_from_dumpxml,
 )
-from .fdguard import _fdguard_drift
 from .virtiofs import _virtiofs_binary_drift
 
 

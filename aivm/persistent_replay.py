@@ -372,7 +372,7 @@ def persistent_replay_service_unit() -> str:
 
 def persistent_host_replay_python() -> str:
     return textwrap.dedent(
-        f"""        #!/usr/bin/env python3
+        """        #!/usr/bin/env python3
         import argparse
         import json
         import os
@@ -417,13 +417,13 @@ def persistent_host_replay_python() -> str:
                 return
             if not source_dir:
                 print(
-                    f"WARNING: skipping persistent host bind record {{token}} with missing source_dir",
+                    f"WARNING: skipping persistent host bind record {token} with missing source_dir",
                     file=sys.stderr,
                 )
                 return
             if not os.path.isdir(source_dir):
                 print(
-                    f"WARNING: skipping persistent host bind record {{token}} because source_dir is missing: {{source_dir}}",
+                    f"WARNING: skipping persistent host bind record {token} because source_dir is missing: {source_dir}",
                     file=sys.stderr,
                 )
                 return
@@ -437,12 +437,12 @@ def persistent_host_replay_python() -> str:
                     return
                 if is_mountpoint(target):
                     raise RuntimeError(
-                        f"could not replace existing persistent host bind {{target}}"
+                        f"could not replace existing persistent host bind {target}"
                     )
             run(["mount", "--bind", source_dir, target])
             if not (is_mountpoint(target) and same_tree(source_dir, target)):
                 raise RuntimeError(
-                    f"could not verify persistent host bind {{target}} -> {{source_dir}}"
+                    f"could not verify persistent host bind {target} -> {source_dir}"
                 )
 
         def prune_stale_mounts(export_root, desired_tokens):

@@ -8,20 +8,25 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..cli._common import (
-    _activate_cfg_runtime,
-    _maybe_install_missing_host_deps,
-    log,
+from loguru import logger as log
+
+from ..attachments.persistent import (
+    _ensure_persistent_root_parent_dir,
+    _persistent_root_host_dir,
+)
+from ..attachments.resolve import (
+    ATTACHMENT_MODE_PERSISTENT,
+    ATTACHMENT_MODE_SHARED,
+    ATTACHMENT_MODE_SHARED_ROOT,
+    _resolve_attachment,
+)
+from ..attachments.shared_root import (
+    SHARED_ROOT_VIRTIOFS_TAG,
+    _ensure_shared_root_parent_dir,
+    _shared_root_host_dir,
 )
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..firewall import apply_firewall
-from ..net import ensure_network
-from ..runtime import runtime_is_session
-from ..resource_checks import (
-    vm_resource_impossible_lines,
-    vm_resource_warning_lines,
-)
 from ..config_store import (
     find_network,
     find_vm,
@@ -31,6 +36,15 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from ..firewall import apply_firewall
+from ..net import ensure_network
+from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
+from ..resource_checks import (
+    vm_resource_impossible_lines,
+    vm_resource_warning_lines,
+)
+from ..runtime import runtime_is_session
+from ..services import activate_cfg_runtime, maybe_install_missing_host_deps
 from ..vm import create_or_start_vm
 
 if TYPE_CHECKING:
@@ -267,19 +281,6 @@ def _initial_share_mapping_for_create(
     if host_src is None:
         return '', '', ''
 
-    from ..attachments.persistent import _persistent_root_host_dir
-    from ..attachments.resolve import (
-        ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED,
-        ATTACHMENT_MODE_SHARED_ROOT,
-        _resolve_attachment,
-    )
-    from ..attachments.shared_root import (
-        SHARED_ROOT_VIRTIOFS_TAG,
-        _shared_root_host_dir,
-    )
-    from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
-
     attachment = _resolve_attachment(
         cfg,
         cfg_path,
@@ -313,12 +314,8 @@ def _ensure_initial_share_source_for_create(
 ) -> None:
     """Create VM-level share export parents needed by initial virtiofs."""
     if attachment_mode == 'persistent':
-        from ..attachments.persistent import _ensure_persistent_root_parent_dir
-
         _ensure_persistent_root_parent_dir(cfg, dry_run=dry_run)
     elif attachment_mode == 'shared-root':
-        from ..attachments.shared_root import _ensure_shared_root_parent_dir
-
         _ensure_shared_root_parent_dir(cfg, dry_run=dry_run)
 
 
@@ -374,7 +371,7 @@ def create_vm_from_defaults(
         if 'No config defaults found in store' in str(ex):
             return 1
         raise ex
-    _activate_cfg_runtime(cfg)
+    activate_cfg_runtime(cfg)
 
     # Apply resource warnings
     for line in vm_resource_warning_lines(cfg):
@@ -426,7 +423,7 @@ def create_vm_from_defaults(
     )
 
     # Install host dependencies
-    _maybe_install_missing_host_deps(yes=yes, dry_run=dry_run)
+    maybe_install_missing_host_deps(yes=yes, dry_run=dry_run)
 
     # Create VM with CommandManager narration
     mgr = CommandManager.current()

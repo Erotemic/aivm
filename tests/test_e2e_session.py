@@ -26,7 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from test_e2e_nested import (
+from aivm.config import AgentVMConfig
+from aivm.config_store import Store, save_store, upsert_vm
+from tests.test_e2e_nested import (
     _default_shared_image_path,
     _ensure_user_cached_image,
     _host_context_enabled,
@@ -34,8 +36,7 @@ from test_e2e_nested import (
     _run_cli,
 )
 
-from aivm.config import AgentVMConfig
-from aivm.config_store import Store, load_store, save_store, upsert_vm
+pytestmark = pytest.mark.e2e
 
 
 def _session_runtime_available() -> str | None:

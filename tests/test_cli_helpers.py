@@ -10,16 +10,15 @@ import pytest
 from pytest import MonkeyPatch
 
 import aivm.cli._common as common_mod
-from aivm.cli._common import (
-    _maybe_offer_create_ssh_identity,
-)
-from aivm.cli.help import HelpCompletionCLI, HelpRawCLI, PlanCLI
+import aivm.services as services_mod
 from aivm.attachments.guest import (
     _upsert_ssh_config_entry,
 )
+from aivm.cli.help import HelpCompletionCLI, HelpRawCLI, PlanCLI
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
+from aivm.services import maybe_offer_create_ssh_identity
 from aivm.vm.share import _auto_share_tag_for_path
 
 
@@ -53,7 +52,7 @@ def test_plan_omits_default_config_flag(
 ) -> None:
     default = Path('/tmp/default-config.toml')
     monkeypatch.setattr(
-        'aivm.cli.help._cfg_path',
+        'aivm.cli.help.cfg_path',
         lambda p: default if p is None else Path(p),
     )
     PlanCLI.main(argv=False, config=None, yes=True)
@@ -69,7 +68,7 @@ def test_plan_includes_nondefault_config_flag(
     default = Path('/tmp/default-config.toml')
     custom = Path('/tmp/custom-config.toml')
     monkeypatch.setattr(
-        'aivm.cli.help._cfg_path',
+        'aivm.cli.help.cfg_path',
         lambda p: default if p is None else Path(p),
     )
     PlanCLI.main(argv=False, config=str(custom), yes=True)
@@ -86,7 +85,7 @@ def test_cli_yes_sudo_defaults_from_config(
     store.defaults = AgentVMConfig()
     store.behavior.yes_sudo = True
     save_store(store, cfg_path)
-    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)
     parsed = PlanCLI.cli(
         argv=False,
         data={'config': str(cfg_path), 'yes': False, 'yes_sudo': False},
@@ -102,7 +101,7 @@ def test_cli_auto_approve_readonly_sudo_defaults_from_config(
     store.defaults = AgentVMConfig()
     store.behavior.auto_approve_readonly_sudo = False
     save_store(store, cfg_path)
-    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)
     PlanCLI.cli(
         argv=False,
         data={'config': str(cfg_path), 'yes': False, 'yes_sudo': False},
@@ -136,7 +135,7 @@ def test_help_raw_outputs_direct_system_commands(
     cfg.firewall.table = 'fw-raw'
     upsert_vm(store, cfg)
     save_store(store, cfg_path)
-    monkeypatch.setattr('aivm.cli.help._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)
     rc = HelpRawCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     out = capsys.readouterr().out
@@ -173,12 +172,12 @@ def test_hydrate_runtime_defaults_skips_detection_when_paths_already_set(
     cfg.paths.ssh_identity_file = '/tmp/id_existing'
     cfg.paths.ssh_pubkey_path = '/tmp/id_existing.pub'
     monkeypatch.setattr(
-        'aivm.cli._common.detect_ssh_identity',
+        'aivm.services.detect_ssh_identity',
         lambda: (_ for _ in ()).throw(
             AssertionError('detect_ssh_identity should not be called')
         ),
     )
-    assert common_mod._hydrate_runtime_defaults(cfg) is False
+    assert services_mod.hydrate_ssh_identity_defaults(cfg) is False
 
 
 def test_resolve_vm_name_prefers_active_vm_for_multi_attached_folder(
@@ -200,8 +199,8 @@ def test_resolve_vm_name_prefers_active_vm_for_multi_attached_folder(
     upsert_attachment(store, host_path=host_src, vm_name='vm-b')
     save_store(store, cfg_path)
 
-    monkeypatch.setattr('aivm.cli._common._cfg_path', lambda p: cfg_path)
-    vm_name, resolved = common_mod._resolve_vm_name(
+    monkeypatch.setattr('aivm.services.cfg_path', lambda p: cfg_path)
+    vm_name, resolved = services_mod.resolve_vm_name(
         config_opt=str(cfg_path),
         vm_opt='',
         host_src=host_src,
@@ -229,10 +228,10 @@ def test_resolve_vm_name_errors_noninteractive_for_multi_attached_folder(
     upsert_attachment(store, host_path=host_src, vm_name='vm-b')
     save_store(store, cfg_path)
 
-    monkeypatch.setattr('aivm.cli._common._cfg_path', lambda p: cfg_path)
+    monkeypatch.setattr('aivm.services.cfg_path', lambda p: cfg_path)
     monkeypatch.setattr('sys.stdin.isatty', lambda: False)
     with pytest.raises(RuntimeError, match='attached to multiple VMs'):
-        common_mod._resolve_vm_name(
+        services_mod.resolve_vm_name(
             config_opt=str(cfg_path),
             vm_opt='',
             host_src=host_src,
@@ -249,10 +248,10 @@ def test_maybe_offer_create_ssh_identity_generates_distinct_aivm_key(
 
     CommandManager.activate(CommandManager(yes=True))
     monkeypatch.setattr(
-        common_mod.Path, 'home', staticmethod(lambda: fake_home)
+        services_mod.Path, 'home', staticmethod(lambda: fake_home)
     )
     monkeypatch.setattr(
-        'aivm.cli._common.which', lambda cmd: '/usr/bin/ssh-keygen'
+        'aivm.services.which', lambda cmd: '/usr/bin/ssh-keygen'
     )
 
     class Proc:
@@ -280,7 +279,7 @@ def test_maybe_offer_create_ssh_identity_generates_distinct_aivm_key(
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
 
-    changed = _maybe_offer_create_ssh_identity(
+    changed = maybe_offer_create_ssh_identity(
         cfg,
         yes=True,
         prompt_reason='test prompt',

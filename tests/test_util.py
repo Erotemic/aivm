@@ -15,6 +15,7 @@ from aivm.commands import (
     shell_join,
 )
 from aivm.util import CmdError
+from tests.helpers import FakeLog, FakeProc, activate_manager
 
 
 def _activate_manager(**kwargs: Any) -> CommandManager:
@@ -54,17 +55,10 @@ def test_nested_intent_breadcrumb_rendering() -> None:
 def test_plan_prompts_once_for_multiple_sudo_commands(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
     calls = []
     prompts = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         builtins,
         'input',
@@ -72,7 +66,7 @@ def test_plan_prompts_once_for_multiple_sudo_commands(
     )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or P(),
+        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -106,19 +100,12 @@ def test_plan_prompts_once_for_multiple_sudo_commands(
 def test_command_handle_result_flushes_through_handle(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager(yes_sudo=True)
+    activate_manager(monkeypatch, yes_sudo=True, isatty=True)
     calls = []
 
-    class P:
-        returncode = 0
-        stdout = 'ok'
-        stderr = ''
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append(cmd) or P(),
+        lambda cmd, **kwargs: calls.append(cmd) or FakeProc(0, 'ok', ''),
     )
 
     mgr = CommandManager.current()
@@ -140,17 +127,10 @@ def test_command_handle_result_flushes_through_handle(
 def test_plan_yes_approves_current_block_only(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
     prompts = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
     answers = iter(['y', 'y'])
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         builtins,
         'input',
@@ -158,7 +138,7 @@ def test_plan_yes_approves_current_block_only(
     )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -176,16 +156,9 @@ def test_plan_yes_approves_current_block_only(
 def test_plan_all_approves_current_and_future_blocks(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
     prompts = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         builtins,
         'input',
@@ -193,7 +166,7 @@ def test_plan_all_approves_current_and_future_blocks(
     )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -208,37 +181,23 @@ def test_plan_all_approves_current_and_future_blocks(
 def test_plan_show_full_commands_then_reprompts(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
     prompts = []
-    messages = []
-
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def trace(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
+    messages: list[str] = []
 
     answers = iter(['s', 'y'])
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         builtins,
         'input',
         lambda prompt: prompts.append(prompt) or next(answers),
     )
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.log.opt',
+        lambda **kwargs: FakeLog(messages, ('info', 'debug')),
+    )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -262,19 +221,12 @@ def test_plan_show_full_commands_then_reprompts(
 def test_manager_run_uses_submit_execution_path(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    mgr = _activate_manager(yes_sudo=True)
+    mgr = activate_manager(monkeypatch, yes_sudo=True, isatty=True)
     calls = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append(cmd) or P(),
+        lambda cmd, **kwargs: calls.append(cmd) or FakeProc(),
     )
 
     mgr.run(['virsh', 'dominfo', 'vm'], sudo=True, check=True, capture=True)
@@ -287,45 +239,33 @@ def test_manager_run_uses_submit_execution_path(
 def test_confirm_sudo_scope_autoauthenticates_read_auth_with_autoapprove(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    mgr = _activate_manager(auto_approve_readonly_sudo=True)
+    mgr = activate_manager(
+        monkeypatch,
+        yes_sudo=False,
+        isatty=True,
+        auto_approve_readonly_sudo=True,
+    )
     prompts = []
-    messages = []
+    messages: list[str] = []
     auth_cmds = []
-
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: Any) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: Any) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def trace(self, fmt: str, *args: Any) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
 
     def fake_run(cmd, **kwargs: Any):  # type: ignore[no-untyped-def]
         auth_cmds.append(cmd)
         if cmd == ['sudo', '-n', 'true']:
-            return P(returncode=1, stderr='sudo: a password is required')
+            return FakeProc(returncode=1, stderr='sudo: a password is required')
         if cmd == ['sudo', '-v']:
-            return P(returncode=0)
+            return FakeProc(returncode=0)
         raise AssertionError(cmd)
 
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(
         builtins,
         'input',
         lambda prompt: prompts.append(prompt) or 'y',
     )
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.log.opt',
+        lambda **kwargs: FakeLog(messages, ('info', 'debug', 'trace')),
+    )
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
 
     mgr.confirm_sudo_scope(
@@ -348,38 +288,26 @@ def test_confirm_sudo_scope_autoauthenticates_read_auth_with_autoapprove(
 def test_confirm_sudo_scope_logs_preview_commands(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    mgr = _activate_manager(auto_approve_readonly_sudo=True)
-    messages = []
+    mgr = activate_manager(
+        monkeypatch,
+        yes_sudo=False,
+        isatty=True,
+        auto_approve_readonly_sudo=True,
+    )
+    messages: list[str] = []
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def trace(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> P:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         if cmd == ['sudo', '-n', 'true']:
-            return P(returncode=1, stderr='sudo: a password is required')
+            return FakeProc(returncode=1, stderr='sudo: a password is required')
         if cmd == ['sudo', '-v']:
-            return P(returncode=0)
+            return FakeProc(returncode=0)
         raise AssertionError(cmd)
 
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(builtins, 'input', lambda prompt: 'y')
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.log.opt',
+        lambda **kwargs: FakeLog(messages, ('info', 'debug', 'trace')),
+    )
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
 
     mgr.confirm_sudo_scope(
@@ -401,30 +329,16 @@ def test_confirm_sudo_scope_logs_preview_commands(
 def test_plan_preview_includes_summary_and_command(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager(yes_sudo=True)
-    messages = []
+    activate_manager(monkeypatch, yes_sudo=True, isatty=True)
+    messages: list[str] = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def trace(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.log.opt',
+        lambda **kwargs: FakeLog(messages, ('info', 'debug')),
+    )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -444,34 +358,17 @@ def test_plan_preview_includes_summary_and_command(
 def test_run_logs_use_stacklevel_to_attribute_caller(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager(yes_sudo=True)
+    activate_manager(monkeypatch, yes_sudo=True, isatty=True)
     depths_seen: list[int] = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-        def debug(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-        def trace(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-    def _tracking_opt(**kwargs: Any) -> _FakeLog:
+    def _tracking_opt(**kwargs: Any) -> FakeLog:
         depths_seen.append(kwargs.get('depth', 0))
-        return _FakeLog()
+        return FakeLog([], ())
 
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('aivm.commands.log.opt', _tracking_opt)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -492,19 +389,12 @@ def test_run_logs_use_stacklevel_to_attribute_caller(
 def test_read_only_command_stays_read_inside_modify_intent(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager()
+    activate_manager(monkeypatch, yes_sudo=False, isatty=False)
     calls = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append(cmd) or P(),
+        lambda cmd, **kwargs: calls.append(cmd) or FakeProc(),
     )
 
     mgr = CommandManager.current()
@@ -527,30 +417,16 @@ def test_read_only_command_stays_read_inside_modify_intent(
 def test_plan_preview_labels_read_only_commands(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    _activate_manager(yes_sudo=True)
-    messages = []
+    activate_manager(monkeypatch, yes_sudo=True, isatty=True)
+    messages: list[str] = []
 
-    class P:
-        returncode = 0
-        stdout = ''
-        stderr = ''
-
-    class _FakeLog:
-        def info(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def debug(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            messages.append(fmt.format(*args))
-
-        def trace(self, fmt: str, *args: object) -> None:  # type: ignore[no-untyped-def]
-            return None
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('aivm.commands.log.opt', lambda **kwargs: _FakeLog())
+    monkeypatch.setattr(
+        'aivm.commands.log.opt',
+        lambda **kwargs: FakeLog(messages, ('info', 'debug')),
+    )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(),
     )
 
     mgr = CommandManager.current()

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from ...commands import CommandError, CommandManager
-from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...errors import AIVMError
+from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...runtime import virsh_cmd
 from .fdguard import _apply_fdguard_drift
 from .models import RestartKind, VMUpdateDrift, _escalate

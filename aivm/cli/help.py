@@ -17,7 +17,8 @@ import ubelt as ub
 
 from ..config import default_vm_name
 from ..config_store import find_vm, load_store
-from ._common import _BaseCommand, _cfg_path
+from ..services import cfg_path
+from ._common import _BaseCommand
 
 
 class PlanCLI(_BaseCommand):
@@ -26,8 +27,8 @@ class PlanCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
-        default_path = _cfg_path(None)
+        path = cfg_path(args.config)
+        default_path = cfg_path(None)
         cfg_flag = (
             f' --config {shlex.quote(str(path))}'
             if path != default_path
@@ -196,7 +197,7 @@ def _resolve_raw_targets(
     vm_name = vm_opt or default_vm_name()
     net_name = 'aivm-net'
     fw_table = 'aivm_sandbox'
-    reg = load_store(_cfg_path(config_opt))
+    reg = load_store(cfg_path(config_opt))
     rec = None
     if vm_opt:
         rec = find_vm(reg, vm_opt)

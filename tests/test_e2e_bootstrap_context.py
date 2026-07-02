@@ -18,13 +18,15 @@ import uuid
 from pathlib import Path
 
 import pytest
-from test_e2e_nested import (
+
+from aivm.config import AgentVMConfig
+from aivm.config_store import Store, save_store, upsert_vm
+from tests.test_e2e_nested import (
     _make_temp_ssh_material,
     _run_cli,
 )
 
-from aivm.config import AgentVMConfig
-from aivm.config_store import Store, save_store, upsert_vm
+pytestmark = pytest.mark.e2e
 
 
 def _bootstrap_context_enabled() -> bool:

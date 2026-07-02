@@ -19,11 +19,9 @@ from ..host import (
     host_is_debian_like,
     install_deps_debian,
 )
+from ..services import resolve_cfg_fallback
 from ..vm import fetch_image
-from ._common import (
-    _BaseCommand,
-    _resolve_cfg_fallback,
-)
+from ._common import _BaseCommand
 from .firewall import FirewallModalCLI
 from .host_rootless import RootlessModalCLI
 from .host_sudoless import SudolessModalCLI
@@ -136,7 +134,7 @@ class ImageFetchCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             'Fetch base image',

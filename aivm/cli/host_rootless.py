@@ -31,9 +31,10 @@ from ..config_store import load_store, save_store
 from ..host import SESSION_ONLY_CMDS
 from ..privilege import user_can_write_path
 from ..runtime import SESSION_LIBVIRT_URI
+from ..services import cfg_path
 from ..status import status_line
 from ..util import expand, which
-from ._common import _BaseCommand, _cfg_path
+from ._common import _BaseCommand
 
 KVM_DEVICE = Path('/dev/kvm')
 KVM_GROUP = 'kvm'
@@ -75,7 +76,7 @@ def _session_libvirt_ok() -> bool:
 def _effective_session_base_dir(config_opt: str | None) -> Path:
     """Return the base_dir a new session VM would get from the store."""
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
             if reg.defaults is not None and reg.defaults.paths.base_dir:
@@ -168,7 +169,7 @@ class RootlessCheckCLI(_BaseCommand):
         )
         ok_overall &= writable
 
-        reg_path = _cfg_path(args.config)
+        reg_path = cfg_path(args.config)
         runtime_mode = 'system'
         if reg_path.exists():
             reg = load_store(reg_path)
@@ -310,7 +311,7 @@ class RootlessSetupCLI(_BaseCommand):
 
         # Persist config: session runtime, never-sudo privilege mode,
         # user-owned storage, firewall off (not applicable in session).
-        store = _cfg_path(args.config)
+        store = cfg_path(args.config)
         reg = load_store(store)
         reg.behavior.privilege_mode = 'sudoless'
         if reg.defaults is None:

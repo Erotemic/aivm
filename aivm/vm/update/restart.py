@@ -5,8 +5,8 @@ from __future__ import annotations
 import sys
 
 from ...commands import CommandManager
-from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
+from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
 from .models import RestartKind
 

@@ -8,9 +8,9 @@ from pathlib import Path, PurePosixPath
 from loguru import logger as log
 
 from ..config import AgentVMConfig
+from ..config_store import find_attachment_for_vm, load_store
 from ..privilege import require_sudo_allowed, sudo_allowed
 from ..runtime import require_system_runtime, runtime_is_session
-from ..config_store import find_attachment_for_vm, load_store
 from ..vm.share import (
     AttachmentAccess,
     AttachmentMode,

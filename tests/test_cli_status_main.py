@@ -9,12 +9,12 @@ from pytest import MonkeyPatch
 
 from aivm.cli.main import StatusCLI
 from aivm.config import AgentVMConfig
+from aivm.config_store import Store
 from aivm.status import (
     ProbeOutcome,
     anticipated_status_sudo_commands,
     render_global_status,
 )
-from aivm.config_store import Store
 
 main_mod = importlib.import_module('aivm.cli.main')
 
@@ -36,10 +36,10 @@ def test_status_cli_uses_vm_opt_and_sudo(
 
     monkeypatch.setattr(
         main_mod,
-        '_load_cfg_with_path',
+        'load_cfg_with_path',
         fake_load_cfg_with_path,
     )
-    monkeypatch.setattr(main_mod, '_cfg_path', lambda _: cfg_path)
+    monkeypatch.setattr(main_mod, 'cfg_path', lambda _: cfg_path)
     monkeypatch.setattr(
         main_mod.CommandManager,
         'confirm_sudo_scope',

@@ -221,6 +221,7 @@ vm_name = "vm-b"
 host_path = "{project}"
 '''
     from pytest import raises
+
     from aivm.config_store import parse_store_toml
 
     with raises(ValueError, match='vm_name mismatch'):
@@ -310,6 +311,7 @@ network_name = "aivm-net"
     )
 
     from pytest import raises
+
     from aivm.config_store import load_config_document
 
     with raises(ValueError, match='duplicate VM definition'):
@@ -367,7 +369,11 @@ def test_save_store_updates_existing_split_layout(tmp_path: Path) -> None:
     upsert_vm(store, cfg)
     root = tmp_path / 'config.toml'
 
-    from aivm.config_store import load_config_document, save_store, save_store_split
+    from aivm.config_store import (
+        load_config_document,
+        save_store,
+        save_store_split,
+    )
 
     save_store_split(store, root)
     store.vms[0].cfg.vm.cpus = 12
@@ -427,6 +433,7 @@ def test_save_store_split_rejects_orphaned_attachment(tmp_path: Path) -> None:
         AttachmentEntry(host_path=str(tmp_path), vm_name='missing-vm')
     )
     from pytest import raises
+
     from aivm.config_store import save_store_split
 
     with raises(ValueError, match='orphaned|attachment records'):

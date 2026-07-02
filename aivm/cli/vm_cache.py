@@ -6,13 +6,14 @@ import shlex
 from typing import Any
 
 import kwconf
+from loguru import logger as log
 
+from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
 from ..runtime import require_ssh_identity, ssh_base_args
-from ._common import _BaseCommand, _load_cfg, log
-from ..attachments.session import _resolve_ip_for_ssh_ops
+from ..services import load_cfg
 from ..vm import ssh_port_for
-
+from ._common import _BaseCommand
 
 _DROP_CACHES_HELP = (
     'Comma-separated /proc/sys/vm/drop_caches levels to write in the guest. '
@@ -114,7 +115,7 @@ class VMFlushCachesCLI(_BaseCommand):
         except ValueError as ex:
             raise RuntimeError(str(ex)) from ex
 
-        cfg = _load_cfg(args.config, vm_opt=str(args.vm or ''))
+        cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
         vm_name = cfg.vm.name
         # Quote the guest script so the remote login shell hands it to
         # `sh -c` as one argument. Without this the remote shell executed

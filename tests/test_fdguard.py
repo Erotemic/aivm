@@ -21,14 +21,15 @@ from aivm.fdguard import (
     FDGUARD_BIN,
     FDGUARD_TIMER,
     fdguard_conf_text,
+    fdguard_expected_hashes,
     fdguard_install_script,
     fdguard_python,
     fdguard_service_unit,
     fdguard_status_script,
     fdguard_timer_unit,
     fdguard_uninstall_script,
+    parse_fdguard_probe,
 )
-from aivm.fdguard import fdguard_expected_hashes, parse_fdguard_probe
 from aivm.vm.cloudinit import _render_user_data_text
 from aivm.vm.update import FdGuardDrift, VMUpdateDrift
 from aivm.vm.update.fdguard import _apply_fdguard_drift, _fdguard_drift
@@ -468,7 +469,7 @@ def test_vm_fdguard_install_runs_quoted_remote_command(
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_aivm'
 
-    monkeypatch.setattr('aivm.cli.vm_guard._load_cfg', lambda *a, **k: cfg)
+    monkeypatch.setattr('aivm.cli.vm_guard.load_cfg', lambda *a, **k: cfg)
     monkeypatch.setattr(
         'aivm.cli.vm_guard._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.123',

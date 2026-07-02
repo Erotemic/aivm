@@ -155,7 +155,6 @@ def _wait_for_vm_state(
     expires. Raises ``RuntimeError`` if the timeout is reached before
     the target state is observed, or if the domstate command fails.
     """
-    import time
 
     elapsed = 0
     last_state = ''
@@ -193,7 +192,6 @@ def _wait_for_vm_not_state(
     if the domstate command fails.
     This is useful for waiting for a VM to transition out of a suspended state.
     """
-    import time
 
     elapsed = 0
     last_state = ''

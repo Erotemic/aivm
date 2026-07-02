@@ -16,8 +16,9 @@ from ...config_store import (
     load_store,
     save_store,
 )
+from ...services import cfg_path
 from ...util import which
-from .._common import _BaseCommand, _cfg_path
+from .._common import _BaseCommand
 from .paths import _role_source, _vm_config_source
 
 
@@ -59,7 +60,7 @@ class ConfigEditCLI(_BaseCommand):
             target=str(args.target or 'global'),
             name=str(args.name or ''),
         )
-        if path == _cfg_path(args.config) and not path.exists():
+        if path == cfg_path(args.config) and not path.exists():
             reg = load_store(path)
             save_store(reg, path)
         _edit_path(path, args)
@@ -96,7 +97,7 @@ def _resolve_config_edit_target(
     *, config_opt: str | None, target: str, name: str = ''
 ) -> Path:
     """Resolve a user-facing config edit target to a physical file."""
-    root = _cfg_path(config_opt)
+    root = cfg_path(config_opt)
     loaded = load_config_document(root)
     cfg_dir = root.parent
     target_norm = (target or 'global').strip().lower().replace('_', '-')

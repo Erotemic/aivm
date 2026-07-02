@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.attachments.session import ReconcileResult, _prepare_attached_session
+from aivm.cli.vm_connect import _bootstrap_vm_for_folder
 from aivm.cli.vm_update import VMUpdateCLI
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
@@ -261,7 +263,7 @@ def test_vm_update_no_changes(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-noop'
     monkeypatch.setattr(
-        'aivm.cli.vm_update._load_cfg_with_path',
+        'aivm.cli.vm_update.load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
@@ -281,7 +283,7 @@ def test_vm_update_restarts_when_required(
     cfg.vm.name = 'vm-update'
     drift = VMUpdateDrift(cpus=(2, 4))
     monkeypatch.setattr(
-        'aivm.cli.vm_update._load_cfg_with_path',
+        'aivm.cli.vm_update.load_cfg_with_path',
         lambda *a, **k: (cfg, tmp_path / 'config.toml'),
     )
     monkeypatch.setattr(
@@ -449,7 +451,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         return cfg, cfg_path
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
@@ -502,6 +504,17 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
     )
 
+    bootstrap = partial(
+        _bootstrap_vm_for_folder,
+        config_opt=None,
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        attach_mode_opt='',
+        attach_access_opt='',
+        yes=True,
+        dry_run=False,
+    )
     session = _prepare_attached_session(
         config_opt=None,
         vm_opt='',
@@ -511,6 +524,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         ensure_firewall_opt=True,
         dry_run=False,
         yes=True,
+        bootstrap_missing_vm=bootstrap,
     )
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert calls == ['config_init', 'vm_create']
@@ -539,7 +553,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         return cfg, cfg_path
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         fake_resolve_cfg_for_code,
     )
 
@@ -561,7 +575,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
     )
     monkeypatch.setattr(
-        'aivm.attachments.session.sys.stdin.isatty', lambda: True
+        'aivm.cli.vm_connect.sys.stdin.isatty', lambda: True
     )
     monkeypatch.setattr('builtins.input', lambda prompt='': 'y')
     monkeypatch.setattr(
@@ -601,6 +615,17 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
     )
 
+    bootstrap = partial(
+        _bootstrap_vm_for_folder,
+        config_opt=None,
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        attach_mode_opt='',
+        attach_access_opt='',
+        yes=False,
+        dry_run=False,
+    )
     session = _prepare_attached_session(
         config_opt=None,
         vm_opt='',
@@ -610,6 +635,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         ensure_firewall_opt=True,
         dry_run=False,
         yes=False,
+        bootstrap_missing_vm=bootstrap,
     )
 
     assert session.cfg.vm.name == 'bootstrap-vm'
@@ -660,7 +686,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         return cfg, cfg_path
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
@@ -713,6 +739,17 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
     )
 
+    bootstrap = partial(
+        _bootstrap_vm_for_folder,
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        attach_mode_opt='',
+        attach_access_opt='',
+        yes=True,
+        dry_run=False,
+    )
     session = _prepare_attached_session(
         config_opt=str(cfg_path),
         vm_opt='',
@@ -722,6 +759,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         ensure_firewall_opt=True,
         dry_run=False,
         yes=True,
+        bootstrap_missing_vm=bootstrap,
     )
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert calls == ['vm_create']
@@ -730,7 +768,12 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
 def test_prepare_attached_session_restores_saved_vm_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
+    from aivm.config_store import (
+        Store,
+        save_store,
+        upsert_attachment,
+        upsert_vm,
+    )
 
     host_src = tmp_path / 'proj'
     other_src = tmp_path / 'docs'
@@ -766,13 +809,13 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     )
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
 
     def fake_resolve_attachment(
         _cfg: AgentVMConfig,
-        _cfg_path: Path,
+        cfg_path: Path,
         host_path: Path,
         _guest_dst_opt: str,
     ) -> ResolvedAttachment:
@@ -891,7 +934,12 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
 def test_prepare_attached_session_restores_saved_shared_root_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
+    from aivm.config_store import (
+        Store,
+        save_store,
+        upsert_attachment,
+        upsert_vm,
+    )
 
     host_src = tmp_path / 'proj'
     other_src = tmp_path / 'docs'
@@ -930,13 +978,13 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
     )
 
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_cfg_for_code',
+        'aivm.attachments.session.resolve_cfg_for_code',
         lambda **kwargs: (cfg, cfg_path),
     )
 
     def fake_resolve_attachment(
         _cfg: AgentVMConfig,
-        _cfg_path: Path,
+        cfg_path: Path,
         host_path: Path,
         _guest_dst_opt: str,
     ) -> ResolvedAttachment:

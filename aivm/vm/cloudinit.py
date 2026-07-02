@@ -10,7 +10,6 @@ from pathlib import Path
 from loguru import logger
 
 from ..commands import CommandManager
-from ..privilege import path_needs_sudo
 from ..config import AgentVMConfig
 from ..detect import detect_host_timezone
 from ..fdguard import (
@@ -29,6 +28,7 @@ from ..persistent_replay import (
     persistent_replay_python,
     persistent_replay_service_unit,
 )
+from ..privilege import path_needs_sudo
 from .host_access import _ensure_qemu_access
 from .paths import _paths
 

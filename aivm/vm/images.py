@@ -14,8 +14,8 @@ from ..config import (
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
-from ..util import CmdError
 from ..privilege import path_needs_sudo, sudo_allowed
+from ..util import CmdError
 from .host_access import _ensure_qemu_access, _sudo_file_exists
 from .paths import _paths
 

@@ -19,7 +19,9 @@ import shlex
 from typing import Any
 
 import kwconf
+from loguru import logger as log
 
+from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
 from ..fdguard import (
     fdguard_install_script,
@@ -27,9 +29,9 @@ from ..fdguard import (
     fdguard_uninstall_script,
 )
 from ..runtime import require_ssh_identity, ssh_base_args
-from ._common import _BaseCommand, _load_cfg, log
-from ..attachments.session import _resolve_ip_for_ssh_ops
+from ..services import load_cfg
 from ..vm import ssh_port_for
+from ._common import _BaseCommand
 
 _ACTIONS = ('status', 'install', 'uninstall')
 
@@ -87,7 +89,7 @@ class VMFdGuardCLI(_BaseCommand):
                 f'invalid action {action!r}; expected one of {", ".join(_ACTIONS)}'
             )
 
-        cfg = _load_cfg(args.config, vm_opt=str(args.vm or ''))
+        cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
         vm_name = cfg.vm.name
         threshold = int(args.threshold or 0) or int(
             cfg.virtiofs.fd_guard_threshold

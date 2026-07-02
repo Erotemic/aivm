@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..config import AgentVMConfig
 
+
 def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
     cfg = cfg.expanded_paths()
     base_dir = Path(cfg.paths.base_dir) / cfg.vm.name
