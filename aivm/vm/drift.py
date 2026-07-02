@@ -18,13 +18,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Iterable
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..firewall import read_firewall_tcp_ports
-from ..runtime import virsh_cmd
 from ..config_store import Store, find_attachments_for_vm
-from ..privilege import sudo_allowed, virsh_needs_sudo
+from ..firewall import read_firewall_tcp_ports
+from ..privilege import virsh_needs_sudo
+from ..runtime import virsh_cmd
 from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
@@ -37,7 +38,7 @@ from .share import (
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
 
 
-def _normalize_tcp_ports(values) -> tuple[int, ...]:
+def _normalize_tcp_ports(values: Iterable[Any] | None) -> tuple[int, ...]:
     """
     Normalize configured / observed TCP ports into a sorted deduped tuple[int].
     """

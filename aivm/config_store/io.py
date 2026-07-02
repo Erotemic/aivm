@@ -18,7 +18,7 @@ import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from loguru import logger as log
 
@@ -150,7 +150,7 @@ def _record_source_names(
 
 
 def load_config_document(
-    path: Path | None = None, *, logger=log
+    path: Path | None = None, *, logger: Any = log
 ) -> LoadedStore:
     """Load the logical AIVM config document from monolith or split files."""
     logger.trace(f'Start load config document {path}')
@@ -191,7 +191,7 @@ def load_config_document(
     )
 
 
-def load_store(path: Path | None = None, *, logger=log) -> Store:
+def load_store(path: Path | None = None, *, logger: Any = log) -> Store:
     # FIXME: This is called very often and touches the disk.
     # We likely can do something more elegant here where a store is loaded once
     # (with a real architectural change, not just a functools.cache patch).
@@ -282,7 +282,7 @@ def save_store_split(
     path: Path | None = None,
     *,
     reason: str = '',
-    logger=log,
+    logger: Any = log,
     dry_run: bool = False,
 ) -> list[Path]:
     """Save a store as split config fragments.
@@ -331,7 +331,7 @@ def save_store(
     path: Path | None = None,
     *,
     reason: str = '',
-    logger=log,
+    logger: Any = log,
 ) -> Path:
     fpath = (path or store_path()).expanduser().resolve()
     if is_split_layout(fpath):
@@ -351,7 +351,7 @@ def format_existing_config(
     backup: bool = True,
     dry_run: bool = False,
     force: bool = False,
-    logger=log,
+    logger: Any = log,
 ) -> list[Path]:
     """Format the current logical store into canonical split fragments.
 

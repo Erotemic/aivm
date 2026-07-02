@@ -122,9 +122,12 @@ warn_unused_ignores = false
 disallow_any_generics = false
 extra_checks = false
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+# Tests intentionally use `lambda *a, **k: calls.append(...)` recorder fakes,
+# which trip func-returns-value; the package itself is checked with it on.
 disable_error_code = [
-  "attr-defined",
-  "arg-type",
   "func-returns-value",
 ]
 
@@ -136,6 +139,9 @@ rules.unused-type-ignore-comment = "ignore"
 [tool.pytest]
 ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
 ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
+ini_options.markers = [
+  "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",
+]
 ini_options.filterwarnings = [
   "default",
   "ignore:.*No cfgstr given in Cacher constructor or call.*:Warning",
