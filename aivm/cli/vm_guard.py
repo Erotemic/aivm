@@ -7,8 +7,10 @@ and (b) flushes guest dentry/inode caches when the fuse inode count crosses
 a watermark, releasing host-side virtiofsd file descriptors before EMFILE.
 
 New VMs get the guard automatically via cloud-init when
-``virtiofs.fd_guard`` is enabled (the default). This command retrofits,
-inspects, or removes it on existing VMs over SSH.
+``virtiofs.fd_guard`` is enabled (the default), and ``aivm vm update``
+reconciles existing running VMs against that config. This command is the
+direct manual path: inspect, install/refresh, or remove the guard over SSH
+without a full update pass.
 """
 
 from __future__ import annotations

@@ -20,6 +20,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `aivm vm fdguard --action install` retrofits existing VMs and replaces
   host-side periodic `aivm vm flush_caches` jobs. See
   `docs/source/virtiofs.rst`.
+* `aivm vm update` now reconciles the virtiofs fd guard against config like
+  any other drift: while the VM is running and reachable it probes the guest
+  (install state, timer enablement, sha256 of each managed guard file),
+  plans an install/refresh when `virtiofs.fd_guard = true` and the guest is
+  missing/stale (e.g. threshold changed or aivm's embedded guard script was
+  updated), and plans an uninstall when the knob is disabled. Probe failures
+  (VM down, SSH unreachable) become diagnostics notes rather than errors, and
+  guard reconciliation never requires a restart.
 * Sudoless operation. A new `behavior.privilege_mode` config knob (`auto` |
   `sudo` | `sudoless`, default `auto`) controls how aivm acquires privileges:
   `auto` probes what already works without sudo (libvirt group membership for

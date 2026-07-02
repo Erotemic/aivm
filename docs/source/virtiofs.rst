@@ -115,16 +115,24 @@ Because the guard is closed-loop, it does nothing while the cache is small
 interval when a mass traversal starts — a blind 30-minute host cron can be
 both too aggressive when idle and too slow during a fast sweep.
 
-Deployment:
+Deployment — the guard is config-driven and reconciled like everything
+else:
 
 * **New VMs**: installed automatically via cloud-init when
   ``virtiofs.fd_guard`` is enabled (the default).
-* **Existing VMs**: run ``aivm vm fdguard --action install`` once (uses
-  SSH + guest passwordless sudo, like ``flush_caches``).
-* **Inspect**: ``aivm vm fdguard`` (status is the default action) shows the
-  timer state, recent guard runs, the live fuse inode count, threshold, and
-  whether updatedb is pruned.
-* **Remove**: ``aivm vm fdguard --action uninstall``.
+* **Existing VMs**: ``aivm vm update`` detects guard drift against config
+  while the VM is running and reachable — not installed, timer disabled,
+  or installed files differing from what current config renders (e.g. a
+  changed ``fd_guard_threshold`` or a newer aivm) — plans the
+  install/refresh/uninstall alongside CPU/RAM/disk changes, and applies it
+  over SSH. Setting ``fd_guard = false`` and running ``aivm vm update``
+  uninstalls it. If the VM is down or unreachable, update reports a note
+  and reconciles on a later run; no restart is ever required.
+* **Manual control**: ``aivm vm fdguard`` remains for direct use —
+  ``status`` (the default action) shows the timer state, recent guard
+  runs, the live fuse inode count, threshold, and whether updatedb is
+  pruned; ``--action install`` / ``--action uninstall`` apply immediately
+  without a full update pass.
 
 Config knobs (``[virtiofs]`` in ``~/.config/aivm/config.toml``)::
 

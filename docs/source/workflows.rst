@@ -103,11 +103,12 @@ sweep walked every attached inode — so the daemon marched to its fd ceiling
 and normal traversal failed with ``Too many open files`` /
 ``OSError: [Errno 24]``.
 
-This is now prevented automatically by the guest-side virtiofs guard
-(installed via cloud-init on new VMs; ``aivm vm fdguard --action install``
-retrofits existing VMs). The guard prunes ``updatedb`` and flushes guest
-dentry/inode caches when the cached-inode watermark is crossed. See
-:doc:`virtiofs` for the full analysis and tuning.
+This is now prevented automatically by the guest-side virtiofs guard: new
+VMs install it via cloud-init, and ``aivm vm update`` reconciles existing
+running VMs against the ``virtiofs.fd_guard*`` config (install, refresh
+after config/version changes, or uninstall when disabled). The guard prunes
+``updatedb`` and flushes guest dentry/inode caches when the cached-inode
+watermark is crossed. See :doc:`virtiofs` for the full analysis and tuning.
 
 Operational guidance:
 

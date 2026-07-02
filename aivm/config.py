@@ -217,7 +217,9 @@ class VirtiofsConfig:
     # timer: it keeps updatedb from sweeping virtiofs shares nightly and
     # flushes guest dentry/inode caches when the fuse inode count crosses
     # ``fd_guard_threshold``. New VMs get it via cloud-init when enabled;
-    # existing VMs via ``aivm vm fdguard --action install``.
+    # existing running VMs are reconciled by ``aivm vm update`` (install,
+    # refresh on config/version change, uninstall when disabled), and
+    # ``aivm vm fdguard`` offers direct manual control.
     fd_guard: bool = True
     fd_guard_threshold: int = 500_000
     fd_guard_interval_sec: int = 60

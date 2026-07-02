@@ -28,7 +28,10 @@ from aivm.fdguard import (
     fdguard_timer_unit,
     fdguard_uninstall_script,
 )
+from aivm.fdguard import fdguard_expected_hashes, parse_fdguard_probe
 from aivm.vm.cloudinit import _render_user_data_text
+from aivm.vm.update import FdGuardDrift, VMUpdateDrift
+from aivm.vm.update.fdguard import _apply_fdguard_drift, _fdguard_drift
 
 STOCK_UPDATEDB_CONF = (
     'PRUNE_BIND_MOUNTS="yes"\n'
@@ -254,6 +257,207 @@ def test_vm_fdguard_rejects_bad_action(tmp_path: Path) -> None:
             dry_run=True,
             config=str(cfg_path),
         )
+
+
+def test_parse_fdguard_probe_ignores_noise() -> None:
+    state = parse_fdguard_probe(
+        "Warning: Permanently added '10.0.0.5' to known hosts.\n"
+        'installed=yes\n'
+        'timer_enabled=enabled\n'
+        'sha_bin=abc123\n'
+        'sha_conf=\n'
+        '\n'
+    )
+    assert state['installed'] == 'yes'
+    assert state['sha_bin'] == 'abc123'
+    assert state['sha_conf'] == ''
+    assert 'Warning: Permanently added' not in state
+
+
+def test_vm_update_drift_has_changes_includes_fd_guard() -> None:
+    empty = VMUpdateDrift()
+    assert not empty.has_changes()
+    with_guard = VMUpdateDrift(
+        fd_guard=FdGuardDrift(action='install', reason='missing')
+    )
+    assert with_guard.has_changes()
+
+
+def _drift_cfg(tmp_path: Path) -> AgentVMConfig:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-drift'
+    cfg.vm.user = 'agent'
+    cfg.paths.base_dir = str(tmp_path / 'libvirt')
+    cfg.paths.state_dir = str(tmp_path / 'state')
+    identity = tmp_path / 'id_ed25519'
+    identity.write_text('key', encoding='utf-8')
+    cfg.paths.ssh_identity_file = str(identity)
+    return cfg
+
+
+def _probe_output(cfg: AgentVMConfig, **overrides: str) -> str:
+    expected = fdguard_expected_hashes(
+        threshold=int(cfg.virtiofs.fd_guard_threshold),
+        interval_sec=int(cfg.virtiofs.fd_guard_interval_sec),
+    )
+    state = {
+        'installed': 'yes',
+        'timer_enabled': 'enabled',
+        **expected,
+        **overrides,
+    }
+    return ''.join(f'{key}={value}\n' for key, value in state.items())
+
+
+def _patch_reachable_guest(
+    monkeypatch: pytest.MonkeyPatch, probe_stdout: str
+) -> dict[str, Any]:
+    from types import SimpleNamespace
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        'aivm.vm.update.fdguard.get_ip_cached', lambda cfg: '10.0.0.5'
+    )
+    monkeypatch.setattr(
+        'aivm.vm.update.fdguard.probe_ssh_ready',
+        lambda cfg, ip: SimpleNamespace(ok=True),
+    )
+
+    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CommandResult:
+        seen.setdefault('cmds', []).append(cmd)
+        seen['kwargs'] = kwargs
+        return CommandResult(0, probe_stdout, '')
+
+    monkeypatch.setattr('aivm.vm.update.fdguard.CommandManager.run', fake_run)
+    return seen
+
+
+def test_fdguard_drift_skips_when_vm_not_running(tmp_path: Path) -> None:
+    cfg = _drift_cfg(tmp_path)
+    drift, notes = _fdguard_drift(cfg, vm_running=False)
+    assert drift is None
+    assert any('not running' in note for note in notes)
+
+
+def test_fdguard_drift_skips_when_guest_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    monkeypatch.setattr(
+        'aivm.vm.update.fdguard.get_ip_cached', lambda cfg: None
+    )
+    drift, notes = _fdguard_drift(cfg, vm_running=True)
+    assert drift is None
+    assert any('SSH' in note for note in notes)
+
+
+def test_fdguard_drift_none_when_in_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    _patch_reachable_guest(monkeypatch, _probe_output(cfg))
+    drift, notes = _fdguard_drift(cfg, vm_running=True)
+    assert drift is None
+    assert notes == ()
+
+
+def test_fdguard_drift_installs_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    _patch_reachable_guest(
+        monkeypatch,
+        'installed=no\ntimer_enabled=not-found\nsha_bin=\n',
+    )
+    drift, _ = _fdguard_drift(cfg, vm_running=True)
+    assert drift is not None
+    assert drift.action == 'install'
+    assert 'not installed' in drift.reason
+    assert drift.ip == '10.0.0.5'
+
+
+def test_fdguard_drift_installs_on_stale_conf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    _patch_reachable_guest(
+        monkeypatch, _probe_output(cfg, sha_conf='deadbeef')
+    )
+    drift, _ = _fdguard_drift(cfg, vm_running=True)
+    assert drift is not None
+    assert drift.action == 'install'
+    assert 'conf' in drift.reason
+
+
+def test_fdguard_drift_uninstalls_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    cfg.virtiofs.fd_guard = False
+    _patch_reachable_guest(monkeypatch, _probe_output(cfg))
+    drift, _ = _fdguard_drift(cfg, vm_running=True)
+    assert drift is not None
+    assert drift.action == 'uninstall'
+
+
+def test_fdguard_drift_none_when_disabled_and_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    cfg.virtiofs.fd_guard = False
+    _patch_reachable_guest(
+        monkeypatch, 'installed=no\ntimer_enabled=not-found\n'
+    )
+    drift, _ = _fdguard_drift(cfg, vm_running=True)
+    assert drift is None
+
+
+def test_apply_fdguard_drift_dry_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    drift = VMUpdateDrift(
+        fd_guard=FdGuardDrift(action='install', reason='missing', ip='10.0.0.5')
+    )
+    assert _apply_fdguard_drift(cfg, drift, dry_run=True) is True
+    out = capsys.readouterr().out
+    assert 'DRYRUN: would install virtiofs fd guard' in out
+
+
+def test_apply_fdguard_drift_runs_install_over_ssh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    seen = _patch_reachable_guest(monkeypatch, 'aivm: virtiofs guard installed\n')
+    drift = VMUpdateDrift(
+        fd_guard=FdGuardDrift(action='install', reason='missing', ip='10.0.0.5')
+    )
+    assert _apply_fdguard_drift(cfg, drift, dry_run=False) is True
+    cmd = seen['cmds'][-1]
+    assert cmd[:1] == ['ssh']
+    assert 'agent@10.0.0.5' in cmd
+    assert cmd[-1].startswith("sh -c 'set -eu")
+    assert 'base64 -d' in cmd[-1]
+    assert seen['kwargs']['check'] is True
+    assert 'Installed/refreshed virtiofs fd guard' in capsys.readouterr().out
+
+
+def test_apply_fdguard_drift_runs_uninstall_over_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    seen = _patch_reachable_guest(
+        monkeypatch, 'aivm: virtiofs guard uninstalled\n'
+    )
+    drift = VMUpdateDrift(
+        fd_guard=FdGuardDrift(
+            action='uninstall', reason='disabled', ip='10.0.0.5'
+        )
+    )
+    assert _apply_fdguard_drift(cfg, drift, dry_run=False) is True
+    assert 'systemctl disable --now' in seen['cmds'][-1][-1]
 
 
 def test_vm_fdguard_install_runs_quoted_remote_command(

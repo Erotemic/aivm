@@ -7,6 +7,7 @@ from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...runtime import virsh_system_cmd
+from .fdguard import _apply_fdguard_drift
 from .models import RestartKind, VMUpdateDrift, _escalate
 from .util import _bytes_to_gib
 from .virtiofs import _apply_virtiofs_binary_drift
@@ -129,4 +130,9 @@ def _apply_vm_update(
             # libvirt spawns a fresh virtiofsd, which requires a full
             # qemu power cycle. virsh reboot would NOT swap the binary.
             restart = _escalate(restart, RestartKind.HARD)
+    if drift.fd_guard is not None:
+        if _apply_fdguard_drift(cfg, drift, dry_run=dry_run):
+            changed = True
+            # The guard is reconciled live inside the guest over SSH
+            # (systemd daemon-reload + enable --now); no restart needed.
     return changed, restart

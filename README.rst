@@ -334,12 +334,13 @@ inode every day.
 aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
 ``updatedb`` and flushes guest dentry/inode caches when the cached-inode
 count crosses a watermark, releasing the host descriptors before the ceiling
-is reached. New VMs get it automatically; retrofit existing VMs with::
-
-   aivm vm fdguard --action install
-
-and retire any periodic host-side ``aivm vm flush_caches`` cron jobs.
-``aivm vm fdguard`` (default action ``status``) shows the live state.
+is reached. The guard is config-driven (``[virtiofs] fd_guard = true``, the
+default): new VMs get it via cloud-init, and ``aivm vm update`` reconciles
+existing running VMs — installing, refreshing after config/version changes,
+or uninstalling when disabled — so no manual setup or host-side
+``aivm vm flush_caches`` cron jobs are needed. ``aivm vm fdguard`` (default
+action ``status``) shows the live state and offers direct
+install/uninstall.
 
 Remaining guidance:
 

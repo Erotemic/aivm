@@ -16,6 +16,7 @@ from .util import (
     _parse_vm_disk_path_from_dumpxml,
     _parse_vm_network_from_dumpxml,
 )
+from .fdguard import _fdguard_drift
 from .virtiofs import _virtiofs_binary_drift
 
 
@@ -226,6 +227,9 @@ def _vm_update_drift(
             'Existing AIVM wrapper paths will be removed from domain XML.'
         )
 
+    fd_guard, fd_guard_notes = _fdguard_drift(cfg, vm_running=vm_running)
+    notes.extend(fd_guard_notes)
+
     return (
         VMUpdateDrift(
             cpus=cpus,
@@ -234,6 +238,7 @@ def _vm_update_drift(
             disk_path=str(disk_path),
             virtiofs_binary=virtiofs_binary,
             virtiofsd_mode=virtiofsd_mode,
+            fd_guard=fd_guard,
             notes=tuple(notes),
         ),
         vm_running,

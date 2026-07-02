@@ -49,6 +49,22 @@ class VirtiofsBinaryDrift:
 
 
 @dataclass(frozen=True)
+class FdGuardDrift:
+    """Guest-side virtiofs fd guard state that differs from config.
+
+    ``action`` is ``install`` (covers first install, re-enable, and
+    refreshing stale files after a config/aivm change — the install script
+    is idempotent) or ``uninstall``. ``reason`` is the human-readable
+    explanation shown in the plan. ``ip`` carries the guest address the
+    detection probe already verified so apply does not re-resolve it.
+    """
+
+    action: str
+    reason: str
+    ip: str = ''
+
+
+@dataclass(frozen=True)
 class VMUpdateDrift:
     cpus: tuple[int, int] | None = None
     ram_mb: tuple[int, int] | None = None
@@ -56,9 +72,16 @@ class VMUpdateDrift:
     disk_path: str = ''
     virtiofs_binary: tuple[VirtiofsBinaryDrift, ...] = ()
     virtiofsd_mode: str = ''
+    fd_guard: FdGuardDrift | None = None
     notes: tuple[str, ...] = ()
 
     def has_changes(self) -> bool:
         return any(
-            (self.cpus, self.ram_mb, self.disk_bytes, self.virtiofs_binary)
+            (
+                self.cpus,
+                self.ram_mb,
+                self.disk_bytes,
+                self.virtiofs_binary,
+                self.fd_guard,
+            )
         )

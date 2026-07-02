@@ -39,12 +39,15 @@ import it without pulling in the higher-level attachments package.
 from __future__ import annotations
 
 import base64
+import hashlib
 import textwrap
 
 FDGUARD_BIN = '/usr/local/libexec/aivm-virtiofs-guard'
 FDGUARD_CONF = '/etc/aivm/virtiofs-guard.conf'
 FDGUARD_SERVICE = 'aivm-virtiofs-guard.service'
 FDGUARD_TIMER = 'aivm-virtiofs-guard.timer'
+FDGUARD_SERVICE_PATH = f'/etc/systemd/system/{FDGUARD_SERVICE}'
+FDGUARD_TIMER_PATH = f'/etc/systemd/system/{FDGUARD_TIMER}'
 FDGUARD_STATE = '/run/aivm-virtiofs-guard.json'
 
 DEFAULT_FDGUARD_THRESHOLD = 500_000
@@ -362,6 +365,76 @@ def fdguard_install_script(
         'echo "aivm: virtiofs guard installed"',
     ]
     return '\n'.join(lines)
+
+
+def _guard_payload_files(
+    *,
+    threshold: int,
+    interval_sec: int,
+) -> dict[str, str]:
+    """Map probe hash keys to the file contents the guard should have."""
+    return {
+        'sha_bin': fdguard_python(),
+        'sha_conf': fdguard_conf_text(threshold),
+        'sha_service': fdguard_service_unit(),
+        'sha_timer': fdguard_timer_unit(interval_sec),
+    }
+
+
+def fdguard_expected_hashes(
+    *,
+    threshold: int = DEFAULT_FDGUARD_THRESHOLD,
+    interval_sec: int = DEFAULT_FDGUARD_INTERVAL_SEC,
+) -> dict[str, str]:
+    """sha256 of each guard file as the current config would render it."""
+    return {
+        key: hashlib.sha256(content.encode('utf-8')).hexdigest()
+        for key, content in _guard_payload_files(
+            threshold=threshold, interval_sec=interval_sec
+        ).items()
+    }
+
+
+def fdguard_probe_script() -> str:
+    """Read-only guest script reporting guard install state as KEY=VALUE.
+
+    Emits ``installed``, ``timer_enabled``, and a ``sha_*`` line per managed
+    file (empty value when the file is absent) so drift detection can compare
+    against :func:`fdguard_expected_hashes` without sudo.
+    """
+    hash_targets = {
+        'sha_bin': FDGUARD_BIN,
+        'sha_conf': FDGUARD_CONF,
+        'sha_service': FDGUARD_SERVICE_PATH,
+        'sha_timer': FDGUARD_TIMER_PATH,
+    }
+    lines = [
+        'set -eu',
+        f'if [ -x {FDGUARD_BIN} ]; then echo "installed=yes"; '
+        'else echo "installed=no"; fi',
+        f'echo "timer_enabled=$(systemctl is-enabled {FDGUARD_TIMER} '
+        '2>/dev/null || echo not-found)"',
+    ]
+    for key, path in hash_targets.items():
+        lines.append(
+            f'printf \'{key}=%s\\n\' '
+            f'"$(sha256sum {path} 2>/dev/null | cut -d\' \' -f1)"'
+        )
+    return '\n'.join(lines)
+
+
+def parse_fdguard_probe(text: str) -> dict[str, str]:
+    """Parse :func:`fdguard_probe_script` output into a dict."""
+    state: dict[str, str] = {}
+    for line in (text or '').splitlines():
+        line = line.strip()
+        if not line or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        if key:
+            state[key] = value.strip()
+    return state
 
 
 def fdguard_status_script() -> str:

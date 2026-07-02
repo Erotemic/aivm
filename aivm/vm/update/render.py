@@ -30,3 +30,8 @@ def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
             cur_path = d.current or '(default)'
             new_path = d.desired or '(default)'
             print(f'      tag={d.tag}: {cur_path} -> {new_path}')
+    if drift.fd_guard is not None:
+        print(
+            f'  - virtiofs fd guard (guest): {drift.fd_guard.action} '
+            f'({drift.fd_guard.reason})'
+        )

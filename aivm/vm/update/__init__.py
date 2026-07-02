@@ -12,7 +12,9 @@ from .detect import (
     _virsh_domblk_capacity_bytes,
     _vm_update_drift,
 )
+from .fdguard import _apply_fdguard_drift, _fdguard_drift
 from .models import (
+    FdGuardDrift,
     RestartKind,
     VirtiofsBinaryDrift,
     VMUpdateDrift,
@@ -30,10 +32,13 @@ from .util import (
 from .virtiofs import _apply_virtiofs_binary_drift, _virtiofs_binary_drift
 
 __all__ = [
+    'FdGuardDrift',
     'RestartKind',
     'VirtiofsBinaryDrift',
     'VMUpdateDrift',
+    '_apply_fdguard_drift',
     '_apply_virtiofs_binary_drift',
+    '_fdguard_drift',
     '_apply_vm_update',
     '_bytes_to_gib',
     '_escalate',
