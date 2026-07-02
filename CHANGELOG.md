@@ -5,6 +5,21 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.5.0 - Unreleased
 
 ### Added
+* Guest-side virtiofs fd guard (`aivm vm fdguard`, on by default via the new
+  `virtiofs.fd_guard`, `virtiofs.fd_guard_threshold`, and
+  `virtiofs.fd_guard_interval_sec` config knobs). Root cause work on the
+  long-lived virtiofs EMFILE failure identified that (a) host `virtiofsd`
+  holds one `O_PATH` fd per guest-cached inode and only releases it on guest
+  inode eviction, and (b) the guest's stock nightly `plocate` updatedb sweep
+  walked every attached inode because Ubuntu's default `PRUNEFS` lacks
+  `virtiofs`, deterministically saturating the ~1M host fd ceiling. The guard
+  is a guest systemd timer that idempotently prunes virtiofs from
+  `/etc/updatedb.conf` and flushes guest dentry/inode caches when the
+  `fuse_inode` slab count crosses a watermark (default 500k), releasing the
+  host-side descriptors before EMFILE. New VMs install it via cloud-init;
+  `aivm vm fdguard --action install` retrofits existing VMs and replaces
+  host-side periodic `aivm vm flush_caches` jobs. See
+  `docs/source/virtiofs.rst`.
 * Sudoless operation. A new `behavior.privilege_mode` config knob (`auto` |
   `sudo` | `sudoless`, default `auto`) controls how aivm acquires privileges:
   `auto` probes what already works without sudo (libvirt group membership for
@@ -35,6 +50,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * Removed the flaky settings-sync feature for now: `aivm vm sync_settings`, `aivm code --sync_settings`, `--sync_paths`, and the `[sync]` config section are no longer supported.
 
 ### Fixed
+* `aivm vm flush_caches` now quotes the guest script into a single remote
+  `sh -c` argument. Previously the remote login shell executed each line
+  independently, so `set -eu` never applied and a failed drop_caches write
+  (e.g. missing guest passwordless sudo) still exited 0 and was reported as
+  success.
 * Attaching directories now uses consistent guest locations between different attach modes 
 * Read-only access is now documented and wired through the new persistent attachment replay path.
 * Tightened local annotations in firewall, VM update rendering, and persistent attachment transport helpers so the package is clean for the reported mypy diagnostics.

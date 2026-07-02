@@ -96,29 +96,31 @@ folders, or split the workload across multiple VMs.
 Major limitation: long-lived virtiofs FD growth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Long-lived ``shared-root`` and ``persistent`` VMs can still run into a
-virtiofs/submount file-descriptor problem. The visible error is often
-``Too many open files`` or ``OSError: [Errno 24]`` from normal traversal tools
-inside the guest or from host tools walking the attached tree.
+Long-lived virtiofs-backed VMs historically hit a file-descriptor failure:
+host-side ``virtiofsd`` keeps one descriptor per guest-cached inode, the
+guest never evicts on its own, and the guest's stock nightly ``updatedb``
+sweep walked every attached inode — so the daemon marched to its fd ceiling
+and normal traversal failed with ``Too many open files`` /
+``OSError: [Errno 24]``.
 
-Current investigation points at host-side ``virtiofsd`` workers retaining many
-path-backed file descriptors across exported token trees after heavy traversal.
-The ``persistent`` backend reduces repeated mount teardown/rebuild churn, but
-it does not remove the shared virtiofs export design and therefore should be
-treated as a mitigation rather than a fix.
+This is now prevented automatically by the guest-side virtiofs guard
+(installed via cloud-init on new VMs; ``aivm vm fdguard --action install``
+retrofits existing VMs). The guard prunes ``updatedb`` and flushes guest
+dentry/inode caches when the cached-inode watermark is crossed. See
+:doc:`virtiofs` for the full analysis and tuning.
 
 Operational guidance:
 
+* verify the guard with ``aivm vm fdguard`` (status is the default action)
+  and retire any periodic host-side ``aivm vm flush_caches`` jobs
 * keep attachments narrow and remove stale attachment records when possible
 * prefer ``--mode git`` for repositories that can tolerate explicit Git
   handoff instead of live host sharing
-* run ``aivm vm flush_caches`` when the failure appears; it drops guest
-  inode/dentry caches, which releases virtiofsd file descriptors without a
-  restart
-* restart the VM if flushing is not enough; this usually resets the hot
-  ``virtiofsd`` state
-* use ``dev/devcheck/debug-harness.sh`` to collect comparable host/guest
-  evidence when debugging the issue
+* ``aivm vm flush_caches`` remains available as a manual recovery command;
+  restart the VM only if flushing is not enough
+* use ``dev/devcheck/debug-harness.sh`` or
+  ``dev/devcheck/virtiofsd_fd_postmortem.py`` to collect host/guest
+  evidence when debugging
 
 Attachment mode rules:
 

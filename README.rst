@@ -319,33 +319,35 @@ Mode selection behavior:
    aivm detach .
    aivm attach . --mode git
 
-Known issue: long-lived virtiofs FD growth
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Known issue: long-lived virtiofs FD growth (now auto-mitigated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Long-lived VMs that use ``shared-root`` or ``persistent`` can still hit a
-virtiofs-related file-descriptor failure mode. The observed symptom is ordinary
-guest or host traversal failing with errors like ``OSError: [Errno 24] Too many
-open files`` / ``Too many open files`` even when the shell's normal
-``ulimit -n`` is high.
+Host-side ``virtiofsd`` keeps one open descriptor per inode the guest caches,
+and guests never evict those caches on their own, so long-lived virtiofs
+attachments historically saturated the daemon's fd ceiling (~1M) and ordinary
+traversal failed with ``OSError: [Errno 24] Too many open files`` even though
+``ulimit -n`` looked fine. The dominant trigger turned out to be the guest OS
+itself: Ubuntu's stock nightly ``updatedb`` sweep walks virtiofs mounts
+(``virtiofs`` is missing from the default ``PRUNEFS``), touching every shared
+inode every day.
 
-The best current interpretation is that one or more host-side ``virtiofsd``
-workers can retain a large number of path-backed file descriptors across the
-export tree after heavy traversal of long-lived shared folders. Restarting the
-VM usually clears the bad runtime state. The ``persistent`` mode reduces mount
-churn and stale declaration problems, but it does not eliminate the underlying
-virtiofs/submount behavior.
+aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
+``updatedb`` and flushes guest dentry/inode caches when the cached-inode
+count crosses a watermark, releasing the host descriptors before the ceiling
+is reached. New VMs get it automatically; retrofit existing VMs with::
 
-Current mitigations and guidance:
+   aivm vm fdguard --action install
 
-* prefer fewer, narrower shared folders
-* detach stale attachments and avoid leaving old token trees exposed
+and retire any periodic host-side ``aivm vm flush_caches`` cron jobs.
+``aivm vm fdguard`` (default action ``status``) shows the live state.
+
+Remaining guidance:
+
+* prefer fewer, narrower shared folders; detach stale attachments
 * use ``--mode git`` for repos that do not need live writable host sharing
-* run ``aivm vm flush_caches`` to drop guest inode/dentry caches and release
-  virtiofsd file descriptors without a restart
-* restart the VM if traversal still fails with ``Too many open files``
-* use ``dev/devcheck/debug-harness.sh`` when collecting host/guest evidence
-
-This is a known limitation, not a solved problem.
+* ``aivm vm flush_caches`` remains as a manual recovery command
+* see ``docs/source/virtiofs.rst`` for the full mechanism, tuning knobs
+  (``[virtiofs] fd_guard*``), and the incident runbook
 
 Inventory and visibility
 ~~~~~~~~~~~~~~~~~~~~~~~~

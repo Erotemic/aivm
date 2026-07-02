@@ -115,13 +115,18 @@ class VMFlushCachesCLI(_BaseCommand):
 
         cfg = _load_cfg(args.config, vm_opt=str(args.vm or ''))
         vm_name = cfg.vm.name
-        remote_script_arg = shlex.quote(script)
+        # Quote the guest script so the remote login shell hands it to
+        # `sh -c` as one argument. Without this the remote shell executed
+        # each script line independently, so `set -eu` never applied and a
+        # failed drop_caches write (e.g. missing passwordless sudo) still
+        # exited 0 and reported success.
+        remote_command = f'sh -c {shlex.quote(script)}'
         if args.dry_run:
             print(f'DRYRUN: would flush guest caches for VM {vm_name}')
             print('Guest script:')
             print(script)
             print('SSH shape:')
-            print(f'ssh <ssh-options> {cfg.vm.user}@<vm-ip> sh -c {remote_script_arg}')
+            print(f'ssh <ssh-options> {cfg.vm.user}@<vm-ip> {remote_command}')
             return 0
 
         mgr = CommandManager.current()
@@ -149,9 +154,7 @@ class VMFlushCachesCLI(_BaseCommand):
                     batch_mode=True,
                 ),
                 f'{cfg.vm.user}@{ip}',
-                'sh',
-                '-c',
-                script,
+                remote_command,
             ]
             log.debug('Running guest cache flush command: {}', shell_join(cmd))
             res = mgr.run(

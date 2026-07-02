@@ -211,24 +211,30 @@ References:
 6) Long-lived virtiofs file-descriptor retention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Current ``aivm`` attachment modes that use ``shared-root`` or ``persistent``
-rely on a long-lived virtiofs export containing host-side bind-mounted
-subtrees. In real use this has produced intermittent ``Too many open files`` /
-``OSError: [Errno 24]`` failures during ordinary filesystem traversal.
+Host-side ``virtiofsd`` keeps one open ``O_PATH`` descriptor per inode the
+guest caches, and the guest holds those caches indefinitely on large-RAM
+VMs, so long-lived exports historically saturated the daemon's fd limit
+(typically 1,048,576) and surfaced in the guest as intermittent
+``Too many open files`` / ``OSError: [Errno 24]`` during ordinary
+traversal. The dominant trigger was the guest's stock nightly
+``updatedb`` sweep, which walks virtiofs mounts because Ubuntu's default
+``PRUNEFS`` does not include ``virtiofs``.
 
-The working interpretation is that host-side ``virtiofsd`` workers can retain a
-large number of path-backed file descriptors across exported token trees. This
-is currently treated as a reliability and availability risk rather than a
-solved security boundary issue. Restarting the VM usually clears the bad
-runtime state; ``persistent`` mode reduces mount churn but does not remove the
-underlying virtiofs/submount design.
+This is a reliability and availability risk rather than a security
+boundary issue. It is now mitigated automatically by the guest-side
+virtiofs guard (updatedb pruning plus a watermark-triggered cache flush);
+see :doc:`virtiofs` for the mechanism, tuning, and incident runbook.
 
 Operator guidance:
 
+* keep the guard enabled (``virtiofs.fd_guard``, default on); retrofit
+  older VMs with ``aivm vm fdguard --action install``
 * keep shared folders narrow and explicit
 * avoid leaving stale attachments exposed
 * prefer Git-mode handoff when live writable sharing is unnecessary
-* restart long-lived VMs when traversal begins failing with ``Too many open files``
+* if traversal still fails with ``Too many open files``, follow the
+  incident runbook in :doc:`virtiofs`; a VM restart remains the
+  last-resort reset
 
 
 .. _Historical examples:

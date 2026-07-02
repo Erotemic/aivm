@@ -109,6 +109,10 @@ def test_vm_flush_caches_runs_guest_command(monkeypatch: pytest.MonkeyPatch) -> 
     cmd = seen['cmd']
     assert cmd[:1] == ['ssh']
     assert 'agent@10.77.0.123' in cmd
-    remote_script = cmd[-1]
-    assert 'echo 2 > /proc/sys/vm/drop_caches' in remote_script
+    remote_command = cmd[-1]
+    # The guest script must travel as one quoted `sh -c` argument so
+    # `set -eu` applies remotely and a failed drop_caches write cannot be
+    # reported as success.
+    assert remote_command.startswith("sh -c 'set -eu")
+    assert 'echo 2 > /proc/sys/vm/drop_caches' in remote_command
     assert seen['kwargs']['check'] is False

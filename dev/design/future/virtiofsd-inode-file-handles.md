@@ -152,6 +152,29 @@ binary path update from the wrapper path back to `(default)`. A full power cycle
 is still needed for libvirt to spawn fresh virtiofsd processes, but the XML
 repair itself should not install or execute any generated wrapper.
 
+## 2026-07-02 addendum: capability analysis, libvirt status, and the guard
+
+Three clarifications from the later root-cause investigation (see
+`docs/source/virtiofs.rst`):
+
+1. **The observed `CapBnd: 0` on a running daemon does not doom this
+   option.** virtiofsd empties its own bounding set after startup; the
+   bounding set only constrains `execve`. A daemon launched as root with
+   `--modcaps=+dac_read_search` retains the capability in its effective
+   set, which is what `open_by_handle_at` needs. So a future delivery path
+   must pair `--inode-file-handles=prefer` with
+   `--modcaps=+dac_read_search`, and it can only work for root-launched
+   (system libvirt) virtiofsd; fully unprivileged launches cannot decode
+   file handles on current kernels.
+2. **libvirt 10.0 (Ubuntu 24.04) has no XML knob for this option.**
+   Re-check `formatdomain` on libvirt upgrades before revisiting.
+3. **The urgency dropped.** The dominant fd-pressure source was the guest's
+   nightly `updatedb` sweep (virtiofs missing from Ubuntu's `PRUNEFS`),
+   and the guest-side virtiofs guard (`aivm/fdguard.py`) now prunes it and
+   watermark-flushes guest caches, keeping daemon fd counts bounded without
+   any host-side changes. File-handle mode remains the structural fix worth
+   adopting when a vetted delivery path exists (options 1 or 3 above).
+
 ## 2026-05-12 follow-up: repair detection must not depend on current base_dir
 
 A later local repair attempt reported `VM aivm-2404 is already in sync with

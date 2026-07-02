@@ -13,6 +13,16 @@ from ..commands import CommandManager
 from ..privilege import path_needs_sudo
 from ..config import AgentVMConfig
 from ..detect import detect_host_timezone
+from ..fdguard import (
+    FDGUARD_BIN,
+    FDGUARD_CONF,
+    FDGUARD_SERVICE,
+    FDGUARD_TIMER,
+    fdguard_conf_text,
+    fdguard_python,
+    fdguard_service_unit,
+    fdguard_timer_unit,
+)
 from ..persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
@@ -148,6 +158,33 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
                 f'|| true"]'
             )
 
+    # Guest-side virtiofs fd guard: keeps the host virtiofsd fd count bounded
+    # by pruning virtiofs from updatedb sweeps and flushing guest
+    # dentry/inode caches at a watermark. See aivm/fdguard.py.
+    fdguard_write_files = ''
+    fdguard_runcmd = ''
+    if cfg.virtiofs.fd_guard:
+        indent14 = ' ' * 14
+        fdguard_write_files = (
+            f'\n          - path: {FDGUARD_BIN}\n'
+            '            permissions: "0755"\n'
+            '            content: |\n'
+            f'{textwrap.indent(fdguard_python().rstrip(), indent14)}\n'
+            f'          - path: {FDGUARD_CONF}\n'
+            '            permissions: "0644"\n'
+            '            content: |\n'
+            f'{textwrap.indent(fdguard_conf_text(cfg.virtiofs.fd_guard_threshold).rstrip(), indent14)}\n'
+            f'          - path: /etc/systemd/system/{FDGUARD_SERVICE}\n'
+            '            permissions: "0644"\n'
+            '            content: |\n'
+            f'{textwrap.indent(fdguard_service_unit().rstrip(), indent14)}\n'
+            f'          - path: /etc/systemd/system/{FDGUARD_TIMER}\n'
+            '            permissions: "0644"\n'
+            '            content: |\n'
+            f'{textwrap.indent(fdguard_timer_unit(cfg.virtiofs.fd_guard_interval_sec).rstrip(), indent14)}'
+        )
+        fdguard_runcmd = f'\n          - systemctl enable --now {FDGUARD_TIMER}'
+
     if cfg.vm.allow_password_login:
         if '\n' in cfg.vm.password:
             raise RuntimeError(
@@ -216,14 +253,14 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
           - path: /etc/systemd/system/{PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
             permissions: "0644"
             content: |
-{textwrap.indent(persistent_replay_service_unit().rstrip(), '              ')}
+{textwrap.indent(persistent_replay_service_unit().rstrip(), '              ')}{fdguard_write_files}
 
         runcmd:
           - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
           - systemctl daemon-reload
           - systemctl enable {PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
           - systemctl enable --now ssh
-          - systemctl enable --now unattended-upgrades || true{matched_uid_gid_runcmd}
+          - systemctl enable --now unattended-upgrades || true{matched_uid_gid_runcmd}{fdguard_runcmd}
         """
     )
 

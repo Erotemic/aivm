@@ -210,6 +210,17 @@ class VirtiofsConfig:
     # treats it as disabled and removes old AIVM-managed wrapper paths from
     # domain XML.
     inode_file_handles: str = ''
+    # Guest-side virtiofs fd guard (see docs/source/virtiofs.rst and
+    # aivm/fdguard.py). Host virtiofsd pins one O_PATH fd per inode the
+    # guest keeps cached and hits EMFILE at min(RLIMIT_NOFILE, fs.nr_open),
+    # typically 1,048,576. The guard runs inside the guest from a systemd
+    # timer: it keeps updatedb from sweeping virtiofs shares nightly and
+    # flushes guest dentry/inode caches when the fuse inode count crosses
+    # ``fd_guard_threshold``. New VMs get it via cloud-init when enabled;
+    # existing VMs via ``aivm vm fdguard --action install``.
+    fd_guard: bool = True
+    fd_guard_threshold: int = 500_000
+    fd_guard_interval_sec: int = 60
 
 
 @dataclass

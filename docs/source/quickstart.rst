@@ -94,14 +94,17 @@ Notes
 Known virtiofs limitation
 -------------------------
 
-Long-lived VMs with virtiofs-backed attachments can accumulate host-side
-``virtiofsd`` file descriptors after heavy traversal of shared folders. The
-symptom is usually ``Too many open files`` / ``OSError: [Errno 24]`` from
-ordinary filesystem tools even when user limits look high.
+Long-lived VMs with virtiofs-backed attachments accumulate host-side
+``virtiofsd`` file descriptors (one per guest-cached inode) and historically
+hit the daemon's fd ceiling, failing with ``Too many open files`` /
+``OSError: [Errno 24]`` even when user limits look high. The dominant
+trigger was the guest's nightly ``updatedb`` indexing sweep over the shares.
 
-``persistent`` mode mitigates attachment replay and mount churn, but it has not
-solved this underlying virtiofs behavior. ``aivm vm flush_caches`` drops guest
-inode/dentry caches to release virtiofsd file descriptors without a restart;
-restarting the VM clears the bad runtime state when that is not enough. Prefer
-narrow attachments, detach stale folders, and use ``--mode git`` when live
-writable host sharing is not required.
+aivm now handles this automatically: new VMs get a guest-side *virtiofs
+guard* (a systemd timer that prunes updatedb and flushes guest
+dentry/inode caches at a watermark, releasing the host descriptors).
+Retrofit existing VMs once with ``aivm vm fdguard --action install`` and
+retire any periodic host-side ``aivm vm flush_caches`` jobs. See
+:doc:`virtiofs` for the full mechanism, tuning knobs, and incident
+runbook. Prefer narrow attachments, detach stale folders, and use
+``--mode git`` when live writable host sharing is not required.
