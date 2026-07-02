@@ -63,6 +63,51 @@ def clip(text: str, *, max_lines: int = 60) -> str:
     return '\n'.join(keep)
 
 
+@dataclass
+class _StatusChecklist:
+    """Accumulate status lines and the done/total progress tally.
+
+    Wraps the shared output ``lines`` list so a check appends its status
+    line and updates the progress counters in one call, instead of the
+    caller repeating ``total += 1; done += int(ok)`` next to every append.
+    """
+
+    lines: list[str]
+    done: int = 0
+    total: int = 0
+
+    def check(
+        self,
+        ok: bool | None,
+        label: str,
+        detail: str,
+        *,
+        counted: bool | None = None,
+    ) -> None:
+        """Append a status line, counting it toward progress when conclusive.
+
+        By default a check counts toward the denominator when ``ok`` is not
+        ``None`` (the inconclusive/skipped state). Pass ``counted`` to force
+        it on (a check that always counts) or off (a purely informational
+        line that never affects the tally).
+        """
+        should_count = (ok is not None) if counted is None else counted
+        if should_count:
+            self.total += 1
+            self.done += int(bool(ok))
+        self.lines.append(status_line(ok, label, detail))
+
+    def bump(self, ok: bool) -> None:
+        """Count a check toward progress without emitting its own line.
+
+        For the rare case where the counted state and the displayed line
+        are decoupled (the cached-IP check counts on VM-state
+        conclusiveness but prints a separate, more nuanced line).
+        """
+        self.total += 1
+        self.done += int(bool(ok))
+
+
 def probe_cwd_shared_with_vm(
     cfg: AgentVMConfig, store_cfg_path: Path
 ) -> ProbeOutcome:
@@ -571,13 +616,10 @@ def render_status(
         )
         lines.append(f'🔌 SSH endpoint: {endpoint} (passt port forward)')
     lines.append('')
-    done = 0
-    total = 0
+    report = _StatusChecklist(lines)
 
     missing, missing_opt = check_commands()
     host_ok = len(missing) == 0
-    total += 1
-    done += int(host_ok)
     host_detail = (
         'all required commands found'
         if host_ok
@@ -585,22 +627,16 @@ def render_status(
     )
     if missing_opt:
         host_detail += f' (optional missing: {", ".join(missing_opt)})'
-    lines.append(status_line(host_ok, 'Host dependencies', host_detail))
+    report.check(host_ok, 'Host dependencies', host_detail, counted=True)
 
     env = probe_runtime_environment()
-    lines.append(status_line(env.ok, 'Runtime environment', env.detail))
+    report.check(env.ok, 'Runtime environment', env.detail, counted=False)
 
     net = probe_network(cfg, use_sudo=use_sudo)
-    if net.ok is not None:
-        total += 1
-        done += int(net.ok)
-    lines.append(status_line(net.ok, 'Libvirt network', net.detail))
+    report.check(net.ok, 'Libvirt network', net.detail)
 
     fw = probe_firewall(cfg, use_sudo=use_sudo)
-    if fw.ok is not None:
-        total += 1
-        done += int(fw.ok)
-    lines.append(status_line(fw.ok, 'Firewall', fw.detail))
+    report.check(fw.ok, 'Firewall', fw.detail)
 
     base_img = (
         Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / cfg.image.cache_name
@@ -623,14 +659,10 @@ def render_status(
             == 0
         )
     if img_ok is not None:
-        total += 1
-        done += int(img_ok)
-        lines.append(status_line(img_ok, 'Base image cache', str(base_img)))
+        report.check(img_ok, 'Base image cache', str(base_img))
     else:
-        lines.append(
-            status_line(
-                None, 'Base image cache', f'skipped without --sudo ({base_img})'
-            )
+        report.check(
+            None, 'Base image cache', f'skipped without --sudo ({base_img})'
         )
 
     vm_out, vm_defined = probe_vm_state(cfg, use_sudo=use_sudo)
@@ -653,21 +685,17 @@ def render_status(
         )
         vm_defined_effective = True
 
-    if vm_display.ok is not None:
-        total += 1
-        done += int(bool(vm_display.ok))
-    lines.append(status_line(vm_display.ok, 'VM state', vm_display.detail))
+    report.check(vm_display.ok, 'VM state', vm_display.detail)
 
     share_mappings: list[tuple[str, str]] = []
     if vm_defined is True:
         share_mappings = vm_share_mappings(cfg, use_sudo=use_sudo)
     if vm_defined is True and share_mappings:
-        lines.append(
-            status_line(
-                True,
-                'VM shared folders',
-                f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
-            )
+        report.check(
+            True,
+            'VM shared folders',
+            f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
+            counted=False,
         )
     elif vm_defined_effective is True:
         if vm_defined is None:
@@ -676,25 +704,29 @@ def render_status(
             share_detail = 'none detected'
             if not use_sudo:
                 share_detail = 'none detected or unavailable without --sudo'
-        lines.append(status_line(None, 'VM shared folders', share_detail))
+        report.check(None, 'VM shared folders', share_detail, counted=False)
     elif vm_defined is None:
-        lines.append(
-            status_line(
-                None,
-                'VM shared folders',
-                'unverified without privileged VM checks',
-            )
+        report.check(
+            None,
+            'VM shared folders',
+            'unverified without privileged VM checks',
+            counted=False,
         )
     else:
-        lines.append(status_line(None, 'VM shared folders', 'VM not defined'))
+        report.check(
+            None, 'VM shared folders', 'VM not defined', counted=False
+        )
 
     # TODO: we probably want to clean up the detail that is shown here, but do want more than just
     # the path that is shared. We want what mode it is shared in, which VMs if is shared with, what its access is.
     # It could be the case that it is shared with more than 1 VM in different modes, maybe we only print the first
     # and then that there are more, and show them all if --detail is given.
     cwd_share = probe_cwd_shared_with_vm(cfg, path)
-    lines.append(
-        status_line(cwd_share.ok, 'Current directory shared', cwd_share.detail)
+    report.check(
+        cwd_share.ok,
+        'Current directory shared',
+        cwd_share.detail,
+        counted=False,
     )
 
     # Config drift check: compare saved VM config against actual libvirt state
@@ -706,39 +738,31 @@ def render_status(
                 # TODO: if we don't have sudo or we can only do a partial
                 # check, we should inform the user about that here. (e.g.
                 # firewall drift)
-                lines.append(status_line(True, 'Config drift', 'in sync'))
+                report.check(True, 'Config drift', 'in sync')
             else:
                 # drift.ok is False here (drift detected)
-                lines.append(
-                    status_line(
-                        False,
-                        'Config drift',
-                        f'{len(drift.items)} mismatch(es) detected',
-                    )
+                report.check(
+                    False,
+                    'Config drift',
+                    f'{len(drift.items)} mismatch(es) detected',
                 )
                 if detail:
-                    lines.append('Config Drift Details:')
+                    report.lines.append('Config Drift Details:')
                     for item in drift.items:
-                        lines.append(
+                        report.lines.append(
                             f'  - {item.key}: expected={item.expected}, actual={item.actual}'
                         )
-            # Count this check
-            total += 1
-            done += 1 if drift.ok is True else 0
         else:
             # drift.available is False here (unavailable)
-            lines.append(
-                status_line(None, 'Config drift', drift.diag or 'unavailable')
-            )
+            report.check(None, 'Config drift', drift.diag or 'unavailable')
     else:
-        lines.append(status_line(None, 'Config drift', 'VM not defined'))
+        report.check(None, 'Config drift', 'VM not defined')
 
     ip_ok = bool(ip) and (vm_defined_effective is not False)
     if vm_display.ok is not None:
-        total += 1
-        done += int(ip_ok)
+        report.bump(ip_ok)
     if cached_ip and vm_defined is False:
-        lines.append(
+        report.lines.append(
             status_line(
                 False,
                 'Cached VM IP',
@@ -746,9 +770,9 @@ def render_status(
             )
         )
     elif ip and ssh.ok:
-        lines.append(status_line(True, 'Cached VM IP', ip))
+        report.lines.append(status_line(True, 'Cached VM IP', ip))
     elif ip and vm_defined is None:
-        lines.append(
+        report.lines.append(
             status_line(
                 None,
                 'Cached VM IP',
@@ -756,13 +780,11 @@ def render_status(
             )
         )
     else:
-        lines.append(
+        report.lines.append(
             status_line(bool(ip), 'Cached VM IP', ip or 'no cached IP yet')
         )
 
-    total += 1
-    done += int(bool(ssh.ok))
-    lines.append(status_line(bool(ssh.ok), 'SSH readiness', ssh.detail))
+    report.check(bool(ssh.ok), 'SSH readiness', ssh.detail, counted=True)
 
     if ip and ssh.ok:
         prov = probe_provisioned(cfg, ip)
@@ -774,13 +796,10 @@ def render_status(
             else 'disabled in config',
             '',
         )
-    if prov.ok is not None:
-        total += 1
-        done += int(bool(prov.ok))
-    lines.append(status_line(prov.ok, 'Provisioning', prov.detail))
+    report.check(prov.ok, 'Provisioning', prov.detail)
 
     lines.append('')
-    lines.append(f'📊 Progress: {done}/{total} checks complete')
+    lines.append(f'📊 Progress: {report.done}/{report.total} checks complete')
     if not use_sudo:
         lines.append(
             'ℹ️ Some privileged checks are skipped/limited without --sudo.'
