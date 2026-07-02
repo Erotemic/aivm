@@ -46,6 +46,11 @@ After either path
 Optional: sudoless operation
 ----------------------------
 
+The default posture assumes an administrator: system libvirt plus sudo
+prompts, with no setup ceremony. The two optional postures below relax
+host privileges in increasing strength; :doc:`runtimes` compares all
+three side by side.
+
 If you prefer ``aivm`` to never invoke ``sudo``:
 
 .. code-block:: bash

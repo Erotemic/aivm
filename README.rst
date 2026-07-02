@@ -183,6 +183,11 @@ daemon or a future unprivileged virtiofsd backend), and there is no
 managed-network/nftables isolation — the guest gets whatever egress passt
 provides. A session VM and a system VM can coexist in one config store.
 
+The classic admin-assuming posture (system runtime + sudo prompts) remains
+the default and is unchanged; sudoless and rootless are opt-in. See
+`Runtimes and privilege modes <docs/source/runtimes.rst>`_ for a
+side-by-side comparison of all three postures.
+
 Command manager defaults:
 
 * subprocess execution is centralized through a command manager
