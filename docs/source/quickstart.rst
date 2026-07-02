@@ -43,10 +43,36 @@ After either path
    aivm status --sudo
    aivm vm update
 
+Optional: sudoless operation
+----------------------------
+
+If you prefer ``aivm`` to never invoke ``sudo``:
+
+.. code-block:: bash
+
+   aivm host sudoless check    # report what is missing
+   aivm host sudoless setup    # establish it (sudo used at most once)
+
+Setup adds you to the ``libvirt`` group (the one privileged step), moves the
+default VM storage to a user-owned directory with ``setfacl`` traversal grants
+for ``libvirt-qemu``, disables the managed nftables firewall (it requires
+root; keep it with ``--keep_firewall``), and persists
+``behavior.privilege_mode = "sudoless"``. Log out and back in (or ``newgrp
+libvirt``) after the group change, then re-run the check.
+
+In sudoless mode new attachments default to ``--mode shared`` (direct
+virtiofs); the ``persistent`` and ``shared-root`` modes rely on host bind
+mounts, which require root. The default ``auto`` mode needs no setup ceremony:
+it simply stops using sudo for whatever already works without it.
+
 Notes
 -----
 
 * ``status --sudo`` enables privileged checks (libvirt/network/firewall/image).
+  In sudoless mode ``--sudo`` is ignored with a notice.
+* ``behavior.privilege_mode`` controls escalation: ``auto`` (default, sudo
+  only where needed), ``sudo`` (classic), ``sudoless`` (never; see above).
+  ``--never_sudo`` forces sudoless for one invocation.
 * ``status --detail`` includes raw diagnostics (virsh/nft/ssh probe outputs).
 * Privileged operations prompt unless ``--yes`` or ``--yes-sudo`` is used.
 * Approvals normally happen once per grouped step, not once per command.

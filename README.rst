@@ -124,6 +124,25 @@ Status and sudo behavior
 By default, ``aivm status`` avoids privileged probes. Use ``--sudo`` for
 network/firewall/libvirt/image checks.
 
+Privilege modes (``behavior.privilege_mode``):
+
+* ``auto`` (default) probes what already works without sudo -- unprivileged
+  ``qemu:///system`` access via the ``libvirt`` group, user-writable VM
+  storage -- and uses sudo only where required.
+* ``sudo`` always escalates privileged host operations through sudo
+  (the classic behavior).
+* ``sudoless`` never invokes sudo. Root-only features (nftables firewall,
+  shared-root/persistent host bind mounts, dependency install) fail with
+  actionable guidance instead of escalating. Force it per-invocation with
+  ``--never_sudo``.
+
+Run ``aivm host sudoless check`` to see what your host still needs for
+sudoless operation, and ``aivm host sudoless setup`` to establish it (it uses
+sudo at most once, to add you to the ``libvirt`` group). State-changing
+hypervisor commands keep their approval prompt even when they no longer need
+sudo, so destructive operations never become promptless just because
+escalation stopped being necessary.
+
 Command manager defaults:
 
 * subprocess execution is centralized through a command manager
@@ -177,6 +196,7 @@ receive the new host-qualified default.
    [behavior]
    yes_sudo = false
    auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
+   privilege_mode = "auto"            # "sudo" | "auto" | "sudoless"
 
 Common Workflows
 ----------------

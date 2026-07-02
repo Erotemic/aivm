@@ -65,6 +65,12 @@ Attachment modes:
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
 
+In sudoless mode (``behavior.privilege_mode = "sudoless"``) new attachments
+default to ``shared`` instead of ``persistent``: the ``persistent`` and
+``shared-root`` backends stage host bind mounts, which require root.
+Requesting them explicitly in sudoless mode fails with detach/reattach
+guidance rather than escalating.
+
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
 guest repo. ``aivm`` configures the guest side with
@@ -177,6 +183,29 @@ Reconcile VM drift
 .. code-block:: bash
 
    aivm vm update
+
+Run without sudo
+----------------
+
+.. code-block:: bash
+
+   aivm host sudoless check
+   aivm host sudoless setup
+   aivm status            # header shows the active privilege mode
+   aivm vm up --never_sudo  # force sudoless for one invocation
+
+The default ``auto`` mode already prefers unprivileged execution and only
+escalates where required, so most hosts need no ceremony: joining the
+``libvirt`` group removes sudo from every ``virsh``/``virt-install`` call, and
+a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
+work. ``sudoless setup`` performs those two changes (using sudo at most once,
+for ``usermod``) and persists ``behavior.privilege_mode = "sudoless"``, after
+which ``aivm`` refuses to invoke sudo at all: the managed nftables firewall is
+skipped with a warning, and bind-mount attachment modes fail with guidance.
+
+State-changing hypervisor commands keep the same interactive approval prompts
+they had under sudo, so unprivileged operation does not make destructive
+operations promptless.
 
 Workflow logging model
 ----------------------

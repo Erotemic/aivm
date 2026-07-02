@@ -64,6 +64,11 @@ Host boundary (trusted):
 
 * Host user account and local filesystem.
 * Host ``sudo`` privileges when explicitly approved by the operator.
+* ``libvirt`` group membership, when the operator opts into sudoless
+  operation. This is effectively root-equivalent: controlling the system
+  libvirt daemon lets a principal run arbitrary configuration as root.
+  Sudoless mode is therefore a *no-sudo-invocation* guarantee (``aivm``
+  never executes ``sudo``), not a reduced-privilege guarantee.
 
 Guest boundary (untrusted):
 
@@ -274,6 +279,17 @@ The current ``aivm`` security posture is intentionally pragmatic:
   explicit trust extension.
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
+* Sudoless operation (``behavior.privilege_mode = "sudoless"``) cannot manage
+  the nftables firewall: reconciliation skips it with a warning and
+  ``aivm host sudoless setup`` disables it in the default config unless
+  ``--keep_firewall`` is passed. Choosing sudoless trades away managed
+  network isolation for the never-sudo guarantee; guests then rely on the
+  standard libvirt NAT network behavior alone.
+* The explicit-consent contract survives sudoless operation: state-changing
+  hypervisor commands (``virsh``/``virt-install``) prompt for approval even
+  when group membership means they no longer need sudo. Destructive
+  operations never become promptless because escalation stopped being
+  necessary.
 * Long-lived virtiofs-backed shares have a known file-descriptor growth/retention
   failure mode that has been mitigated through persistent replay and better
   cleanup paths, but not solved.

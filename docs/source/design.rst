@@ -169,6 +169,21 @@ Operational command execution
 * Route external command execution through a centralized command manager for
   consistent sudo policy, plan rendering, logging, and error semantics.
 * Keep privilege handling explicit and auditable.
+* Privilege acquisition is a policy, not a property of call sites:
+  ``behavior.privilege_mode`` selects ``auto`` (probe unprivileged
+  capability -- libvirt group access, user-writable storage trees -- and
+  escalate only where required), ``sudo`` (always escalate), or ``sudoless``
+  (never invoke sudo). ``aivm.privilege`` owns the capability probes and
+  per-family decisions (``virsh_needs_sudo``, ``path_needs_sudo``); the
+  ``CommandManager`` enforces the sudoless guarantee structurally by
+  rejecting any sudo command before execution or approval side effects, so a
+  call site that forgets to consult the policy fails loudly instead of
+  escalating.
+* Because all ``virsh``/``virt-install`` commands can now run unprivileged,
+  they pin ``-c qemu:///system`` explicitly (bare unprivileged ``virsh``
+  would silently target ``qemu:///session``), and state-changing hypervisor
+  commands require interactive approval regardless of whether sudo is used,
+  preserving the consent contract of principle 1.
 * Preserve ``--dry_run`` as a true non-destructive preview path.
 * Automatic/background reconciliation must avoid disruptive host operations
   against existing mounts (for example, forced/lazy unmount of busy targets).
