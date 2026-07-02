@@ -112,7 +112,10 @@ Operational guidance:
 * keep attachments narrow and remove stale attachment records when possible
 * prefer ``--mode git`` for repositories that can tolerate explicit Git
   handoff instead of live host sharing
-* restart the VM when the failure appears; this usually resets the hot
+* run ``aivm vm flush_caches`` when the failure appears; it drops guest
+  inode/dentry caches, which releases virtiofsd file descriptors without a
+  restart
+* restart the VM if flushing is not enough; this usually resets the hot
   ``virtiofsd`` state
 * use ``dev/devcheck/debug-harness.sh`` to collect comparable host/guest
   evidence when debugging the issue
@@ -176,13 +179,17 @@ Manage config store
    aivm config show
    aivm config edit
    aivm config discover
+   aivm config lint      # flag unknown/unused keys and sections
+   aivm config format    # rewrite into the canonical split-file layout
+   aivm config paths     # show config, data, and libvirt-related paths
 
 Reconcile VM drift
 ------------------
 
 .. code-block:: bash
 
-   aivm vm update
+   aivm vm edit     # change the saved VM config fragment in $EDITOR
+   aivm vm update   # reconcile the live libvirt domain against saved config
 
 Run without sudo
 ----------------
@@ -246,12 +253,5 @@ Get command tree
 Related projects
 ----------------
 
-* `Matchlock <https://github.com/jingkaihe/matchlock>`_: ephemeral microVMs for
-  AI-agent workloads with network allowlisting and host-side secret injection.
-* `JAI <https://github.com/stanford-scs/jai>`_: lightweight Linux jail for AI
-  CLIs with current-directory access and copy-on-write or stricter home
-  handling.
-
-These tools make different tradeoffs than ``aivm``. ``aivm`` emphasizes a
-persistent libvirt/KVM Ubuntu VM with explicit folder attachments and
-VS Code/SSH-oriented local development workflows.
+See :doc:`alternatives` for related tools (Matchlock, JAI) and how their
+tradeoffs compare with ``aivm``'s persistent-VM, attachment-first approach.

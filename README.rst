@@ -67,12 +67,15 @@ What it provides
 
 .. note::
 
-   Two opt-in end-to-end test modules live in ``tests/``: ``test_e2e_nested.py``
-   (light smoke path) and ``test_e2e_full.py`` (comprehensive cycle).  They are
+   Three opt-in end-to-end test modules live in ``tests/``:
+   ``test_e2e_nested.py`` (light smoke path), ``test_e2e_full.py``
+   (comprehensive cycle), and ``test_e2e_sudoless.py`` (full lifecycle with
+   ``privilege_mode = "sudoless"``, proving no sudo is invoked).  They are
    skipped by default; to run them locally set ``AIVM_E2E=1`` and invoke pytest
-   manually.  These tests require a host with libvirt/KVM, passwordless ``sudo``
-   and (optionally) an Ubuntu cloud image cached under
-   ``~/.cache/aivm/e2e``.
+   manually.  All need a host with libvirt/KVM and (optionally) an Ubuntu cloud
+   image cached under ``~/.cache/aivm/e2e``; the first two also need
+   passwordless ``sudo``, while the sudoless module instead needs ``libvirt``
+   group membership and ``setfacl``.
 
    An additional opt-in bootstrap-context e2e test is available in
    ``test_e2e_bootstrap_context.py``. It creates a fresh outer VM and runs the
@@ -91,7 +94,9 @@ Fast Start
 
 Recommended for new repos:
 
-Currently ``aivm config init``  is required, but we will make that implicit in a future version.
+No explicit setup is required first: if VM context is missing, ``aivm code .``
+offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
+(run them yourself for the explicit, reproducible path).
 
 .. code-block:: bash
 
@@ -335,7 +340,9 @@ Current mitigations and guidance:
 * prefer fewer, narrower shared folders
 * detach stale attachments and avoid leaving old token trees exposed
 * use ``--mode git`` for repos that do not need live writable host sharing
-* restart the VM if traversal begins failing with ``Too many open files``
+* run ``aivm vm flush_caches`` to drop guest inode/dentry caches and release
+  virtiofsd file descriptors without a restart
+* restart the VM if traversal still fails with ``Too many open files``
 * use ``dev/devcheck/debug-harness.sh`` when collecting host/guest evidence
 
 This is a known limitation, not a solved problem.
@@ -360,9 +367,13 @@ Config-store lifecycle (explicit flow)
    aivm config init
    aivm vm create
    aivm vm update
+   aivm vm edit
    aivm config discover
    aivm config show
    aivm config edit
+   aivm config lint
+   aivm config format
+   aivm config paths
    aivm help plan
    aivm help tree
    aivm help completion

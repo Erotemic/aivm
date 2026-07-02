@@ -329,10 +329,10 @@ Implementation TODO Notes
 To fully realize the integrity/content-addressable principle, current code
 should be evolved in these areas:
 
-* ``aivm/vm/lifecycle.py``:
-  verify pre-existing cached base images before reuse (not only newly
-  downloaded images), and add digest-keyed cache lookup fallback before URL
-  fetch.
+* ``aivm/vm/images.py``:
+  add digest-keyed cache lookup fallback before URL fetch. (Pre-existing
+  cached base images are now revalidated by checksum before reuse; the
+  digest-keyed lookup remains open.)
 * ``aivm/config.py``:
   move image cache identity toward digest-first semantics (``cache_name`` is
   currently name-oriented).
@@ -342,9 +342,6 @@ should be evolved in these areas:
 * E2E/shared cache helpers in ``tests/test_e2e_nested.py``:
   keep local cache path/version conventions aligned with digest-addressable
   behavior once implemented in runtime code.
-* Provisioning defaults:
-  add ``uv`` to baseline provisioning so Python package/workflow setup is
-  consistent out of the box.
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
   limits (see ``dev/design/future/flexible-folder-sharing.md``).

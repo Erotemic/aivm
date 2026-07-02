@@ -100,6 +100,8 @@ symptom is usually ``Too many open files`` / ``OSError: [Errno 24]`` from
 ordinary filesystem tools even when user limits look high.
 
 ``persistent`` mode mitigates attachment replay and mount churn, but it has not
-solved this underlying virtiofs behavior. Restarting the VM usually clears the
-bad runtime state. Prefer narrow attachments, detach stale folders, and use
-``--mode git`` when live writable host sharing is not required.
+solved this underlying virtiofs behavior. ``aivm vm flush_caches`` drops guest
+inode/dentry caches to release virtiofsd file descriptors without a restart;
+restarting the VM clears the bad runtime state when that is not enough. Prefer
+narrow attachments, detach stale folders, and use ``--mode git`` when live
+writable host sharing is not required.

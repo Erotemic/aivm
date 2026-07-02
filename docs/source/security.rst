@@ -1,5 +1,5 @@
 Security Model (Malicious-Guest Focus)
-=====================================
+=======================================
 
 Purpose and scope
 -----------------
@@ -54,7 +54,7 @@ Important nuance:
 References:
 
 * QEMU’s statement on attack surface (emulated devices, monitor): `QEMU Security`_
-* KVM escape case study (example of kernel-level breakout): `Project Zero: EPYC escape (CVE-2021-29657)`_
+* KVM escape case study (example of kernel-level breakout): `Project Zero EPYC escape (CVE-2021-29657)`_
 
 
 Trust boundaries and data classification
@@ -192,8 +192,8 @@ boundaries (including VM boundaries), depending on CPU model and mitigation stat
 
 References:
 
-* Linux kernel documentation for L1TF/L1 Terminal Fault: `Linux kernel doc: L1TF (CVE-2018-3646 class)`_
-* Ubuntu vulnerability note for L1TF (virtualization impact): `Ubuntu: L1TF vulnerability page`_
+* Linux kernel documentation for L1TF/L1 Terminal Fault: `Linux kernel doc on L1TF (CVE-2018-3646 class)`_
+* Ubuntu vulnerability note for L1TF (virtualization impact): `Ubuntu L1TF vulnerability page`_
 
 5) Denial of Service (DoS) against the host
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -231,6 +231,8 @@ Operator guidance:
 * restart long-lived VMs when traversal begins failing with ``Too many open files``
 
 
+.. _Historical examples:
+
 Historical examples (selected)
 ------------------------------
 
@@ -248,7 +250,7 @@ Examples relevant to KVM/QEMU/libvirt-style deployments:
   configurations. (`Red Hat vhost-net CVE-2019-14835`_)
 
 * **KVM breakout not relying on QEMU userspace (CVE-2021-29657)**: a KVM/AMD
-  vulnerability writeup and exploitation discussion. (`Project Zero: EPYC escape (CVE-2021-29657)`_,
+  vulnerability writeup and exploitation discussion. (`Project Zero EPYC escape (CVE-2021-29657)`_,
   `CVE-2021-29657 (NVD)`_)
 
 * **QEMU virtio-net use-after-free (CVE-2021-3748)**: a virtio device bug that
@@ -263,7 +265,7 @@ Examples relevant to KVM/QEMU/libvirt-style deployments:
 * **virglrenderer / 3D acceleration guest→host escape (CVE-2019-18389)**:
   highlights why enabling graphics/3D acceleration increases surface area.
   (``aivm`` defaults should avoid graphics/3D for untrusted guests.)
-  (`Ubuntu: CVE-2019-18389`_)
+  (`Ubuntu advisory for CVE-2019-18389`_)
 
 These are *examples*, not an exhaustive list.
 
@@ -450,10 +452,25 @@ What ``aivm`` does not do:
 * Copy private key material into the VM.
 * Intentionally persist private key contents in the config store.
 
+Default password login (important):
+
+* The default config also enables SSH *password* authentication for the guest
+  user with a well-known default password (``vm.allow_password_login = true``,
+  ``vm.password = "agent"``). This is a deliberate convenience for local
+  console/SSH recovery, but it means any principal that can reach the VM's
+  address on the libvirt NAT network can log in with ``agent``/``agent``.
+* On a single-user host with the default NAT network this is reachable only
+  from the host itself and from the guest. Change the password or set
+  ``allow_password_login = false`` (key-only) before exposing the VM network
+  more widely; password changes are baked into cloud-init at create time, so
+  this is best decided before VM creation.
+
 Operator guidance:
 
 * Do not use SSH agent forwarding into the VM.
 * Keep per-VM ``known_hosts`` files; avoid disabling host key checking.
+* Prefer key-only login (``allow_password_login = false``) when the default
+  password convenience is not needed.
 
 (See also QEMU security notes about “sensitive configuration” patterns when
 management channels are overly powerful.)
@@ -534,14 +551,14 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 
 .. _Red Hat vhost-net CVE-2019-14835: https://access.redhat.com/security/vulnerabilities/kernel-vhost
 
-.. _Project Zero: EPYC escape (CVE-2021-29657): https://projectzero.google/2021/06/an-epyc-escape-case-study-of-kvm.html
+.. _Project Zero EPYC escape (CVE-2021-29657): https://projectzero.google/2021/06/an-epyc-escape-case-study-of-kvm.html
 .. _CVE-2021-29657 (NVD): https://nvd.nist.gov/vuln/detail/CVE-2021-29657
 
 .. _CVE-2021-3748 (NVD): https://nvd.nist.gov/vuln/detail/CVE-2021-3748
 
 .. _CVE-2020-35517 record: https://www.cve.org/CVERecord?id=CVE-2020-35517
 
-.. _Linux kernel doc: L1TF (CVE-2018-3646 class): https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html
-.. _Ubuntu: L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
+.. _Linux kernel doc on L1TF (CVE-2018-3646 class): https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html
+.. _Ubuntu L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
 
-.. _Ubuntu: CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389
+.. _Ubuntu advisory for CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389
