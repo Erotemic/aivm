@@ -13,7 +13,7 @@ import kwconf
 from ..attachments.guest import _upsert_ssh_config_entry
 from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
-from ..commands import CommandManager
+from ..commands import CommandManager, shell_join
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..config import default_host_label
 from ..util import which
@@ -158,6 +158,10 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
 
     Replaces the current process so stdio, signals, and TTY handling match
     a plain ``ssh -t`` invocation. Returns nonzero only if exec fails.
+
+    This is the one deliberate exception to routing commands through
+    :class:`CommandManager`: a subprocess cannot hand the caller's TTY back
+    cleanly, so the command is logged here for auditability and then exec'd.
     """
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     cmd = [
@@ -167,6 +171,7 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
         f'{cfg.vm.user}@{ip}',
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
+    log.info('RUN (exec, replaces this process): {}', shell_join(cmd))
     os.execvp(cmd[0], cmd)
     return 1  # unreachable; execvp replaces the process
 

@@ -15,6 +15,16 @@ def virsh_system_cmd(*args: str) -> list[str]:
     return ['virsh', '-c', LIBVIRT_URI, *args]
 
 
+def virsh_domain_missing(stderr: str) -> bool:
+    """Return True when virsh failed because the domain does not exist.
+
+    Distinguishes "domain not found" from permission/connection failures so
+    callers know that retrying with sudo cannot change the answer.
+    """
+    detail = (stderr or '').lower()
+    return 'failed to get domain' in detail or 'domain not found' in detail
+
+
 def require_ssh_identity(identity: str) -> str:
     ident = (identity or '').strip()
     if not ident:

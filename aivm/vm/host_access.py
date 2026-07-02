@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat as stat_mod
 from pathlib import Path
 
 from loguru import logger
@@ -11,7 +12,33 @@ from ..config import AgentVMConfig
 
 log = logger
 
+def _local_stat_answer(path: Path, *, want_file: bool) -> bool | None:
+    """Try to answer an existence check without privileges.
+
+    Returns True/False when the local stat is authoritative and None when
+    the answer needs a privileged probe. A successful stat is definitive,
+    and ENOENT is definitive non-existence (the kernel resolved every parent
+    we were allowed to traverse); EACCES and friends are inconclusive.
+    """
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    if want_file:
+        return stat_mod.S_ISREG(st.st_mode)
+    return True
+
 def _sudo_path_exists(path: Path) -> bool:
+    """Return True if ``path`` exists, using sudo only when necessary.
+
+    The privileged probe only runs when an unprivileged stat cannot answer
+    (for example under a root-only image directory).
+    """
+    local = _local_stat_answer(path, want_file=False)
+    if local is not None:
+        return local
     mgr = CommandManager.current()
     return (
         mgr.run(
@@ -25,6 +52,13 @@ def _sudo_path_exists(path: Path) -> bool:
     )
 
 def _sudo_file_exists(path: Path) -> bool:
+    """Return True if ``path`` is a regular file, using sudo only when necessary.
+
+    See :func:`_sudo_path_exists` for the escalation rationale.
+    """
+    local = _local_stat_answer(path, want_file=True)
+    if local is not None:
+        return local
     mgr = CommandManager.current()
     return (
         mgr.run(

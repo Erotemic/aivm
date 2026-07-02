@@ -688,11 +688,9 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
     )
 
     assert prompts == ['Approve this step? [y]es/[a]ll/[s]how/[N]o: ']
+    # One inspect step covers both the unprivileged read and its internal
+    # sudo escalation; the old separate privileged-inspect step is gone.
     assert 'Step: Inspect shared-root VM mapping' in messages
-    assert (
-        'Step: Inspect shared-root VM mapping with libvirt privileges'
-        in messages
-    )
     assert 'Step: Ensure VM virtiofs mapping' in messages
     assert (
         '  1. Attach virtiofs device to running VM vm-shared-root-map'

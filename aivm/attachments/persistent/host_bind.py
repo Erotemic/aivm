@@ -15,6 +15,7 @@ from ...persistent_replay import (
     persistent_host_replay_service_unit,
 )
 from ...vm import attach_vm_share, vm_share_mappings
+from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from ...vm.share import AttachmentMode, ResolvedAttachment
 from ..resolve import _normalize_attachment_access
 from ..shared_root import (
@@ -45,7 +46,7 @@ def _install_persistent_host_bind_replay(
         persistent_host_replay_service_unit(
             vm_name=cfg.vm.name,
             manifest_path=str(manifest._persistent_host_manifest_path(cfg)),
-            export_root=str(manifest._persistent_root_host_dir(cfg)),
+            export_root=str(_persistent_root_host_dir(cfg)),
         ),
         '0644',
         label='persistent host replay unit',
@@ -124,7 +125,7 @@ def _ensure_persistent_root_parent_dir(
     *,
     dry_run: bool,
 ) -> None:
-    target = manifest._persistent_root_host_dir(cfg)
+    target = _persistent_root_host_dir(cfg)
     if dry_run:
         print(f'DRYRUN: would create persistent-root parent directory {target}')
         return
@@ -151,11 +152,10 @@ def _ensure_persistent_root_vm_mapping(
     dry_run: bool,
     vm_running: bool | None = None,
 ) -> None:
-    source = str(manifest._persistent_root_host_dir(cfg))
+    source = str(_persistent_root_host_dir(cfg))
     tag = PERSISTENT_ROOT_VIRTIOFS_TAG
-    mappings = vm_share_mappings(cfg, use_sudo=False)
-    if any(src == source and t == tag for src, t in mappings):
-        return
+    # vm_share_mappings escalates to sudo internally only when the
+    # unprivileged read fails, so one call covers both cases.
     mappings = vm_share_mappings(cfg, use_sudo=True)
     if any(src == source and t == tag for src, t in mappings):
         return
@@ -178,7 +178,7 @@ def _ensure_persistent_root_host_bind(
     # dedicated persistent-root export tree so the two backends never share the
     # same virtiofs device or host export directory.
     source = Path(attachment.source_dir).resolve()
-    parent = manifest._persistent_root_host_dir(cfg)
+    parent = _persistent_root_host_dir(cfg)
     target = parent / Path(_shared_root_host_target(cfg, attachment.tag)).name
     if dry_run:
         print(

@@ -368,9 +368,10 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert refreshes
 
 
-def test_vm_attach_escalates_when_nonsudo_probe_inconclusive(
+def test_vm_attach_uses_single_escalating_probe(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Attach makes one probe call; escalation lives inside probe_vm_state."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-needs-sudo'
     cfg_path = tmp_path / 'config.toml'
@@ -393,14 +394,13 @@ def test_vm_attach_escalates_when_nonsudo_probe_inconclusive(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
     )
-    states = [
-        (ProbeOutcome(None, 'probe inconclusive without sudo'), False),
-        (ProbeOutcome(True, 'vm-needs-sudo state=running'), True),
-    ]
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach.probe_vm_state',
-        lambda *a, **k: states.pop(0),
-    )
+    probe_calls: list[dict] = []
+
+    def fake_probe(*a: object, **k: object) -> tuple[ProbeOutcome, bool]:
+        probe_calls.append(dict(k))
+        return (ProbeOutcome(True, 'vm-needs-sudo state=running'), True)
+
+    monkeypatch.setattr('aivm.cli.vm_attach.probe_vm_state', fake_probe)
     monkeypatch.setattr('aivm.cli.vm_attach.vm_share_mappings', lambda *a, **k: [])
 
     attached: list[tuple[tuple, dict]] = []
@@ -431,6 +431,7 @@ def test_vm_attach_escalates_when_nonsudo_probe_inconclusive(
     assert rc == 0
     assert attached
     assert mounted
+    assert probe_calls == [{'use_sudo': True}]
 
 
 def test_vm_attach_git_mode_sets_up_guest_repo_when_running(

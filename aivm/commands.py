@@ -259,6 +259,9 @@ class CommandPlan:
         approval_scope: Optional label describing the approval boundary.
         commands: Commands in submission order.
         approved: True once this plan has cleared approval.
+        approved_command_count: Number of commands present when approval was
+            granted. Commands appended after that never went through the
+            plan prompt and must be confirmed individually at execution.
         executed_upto: Highest command index already executed.
         closed: True once the plan lifecycle has ended.
         rendered_preview: True once the preview has been logged.
@@ -269,6 +272,7 @@ class CommandPlan:
     approval_scope: str = ''
     commands: list[PlannedCommand] = field(default_factory=list)
     approved: bool = False
+    approved_command_count: int = 0
     executed_upto: int = -1
     closed: bool = False
     rendered_preview: bool = False
@@ -555,6 +559,18 @@ class CommandManager:
         self._approve_all_remaining = False
         self._loose_commands: list[PlannedCommand] = []
         self._sudo_authentication_required: bool | None = None
+        # Scratch space for modules to memoize read-only probe results
+        # (e.g. domain XML) for the lifetime of this manager. Entries are
+        # expected to be validated against ``mutation_generation`` so any
+        # state-changing command conservatively invalidates them.
+        self.probe_cache: dict[str, dict] = {}
+        # Incremented every time a state-changing ('modify') command is
+        # executed. Probe caches compare against this to decide staleness.
+        # Invariant required of callers: state-changing commands must carry
+        # role='modify' (directly or via their intent scope). Note that
+        # _effective_role classifies unlabeled sudo+check=False commands as
+        # reads, so tolerant mutations need an explicit role.
+        self.mutation_generation = 0
 
     def push_intent(self, frame: IntentFrame) -> None:
         """Push one intent frame onto the active intent stack."""
@@ -974,9 +990,11 @@ class CommandManager:
             if self.sudo_authentication_required():
                 self._authenticate_sudo()
             plan.approved = True
+            plan.approved_command_count = len(plan.commands)
             return
         if not self._plan_needs_approval(plan):
             plan.approved = True
+            plan.approved_command_count = len(plan.commands)
             return
         if not sys.stdin.isatty():
             raise RuntimeError(
@@ -997,9 +1015,11 @@ class CommandManager:
             if ans in {'a', 'all'}:
                 self._approve_all_remaining = True
                 plan.approved = True
+                plan.approved_command_count = len(plan.commands)
                 return
             if ans in {'y', 'yes'}:
                 plan.approved = True
+                plan.approved_command_count = len(plan.commands)
                 return
             raise RuntimeError('Aborted by user.')
 
@@ -1081,6 +1101,34 @@ class CommandManager:
         """Execute pending commands in ``plan`` in submission order."""
         for idx in range(plan.executed_upto + 1, len(plan.commands)):
             item = plan.commands[idx]
+            if (
+                plan.approved
+                and idx >= plan.approved_command_count
+                and item.spec.sudo
+            ):
+                # This command was appended after the step cleared approval
+                # (e.g. a sudo escalation fallback), so the plan prompt never
+                # covered it. Apply the same policy the plan approval would
+                # have: confirm when approval is required, otherwise make
+                # sure auto-approved read-only sudo is authenticated up
+                # front so it cannot fail (or prompt) mid-plan.
+                role = self._effective_role(item.spec)
+                if self._needs_sudo_approval(role):
+                    self._confirm_loose_sudo_command(
+                        item.spec, _stacklevel=_stacklevel + 1
+                    )
+                elif (
+                    role == 'read'
+                    and self.auto_approve_readonly_sudo
+                    and not (
+                        self.yes
+                        or self.yes_sudo
+                        or self._approve_all_remaining
+                    )
+                    and os.geteuid() != 0
+                    and self.sudo_authentication_required()
+                ):
+                    self._authenticate_sudo()
             res = self._execute_one(
                 item.spec,
                 ordinal=(idx + 1, len(plan.commands)),
@@ -1164,6 +1212,10 @@ class CommandManager:
     ) -> CommandResult:
         """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=_stacklevel)
+        if self._effective_role(spec) == 'modify':
+            # Bump before running so probe caches are invalidated even if
+            # the mutation fails partway through.
+            self.mutation_generation += 1
         if spec.sudo and not within_plan:
             self._confirm_loose_sudo_command(spec, _stacklevel=_stacklevel + 1)
         cmd = list(spec.cmd)

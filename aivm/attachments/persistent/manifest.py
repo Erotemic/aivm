@@ -31,10 +31,6 @@ from ..resolve import ATTACHMENT_MODE_PERSISTENT
 from . import transport
 
 
-def _persistent_root_host_dir(cfg: AgentVMConfig) -> Path:
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'persistent-root'
-
-
 @dataclass(frozen=True)
 class PersistentAttachmentRecord:
     attachment_id: str

@@ -24,6 +24,7 @@ from ..config import AgentVMConfig
 from ..firewall import read_firewall_tcp_ports
 from ..runtime import virsh_system_cmd
 from ..config_store import Store, find_attachments_for_vm
+from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
     AttachmentMode,
@@ -94,16 +95,10 @@ def firewall_drift_report(cfg: AgentVMConfig, *, use_sudo: bool) -> DriftReport:
     )
 
 
-def _shared_root_host_dir(cfg: AgentVMConfig) -> Path:
-    """Get the shared-root host directory for a VM.
-
-    Note: This is a simple path computation based on config, not a libvirt query.
-    """
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
-
-
-def _persistent_root_host_dir(cfg: AgentVMConfig) -> Path:
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'persistent-root'
+# Canonical host-side export layout lives in .paths; these aliases keep the
+# established module-local names used throughout drift reporting and tests.
+_shared_root_host_dir = shared_root_host_dir
+_persistent_root_host_dir = persistent_root_host_dir
 
 
 @dataclass(frozen=True)

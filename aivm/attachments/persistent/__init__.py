@@ -30,6 +30,7 @@ from ...persistent_replay import (
     PERSISTENT_ROOT_GUEST_MOUNT_ROOT,
     PERSISTENT_ROOT_VIRTIOFS_TAG,
 )
+from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from . import host_bind, manifest, replay, transport
 from .host_bind import (
     _ensure_persistent_root_host_bind,
@@ -46,7 +47,6 @@ from .manifest import (
     _persistent_host_manifest_path,
     _persistent_host_replay_service_name,
     _persistent_host_state_dir,
-    _persistent_root_host_dir,
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_attachment_manifest_to_guest,
 )

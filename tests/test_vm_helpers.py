@@ -170,6 +170,9 @@ def test_vm_has_virtiofs_shared_memory(
         'aivm.commands.subprocess.run',
         lambda cmd, **kwargs: _Proc(0, xml_without_shared, ''),
     )
+    # Domain XML is cached on the manager between mutations, so start a
+    # fresh manager to observe the changed XML.
+    _activate_manager()
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 

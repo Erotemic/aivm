@@ -7,6 +7,7 @@ folders are shared into VMs.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import tempfile
@@ -20,7 +21,12 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    virsh_domain_missing,
+    virsh_system_cmd,
+)
 from ..util import CmdError
 
 log = logger
@@ -169,18 +175,60 @@ def _dumpxml_text(
     summary: str,
     detail: str = '',
 ) -> str | None:
+    """Return the VM's domain XML, or None when it cannot be read.
+
+    Successful reads are cached on the current :class:`CommandManager` and
+    invalidated whenever any state-changing command executes, so the many
+    XML-derived probes in one flow submit at most one ``virsh dumpxml``.
+
+    When ``use_sudo`` is True the read still tries unprivileged access first
+    and only escalates to sudo when that fails for a reason other than the
+    domain not existing.
+
+    Note: changes made to the domain outside this process during one
+    invocation are not observed until a manager-run mutation bumps the
+    generation.
+    """
     mgr = CommandManager.current()
+    cache: dict[str, tuple[int, str]] = mgr.probe_cache.setdefault(
+        'domain_xml', {}
+    )
+    entry = cache.get(cfg.vm.name)
+    if entry is not None and entry[0] == mgr.mutation_generation:
+        return entry[1]
+    # Closed stdin keeps an unprivileged probe from blocking on a polkit
+    # password prompt outside the manager's approval flow, and LC_ALL=C
+    # keeps the domain-missing stderr heuristic locale-independent.
+    probe_env = {**os.environ, 'LC_ALL': 'C'}
     res = mgr.submit(
         virsh_system_cmd('dumpxml', cfg.vm.name),
-        sudo=use_sudo,
+        sudo=False,
         role='read',
         check=False,
         capture=True,
+        input_text='',
+        env=probe_env,
         summary=summary,
         detail=detail,
     ).result()
+    if (
+        (res.code != 0 or not res.stdout.strip())
+        and use_sudo
+        and not virsh_domain_missing(res.stderr)
+    ):
+        res = mgr.submit(
+            virsh_system_cmd('dumpxml', cfg.vm.name),
+            sudo=True,
+            role='read',
+            check=False,
+            capture=True,
+            env=probe_env,
+            summary=summary,
+            detail=detail,
+        ).result()
     if res.code != 0 or not res.stdout.strip():
         return None
+    cache[cfg.vm.name] = (mgr.mutation_generation, res.stdout)
     return res.stdout
 
 

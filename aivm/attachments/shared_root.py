@@ -11,14 +11,11 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..vm import attach_vm_share, vm_share_mappings
+from ..vm.paths import shared_root_host_dir as _shared_root_host_dir
 from ..vm.share import SHARED_ROOT_VIRTIOFS_TAG, ResolvedAttachment
 from .resolve import ATTACHMENT_ACCESS_RO, ATTACHMENT_ACCESS_RW
 
 SHARED_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-shared'
-
-
-def _shared_root_host_dir(cfg: AgentVMConfig) -> Path:
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
 
 
 def _shared_root_host_target(cfg: AgentVMConfig, token: str) -> Path:
@@ -437,8 +434,8 @@ def _ensure_shared_root_vm_mapping(
     In shared-root mode all per-folder guest mounts ultimately come from one
     libvirt virtiofs mapping rooted at ``_shared_root_host_dir(cfg)`` and tagged
     with ``SHARED_ROOT_VIRTIOFS_TAG``. This helper checks whether that mapping
-    already exists, first without sudo and then with sudo if needed, and only
-    attaches it when absent.
+    already exists (escalating to sudo only if the unprivileged read fails)
+    and only attaches it when absent.
     """
     del yes
     mgr = CommandManager.current()
@@ -448,14 +445,6 @@ def _ensure_shared_root_vm_mapping(
         'Inspect shared-root VM mapping',
         why='Check whether the current VM definition already includes the shared-root virtiofs device.',
         approval_scope=f'shared-root-vm-inspect:{cfg.vm.name}',
-    ):
-        mappings = vm_share_mappings(cfg, use_sudo=False)
-    if any(src == source and t == tag for src, t in mappings):
-        return
-    with mgr.step(
-        'Inspect shared-root VM mapping with libvirt privileges',
-        why='Some hosts require privileged libvirt access to read the effective filesystem mapping state.',
-        approval_scope=f'shared-root-vm-inspect-sudo:{cfg.vm.name}',
     ):
         mappings = vm_share_mappings(cfg, use_sudo=True)
     if any(src == source and t == tag for src, t in mappings):
@@ -689,6 +678,7 @@ def _detach_shared_root_host_bind(
             res = mgr.run(
                 ['umount', str(target)],
                 sudo=True,
+                role='modify',
                 check=False,
                 capture=True,
                 summary=f'Unmount shared-root bind target {target}',

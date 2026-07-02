@@ -184,21 +184,14 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         ),
     )
     vm_running = False
-    vm_defined = False
-    sudo_confirmed = False
-    vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=False)
+    # probe_vm_state escalates to sudo internally only when the unprivileged
+    # read is inconclusive, so one call covers both cases.
+    vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=True)
     vm_running_probe = bool(vm_out.ok)
     vm_defined = bool(vm_defined_probe)
-    if not vm_defined:
-        sudo_confirmed = True
-        vm_out, vm_defined_probe = probe_vm_state(cfg, use_sudo=True)
-        vm_running_probe = bool(vm_out.ok)
-        vm_defined = bool(vm_defined_probe)
     if vm_defined:
         vm_running = vm_running_probe is True
         if attachment.mode == ATTACHMENT_MODE_SHARED:
-            if not sudo_confirmed:
-                sudo_confirmed = True
             mappings = vm_share_mappings(cfg)
             attachment = drift_align_attachment_tag_with_mappings(
                 attachment, host_src, mappings
@@ -368,11 +361,10 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         )
         return 0
 
-    vm_out, vm_defined = probe_vm_state(cfg, use_sudo=False)
+    # probe_vm_state escalates to sudo internally only when the unprivileged
+    # read is inconclusive, so one call covers both cases.
+    vm_out, vm_defined = probe_vm_state(cfg, use_sudo=True)
     vm_defined_probe = vm_defined
-    if vm_defined_probe is False:
-        vm_out, vm_defined = probe_vm_state(cfg, use_sudo=True)
-        vm_defined_probe = vm_defined
     vm_running = bool(vm_out.ok)
     mode = _normalize_attachment_mode(att.mode)
     resolved = ResolvedAttachment(

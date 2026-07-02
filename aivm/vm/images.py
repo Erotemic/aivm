@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -77,9 +78,11 @@ def _verify_image_sha256(
         return
     mgr = CommandManager.current()
     log.info('Verifying base image checksum (source: {})', source)
+    # Cached images are usually world-readable, so sudo is only needed when
+    # the current user cannot read the file directly.
     out = mgr.submit(
         ['sha256sum', str(image_path)],
-        sudo=True,
+        sudo=not os.access(image_path, os.R_OK),
         role='read',
         check=True,
         capture=True,

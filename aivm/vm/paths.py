@@ -20,3 +20,19 @@ def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
         'ip_file': state_dir / f'{cfg.vm.name}.ip',
         'known_hosts': state_dir / 'known_hosts',
     }
+
+def shared_root_host_dir(cfg: AgentVMConfig) -> Path:
+    """Host-side export directory backing shared-root attachments for this VM.
+
+    This is a pure path computation from config, not a libvirt query. It is
+    the single source of truth for the shared-root layout used by drift
+    detection, attachment reconciliation, and VM creation.
+    """
+    return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
+
+def persistent_root_host_dir(cfg: AgentVMConfig) -> Path:
+    """Host-side export directory backing persistent attachments for this VM.
+
+    See :func:`shared_root_host_dir`; this is the persistent-mode analogue.
+    """
+    return Path(cfg.paths.base_dir) / cfg.vm.name / 'persistent-root'

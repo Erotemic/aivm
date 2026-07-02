@@ -346,18 +346,9 @@ def _restore_saved_vm_attachments(
     ]
     mappings: list[tuple[str, str]] = []
     if shared_secondary:
-        mappings = vm_share_mappings(cfg, use_sudo=False)
-        needs_privileged_probe = False
-        for att in shared_secondary:
-            aligned = drift_align_attachment_tag_with_mappings(
-                att, Path(att.source_dir), mappings
-            )
-            if not drift_attachment_has_mapping(cfg, aligned, mappings):
-                needs_privileged_probe = True
-                break
-
-        if needs_privileged_probe:
-            mappings = vm_share_mappings(cfg, use_sudo=True)
+        # vm_share_mappings escalates to sudo internally only when the
+        # unprivileged read fails, so one call covers both cases.
+        mappings = vm_share_mappings(cfg, use_sudo=True)
 
     restored = 0
     for att in secondary_attachments:
@@ -584,9 +575,10 @@ def _reconcile_attached_vm(
             and policy.ensure_firewall_opt
             and (not cached_ssh_ok)
         ):
-            fw_probe = probe_firewall(cfg, use_sudo=False).ok
-            if fw_probe is None:
-                fw_probe = probe_firewall(cfg, use_sudo=True).ok
+            # nft reads need root on almost every host, so probing without
+            # sudo first would just submit a doomed command; go straight to
+            # the read-only sudo probe.
+            fw_probe = probe_firewall(cfg, use_sudo=True).ok
             need_firewall_apply = fw_probe is not True
         if need_firewall_apply:
             apply_firewall(cfg, dry_run=policy.dry_run)
