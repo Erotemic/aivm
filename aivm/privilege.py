@@ -53,11 +53,12 @@ from loguru import logger
 
 from .commands import CommandManager
 from .errors import SudolessModeError
+from .modes import PrivilegeMode
 from .runtime import virsh_cmd
 
 log = logger
 
-PRIVILEGE_MODES = ('auto', 'sudo', 'sudoless')
+PRIVILEGE_MODES = tuple(m.value for m in PrivilegeMode)
 
 #: The user that Ubuntu system-libvirt runs QEMU processes as. Disk images
 #: and every ancestor directory must be traversable by this user.
@@ -67,21 +68,22 @@ LIBVIRT_QEMU_USER = 'libvirt-qemu'
 LIBVIRT_GROUP = 'libvirt'
 
 
-def normalize_privilege_mode(value: object) -> str:
-    """Normalize a configured privilege mode, defaulting to ``'auto'``."""
+def normalize_privilege_mode(value: object) -> PrivilegeMode:
+    """Normalize a configured privilege mode, defaulting to ``AUTO``."""
     mode = str(value or 'auto').strip().lower()
-    if mode not in PRIVILEGE_MODES:
+    try:
+        return PrivilegeMode(mode)
+    except ValueError:
         log.warning(
             "Unknown privilege_mode {!r}; falling back to 'auto'. "
             'Valid values: {}',
             value,
             ', '.join(PRIVILEGE_MODES),
         )
-        return 'auto'
-    return mode
+        return PrivilegeMode.AUTO
 
 
-def current_privilege_mode() -> str:
+def current_privilege_mode() -> PrivilegeMode:
     """Return the active manager's privilege mode."""
     return CommandManager.current().privilege_mode
 
@@ -129,16 +131,16 @@ def libvirt_unprivileged_ok() -> bool:
 def virsh_needs_sudo() -> bool:
     """Return whether libvirt client commands should run via sudo."""
     mode = current_privilege_mode()
-    if mode == 'sudo':
+    if mode == PrivilegeMode.SUDO:
         return True
-    if mode == 'sudoless':
+    if mode == PrivilegeMode.SUDOLESS:
         return False
     return not libvirt_unprivileged_ok()
 
 
 def sudo_allowed() -> bool:
     """Return False when the active mode forbids sudo entirely."""
-    return current_privilege_mode() != 'sudoless'
+    return current_privilege_mode() != PrivilegeMode.SUDOLESS
 
 
 def _stat_or_none(path: Path) -> os.stat_result | None:
@@ -190,9 +192,9 @@ def user_can_write_path(path: Path | str) -> bool:
 def path_needs_sudo(path: Path | str) -> bool:
     """Return whether filesystem operations on ``path`` should use sudo."""
     mode = current_privilege_mode()
-    if mode == 'sudo':
+    if mode == PrivilegeMode.SUDO:
         return True
-    if mode == 'sudoless':
+    if mode == PrivilegeMode.SUDOLESS:
         return False
     return not user_can_write_path(path)
 
@@ -213,9 +215,9 @@ def user_can_write_file(path: Path | str) -> bool:
 def file_write_needs_sudo(path: Path | str) -> bool:
     """Return whether an in-place write to ``path`` should use sudo."""
     mode = current_privilege_mode()
-    if mode == 'sudo':
+    if mode == PrivilegeMode.SUDO:
         return True
-    if mode == 'sudoless':
+    if mode == PrivilegeMode.SUDOLESS:
         return False
     return not user_can_write_file(path)
 
@@ -227,7 +229,7 @@ def require_sudo_allowed(*, feature: str, hint: str) -> None:
     host bind mounts, package installation) so users get feature-level
     guidance instead of a failed command deep inside a flow.
     """
-    if current_privilege_mode() != 'sudoless':
+    if current_privilege_mode() != PrivilegeMode.SUDOLESS:
         return
     raise SudolessModeError(
         f'{feature} requires privileged host access, but sudoless mode is '

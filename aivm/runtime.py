@@ -31,8 +31,9 @@ from contextvars import ContextVar
 from loguru import logger as log
 
 from .errors import MissingSSHIdentityError, SessionRuntimeError
+from .modes import PrivilegeMode, RuntimeMode
 
-RUNTIME_MODES = ('system', 'session')
+RUNTIME_MODES = tuple(m.value for m in RuntimeMode)
 
 SYSTEM_LIBVIRT_URI = 'qemu:///system'
 SESSION_LIBVIRT_URI = 'qemu:///session'
@@ -45,33 +46,34 @@ _CURRENT_RUNTIME_MODE: ContextVar[str] = ContextVar(
 )
 
 
-def normalize_runtime_mode(value: object) -> str:
-    """Normalize a configured runtime mode, defaulting to ``'system'``."""
+def normalize_runtime_mode(value: object) -> RuntimeMode:
+    """Normalize a configured runtime mode, defaulting to ``SYSTEM``."""
     mode = str(value or 'system').strip().lower()
-    if mode not in RUNTIME_MODES:
+    try:
+        return RuntimeMode(mode)
+    except ValueError:
         log.warning(
             "Unknown runtime.mode {!r}; falling back to 'system'. "
             'Valid values: {}',
             value,
             ', '.join(RUNTIME_MODES),
         )
-        return 'system'
-    return mode
+        return RuntimeMode.SYSTEM
 
 
-def current_runtime_mode() -> str:
-    """Return the context-local runtime mode (``'system'`` when unset)."""
-    return _CURRENT_RUNTIME_MODE.get()
+def current_runtime_mode() -> RuntimeMode:
+    """Return the context-local runtime mode (``SYSTEM`` when unset)."""
+    return normalize_runtime_mode(_CURRENT_RUNTIME_MODE.get())
 
 
 def runtime_is_session() -> bool:
     """Return True when the active runtime is the per-user session daemon."""
-    return current_runtime_mode() == 'session'
+    return current_runtime_mode() == RuntimeMode.SESSION
 
 
 def libvirt_uri_for_mode(mode: str) -> str:
     """Return the libvirt connection URI for a runtime mode."""
-    if normalize_runtime_mode(mode) == 'session':
+    if normalize_runtime_mode(mode) == RuntimeMode.SESSION:
         return SESSION_LIBVIRT_URI
     return SYSTEM_LIBVIRT_URI
 
@@ -81,7 +83,7 @@ def current_libvirt_uri() -> str:
     return libvirt_uri_for_mode(current_runtime_mode())
 
 
-def activate_runtime(mode: object) -> str:
+def activate_runtime(mode: object) -> RuntimeMode:
     """Install ``mode`` as the context-local runtime and enforce its policy.
 
     Session mode structurally forbids sudo: it flips the active
@@ -91,17 +93,17 @@ def activate_runtime(mode: object) -> str:
     """
     normalized = normalize_runtime_mode(mode)
     _CURRENT_RUNTIME_MODE.set(normalized)
-    if normalized == 'session':
+    if normalized == RuntimeMode.SESSION:
         from .commands import CommandManager
 
         mgr = CommandManager.current()
-        if mgr.privilege_mode != 'sudoless':
+        if mgr.privilege_mode != PrivilegeMode.SUDOLESS:
             log.debug(
                 'Session runtime forces privilege_mode=sudoless '
                 '(was {!r})',
                 mgr.privilege_mode,
             )
-            mgr.privilege_mode = 'sudoless'
+            mgr.privilege_mode = PrivilegeMode.SUDOLESS
     return normalized
 
 

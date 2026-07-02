@@ -29,6 +29,7 @@ else:
 from loguru import logger
 
 from .errors import AIVMError, SudolessModeError
+from .modes import PrivilegeMode
 
 log = logger
 
@@ -556,15 +557,15 @@ class CommandManager:
         self.yes = bool(yes)
         self.yes_sudo = bool(yes_sudo)
         self.auto_approve_readonly_sudo = bool(auto_approve_readonly_sudo)
-        # 'auto' | 'sudo' | 'sudoless'. In 'sudoless' this manager refuses
-        # to execute any sudo command (enforced in _execute_one and in
-        # confirm_sudo_scope) so no code path can escalate silently; call
-        # sites consult aivm.privilege helpers to pick sudo=False where an
-        # unprivileged path exists.
+        # In SUDOLESS this manager refuses to execute any sudo command
+        # (enforced in _execute_one and in confirm_sudo_scope) so no code
+        # path can escalate silently; call sites consult aivm.privilege
+        # helpers to pick sudo=False where an unprivileged path exists.
         mode = str(privilege_mode or 'auto').strip().lower()
-        self.privilege_mode = (
-            mode if mode in {'auto', 'sudo', 'sudoless'} else 'auto'
-        )
+        try:
+            self.privilege_mode: PrivilegeMode = PrivilegeMode(mode)
+        except ValueError:
+            self.privilege_mode = PrivilegeMode.AUTO
         self.intent_stack: list[IntentFrame] = []
         self.plan_stack: list[CommandPlan] = []
         self._next_command_id = 0
@@ -817,7 +818,7 @@ class CommandManager:
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return False
-        if self.privilege_mode == 'sudoless':
+        if self.privilege_mode == PrivilegeMode.SUDOLESS:
             # Never invoke sudo in sudoless mode, not even `sudo -n true`;
             # callers on this path are about to be rejected anyway.
             return True
@@ -900,7 +901,7 @@ class CommandManager:
         funnels through here, so a call site that forgot to consult the
         privilege helpers fails loudly instead of escalating.
         """
-        if not needs_sudo or self.privilege_mode != 'sudoless':
+        if not needs_sudo or self.privilege_mode != PrivilegeMode.SUDOLESS:
             return
         if os.geteuid() == 0:
             return
