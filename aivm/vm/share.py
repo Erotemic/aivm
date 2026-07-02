@@ -21,6 +21,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..privilege import virsh_needs_sudo
 from ..runtime import (
     require_ssh_identity,
     ssh_base_args,
@@ -214,11 +215,12 @@ def _dumpxml_text(
     if (
         (res.code != 0 or not res.stdout.strip())
         and use_sudo
+        and mgr.privilege_mode != 'sudoless'
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(
             virsh_system_cmd('dumpxml', cfg.vm.name),
-            sudo=True,
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -375,8 +377,8 @@ def attach_vm_share(
     if vm_running is None:
         state = (
             mgr.submit(
-                ['virsh', 'domstate', cfg.vm.name],
-                sudo=True,
+                virsh_system_cmd('domstate', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
                 capture=True,
@@ -389,9 +391,9 @@ def attach_vm_share(
     else:
         is_running = bool(vm_running)
     attach_cmd = (
-        ['virsh', 'attach-device', cfg.vm.name, tmp, '--live', '--config']
+        virsh_system_cmd('attach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else ['virsh', 'attach-device', cfg.vm.name, tmp, '--config']
+        else virsh_system_cmd('attach-device', cfg.vm.name, tmp, '--config')
     )
     attach_summary = (
         f'Attach virtiofs device to running VM {cfg.vm.name}'
@@ -400,7 +402,7 @@ def attach_vm_share(
     )
     res = mgr.submit(
         attach_cmd,
-        sudo=True,
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
@@ -411,7 +413,7 @@ def attach_vm_share(
         return
     msg = ((res.stderr or '') + '\n' + (res.stdout or '')).lower()
     if 'target already exists' in msg:
-        current = vm_share_mappings(cfg, use_sudo=True)
+        current = vm_share_mappings(cfg, use_sudo=virsh_needs_sudo())
         if any(src == source_dir and tgt == tag for src, tgt in current):
             log.info(
                 'Virtiofs mapping already present for vm={} source={} tag={}; treating attach as satisfied.',
@@ -448,8 +450,8 @@ def detach_vm_share(
     mgr = CommandManager.current()
     state = (
         mgr.run(
-            ['virsh', 'domstate', cfg.vm.name],
-            sudo=True,
+            virsh_system_cmd('domstate', cfg.vm.name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -459,13 +461,13 @@ def detach_vm_share(
     )
     is_running = 'running' in state
     detach_cmd = (
-        ['virsh', 'detach-device', cfg.vm.name, tmp, '--live', '--config']
+        virsh_system_cmd('detach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else ['virsh', 'detach-device', cfg.vm.name, tmp, '--config']
+        else virsh_system_cmd('detach-device', cfg.vm.name, tmp, '--config')
     )
     res = mgr.run(
         detach_cmd,
-        sudo=True,
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,

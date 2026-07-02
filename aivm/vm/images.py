@@ -15,6 +15,7 @@ from ..config import (
     AgentVMConfig,
 )
 from ..util import CmdError
+from ..privilege import path_needs_sudo, sudo_allowed
 from .host_access import _ensure_qemu_access, _sudo_file_exists
 from .paths import _paths
 
@@ -82,7 +83,7 @@ def _verify_image_sha256(
     # the current user cannot read the file directly.
     out = mgr.submit(
         ['sha256sum', str(image_path)],
-        sudo=not os.access(image_path, os.R_OK),
+        sudo=not os.access(image_path, os.R_OK) and sudo_allowed(),
         role='read',
         check=True,
         capture=True,
@@ -93,7 +94,7 @@ def _verify_image_sha256(
     if actual != expected_sha256:
         mgr.submit(
             ['rm', '-f', str(image_path)],
-            sudo=True,
+            sudo=path_needs_sudo(image_path),
             role='modify',
             check=False,
             capture=True,
@@ -186,6 +187,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         )
     else:
         log.info('Downloading base image to {} (showing progress)', base_img)
+    use_sudo = path_needs_sudo(p['img_dir'])
     with mgr.intent(
         'Fetch base image',
         why=(
@@ -205,7 +207,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         ):
             mkdir_handle = mgr.submit(
                 ['mkdir', '-p', str(p['img_dir'])],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -214,7 +216,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
             cleanup_tmp_handle = mgr.submit(
                 ['rm', '-f', str(tmp_img)],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=False,
                 capture=True,
@@ -236,7 +238,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
             transfer_handle = mgr.submit(
                 transfer_cmd,
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=False,
                 capture=(local_file_src is not None),
@@ -253,7 +255,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
             move_handle = mgr.submit(
                 ['mv', '-f', str(tmp_img), str(base_img)],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -262,7 +264,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             )
             checksum_handle = mgr.submit(
                 ['sha256sum', str(base_img)],
-                sudo=True,
+                sudo=use_sudo,
                 role='read',
                 check=True,
                 capture=True,
@@ -275,7 +277,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             if transfer_res.code != 0:
                 mgr.submit(
                     ['rm', '-f', str(tmp_img)],
-                    sudo=True,
+                    sudo=use_sudo,
                     role='modify',
                     check=False,
                     capture=True,
@@ -293,7 +295,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
             if expected_sha256 and actual != expected_sha256:
                 mgr.submit(
                     ['rm', '-f', str(base_img)],
-                    sudo=True,
+                    sudo=use_sudo,
                     role='modify',
                     check=False,
                     capture=True,

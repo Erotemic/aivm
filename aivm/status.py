@@ -15,6 +15,7 @@ from pathlib import Path
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .host import check_commands
+from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
     require_ssh_identity,
     ssh_base_args,
@@ -196,7 +197,7 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     """
     info = CommandManager.current().run(
         virsh_system_cmd('net-info', cfg.network.name),
-        sudo=use_sudo,
+        sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
         summary=f'Inspect libvirt network {cfg.network.name}',
@@ -248,6 +249,12 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     if not cfg.firewall.enabled:
         return ProbeOutcome(None, 'disabled in config')
     mgr = CommandManager.current()
+    if mgr.privilege_mode == 'sudoless':
+        # nft reads require root; there is no unprivileged fallback.
+        return ProbeOutcome(
+            None,
+            'firewall checks need privileges (unavailable in sudoless mode)',
+        )
     if use_sudo and mgr.current_plan() is None:
         with mgr.step(
             'Inspect firewall status',
@@ -322,7 +329,12 @@ def probe_vm_state(
         env=probe_env,
         summary=f'Inspect VM definition {cfg.vm.name}',
     )
-    if dom.code != 0 and use_sudo and not virsh_domain_missing(dom.stderr):
+    if (
+        dom.code != 0
+        and use_sudo
+        and mgr.privilege_mode != 'sudoless'
+        and not virsh_domain_missing(dom.stderr)
+    ):
         sudo_used = True
         dom = mgr.run(
             dominfo_cmd,
@@ -529,7 +541,13 @@ def render_status(
     ``use_sudo=False`` intentionally favors safe/non-privileged checks and marks
     sudo-only checks as inconclusive instead of failing hard.
     """
-    lines: list[str] = ['🧭 AgentVM Status', f'📄 Config: {path}', '']
+    privilege_mode = CommandManager.current().privilege_mode
+    lines: list[str] = [
+        '🧭 AgentVM Status',
+        f'📄 Config: {path}',
+        f'🔐 Privilege mode: {privilege_mode}',
+        '',
+    ]
     done = 0
     total = 0
 
@@ -770,7 +788,7 @@ def render_status(
         mgr = CommandManager.current()
         net_xml = mgr.run(
             virsh_system_cmd('net-dumpxml', cfg.network.name),
-            sudo=use_sudo,
+            sudo=use_sudo and virsh_needs_sudo(),
             check=False,
             capture=True,
         )
@@ -796,7 +814,7 @@ def render_status(
         lines.append('Image')
         img_stat = mgr.run(
             ['ls', '-lh', str(base_img)],
-            sudo=use_sudo,
+            sudo=use_sudo and sudo_allowed(),
             check=False,
             capture=True,
         )
@@ -818,7 +836,12 @@ def render_status(
             virsh_system_cmd('domifaddr', cfg.vm.name),
             virsh_system_cmd('net-dhcp-leases', cfg.network.name),
         ):
-            vm_raw = mgr.run(cmd, sudo=use_sudo, check=False, capture=True)
+            vm_raw = mgr.run(
+                cmd,
+                sudo=use_sudo and virsh_needs_sudo(),
+                check=False,
+                capture=True,
+            )
             lines.append(
                 _command_output_block(cmd, vm_raw.stdout, vm_raw.stderr)
             )

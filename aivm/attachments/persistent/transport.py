@@ -25,6 +25,7 @@ from ...commands import (
     CommandRole,
 )
 from ...config import AgentVMConfig
+from ...privilege import path_needs_sudo
 from ...runtime import require_ssh_identity, ssh_base_args
 
 
@@ -52,16 +53,17 @@ def _install_host_text_if_changed(
             why=f'Install updated host-side {label} content for persistent attachment replay.',
             approval_scope=f'{label.replace(" ", "-")}:host:{target}',
         ):
+            host_sudo = path_needs_sudo(target.parent)
             mgr.submit(
                 ['mkdir', '-p', str(target.parent)],
-                sudo=True,
+                sudo=host_sudo,
                 role='modify',
                 summary=f'Create parent directory for {label}',
                 detail=f'target={target.parent}',
             )
             mgr.submit(
                 ['install', '-m', mode, tmp_name, str(target)],
-                sudo=True,
+                sudo=host_sudo,
                 role='modify',
                 summary=f'Install {label}',
                 detail=f'target={target}',

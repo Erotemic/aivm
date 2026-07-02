@@ -96,9 +96,11 @@ def test_plan_prompts_once_for_multiple_sudo_commands(
             )
 
     assert len(prompts) == 1
-    assert calls[0][0] == ['sudo', '-n', 'true']
+    # Approval no longer runs a side-effect `sudo -n true` probe; the plan's
+    # own commands are the only sudo invocations.
+    assert calls[0][0][:2] == ['sudo', 'virsh']
     assert calls[1][0][:2] == ['sudo', 'virsh']
-    assert calls[2][0][:2] == ['sudo', 'virsh']
+    assert len(calls) == 2
 
 
 def test_command_handle_result_flushes_through_handle(

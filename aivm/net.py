@@ -13,6 +13,8 @@ import textwrap
 from loguru import logger
 
 from .commands import CommandManager
+from .privilege import virsh_needs_sudo
+from .runtime import virsh_system_cmd
 from .config import AgentVMConfig
 from .util import which
 
@@ -86,10 +88,10 @@ def ensure_network(
                 approval_scope=f'network-probe:{name}',
             ):
                 exists_probe = mgr.submit(
-                    ['virsh', 'net-info', name],
+                    virsh_system_cmd('net-info', name),
                     check=False,
                     capture=True,
-                    sudo=True,
+                    sudo=virsh_needs_sudo(),
                     role='read',
                     summary=f'Check whether libvirt network {name} exists',
                 )
@@ -134,24 +136,24 @@ def ensure_network(
         ):
             if exists and recreate:
                 mgr.submit(
-                    ['virsh', 'net-destroy', name],
-                    sudo=True,
+                    virsh_system_cmd('net-destroy', name),
+                    sudo=virsh_needs_sudo(),
                     role='modify',
                     check=False,
                     capture=True,
                     summary=f'Stop existing libvirt network {name}',
                 )
                 mgr.submit(
-                    ['virsh', 'net-undefine', name],
-                    sudo=True,
+                    virsh_system_cmd('net-undefine', name),
+                    sudo=virsh_needs_sudo(),
                     role='modify',
                     check=False,
                     capture=True,
                     summary=f'Remove existing libvirt network definition {name}',
                 )
             mgr.submit(
-                ['virsh', 'net-define', tmp],
-                sudo=True,
+                virsh_system_cmd('net-define', tmp),
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=True,
                 capture=True,
@@ -159,16 +161,16 @@ def ensure_network(
                 detail=f'bridge={bridge} subnet={subnet} gateway={gw}',
             )
             mgr.submit(
-                ['virsh', 'net-autostart', name],
-                sudo=True,
+                virsh_system_cmd('net-autostart', name),
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=True,
                 capture=True,
                 summary=f'Enable autostart for libvirt network {name}',
             )
             mgr.submit(
-                ['virsh', 'net-start', name],
-                sudo=True,
+                virsh_system_cmd('net-start', name),
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=True,
                 capture=True,
@@ -181,15 +183,15 @@ def network_status(cfg: AgentVMConfig) -> str:
     name = cfg.network.name
     mgr = CommandManager.current()
     info = mgr.run(
-        ['virsh', 'net-info', name],
-        sudo=True,
+        virsh_system_cmd('net-info', name),
+        sudo=virsh_needs_sudo(),
         role='read',
         check=False,
         capture=True,
     )
     dump = mgr.run(
-        ['virsh', 'net-dumpxml', name],
-        sudo=True,
+        virsh_system_cmd('net-dumpxml', name),
+        sudo=virsh_needs_sudo(),
         role='read',
         check=False,
         capture=True,
@@ -206,15 +208,15 @@ def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         return
     mgr = CommandManager.current()
     mgr.run(
-        ['virsh', 'net-destroy', name],
-        sudo=True,
+        virsh_system_cmd('net-destroy', name),
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
     )
     mgr.run(
-        ['virsh', 'net-undefine', name],
-        sudo=True,
+        virsh_system_cmd('net-undefine', name),
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,

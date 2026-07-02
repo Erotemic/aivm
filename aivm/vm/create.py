@@ -5,6 +5,8 @@ from __future__ import annotations
 from loguru import logger
 
 from ..commands import CommandManager
+from ..privilege import virsh_needs_sudo
+from ..runtime import virsh_system_cmd
 from ..config import AgentVMConfig
 from ..util import CmdError
 from .cloudinit import _write_cloud_init
@@ -117,8 +119,8 @@ def create_or_start_vm(
                 ):
                     st = (
                         mgr.submit(
-                            ['virsh', 'domstate', cfg.vm.name],
-                            sudo=True,
+                            virsh_system_cmd('domstate', cfg.vm.name),
+                            sudo=virsh_needs_sudo(),
                             role='read',
                             check=False,
                             capture=True,
@@ -145,8 +147,8 @@ def create_or_start_vm(
                             st,
                         )
                         mgr.submit(
-                            ['virsh', 'resume', cfg.vm.name],
-                            sudo=True,
+                            virsh_system_cmd('resume', cfg.vm.name),
+                            sudo=virsh_needs_sudo(),
                             role='modify',
                             check=True,
                             capture=True,
@@ -166,8 +168,8 @@ def create_or_start_vm(
                             log.info('DRYRUN: virsh start {}', cfg.vm.name)
                             return
                         mgr.submit(
-                            ['virsh', 'start', cfg.vm.name],
-                            sudo=True,
+                            virsh_system_cmd('start', cfg.vm.name),
+                            sudo=virsh_needs_sudo(),
                             role='modify',
                             check=True,
                             capture=True,
@@ -229,6 +231,10 @@ def create_or_start_vm(
         boot_opts = 'uefi,loader.secure=no,bios.useserial=on'
         cmd = [
             'virt-install',
+            # Pin the system daemon; unprivileged virt-install would
+            # otherwise default to the per-user qemu:///session.
+            '--connect',
+            'qemu:///system',
             '--name',
             cfg.vm.name,
             '--memory',
@@ -264,7 +270,7 @@ def create_or_start_vm(
         try:
             first = CommandManager.current().run(
                 cmd,
-                sudo=True,
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=False,
                 capture=True,
@@ -294,7 +300,7 @@ def create_or_start_vm(
                     pass
                 try:
                     CommandManager.current().run(
-                        cmd_no_uefi, sudo=True, check=True, capture=True
+                        cmd_no_uefi, sudo=virsh_needs_sudo(), check=True, capture=True
                     )
                 except CmdError as ex2:
                     if source_dir and _is_missing_virtiofsd_error(ex2):

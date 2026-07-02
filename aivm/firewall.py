@@ -13,6 +13,7 @@ from typing import TypeAlias, TypeGuard
 from loguru import logger
 
 from .commands import CommandManager
+from .privilege import require_sudo_allowed, sudo_allowed
 from .config import AgentVMConfig
 from .runtime import virsh_system_cmd
 
@@ -178,6 +179,13 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if not cfg.firewall.enabled:
         log.info('Firewall disabled in config; skipping.')
         return
+    require_sudo_allowed(
+        feature='Firewall management (nftables)',
+        hint=(
+            'Disable the managed firewall (firewall.enabled = false) or set '
+            "behavior.privilege_mode to 'auto' to allow sudo for it."
+        ),
+    )
     script = _nft_script(cfg)
     table = cfg.firewall.table
     if dry_run:
@@ -221,6 +229,11 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
 
 def firewall_status(cfg: AgentVMConfig) -> str:
+    if not sudo_allowed():
+        return (
+            'firewall status needs privileges (unavailable in sudoless '
+            'mode)\n'
+        )
     table = cfg.firewall.table
     mgr = CommandManager.current()
     with mgr.intent(
@@ -256,6 +269,10 @@ def read_firewall_tcp_ports(
 
     table = cfg.firewall.table
     bridge = cfg.network.bridge
+
+    if not sudo_allowed():
+        # nft reads require root; report unavailable instead of escalating.
+        return None, 'firewall checks need privileges (sudoless mode)'
 
     res = CommandManager.current().run(
         ['nft', '--json', 'list', 'table', 'inet', table],
@@ -416,6 +433,13 @@ def read_firewall_tcp_ports(
 
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    require_sudo_allowed(
+        feature='Firewall management (nftables)',
+        hint=(
+            "Set behavior.privilege_mode to 'auto' to allow sudo for "
+            'firewall operations.'
+        ),
+    )
     table = cfg.firewall.table
     if dry_run:
         log.info('DRYRUN: nft delete table inet {}', table)

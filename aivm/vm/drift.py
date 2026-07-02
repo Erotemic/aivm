@@ -24,6 +24,7 @@ from ..config import AgentVMConfig
 from ..firewall import read_firewall_tcp_ports
 from ..runtime import virsh_system_cmd
 from ..config_store import Store, find_attachments_for_vm
+from ..privilege import sudo_allowed, virsh_needs_sudo
 from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
@@ -203,7 +204,7 @@ def read_actual_vm_hardware(
     """
     cmd = virsh_system_cmd('dominfo', cfg.vm.name)
     res = CommandManager.current().run(
-        cmd, sudo=use_sudo, check=False, capture=True
+        cmd, sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
     )
     if res.code != 0:
         # Check both stderr and stdout for error messages

@@ -182,6 +182,14 @@ class BehaviorConfig:
     yes_sudo: bool = False
     auto_approve_readonly_sudo: bool = True
     verbose: int = 1
+    # How aivm acquires privileges for host operations:
+    #   'auto'     - probe what works without sudo (libvirt group membership,
+    #                user-writable image trees) and escalate only when needed.
+    #   'sudo'     - always use sudo for privileged host operations.
+    #   'sudoless' - never invoke sudo; root-only features (firewall,
+    #                shared-root/persistent host bind mounts, dependency
+    #                install) fail with guidance. See `aivm host sudoless`.
+    privilege_mode: str = 'auto'
 
 
 @dataclass

@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ...commands import CommandManager
+from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...runtime import virsh_system_cmd
 from .. import virtiofsd_wrapper
@@ -103,7 +104,7 @@ def _apply_virtiofs_binary_drift(
 
     dumpxml = mgr.run(
         virsh_system_cmd('dumpxml', cfg.vm.name),
-        sudo=True,
+        sudo=virsh_needs_sudo(),
         check=True,
         capture=True,
         role='read',
@@ -152,8 +153,8 @@ def _apply_virtiofs_binary_drift(
         tmp = f.name
     try:
         mgr.run(
-            ['virsh', '-c', 'qemu:///system', 'define', tmp],
-            sudo=True,
+            virsh_system_cmd('define', tmp),
+            sudo=virsh_needs_sudo(),
             check=True,
             capture=True,
             role='modify',

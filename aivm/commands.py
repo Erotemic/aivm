@@ -28,6 +28,8 @@ else:
 
 from loguru import logger
 
+from .errors import SudolessModeError
+
 log = logger
 
 # TODO: The current command role model is too coarse.
@@ -549,10 +551,20 @@ class CommandManager:
         yes: bool = False,
         yes_sudo: bool = False,
         auto_approve_readonly_sudo: bool = True,
+        privilege_mode: str = 'auto',
     ) -> None:
         self.yes = bool(yes)
         self.yes_sudo = bool(yes_sudo)
         self.auto_approve_readonly_sudo = bool(auto_approve_readonly_sudo)
+        # 'auto' | 'sudo' | 'sudoless'. In 'sudoless' this manager refuses
+        # to execute any sudo command (enforced in _execute_one and in
+        # confirm_sudo_scope) so no code path can escalate silently; call
+        # sites consult aivm.privilege helpers to pick sudo=False where an
+        # unprivileged path exists.
+        mode = str(privilege_mode or 'auto').strip().lower()
+        self.privilege_mode = (
+            mode if mode in {'auto', 'sudo', 'sudoless'} else 'auto'
+        )
         self.intent_stack: list[IntentFrame] = []
         self.plan_stack: list[CommandPlan] = []
         self._next_command_id = 0
@@ -800,23 +812,15 @@ class CommandManager:
         parts = [f.title for f in self.intent_stack if f.visible and f.title]
         return ' > '.join(parts)
 
-    def _needs_sudo_approval(self, role: CommandRole) -> bool:
-        """Return True if a sudo command with ``role`` needs confirmation."""
-        if os.geteuid() == 0:
-            return False
-        if self.yes or self.yes_sudo or self._approve_all_remaining:
-            return False
-        if role == 'read' and self.auto_approve_readonly_sudo:
-            return False
-        if self.sudo_authentication_required():
-            return True
-        return True
-
     def sudo_authentication_required(self) -> bool:
         """Return True when the current user likely needs sudo auth."""
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return False
+        if self.privilege_mode == 'sudoless':
+            # Never invoke sudo in sudoless mode, not even `sudo -n true`;
+            # callers on this path are about to be rejected anyway.
+            return True
         if self._sudo_authentication_required is not None:
             return self._sudo_authentication_required
         probe = subprocess.run(
@@ -870,6 +874,7 @@ class CommandManager:
 
     def _authenticate_sudo(self) -> None:
         """Refresh sudo credentials now so later commands do not surprise."""
+        self._reject_sudo_if_sudoless(['sudo', '-v'], needs_sudo=True)
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return
@@ -886,6 +891,29 @@ class CommandManager:
             raise CommandError(cmd, res)
         self._sudo_authentication_required = False
 
+    def _reject_sudo_if_sudoless(
+        self, cmd: Sequence[str] | str, *, needs_sudo: bool
+    ) -> None:
+        """Raise when a sudo command would run under sudoless mode.
+
+        This is the structural never-sudo guarantee: every execution path
+        funnels through here, so a call site that forgot to consult the
+        privilege helpers fails loudly instead of escalating.
+        """
+        if not needs_sudo or self.privilege_mode != 'sudoless':
+            return
+        if os.geteuid() == 0:
+            return
+        raise SudolessModeError(
+            'Sudoless mode is enabled (behavior.privilege_mode = '
+            '"sudoless"), but this operation requested privileged host '
+            'access:\n'
+            f'  {shell_join(cmd) if not isinstance(cmd, str) else cmd}\n'
+            'Run `aivm host sudoless check` to see what is missing for '
+            "sudoless operation, or set behavior.privilege_mode to 'auto' "
+            'to allow sudo fallback.'
+        )
+
     def confirm_sudo_scope(
         self,
         *,
@@ -897,6 +925,9 @@ class CommandManager:
         """Preflight sudo approval/authentication for an upcoming operation."""
         if os.geteuid() == 0:
             return
+        self._reject_sudo_if_sudoless(
+            preview_cmds[0] if preview_cmds else purpose, needs_sudo=True
+        )
         eff_role = self._normalize_role(role)
         auth_required = self.sudo_authentication_required()
         auto_yes = bool(
@@ -960,12 +991,44 @@ class CommandManager:
         if ans not in {'y', 'yes'}:
             raise RuntimeError('Aborted by user.')
 
+    def _is_system_libvirt_mutation(self, spec: CommandSpec) -> bool:
+        """Return True for state-changing hypervisor commands.
+
+        With libvirt group membership these run without sudo, but they keep
+        the approval contract of the sudo era: destroying a VM must not
+        become promptless just because escalation is no longer needed.
+        """
+        if self._effective_role(spec) != 'modify':
+            return False
+        head = str(spec.cmd[0]) if spec.cmd else ''
+        return head in {'virsh', 'virt-install'}
+
+    def _command_needs_approval(self, spec: CommandSpec) -> bool:
+        """Return True when ``spec`` must be confirmed before executing.
+
+        Approval applies to sudo commands and to unprivileged state-changing
+        libvirt commands; ``yes``/``yes_sudo`` and the read-only sudo
+        auto-approve policy suppress prompts exactly as before.
+        """
+        if os.geteuid() == 0:
+            return False
+        privileged = spec.sudo
+        if not privileged and not self._is_system_libvirt_mutation(spec):
+            return False
+        if self.yes or self.yes_sudo or self._approve_all_remaining:
+            return False
+        if (
+            privileged
+            and self._effective_role(spec) == 'read'
+            and self.auto_approve_readonly_sudo
+        ):
+            return False
+        return True
+
     def _plan_needs_approval(self, plan: CommandPlan) -> bool:
         """Return True if any command in ``plan`` requires approval."""
         return any(
-            item.spec.sudo
-            and self._needs_sudo_approval(self._effective_role(item.spec))
-            for item in plan.commands
+            self._command_needs_approval(item.spec) for item in plan.commands
         )
 
     def _approve_plan_if_needed(
@@ -974,6 +1037,12 @@ class CommandManager:
         """Render and approve ``plan`` if approval has not already occurred."""
         if plan.approved:
             return
+        for item in plan.commands:
+            # Reject sudo work before any approval side effect (previews,
+            # prompts, `sudo -n true` probes, `sudo -v`) can run.
+            self._reject_sudo_if_sudoless(
+                item.spec.cmd, needs_sudo=item.spec.sudo
+            )
         self._render_plan_preview(plan, _stacklevel=_stacklevel + 1)
         readonly_autoapproved_sudo = [
             item
@@ -1063,11 +1132,19 @@ class CommandManager:
         for idx, item in enumerate(plan.commands, start=1):
             local_log.info('  {}. {}', idx, self._raw_command(item.spec))
 
-    def _confirm_loose_sudo_command(
+    def _confirm_loose_command(
         self, spec: CommandSpec, *, _stacklevel: int = 1
     ) -> None:
-        """Confirm one sudo command that is not grouped into a plan."""
-        if not spec.sudo or os.geteuid() == 0:
+        """Confirm one approval-needing command outside a plan's approval.
+
+        Sudo commands go through the full sudo scope confirmation
+        (authentication included). Unprivileged state-changing libvirt
+        commands get a plain confirmation prompt so the approval contract
+        survives sudoless operation.
+        """
+        if os.geteuid() == 0:
+            return
+        if not spec.sudo and not self._command_needs_approval(spec):
             return
         role = self._effective_role(spec)
         purpose = spec.summary.strip()
@@ -1081,15 +1158,49 @@ class CommandManager:
                 )
         if not spec.summary.strip():
             log.opt(depth=_stacklevel).info(
-                '  This sudo command is not grouped into an explicit step. '
+                '  This command is not grouped into an explicit step. '
                 'Wrap related work in mgr.intent(...) / mgr.step(...) for clearer previews and fewer prompts.'
             )
-        self.confirm_sudo_scope(
-            yes=False,
-            purpose=purpose,
-            role=role,
-            preview_cmds=[list(spec.cmd)],
+        if spec.sudo:
+            self.confirm_sudo_scope(
+                yes=False,
+                purpose=purpose,
+                role=role,
+                preview_cmds=[list(spec.cmd)],
+            )
+            return
+        self._confirm_unprivileged_mutation(
+            purpose=purpose, preview_cmds=[list(spec.cmd)]
         )
+
+    def _confirm_unprivileged_mutation(
+        self,
+        *,
+        purpose: str,
+        preview_cmds: Sequence[Sequence[str]] | None = None,
+    ) -> None:
+        """Prompt for a state-changing hypervisor command that needs no sudo."""
+        local_log = log.opt(depth=0)
+        local_log.info(
+            'About to run state-changing hypervisor operations (no sudo needed):'
+        )
+        local_log.info('  {}', purpose)
+        if preview_cmds:
+            local_log.info('  Planned commands:')
+            for idx, cmd in enumerate(preview_cmds, start=1):
+                local_log.info(
+                    '    {}. {}', idx, shell_join([str(p) for p in cmd])
+                )
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                'State-changing operations require confirmation, but stdin '
+                'is not interactive. Re-run with --yes.'
+            )
+        ans = input('Continue? [y]es/[a]ll/[N]o: ').strip().lower()
+        if ans in {'a', 'all'}:
+            self._approve_all_remaining = True
+        elif ans not in {'y', 'yes'}:
+            raise RuntimeError('Aborted by user.')
 
     def _flush_plan(
         self,
@@ -1104,7 +1215,10 @@ class CommandManager:
             if (
                 plan.approved
                 and idx >= plan.approved_command_count
-                and item.spec.sudo
+                and (
+                    item.spec.sudo
+                    or self._is_system_libvirt_mutation(item.spec)
+                )
             ):
                 # This command was appended after the step cleared approval
                 # (e.g. a sudo escalation fallback), so the plan prompt never
@@ -1113,12 +1227,13 @@ class CommandManager:
                 # sure auto-approved read-only sudo is authenticated up
                 # front so it cannot fail (or prompt) mid-plan.
                 role = self._effective_role(item.spec)
-                if self._needs_sudo_approval(role):
-                    self._confirm_loose_sudo_command(
+                if self._command_needs_approval(item.spec):
+                    self._confirm_loose_command(
                         item.spec, _stacklevel=_stacklevel + 1
                     )
                 elif (
-                    role == 'read'
+                    item.spec.sudo
+                    and role == 'read'
                     and self.auto_approve_readonly_sudo
                     and not (
                         self.yes
@@ -1212,12 +1327,15 @@ class CommandManager:
     ) -> CommandResult:
         """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=_stacklevel)
+        self._reject_sudo_if_sudoless(spec.cmd, needs_sudo=spec.sudo)
         if self._effective_role(spec) == 'modify':
             # Bump before running so probe caches are invalidated even if
             # the mutation fails partway through.
             self.mutation_generation += 1
-        if spec.sudo and not within_plan:
-            self._confirm_loose_sudo_command(spec, _stacklevel=_stacklevel + 1)
+        if not within_plan and (
+            spec.sudo or self._is_system_libvirt_mutation(spec)
+        ):
+            self._confirm_loose_command(spec, _stacklevel=_stacklevel + 1)
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]

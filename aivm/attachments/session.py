@@ -19,6 +19,7 @@ from ..cli._common import (
     _resolve_cfg_for_code,
 )
 from ..commands import CommandManager
+from ..privilege import sudo_allowed
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
@@ -575,11 +576,18 @@ def _reconcile_attached_vm(
             and policy.ensure_firewall_opt
             and (not cached_ssh_ok)
         ):
-            # nft reads need root on almost every host, so probing without
-            # sudo first would just submit a doomed command; go straight to
-            # the read-only sudo probe.
-            fw_probe = probe_firewall(cfg, use_sudo=True).ok
-            need_firewall_apply = fw_probe is not True
+            if not sudo_allowed():
+                log.warning(
+                    'Skipping firewall reconciliation in sudoless mode; '
+                    'nftables requires root. Set firewall.enabled = false '
+                    'to silence this warning.'
+                )
+            else:
+                # nft reads need root on almost every host, so probing
+                # without sudo first would just submit a doomed command; go
+                # straight to the read-only sudo probe.
+                fw_probe = probe_firewall(cfg, use_sudo=True).ok
+                need_firewall_apply = fw_probe is not True
         if need_firewall_apply:
             apply_firewall(cfg, dry_run=policy.dry_run)
 

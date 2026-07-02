@@ -43,7 +43,7 @@ class ConfigDiscoverCLI(_BaseCommand):
             capture=True,
         )
         used_sudo = False
-        if names_res.code != 0:
+        if names_res.code != 0 and mgr.privilege_mode != 'sudoless':
             used_sudo = True
             names_res = mgr.run(
                 virsh_system_cmd('list', '--all', '--name'),

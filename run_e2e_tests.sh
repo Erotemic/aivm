@@ -21,6 +21,7 @@ export AIVM_E2E_HOST_CONTEXT="${AIVM_E2E_HOST_CONTEXT:-1}"
 tests=(
   tests/test_e2e_nested.py
   tests/test_e2e_full.py
+  tests/test_e2e_sudoless.py
 )
 if [[ "${AIVM_E2E_BOOTSTRAP:-0}" == "1" ]]; then
   tests+=(tests/test_e2e_bootstrap_context.py)

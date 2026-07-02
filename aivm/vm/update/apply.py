@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...commands import CommandError, CommandManager
+from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...runtime import virsh_system_cmd
@@ -53,7 +54,7 @@ def _apply_vm_update(
             print(f'DRYRUN: {" ".join(cmd)}')
         else:
             CommandManager.current().run(
-                cmd, sudo=True, check=True, capture=True
+                cmd, sudo=virsh_needs_sudo(), check=True, capture=True
             )
             print(f'Updated CPU count to {want}.')
         changed = True
@@ -73,8 +74,8 @@ def _apply_vm_update(
             print(f'DRYRUN: {" ".join(mem_cmd)}')
         else:
             mgr = CommandManager.current()
-            mgr.run(max_cmd, sudo=True, check=True, capture=True)
-            mgr.run(mem_cmd, sudo=True, check=True, capture=True)
+            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            mgr.run(mem_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
             print(f'Updated RAM to {want} MiB.')
         changed = True
         # Same reasoning as CPU: setmem --config is persistent-only.
@@ -92,7 +93,7 @@ def _apply_vm_update(
             else:
                 try:
                     CommandManager.current().run(
-                        cmd, sudo=True, check=True, capture=True
+                        cmd, sudo=virsh_needs_sudo(), check=True, capture=True
                     )
                 except CommandError as ex:
                     raise _disk_resize_error(drift, ex) from ex

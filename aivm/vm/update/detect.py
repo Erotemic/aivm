@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...commands import CommandManager
+from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...runtime import virsh_system_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
@@ -30,7 +31,7 @@ def _resolve_vm_disk_path(
     )
     res = CommandManager.current().run(
         virsh_system_cmd('dumpxml', cfg.vm.name),
-        sudo=use_sudo,
+        sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
     )
@@ -53,7 +54,7 @@ def _qemu_img_virtual_size_bytes(
 ) -> tuple[int | None, str]:
     res = CommandManager.current().run(
         ['qemu-img', 'info', '--output=json', str(path)],
-        sudo=use_sudo,
+        sudo=use_sudo and sudo_allowed(),
         check=False,
         capture=True,
     )
@@ -68,7 +69,7 @@ def _virsh_domblk_capacity_bytes(
 ) -> int | None:
     res = CommandManager.current().run(
         virsh_system_cmd('domblkinfo', cfg.vm.name, path_or_target),
-        sudo=use_sudo,
+        sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
     )
@@ -101,7 +102,7 @@ def _vm_update_drift(
     if dominfo.code != 0:
         dominfo = mgr.run(
             virsh_system_cmd('dominfo', cfg.vm.name),
-            sudo=True,
+            sudo=virsh_needs_sudo(),
             check=False,
             capture=True,
             summary=f'Inspect VM definition {cfg.vm.name} with sudo for update planning',
@@ -132,7 +133,7 @@ def _vm_update_drift(
     if state_res.code != 0:
         state_res = mgr.run(
             virsh_system_cmd('domstate', cfg.vm.name),
-            sudo=True,
+            sudo=virsh_needs_sudo(),
             check=False,
             capture=True,
         )
@@ -149,7 +150,7 @@ def _vm_update_drift(
         and not sudo_confirmed
     ):
         sudo_confirmed = True
-        disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=True)
+        disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=virsh_needs_sudo())
     notes.extend(disk_notes)
     cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
         disk_path, use_sudo=False
@@ -157,7 +158,7 @@ def _vm_update_drift(
     if cur_disk is None:
         sudo_confirmed = True
         cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
-            disk_path, use_sudo=True
+            disk_path, use_sudo=virsh_needs_sudo()
         )
     if cur_disk is None:
         if (
@@ -173,7 +174,7 @@ def _vm_update_drift(
         if domblk is None and not sudo_confirmed:
             sudo_confirmed = True
             domblk = _virsh_domblk_capacity_bytes(
-                cfg, str(disk_path), use_sudo=True
+                cfg, str(disk_path), use_sudo=virsh_needs_sudo()
             )
         cur_disk = domblk
     desired_disk = int(cfg.vm.disk_gb) * (1024**3)
@@ -196,7 +197,7 @@ def _vm_update_drift(
         sudo_confirmed = True
         xml = mgr.run(
             virsh_system_cmd('dumpxml', cfg.vm.name),
-            sudo=True,
+            sudo=virsh_needs_sudo(),
             check=False,
             capture=True,
             summary=f'Inspect VM XML for {cfg.vm.name} network details with sudo',

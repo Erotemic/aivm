@@ -670,7 +670,9 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
         if parts[:2] == ['sudo', '-v']:
             return _Proc(0, '', '')
         normalized = parts[1:] if parts[:1] == ['sudo'] else parts
-        if normalized[:4] == ['virsh', '-c', 'qemu:///system', 'dumpxml']:
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
+        if normalized[:2] == ['virsh', 'dumpxml']:
             return _Proc(1, '', 'domain not visible')
         if normalized[:2] == ['virsh', 'attach-device']:
             return _Proc(0, '', '')
@@ -697,7 +699,9 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
         in messages
     )
     assert any(
-        msg.startswith('     command: sudo virsh attach-device ')
+        msg.startswith(
+            '     command: sudo virsh -c qemu:///system attach-device '
+        )
         for msg in messages
     )
 

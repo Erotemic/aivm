@@ -63,6 +63,17 @@ class _BaseCommand(kwconf.Config):
         False,
         help='Auto-approve sudo confirmation prompts only.',
     )
+    # Named --never_sudo (not --sudoless) so a mistyped `--sudo` cannot
+    # prefix-abbreviate into the opposite of the user's intent, and (unlike
+    # --no_sudo) its auto-generated negation aliases cannot collide with the
+    # status command's --sudo/--no-sudo flag.
+    never_sudo: bool = kwconf.Flag(
+        False,
+        help=(
+            'Never invoke sudo for this invocation (forces sudoless mode, '
+            'overriding behavior.privilege_mode; see `aivm host sudoless`).'
+        ),
+    )
 
     @classmethod
     def cli(cls, *args: Any, **kwargs: Any) -> Self:  # type: ignore
@@ -71,6 +82,11 @@ class _BaseCommand(kwconf.Config):
         cfg_yes_sudo = _resolve_cfg_yes_sudo(parsed.config)
         cfg_auto_approve_readonly_sudo = (
             _resolve_cfg_auto_approve_readonly_sudo(parsed.config)
+        )
+        privilege_mode = (
+            'sudoless'
+            if parsed.never_sudo
+            else _resolve_cfg_privilege_mode(parsed.config)
         )
         effective_yes_sudo = bool(parsed.yes_sudo or parsed.yes or cfg_yes_sudo)
         setattr(parsed, 'yes_sudo', effective_yes_sudo)
@@ -83,18 +99,20 @@ class _BaseCommand(kwconf.Config):
                 yes=bool(parsed.yes),
                 yes_sudo=bool(effective_yes_sudo),
                 auto_approve_readonly_sudo=bool(cfg_auto_approve_readonly_sudo),
+                privilege_mode=privilege_mode,
             )
         )
         args_verbose = int(parsed.verbose or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
-            'Parsed command {} with config={} verbose={} yes={} yes_sudo={} auto_approve_readonly_sudo={}',
+            'Parsed command {} with config={} verbose={} yes={} yes_sudo={} auto_approve_readonly_sudo={} privilege_mode={}',
             cls.__name__,
             parsed.config,
             args_verbose,
             bool(parsed.yes),
             bool(parsed.yes_sudo),
             bool(cfg_auto_approve_readonly_sudo),
+            privilege_mode,
         )
         return parsed
 
@@ -133,6 +151,19 @@ def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
     except Exception:
         cfg_yes_sudo = False
     return cfg_yes_sudo
+
+
+def _resolve_cfg_privilege_mode(config_opt: str | None) -> str:
+    from ..privilege import normalize_privilege_mode
+
+    try:
+        path = _cfg_path(config_opt)
+        if path.exists():
+            reg = load_store(path)
+            return normalize_privilege_mode(reg.behavior.privilege_mode)
+    except Exception:
+        pass
+    return 'auto'
 
 
 def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:

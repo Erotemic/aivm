@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from loguru import logger as log
 
 from ..config import AgentVMConfig
+from ..privilege import require_sudo_allowed, sudo_allowed
 from ..config_store import find_attachment_for_vm, load_store
 from ..vm.share import (
     AttachmentAccess,
@@ -217,7 +218,12 @@ def _resolve_attachment(
     source_dir = str(host_src.resolve())
     guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
     tag = _ensure_share_tag_len('', host_src, set())
-    mode = _normalize_attachment_mode(mode_opt)
+    if not mode_opt and not sudo_allowed():
+        # The default persistent mode relies on host bind mounts, which
+        # need root; sudoless attachments default to direct virtiofs.
+        mode = _normalize_attachment_mode(ATTACHMENT_MODE_SHARED)
+    else:
+        mode = _normalize_attachment_mode(mode_opt)
     access = _normalize_attachment_access(access_opt)
     reg = load_store(cfg_path)
     att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
@@ -261,6 +267,17 @@ def _resolve_attachment(
             'Read-only attachments are currently only implemented for '
             f"'{ATTACHMENT_MODE_SHARED}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
             f'Requested mode: {mode}'
+        )
+    if mode in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}:
+        require_sudo_allowed(
+            feature=f"The '{mode}' attachment mode (host bind mounts)",
+            hint=(
+                'Use the sudoless-compatible shared mode instead (existing '
+                'attachments keep their saved mode, so detach first):\n'
+                f'  aivm detach {host_src}\n'
+                f'  aivm attach {host_src} --mode shared\n'
+                "Or set behavior.privilege_mode to 'auto' to allow sudo."
+            ),
         )
     if mode == ATTACHMENT_MODE_GIT:
         tag = ''

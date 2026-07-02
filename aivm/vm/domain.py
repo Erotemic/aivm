@@ -8,6 +8,8 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..privilege import virsh_needs_sudo
+from ..runtime import virsh_system_cmd
 from .connectivity import get_ip_cached
 
 log = logger
@@ -24,8 +26,8 @@ def _vm_defined(name: str) -> bool:
             approval_scope=f'vm-defined:{name}',
         ):
             res = mgr.submit(
-                ['virsh', 'dominfo', name],
-                sudo=True,
+                virsh_system_cmd('dominfo', name),
+                sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
                 capture=True,
@@ -34,8 +36,8 @@ def _vm_defined(name: str) -> bool:
             ).result()
     else:
         res = mgr.run(
-            ['virsh', 'dominfo', name],
-            sudo=True,
+            virsh_system_cmd('dominfo', name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -46,41 +48,39 @@ def _vm_defined(name: str) -> bool:
 def _destroy_and_undefine_vm(name: str) -> None:
     mgr = CommandManager.current()
     mgr.run(
-        ['virsh', 'destroy', name],
-        sudo=True,
+        virsh_system_cmd('destroy', name),
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
     )
     # Different libvirt states require different undefine flags.
     attempts = [
-        [
-            'virsh',
+        virsh_system_cmd(
             'undefine',
             name,
             '--managed-save',
             '--snapshots-metadata',
             '--nvram',
             '--remove-all-storage',
-        ],
-        [
-            'virsh',
+        ),
+        virsh_system_cmd(
             'undefine',
             name,
             '--managed-save',
             '--snapshots-metadata',
             '--nvram',
-        ],
-        ['virsh', 'undefine', name, '--nvram', '--remove-all-storage'],
-        ['virsh', 'undefine', name, '--nvram'],
-        ['virsh', 'undefine', name, '--remove-all-storage'],
-        ['virsh', 'undefine', name],
+        ),
+        virsh_system_cmd('undefine', name, '--nvram', '--remove-all-storage'),
+        virsh_system_cmd('undefine', name, '--nvram'),
+        virsh_system_cmd('undefine', name, '--remove-all-storage'),
+        virsh_system_cmd('undefine', name),
     ]
     errs: list[str] = []
     for cmd in attempts:
         res = mgr.run(
             cmd,
-            sudo=True,
+            sudo=virsh_needs_sudo(),
             role='modify',
             check=False,
             capture=True,
@@ -131,8 +131,8 @@ def _get_vm_state(name: str) -> tuple[int, str, str]:
     """
     mgr = CommandManager.current()
     res = mgr.run(
-        ['virsh', 'domstate', name],
-        sudo=True,
+        virsh_system_cmd('domstate', name),
+        sudo=virsh_needs_sudo(),
         role='read',
         check=False,
         capture=True,
@@ -252,8 +252,8 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         if 'pmsuspended' in state:
             log.info('VM {} is pmsuspended; resuming first', name)
             res = mgr.run(
-                ['virsh', 'resume', name],
-                sudo=True,
+                virsh_system_cmd('resume', name),
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=False,
                 capture=True,
@@ -285,8 +285,8 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
         # Send ACPI shutdown signal
         res = mgr.run(
-            ['virsh', 'shutdown', name],
-            sudo=True,
+            virsh_system_cmd('shutdown', name),
+            sudo=virsh_needs_sudo(),
             role='modify',
             check=False,
             capture=True,
@@ -341,8 +341,8 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             if 'pmsuspended' in state:
                 log.info('VM {} is pmsuspended; resuming first', name)
                 res = mgr.run(
-                    ['virsh', 'resume', name],
-                    sudo=True,
+                    virsh_system_cmd('resume', name),
+                    sudo=virsh_needs_sudo(),
                     role='modify',
                     check=False,
                     capture=True,
@@ -377,8 +377,8 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             log.info('Sending shutdown signal to VM {} (state={})', name, state)
             # Send ACPI shutdown signal
             res = mgr.run(
-                ['virsh', 'shutdown', name],
-                sudo=True,
+                virsh_system_cmd('shutdown', name),
+                sudo=virsh_needs_sudo(),
                 role='modify',
                 check=False,
                 capture=True,
@@ -413,8 +413,8 @@ def _start_vm(name: str) -> None:
     """
     mgr = CommandManager.current()
     mgr.run(
-        ['virsh', 'start', name],
-        sudo=True,
+        virsh_system_cmd('start', name),
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=True,
         summary=f'Start VM {name}',
@@ -443,8 +443,8 @@ def vm_status(cfg: AgentVMConfig) -> str:
         role='read',
     ):
         dom = mgr.run(
-            ['virsh', 'dominfo', name],
-            sudo=True,
+            virsh_system_cmd('dominfo', name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -453,8 +453,8 @@ def vm_status(cfg: AgentVMConfig) -> str:
         if dom.code != 0:
             return f'VM not found: {name}\n'
         state = mgr.run(
-            ['virsh', 'domstate', name],
-            sudo=True,
+            virsh_system_cmd('domstate', name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,

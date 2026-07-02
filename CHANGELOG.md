@@ -4,6 +4,26 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.5.0 - Unreleased
 
+### Added
+* Sudoless operation. A new `behavior.privilege_mode` config knob (`auto` |
+  `sudo` | `sudoless`, default `auto`) controls how aivm acquires privileges:
+  `auto` probes what already works without sudo (libvirt group membership for
+  `qemu:///system`, user-writable image trees) and escalates only when
+  required; `sudoless` is a hard never-sudo guarantee enforced inside
+  `CommandManager`, with root-only features (nftables firewall,
+  shared-root/persistent host bind mounts, dependency install) failing with
+  actionable guidance. A per-invocation `--never_sudo` flag forces the mode.
+  State-changing hypervisor commands (`virsh`/`virt-install` with
+  role=modify) keep their interactive approval prompt even when they run
+  without sudo, so libvirt-group access does not silently drop the
+  confirmation contract for destructive operations.
+* `aivm host sudoless check` reports sudoless readiness (libvirt group, live
+  unprivileged libvirt access, user-writable VM storage, libvirt-qemu
+  traversal ACLs, firewall compatibility) and `aivm host sudoless setup`
+  establishes it, using sudo at most once (libvirt group membership) and
+  persisting the configuration. In sudoless mode new attachments default to
+  `--mode shared` since the persistent default relies on host bind mounts.
+
 ### Changed
 * Attaching directories now has mirrors that resolve to exact path matches on the guest and paths relative to root.
 * Added a `persistent` attachment mode that uses its own `persistent-root` virtiofs export, persists desired guest-visible bind mounts as declarations, and replays them from a guest systemd helper instead of reconstructing every attachment on each `aivm code .` / `aivm ssh .` run. New folder attachments now default to this mode when `--mode` is omitted.

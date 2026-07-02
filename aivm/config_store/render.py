@@ -97,6 +97,9 @@ def render_store_toml(
         bool(reg.behavior.auto_approve_readonly_sudo),
     )
     _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
+    _emit_toml_kv(
+        lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'auto')
+    )
     lines.append('')
 
     _emit_defaults(lines, reg)

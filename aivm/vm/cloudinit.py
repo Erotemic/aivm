@@ -10,6 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 from ..commands import CommandManager
+from ..privilege import path_needs_sudo
 from ..config import AgentVMConfig
 from ..detect import detect_host_timezone
 from ..persistent_replay import (
@@ -292,6 +293,7 @@ def _write_cloud_init(
 
     _ensure_qemu_access(cfg, dry_run=False)
     mgr = CommandManager.current()
+    use_sudo = path_needs_sudo(ci_dir)
     with mgr.intent(
         'Generate cloud-init artifacts',
         why=(
@@ -310,7 +312,7 @@ def _write_cloud_init(
         ):
             mgr.submit(
                 ['mkdir', '-p', str(ci_dir)],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -318,7 +320,7 @@ def _write_cloud_init(
             )
             mgr.submit(
                 ['bash', '-c', f"cat > {user_data} <<'EOF'\n{cloud}\nEOF"],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -326,7 +328,7 @@ def _write_cloud_init(
             )
             mgr.submit(
                 ['bash', '-c', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -338,7 +340,7 @@ def _write_cloud_init(
                     '-c',
                     f"cat > {network_config} <<'EOF'\n{netcfg}\nEOF",
                 ],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,
@@ -354,7 +356,7 @@ def _write_cloud_init(
                     str(user_data),
                     str(meta_data),
                 ],
-                sudo=True,
+                sudo=use_sudo,
                 role='modify',
                 check=True,
                 capture=True,

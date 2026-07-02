@@ -76,7 +76,9 @@ def test_ensure_network_existing_not_recreate(
         lambda cmd, **kwargs: calls.append(cmd) or P(),
     )
     ensure_network(cfg, recreate=False, dry_run=False)
-    assert calls == [['virsh', 'net-info', cfg.network.name]]
+    assert calls == [
+        ['virsh', '-c', 'qemu:///system', 'net-info', cfg.network.name]
+    ]
 
 
 def test_network_status_and_destroy(
@@ -87,9 +89,9 @@ def test_network_status_and_destroy(
 
     def fake_run_cmd(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         calls.append(cmd)
-        if cmd[1] == 'net-info':
+        if cmd[3] == 'net-info':
             return CmdResult(0, 'INFO', '')
-        if cmd[1] == 'net-dumpxml':
+        if cmd[3] == 'net-dumpxml':
             return CmdResult(0, '<network/>', '')
         return CmdResult(0, '', '')
 
@@ -98,5 +100,11 @@ def test_network_status_and_destroy(
     assert 'INFO' in out
     assert '<network/>' in out
     destroy_network(cfg, dry_run=False)
-    assert ['virsh', 'net-destroy', cfg.network.name] in calls
-    assert ['virsh', 'net-undefine', cfg.network.name] in calls
+    assert (
+        ['virsh', '-c', 'qemu:///system', 'net-destroy', cfg.network.name]
+        in calls
+    )
+    assert (
+        ['virsh', '-c', 'qemu:///system', 'net-undefine', cfg.network.name]
+        in calls
+    )

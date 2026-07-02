@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from ...commands import CommandManager
+from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...runtime import virsh_system_cmd
 from .models import RestartKind
@@ -65,7 +66,7 @@ def _maybe_restart_vm_after_update(
             print(f'DRYRUN: {" ".join(cmd)}')
         else:
             CommandManager.current().run(
-                cmd, sudo=True, check=True, capture=True
+                cmd, sudo=virsh_needs_sudo(), check=True, capture=True
             )
             print(f'Rebooted VM {cfg.vm.name}.')
         return

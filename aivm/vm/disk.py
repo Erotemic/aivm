@@ -8,6 +8,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..privilege import path_needs_sudo
 from .host_access import _sudo_path_exists
 from .paths import _paths
 
@@ -23,12 +24,13 @@ def _ensure_disk(
     p = _paths(cfg, dry_run=dry_run)
     vm_disk = p['img_dir'] / f'{cfg.vm.name}.qcow2'
     mgr = CommandManager.current()
+    use_sudo = path_needs_sudo(p['img_dir'])
     if _sudo_path_exists(vm_disk) and recreate:
         if dry_run:
             log.info('DRYRUN: rm -f {}', vm_disk)
         else:
             mgr.run(
-                ['rm', '-f', str(vm_disk)], sudo=True, check=True, capture=True
+                ['rm', '-f', str(vm_disk)], sudo=use_sudo, check=True, capture=True
             )
     if _sudo_path_exists(vm_disk):
         log.info('VM disk exists: {}', vm_disk)
@@ -54,7 +56,7 @@ def _ensure_disk(
             str(vm_disk),
             f'{cfg.vm.disk_gb}G',
         ],
-        sudo=True,
+        sudo=use_sudo,
         check=True,
         capture=True,
     )

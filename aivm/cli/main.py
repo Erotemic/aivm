@@ -149,6 +149,14 @@ class StatusCLI(_BaseCommand):
             print(render_global_status())
             return 0
         mgr = CommandManager.current()
+        if args.sudo and mgr.privilege_mode == 'sudoless':
+            # --sudo cannot override the sudoless guarantee; run the
+            # unprivileged probes and say so instead of erroring.
+            print(
+                'ℹ️ sudoless mode: ignoring --sudo; showing unprivileged '
+                'status checks only.'
+            )
+            args.sudo = False
         with mgr.intent(
             f'Inspect status for {cfg.vm.name}',
             why='Summarize host, network, firewall, VM, and SSH readiness for this managed VM.',

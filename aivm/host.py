@@ -12,6 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandError, CommandManager
+from .privilege import require_sudo_allowed
 from .util import which
 
 log = logger
@@ -26,7 +27,7 @@ REQUIRED_CMDS = [
     'ip',
     'ssh',
 ]
-OPTIONAL_CMDS = ['nft', 'ssh-keyscan']
+OPTIONAL_CMDS = ['nft', 'ssh-keyscan', 'setfacl']
 
 
 def check_commands() -> tuple[list[str], list[str]]:
@@ -108,6 +109,13 @@ def _is_apt_lock_error(ex: Exception) -> bool:
 def install_deps_debian(*, assume_yes: bool = True) -> None:
     # TODO: add alternative ways to install deps for other common systems that
     # can use libvirt.
+    require_sudo_allowed(
+        feature='Host dependency installation (apt-get)',
+        hint=(
+            'Install the packages manually, or run this one command with '
+            "behavior.privilege_mode set to 'auto'."
+        ),
+    )
     if not host_is_debian_like():
         raise RuntimeError(
             'Host is not detected as Debian/Ubuntu; install deps manually.'

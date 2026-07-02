@@ -104,6 +104,7 @@ def _lint_store_text(text: str) -> list[str]:
                 'yes_sudo',
                 'auto_approve_readonly_sudo',
                 'verbose',
+                'privilege_mode',
             }
             # mirror_shared_home_folders moved to VMConfig in schema 6;
             # tolerate the legacy key here so older files lint cleanly

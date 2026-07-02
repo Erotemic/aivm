@@ -152,3 +152,92 @@ def test_mutation_generation_bumps_only_for_modify_commands(
     assert mgr.mutation_generation == start
     mgr.run(['virsh', 'resume', 'vm'], role='modify')
     assert mgr.mutation_generation == start + 1
+
+
+def test_unprivileged_libvirt_mutation_keeps_approval_contract(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """State-changing virsh commands prompt even when sudo is not needed.
+
+    With libvirt group membership, destructive hypervisor operations run
+    without sudo in auto/sudoless modes; they must not silently lose the
+    confirmation prompt they had in the sudo era.
+    """
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+        del kwargs
+        return _Proc(0, 'ok', '')
+
+    prompts = _patch_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(privilege_mode='sudoless')
+    CommandManager.activate(mgr)
+    # Unprivileged reads stay promptless.
+    mgr.run(
+        ['virsh', '-c', 'qemu:///system', 'dominfo', 'vm'],
+        sudo=False,
+        role='read',
+        check=False,
+    )
+    assert prompts == []
+    # Unprivileged hypervisor mutations prompt.
+    mgr.run(
+        ['virsh', '-c', 'qemu:///system', 'destroy', 'vm'],
+        sudo=False,
+        role='modify',
+        summary='Destroy VM vm',
+    )
+    assert prompts == ['Continue? [y]es/[a]ll/[N]o: ']
+    # Non-libvirt unprivileged mutations (guest ssh, file ops) stay
+    # promptless as before.
+    mgr.run(['mkdir', '-p', '/tmp/x'], sudo=False, role='modify', check=False)
+    assert len(prompts) == 1
+
+
+def test_sudoless_plan_approval_never_touches_sudo(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A sudo command entering a plan in sudoless mode is rejected before
+    any approval side effect (`sudo -n true`, `sudo -v`, prompts) runs."""
+    from aivm.errors import SudolessModeError
+
+    sudo_calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+        if cmd and cmd[0] == 'sudo':
+            sudo_calls.append(list(cmd))
+        return _Proc(1, '', 'should not run')
+
+    prompts = _patch_runtime(monkeypatch, fake_run)
+    # Do not pin sudo_authentication_required here: the point is that it
+    # must never be consulted with a live sudo probe.
+    monkeypatch.setattr(
+        CommandManager,
+        'sudo_authentication_required',
+        CommandManager.sudo_authentication_required,
+    )
+    mgr = CommandManager(privilege_mode='sudoless')
+    CommandManager.activate(mgr)
+    import pytest as _pytest
+
+    with _pytest.raises(SudolessModeError):
+        with mgr.step('inspect'):
+            mgr.submit(
+                ['nft', 'list', 'ruleset'],
+                sudo=True,
+                role='read',
+                check=False,
+                summary='read rules',
+            ).result()
+    assert sudo_calls == []
+    assert prompts == []
+
+
+def test_dash_dash_sudo_does_not_abbreviate_to_never_sudo() -> None:
+    """`--sudo` on commands without a sudo flag must not silently parse as
+    the never-sudo flag (argparse prefix abbreviation)."""
+    import pytest as _pytest
+
+    from aivm.cli.main import ListCLI
+
+    with _pytest.raises(SystemExit):
+        ListCLI.cli(argv=['--sudo'])

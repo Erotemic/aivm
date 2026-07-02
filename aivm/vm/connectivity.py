@@ -9,7 +9,8 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..runtime import require_ssh_identity, ssh_base_args
+from ..privilege import virsh_needs_sudo
+from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
 from ..util import ensure_dir
 from .paths import _paths
 
@@ -27,8 +28,8 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             approval_scope=f'vm-network-interfaces:{cfg.vm.name}',
         ):
             res = mgr.submit(
-                ['virsh', 'domiflist', cfg.vm.name],
-                sudo=True,
+                virsh_system_cmd('domiflist', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
                 capture=True,
@@ -37,8 +38,8 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             ).result()
     else:
         res = mgr.run(
-            ['virsh', 'domiflist', cfg.vm.name],
-            sudo=True,
+            virsh_system_cmd('domiflist', cfg.vm.name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -103,8 +104,8 @@ def wait_for_ip(
             domif_text = ''
             if mac:
                 lease_text = mgr.run(
-                    ['virsh', 'net-dhcp-leases', cfg.network.name],
-                    sudo=True,
+                    virsh_system_cmd('net-dhcp-leases', cfg.network.name),
+                    sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
                     capture=True,
@@ -121,8 +122,8 @@ def wait_for_ip(
                         break
             if not ip:
                 domif_text = mgr.run(
-                    ['virsh', 'domifaddr', cfg.vm.name],
-                    sudo=True,
+                    virsh_system_cmd('domifaddr', cfg.vm.name),
+                    sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
                     capture=True,
@@ -171,8 +172,8 @@ def wait_for_ip(
             now = time.time()
             if now >= next_status_at:
                 st = mgr.run(
-                    ['virsh', 'domstate', cfg.vm.name],
-                    sudo=True,
+                    virsh_system_cmd('domstate', cfg.vm.name),
+                    sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
                     capture=True,

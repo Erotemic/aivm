@@ -24,6 +24,7 @@ from ._common import (
     _resolve_cfg_fallback,
 )
 from .firewall import FirewallModalCLI
+from .host_sudoless import SudolessModalCLI
 from .net import NetModalCLI
 
 
@@ -116,3 +117,4 @@ class HostModalCLI(kwconf.ModalCLI):
     image_fetch = ImageFetchCLI
     net = NetModalCLI
     fw = FirewallModalCLI
+    sudoless = SudolessModalCLI

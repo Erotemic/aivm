@@ -201,6 +201,8 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if parts[:3] == ['sudo', '-n', 'true']:
             return _Proc(0, '', '')
         if normalized[:2] == ['virsh', 'domstate']:
@@ -221,18 +223,15 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
 
     attach_vm_share(cfg, source_dir, tag, dry_run=False)
     command_calls = [c for c in calls if c[:3] != ['sudo', '-n', 'true']]
-    norm0 = (
-        command_calls[0][2:]
-        if command_calls[0][:2] == ['sudo', '-n']
-        else command_calls[0]
-    )
-    norm1 = (
-        command_calls[1][2:]
-        if command_calls[1][:2] == ['sudo', '-n']
-        else command_calls[1]
-    )
-    assert norm0[:2] == ['virsh', 'domstate']
-    assert norm1[:2] == ['virsh', 'attach-device']
+    def _norm(call: list[str]) -> list[str]:
+        if call[:2] == ['sudo', '-n']:
+            call = call[2:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        return call
+
+    assert _norm(command_calls[0])[:2] == ['virsh', 'domstate']
+    assert _norm(command_calls[1])[:2] == ['virsh', 'attach-device']
 
 
 def test_ensure_share_mounted_retries_then_succeeds(
@@ -464,6 +463,8 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'shut off\n', '')
         if normalized[:2] == ['virsh', 'start']:
@@ -477,11 +478,12 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     assert normalized_calls == [
         ['virsh', 'domstate', 'vm-existing'],
         ['virsh', 'start', 'vm-existing'],
@@ -511,6 +513,8 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, f'{paused_state}\n', '')
         if normalized[:2] == ['virsh', 'resume']:
@@ -523,11 +527,12 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     assert normalized_calls == [
         ['virsh', 'domstate', 'vm-paused'],
         ['virsh', 'resume', 'vm-paused'],
@@ -556,6 +561,8 @@ def test_create_or_start_shutting_down_vm_raises_friendly_error(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'in shutdown\n', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
@@ -1284,6 +1291,8 @@ def test_shutdown_vm_when_running_sends_shutdown_signal(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'shutdown']:
@@ -1296,11 +1305,12 @@ def test_shutdown_vm_when_running_sends_shutdown_signal(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     assert normalized_calls == [
         ['virsh', 'domstate', 'vm-shutdown-test'],
         ['virsh', 'shutdown', 'vm-shutdown-test'],
@@ -1333,6 +1343,8 @@ def test_shutdown_vm_when_not_running_does_nothing(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'shut off\n', '')
         raise AssertionError(f'unexpected command: {cmd!r}')
@@ -1343,11 +1355,12 @@ def test_shutdown_vm_when_not_running_does_nothing(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     # Only one domstate call since VM is not active
     assert normalized_calls == [['virsh', 'domstate', 'vm-shutdown-off']]
 
@@ -1379,6 +1392,8 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             domstate_call_count[0] += 1
             # First call: pmsuspended, subsequent calls: running
@@ -1398,11 +1413,12 @@ def test_shutdown_vm_when_pmsuspended_resumes_first(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     # Should resume first, then shutdown
     assert ['virsh', 'resume', 'vm-shutdown-pmsuspended'] in normalized_calls
     assert ['virsh', 'shutdown', 'vm-shutdown-pmsuspended'] in normalized_calls
@@ -1451,6 +1467,8 @@ def test_shutdown_vm_raises_on_shutdown_failure(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'running\n', '')
         if normalized[:2] == ['virsh', 'shutdown']:
@@ -1485,6 +1503,8 @@ def test_shutdown_vm_raises_with_stderr_error_message(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(1, '', 'error: domain is not found')
         raise AssertionError(f'unexpected command: {cmd!r}')
@@ -1527,6 +1547,8 @@ def test_restart_vm_when_running_shutdowns_then_starts(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             domstate_call_count[0] += 1
             # First call: VM is running, second call (after shutdown): VM is off
@@ -1546,11 +1568,12 @@ def test_restart_vm_when_running_shutdowns_then_starts(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     # Should check state, shutdown, then start
     assert ['virsh', 'domstate', 'vm-restart-test'] in normalized_calls
     assert ['virsh', 'shutdown', 'vm-restart-test'] in normalized_calls
@@ -1594,6 +1617,8 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             domstate_count[0] += 1
             # First call: pmsuspended (initial check)
@@ -1617,11 +1642,12 @@ def test_restart_vm_when_pmsuspended_resumes_then_shutsdown(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     # Should resume, shutdown, then start
     assert ['virsh', 'resume', 'vm-restart-pmsuspended'] in normalized_calls
     assert ['virsh', 'shutdown', 'vm-restart-pmsuspended'] in normalized_calls
@@ -1656,6 +1682,8 @@ def test_restart_vm_when_not_running_just_starts(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(0, 'shut off\n', '')
         if normalized[:2] == ['virsh', 'start']:
@@ -1668,11 +1696,12 @@ def test_restart_vm_when_not_running_just_starts(
     normalized_calls = []
     for call in calls:
         if call[:2] == ['sudo', '-n']:
-            normalized_calls.append(call[2:])
+            call = call[2:]
         elif call[:1] == ['sudo']:
-            normalized_calls.append(call[1:])
-        else:
-            normalized_calls.append(call)
+            call = call[1:]
+        if call[:3] == ['virsh', '-c', 'qemu:///system']:
+            call = ['virsh'] + call[3:]
+        normalized_calls.append(call)
     # Should check state, then start (no shutdown since not running)
     assert ['virsh', 'domstate', 'vm-restart-off'] in normalized_calls
     assert ['virsh', 'start', 'vm-restart-off'] in normalized_calls
@@ -1736,6 +1765,8 @@ def test_restart_vm_raises_with_stderr_error_message(
             normalized = normalized[2:]
         elif normalized[:1] == ['sudo']:
             normalized = normalized[1:]
+        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
+            normalized = ['virsh'] + normalized[3:]
         if normalized[:2] == ['virsh', 'domstate']:
             return _Proc(1, '', 'error: domain is not found')
         raise AssertionError(f'unexpected command: {cmd!r}')
