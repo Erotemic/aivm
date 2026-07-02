@@ -330,3 +330,125 @@ runtime, not as a collection of ad hoc `sudo` removals. The important design
 shift is from a privileged host-managed VM/network/filesystem model to a
 user-owned VM with explicit user-mode networking and rootless-compatible
 attachments.
+
+## Status update and implementation handoff (2026-07-02)
+
+Everything above remains the design of record. This section reconciles it
+with the `dev/sudoless` branch, which landed after the original writeup and
+completed several "Required implementation changes" ahead of schedule. An
+implementing agent should start here.
+
+### What is already done (verified anchors)
+
+* **Change 2 (centralize libvirt command construction): DONE.**
+  All `virsh` argv construction goes through
+  `aivm/runtime.py::virsh_system_cmd` (currently pinning
+  `LIBVIRT_URI = 'qemu:///system'`), and `virt-install` passes
+  `--connect qemu:///system` (`aivm/vm/create.py`). Bare `virsh` no longer
+  exists in the package. Making the URI runtime-dependent is now a
+  one-module change plus test updates (unit tests normalize/assert the
+  pinned URI; grep tests for `qemu:///system`).
+* **Change 3 (privilege policy split from command intent): DONE**, with a
+  different spelling than proposed. `behavior.privilege_mode`
+  (`auto`/`sudo`/`sudoless`) lives on `CommandManager`
+  (`aivm/commands.py`), which structurally rejects sudo in `sudoless`
+  mode before execution or approval side effects
+  (`_reject_sudo_if_sudoless`). The invariant the doc asks for
+  ("session implies no sudo") is expressible as: session runtime forces
+  `privilege_mode='sudoless'`. Note the approval contract survives:
+  `_command_needs_approval` prompts for `virsh`/`virt-install`
+  role=modify commands even when unprivileged; keep that in session mode.
+* **Change 4 (user-owned storage): LARGELY DONE.** File operations decide
+  privilege via `aivm/privilege.py::path_needs_sudo`;
+  `aivm/vm/host_access.py::_ensure_qemu_access_unprivileged` prepares
+  user-owned trees. One session-mode delta remains: the unprivileged path
+  grants `setfacl u:libvirt-qemu:x` traversal because **system** libvirt
+  runs qemu as `libvirt-qemu`. In **session** mode qemu runs as the
+  invoking user, so those ACLs are unnecessary — gate the ACL step on the
+  runtime, don't remove it.
+* **Change 6 (runtime-gated attachment modes): PATTERN EXISTS.**
+  `aivm/attachments/resolve.py::_resolve_attachment` already rejects
+  `shared-root`/`persistent` and flips the default mode to `shared` when
+  sudo is forbidden, with detach/reattach guidance. Session mode extends
+  the same guard (and initially also rejects `shared` until rootless
+  virtiofs lands — see `external-virtiofsd.md`).
+* **Partial change 7 (preflight diagnostics):** `aivm host sudoless
+  check`/`setup` (`aivm/cli/host_sudoless.py`) established the readiness
+  report + one-time setup pattern and the `status_line` rendering to
+  reuse for `aivm host rootless check`.
+* **Test harness pattern:** `tests/test_e2e_sudoless.py` runs the full
+  lifecycle under the never-sudo guarantee and is the direct template for
+  `tests/test_e2e_session.py`. Its trick generalizes: configure the
+  restrictive mode in the store, run the real CLI, and let structural
+  enforcement turn any violation into a hard failure.
+
+### What remains (the actual rootless work)
+
+In the doc's numbering: change 1 (runtime config axis), the session half
+of 2 (URI selection), 5 (user-mode networking — the hard one), the
+connectivity model, 7 (rootless preflights), and 8 (regression protection
+for system mode).
+
+Suggested first-session milestones, smallest-shippable first:
+
+1. **Runtime axis.** Add `runtime.mode: 'system' | 'session'` (a new
+   `RuntimeConfig` dataclass in `aivm/config.py`, rendered/parsed like
+   `BehaviorConfig`; store-level like `privilege_mode`, resolved in
+   `aivm/cli/_common.py::_BaseCommand.cli`). Thread it to where commands
+   are built: replace the `LIBVIRT_URI` constant with a
+   `current_libvirt_uri()` accessor (context-var or CommandManager
+   attribute, mirroring `privilege_mode`). Session mode forces
+   `privilege_mode='sudoless'` at manager construction and never falls
+   back to `qemu:///system`.
+2. **Session storage + domain lifecycle.** With the URI switched and a
+   user-owned `paths.base_dir`, `vm create`/`up`/`down`/`delete` should
+   mostly work already (all file ops are unprivileged-capable; skip the
+   libvirt-qemu ACL step in session mode). Expect two snags: (a)
+   `virt-install --connect qemu:///session` requires user networking
+   flags (`--network user` or passt, see milestone 3) instead of
+   `network=<managed>`; (b) UEFI/nvram paths differ per-user — reuse the
+   existing missing-UEFI fallback in `create.py`.
+3. **Networking: passt + forwarded SSH port.** This is the core new code.
+   Decisions already made in this doc: passt preferred, explicit
+   localhost port forward for SSH, port persisted in state. Concretes:
+   `virt-install --network passt,portForward0.proto=tcp,portForward0.range=2222:22`
+   style config (libvirt >= 9.2 supports `<interface type='user'>
+   <backend type='passt'>` with `<portForward>`); allocate the host port
+   deterministically from the VM name with collision probing; persist in
+   the VM state dir (`aivm/vm/paths.py`) next to the cached IP.
+   `aivm/vm/connectivity.py` grows a runtime split: session mode skips
+   `net-dhcp-leases`/`domifaddr` entirely and returns
+   (`127.0.0.1`, port) for SSH endpoints. Audit every consumer of
+   `get_ip_cached`/`wait_for_ip` (ssh, code, provisioning, attachments'
+   `_resolve_ip_for_ssh_ops`, status) to carry host+port rather than bare
+   IP — this is the widest-touch part; do it as a preparatory
+   behavior-preserving refactor (introduce an `SshEndpoint` value object
+   defaulting to port 22) before flipping session mode on.
+4. **Gate the rest.** Firewall: session mode behaves like sudoless
+   (skip + warn; `probe_firewall` reports not-applicable). Networks CLI:
+   `host net create/destroy` error in session mode with guidance.
+   Status: report runtime mode and forwarded ports instead of
+   bridge/DHCP state.
+5. **Preflights + docs + e2e.** `aivm host rootless check` (KVM access,
+   `virsh -c qemu:///session capabilities`, passt presence, base_dir
+   writability); README/quickstart/security sections mirroring the
+   sudoless docs; `tests/test_e2e_session.py` cloned from the sudoless
+   module (requirements: `/dev/kvm` access and passt, *not* libvirt
+   group). CI note: the session runtime is the most CI-friendly of all
+   modes — see `ci-e2e.md`.
+
+### Additional acceptance criteria (beyond the list above)
+
+10. `aivm status` on a session VM shows runtime mode and the forwarded
+    SSH endpoint, and does not execute `net-*` or `nft` commands.
+11. System-mode e2e suites still pass unchanged (criterion for change 8).
+12. A session VM and a system VM can coexist in one config store without
+    cross-talk (distinct URIs, storage, and connectivity records).
+
+### Known open question resolved since the original writeup
+
+The last open question ("should system-without-sudo be a third runtime
+variant?") is now answered: that is exactly `privilege_mode` on the
+existing system runtime, orthogonal to `runtime.mode`. The two axes stay
+separate: runtime = which hypervisor/daemon identity, privilege_mode = how
+host commands escalate.
