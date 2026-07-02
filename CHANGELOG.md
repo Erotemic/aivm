@@ -9,6 +9,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * Added a `persistent` attachment mode that uses its own `persistent-root` virtiofs export, persists desired guest-visible bind mounts as declarations, and replays them from a guest systemd helper instead of reconstructing every attachment on each `aivm code .` / `aivm ssh .` run. New folder attachments now default to this mode when `--mode` is omitted.
 * Refreshed README and Sphinx docs to describe the current attachment-first workflow, known long-lived virtiofs file-descriptor growth, and related alternatives (`matchlock`, `jai`).
 * Ported command-line configuration declarations to `kwconf` and annotated CLI schema fields so parsing/documentation can use bool/int/list types and closed-value hints.
+* New implicit VM names are host-qualified by default (for example `aivm-2404-workstation`) and that same canonical name is used for the VM, guest hostname, and generated SSH alias. Existing explicit config values are not migrated.
 
 ### Removed
 * Removed the flaky settings-sync feature for now: `aivm vm sync_settings`, `aivm code --sync_settings`, `--sync_paths`, and the `[sync]` config section are no longer supported.

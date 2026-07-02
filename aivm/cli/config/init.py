@@ -90,6 +90,11 @@ def _init_default_summary_rows(
     )
     return [
         ('config_store', str(path), 'config destination'),
+        (
+            'vm.name',
+            cfg.vm.name,
+            'default VM name, guest hostname, and SSH alias',
+        ),
         ('vm.user', cfg.vm.user, 'guest login user'),
         ('vm.cpus', str(cfg.vm.cpus), 'virtual CPUs'),
         ('vm.ram_mb', str(cfg.vm.ram_mb), 'RAM in MiB'),

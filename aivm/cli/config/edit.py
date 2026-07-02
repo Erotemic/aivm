@@ -39,7 +39,7 @@ class ConfigEditCLI(_BaseCommand):
     )
     name: str = kwconf.Value(
         '',
-        help='Optional name for targets that need one, e.g. `vm aivm-2404`.',
+        help='Optional name for targets that need one, e.g. `vm aivm-2404-workstation`.',
         position=2,
     )
     editor: str = kwconf.Value(
@@ -120,7 +120,7 @@ def _resolve_config_edit_target(
     if target_norm in {'vm', 'vms', 'active-vm', 'active'}:
         vm_name = name or loaded.store.active_vm
     else:
-        # Convenience: `aivm config edit aivm-2404` means that VM if it exists.
+        # Convenience: `aivm config edit aivm-2404-workstation` means that VM if it exists.
         vm_name = target
 
     if not vm_name:

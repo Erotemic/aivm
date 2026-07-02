@@ -83,8 +83,23 @@ def test_remote_tunnel_name_uses_vm_and_hypervisor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
-    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek.kitware.com')
-    assert _remote_tunnel_name(cfg) == 'aivm-2404-namek'
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.socket.gethostname',
+        lambda: 'builder.example.test',
+    )
+    assert _remote_tunnel_name(cfg) == 'aivm-2404-builder'
+
+
+def test_remote_tunnel_name_preserves_host_qualified_vm_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = SimpleNamespace(
+        vm=SimpleNamespace(name='aivm-2404-builder', user='agent')
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.socket.gethostname', lambda: 'builder'
+    )
+    assert _remote_tunnel_name(cfg) == 'aivm-2404-builder'
 
 
 def test_print_remote_session_recipe_includes_tunnel_command(
@@ -97,7 +112,9 @@ def test_print_remote_session_recipe_includes_tunnel_command(
         share_guest_dst='/home/joncrall/code/aivm',
         reg_path='/home/joncrall/.config/aivm/config.toml',
     )
-    monkeypatch.setattr('aivm.cli.vm_connect.socket.gethostname', lambda: 'namek')
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.socket.gethostname', lambda: 'builder'
+    )
     _print_remote_session_recipe(
         cfg,
         session,
@@ -111,18 +128,18 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     assert (
         'ssh aivm-2404 '
         "'cd /home/joncrall/code/aivm && "
-        "code tunnel --name aivm-2404-namek --accept-server-license-terms'"
+        "code tunnel --name aivm-2404-builder --accept-server-license-terms'"
         in out
     )
     assert 'Remote - Tunnels extension' in out
     assert 'ms-vscode.remote-server' in out
-    assert 'connect to: aivm-2404-namek' in out
+    assert 'connect to: aivm-2404-builder' in out
     assert 'ProxyJump' in out
     assert 'ssh aivm-2404' in out
     # And report the basics they need to verify the session is ready.
     assert '10.77.0.103' in out
     assert 'agent' in out
-    assert 'Tunnel:  aivm-2404-namek' in out
+    assert 'Tunnel:  aivm-2404-builder' in out
     # ssh_cfg_updated=True should be surfaced as host-local state.
     assert 'SSH entry updated on this host in ~/.ssh/config' in out
 
@@ -130,7 +147,7 @@ def test_print_remote_session_recipe_includes_tunnel_command(
 def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
     script = _build_tunnel_remote_script(
         guest_path='/home/agent/code/aivm',
-        tunnel_name='aivm-2404-namek',
+        tunnel_name='aivm-2404-builder',
     )
     # Guard: required guest binaries.
     assert 'command -v tmux' in script
@@ -140,7 +157,7 @@ def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
     # New session command runs `code tunnel` in the share dir.
     assert f'tmux new-session -d -s {_TUNNEL_TMUX_SESSION}' in script
     assert 'cd /home/agent/code/aivm' in script
-    assert 'code tunnel --name aivm-2404-namek --accept-server-license-terms' in script
+    assert 'code tunnel --name aivm-2404-builder --accept-server-license-terms' in script
     # Tunnel session name is the constant — must not vary by VM/host name.
     assert _TUNNEL_TMUX_SESSION == 'aivm-tunnel'
 
@@ -149,7 +166,7 @@ def test_build_tunnel_remote_script_quotes_unusual_paths() -> None:
     """Spaces or shell metachars in the share path must not break the script."""
     script = _build_tunnel_remote_script(
         guest_path="/home/agent/projects/has space; rm -rf /tmp",
-        tunnel_name='aivm-2404-namek',
+        tunnel_name='aivm-2404-builder',
     )
     # The path appears only as a single shell-quoted argument to ``cd``.
     assert "'/home/agent/projects/has space; rm -rf /tmp'" in script

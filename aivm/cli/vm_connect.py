@@ -15,6 +15,7 @@ from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager
 from ..runtime import require_ssh_identity, ssh_base_args
+from ..config import default_host_label
 from ..util import which
 from ..vm import wait_for_ip
 from ..vm import ssh_config as mk_ssh_config
@@ -86,11 +87,14 @@ def _vscode_can_open_locally() -> tuple[bool, str | None]:
 
 def _remote_tunnel_name(cfg: Any) -> str:
     """Return a stable VS Code tunnel name for a VM on this hypervisor."""
-    host_name = socket.gethostname().split('.')[0] or 'host'
-    # VS Code accepts names like ``aivm-2404-namek``. Keep the generated name
-    # conservative so it is easy to scan in the Remote Explorer UI.
-    safe_host = ''.join(ch if ch.isalnum() or ch == '-' else '-' for ch in host_name)
-    return f'{cfg.vm.name}-{safe_host}'
+    safe_host = default_host_label(socket.gethostname())
+    vm_name = str(cfg.vm.name or '').strip() or 'aivm'
+    # New default VM names already include the host label, which also keeps the
+    # guest hostname and SSH alias canonical. Preserve that name instead of
+    # doubling the host suffix in VS Code Remote Tunnels.
+    if vm_name.endswith(f'-{safe_host}'):
+        return vm_name
+    return f'{vm_name}-{safe_host}'
 
 
 _TUNNEL_TMUX_SESSION = 'aivm-tunnel'

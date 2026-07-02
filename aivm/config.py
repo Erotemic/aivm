@@ -6,6 +6,8 @@ into the global config registry format.
 
 from __future__ import annotations
 
+import re
+import socket
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -22,6 +24,37 @@ DEFAULT_UBUNTU_NOBLE_IMG_URL = 'https://cloud-images.ubuntu.com/noble/20260225/n
 SUPPORTED_IMAGE_SHA256 = {
     DEFAULT_UBUNTU_NOBLE_IMG_URL: '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21',
 }
+
+_DEFAULT_VM_NAME_PREFIX = 'aivm-2404-'
+_MAX_GUEST_HOSTNAME_LEN = 63
+
+
+def default_host_label(hostname: str | None = None) -> str:
+    """Return the host label used to make default VM names local-host specific.
+
+    The source identity is the host's own short node name, not an FQDN that
+    DNS might synthesize later. The returned value is safe for libvirt domain
+    names, SSH host aliases, and Linux guest hostnames.
+    """
+    raw = socket.gethostname() if hostname is None else hostname
+    short = str(raw or '').split('.', 1)[0].strip().lower()
+    label = re.sub(r'[^a-z0-9-]+', '-', short)
+    label = re.sub(r'-+', '-', label).strip('-')
+    return label or 'host'
+
+
+def default_vm_name(hostname: str | None = None) -> str:
+    """Return the default canonical VM / guest-host / SSH alias name.
+
+    Existing explicit config values are not migrated. Missing/implicit names use
+    this factory, so users relying on the old implicit ``aivm-2404`` default now
+    get a host-qualified default such as ``aivm-2404-workstation``.
+    """
+    label = default_host_label(hostname)
+    max_label_len = _MAX_GUEST_HOSTNAME_LEN - len(_DEFAULT_VM_NAME_PREFIX)
+    if max_label_len > 0 and len(label) > max_label_len:
+        label = label[:max_label_len].rstrip('-') or 'host'
+    return f'{_DEFAULT_VM_NAME_PREFIX}{label}'
 
 
 @dataclass
@@ -68,7 +101,7 @@ class ImageConfig:
 
 @dataclass
 class VMConfig:
-    name: str = 'aivm-2404'
+    name: str = field(default_factory=default_vm_name)
     user: str = 'agent'
     cpus: int = 4
     ram_mb: int = 8192

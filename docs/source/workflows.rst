@@ -3,6 +3,11 @@ Workflows
 
 Common daily workflows.
 
+New configs derive the default VM name from the host's own ``$HOSTNAME``. On a
+host named ``workstation``, the canonical VM name, guest hostname, and SSH alias are
+all ``aivm-2404-workstation``. Existing explicit config values are left alone; omitted
+implicit names use the new host-qualified default.
+
 Open project in VM
 ------------------
 
@@ -40,7 +45,7 @@ Attach folders
 
    aivm attach .
    aivm detach .
-   aivm vm attach --vm aivm-2404 --host_src . --guest_dst /workspace/project
+   aivm vm attach --vm aivm-2404-$HOSTNAME --host_src . --guest_dst /workspace/project
    aivm attach . --mode git
 
 ``aivm code`` / ``aivm ssh`` restore the requested folder and attempt to

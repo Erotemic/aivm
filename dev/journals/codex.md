@@ -2382,3 +2382,32 @@ for the six reported diagnostics and not a broader transport refactor.
 What I am confident about: the touched Python modules compile with
 `python -m py_compile`, and each edit directly addresses one of the reported
 mypy error sites without changing behavior.
+
+## 2026-07-01 14:25:00 -0400
+
+Changed the implicit default VM name from the single global-looking `aivm-2404`
+value to a host-qualified factory that produces names like `aivm-2404-workstation` from
+the host's own short hostname. The same canonical name is used as the libvirt
+VM name, guest hostname, and generated SSH alias because splitting those names
+would make daily use more confusing. Existing explicit config values are not
+migrated, but configs that omit the name now receive the new factory value.
+
+State of mind / reflection: this change felt like the right boundary between
+local convenience and multi-host clarity. The old name was pleasant but too easy
+to confuse once config, SSH aliases, logs, attachments, and synced snippets
+leave the immediate libvirt host context.
+
+Uncertainties / risks: this intentionally changes behavior for users who relied
+on the implicit omitted-name default. That is acceptable for this pass, but it
+means tests and docs should describe the break honestly rather than pretending
+old implicit configs are preserved.
+
+Tradeoffs: I avoided an automatic migration or compatibility special-case for
+`aivm-2404`. I also adjusted VS Code tunnel naming so a newly host-qualified VM
+name does not get the host suffix appended twice, while older/custom names still
+receive the hypervisor suffix for tunnel disambiguation.
+
+What I am confident about: the change is limited to default-name generation,
+help/docs that expose examples, config-init/create summaries, and focused tests
+for hostname sanitization plus tunnel-name behavior. Cloud-init and SSH config
+already consume `cfg.vm.name`, so they naturally inherit the canonical name.

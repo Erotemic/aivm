@@ -166,6 +166,12 @@ logged when they actually run.
 
 Config defaults:
 
+New configs use a host-qualified default VM name derived from ``$HOSTNAME``.
+For example, on a host named ``workstation``, the generated VM name, guest hostname,
+and primary SSH alias are all ``aivm-2404-workstation``. Existing explicit config
+values are not migrated; configs that relied on an omitted implicit name now
+receive the new host-qualified default.
+
 .. code-block:: toml
 
    [behavior]
@@ -194,7 +200,7 @@ Folder attachment
 
    aivm attach .
    aivm detach .
-   aivm vm attach --vm aivm-2404 --host_src .
+   aivm vm attach --vm aivm-2404-$HOSTNAME --host_src .
    aivm attach . --mode git
 
 Attachment modes:

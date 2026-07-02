@@ -75,7 +75,8 @@ def test_config_init_interactive_shows_summary_and_accepts(
     assert rc == 0
     out = capsys.readouterr().out
     assert 'Detected defaults for `aivm config init`' in out
-    assert 'vm.name:' not in out
+    assert 'vm.name' in out
+    assert 'aivm-init-test' in out
     assert 'ssh-keygen -t ed25519' in out
 
 

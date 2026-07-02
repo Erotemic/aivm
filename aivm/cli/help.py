@@ -15,6 +15,7 @@ from typing import Any, Literal
 import kwconf
 import ubelt as ub
 
+from ..config import default_vm_name
 from ..config_store import find_vm, load_store
 from ._common import _BaseCommand, _cfg_path
 
@@ -192,7 +193,7 @@ def _resolve_raw_targets(
     vm_opt: str,
     host_src: Path,
 ) -> tuple[str, str, str]:
-    vm_name = vm_opt or 'aivm-2404'
+    vm_name = vm_opt or default_vm_name()
     net_name = 'aivm-net'
     fw_table = 'aivm_sandbox'
     reg = load_store(_cfg_path(config_opt))

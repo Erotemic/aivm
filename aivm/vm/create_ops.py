@@ -54,7 +54,7 @@ def _vm_create_summary_rows(
     )
     return [
         ('config_store', str(path), 'config source'),
-        ('vm.name', cfg.vm.name, 'libvirt domain name'),
+        ('vm.name', cfg.vm.name, 'VM name, guest hostname, and SSH alias'),
         ('vm.user', cfg.vm.user, 'guest login user'),
         ('vm.cpus', str(cfg.vm.cpus), 'virtual CPUs'),
         ('vm.ram_mb', str(cfg.vm.ram_mb), 'RAM in MiB'),
