@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.net import (
     _route_overlap,
@@ -16,6 +15,7 @@ from aivm.net import (
     network_status,
 )
 from aivm.util import CmdResult
+from tests.helpers import FakeProc, activate_manager
 
 
 def test_route_overlap_none_without_ip(
@@ -60,20 +60,11 @@ def test_ensure_network_existing_not_recreate(
     cfg = AgentVMConfig()
     calls = []
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    CommandManager.activate(CommandManager())
+    activate_manager(monkeypatch, yes_sudo=False, euid=0)
     monkeypatch.setattr('aivm.net._route_overlap', lambda _s: None)
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 0)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append(cmd) or P(),
+        lambda cmd, **kwargs: calls.append(cmd) or FakeProc(),
     )
     ensure_network(cfg, recreate=False, dry_run=False)
     assert calls == [

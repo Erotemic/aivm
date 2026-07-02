@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.firewall import (
     _effective_bridge_and_gateway,
@@ -12,6 +11,7 @@ from aivm.firewall import (
     apply_firewall,
     firewall_status,
 )
+from tests.helpers import FakeProc, activate_manager
 
 
 def test_effective_bridge_and_gateway_prefers_live(
@@ -22,22 +22,16 @@ def test_effective_bridge_and_gateway_prefers_live(
     cfg.network.bridge = 'virbr-aivm'
     cfg.network.gateway_ip = '10.77.0.1'
 
-    class P:
-        returncode = 0
-        stdout = (
-            '<network>'
-            "<bridge name='virbr-live'/>"
-            "<ip address='10.99.0.1'/>"
-            '</network>'
-        )
-        stderr = ''
-
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    live_xml = (
+        '<network>'
+        "<bridge name='virbr-live'/>"
+        "<ip address='10.99.0.1'/>"
+        '</network>'
+    )
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: P(),
+        lambda cmd, **kwargs: FakeProc(stdout=live_xml),
     )
     bridge, gateway = _effective_bridge_and_gateway(cfg)
     assert bridge == 'virbr-live'
@@ -109,17 +103,11 @@ def test_firewall_status_uses_readonly_step(
     cfg.firewall.table = 'aivm_fw'
     calls = []
 
-    class P:
-        returncode = 0
-        stdout = 'table inet aivm_fw {}'
-        stderr = ''
-
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or P(),
+        lambda cmd, **kwargs: calls.append((cmd, kwargs))
+        or FakeProc(stdout='table inet aivm_fw {}'),
     )
 
     text = firewall_status(cfg)
@@ -145,23 +133,14 @@ def test_apply_firewall_runs_delete_then_apply(
     cfg = AgentVMConfig()
     calls = []
 
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    CommandManager.activate(CommandManager())
+    activate_manager(monkeypatch, yes_sudo=False, euid=0)
     monkeypatch.setattr(
         'aivm.firewall._effective_bridge_and_gateway',
         lambda _cfg: ('virbr-aivm', '10.77.0.1'),
     )
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 0)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or P(),
+        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
     )
     apply_firewall(cfg, dry_run=False)
     assert calls[0][0][:4] == ['nft', 'delete', 'table', 'inet']

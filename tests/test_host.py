@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
 from aivm.host import (
     check_commands,
     check_commands_with_sudo,
@@ -15,6 +14,7 @@ from aivm.host import (
     install_deps_debian,
 )
 from aivm.util import CmdResult
+from tests.helpers import FakeProc, activate_manager
 
 
 def test_check_commands(
@@ -90,24 +90,10 @@ def test_install_deps_debian_behaviors(
 
     calls = []
     monkeypatch.setattr('aivm.host.host_is_debian_like', lambda: True)
-    CommandManager.activate(CommandManager(yes_sudo=True))
-
-    class P:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    monkeypatch.setattr(
-        'aivm.commands.os.geteuid',
-        lambda: 1000,
-    )
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or P(),
+        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
     )
     install_deps_debian()
     assert calls[0][0][:5] == [
@@ -144,28 +130,17 @@ def test_install_deps_debian_reports_apt_lock_cleanly(
     monkeypatch: MonkeyPatch,
 ) -> None:
     monkeypatch.setattr('aivm.host.host_is_debian_like', lambda: True)
-    CommandManager.activate(CommandManager(yes_sudo=True))
+    activate_manager(monkeypatch, isatty=True)
 
-    class P:
-        def __init__(
-            self, returncode: int = 100, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> P:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         if cmd[-2:] == ['update', '-y']:
-            return P(
+            return FakeProc(
                 returncode=100,
                 stderr='E: Could not get lock /var/lib/dpkg/lock-frontend. '
                 'It is held by process 1234',
             )
-        return P()
+        return FakeProc(returncode=100)
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
     with pytest.raises(RuntimeError, match='apt/dpkg appears to be locked'):

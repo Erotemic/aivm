@@ -23,6 +23,7 @@ from aivm.vm.drift import (
 from aivm.vm.drift import (
     parse_dominfo_hardware as _parse_dominfo_hardware,
 )
+from tests.helpers import FakeProc, activate_manager
 
 
 def test_check_network_parsing_and_permission(
@@ -86,9 +87,7 @@ def test_probe_firewall_privileged_probe_uses_step(
     cfg.firewall.enabled = True
     cfg.firewall.table = 'aivm_sandbox'
 
-    CommandManager.activate(CommandManager(yes_sudo=True))
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    activate_manager(monkeypatch)
 
     step_titles: list[str] = []
     orig_step = CommandManager.step
@@ -100,17 +99,9 @@ def test_probe_firewall_privileged_probe_uses_step(
 
     monkeypatch.setattr('aivm.status.CommandManager.step', track_step)
 
-    class _Proc:
-        def __init__(
-            self, returncode: int = 0, stdout: str = '', stderr: str = ''
-        ) -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: _Proc(0, '', ''),
+        lambda cmd, **kwargs: FakeProc(0, '', ''),
     )
 
     out = probe_firewall(cfg, use_sudo=True)

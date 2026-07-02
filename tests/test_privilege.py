@@ -25,15 +25,7 @@ from aivm.privilege import (
 # Captured at import time, before the conftest fixture pins the module
 # attribute, so the real probe body stays testable.
 from aivm.privilege import libvirt_unprivileged_ok as _real_libvirt_probe
-
-
-class _Proc:
-    def __init__(
-        self, returncode: int = 0, stdout: str = '', stderr: str = ''
-    ) -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
+from tests.helpers import FakeProc
 
 
 def _activate(mode: str, **kw: Any) -> CommandManager:
@@ -67,9 +59,9 @@ def test_virsh_needs_sudo_per_mode(monkeypatch: MonkeyPatch) -> None:
 def test_libvirt_probe_is_cached_per_manager(monkeypatch: MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> _Proc:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         calls.append(list(cmd))
-        return _Proc(0, '', '')
+        return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
@@ -123,7 +115,7 @@ def test_sudoless_manager_rejects_sudo_commands(
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kw: _Proc(0, 'ok', ''),
+        lambda cmd, **kw: FakeProc(0, 'ok', ''),
     )
     mgr = _activate('sudoless', yes=True)
     res = mgr.run(['true'], sudo=False, check=False)
