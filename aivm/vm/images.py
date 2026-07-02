@@ -14,6 +14,7 @@ from ..config import (
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
+from ..errors import AIVMError
 from ..privilege import path_needs_sudo, sudo_allowed
 from ..util import CmdError
 from .host_access import _ensure_qemu_access, _sudo_file_exists
@@ -29,7 +30,7 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
     if parsed.scheme == 'file':
         file_path = Path(unquote(parsed.path))
         if not file_path.exists():
-            raise RuntimeError(
+            raise AIVMError(
                 'Local file image URL does not exist.\n'
                 f'Requested URL: {image_url}\n'
                 f'Path: {file_path}'
@@ -54,7 +55,7 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
         supported_hashes = '\n'.join(
             f'  - {u} :: {d}' for u, d in sorted(SUPPORTED_IMAGE_SHA256.items())
         )
-        raise RuntimeError(
+        raise AIVMError(
             'Image file URL digest is not in the built-in verified image registry.\n'
             f'Requested URL: {image_url}\n'
             f'Path: {file_path}\n'
@@ -64,7 +65,7 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
             'This often means a partial/corrupt local cache file. Delete it and retry.'
         )
     supported = '\n'.join(f'  - {u}' for u in sorted(SUPPORTED_IMAGE_SHA256))
-    raise RuntimeError(
+    raise AIVMError(
         'Image URL is not in the built-in verified image registry.\n'
         f'Requested URL: {image_url}\n'
         'Supported URLs:\n'
@@ -101,7 +102,7 @@ def _verify_image_sha256(
             summary='Remove invalid base image after checksum mismatch',
             detail=f'path={image_path}',
         ).result()
-        raise RuntimeError(
+        raise AIVMError(
             'Downloaded base image checksum mismatch; removed invalid image.\n'
             f'Path: {image_path}\n'
             f'Expected: {expected_sha256}\n'
@@ -302,7 +303,7 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     summary='Remove invalid base image after checksum mismatch',
                     detail=f'path={base_img}',
                 ).result()
-                raise RuntimeError(
+                raise AIVMError(
                     'Downloaded base image checksum mismatch; removed invalid image.\n'
                     f'Path: {base_img}\n'
                     f'Expected: {expected_sha256}\n'

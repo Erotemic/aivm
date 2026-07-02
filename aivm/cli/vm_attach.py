@@ -58,6 +58,7 @@ from ..config_store import (
     remove_attachment,
     save_store,
 )
+from ..errors import AIVMError
 from ..services import (
     load_cfg_with_path,
     maybe_offer_create_ssh_identity,
@@ -124,7 +125,7 @@ class VMInstallPersistentHostReplayServiceRequest:
 
 def _validate_host_directory(path: Path) -> None:
     if not path.exists() or not path.is_dir():
-        raise RuntimeError(f'host_src must be an existing directory: {path}')
+        raise AIVMError(f'host_src must be an existing directory: {path}')
 
 
 def _resolve_attach_config(

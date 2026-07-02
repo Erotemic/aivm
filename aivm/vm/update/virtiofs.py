@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...errors import AIVMError
 from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
 from .. import virtiofsd_wrapper
@@ -84,7 +85,7 @@ def _apply_virtiofs_binary_drift(
     mgr = CommandManager.current()
     needs_wrapper = any(d.desired for d in drift.virtiofs_binary)
     if needs_wrapper:
-        raise RuntimeError(
+        raise AIVMError(
             'Refusing to configure AIVM-generated host-side virtiofsd wrappers. '
             'Managed libvirt mode now only removes old AIVM wrapper paths. '
             'See dev/design/future/virtiofsd-inode-file-handles.md.'

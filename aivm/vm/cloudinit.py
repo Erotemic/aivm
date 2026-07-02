@@ -12,6 +12,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..detect import detect_host_timezone
+from ..errors import AIVMError, MissingSSHIdentityError
 from ..fdguard import (
     FDGUARD_BIN,
     FDGUARD_CONF,
@@ -187,7 +188,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
 
     if cfg.vm.allow_password_login:
         if '\n' in cfg.vm.password:
-            raise RuntimeError(
+            raise AIVMError(
                 'VM password must not contain newlines (cloud-init chpasswd format).'
             )
         password_yaml = json.dumps(cfg.vm.password)
@@ -286,7 +287,7 @@ def _write_cloud_init(
         Path(cfg.paths.ssh_pubkey_path) if cfg.paths.ssh_pubkey_path else None
     )
     if not pubkey_path or not pubkey_path.exists():
-        raise RuntimeError(
+        raise MissingSSHIdentityError(
             f'Missing SSH public key. Set paths.ssh_pubkey_path in config (got: {cfg.paths.ssh_pubkey_path})'
         )
     pubkey = pubkey_path.read_text(encoding='utf-8').strip()

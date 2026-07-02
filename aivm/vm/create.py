@@ -8,6 +8,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, runtime_is_session, virsh_cmd
 from ..util import CmdError, which
@@ -314,7 +315,7 @@ def create_or_start_vm(
                         log.info('VM resumed: {}', cfg.vm.name)
                         return
                     if 'in shutdown' in st or 'shutting down' in st:
-                        raise RuntimeError(
+                        raise AIVMError(
                             f'VM {cfg.vm.name!r} is currently shutting down '
                             f'(state={st!r}). Wait for it to finish, or run '
                             f'`aivm vm destroy {cfg.vm.name}` to force it off, '
@@ -334,7 +335,7 @@ def create_or_start_vm(
                         )
                         log.info('VM started: {}', cfg.vm.name)
                         return
-                    raise RuntimeError(
+                    raise AIVMError(
                         f'VM {cfg.vm.name!r} is in unexpected state '
                         f'{st!r}; refusing to start or resume. Inspect with '
                         f'`virsh domstate {cfg.vm.name}` and recover manually.'
@@ -355,7 +356,7 @@ def create_or_start_vm(
                     if missing
                     else ''
                 )
-                raise RuntimeError(
+                raise AIVMError(
                     f'Failed to build cloud-init artifacts for VM `{cfg.vm.name}`. '
                     f'{hint}Run `aivm host install_deps` and retry.'
                 ) from ex
@@ -370,7 +371,7 @@ def create_or_start_vm(
         ssh_forward_port: int | None = None
         if runtime_is_session():
             if which('passt') is None:
-                raise RuntimeError(
+                raise AIVMError(
                     'Session-runtime VMs need `passt` for user-mode '
                     'networking, but it is not installed. Install the '
                     '`passt` package (or run `aivm host rootless check` '
@@ -402,17 +403,17 @@ def create_or_start_vm(
         if first.code != 0:
             err = CmdError(cmd, first)
             if source_dir and _is_missing_virtiofsd_error(err):
-                raise RuntimeError(
+                raise AIVMError(
                     _virtiofsd_failure_message(source_dir)
                 ) from err
             if _is_guest_memory_allocation_error(err):
-                raise RuntimeError(
+                raise AIVMError(
                     _memory_allocation_failure_message(cfg)
                 ) from err
             if _is_missing_kvm_error(err):
-                raise RuntimeError(_missing_kvm_failure_message()) from err
+                raise AIVMError(_missing_kvm_failure_message()) from err
             if _is_passt_crash_error(err):
-                raise RuntimeError(_passt_crash_failure_message()) from err
+                raise AIVMError(_passt_crash_failure_message()) from err
             if _is_missing_uefi_firmware_error(err):
                 log.warning(
                     'UEFI firmware not available on host. Retrying VM create with non-UEFI boot.'
@@ -429,11 +430,11 @@ def create_or_start_vm(
                     )
                 except CmdError as ex2:
                     if source_dir and _is_missing_virtiofsd_error(ex2):
-                        raise RuntimeError(
+                        raise AIVMError(
                             _virtiofsd_failure_message(source_dir)
                         ) from ex2
                     if _is_guest_memory_allocation_error(ex2):
-                        raise RuntimeError(
+                        raise AIVMError(
                             _memory_allocation_failure_message(cfg)
                         ) from ex2
                     raise

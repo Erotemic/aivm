@@ -10,6 +10,7 @@ from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
+from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import load_cfg
 from ..vm import ssh_port_for
@@ -113,7 +114,7 @@ class VMFlushCachesCLI(_BaseCommand):
                 settle_seconds=int(args.settle_seconds or 0),
             )
         except ValueError as ex:
-            raise RuntimeError(str(ex)) from ex
+            raise AIVMError(str(ex)) from ex
 
         cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
         vm_name = cfg.vm.name

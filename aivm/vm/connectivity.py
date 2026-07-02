@@ -9,6 +9,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
     require_ssh_identity,
@@ -34,7 +35,7 @@ def ssh_port_for(cfg: AgentVMConfig, *, strict: bool = True) -> int | None:
         return 22
     port = read_ssh_forward_port(cfg)
     if port is None and strict:
-        raise RuntimeError(
+        raise AIVMError(
             f'No SSH forward port is recorded for session VM {cfg.vm.name}. '
             'The port is allocated at create time; run `aivm vm up` (or '
             '`aivm vm create`) first.'
@@ -352,7 +353,7 @@ def wait_for_ssh(
             return
         last_stderr = (res.stderr or '').strip()
         if _is_ssh_host_key_mismatch(last_stderr):
-            raise RuntimeError(_ssh_host_key_mismatch_message(cfg, ip))
+            raise AIVMError(_ssh_host_key_mismatch_message(cfg, ip))
         time.sleep(2)
     detail = f' Last SSH error: {last_stderr}' if last_stderr else ''
     raise TimeoutError(f'Timed out waiting for SSH on {ip}:{port}.{detail}')

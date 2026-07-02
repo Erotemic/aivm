@@ -19,6 +19,7 @@ from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
 from ..config_store import load_store
+from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import cfg_path, load_cfg
 from ..util import which
@@ -59,7 +60,7 @@ def _bootstrap_vm_for_folder(
     need_init = missing_store.defaults is None
     if not yes:
         if not sys.stdin.isatty():
-            raise RuntimeError(
+            raise AIVMError(
                 'No managed VM found for this folder. Re-run with --yes to create one automatically.'
             ) from ex
         print('No managed VM found for this folder.')
@@ -69,7 +70,7 @@ def _bootstrap_vm_for_folder(
             prompt = 'Run `aivm vm create` now using existing config defaults? [Y/n]: '
         ans = input(prompt).strip().lower()
         if ans not in {'', 'y', 'yes'}:
-            raise RuntimeError('Aborted by user.') from ex
+            raise AIVMError('Aborted by user.') from ex
     if need_init:
         from .config import InitCLI
 

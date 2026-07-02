@@ -28,7 +28,7 @@ else:
 
 from loguru import logger
 
-from .errors import SudolessModeError
+from .errors import AIVMError, SudolessModeError
 
 log = logger
 
@@ -92,7 +92,7 @@ class CommandResult:
     stderr: str
 
 
-class CommandError(RuntimeError):
+class CommandError(AIVMError):
     """Error raised when a checked command finishes unsuccessfully.
 
     The exception retains both the original command and the normalized
@@ -949,7 +949,7 @@ class CommandManager:
                 self._authenticate_sudo()
             return
         if not sys.stdin.isatty():
-            raise RuntimeError(
+            raise AIVMError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -964,7 +964,7 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
         if auth_required:
             self._authenticate_sudo()
 
@@ -979,7 +979,7 @@ class CommandManager:
         if yes or self.yes or self._approve_all_remaining:
             return
         if not sys.stdin.isatty():
-            raise RuntimeError(
+            raise AIVMError(
                 'External host file updates require confirmation, but stdin is not interactive. '
                 'Re-run with --yes.'
             )
@@ -989,7 +989,7 @@ class CommandManager:
         local_log.info('  {}', purpose)
         ans = input('Continue? [y/N]: ').strip().lower()
         if ans not in {'y', 'yes'}:
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
 
     def _is_system_libvirt_mutation(self, spec: CommandSpec) -> bool:
         """Return True for state-changing hypervisor commands.
@@ -1066,7 +1066,7 @@ class CommandManager:
             plan.approved_command_count = len(plan.commands)
             return
         if not sys.stdin.isatty():
-            raise RuntimeError(
+            raise AIVMError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -1090,7 +1090,7 @@ class CommandManager:
                 plan.approved = True
                 plan.approved_command_count = len(plan.commands)
                 return
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
 
     def _render_plan_preview(
         self, plan: CommandPlan, *, _stacklevel: int = 1
@@ -1192,7 +1192,7 @@ class CommandManager:
                     '    {}. {}', idx, shell_join([str(p) for p in cmd])
                 )
         if not sys.stdin.isatty():
-            raise RuntimeError(
+            raise AIVMError(
                 'State-changing operations require confirmation, but stdin '
                 'is not interactive. Re-run with --yes.'
             )
@@ -1200,7 +1200,7 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
 
     def _flush_plan(
         self,

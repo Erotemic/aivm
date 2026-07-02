@@ -16,6 +16,7 @@ from ...config_store import (
     load_store,
     save_store,
 )
+from ...errors import AIVMError
 from ...services import cfg_path
 from ...util import which
 from .._common import _BaseCommand
@@ -78,7 +79,7 @@ def _editor_command(args: Any) -> list[str]:
     if not editor_cmd:
         editor_cmd = which('nano') or which('vi') or ''
     if not editor_cmd:
-        raise RuntimeError('No editor found. Set $EDITOR or pass --editor.')
+        raise AIVMError('No editor found. Set $EDITOR or pass --editor.')
     return shlex.split(editor_cmd)
 
 
@@ -125,7 +126,7 @@ def _resolve_config_edit_target(
         vm_name = target
 
     if not vm_name:
-        raise RuntimeError('No VM specified and active_vm is unset.')
+        raise AIVMError('No VM specified and active_vm is unset.')
     if find_vm(loaded.store, vm_name) is None:
-        raise RuntimeError(f'VM not found in config: {vm_name}')
+        raise AIVMError(f'VM not found in config: {vm_name}')
     return _vm_config_source(root, loaded, vm_name)

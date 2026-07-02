@@ -14,6 +14,7 @@ from loguru import logger
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .errors import AIVMError
 from .privilege import require_sudo_allowed, sudo_allowed
 from .runtime import virsh_cmd
 
@@ -33,9 +34,9 @@ def _normalize_port_list(ports: list[int]) -> list[int]:
         try:
             p = int(raw)
         except Exception as ex:
-            raise RuntimeError(f'Invalid firewall port value: {raw!r}') from ex
+            raise AIVMError(f'Invalid firewall port value: {raw!r}') from ex
         if p < 1 or p > 65535:
-            raise RuntimeError(
+            raise AIVMError(
                 f'Invalid firewall port {p}; expected range 1..65535.'
             )
         if p in seen:

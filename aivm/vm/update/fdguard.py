@@ -16,6 +16,7 @@ import shlex
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...errors import AIVMError
 from ...fdguard import (
     FDGUARD_TIMER,
     fdguard_expected_hashes,
@@ -162,7 +163,7 @@ def _apply_fdguard_drift(
         return True
     ip = fd.ip or get_ip_cached(cfg)
     if not ip:
-        raise RuntimeError(
+        raise AIVMError(
             'Cannot reconcile the virtiofs fd guard: guest IP is '
             'unavailable. Bring the VM up and rerun `aivm vm update`, or '
             f'use `aivm vm fdguard --action {fd.action}` directly.'

@@ -14,6 +14,7 @@ from loguru import logger
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .errors import AIVMError
 from .privilege import virsh_needs_sudo
 from .runtime import virsh_cmd
 from .util import which
@@ -60,13 +61,13 @@ def ensure_network(
     prefix = subnet_net.prefixlen
 
     if len(bridge) > 15:
-        raise RuntimeError(
+        raise AIVMError(
             f'Bridge name too long ({len(bridge)} > 15): {bridge}'
         )
 
     overlap = _route_overlap(subnet)
     if overlap:
-        raise RuntimeError(
+        raise AIVMError(
             f'NET_SUBNET_CIDR {subnet} overlaps existing route {overlap}. Pick a different subnet.'
         )
 

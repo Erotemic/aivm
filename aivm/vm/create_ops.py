@@ -36,6 +36,7 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
@@ -177,7 +178,7 @@ def _review_vm_create_overrides_interactive(
 ) -> AgentVMConfig:
     """Interactively review and optionally edit VM create defaults."""
     if not sys.stdin.isatty():
-        raise RuntimeError(
+        raise AIVMError(
             'VM create defaults require confirmation in interactive mode. '
             'Re-run with --yes.'
         )
@@ -187,7 +188,7 @@ def _review_vm_create_overrides_interactive(
         if ans in {'', 'y', 'yes'}:
             return cfg
         if ans in {'n', 'no'}:
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
         if ans in {'e', 'edit'}:
             cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
             cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
@@ -254,7 +255,7 @@ def _resolve_create_config(
             f'No config defaults found in store: {cfg_path}. '
             'Run `aivm config init` first.'
         )
-        raise RuntimeError('No config defaults found in store.')
+        raise AIVMError('No config defaults found in store.')
 
     if vm_override:
         cfg.vm.name = vm_override.strip()
@@ -385,7 +386,7 @@ def create_vm_from_defaults(
     problems = vm_resource_impossible_lines(cfg)
     if problems:
         detail = '\n  - '.join(problems)
-        raise RuntimeError(
+        raise AIVMError(
             'Requested VM resources are not feasible on this host right now:\n'
             f'  - {detail}\n'
             'Lower vm.ram_mb / vm.cpus and retry.'

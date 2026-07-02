@@ -21,6 +21,7 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..privilege import sudo_allowed
@@ -709,7 +710,7 @@ def _reconcile_attached_vm(
                 cfg, use_sudo=False
             )
             if vm_has_shared_mem is False and not policy.recreate_if_needed:
-                raise RuntimeError(
+                raise AIVMError(
                     'Existing VM cannot accept virtiofs attachments because its domain '
                     'definition lacks required shared-memory backing (memfd/shared).\n'
                     f'VM: {cfg.vm.name}\n'
@@ -802,7 +803,7 @@ def _reconcile_attached_vm(
                         ]
                     )
                     next_steps_text = '\n'.join(next_steps)
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Existing VM does not include requested share mapping, and live attach failed.\n'
                         f'VM: {cfg.vm.name}\n'
                         f'Requested: source={virtiofs_mapping[0]} tag={requested_tag} guest_dst={attachment.guest_dst}\n'
@@ -857,7 +858,7 @@ def _prepare_attached_session(
     if not host_src.exists():
         raise FileNotFoundError(f'Host source path does not exist: {host_src}')
     if not host_src.is_dir():
-        raise RuntimeError(f'Host source path is not a directory: {host_src}')
+        raise AIVMError(f'Host source path is not a directory: {host_src}')
 
     # Run the sensitive-path guard before we resolve config or potentially
     # bootstrap a brand-new VM — refusing here avoids creating a VM only to
@@ -871,7 +872,7 @@ def _prepare_attached_session(
         dry_run=bool(dry_run),
     )
     if not ok:
-        raise RuntimeError(
+        raise AIVMError(
             f'Aborted: declined to attach sensitive path {host_src}.'
         )
 
@@ -903,7 +904,7 @@ def _prepare_attached_session(
         dry_run=bool(dry_run),
     )
     if not ok:
-        raise RuntimeError(
+        raise AIVMError(
             f'Aborted: declined to add overlapping attachment {host_src} to VM {cfg.vm.name}.'
         )
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandError, CommandManager
+from .errors import AIVMError
 from .privilege import require_sudo_allowed
 from .util import which
 
@@ -133,7 +134,7 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         ),
     )
     if not host_is_debian_like():
-        raise RuntimeError(
+        raise AIVMError(
             'Host is not detected as Debian/Ubuntu; install deps manually.'
         )
     pkgs = [
@@ -212,7 +213,7 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
                 )
     except CommandError as ex:
         if _is_apt_lock_error(ex):
-            raise RuntimeError(
+            raise AIVMError(
                 'apt/dpkg appears to be locked by another process. '
                 'Close other package managers or wait for unattended upgrades to finish, then retry.'
             ) from ex

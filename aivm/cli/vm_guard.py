@@ -23,6 +23,7 @@ from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
+from ..errors import AIVMError
 from ..fdguard import (
     fdguard_install_script,
     fdguard_status_script,
@@ -85,7 +86,7 @@ class VMFdGuardCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         action = str(args.action or '').strip().lower()
         if action not in _ACTIONS:
-            raise RuntimeError(
+            raise AIVMError(
                 f'invalid action {action!r}; expected one of {", ".join(_ACTIONS)}'
             )
 
@@ -103,7 +104,7 @@ class VMFdGuardCLI(_BaseCommand):
                     threshold=threshold, interval_sec=interval_sec
                 )
             except ValueError as ex:
-                raise RuntimeError(str(ex)) from ex
+                raise AIVMError(str(ex)) from ex
         elif action == 'uninstall':
             script = fdguard_uninstall_script()
         else:

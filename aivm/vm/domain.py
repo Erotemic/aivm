@@ -8,6 +8,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import virsh_cmd
 from .connectivity import get_ip_cached
@@ -315,7 +316,7 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
     # Verify the VM exists before attempting restart
     if not _vm_defined(name):
-        raise RuntimeError(
+        raise AIVMError(
             f'VM {name!r} does not exist. Restart requires an existing VM; '
             f'use `aivm vm up` to create and start it.'
         )

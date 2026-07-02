@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..vm import attach_vm_share, vm_share_mappings
 from ..vm.paths import shared_root_host_dir as _shared_root_host_dir
@@ -297,7 +298,7 @@ def _ensure_shared_root_host_bind(
     source_dir = str(Path(attachment.source_dir).resolve())
     source = Path(source_dir)
     if not source.exists() or not source.is_dir():
-        raise RuntimeError(
+        raise AIVMError(
             f'shared-root source must be an existing directory: {source_dir}'
         )
 
@@ -325,7 +326,7 @@ def _ensure_shared_root_host_bind(
         if _shared_root_host_bind_matches_source(source, target, probe):
             return target
         if not allow_disruptive_rebind:
-            raise RuntimeError(
+            raise AIVMError(
                 'Refusing to replace existing shared-root host bind mount during automatic restore '
                 f'(target={target}, expected_source={source_dir}, actual_source={probe.source or "unknown"}, '
                 f'actual_root={probe.root or "unknown"}, actual_fstype={probe.fstype or "unknown"}). '
@@ -637,7 +638,7 @@ def _ensure_shared_root_guest_bind(
             ),
         ).result()
     if res.code != 0:
-        raise RuntimeError(
+        raise AIVMError(
             'Failed to bind-mount shared-root attachment inside guest. You may need to stop the VM to run detatch\n'
             f'VM: {cfg.vm.name}\n'
             f'Guest source: {source_in_guest}\n'
@@ -690,7 +691,7 @@ def _detach_shared_root_host_bind(
                     # already gone by the time we try to unmount it.
                     pass
                 elif 'target is busy' in msg:
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Shared-root host bind target is busy and was not detached. '
                         f'target={target}. '
                         'Refusing automatic lazy-unmount during normal detach because it can '
@@ -700,7 +701,7 @@ def _detach_shared_root_host_bind(
                         'orphaned mount cleanup.'
                     )
                 elif 'transport endpoint is not connected' in msg:
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Shared-root host bind target appears stale and was not detached. '
                         f'target={target}. '
                         'Refusing automatic lazy-unmount during normal detach. '

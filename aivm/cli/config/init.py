@@ -12,6 +12,7 @@ from loguru import logger
 from ...config import AgentVMConfig
 from ...config_store import load_store, save_store
 from ...detect import auto_defaults
+from ...errors import AIVMError
 from ...resource_checks import vm_resource_warning_lines
 from ...services import cfg_path, maybe_offer_create_ssh_identity
 from .._common import _BaseCommand
@@ -218,7 +219,7 @@ def _review_init_defaults_interactive(
 ) -> AgentVMConfig:
     """Interactive review/edit loop for ``aivm config init`` defaults."""
     if not sys.stdin.isatty():
-        raise RuntimeError(
+        raise AIVMError(
             'Config init defaults require confirmation in interactive mode. '
             'Re-run with --yes or --defaults.'
         )
@@ -235,7 +236,7 @@ def _review_init_defaults_interactive(
         if ans in {'', 'y', 'yes'}:
             return cfg
         if ans in {'n', 'no'}:
-            raise RuntimeError('Aborted by user.')
+            raise AIVMError('Aborted by user.')
         if ans in {'e', 'edit'}:
             cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
             cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)

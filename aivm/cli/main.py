@@ -45,7 +45,7 @@ class ListCLI(_BaseCommand):
         want = str(args.section or 'all').strip().lower()
         allowed = {'all', 'vms', 'networks', 'folders'}
         if want not in allowed:
-            raise RuntimeError(
+            raise AIVMError(
                 f'--section must be one of: {", ".join(sorted(allowed))}'
             )
 
@@ -193,9 +193,6 @@ class AgentVMModalCLI(kwconf.ModalCLI):
 
 
 def main(argv: list[str] | None = None) -> None:
-    # if argv is None:
-    #     argv = sys.argv[1:]
-
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
     except AIVMError as ex:
@@ -205,11 +202,10 @@ def main(argv: list[str] | None = None) -> None:
         log.error('aivm error: {}', ex)
         sys.exit(2)
     except Exception as ex:
-        print(f'ERROR: {ex}', file=sys.stderr)
+        # Unexpected failures propagate with their traceback (which repeats
+        # the message), so log for the record but do not print it twice.
         log.error('Unhandled aivm error: {}', ex)
         raise
 
-    # if any(flag in argv for flag in ('-h', '--help')):
-    #     sys.exit(0)
     assert isinstance(rc, int)
     sys.exit(rc)

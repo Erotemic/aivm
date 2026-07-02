@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..errors import AIVMError
 from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
 from .parse import _norm_dir
 
@@ -37,10 +38,10 @@ def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
     """
     vm = find_vm(reg, vm_name)
     if vm is None:
-        raise RuntimeError(f'VM not found in config store: {vm_name}')
+        raise AIVMError(f'VM not found in config store: {vm_name}')
     net = find_network(reg, vm.network_name)
     if net is None:
-        raise RuntimeError(
+        raise AIVMError(
             f"VM '{vm_name}' references unknown network '{vm.network_name}'. "
             'Define it under [[networks]].'
         )

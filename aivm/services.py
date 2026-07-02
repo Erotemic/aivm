@@ -31,6 +31,7 @@ from .config_store import (
     upsert_vm_with_network,
 )
 from .detect import detect_ssh_identity
+from .errors import AIVMError
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .runtime import activate_runtime
 from .util import which
@@ -188,7 +189,7 @@ def maybe_offer_create_ssh_identity(
 
 def choose_vm_interactive(options: list[str], *, reason: str) -> str:
     if not sys.stdin.isatty():
-        raise RuntimeError(
+        raise AIVMError(
             f'VM selection is ambiguous ({reason}). Re-run with --vm.'
         )
     print(f'Multiple VMs match ({reason}). Select one:')
@@ -229,7 +230,7 @@ def resolve_vm_name(
 
     if vm_opt:
         if find_vm(reg, vm_opt) is None:
-            raise RuntimeError(f'VM not found in config store: {vm_opt}')
+            raise AIVMError(f'VM not found in config store: {vm_opt}')
         return vm_opt, store_path
 
     if host_src is not None:
@@ -249,7 +250,7 @@ def resolve_vm_name(
                     return reg.active_vm, store_path
                 if not sys.stdin.isatty():
                     vm_names = ', '.join(attached_vm_names)
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Host folder is attached to multiple VMs: '
                         f'{vm_names}. Re-run with --vm.'
                     )
@@ -275,7 +276,7 @@ def resolve_vm_name(
         )
         return chosen, store_path
 
-    raise RuntimeError(
+    raise AIVMError(
         f'No VM definitions found in config store: {store_path}. '
         'Run `aivm config init` then `aivm vm create` first.'
     )
@@ -303,7 +304,7 @@ def load_cfg_with_path(
     reg = load_store(store_path)
     rec = find_vm(reg, vm_name)
     if rec is None:
-        raise RuntimeError(f'VM not found in config store: {vm_name}')
+        raise AIVMError(f'VM not found in config store: {vm_name}')
     cfg = activate_cfg_runtime(materialize_vm_cfg(reg, vm_name))
     changed = (
         hydrate_ssh_identity_defaults(cfg) if hydrate_runtime_defaults else False
@@ -406,11 +407,11 @@ def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
         )
         return
     if not host_is_debian_like():
-        raise RuntimeError(
+        raise AIVMError(
             'Host is not detected as Debian/Ubuntu. Install dependencies manually, then retry.'
         )
     if not sys.stdin.isatty():
-        raise RuntimeError(
+        raise AIVMError(
             'Missing required host dependencies in non-interactive mode. '
             'Run `aivm host install_deps` first.'
         )
@@ -421,7 +422,7 @@ def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
     )
     do_install = ans in {'', 'y', 'yes'}
     if not do_install:
-        raise RuntimeError('Aborted by user.')
+        raise AIVMError('Aborted by user.')
     mgr = CommandManager.current()
     with mgr.intent(
         'Prepare host dependencies',
@@ -431,7 +432,7 @@ def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
         install_deps_debian(assume_yes=True)
     missing_after, _ = check_commands()
     if missing_after:
-        raise RuntimeError(
+        raise AIVMError(
             'Required dependencies are still missing after install attempt: '
             + ', '.join(missing_after)
         )

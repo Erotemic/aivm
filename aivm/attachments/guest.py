@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
 from ..vm import ensure_share_mounted, ssh_port_for
@@ -379,7 +380,7 @@ def _git_repo_context(host_src: Path) -> tuple[Path, Path]:
         capture=True,
     )
     if probe.code != 0:
-        raise RuntimeError(
+        raise AIVMError(
             f'Git attachment mode requires a Git worktree: {host_src}'
         )
     repo_root = Path((probe.stdout or '').strip()).resolve()

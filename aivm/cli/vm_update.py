@@ -14,6 +14,7 @@ import kwconf
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..services import load_cfg_with_path
 from ..vm.update import (
     RestartKind,
@@ -39,7 +40,7 @@ def normalize_restart_policy(value: object) -> str:
     """Normalize and validate a VM update restart policy."""
     restart_policy = str(value or 'auto').strip().lower()
     if restart_policy not in {'auto', 'always', 'never'}:
-        raise RuntimeError('--restart must be one of: auto, always, never')
+        raise AIVMError('--restart must be one of: auto, always, never')
     return restart_policy
 
 

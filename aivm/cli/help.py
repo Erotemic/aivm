@@ -17,6 +17,7 @@ import ubelt as ub
 
 from ..config import default_vm_name
 from ..config_store import find_vm, load_store
+from ..errors import AIVMError
 from ..services import cfg_path
 from ._common import _BaseCommand
 
@@ -281,7 +282,7 @@ def _resolve_completion_shell(shell_opt: str) -> str:
     }
     resolved = aliases.get(raw, raw)
     if resolved not in {'bash', 'zsh', 'fish'}:
-        raise RuntimeError('--shell must be one of: bash, zsh, fish')
+        raise AIVMError('--shell must be one of: bash, zsh, fish')
     return resolved
 
 

@@ -17,7 +17,7 @@ from ..config_store import (
     remove_network,
     save_store,
 )
-from ..errors import SessionRuntimeError
+from ..errors import AIVMError, SessionRuntimeError
 from ..net import destroy_network, ensure_network, network_status
 from ..runtime import normalize_runtime_mode
 from ..services import cfg_path
@@ -131,7 +131,7 @@ class NetDestroyCLI(_BaseCommand):
         users = network_users(reg, cfg.network.name)
         if users and not args.force and not args.dry_run:
             names = ', '.join(users)
-            raise RuntimeError(
+            raise AIVMError(
                 f"Network '{cfg.network.name}' is referenced by managed VMs: {names}. "
                 'Detach or destroy those VMs first, or use --force.'
             )
@@ -174,12 +174,12 @@ def _resolve_network_cfg(
         if not net_name and len(reg.vms) == 1:
             net_name = reg.vms[0].network_name
     if not net_name:
-        raise RuntimeError(
+        raise AIVMError(
             'Unable to resolve a managed network. Pass a network name explicitly.'
         )
     net = find_network(reg, net_name)
     if net is None:
-        raise RuntimeError(
+        raise AIVMError(
             f'Managed network not found in config store: {net_name}'
         )
     cfg = AgentVMConfig()

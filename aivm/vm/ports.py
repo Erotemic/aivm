@@ -18,6 +18,7 @@ from pathlib import Path
 from loguru import logger
 
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..util import ensure_dir
 from .paths import _paths
 
@@ -96,7 +97,7 @@ def allocate_ssh_forward_port(
             port = candidate
             break
     if port is None:
-        raise RuntimeError(
+        raise AIVMError(
             'No free localhost port available for session SSH forwarding '
             f'in {SESSION_SSH_PORT_BASE}-'
             f'{SESSION_SSH_PORT_BASE + SESSION_SSH_PORT_SPAN - 1}.'

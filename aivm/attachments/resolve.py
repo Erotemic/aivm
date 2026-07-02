@@ -9,6 +9,7 @@ from loguru import logger as log
 
 from ..config import AgentVMConfig
 from ..config_store import find_attachment_for_vm, load_store
+from ..errors import AIVMError
 from ..privilege import require_sudo_allowed, sudo_allowed
 from ..runtime import require_system_runtime, runtime_is_session
 from ..vm.share import (
@@ -183,7 +184,7 @@ def _normalize_attachment_mode(mode: str) -> AttachmentMode:
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_MODES))
-        raise RuntimeError(f'--mode must be one of: {allowed}')
+        raise AIVMError(f'--mode must be one of: {allowed}')
     return AttachmentMode(resolved)
 
 
@@ -204,7 +205,7 @@ def _normalize_attachment_access(access: str) -> AttachmentAccess:
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_ACCESS_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_ACCESS_MODES))
-        raise RuntimeError(f'--access must be one of: {allowed}')
+        raise AIVMError(f'--access must be one of: {allowed}')
     return AttachmentAccess(resolved)
 
 
@@ -237,7 +238,7 @@ def _resolve_attachment(
         saved_mode = _normalize_attachment_mode(att.mode)
         saved_access = _normalize_attachment_access(att.access)
         if mode_opt and mode != saved_mode:
-            raise RuntimeError(
+            raise AIVMError(
                 'Attachment mode mismatch for existing folder attachment.\n'
                 f'VM: {cfg.vm.name}\n'
                 f'Host folder: {host_src}\n'
@@ -249,7 +250,7 @@ def _resolve_attachment(
                 f'  aivm attach {host_src} --mode {mode}'
             )
         if access_opt and access != saved_access:
-            raise RuntimeError(
+            raise AIVMError(
                 'Attachment access mismatch for existing folder attachment.\n'
                 f'VM: {cfg.vm.name}\n'
                 f'Host folder: {host_src}\n'

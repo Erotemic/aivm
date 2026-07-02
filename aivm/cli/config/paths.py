@@ -16,6 +16,7 @@ from ...config_store import (
     persistent_host_state_dir,
     split_fragment_paths,
 )
+from ...errors import AIVMError
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
 from ...services import cfg_path
 from ...vm.paths import _paths as _vm_runtime_paths
@@ -76,7 +77,7 @@ class ConfigPathsCLI(_BaseCommand):
             'data',
         }
         if target not in valid:
-            raise RuntimeError(
+            raise AIVMError(
                 f'Unknown path group {target!r}. Expected one of: '
                 + ', '.join(sorted(valid))
             )
@@ -179,9 +180,9 @@ def _print_config_paths(
             _print_path('vms_dir', cfg_dir / 'vms', kind='dir')
     if target == 'vm':
         if not vm_name:
-            raise RuntimeError('No VM specified and active_vm is unset.')
+            raise AIVMError('No VM specified and active_vm is unset.')
         if find_vm(loaded.store, vm_name) is None:
-            raise RuntimeError(f'VM not found in config: {vm_name}')
+            raise AIVMError(f'VM not found in config: {vm_name}')
         _print_path(
             f'vm:{vm_name}',
             _vm_config_source(root, loaded, vm_name),
@@ -225,7 +226,7 @@ def _print_libvirt_paths(
             continue
         if find_vm(loaded.store, name) is None:
             if target == 'vm':
-                raise RuntimeError(f'VM not found in config: {name}')
+                raise AIVMError(f'VM not found in config: {name}')
             continue
         cfgs.append(materialize_vm_cfg(loaded.store, name).expanded_paths())
 

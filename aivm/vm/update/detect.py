@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...errors import AIVMError
 from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...runtime import virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
@@ -109,7 +110,7 @@ def _vm_update_drift(
             summary=f'Inspect VM definition {cfg.vm.name} with sudo for update planning',
         )
     if dominfo.code != 0:
-        raise RuntimeError(
+        raise AIVMError(
             f"VM '{cfg.vm.name}' is not defined (or inaccessible via sudo)."
         )
 

@@ -21,6 +21,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
     require_ssh_identity,
@@ -566,7 +567,7 @@ def ensure_share_mounted(
         if attempt < max_attempts:
             time.sleep(retry_sleep_s)
             continue
-        raise RuntimeError(
+        raise AIVMError(
             'Failed to mount shared folder inside guest after retries.\n'
             f'VM: {cfg.vm.name}\n'
             f'IP: {ip}\n'

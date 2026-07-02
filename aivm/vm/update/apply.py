@@ -97,7 +97,7 @@ def _apply_vm_update(
     if drift.disk_bytes is not None:
         cur, want = drift.disk_bytes
         if want < cur:
-            raise RuntimeError(
+            raise AIVMError(
                 f'Disk shrink is not supported safely (live={_bytes_to_gib(cur):.2f} GiB, config={_bytes_to_gib(want):.2f} GiB).'
             )
         if want > cur:
