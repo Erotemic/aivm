@@ -25,6 +25,7 @@ from .config_store import AttachmentEntry, load_store, store_path
 from .util import which
 from .vm import get_ip_cached, vm_share_mappings
 from .vm.drift import saved_vm_drift_report
+from .vm.host_access import _local_stat_answer
 
 
 @dataclass(frozen=True)
@@ -565,9 +566,9 @@ def render_status(
     )
     # TODO(design): once digest-addressable image cache fallback exists,
     # surface both named-path and digest-path resolution in status.
-    # A local stat is authoritative when it succeeds; the sudo probe is only
-    # needed when the image tree is not readable by the current user.
-    img_ok: bool | None = True if base_img.is_file() else None
+    # A local stat answers definitively when it can (the image tree is often
+    # root-only, so EACCES means "ask again with sudo", not "missing").
+    img_ok: bool | None = _local_stat_answer(base_img, want_file=True)
     if img_ok is None and use_sudo:
         img_ok = (
             CommandManager.current()

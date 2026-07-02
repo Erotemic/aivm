@@ -1743,3 +1743,34 @@ def test_restart_vm_raises_with_stderr_error_message(
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     with pytest.raises(RuntimeError, match='domain is not found'):
         restart_vm(cfg, dry_run=False)
+
+
+def test_local_stat_answer_tristate(tmp_path: Path) -> None:
+    """Local stat is authoritative for present/absent, inconclusive on EACCES.
+
+    Regression: a root-only image directory made ``aivm status`` crash with
+    PermissionError because Path.is_file() raises when a parent directory is
+    not traversable; existence probes must treat that as "ask with sudo".
+    """
+    import os
+
+    from aivm.vm.host_access import _local_stat_answer
+
+    present = tmp_path / 'present.img'
+    present.write_text('x', encoding='utf-8')
+    assert _local_stat_answer(present, want_file=True) is True
+    assert _local_stat_answer(tmp_path, want_file=True) is False
+    assert _local_stat_answer(tmp_path, want_file=False) is True
+    assert _local_stat_answer(tmp_path / 'missing', want_file=True) is False
+
+    if os.geteuid() == 0:
+        return  # root bypasses directory permissions; skip the EACCES leg
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    inner = locked / 'file.img'
+    inner.write_text('x', encoding='utf-8')
+    locked.chmod(0o000)
+    try:
+        assert _local_stat_answer(inner, want_file=True) is None
+    finally:
+        locked.chmod(0o755)
