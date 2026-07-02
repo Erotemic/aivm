@@ -629,6 +629,59 @@ def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
     )
 
 
+def test_write_cloud_init_unlinks_seed_iso_before_rebuild(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """libvirt DAC relabeling can leave an existing seed ISO owned by
+    libvirt-qemu, and cloud-localds truncates its target in place — so the
+    rebuild must unlink the old seed (a directory-write operation) first.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    pubkey_path = tmp_path / 'id_ed25519.pub'
+    pubkey_path.write_text(
+        'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey agent@test\n',
+        encoding='utf-8',
+    )
+    cfg.paths.ssh_pubkey_path = str(pubkey_path)
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
+    )
+
+    class P:
+        def __init__(
+            self, returncode: int = 0, stdout: str = '', stderr: str = ''
+        ) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> P:
+        del kwargs
+        normalized = cmd[1:] if cmd and cmd[0] == 'sudo' else cmd
+        commands.append(list(normalized))
+        return P(0, '', '')
+
+    CommandManager.activate(CommandManager(yes_sudo=True))
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    _write_cloud_init(cfg, dry_run=False)
+    rm_idx = [
+        i
+        for i, cmd in enumerate(commands)
+        if cmd[:2] == ['rm', '-f'] and cmd[-1].endswith('seed.iso')
+    ]
+    localds_idx = [
+        i for i, cmd in enumerate(commands) if cmd[:1] == ['cloud-localds']
+    ]
+    assert rm_idx and localds_idx
+    assert rm_idx[0] < localds_idx[0]
+
+
 def test_refresh_cloud_init_seed_for_next_boot_bumps_instance_id(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

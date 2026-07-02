@@ -346,6 +346,19 @@ def _write_cloud_init(
                 capture=True,
                 summary='Write cloud-init network config',
             )
+            # libvirt's dynamic-ownership DAC relabeling chowns the seed ISO
+            # to libvirt-qemu at domain start, so a rebuild for an existing
+            # VM may find it non-user-writable inside a user-owned tree.
+            # cloud-localds truncates the target in place; unlinking first
+            # only needs directory write, which use_sudo already reflects.
+            mgr.submit(
+                ['rm', '-f', str(seed_iso)],
+                sudo=use_sudo,
+                role='modify',
+                check=True,
+                capture=True,
+                summary='Remove stale seed ISO before rebuild',
+            )
             mgr.submit(
                 [
                     'cloud-localds',
