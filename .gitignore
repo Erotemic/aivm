@@ -99,3 +99,8 @@ wheelhouse
 .vscode
 .venv
 .local
+
+# Local debugging artifacts (incident captures, log dumps, source snapshots)
+dev/incidents/
+*.log
+aivm-source-*.tar.gz
