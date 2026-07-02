@@ -25,6 +25,9 @@ kind of command need sudo right now?" for call sites:
 * :func:`path_needs_sudo` -- host filesystem operations under the VM
   image/state tree. Unprivileged when the target (or its nearest existing
   ancestor) is writable by the current user.
+* :func:`file_write_needs_sudo` -- in-place writes to an existing file
+  (for example ``qemu-img resize``). Judged by the file's own mode rather
+  than its parent directory.
 
 Run ``aivm host sudoless check`` / ``aivm host sudoless setup`` to inspect
 or establish the host state these probes look for.
@@ -192,6 +195,29 @@ def path_needs_sudo(path: Path | str) -> bool:
     if mode == 'sudoless':
         return False
     return not user_can_write_path(path)
+
+
+def user_can_write_file(path: Path | str) -> bool:
+    """Return True when the user can open ``path`` itself for writing.
+
+    Unlike :func:`user_can_write_path`, an existing file is judged by its
+    own mode, not its parent directory: in-place modifications (for example
+    ``qemu-img resize``) open the file O_RDWR and never touch the directory
+    entry. A missing target falls back to the directory-based check.
+    """
+    if _stat_or_none(Path(path)) is None:
+        return user_can_write_path(path)
+    return os.access(path, os.W_OK)
+
+
+def file_write_needs_sudo(path: Path | str) -> bool:
+    """Return whether an in-place write to ``path`` should use sudo."""
+    mode = current_privilege_mode()
+    if mode == 'sudo':
+        return True
+    if mode == 'sudoless':
+        return False
+    return not user_can_write_file(path)
 
 
 def require_sudo_allowed(*, feature: str, hint: str) -> None:

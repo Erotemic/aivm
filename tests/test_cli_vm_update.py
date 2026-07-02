@@ -109,6 +109,36 @@ def test_apply_vm_update_disk_resize_lock_error_is_graceful(
     assert 'write' in msg  # original qemu-img message is resurfaced
 
 
+def test_apply_vm_update_disk_resize_sudo_follows_file_writability(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """qemu-img opens the image file directly, so resize escalation is
+    decided by file writability, not libvirt-group access (which lets an
+    unprivileged resize of a root-owned image fail with EACCES).
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.disk_gb = 60
+    image = tmp_path / 'vm.qcow2'
+    image.write_bytes(b'')
+    drift = VMUpdateDrift(
+        disk_bytes=(40 * 1024**3, 60 * 1024**3),
+        disk_path=str(image),
+    )
+    sudo_seen: list[bool] = []
+
+    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
+        assert cmd[:2] == ['qemu-img', 'resize']
+        sudo_seen.append(bool(kwargs.get('sudo')))
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.update.apply.CommandManager.run', fake_run)
+    image.chmod(0o444)
+    _apply_vm_update(cfg, drift, dry_run=False)
+    image.chmod(0o644)
+    _apply_vm_update(cfg, drift, dry_run=False)
+    assert sudo_seen == [True, False]
+
+
 def test_escalate_orders_none_soft_hard() -> None:
     assert _escalate(RestartKind.NONE, RestartKind.NONE) == RestartKind.NONE
     assert _escalate(RestartKind.NONE, RestartKind.SOFT) == RestartKind.SOFT

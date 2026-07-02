@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from ...commands import CommandError, CommandManager
-from ...privilege import virsh_needs_sudo
+from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...runtime import virsh_system_cmd
@@ -29,6 +29,13 @@ def _disk_resize_error(
             'most likely because the VM is currently running. Shut the VM '
             'down (`aivm vm down`) and retry `aivm vm update`, or resize the '
             'running disk via `virsh blockresize`.'
+        )
+    elif 'permission denied' in raw.lower():
+        hint = (
+            f"Could not resize disk '{drift.disk_path}': the image is not "
+            'writable by your user and the active privilege mode did not '
+            'escalate. Fix the image ownership or rerun with '
+            '`behavior.privilege_mode = "sudo"` (or without `--sudoless`).'
         )
     else:
         hint = f"Could not resize disk '{drift.disk_path}'."
@@ -92,8 +99,13 @@ def _apply_vm_update(
                 print(f'DRYRUN: {" ".join(cmd)}')
             else:
                 try:
+                    # qemu-img opens the image file directly, so escalation
+                    # depends on file writability, not libvirt-group access.
                     CommandManager.current().run(
-                        cmd, sudo=virsh_needs_sudo(), check=True, capture=True
+                        cmd,
+                        sudo=file_write_needs_sudo(drift.disk_path),
+                        check=True,
+                        capture=True,
                     )
                 except CommandError as ex:
                     raise _disk_resize_error(drift, ex) from ex

@@ -13,9 +13,11 @@ from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.errors import SudolessModeError
 from aivm.privilege import (
+    file_write_needs_sudo,
     normalize_privilege_mode,
     path_needs_sudo,
     qemu_traversal_blockers,
+    user_can_write_file,
     user_can_write_path,
     virsh_needs_sudo,
 )
@@ -90,6 +92,29 @@ def test_path_privilege_decisions(tmp_path: Path) -> None:
     assert path_needs_sudo(writable) is True
     _activate('sudoless')
     assert path_needs_sudo(root_only) is False
+
+
+def test_file_write_privilege_decisions(tmp_path: Path) -> None:
+    _activate('auto')
+    locked = tmp_path / 'root-owned.qcow2'
+    locked.write_bytes(b'')
+    locked.chmod(0o444)
+    # The parent directory is writable, so the directory-based predicate
+    # says no sudo — but an in-place write to the file itself must escalate.
+    assert path_needs_sudo(locked) is False
+    assert user_can_write_file(locked) is False
+    assert file_write_needs_sudo(locked) is True
+    writable = tmp_path / 'mine.qcow2'
+    writable.write_bytes(b'')
+    assert user_can_write_file(writable) is True
+    assert file_write_needs_sudo(writable) is False
+    # A missing target falls back to the directory-based check.
+    missing = tmp_path / 'not-yet.qcow2'
+    assert file_write_needs_sudo(missing) is False
+    _activate('sudo')
+    assert file_write_needs_sudo(writable) is True
+    _activate('sudoless')
+    assert file_write_needs_sudo(locked) is False
 
 
 def test_sudoless_manager_rejects_sudo_commands(

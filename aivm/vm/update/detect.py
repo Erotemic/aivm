@@ -157,8 +157,11 @@ def _vm_update_drift(
     )
     if cur_disk is None:
         sudo_confirmed = True
+        # qemu-img reads the image file directly; libvirt-group access
+        # (virsh_needs_sudo) is irrelevant here, so escalate outright and
+        # let _qemu_img_virtual_size_bytes gate on sudo_allowed().
         cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
-            disk_path, use_sudo=virsh_needs_sudo()
+            disk_path, use_sudo=True
         )
     if cur_disk is None:
         if (
