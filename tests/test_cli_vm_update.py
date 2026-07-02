@@ -170,6 +170,31 @@ def test_apply_vm_update_cpu_drift_requires_hard_cycle() -> None:
     assert kind == RestartKind.HARD
 
 
+def test_apply_vm_update_cpu_grow_raises_maximum_first(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """setvcpus rejects counts above the persistent <vcpu> maximum, so the
+    maximum must be raised before the count (mirrors setmaxmem/setmem).
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-cpu'
+    drift = VMUpdateDrift(cpus=(8, 14))
+    commands: list[list[str]] = []
+
+    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
+        del kwargs
+        commands.append(list(cmd))
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.vm.update.apply.CommandManager.run', fake_run)
+    _apply_vm_update(cfg, drift, dry_run=False)
+    prefix = ['virsh', '-c', 'qemu:///system']
+    assert commands == [
+        prefix + ['setvcpus', 'vm-cpu', '14', '--maximum', '--config'],
+        prefix + ['setvcpus', 'vm-cpu', '14', '--config'],
+    ]
+
+
 def test_apply_vm_update_ram_drift_requires_hard_cycle() -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-ram'

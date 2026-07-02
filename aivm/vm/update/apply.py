@@ -56,13 +56,19 @@ def _apply_vm_update(
     # TODO: Should we check for network config drift here too?
     if drift.cpus is not None:
         _, want = drift.cpus
+        # setvcpus rejects counts above the persistent <vcpu> maximum, so
+        # raise the maximum first (mirrors setmaxmem before setmem below).
+        max_cmd = virsh_system_cmd(
+            'setvcpus', cfg.vm.name, str(want), '--maximum', '--config'
+        )
         cmd = virsh_system_cmd('setvcpus', cfg.vm.name, str(want), '--config')
         if dry_run:
+            print(f'DRYRUN: {" ".join(max_cmd)}')
             print(f'DRYRUN: {" ".join(cmd)}')
         else:
-            CommandManager.current().run(
-                cmd, sudo=virsh_needs_sudo(), check=True, capture=True
-            )
+            mgr = CommandManager.current()
+            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            mgr.run(cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
             print(f'Updated CPU count to {want}.')
         changed = True
         # --config writes the persistent XML only; live qemu keeps the old
