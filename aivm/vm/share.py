@@ -30,6 +30,7 @@ from ..runtime import (
     virsh_domain_missing,
 )
 from ..util import CmdError
+from ..xmlutil import parse_domain_xml
 from .connectivity import ssh_port_for
 
 log = logger
@@ -246,11 +247,8 @@ def vm_has_virtiofs_shared_memory(
         summary=f'Inspect VM shared-memory backing for {cfg.vm.name}',
         detail='Read domain XML to verify memfd/shared backing for virtiofs.',
     )
-    if not xml_text:
-        return None
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return None
     mb = root.find('.//memoryBacking')
     if mb is None:
@@ -274,11 +272,8 @@ def vm_has_share(
         summary=f'Inspect VM filesystem mappings for {cfg.vm.name}',
         detail='Read domain XML to look for the requested virtiofs source/tag pair.',
     )
-    if not xml_text:
-        return False
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return False
     want_src = str(Path(source_dir).resolve())
     want_tag = tag
@@ -304,11 +299,8 @@ def vm_share_mappings(
         summary=f'Inspect VM virtiofs mappings for {cfg.vm.name}',
         detail='Read domain XML to enumerate current virtiofs source/tag mappings.',
     )
-    if not xml_text:
-        return []
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return []
     mappings: list[tuple[str, str]] = []
     for fs in root.findall('.//devices/filesystem'):

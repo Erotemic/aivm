@@ -11,6 +11,7 @@ from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
+from ...xmlutil import parse_domain_xml
 from .. import virtiofsd_wrapper
 from .models import VirtiofsBinaryDrift, VMUpdateDrift
 
@@ -36,11 +37,8 @@ def _virtiofs_binary_drift(
         virtiofsd_wrapper.desired_binary_path(cfg.paths.base_dir, mode) or ''
     )
 
-    if not dumpxml_text:
-        return mode, ()
-    try:
-        root = ET.fromstring(dumpxml_text)
-    except ET.ParseError:
+    root = parse_domain_xml(dumpxml_text)
+    if root is None:
         return mode, ()
 
     drift: list[VirtiofsBinaryDrift] = []

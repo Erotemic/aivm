@@ -6,7 +6,6 @@ restricted" behavior unless caller config loosens/tightens policy.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeGuard
 
@@ -17,6 +16,7 @@ from .config import AgentVMConfig
 from .errors import AIVMError
 from .privilege import require_sudo_allowed, sudo_allowed
 from .runtime import virsh_cmd
+from .xmlutil import parse_domain_xml
 
 JsonObj: TypeAlias = Mapping[str, object]
 
@@ -81,9 +81,8 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
         )
     if res.code != 0 or not (res.stdout or '').strip():
         return bridge, gateway
-    try:
-        root = ET.fromstring(res.stdout)
-    except Exception:
+    root = parse_domain_xml(res.stdout)
+    if root is None:
         return bridge, gateway
     br_node = root.find('./bridge')
     ip_node = root.find('./ip')

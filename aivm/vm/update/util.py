@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-import xml.etree.ElementTree as ET
+
+from ...xmlutil import parse_domain_xml
 
 
 def _bytes_to_gib(size_bytes: int) -> float:
@@ -23,9 +24,8 @@ def _parse_qemu_img_virtual_size(info_json: str) -> int | None:
 
 
 def _parse_vm_disk_path_from_dumpxml(dumpxml_text: str) -> str | None:
-    try:
-        root = ET.fromstring(dumpxml_text)
-    except ET.ParseError:
+    root = parse_domain_xml(dumpxml_text)
+    if root is None:
         return None
     devices = root.find('devices')
     if devices is None:
@@ -43,9 +43,8 @@ def _parse_vm_disk_path_from_dumpxml(dumpxml_text: str) -> str | None:
 
 
 def _parse_vm_network_from_dumpxml(dumpxml_text: str) -> str | None:
-    try:
-        root = ET.fromstring(dumpxml_text)
-    except ET.ParseError:
+    root = parse_domain_xml(dumpxml_text)
+    if root is None:
         return None
     devices = root.find('devices')
     if devices is None:
