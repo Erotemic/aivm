@@ -51,6 +51,7 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
         lines.append('')
     for section in (
         'vm',
+        'runtime',
         'network',
         'firewall',
         'image',
@@ -128,7 +129,7 @@ def render_store_toml(
         verbosity = int(d.get('verbosity', 1))
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
-        for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
+        for section in ('vm', 'runtime', 'image', 'provision', 'paths', 'virtiofs'):
             body = d.get(section, {})
             if not isinstance(body, dict):
                 continue
@@ -230,7 +231,7 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     verbosity = int(d.get('verbosity', 1))
     if verbosity != 1:
         lines.append(f'verbosity = {verbosity}')
-    for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
+    for section in ('vm', 'runtime', 'image', 'provision', 'paths', 'virtiofs'):
         body = d.get(section, {})
         if not isinstance(body, dict):
             continue

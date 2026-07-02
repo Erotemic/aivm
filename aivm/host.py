@@ -29,9 +29,25 @@ REQUIRED_CMDS = [
 ]
 OPTIONAL_CMDS = ['nft', 'ssh-keyscan', 'setfacl']
 
+#: Session-runtime swaps: dnsmasq only serves the managed system network,
+#: and passt provides session user-mode networking in its place.
+SESSION_ONLY_CMDS = ['passt']
+SYSTEM_ONLY_CMDS = ['dnsmasq']
+
+
+def required_commands() -> list[str]:
+    """Return the required host commands for the active runtime."""
+    from .runtime import runtime_is_session
+
+    if runtime_is_session():
+        return [
+            c for c in REQUIRED_CMDS if c not in SYSTEM_ONLY_CMDS
+        ] + SESSION_ONLY_CMDS
+    return list(REQUIRED_CMDS)
+
 
 def check_commands() -> tuple[list[str], list[str]]:
-    missing = [c for c in REQUIRED_CMDS if which(c) is None]
+    missing = [c for c in required_commands() if which(c) is None]
     missing_opt = [c for c in OPTIONAL_CMDS if which(c) is None]
     return missing, missing_opt
 

@@ -177,6 +177,49 @@ class PathsConfig:
     ssh_pubkey_path: str = ''
 
 
+#: Default user-owned VM storage tree for the session runtime.
+SESSION_DEFAULT_BASE_DIR = '~/.local/share/aivm'
+
+
+@dataclass
+class RuntimeConfig:
+    """Which libvirt runtime a VM binds to.
+
+    ``mode``:
+
+    * ``'system'``  -- privileged system daemon (``qemu:///system``):
+      managed NAT network, shared storage under ``/var/lib/libvirt/aivm``,
+      optional nftables firewall. The classic default.
+    * ``'session'`` -- per-user daemon (``qemu:///session``): fully
+      rootless. User-owned storage, user-mode passt networking with a
+      forwarded localhost SSH port, no managed network, no firewall, and
+      a structural never-sudo guarantee (session forces
+      ``behavior.privilege_mode='sudoless'``).
+
+    The runtime is a per-VM property: a session VM and a system VM can
+    coexist in one config store with distinct URIs, storage, and
+    connectivity records. Changing the mode of an existing VM is not a
+    migration -- recreate the VM instead.
+    """
+
+    mode: str = 'system'
+
+
+def apply_session_runtime_defaults(cfg: 'AgentVMConfig') -> None:
+    """Adjust config defaults that differ under the session runtime.
+
+    A session VM cannot use the system-mode storage default (root-owned
+    ``/var/lib/libvirt/aivm``), so a still-default ``paths.base_dir`` is
+    re-pointed at the user-owned session tree. Explicitly configured
+    paths are respected as-is.
+    """
+    if str(cfg.runtime.mode or '').strip().lower() != 'session':
+        return
+    default_base = expand(PathsConfig().base_dir)
+    if expand(cfg.paths.base_dir) == default_base:
+        cfg.paths.base_dir = SESSION_DEFAULT_BASE_DIR
+
+
 @dataclass
 class BehaviorConfig:
     yes_sudo: bool = False
@@ -228,6 +271,7 @@ class VirtiofsConfig:
 @dataclass
 class AgentVMConfig:
     vm: VMConfig = field(default_factory=VMConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
     image: ImageConfig = field(default_factory=ImageConfig)
@@ -288,6 +332,7 @@ def load(path: Path) -> AgentVMConfig:
     cfg = AgentVMConfig()
     for section in (
         'vm',
+        'runtime',
         'network',
         'firewall',
         'image',

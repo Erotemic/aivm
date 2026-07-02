@@ -65,6 +65,38 @@ virtiofs); the ``persistent`` and ``shared-root`` modes rely on host bind
 mounts, which require root. The default ``auto`` mode needs no setup ceremony:
 it simply stops using sudo for whatever already works without it.
 
+Optional: rootless session runtime
+----------------------------------
+
+Sudoless still uses the root *system* libvirt daemon (the ``libvirt`` group
+is effectively root-equivalent). For truly rootless VMs on the per-user
+``qemu:///session`` daemon:
+
+.. code-block:: bash
+
+   aivm host rootless check    # /dev/kvm access, session libvirt, passt, storage
+   aivm host rootless setup    # kvm group (sudo used at most once) + defaults
+   aivm vm create              # new VMs land on qemu:///session
+   aivm ssh .
+
+Setup adds you to the ``kvm`` group (the one privileged step; log out and
+back in afterwards), points default VM storage at a user-owned tree
+(``~/.local/share/aivm``), persists ``runtime.mode = "session"`` in the
+defaults, and forces sudoless. Session VMs use passt user-mode networking:
+guest SSH is forwarded to a persisted localhost port (shown by
+``aivm status``), there is no managed network or nftables firewall, and
+folder attachments currently support ``--mode git`` only.
+
+.. note::
+
+   Ubuntu 24.04's stock AppArmor profile for passt breaks libvirt-launched
+   passt (mmap of its own binary and the pid file under ``/run/user`` are
+   denied). If ``aivm vm create`` reports a passt failure, add
+   ``/usr/bin/passt{,.avx2} mr,`` and
+   ``owner /run/user/[0-9]*/libvirt/qemu/run/passt/* rw,`` to the profile in
+   ``/etc/apparmor.d/usr.bin.passt`` and reload it with
+   ``sudo apparmor_parser -r /etc/apparmor.d/usr.bin.passt``.
+
 Notes
 -----
 

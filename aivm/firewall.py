@@ -15,7 +15,7 @@ from loguru import logger
 from .commands import CommandManager
 from .privilege import require_sudo_allowed, sudo_allowed
 from .config import AgentVMConfig
-from .runtime import virsh_system_cmd
+from .runtime import virsh_cmd
 
 JsonObj: TypeAlias = Mapping[str, object]
 
@@ -60,7 +60,7 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
             approval_scope=f'network-xml:{cfg.network.name}',
         ):
             res = mgr.submit(
-                virsh_system_cmd('net-dumpxml', cfg.network.name),
+                virsh_cmd('net-dumpxml', cfg.network.name),
                 sudo=True,
                 role='read',
                 check=False,
@@ -70,7 +70,7 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
             )
     else:
         res = mgr.submit(
-            virsh_system_cmd('net-dumpxml', cfg.network.name),
+            virsh_cmd('net-dumpxml', cfg.network.name),
             sudo=True,
             role='read',
             check=False,

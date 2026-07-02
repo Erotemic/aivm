@@ -9,7 +9,7 @@ from pathlib import Path
 from ...commands import CommandManager
 from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
-from ...runtime import virsh_system_cmd
+from ...runtime import virsh_cmd
 from .. import virtiofsd_wrapper
 from .models import VirtiofsBinaryDrift, VMUpdateDrift
 
@@ -103,7 +103,7 @@ def _apply_virtiofs_binary_drift(
         return True
 
     dumpxml = mgr.run(
-        virsh_system_cmd('dumpxml', cfg.vm.name),
+        virsh_cmd('dumpxml', cfg.vm.name),
         sudo=virsh_needs_sudo(),
         check=True,
         capture=True,
@@ -153,7 +153,7 @@ def _apply_virtiofs_binary_drift(
         tmp = f.name
     try:
         mgr.run(
-            virsh_system_cmd('define', tmp),
+            virsh_cmd('define', tmp),
             sudo=virsh_needs_sudo(),
             check=True,
             capture=True,

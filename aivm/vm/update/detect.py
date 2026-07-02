@@ -7,7 +7,7 @@ from pathlib import Path
 from ...commands import CommandManager
 from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...config import AgentVMConfig
-from ...runtime import virsh_system_cmd
+from ...runtime import virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
 from .models import VMUpdateDrift
 from .util import (
@@ -31,7 +31,7 @@ def _resolve_vm_disk_path(
         / f'{cfg.vm.name}.qcow2'
     )
     res = CommandManager.current().run(
-        virsh_system_cmd('dumpxml', cfg.vm.name),
+        virsh_cmd('dumpxml', cfg.vm.name),
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -69,7 +69,7 @@ def _virsh_domblk_capacity_bytes(
     cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
 ) -> int | None:
     res = CommandManager.current().run(
-        virsh_system_cmd('domblkinfo', cfg.vm.name, path_or_target),
+        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target),
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -94,7 +94,7 @@ def _vm_update_drift(
     notes: list[str] = []
     mgr = CommandManager.current()
     dominfo = mgr.run(
-        virsh_system_cmd('dominfo', cfg.vm.name),
+        virsh_cmd('dominfo', cfg.vm.name),
         sudo=False,
         check=False,
         capture=True,
@@ -102,7 +102,7 @@ def _vm_update_drift(
     )
     if dominfo.code != 0:
         dominfo = mgr.run(
-            virsh_system_cmd('dominfo', cfg.vm.name),
+            virsh_cmd('dominfo', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             check=False,
             capture=True,
@@ -126,14 +126,14 @@ def _vm_update_drift(
     )
 
     state_res = mgr.run(
-        virsh_system_cmd('domstate', cfg.vm.name),
+        virsh_cmd('domstate', cfg.vm.name),
         sudo=False,
         check=False,
         capture=True,
     )
     if state_res.code != 0:
         state_res = mgr.run(
-            virsh_system_cmd('domstate', cfg.vm.name),
+            virsh_cmd('domstate', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             check=False,
             capture=True,
@@ -191,7 +191,7 @@ def _vm_update_drift(
         notes.append(f'Could not determine disk size from {disk_path}.')
 
     xml = mgr.run(
-        virsh_system_cmd('dumpxml', cfg.vm.name),
+        virsh_cmd('dumpxml', cfg.vm.name),
         sudo=False,
         check=False,
         capture=True,
@@ -200,7 +200,7 @@ def _vm_update_drift(
     if xml.code != 0:
         sudo_confirmed = True
         xml = mgr.run(
-            virsh_system_cmd('dumpxml', cfg.vm.name),
+            virsh_cmd('dumpxml', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             check=False,
             capture=True,

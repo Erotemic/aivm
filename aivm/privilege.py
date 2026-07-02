@@ -53,7 +53,7 @@ from loguru import logger
 
 from .commands import CommandManager
 from .errors import SudolessModeError
-from .runtime import virsh_system_cmd
+from .runtime import virsh_cmd
 
 log = logger
 
@@ -106,7 +106,7 @@ def libvirt_unprivileged_ok() -> bool:
     mgr.plan_stack = []
     try:
         res = mgr.run(
-            virsh_system_cmd('list', '--name'),
+            virsh_cmd('list', '--name'),
             sudo=False,
             role='read',
             check=False,

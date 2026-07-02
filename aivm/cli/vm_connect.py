@@ -17,7 +17,7 @@ from ..commands import CommandManager, shell_join
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..config import default_host_label
 from ..util import which
-from ..vm import wait_for_ip
+from ..vm import ssh_port_for, wait_for_ip
 from ..vm import ssh_config as mk_ssh_config
 from ._common import _BaseCommand, _load_cfg, log
 
@@ -144,7 +144,7 @@ def _start_remote_tunnel_session(
     remote = _build_tunnel_remote_script(guest_path, tunnel_name)
     cmd = [
         'ssh',
-        *ssh_base_args(ident),
+        *ssh_base_args(ident, port=ssh_port_for(cfg)),
         f'{cfg.vm.user}@{ip}',
         remote,
     ]
@@ -167,7 +167,7 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
     cmd = [
         'ssh',
         '-t',
-        *ssh_base_args(ident),
+        *ssh_base_args(ident, port=ssh_port_for(cfg)),
         f'{cfg.vm.user}@{ip}',
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
@@ -460,7 +460,11 @@ class VMSSHCLI(_BaseCommand):
             [
                 'ssh',
                 '-t',
-                *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+                *ssh_base_args(
+                    ident,
+                    strict_host_key_checking='accept-new',
+                    port=ssh_port_for(cfg),
+                ),
                 f'{cfg.vm.user}@{ip}',
                 remote_cmd,
             ],

@@ -9,6 +9,7 @@ from loguru import logger as log
 
 from ..config import AgentVMConfig
 from ..privilege import require_sudo_allowed, sudo_allowed
+from ..runtime import require_system_runtime, runtime_is_session
 from ..config_store import find_attachment_for_vm, load_store
 from ..vm.share import (
     AttachmentAccess,
@@ -218,7 +219,12 @@ def _resolve_attachment(
     source_dir = str(host_src.resolve())
     guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
     tag = _ensure_share_tag_len('', host_src, set())
-    if not mode_opt and not sudo_allowed():
+    if not mode_opt and runtime_is_session():
+        # Session VMs cannot mount host folders at all yet: libvirt-managed
+        # virtiofsd needs the system daemon, and bind-mount modes need root.
+        # Git sync is the one transport that works everywhere.
+        mode = _normalize_attachment_mode(ATTACHMENT_MODE_GIT)
+    elif not mode_opt and not sudo_allowed():
         # The default persistent mode relies on host bind mounts, which
         # need root; sudoless attachments default to direct virtiofs.
         mode = _normalize_attachment_mode(ATTACHMENT_MODE_SHARED)
@@ -267,6 +273,20 @@ def _resolve_attachment(
             'Read-only attachments are currently only implemented for '
             f"'{ATTACHMENT_MODE_SHARED}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
             f'Requested mode: {mode}'
+        )
+    if mode != ATTACHMENT_MODE_GIT:
+        require_system_runtime(
+            feature=f"The '{mode}' attachment mode",
+            hint=(
+                'Session-runtime VMs currently support only git-mode '
+                'attachments: virtiofs sharing needs the system libvirt '
+                'daemon (or a future unprivileged virtiofsd backend), and '
+                'bind-mount modes need root. Existing attachments keep '
+                'their saved mode, so detach first:\n'
+                f'  aivm detach {host_src}\n'
+                f'  aivm attach {host_src} --mode git\n'
+                "Or use a VM with runtime.mode = 'system'."
+            ),
         )
     if mode in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}:
         require_sudo_allowed(

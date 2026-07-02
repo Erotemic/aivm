@@ -69,6 +69,12 @@ Host boundary (trusted):
   libvirt daemon lets a principal run arbitrary configuration as root.
   Sudoless mode is therefore a *no-sudo-invocation* guarantee (``aivm``
   never executes ``sudo``), not a reduced-privilege guarantee.
+* The session runtime (``runtime.mode = "session"``) removes that grant
+  entirely: VMs run on the per-user ``qemu:///session`` daemon, QEMU runs
+  as the invoking user, and the only host privilege involved is ``kvm``
+  group membership (read/write on ``/dev/kvm``, which is not
+  root-equivalent). This is the strongest host-privilege posture ``aivm``
+  offers; the trade-offs are listed under Residual risk below.
 
 Guest boundary (untrusted):
 
@@ -298,6 +304,15 @@ The current ``aivm`` security posture is intentionally pragmatic:
   when group membership means they no longer need sudo. Destructive
   operations never become promptless because escalation stopped being
   necessary.
+* The session runtime (``runtime.mode = "session"``) eliminates the
+  root-equivalent libvirt-group grant, but has no managed network and no
+  nftables isolation at all: guests get whatever connectivity the passt
+  user-mode backend provides (WAN egress plus, via NAT, whatever the host
+  user can reach). Host exposure is minimized — no root daemon, user-owned
+  storage, a single forwarded localhost SSH port — while guest *egress*
+  confinement is weaker than a firewalled system-runtime VM. Session
+  activation also structurally forces sudoless, so the never-sudo
+  guarantee is enforced at the command chokepoint, not by convention.
 * Long-lived virtiofs-backed shares have a known file-descriptor growth/retention
   failure mode that has been mitigated through persistent replay and better
   cleanup paths, but not solved.

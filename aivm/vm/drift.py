@@ -22,7 +22,7 @@ from pathlib import Path
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..firewall import read_firewall_tcp_ports
-from ..runtime import virsh_system_cmd
+from ..runtime import virsh_cmd
 from ..config_store import Store, find_attachments_for_vm
 from ..privilege import sudo_allowed, virsh_needs_sudo
 from .paths import persistent_root_host_dir, shared_root_host_dir
@@ -202,7 +202,7 @@ def read_actual_vm_hardware(
         error_type is one of: 'not_found', 'permission', 'other', or '' on success.
         error_detail contains the raw error message.
     """
-    cmd = virsh_system_cmd('dominfo', cfg.vm.name)
+    cmd = virsh_cmd('dominfo', cfg.vm.name)
     res = CommandManager.current().run(
         cmd, sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
     )

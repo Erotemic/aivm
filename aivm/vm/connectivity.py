@@ -10,11 +10,36 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..privilege import virsh_needs_sudo
-from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..runtime import (
+    require_ssh_identity,
+    runtime_is_session,
+    ssh_base_args,
+    virsh_cmd,
+)
 from ..util import ensure_dir
 from .paths import _paths
+from .ports import SSH_FORWARD_HOST, read_ssh_forward_port
 
 log = logger
+
+def ssh_port_for(cfg: AgentVMConfig, *, strict: bool = True) -> int | None:
+    """Return the TCP port SSH-shaped operations must use for this VM.
+
+    System-runtime VMs listen on the guest IP's standard port 22. Session
+    VMs are reached through the persisted passt-forwarded localhost port.
+    With ``strict=False`` a missing session port yields ``None`` (useful
+    for best-effort probes that should report not-ready, not crash).
+    """
+    if not runtime_is_session():
+        return 22
+    port = read_ssh_forward_port(cfg)
+    if port is None and strict:
+        raise RuntimeError(
+            f'No SSH forward port is recorded for session VM {cfg.vm.name}. '
+            'The port is allocated at create time; run `aivm vm up` (or '
+            '`aivm vm create`) first.'
+        )
+    return port
 
 def _mac_for_vm(cfg: AgentVMConfig) -> str:
     mgr = CommandManager.current()
@@ -28,7 +53,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             approval_scope=f'vm-network-interfaces:{cfg.vm.name}',
         ):
             res = mgr.submit(
-                virsh_system_cmd('domiflist', cfg.vm.name),
+                virsh_cmd('domiflist', cfg.vm.name),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -38,7 +63,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             ).result()
     else:
         res = mgr.run(
-            virsh_system_cmd('domiflist', cfg.vm.name),
+            virsh_cmd('domiflist', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
@@ -72,6 +97,20 @@ def wait_for_ip(
     if dry_run:
         log.info('DRYRUN: wait for IP and write {}', ip_file)
         return '0.0.0.0'
+    if runtime_is_session():
+        # Session VMs have no managed network and no lease table to poll:
+        # passt NATs the guest and forwards SSH to a persisted localhost
+        # port. The loopback endpoint is knowable immediately; SSH
+        # readiness (wait_for_ssh) is the real boot signal.
+        ensure_dir(p['state_dir'])
+        log.info('Writing VM IP cache to {}', ip_file)
+        ip_file.write_text(SSH_FORWARD_HOST + '\n', encoding='utf-8')
+        log.info(
+            'Session VM endpoint: {}:{} (passt user-mode networking)',
+            SSH_FORWARD_HOST,
+            read_ssh_forward_port(cfg) or 'unallocated',
+        )
+        return SSH_FORWARD_HOST
     ensure_dir(p['state_dir'])
     mac = _mac_for_vm(cfg)
     cached_ip = get_ip_cached(cfg)
@@ -104,7 +143,7 @@ def wait_for_ip(
             domif_text = ''
             if mac:
                 lease_text = mgr.run(
-                    virsh_system_cmd('net-dhcp-leases', cfg.network.name),
+                    virsh_cmd('net-dhcp-leases', cfg.network.name),
                     sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
@@ -122,7 +161,7 @@ def wait_for_ip(
                         break
             if not ip:
                 domif_text = mgr.run(
-                    virsh_system_cmd('domifaddr', cfg.vm.name),
+                    virsh_cmd('domifaddr', cfg.vm.name),
                     sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
@@ -172,7 +211,7 @@ def wait_for_ip(
             now = time.time()
             if now >= next_status_at:
                 st = mgr.run(
-                    virsh_system_cmd('domstate', cfg.vm.name),
+                    virsh_cmd('domstate', cfg.vm.name),
                     sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
@@ -225,11 +264,18 @@ def wait_for_ip(
 
 def ssh_config(cfg: AgentVMConfig) -> str:
     cfg = cfg.expanded_paths()
-    ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
     ident = cfg.paths.ssh_identity_file or '~/.ssh/id_ed25519'
     host = cfg.vm.name
+    port_line = ''
+    if runtime_is_session():
+        ip = SSH_FORWARD_HOST
+        port = read_ssh_forward_port(cfg)
+        if port is not None:
+            port_line = f'\n  Port {port}'
+    else:
+        ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
     return f"""Host {host}
-  HostName {ip}
+  HostName {ip}{port_line}
   User {cfg.vm.user}
   IdentityFile {ident}
   IdentitiesOnly yes
@@ -280,6 +326,7 @@ def wait_for_ssh(
     # handshake to finish before declaring the guest unreachable.
     probe_timeout_s = 30
     last_stderr = ''
+    port = ssh_port_for(cfg)
     while time.time() < deadline:
         cmd = [
             'ssh',
@@ -288,6 +335,7 @@ def wait_for_ssh(
                 batch_mode=True,
                 connect_timeout=3,
                 strict_host_key_checking='accept-new',
+                port=port,
             ),
             f'{cfg.vm.user}@{ip}',
             'true',
@@ -307,4 +355,4 @@ def wait_for_ssh(
             raise RuntimeError(_ssh_host_key_mismatch_message(cfg, ip))
         time.sleep(2)
     detail = f' Last SSH error: {last_stderr}' if last_stderr else ''
-    raise TimeoutError(f'Timed out waiting for SSH on {ip}:22.{detail}')
+    raise TimeoutError(f'Timed out waiting for SSH on {ip}:{port}.{detail}')

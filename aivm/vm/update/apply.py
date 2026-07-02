@@ -6,7 +6,7 @@ from ...commands import CommandError, CommandManager
 from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...config import AgentVMConfig
 from ...errors import AIVMError
-from ...runtime import virsh_system_cmd
+from ...runtime import virsh_cmd
 from .fdguard import _apply_fdguard_drift
 from .models import RestartKind, VMUpdateDrift, _escalate
 from .util import _bytes_to_gib
@@ -59,10 +59,10 @@ def _apply_vm_update(
         _, want = drift.cpus
         # setvcpus rejects counts above the persistent <vcpu> maximum, so
         # raise the maximum first (mirrors setmaxmem before setmem below).
-        max_cmd = virsh_system_cmd(
+        max_cmd = virsh_cmd(
             'setvcpus', cfg.vm.name, str(want), '--maximum', '--config'
         )
-        cmd = virsh_system_cmd('setvcpus', cfg.vm.name, str(want), '--config')
+        cmd = virsh_cmd('setvcpus', cfg.vm.name, str(want), '--config')
         if dry_run:
             print(f'DRYRUN: {" ".join(max_cmd)}')
             print(f'DRYRUN: {" ".join(cmd)}')
@@ -79,10 +79,10 @@ def _apply_vm_update(
     if drift.ram_mb is not None:
         _, want = drift.ram_mb
         kib = int(want) * 1024
-        max_cmd = virsh_system_cmd(
+        max_cmd = virsh_cmd(
             'setmaxmem', cfg.vm.name, str(kib), '--config'
         )
-        mem_cmd = virsh_system_cmd('setmem', cfg.vm.name, str(kib), '--config')
+        mem_cmd = virsh_cmd('setmem', cfg.vm.name, str(kib), '--config')
         if dry_run:
             print(f'DRYRUN: {" ".join(max_cmd)}')
             print(f'DRYRUN: {" ".join(mem_cmd)}')

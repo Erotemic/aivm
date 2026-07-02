@@ -23,6 +23,7 @@ from ..privilege import sudo_allowed
 from ..config import AgentVMConfig
 from ..firewall import apply_firewall
 from ..net import ensure_network
+from ..runtime import runtime_is_session
 from ..status import (
     probe_firewall,
     probe_network,
@@ -513,10 +514,10 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
         True if the VM is running, False if not defined/running,
         None if the probe is inconclusive (e.g., permission denied).
     """
-    from ..runtime import virsh_system_cmd
+    from ..runtime import virsh_cmd
 
     res = CommandManager.current().run(
-        virsh_system_cmd('domstate', vm_name),
+        virsh_cmd('domstate', vm_name),
         sudo=False,
         check=False,
         capture=True,
@@ -565,8 +566,14 @@ def _reconcile_attached_vm(
             else None
         )
 
-        net_probe = probe_network(cfg, use_sudo=False).ok
-        need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
+        if runtime_is_session():
+            # Session VMs use passt user-mode networking: there is no
+            # managed libvirt network to probe/ensure and no root
+            # nftables firewall to reconcile.
+            need_network_ensure = False
+        else:
+            net_probe = probe_network(cfg, use_sudo=False).ok
+            need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
         if need_network_ensure:
             ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
@@ -575,6 +582,7 @@ def _reconcile_attached_vm(
             cfg.firewall.enabled
             and policy.ensure_firewall_opt
             and (not cached_ssh_ok)
+            and not runtime_is_session()
         ):
             if not sudo_allowed():
                 log.warning(

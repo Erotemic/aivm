@@ -20,6 +20,19 @@ def _fresh_command_manager() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_runtime_mode() -> None:
+    """Reset the context-local runtime mode to the system default.
+
+    ``activate_runtime('session')`` is context-global like the command
+    manager; a session-runtime test must not leak session URIs into later
+    tests that assert classic qemu:///system command shapes.
+    """
+    from aivm.runtime import _CURRENT_RUNTIME_MODE
+
+    _CURRENT_RUNTIME_MODE.set('system')
+
+
+@pytest.fixture(autouse=True)
 def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     """Pin the sudoless capability probe to "unavailable" by default.
 

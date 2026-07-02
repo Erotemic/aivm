@@ -14,6 +14,7 @@ from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
 from ..vm import ensure_share_mounted
+from ..vm import ssh_port_for
 from ..vm import ssh_config as mk_ssh_config
 from ..vm.share import ResolvedAttachment
 from .persistent import _prepare_persistent_attachment_host_and_vm
@@ -83,7 +84,11 @@ def _ensure_guest_symlink(
     )
     cmd = [
         'ssh',
-        *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+            port=ssh_port_for(cfg),
+        ),
         f'{cfg.vm.user}@{ip}',
         script,
     ]

@@ -452,3 +452,56 @@ variant?") is now answered: that is exactly `privilege_mode` on the
 existing system runtime, orthogonal to `runtime.mode`. The two axes stay
 separate: runtime = which hypervisor/daemon identity, privilege_mode = how
 host commands escalate.
+
+## Implementation status (2026-07-02, later the same day)
+
+The first milestone above is **implemented and verified live** (full
+lifecycle e2e on a session VM: create on `qemu:///session`, passt SSH
+forward, status, ssh, delete — with zero sudo and zero system-daemon
+contact). Anchors:
+
+* Runtime axis: `RuntimeConfig` in `aivm/config.py` (`runtime.mode`,
+  per-VM; `[defaults.runtime]` supported); activation in
+  `aivm/cli/_common.py::_activate_cfg_runtime` → `aivm/runtime.py::
+  activate_runtime` (context-var; session forces
+  `privilege_mode='sudoless'` on the active CommandManager).
+* URI selection: `aivm/runtime.py::virsh_cmd` / `current_libvirt_uri()`;
+  every former `virsh_system_cmd` call site migrated. `virt-install`
+  argv built by `aivm/vm/create.py::build_virt_install_cmd` (unit-tested
+  for both runtimes).
+* Networking: passt `<interface type='user'><backend type='passt'>` with
+  `<portForward>` built via virt-install per-device xpath overrides
+  (virt-install 4.1 has no first-class suboptions). Forward-port
+  allocation/persistence in `aivm/vm/ports.py` (deterministic from VM
+  name, collision-probed, stored in the state dir). Connectivity split in
+  `aivm/vm/connectivity.py` (`ssh_port_for`, session `wait_for_ip`
+  returns `127.0.0.1` immediately; `wait_for_ssh` is the boot signal);
+  `ssh_base_args(port=...)` threaded through every SSH-shaped call site;
+  the generated `~/.ssh/config` block gains `Port`, which also covers
+  git-mode remotes.
+* Gating: attachments default to git and reject the rest in session mode
+  (`aivm/attachments/resolve.py`); create/reconcile skip
+  network+firewall; `aivm host net create` refuses in session-only
+  stores; status reports runtime mode + forwarded endpoint and marks
+  network/firewall not-applicable.
+* Preflights: `aivm host rootless check|setup` (`aivm/cli/host_rootless.py`).
+* Tests: `tests/test_session_runtime.py` (unit),
+  `tests/test_e2e_session.py` (live lifecycle; needs kvm group + passt
+  only).
+
+Field notes from the live run (Ubuntu 24.04 guest, nested KVM):
+
+* Ubuntu 24.04's `usr.bin.passt` AppArmor profile breaks libvirt-launched
+  passt twice: `file_mmap` of its own binary is denied (passt then
+  SIGSEGVs) and the pid file under `/run/user/*/libvirt/qemu/run/passt/`
+  is denied. `create_or_start_vm` now classifies both into an actionable
+  error; the quickstart documents the profile fix.
+* A session libvirt daemon spawned *before* the user gained `/dev/kvm`
+  access caches no-KVM capabilities; `--cpu host-passthrough` then fails
+  on the TCG fallback. Also classified with guidance (restart the user
+  daemon, drop `~/.cache/libvirt/qemu/capabilities`).
+
+Remaining from this design (tracked, not blocking): rootless `shared`
+attachments via an externally-managed unprivileged virtiofsd
+(external-virtiofsd.md), and `aivm host doctor` absorbing the rootless
+preflights.

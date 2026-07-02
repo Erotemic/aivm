@@ -21,6 +21,7 @@ def _cfg_from_dict(raw: dict[str, object]) -> AgentVMConfig:
     cfg = AgentVMConfig()
     for section in (
         'vm',
+        'runtime',
         'network',
         'firewall',
         'image',

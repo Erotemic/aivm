@@ -1,6 +1,6 @@
 # AIVM Roadmap (design-doc index)
 
-Updated: 2026-07-02 (post `dev/sudoless` branch)
+Updated: 2026-07-02 (post session-runtime implementation)
 
 This directory holds forward-looking design documents. This file is the
 index: what each doc covers, its current status, and the recommended
@@ -13,7 +13,7 @@ commit), decided design, step-by-step plan, tests, and acceptance criteria.
 
 | # | Effort | Doc | Status |
 |---|--------|-----|--------|
-| 1 | Rootless VMs (`qemu:///session` runtime) | [rootless-vms.md](rootless-vms.md) | Design complete; prerequisites ~half done (see its Status Update section) |
+| 1 | Rootless VMs (`qemu:///session` runtime) | [rootless-vms.md](rootless-vms.md) | **First milestone implemented + verified live** (see its Implementation Status section); rootless `shared` attachments await effort 2 |
 | 2 | Externally-managed virtiofsd backend | [external-virtiofsd.md](external-virtiofsd.md) | Designed here; not started |
 | 3 | Egress allowlist networking | [egress-allowlist.md](egress-allowlist.md) | Designed here; not started |
 | 4 | Snapshots, rollback, ephemeral clones | [snapshots-and-clones.md](snapshots-and-clones.md) | Designed here; not started |

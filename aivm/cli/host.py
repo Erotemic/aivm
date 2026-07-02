@@ -24,6 +24,7 @@ from ._common import (
     _resolve_cfg_fallback,
 )
 from .firewall import FirewallModalCLI
+from .host_rootless import RootlessModalCLI
 from .host_sudoless import SudolessModalCLI
 from .net import NetModalCLI
 
@@ -118,3 +119,4 @@ class HostModalCLI(kwconf.ModalCLI):
     net = NetModalCLI
     fw = FirewallModalCLI
     sudoless = SudolessModalCLI
+    rootless = RootlessModalCLI

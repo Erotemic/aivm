@@ -13,8 +13,9 @@ import kwconf
 from loguru import logger
 
 from ..commands import CommandManager
-from ..config import AgentVMConfig
+from ..config import AgentVMConfig, apply_session_runtime_defaults
 from ..detect import detect_ssh_identity
+from ..runtime import activate_runtime
 from ..host import check_commands, host_is_debian_like, install_deps_debian
 from ..config_store import (
     find_attachments,
@@ -208,6 +209,20 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
         effective_verbosity,
         colorize,
     )
+
+
+def _activate_cfg_runtime(cfg: AgentVMConfig) -> AgentVMConfig:
+    """Bind the process to ``cfg``'s runtime before any command is built.
+
+    This is the single place per-VM runtime selection becomes ambient
+    state: the libvirt URI used by ``virsh_cmd``/``virt-install`` flips to
+    the configured runtime, session mode structurally forces sudoless on
+    the active CommandManager, and session-only config defaults (user-owned
+    ``paths.base_dir``) are applied.
+    """
+    apply_session_runtime_defaults(cfg)
+    activate_runtime(cfg.runtime.mode)
+    return cfg
 
 
 def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
@@ -460,7 +475,7 @@ def _load_cfg_with_path(
     rec = find_vm(reg, vm_name)
     if rec is None:
         raise RuntimeError(f'VM not found in config store: {vm_name}')
-    cfg = materialize_vm_cfg(reg, vm_name)
+    cfg = _activate_cfg_runtime(materialize_vm_cfg(reg, vm_name))
     changed = (
         _hydrate_runtime_defaults(cfg) if hydrate_runtime_defaults else False
     )

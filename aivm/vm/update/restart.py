@@ -7,7 +7,7 @@ import sys
 from ...commands import CommandManager
 from ...privilege import virsh_needs_sudo
 from ...config import AgentVMConfig
-from ...runtime import virsh_system_cmd
+from ...runtime import virsh_cmd
 from .models import RestartKind
 
 
@@ -61,7 +61,7 @@ def _maybe_restart_vm_after_update(
         return
 
     if kind == RestartKind.SOFT:
-        cmd = virsh_system_cmd('reboot', cfg.vm.name)
+        cmd = virsh_cmd('reboot', cfg.vm.name)
         if dry_run:
             print(f'DRYRUN: {" ".join(cmd)}')
         else:

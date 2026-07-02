@@ -26,8 +26,9 @@ from ..runtime import (
     require_ssh_identity,
     ssh_base_args,
     virsh_domain_missing,
-    virsh_system_cmd,
+    virsh_cmd,
 )
+from .connectivity import ssh_port_for
 from ..util import CmdError
 
 log = logger
@@ -202,7 +203,7 @@ def _dumpxml_text(
     # keeps the domain-missing stderr heuristic locale-independent.
     probe_env = {**os.environ, 'LC_ALL': 'C'}
     res = mgr.submit(
-        virsh_system_cmd('dumpxml', cfg.vm.name),
+        virsh_cmd('dumpxml', cfg.vm.name),
         sudo=False,
         role='read',
         check=False,
@@ -219,7 +220,7 @@ def _dumpxml_text(
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(
-            virsh_system_cmd('dumpxml', cfg.vm.name),
+            virsh_cmd('dumpxml', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
@@ -377,7 +378,7 @@ def attach_vm_share(
     if vm_running is None:
         state = (
             mgr.submit(
-                virsh_system_cmd('domstate', cfg.vm.name),
+                virsh_cmd('domstate', cfg.vm.name),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -391,9 +392,9 @@ def attach_vm_share(
     else:
         is_running = bool(vm_running)
     attach_cmd = (
-        virsh_system_cmd('attach-device', cfg.vm.name, tmp, '--live', '--config')
+        virsh_cmd('attach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else virsh_system_cmd('attach-device', cfg.vm.name, tmp, '--config')
+        else virsh_cmd('attach-device', cfg.vm.name, tmp, '--config')
     )
     attach_summary = (
         f'Attach virtiofs device to running VM {cfg.vm.name}'
@@ -450,7 +451,7 @@ def detach_vm_share(
     mgr = CommandManager.current()
     state = (
         mgr.run(
-            virsh_system_cmd('domstate', cfg.vm.name),
+            virsh_cmd('domstate', cfg.vm.name),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
@@ -461,9 +462,9 @@ def detach_vm_share(
     )
     is_running = 'running' in state
     detach_cmd = (
-        virsh_system_cmd('detach-device', cfg.vm.name, tmp, '--live', '--config')
+        virsh_cmd('detach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else virsh_system_cmd('detach-device', cfg.vm.name, tmp, '--config')
+        else virsh_cmd('detach-device', cfg.vm.name, tmp, '--config')
     )
     res = mgr.run(
         detach_cmd,
@@ -522,6 +523,7 @@ def ensure_share_mounted(
             strict_host_key_checking='accept-new',
             connect_timeout=5,
             batch_mode=True,
+            port=ssh_port_for(cfg),
         ),
         f'{cfg.vm.user}@{ip}',
         remote,

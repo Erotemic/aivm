@@ -11,6 +11,7 @@ from ..commands import CommandManager, shell_join
 from ..runtime import require_ssh_identity, ssh_base_args
 from ._common import _BaseCommand, _load_cfg, log
 from ..attachments.session import _resolve_ip_for_ssh_ops
+from ..vm import ssh_port_for
 
 
 _DROP_CACHES_HELP = (
@@ -152,6 +153,7 @@ class VMFlushCachesCLI(_BaseCommand):
                     strict_host_key_checking='accept-new',
                     connect_timeout=10,
                     batch_mode=True,
+                    port=ssh_port_for(cfg),
                 ),
                 f'{cfg.vm.user}@{ip}',
                 remote_command,

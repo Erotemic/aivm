@@ -44,6 +44,7 @@ from .connectivity import (
     _ssh_host_key_mismatch_message,
     get_ip_cached,
     ssh_config,
+    ssh_port_for,
     wait_for_ip,
     wait_for_ssh,
 )
@@ -125,6 +126,7 @@ __all__ = [
     'detect_host_timezone',
     'fetch_image',
     'get_ip_cached',
+    'ssh_port_for',
     'provision',
     'refresh_cloud_init_seed_for_next_boot',
     'restart_vm',

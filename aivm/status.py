@@ -17,14 +17,16 @@ from .config import AgentVMConfig
 from .host import check_commands
 from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
+    current_runtime_mode,
     require_ssh_identity,
+    runtime_is_session,
     ssh_base_args,
     virsh_domain_missing,
-    virsh_system_cmd,
+    virsh_cmd,
 )
 from .config_store import AttachmentEntry, load_store, store_path
 from .util import which
-from .vm import get_ip_cached, vm_share_mappings
+from .vm import get_ip_cached, ssh_port_for, vm_share_mappings
 from .vm.drift import saved_vm_drift_report
 from .vm.host_access import _local_stat_answer
 
@@ -195,8 +197,13 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     The raw ``net-info`` output is preserved in ``diag`` so detail rendering
     can show it without re-running the probe.
     """
+    if runtime_is_session():
+        return ProbeOutcome(
+            None,
+            'not applicable (session runtime uses passt user-mode networking)',
+        )
     info = CommandManager.current().run(
-        virsh_system_cmd('net-info', cfg.network.name),
+        virsh_cmd('net-info', cfg.network.name),
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -246,6 +253,11 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     The raw ``nft list table`` output is preserved in ``diag`` so detail
     rendering can show it without re-running the probe.
     """
+    if runtime_is_session():
+        return ProbeOutcome(
+            None,
+            'not applicable (session runtime has no root nftables firewall)',
+        )
     if not cfg.firewall.enabled:
         return ProbeOutcome(None, 'disabled in config')
     mgr = CommandManager.current()
@@ -314,7 +326,7 @@ def probe_vm_state(
     re-running the commands.
     """
     mgr = CommandManager.current()
-    dominfo_cmd = virsh_system_cmd('dominfo', cfg.vm.name)
+    dominfo_cmd = virsh_cmd('dominfo', cfg.vm.name)
     sudo_used = False
     # Closed stdin keeps the unprivileged probe from blocking on a polkit
     # password prompt outside the manager's approval flow, and LC_ALL=C
@@ -367,7 +379,7 @@ def probe_vm_state(
                 None,
             )
         return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
-    domstate_cmd = virsh_system_cmd('domstate', cfg.vm.name)
+    domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
     state_res = mgr.run(
         domstate_cmd,
         sudo=sudo_used,
@@ -404,6 +416,7 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             connect_timeout=3,
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
+            port=ssh_port_for(cfg, strict=False),
         ),
         f'{cfg.vm.user}@{ip}',
         'true',
@@ -475,6 +488,7 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             connect_timeout=4,
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
+            port=ssh_port_for(cfg, strict=False),
         ),
         f'{cfg.vm.user}@{ip}',
         remote,
@@ -501,21 +515,21 @@ def anticipated_status_sudo_commands(
         Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / cfg.image.cache_name
     )
     cmds: list[list[str]] = [
-        list(virsh_system_cmd('net-info', cfg.network.name)),
+        list(virsh_cmd('net-info', cfg.network.name)),
         ['nft', 'list', 'table', 'inet', cfg.firewall.table],
         ['test', '-f', str(base_img)],
-        list(virsh_system_cmd('dominfo', cfg.vm.name)),
-        list(virsh_system_cmd('domstate', cfg.vm.name)),
-        list(virsh_system_cmd('dumpxml', cfg.vm.name)),
+        list(virsh_cmd('dominfo', cfg.vm.name)),
+        list(virsh_cmd('domstate', cfg.vm.name)),
+        list(virsh_cmd('dumpxml', cfg.vm.name)),
     ]
     if detail:
         cmds.extend(
             [
-                list(virsh_system_cmd('net-dumpxml', cfg.network.name)),
+                list(virsh_cmd('net-dumpxml', cfg.network.name)),
                 ['ls', '-lh', str(base_img)],
-                list(virsh_system_cmd('domiflist', cfg.vm.name)),
-                list(virsh_system_cmd('domifaddr', cfg.vm.name)),
-                list(virsh_system_cmd('net-dhcp-leases', cfg.network.name)),
+                list(virsh_cmd('domiflist', cfg.vm.name)),
+                list(virsh_cmd('domifaddr', cfg.vm.name)),
+                list(virsh_cmd('net-dhcp-leases', cfg.network.name)),
             ]
         )
     deduped: list[list[str]] = []
@@ -546,8 +560,17 @@ def render_status(
         '🧭 AgentVM Status',
         f'📄 Config: {path}',
         f'🔐 Privilege mode: {privilege_mode}',
-        '',
+        f'⚙️ Runtime mode: {current_runtime_mode()}',
     ]
+    if runtime_is_session():
+        forward_port = ssh_port_for(cfg, strict=False)
+        endpoint = (
+            f'127.0.0.1:{forward_port}'
+            if forward_port is not None
+            else 'not allocated yet (created at `aivm vm up`)'
+        )
+        lines.append(f'🔌 SSH endpoint: {endpoint} (passt port forward)')
+    lines.append('')
     done = 0
     total = 0
 
@@ -786,30 +809,41 @@ def render_status(
         # in ProbeOutcome.diag, so detail rendering reuses it instead of
         # re-running the same (often privileged) commands.
         mgr = CommandManager.current()
-        net_xml = mgr.run(
-            virsh_system_cmd('net-dumpxml', cfg.network.name),
-            sudo=use_sudo and virsh_needs_sudo(),
-            check=False,
-            capture=True,
-        )
-        lines.append(f'Network ({cfg.network.name})')
-        lines.append('```text')
-        lines.append(clip(net.diag or '(no output)'))
-        lines.append('```')
-        if net_xml.code == 0 and net_xml.stdout.strip():
-            lines.append('```xml')
-            lines.append(clip(net_xml.stdout, max_lines=80))
-            lines.append('```')
-        lines.append('')
-
-        lines.append(f'Firewall (inet {cfg.firewall.table})')
-        if cfg.firewall.enabled:
-            lines.append('```text')
-            lines.append(clip(fw.diag or '(no output)'))
-            lines.append('```')
+        if runtime_is_session():
+            lines.append('Network')
+            lines.append(
+                '- session runtime: passt user-mode networking, no managed '
+                'libvirt network'
+            )
+            lines.append('')
+            lines.append('Firewall')
+            lines.append('- session runtime: not applicable')
+            lines.append('')
         else:
-            lines.append('- disabled in config')
-        lines.append('')
+            net_xml = mgr.run(
+                virsh_cmd('net-dumpxml', cfg.network.name),
+                sudo=use_sudo and virsh_needs_sudo(),
+                check=False,
+                capture=True,
+            )
+            lines.append(f'Network ({cfg.network.name})')
+            lines.append('```text')
+            lines.append(clip(net.diag or '(no output)'))
+            lines.append('```')
+            if net_xml.code == 0 and net_xml.stdout.strip():
+                lines.append('```xml')
+                lines.append(clip(net_xml.stdout, max_lines=80))
+                lines.append('```')
+            lines.append('')
+
+            lines.append(f'Firewall (inet {cfg.firewall.table})')
+            if cfg.firewall.enabled:
+                lines.append('```text')
+                lines.append(clip(fw.diag or '(no output)'))
+                lines.append('```')
+            else:
+                lines.append('- disabled in config')
+            lines.append('')
 
         lines.append('Image')
         img_stat = mgr.run(
@@ -831,11 +865,15 @@ def render_status(
         lines.append(f'VM ({cfg.vm.name})')
         if vm_out.diag:
             lines.append(vm_out.diag)
-        for cmd in (
-            virsh_system_cmd('domiflist', cfg.vm.name),
-            virsh_system_cmd('domifaddr', cfg.vm.name),
-            virsh_system_cmd('net-dhcp-leases', cfg.network.name),
-        ):
+        vm_detail_cmds = [
+            virsh_cmd('domiflist', cfg.vm.name),
+            virsh_cmd('domifaddr', cfg.vm.name),
+        ]
+        if not runtime_is_session():
+            vm_detail_cmds.append(
+                virsh_cmd('net-dhcp-leases', cfg.network.name)
+            )
+        for cmd in vm_detail_cmds:
             vm_raw = mgr.run(
                 cmd,
                 sudo=use_sudo and virsh_needs_sudo(),
@@ -888,7 +926,11 @@ def render_status(
             next_steps.append(f'aivm host install_deps --config {cfg_arg}')
         if net.ok is False:
             next_steps.append(f'aivm host net create --config {cfg_arg}')
-        if cfg.firewall.enabled and fw.ok is not True:
+        if (
+            cfg.firewall.enabled
+            and fw.ok is not True
+            and not runtime_is_session()
+        ):
             next_steps.append(f'aivm host fw apply --config {cfg_arg}')
         if (not img_ok) and (vm_out.ok is not True):
             next_steps.append(f'aivm host image_fetch --config {cfg_arg}')
