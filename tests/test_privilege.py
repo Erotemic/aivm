@@ -152,6 +152,85 @@ def test_attachment_resolution_is_privilege_mode_independent(
             assert str(att.mode) == requested
 
 
+def test_existence_probe_distinguishes_absent_from_unknown(
+    tmp_path: Path,
+) -> None:
+    """An unreadable path is unknown, not absent.
+
+    Reporting absence would license callers to create over existing state.
+    """
+    from aivm.vm.host_access import _sudo_file_exists, _sudo_path_exists
+
+    if os.geteuid() == 0:
+        pytest.skip('root can stat through any directory')
+    _activate('sudoless')
+
+    present = tmp_path / 'here.qcow2'
+    present.write_bytes(b'')
+    assert _sudo_path_exists(present) is True
+    assert _sudo_file_exists(present) is True
+    assert _sudo_path_exists(tmp_path / 'absent.qcow2') is False
+    assert _sudo_file_exists(tmp_path / 'absent.qcow2') is False
+
+    # A real EACCES: the file exists but no ancestor grants traversal, and
+    # sudoless forbids the privileged probe that would settle it.
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    hidden = locked / 'disk.qcow2'
+    hidden.write_bytes(b'')
+    locked.chmod(0o000)
+    try:
+        assert _sudo_path_exists(hidden) is None
+        assert _sudo_file_exists(hidden) is None
+    finally:
+        locked.chmod(0o700)
+
+
+def test_ensure_disk_refuses_to_create_over_unknown_state(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.vm.disk import _ensure_disk
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    _activate('sudoless', yes=True)
+    monkeypatch.setattr('aivm.vm.disk._sudo_path_exists', lambda p: None)
+    ran: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        ran.append([str(c) for c in cmd])
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
+    with pytest.raises(SudolessModeError, match='Cannot determine'):
+        _ensure_disk(cfg, tmp_path / 'base.img')
+    assert not any('qemu-img' in c for cmd in ran for c in cmd)
+
+
+def test_fetch_image_refuses_to_redownload_over_unknown_state(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.vm.images import fetch_image
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    cfg.paths.base_dir = str(tmp_path)
+    _activate('sudoless', yes=True)
+    monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: None)
+    monkeypatch.setattr(
+        'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
+    )
+    # Belt and braces: an unknown cached image must not reach `curl`, so a
+    # regression here fails the assertion rather than downloading 600MB.
+    def fail_on_exec(cmd: list[str], **kwargs: Any) -> FakeProc:
+        raise AssertionError(f'ran a command for an unknown image: {cmd}')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fail_on_exec)
+    with pytest.raises(SudolessModeError, match='Cannot determine'):
+        fetch_image(cfg)
+
+
 def test_sudoless_firewall_degradation() -> None:
     from aivm.firewall import apply_firewall, read_firewall_tcp_ports
     from aivm.status import probe_firewall

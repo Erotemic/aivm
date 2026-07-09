@@ -17,7 +17,11 @@ from ..config import (
 from ..errors import AIVMError
 from ..privilege import path_needs_sudo, sudo_allowed
 from ..util import CmdError
-from .host_access import _ensure_qemu_access, _sudo_file_exists
+from .host_access import (
+    _ensure_qemu_access,
+    _sudo_file_exists,
+    _undetermined_existence_error,
+)
 from .paths import _paths
 
 log = logger
@@ -128,7 +132,10 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         else None
     )
     mgr = CommandManager.current()
-    if _sudo_file_exists(base_img) and not cfg.image.redownload:
+    base_img_cached = _sudo_file_exists(base_img)
+    if base_img_cached is None:
+        raise _undetermined_existence_error(base_img, 'cached base image')
+    if base_img_cached and not cfg.image.redownload:
         if dry_run:
             log.info('Base image cached: {}', base_img)
             return base_img

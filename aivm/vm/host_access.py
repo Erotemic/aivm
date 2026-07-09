@@ -40,19 +40,32 @@ def _local_stat_answer(path: Path, *, want_file: bool) -> bool | None:
         return stat_mod.S_ISREG(st.st_mode)
     return True
 
-def _sudo_path_exists(path: Path) -> bool:
-    """Return True if ``path`` exists, using sudo only when necessary.
+def _undetermined_existence_error(path: Path, what: str) -> SudolessModeError:
+    """Build the error raised when an existence check cannot be answered."""
+    return SudolessModeError(
+        f'Cannot determine whether the {what} already exists.\n'
+        f'Path: {path}\n'
+        'The path is not readable without privileged access, and sudoless '
+        'mode forbids escalation. Assuming it is absent would overwrite or '
+        're-download existing state.\n'
+        "Set behavior.privilege_mode to 'auto' to allow the privileged probe, "
+        'or move VM storage to a user-owned directory '
+        '(`aivm host sudoless setup`).'
+    )
+
+def _sudo_path_exists(path: Path) -> bool | None:
+    """Return whether ``path`` exists, or None when that cannot be determined.
 
     The privileged probe only runs when an unprivileged stat cannot answer
-    (for example under a root-only image directory).
+    (for example under a root-only image directory). When it cannot answer
+    and sudo is forbidden, the result is None -- *unknown*, which is not the
+    same as absent. Callers must not read None as a green light to create.
     """
     local = _local_stat_answer(path, want_file=False)
     if local is not None:
         return local
     if not sudo_allowed():
-        # Inconclusive without privileges; treat as absent so callers act
-        # unprivileged and surface the real EACCES if the tree is root-only.
-        return False
+        return None
     mgr = CommandManager.current()
     return (
         mgr.run(
@@ -65,16 +78,16 @@ def _sudo_path_exists(path: Path) -> bool:
         == 0
     )
 
-def _sudo_file_exists(path: Path) -> bool:
-    """Return True if ``path`` is a regular file, using sudo only when necessary.
+def _sudo_file_exists(path: Path) -> bool | None:
+    """Return whether ``path`` is a regular file, or None when undeterminable.
 
-    See :func:`_sudo_path_exists` for the escalation rationale.
+    See :func:`_sudo_path_exists` for the escalation and None semantics.
     """
     local = _local_stat_answer(path, want_file=True)
     if local is not None:
         return local
     if not sudo_allowed():
-        return False
+        return None
     mgr = CommandManager.current()
     return (
         mgr.run(
