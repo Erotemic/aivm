@@ -31,7 +31,6 @@ from ..fdguard import (
 )
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import load_cfg
-from ..vm import ssh_port_for
 from ._common import _BaseCommand
 
 _ACTIONS = ('status', 'install', 'uninstall')
@@ -149,7 +148,6 @@ class VMFdGuardCLI(_BaseCommand):
                     strict_host_key_checking='accept-new',
                     connect_timeout=10,
                     batch_mode=True,
-                    port=ssh_port_for(cfg),
                 ),
                 f'{cfg.vm.user}@{ip}',
                 remote_command,

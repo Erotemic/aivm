@@ -3,140 +3,29 @@
 Keeping these helpers centralized reduces drift in connection defaults and
 libvirt URI usage across CLI and VM lifecycle modules.
 
-Runtime modes
--------------
-
-aivm supports two libvirt runtimes, selected per-VM via ``runtime.mode``:
-
-* ``'system'``  -- the privileged system daemon (``qemu:///system``):
-  managed NAT network, ``/var/lib/libvirt/aivm`` storage, optional
-  nftables firewall, and the ``behavior.privilege_mode`` escalation
-  policy.
-* ``'session'`` -- the per-user daemon (``qemu:///session``): user-owned
-  storage, user-mode passt networking with a forwarded localhost SSH
-  port, and a structural never-sudo guarantee (session activation forces
-  ``privilege_mode='sudoless'`` on the active CommandManager).
-
-The active mode is context-local state set by :func:`activate_runtime`
-when a VM config is resolved. Every libvirt client command is built via
-:func:`virsh_cmd` (and ``virt-install`` uses :func:`current_libvirt_uri`),
-so there is exactly one place URI selection happens; session mode never
-falls back to ``qemu:///system``.
+aivm targets the privileged system libvirt daemon (``qemu:///system``).
+A per-user ``qemu:///session`` runtime was prototyped and removed; see
+``docs/planning/deferred/session-runtime.md``.
 """
 
 from __future__ import annotations
 
-from contextvars import ContextVar
-
-from loguru import logger as log
-
-from .errors import MissingSSHIdentityError, SessionRuntimeError
-from .modes import PrivilegeMode, RuntimeMode
-
-RUNTIME_MODES = tuple(m.value for m in RuntimeMode)
+from .errors import MissingSSHIdentityError
 
 SYSTEM_LIBVIRT_URI = 'qemu:///system'
-SESSION_LIBVIRT_URI = 'qemu:///session'
 
-#: Backward-compatible alias; prefer :func:`current_libvirt_uri`.
+#: Backward-compatible alias for :data:`SYSTEM_LIBVIRT_URI`.
 LIBVIRT_URI = SYSTEM_LIBVIRT_URI
-
-_CURRENT_RUNTIME_MODE: ContextVar[str] = ContextVar(
-    'aivm_current_runtime_mode', default='system'
-)
-
-
-def normalize_runtime_mode(value: object) -> RuntimeMode:
-    """Normalize a configured runtime mode, defaulting to ``SYSTEM``."""
-    mode = str(value or 'system').strip().lower()
-    try:
-        return RuntimeMode(mode)
-    except ValueError:
-        log.warning(
-            "Unknown runtime.mode {!r}; falling back to 'system'. "
-            'Valid values: {}',
-            value,
-            ', '.join(RUNTIME_MODES),
-        )
-        return RuntimeMode.SYSTEM
-
-
-def current_runtime_mode() -> RuntimeMode:
-    """Return the context-local runtime mode (``SYSTEM`` when unset)."""
-    return normalize_runtime_mode(_CURRENT_RUNTIME_MODE.get())
-
-
-def runtime_is_session() -> bool:
-    """Return True when the active runtime is the per-user session daemon."""
-    return current_runtime_mode() == RuntimeMode.SESSION
-
-
-def libvirt_uri_for_mode(mode: str) -> str:
-    """Return the libvirt connection URI for a runtime mode."""
-    if normalize_runtime_mode(mode) == RuntimeMode.SESSION:
-        return SESSION_LIBVIRT_URI
-    return SYSTEM_LIBVIRT_URI
-
-
-def current_libvirt_uri() -> str:
-    """Return the libvirt URI every client command must target right now."""
-    return libvirt_uri_for_mode(current_runtime_mode())
-
-
-def activate_runtime(mode: object) -> RuntimeMode:
-    """Install ``mode`` as the context-local runtime and enforce its policy.
-
-    Session mode structurally forbids sudo: it flips the active
-    CommandManager to ``privilege_mode='sudoless'`` so the never-sudo
-    guarantee is enforced at the one chokepoint every subprocess goes
-    through, not by call-site discipline.
-    """
-    normalized = normalize_runtime_mode(mode)
-    _CURRENT_RUNTIME_MODE.set(normalized)
-    if normalized == RuntimeMode.SESSION:
-        from .commands import CommandManager
-
-        mgr = CommandManager.current()
-        if mgr.privilege_mode != PrivilegeMode.SUDOLESS:
-            log.debug(
-                'Session runtime forces privilege_mode=sudoless '
-                '(was {!r})',
-                mgr.privilege_mode,
-            )
-            mgr.privilege_mode = PrivilegeMode.SUDOLESS
-    return normalized
-
-
-def require_system_runtime(*, feature: str, hint: str) -> None:
-    """Fail fast when a system-only feature is used on a session VM.
-
-    Use this for operations the session runtime fundamentally cannot
-    provide (managed libvirt networks, nftables firewall, host bind
-    mounts) so users get feature-level guidance instead of a failed
-    libvirt command deep inside a flow.
-    """
-    if not runtime_is_session():
-        return
-    raise SessionRuntimeError(
-        f'{feature} is not available in runtime.mode=session '
-        '(per-user qemu:///session).\n'
-        f'{hint}'
-    )
 
 
 def virsh_cmd(*args: str) -> list[str]:
-    """Build a virsh argv pinned to the active runtime's libvirt URI."""
-    return ['virsh', '-c', current_libvirt_uri(), *args]
-
-
-def virsh_system_cmd(*args: str) -> list[str]:
-    """Build a virsh argv pinned to the system daemon.
-
-    Deprecated compatibility shim: package code uses :func:`virsh_cmd` so
-    the URI follows the active runtime. Only reach for this when a command
-    must target ``qemu:///system`` regardless of runtime.
-    """
+    """Build a virsh argv pinned to the system libvirt daemon."""
     return ['virsh', '-c', SYSTEM_LIBVIRT_URI, *args]
+
+
+def current_libvirt_uri() -> str:
+    """Return the libvirt URI every client command must target."""
+    return SYSTEM_LIBVIRT_URI
 
 
 def virsh_domain_missing(stderr: str) -> bool:
@@ -166,13 +55,8 @@ def ssh_base_args(
     batch_mode: bool = False,
     user_known_hosts_file: str | None = None,
     identities_only: bool = True,
-    port: int | None = None,
 ) -> list[str]:
     args: list[str] = []
-    if port is not None and int(port) != 22:
-        # Session VMs are reached through a forwarded localhost port;
-        # system VMs keep default-port argv (no -p) for stability.
-        args.extend(['-p', str(int(port))])
     if batch_mode:
         args.extend(['-o', 'BatchMode=yes'])
     if connect_timeout is not None:

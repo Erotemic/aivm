@@ -328,8 +328,10 @@ Roadmap
 
 Major forward-looking efforts are designed in ``dev/design/future/``; see
 ``dev/design/future/README.md`` for the index, statuses, and recommended
-sequencing (rootless session runtime, externally-managed virtiofsd, egress
-allowlist networking, snapshots/ephemeral clones, e2e in CI).
+sequencing (externally-managed virtiofsd, egress allowlist networking,
+snapshots/ephemeral clones, e2e in CI). A per-user ``qemu:///session``
+runtime was prototyped and removed; see
+``docs/planning/deferred/session-runtime.md``.
 
 Implementation TODO Notes
 -------------------------

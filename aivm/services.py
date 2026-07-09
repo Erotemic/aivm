@@ -19,7 +19,7 @@ from pathlib import Path
 from loguru import logger as log
 
 from .commands import CommandManager
-from .config import AgentVMConfig, apply_session_runtime_defaults
+from .config import AgentVMConfig
 from .config_store import (
     find_attachments,
     find_vm,
@@ -33,26 +33,11 @@ from .config_store import (
 from .detect import detect_ssh_identity
 from .errors import AIVMError
 from .host import check_commands, host_is_debian_like, install_deps_debian
-from .runtime import activate_runtime
 from .util import which
 
 
 def cfg_path(p: str | None) -> Path:
     return Path(p).expanduser().resolve() if p else store_path().resolve()
-
-
-def activate_cfg_runtime(cfg: AgentVMConfig) -> AgentVMConfig:
-    """Bind the process to ``cfg``'s runtime before any command is built.
-
-    This is the single place per-VM runtime selection becomes ambient
-    state: the libvirt URI used by ``virsh_cmd``/``virt-install`` flips to
-    the configured runtime, session mode structurally forces sudoless on
-    the active CommandManager, and session-only config defaults (user-owned
-    ``paths.base_dir``) are applied.
-    """
-    apply_session_runtime_defaults(cfg)
-    activate_runtime(cfg.runtime.mode)
-    return cfg
 
 
 def hydrate_ssh_identity_defaults(cfg: AgentVMConfig) -> bool:
@@ -305,7 +290,7 @@ def load_cfg_with_path(
     rec = find_vm(reg, vm_name)
     if rec is None:
         raise AIVMError(f'VM not found in config store: {vm_name}')
-    cfg = activate_cfg_runtime(materialize_vm_cfg(reg, vm_name))
+    cfg = materialize_vm_cfg(reg, vm_name)
     changed = (
         hydrate_ssh_identity_defaults(cfg)
         if hydrate_runtime_defaults

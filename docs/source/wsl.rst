@@ -35,10 +35,7 @@ Requirements at a glance
       systemd=true
 
   then ``wsl --shutdown`` and reopen. Verify with
-  ``ps -p 1 -o comm=`` printing ``systemd``. The **rootless session
-  runtime does not need systemd** — the per-user libvirt daemon spawns
-  on demand — which makes it a particularly good fit for WSL (see
-  :doc:`runtimes`).
+  ``ps -p 1 -o comm=`` printing ``systemd``.
 
 Known footguns and their fixes
 ------------------------------
@@ -91,33 +88,23 @@ breakage and terrible performance. Keep repos under ``~`` inside the
 distro; access them from Windows via ``\\wsl$`` if needed.
 
 **Group membership does not take effect in open shells.**
-After ``usermod -aG kvm ...`` or ``... libvirt ...`` (done by
-``aivm host rootless setup`` / ``aivm host sudoless setup``), close all
-distro shells — or ``wsl --shutdown`` — and reopen. ``sg kvm -c '...'``
-works for a single command in the meantime.
+After ``usermod -aG libvirt ...`` (done by ``aivm host sudoless setup``),
+close all distro shells -- or ``wsl --shutdown`` -- and reopen.
+``sg libvirt -c '...'`` works for a single command in the meantime.
 
 Recommended setup on WSL2
 -------------------------
 
-The rootless session runtime avoids the two most WSL-sensitive
-dependencies (systemd-managed root libvirt, managed bridge networking)
-entirely::
+Enable systemd, install dependencies, then create a VM::
 
-    sudo apt install passt          # user-mode networking backend
-    aivm host rootless check
-    aivm host rootless setup
+    aivm host install_deps
+    aivm host doctor
     aivm vm create
-
-The classic system runtime also works once systemd is enabled and
-``aivm host install_deps`` has run; choose it when you need virtiofs
-folder attachments, which the session runtime does not support yet (see
-:doc:`runtimes` for the full comparison).
 
 Diagnostics
 -----------
 
 ``aivm host doctor`` detects WSL and checks the two hard prerequisites
 (``/dev/kvm`` present, systemd as PID 1) with WSL-specific fix
-instructions. ``aivm host rootless check`` covers the session-runtime
-requirements and also prints the ``.wslconfig`` hint when ``/dev/kvm``
-is missing under WSL.
+instructions, including the ``.wslconfig`` hint when ``/dev/kvm`` is
+missing under WSL.

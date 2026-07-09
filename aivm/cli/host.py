@@ -23,7 +23,6 @@ from ..services import resolve_cfg_fallback
 from ..vm import fetch_image
 from ._common import _BaseCommand
 from .firewall import FirewallModalCLI
-from .host_rootless import RootlessModalCLI
 from .host_sudoless import SudolessModalCLI
 from .net import NetModalCLI
 
@@ -55,8 +54,7 @@ def _print_wsl_diagnostics() -> bool:
         print(
             '❌ systemd is not PID 1. The system libvirt daemon needs '
             'systemd: add `[boot]\nsystemd=true` to /etc/wsl.conf, then '
-            '`wsl --shutdown` and reopen. (The rootless session runtime '
-            'does not need systemd: see `aivm host rootless check`.)'
+            '`wsl --shutdown` and reopen.'
         )
     return problem
 
@@ -154,4 +152,3 @@ class HostModalCLI(kwconf.ModalCLI):
     net = NetModalCLI
     fw = FirewallModalCLI
     sudoless = SudolessModalCLI
-    rootless = RootlessModalCLI

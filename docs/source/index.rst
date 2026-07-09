@@ -15,7 +15,7 @@ See the repository README for current CLI usage and safety notes.
 
    design
    quickstart
-   runtimes
+   privilege-modes
    workflows
    wsl
    virtiofs

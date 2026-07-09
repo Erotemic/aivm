@@ -31,7 +31,6 @@ from ..runtime import (
 )
 from ..util import CmdError
 from ..xmlutil import parse_domain_xml
-from .connectivity import ssh_port_for
 
 log = logger
 
@@ -516,7 +515,6 @@ def ensure_share_mounted(
             strict_host_key_checking='accept-new',
             connect_timeout=5,
             batch_mode=True,
-            port=ssh_port_for(cfg),
         ),
         f'{cfg.vm.user}@{ip}',
         remote,

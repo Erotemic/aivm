@@ -45,8 +45,7 @@ def systemd_is_pid1() -> bool:
 
     Relevant on WSL2, where systemd is opt-in (``[boot] systemd=true`` in
     ``/etc/wsl.conf``) on older installs: the system libvirt daemon is a
-    systemd service and cannot run without it. The rootless session
-    runtime does not need systemd (the per-user daemon auto-spawns).
+    systemd service and cannot run without it.
     """
     try:
         comm = Path('/proc/1/comm').read_text(encoding='utf-8').strip()

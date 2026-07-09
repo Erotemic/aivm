@@ -67,18 +67,15 @@ What it provides
 
 .. note::
 
-   Four opt-in end-to-end test modules live in ``tests/``:
+   Three opt-in end-to-end test modules live in ``tests/``:
    ``test_e2e_nested.py`` (light smoke path), ``test_e2e_full.py``
-   (comprehensive cycle), ``test_e2e_sudoless.py`` (full lifecycle with
-   ``privilege_mode = "sudoless"``, proving no sudo is invoked), and
-   ``test_e2e_session.py`` (full lifecycle on the rootless
-   ``qemu:///session`` runtime).  They are skipped by default; to run them
-   locally set ``AIVM_E2E=1`` and invoke pytest manually.  All need a host
-   with KVM and (optionally) an Ubuntu cloud image cached under
-   ``~/.cache/aivm/e2e``; the first two also need passwordless ``sudo``,
-   the sudoless module instead needs ``libvirt`` group membership and
-   ``setfacl``, and the session module needs only ``kvm`` group membership
-   plus ``passt``.
+   (comprehensive cycle), and ``test_e2e_sudoless.py`` (full lifecycle
+   with ``privilege_mode = "sudoless"``, proving no sudo is invoked).
+   They are skipped by default; to run them locally set ``AIVM_E2E=1``
+   and invoke pytest manually.  All need a host with KVM and (optionally)
+   an Ubuntu cloud image cached under ``~/.cache/aivm/e2e``; the first two
+   also need passwordless ``sudo``, while the sudoless module instead
+   needs ``libvirt`` group membership and ``setfacl``.
 
    An additional opt-in bootstrap-context e2e test is available in
    ``test_e2e_bootstrap_context.py``. It creates a fresh outer VM and runs the
@@ -151,43 +148,6 @@ sudo at most once, to add you to the ``libvirt`` group). State-changing
 hypervisor commands keep their approval prompt even when they no longer need
 sudo, so destructive operations never become promptless just because
 escalation stopped being necessary.
-
-Rootless session runtime
-------------------------
-
-Sudoless mode still talks to the root **system** libvirt daemon, and
-``libvirt`` group membership is effectively root-equivalent. For truly
-rootless VMs, ``aivm`` supports the per-user session daemon as a
-first-class runtime, selected per-VM via ``runtime.mode``:
-
-* ``system`` (default): ``qemu:///system``, managed NAT network, optional
-  nftables firewall, storage under ``/var/lib/libvirt/aivm``.
-* ``session``: ``qemu:///session``. QEMU runs as you; storage lives in a
-  user-owned tree (``~/.local/share/aivm`` by default); networking is
-  user-mode `passt <https://passt.top>`_ with guest SSH forwarded to a
-  persisted localhost port; no managed network, no firewall, and no root
-  daemon is involved at any point. Session activation structurally forces
-  ``privilege_mode = "sudoless"``, so no code path can escalate.
-
-.. code-block:: bash
-
-   aivm host rootless check   # /dev/kvm access, session libvirt, passt, storage
-   aivm host rootless setup   # kvm group (sudo at most once), session defaults
-   aivm vm create             # lands on qemu:///session
-   aivm ssh .                 # connects via the forwarded localhost port
-
-Requirements are deliberately minimal: ``kvm`` group membership (for
-``/dev/kvm``) and the ``passt`` package — no libvirt group, no managed
-network, no nftables. Session-mode limitations: folder attachments
-currently support ``--mode git`` only (virtiofs sharing needs the system
-daemon or a future unprivileged virtiofsd backend), and there is no
-managed-network/nftables isolation — the guest gets whatever egress passt
-provides. A session VM and a system VM can coexist in one config store.
-
-The classic admin-assuming posture (system runtime + sudo prompts) remains
-the default and is unchanged; sudoless and rootless are opt-in. See
-`Runtimes and privilege modes <docs/source/runtimes.rst>`_ for a
-side-by-side comparison of all three postures.
 
 Command manager defaults:
 

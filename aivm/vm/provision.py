@@ -9,7 +9,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
-from .connectivity import get_ip_cached, ssh_port_for, wait_for_ip, wait_for_ssh
+from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import (
     _guest_ensure_code_script,
     _guest_ensure_rust_script,
@@ -73,7 +73,6 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         *ssh_base_args(
             ident,
             strict_host_key_checking='accept-new',
-            port=ssh_port_for(cfg),
         ),
         f'{cfg.vm.user}@{ip}',
         remote,

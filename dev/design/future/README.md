@@ -13,7 +13,7 @@ commit), decided design, step-by-step plan, tests, and acceptance criteria.
 
 | # | Effort | Doc | Status |
 |---|--------|-----|--------|
-| 1 | Rootless VMs (`qemu:///session` runtime) | [rootless-vms.md](rootless-vms.md) | **First milestone implemented + verified live** (see its Implementation Status section); rootless `shared` attachments await effort 2 |
+| 1 | Rootless VMs (`qemu:///session` runtime) | [rootless-vms.md](rootless-vms.md) | **Implemented, then removed before release** — deferred behind effort 2. See [session-runtime.md](../../../docs/planning/deferred/session-runtime.md) |
 | 2 | Externally-managed virtiofsd backend | [external-virtiofsd.md](external-virtiofsd.md) | Designed here; not started |
 | 3 | Egress allowlist networking | [egress-allowlist.md](egress-allowlist.md) | Designed here; not started |
 | 4 | Snapshots, rollback, ephemeral clones | [snapshots-and-clones.md](snapshots-and-clones.md) | Designed here; not started |

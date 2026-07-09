@@ -222,7 +222,7 @@ class VMDeleteCLI(_BaseCommand):
                 ),
             )
             net_name = (cfg.network.name or '').strip()
-            if net_name and cfg.runtime.mode != 'session':
+            if net_name:
                 net = find_network(reg, net_name)
                 if net is not None and not network_users(reg, net_name):
                     log.warning(

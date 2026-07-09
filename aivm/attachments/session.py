@@ -25,7 +25,6 @@ from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..privilege import sudo_allowed
-from ..runtime import runtime_is_session
 from ..services import (
     PreparedSession,
     maybe_install_missing_host_deps,
@@ -566,14 +565,8 @@ def _reconcile_attached_vm(
             else None
         )
 
-        if runtime_is_session():
-            # Session VMs use passt user-mode networking: there is no
-            # managed libvirt network to probe/ensure and no root
-            # nftables firewall to reconcile.
-            need_network_ensure = False
-        else:
-            net_probe = probe_network(cfg, use_sudo=False).ok
-            need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
+        net_probe = probe_network(cfg, use_sudo=False).ok
+        need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
         if need_network_ensure:
             ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
@@ -582,7 +575,6 @@ def _reconcile_attached_vm(
             cfg.firewall.enabled
             and policy.ensure_firewall_opt
             and (not cached_ssh_ok)
-            and not runtime_is_session()
         ):
             if not sudo_allowed():
                 log.warning(

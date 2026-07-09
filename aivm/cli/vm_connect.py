@@ -23,7 +23,7 @@ from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import cfg_path, load_cfg
 from ..util import which
-from ..vm import create_ops, ssh_port_for, wait_for_ip
+from ..vm import create_ops, wait_for_ip
 from ..vm import ssh_config as mk_ssh_config
 from ._common import _BaseCommand
 
@@ -217,7 +217,7 @@ def _start_remote_tunnel_session(
     remote = _build_tunnel_remote_script(guest_path, tunnel_name)
     cmd = [
         'ssh',
-        *ssh_base_args(ident, port=ssh_port_for(cfg)),
+        *ssh_base_args(ident),
         f'{cfg.vm.user}@{ip}',
         remote,
     ]
@@ -240,7 +240,7 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
     cmd = [
         'ssh',
         '-t',
-        *ssh_base_args(ident, port=ssh_port_for(cfg)),
+        *ssh_base_args(ident),
         f'{cfg.vm.user}@{ip}',
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
@@ -558,7 +558,6 @@ class VMSSHCLI(_BaseCommand):
                 *ssh_base_args(
                     ident,
                     strict_host_key_checking='accept-new',
-                    port=ssh_port_for(cfg),
                 ),
                 f'{cfg.vm.user}@{ip}',
                 remote_cmd,

@@ -17,38 +17,10 @@ from ..config_store import (
     remove_network,
     save_store,
 )
-from ..errors import AIVMError, SessionRuntimeError
+from ..errors import AIVMError
 from ..net import destroy_network, ensure_network, network_status
-from ..runtime import normalize_runtime_mode
 from ..services import cfg_path
 from ._common import _BaseCommand
-
-
-def _require_managed_networks_applicable(reg: Store) -> None:
-    """Reject managed-network creation in a session-only config store.
-
-    Managed libvirt networks are a system-runtime concept: session VMs use
-    passt user-mode networking and never reference a bridge. When the
-    store's defaults are session and no system-runtime VM exists, creating
-    a network is a configuration mistake worth a hard error. Status and
-    destroy stay available so leftover system networks remain inspectable
-    and removable.
-    """
-    defaults_mode = 'system'
-    if reg.defaults is not None:
-        defaults_mode = normalize_runtime_mode(reg.defaults.runtime.mode)
-    has_system_vm = any(
-        normalize_runtime_mode(v.cfg.runtime.mode) == 'system'
-        for v in reg.vms
-    )
-    if defaults_mode == 'session' and not has_system_vm:
-        raise SessionRuntimeError(
-            'Managed libvirt networks are not used by session-runtime VMs '
-            '(passt user-mode networking replaces them).\n'
-            'This config store defaults to runtime.mode=session and has no '
-            "system-runtime VMs. Set runtime.mode = 'system' in defaults "
-            'first if you really need a managed network.'
-        )
 
 
 class NetCreateCLI(_BaseCommand):
@@ -69,7 +41,6 @@ class NetCreateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        _require_managed_networks_applicable(load_store(cfg_path(args.config)))
         cfg = _resolve_network_cfg(args.config, network_opt=args.network)
         mgr = CommandManager.current()
         with mgr.intent(

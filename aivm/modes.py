@@ -1,6 +1,6 @@
-"""Privilege and runtime mode enumerations.
+"""Privilege mode enumeration.
 
-These name the small closed sets of strings that flow through the command
+This names the small closed set of strings that flows through the command
 manager, config store, and CLI.  They are ``StrEnum`` values so a member
 compares equal to its wire string (``PrivilegeMode.SUDOLESS == 'sudoless'``)
 and serializes to TOML unchanged --- existing string comparisons keep
@@ -29,16 +29,3 @@ class PrivilegeMode(StrEnum):
     AUTO = 'auto'
     SUDO = 'sudo'
     SUDOLESS = 'sudoless'
-
-
-class RuntimeMode(StrEnum):
-    """Which libvirt daemon a VM is managed through.
-
-    - SYSTEM: the privileged system daemon (``qemu:///system``) with a
-      managed NAT network, shared storage, and the sudo escalation policy.
-    - SESSION: the per-user daemon (``qemu:///session``) with user-owned
-      storage, passt networking, and a structural never-sudo guarantee.
-    """
-
-    SYSTEM = 'system'
-    SESSION = 'session'

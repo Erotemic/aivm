@@ -27,7 +27,7 @@ from ...fdguard import (
 )
 from ...runtime import require_ssh_identity, ssh_base_args
 from ...status import probe_ssh_ready
-from ..connectivity import get_ip_cached, ssh_port_for
+from ..connectivity import get_ip_cached
 from .models import FdGuardDrift, VMUpdateDrift
 
 
@@ -41,7 +41,6 @@ def _guest_ssh_cmd(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
             strict_host_key_checking='accept-new',
             connect_timeout=10,
             batch_mode=True,
-            port=ssh_port_for(cfg),
         ),
         f'{cfg.vm.user}@{ip}',
         f'sh -c {shlex.quote(script)}',

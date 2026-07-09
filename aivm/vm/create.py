@@ -10,35 +10,14 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
-from ..runtime import current_libvirt_uri, runtime_is_session, virsh_cmd
-from ..util import CmdError, which
+from ..runtime import current_libvirt_uri, virsh_cmd
+from ..util import CmdError
 from .cloudinit import _write_cloud_init
 from .disk import _ensure_disk
 from .domain import _destroy_and_undefine_vm, vm_exists
 from .images import fetch_image
-from .ports import SSH_FORWARD_HOST, allocate_ssh_forward_port
 
 log = logger
-
-def _session_network_arg(ssh_forward_port: int) -> str:
-    """Build the ``--network`` value for a session-runtime VM.
-
-    Session mode uses libvirt user-mode networking backed by passt with
-    guest SSH forwarded to a localhost port. virt-install 4.1 has no
-    first-class suboptions for ``<backend>``/``<portForward>``, so the
-    device XML is completed through its per-device xpath overrides.
-    """
-    return ','.join(
-        [
-            'type=user',
-            'model.type=virtio',
-            'xpath1.set=./backend/@type=passt',
-            'xpath2.set=./portForward/@proto=tcp',
-            f'xpath3.set=./portForward/@address={SSH_FORWARD_HOST}',
-            f'xpath4.set=./portForward/range/@start={ssh_forward_port}',
-            'xpath5.set=./portForward/range/@to=22',
-        ]
-    )
 
 def build_virt_install_cmd(
     cfg: AgentVMConfig,
@@ -47,14 +26,8 @@ def build_virt_install_cmd(
     seed_iso: Path | str,
     share_source_dir: str = '',
     share_tag: str = '',
-    ssh_forward_port: int | None = None,
 ) -> list[str]:
-    """Build the full virt-install argv for the active runtime.
-
-    The connection URI follows the active runtime; session mode swaps the
-    managed-network NIC for passt user-mode networking with an SSH port
-    forward (``ssh_forward_port`` is required in that case).
-    """
+    """Build the full virt-install argv."""
     # Always define VMs with shared memory backing so virtiofs can be
     # attached later without requiring a VM recreate.
     extra = ['--memorybacking', 'source.type=memfd,access.mode=shared']
@@ -70,14 +43,7 @@ def build_virt_install_cmd(
             f'source={source_dir},target={tag},driver.type=virtiofs',
         ]
 
-    if runtime_is_session():
-        if ssh_forward_port is None:
-            raise RuntimeError(
-                'ssh_forward_port is required for session-runtime VMs.'
-            )
-        network_arg = _session_network_arg(ssh_forward_port)
-    else:
-        network_arg = f'network={cfg.network.name},model=virtio'
+    network_arg = f'network={cfg.network.name},model=virtio'
 
     # These VMs are for agent development workflows, not secure-boot or TPM
     # validation. Keep UEFI for modern Ubuntu boot, but make the firmware
@@ -138,9 +104,6 @@ def _is_missing_kvm_error(ex: Exception) -> bool:
 
     Without KVM, virt-install warns "KVM acceleration not available" and the
     --cpu host-passthrough profile then fails on the qemu (TCG) domain type.
-    Seen on session-runtime hosts where the user lacks kvm group access, and
-    when a stale session daemon cached capabilities from before access was
-    granted.
     """
     text = str(ex).lower()
     return (
@@ -148,41 +111,14 @@ def _is_missing_kvm_error(ex: Exception) -> bool:
         or "cpu mode 'host-passthrough' for x86_64 qemu domain" in text
     )
 
-def _is_passt_crash_error(ex: Exception) -> bool:
-    """Detect libvirt failing to start the passt user-networking backend."""
-    text = str(ex).lower()
-    return 'passt' in text and (
-        'unexpected fatal signal' in text
-        or 'died unexpectedly' in text
-        or 'pid file open: permission denied' in text
-    )
-
-def _passt_crash_failure_message() -> str:
-    return (
-        'VM creation failed because the passt user-networking backend '
-        'could not start when libvirt launched it.\n'
-        'On Ubuntu 24.04 this is a known packaging bug: the '
-        'usr.bin.passt AppArmor profile denies passt mmap of its own '
-        'binary (SIGSEGV under libvirt; works standalone) and denies its '
-        'pid file under /run/user/.\n'
-        'Fix: inside the profile in /etc/apparmor.d/usr.bin.passt add\n'
-        '  /usr/bin/passt{,.avx2} mr,\n'
-        '  owner /run/user/[0-9]*/libvirt/qemu/run/passt/* rw,\n'
-        'then reload it '
-        '(`sudo apparmor_parser -r /etc/apparmor.d/usr.bin.passt`), or '
-        'update to a passt/apparmor package that includes the fix.'
-    )
-
 def _missing_kvm_failure_message() -> str:
     return (
         'VM creation failed because KVM hardware acceleration is not '
-        'available to this user.\n'
-        'Check /dev/kvm access (usually kvm group membership): run '
-        '`aivm host rootless check`, or `sudo usermod -aG kvm $USER` and '
-        'log out/in.\n'
-        'If access was granted after libvirt started, restart the per-user '
-        'daemon so it re-probes capabilities: `pkill -u $USER libvirtd; '
-        'rm -rf ~/.cache/libvirt/qemu/capabilities`.'
+        'available.\n'
+        'Check that /dev/kvm exists and the kvm kernel module is loaded, '
+        'and that VT-x/AMD-V is enabled in firmware. Under WSL2, set '
+        '`nestedVirtualization=true` under [wsl2] in .wslconfig and run '
+        '`wsl --shutdown`.'
     )
 
 def _virtiofsd_failure_message(source_dir: str) -> str:
@@ -368,23 +304,12 @@ def create_or_start_vm(
         seed_iso = ci['seed_iso']
 
         source_dir = str(share_source_dir or '').strip()
-        ssh_forward_port: int | None = None
-        if runtime_is_session():
-            if which('passt') is None:
-                raise AIVMError(
-                    'Session-runtime VMs need `passt` for user-mode '
-                    'networking, but it is not installed. Install the '
-                    '`passt` package (or run `aivm host rootless check` '
-                    'for the full readiness report) and retry.'
-                )
-            ssh_forward_port = allocate_ssh_forward_port(cfg, dry_run=dry_run)
         cmd = build_virt_install_cmd(
             cfg,
             vm_disk=vm_disk,
             seed_iso=seed_iso,
             share_source_dir=share_source_dir,
             share_tag=share_tag,
-            ssh_forward_port=ssh_forward_port,
         )
         if dry_run:
             log.info('DRYRUN: {}', ' '.join(cmd))
@@ -412,8 +337,6 @@ def create_or_start_vm(
                 ) from err
             if _is_missing_kvm_error(err):
                 raise AIVMError(_missing_kvm_failure_message()) from err
-            if _is_passt_crash_error(err):
-                raise AIVMError(_passt_crash_failure_message()) from err
             if _is_missing_uefi_firmware_error(err):
                 log.warning(
                     'UEFI firmware not available on host. Retrying VM create with non-UEFI boot.'

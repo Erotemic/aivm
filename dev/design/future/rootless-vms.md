@@ -4,7 +4,11 @@ Written: **2026-05-12 14:09:36 America/New_York**
 
 Baseline commit: **525a96e8bafbfa539e3db27ed4c9a128a4665ea6**
 
-Status: **design goal / implementation planning note**
+Status: **implemented, then removed before release.** The runtime was built
+(`cd3886f`) and removed again because session VMs cannot share host folders
+until externally-managed virtiofsd lands, and because `qemu:///session` runs
+QEMU as the invoking user, weakening escape containment. Read
+`docs/planning/deferred/session-runtime.md` before resurrecting any of this.
 
 ## Purpose
 

@@ -44,8 +44,7 @@ from ..resource_checks import (
     vm_resource_impossible_lines,
     vm_resource_warning_lines,
 )
-from ..runtime import runtime_is_session
-from ..services import activate_cfg_runtime, maybe_install_missing_host_deps
+from ..services import maybe_install_missing_host_deps
 from ..vm import create_or_start_vm
 
 if TYPE_CHECKING:
@@ -372,7 +371,6 @@ def create_vm_from_defaults(
         if 'No config defaults found in store' in str(ex):
             return 1
         raise ex
-    activate_cfg_runtime(cfg)
 
     # Apply resource warnings
     for line in vm_resource_warning_lines(cfg):
@@ -433,19 +431,9 @@ def create_vm_from_defaults(
         why='Provision the managed network, firewall, and VM definition from config defaults.',
         role='modify',
     ):
-        if runtime_is_session():
-            # Session VMs use user-mode passt networking; there is no
-            # managed libvirt network to define and no root nftables
-            # firewall to reconcile.
-            log.debug(
-                'Session runtime: skipping managed network and firewall '
-                'setup for VM {}.',
-                cfg.vm.name,
-            )
-        else:
-            ensure_network(cfg, recreate=False, dry_run=dry_run)
-            if cfg.firewall.enabled:
-                apply_firewall(cfg, dry_run=dry_run)
+        ensure_network(cfg, recreate=False, dry_run=dry_run)
+        if cfg.firewall.enabled:
+            apply_firewall(cfg, dry_run=dry_run)
         _ensure_initial_share_source_for_create(
             cfg,
             attachment_mode=initial_attachment_resolved_mode,

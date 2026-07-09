@@ -17,7 +17,6 @@ from ..privilege import (
     sudo_allowed,
     user_can_write_path,
 )
-from ..runtime import runtime_is_session
 from ..util import which
 
 log = logger
@@ -223,52 +222,9 @@ def _ensure_qemu_access_unprivileged(
         )
 
 
-def _ensure_session_storage(base_root: Path, *, dry_run: bool = False) -> None:
-    """Prepare the VM storage tree for the session runtime.
-
-    Session-mode qemu runs as the invoking user, so plain user-owned
-    directories are sufficient: no libvirt-qemu traversal ACLs, no
-    ownership fixups, and never sudo.
-    """
-    if dry_run:
-        log.info('DRYRUN: mkdir -p {} (session runtime storage)', base_root)
-        return
-    mgr = CommandManager.current()
-    with mgr.intent(
-        'Prepare VM storage',
-        why=(
-            'Session-mode qemu runs as you, so the VM tree only needs '
-            'plain user-owned directories before images and cloud-init '
-            'artifacts are written.'
-        ),
-        role='modify',
-    ):
-        with mgr.step(
-            'Prepare user-owned session VM directories',
-            why=(
-                'Create the VM root plus image and cloud-init directories '
-                'owned by the invoking user.'
-            ),
-            approval_scope=f'vm-storage:{base_root}',
-        ):
-            for d in (base_root, base_root / 'images', base_root / 'cloud-init'):
-                mgr.submit(
-                    ['mkdir', '-p', str(d)],
-                    sudo=False,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary=f'Create {d.name or "VM"} directory',
-                    detail=f'target={d}',
-                )
-
-
 def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     cfg = cfg.expanded_paths()
     base_root = Path(cfg.paths.base_dir) / cfg.vm.name
-    if runtime_is_session():
-        _ensure_session_storage(base_root, dry_run=dry_run)
-        return
     if not path_needs_sudo(base_root):
         if which('setfacl') is not None:
             _ensure_qemu_access_unprivileged(base_root, dry_run=dry_run)
