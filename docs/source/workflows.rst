@@ -208,10 +208,15 @@ The default ``auto`` mode already prefers unprivileged execution and only
 escalates where required, so most hosts need no ceremony: joining the
 ``libvirt`` group removes sudo from every ``virsh``/``virt-install`` call, and
 a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
-work. ``sudoless setup`` performs those two changes (using sudo at most once,
-for ``usermod``) and persists ``behavior.privilege_mode = "sudoless"``, after
-which ``aivm`` refuses to invoke sudo at all: the managed nftables firewall is
-skipped with a warning, and bind-mount attachment modes fail with guidance.
+work. ``sudoless setup`` establishes those two host capabilities (using sudo
+at most once, for ``usermod``) and then reports what it found. It does not
+change your config: ``behavior.privilege_mode`` and ``firewall.enabled`` are
+yours to set. Pass ``--persist`` to have it write the one value the host work
+depends on, ``defaults.paths.base_dir``.
+
+Setting ``privilege_mode = "sudoless"`` yourself makes ``aivm`` refuse to
+invoke sudo at all: the managed nftables firewall is skipped with a warning,
+and establishing a *new* bind-mount attachment fails with guidance.
 
 State-changing hypervisor commands keep the same interactive approval prompts
 they had under sudo, so unprivileged operation does not make destructive

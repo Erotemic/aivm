@@ -108,11 +108,13 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     (share_dir / 'flag.txt').write_text('sudoless', encoding='utf-8')
 
     store = Store()
+    # Setup establishes host capabilities; choosing the never-sudo policy is
+    # the user's act, not setup's, so the test makes that choice explicitly.
+    store.behavior.privilege_mode = 'sudoless'
     upsert_vm(store, cfg)
     save_store(store, cfg_path)
 
-    # Establish sudoless prerequisites through the real setup tool, then
-    # verify the whole store runs in sudoless mode from here on.
+    # Establish sudoless prerequisites through the real setup tool.
     _run_cli(
         [
             'host',
@@ -129,7 +131,10 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
         env=env,
     )
     reg = load_store(cfg_path)
+    # Setup must not have touched policy. The mode is the one we wrote, and
+    # setup did not invent a defaults section to hold a base_dir override.
     assert reg.behavior.privilege_mode == 'sudoless'
+    assert reg.defaults is None
     _run_cli(
         ['host', 'sudoless', 'check', '--config', str(cfg_path)],
         cwd=repo_root,

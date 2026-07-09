@@ -1,9 +1,20 @@
 """CLI commands that inspect and establish sudoless operation.
 
-``aivm host sudoless check`` reports whether this host satisfies every
-requirement for running aivm without sudo. ``aivm host sudoless setup``
-establishes those requirements, using sudo at most once (to add the user
-to the libvirt group) and then persists the sudoless configuration.
+"Sudoless" here names a property of the *host*, not a mode aivm runs in: a
+host is sudoless-ready when aivm never needs to escalate to do its ordinary
+work. ``aivm host sudoless check`` reports whether this host is there yet.
+``aivm host sudoless setup`` establishes the host-side prerequisites --
+libvirt group membership (its one privileged step) and a user-owned VM
+storage tree with libvirt-qemu traversal ACLs.
+
+Setup does not change your config. Establishing a capability and choosing a
+policy are different acts: ``behavior.privilege_mode`` and
+``firewall.enabled`` stay yours to set. Once the host work is done, the
+default ``privilege_mode='auto'`` stops invoking sudo for libvirt and image
+operations on its own -- no mode flip required, and the firewall keeps
+working. ``--persist`` opts in to the one config value the host work
+genuinely depends on (``defaults.paths.base_dir``, which the ACLs are
+granted on), and writes nothing else.
 """
 
 from __future__ import annotations
@@ -16,12 +27,14 @@ from typing import Any
 import kwconf
 
 from ..commands import CommandManager
-from ..config import AgentVMConfig, PathsConfig
+from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, save_store
+from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
     LIBVIRT_QEMU_USER,
     libvirt_unprivileged_ok,
+    normalize_privilege_mode,
     qemu_traversal_blockers,
     user_can_write_path,
     user_in_libvirt_group,
@@ -30,6 +43,9 @@ from ..services import cfg_path
 from ..status import status_line
 from ..util import expand, which
 from ._common import _BaseCommand
+
+#: Where setup puts VM storage when the configured base_dir needs root.
+USER_BASE_DIR = '~/.local/share/aivm'
 
 
 def _effective_default_base_dir(config_opt: str | None) -> Path:
@@ -43,6 +59,61 @@ def _effective_default_base_dir(config_opt: str | None) -> Path:
     except Exception:
         pass
     return Path(expand(PathsConfig().base_dir))
+
+
+def _print_base_dir_toml(base_dir: Path) -> None:
+    """Print the exact config lines that point VM storage at ``base_dir``."""
+    print()
+    print('    [defaults.paths]')
+    print(f'    base_dir = "{base_dir}"')
+    print()
+
+
+def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
+    """Return the persisted privilege mode, not the one this run is using.
+
+    Setup temporarily activates an ``auto`` manager so it can run ``usermod``
+    even under a sudoless config, so the live manager is not the answer to
+    "what did the user choose?".
+    """
+    try:
+        path = cfg_path(config_opt)
+        if path.exists():
+            return normalize_privilege_mode(load_store(path).behavior.privilege_mode)
+    except Exception:
+        pass
+    return normalize_privilege_mode(BehaviorConfig().privilege_mode)
+
+
+def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
+    """Report the privilege policy setup deliberately did not change."""
+    mode = _configured_privilege_mode(config_opt)
+    if mode == PrivilegeMode.SUDOLESS:
+        print("behavior.privilege_mode = 'sudoless': aivm refuses rather than")
+        print('  escalates. It cannot manage the nftables firewall, and cannot')
+        print('  establish a *new* persistent/shared-root attachment, because')
+        print('  `mount --bind` has no unprivileged implementation.')
+        if _firewall_enabled_anywhere(config_opt):
+            print(
+                '⚠️ firewall.enabled is true, which sudoless mode cannot honor. '
+                'Disable the firewall or choose a mode that may escalate.'
+            )
+    elif mode == PrivilegeMode.SUDO:
+        print("behavior.privilege_mode = 'sudo': aivm escalates for every")
+        print('  privileged-capable operation, so the host work above buys you')
+        print("  nothing until you switch to 'auto'.")
+    else:
+        print(f"behavior.privilege_mode = '{mode}', unchanged and correct:")
+        print('  once the libvirt group is active, aivm stops invoking sudo for')
+        print('  libvirt and image operations on its own. Sudo remains only for')
+        print('  the nftables firewall, apt-get, and establishing a new host')
+        print('  bind mount.')
+    if group_added:
+        print(
+            f'👉 Group membership added. Log out and back in (or run `newgrp '
+            f'{LIBVIRT_GROUP}`) so it takes effect.'
+        )
+    print('Run `aivm host sudoless check` to verify readiness.')
 
 
 def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
@@ -156,17 +227,18 @@ class SudolessCheckCLI(_BaseCommand):
                 'firewall compatibility',
                 'firewall disabled; nothing needs root'
                 if not fw_enabled
-                else 'firewall.enabled needs root nftables access; sudoless '
-                'runs will skip firewall reconciliation',
+                else 'firewall.enabled requires root nftables access, which '
+                'has no unprivileged equivalent; disable it to run fully '
+                'without sudo',
             )
         )
 
-        mgr = CommandManager.current()
+        mode = _configured_privilege_mode(args.config)
         lines.append(
             status_line(
-                True if mgr.privilege_mode != 'sudo' else None,
+                True if mode != PrivilegeMode.SUDO else None,
                 'privilege mode',
-                f'behavior.privilege_mode = {mgr.privilege_mode!r}',
+                f'behavior.privilege_mode = {str(mode)!r}',
             )
         )
 
@@ -182,30 +254,25 @@ class SudolessSetupCLI(_BaseCommand):
     """Prepare this host for sudoless aivm operation.
 
     Uses sudo at most once (libvirt group membership); everything else is
-    unprivileged: creating a user-owned VM storage directory, granting
-    libvirt-qemu traversal via POSIX ACLs, and persisting the sudoless
-    configuration.
+    unprivileged: creating a user-owned VM storage directory and granting
+    libvirt-qemu traversal via POSIX ACLs. Your config is not modified
+    unless you pass ``--persist``, and even then only
+    ``defaults.paths.base_dir`` is written.
     """
 
     base_dir: str = kwconf.Value(
         '',
         help=(
-            'User-owned VM storage directory to configure (default: keep '
-            'the current default when writable, else ~/.local/share/aivm).'
+            'User-owned VM storage directory to prepare (default: the '
+            f'directory your config already resolves to, else {USER_BASE_DIR}).'
         ),
     )
-    mode: str = kwconf.Value(
-        'sudoless',
-        help=(
-            "privilege_mode to persist: 'sudoless' (never sudo) or 'auto' "
-            '(sudoless where possible, sudo fallback).'
-        ),
-    )
-    keep_firewall: bool = kwconf.Flag(
+    persist: bool = kwconf.Flag(
         False,
         help=(
-            'Keep firewall.enabled in the default config even though '
-            'sudoless runs cannot manage nftables.'
+            'Write the prepared directory to defaults.paths.base_dir. '
+            'Nothing else is ever written: privilege_mode and '
+            'firewall.enabled stay yours to set.'
         ),
     )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
@@ -213,9 +280,6 @@ class SudolessSetupCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        if args.mode not in {'sudoless', 'auto'}:
-            print("--mode must be 'sudoless' or 'auto'")
-            return 2
         mgr = CommandManager.current()
         if mgr.privilege_mode == 'sudoless':
             # Setup is the transition tool: it may need one privileged
@@ -268,16 +332,19 @@ class SudolessSetupCLI(_BaseCommand):
                         )
                 group_added = True
 
+        # The ACLs below are granted on one specific directory, so they are
+        # worthless unless aivm goes on to use it. Prefer the directory the
+        # config already resolves to: when that is user-owned the host work
+        # lands where aivm already looks and no config change is implied.
+        resolved_default = _effective_default_base_dir(args.config)
         base_dir = (
-            Path(expand(args.base_dir))
-            if args.base_dir
-            else _effective_default_base_dir(args.config)
+            Path(expand(args.base_dir)) if args.base_dir else resolved_default
         )
         if not args.base_dir and not user_can_write_path(base_dir):
-            base_dir = Path(expand('~/.local/share/aivm'))
+            base_dir = Path(expand(USER_BASE_DIR))
             print(
-                f'Default VM storage is not user-writable; using {base_dir} '
-                'for sudoless operation.'
+                f'{resolved_default} is not user-writable, so preparing '
+                f'{base_dir} instead.'
             )
         if not user_can_write_path(base_dir):
             print(
@@ -285,6 +352,7 @@ class SudolessSetupCLI(_BaseCommand):
                 'directory via --base_dir.'
             )
             return 2
+        config_gap = base_dir != resolved_default
 
         if args.dry_run:
             print(f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs')
@@ -343,41 +411,54 @@ class SudolessSetupCLI(_BaseCommand):
                 for b in foreign:
                     print(f'  sudo setfacl -m u:{LIBVIRT_QEMU_USER}:x {b}')
 
-        # Persist config: privilege mode, default base_dir, firewall policy.
         store = cfg_path(args.config)
-        reg = load_store(store)
-        reg.behavior.privilege_mode = args.mode
-        if reg.defaults is None:
-            reg.defaults = AgentVMConfig()
-        reg.defaults.paths.base_dir = str(base_dir)
-        firewall_note = ''
-        if reg.defaults.firewall.enabled and not args.keep_firewall:
-            reg.defaults.firewall.enabled = False
-            firewall_note = (
-                'Disabled firewall.enabled in default config: nftables '
-                'management needs root. NOTE this loosens guest network '
-                'confinement for NEW VMs; pass --keep_firewall to keep it '
-                '(sudoless runs will then skip firewall reconciliation).'
+        has_defaults = store.exists() and load_store(store).defaults is not None
+        if config_gap and args.persist and not has_defaults:
+            # Creating a [defaults] section to hold one path would materialize
+            # every other default alongside it, pinning values the user never
+            # chose -- including a hostname-derived vm.name. Decline.
+            print()
+            print(
+                f'❌ Cannot persist: {store} has no [defaults] section, and '
+                'creating one would pin every other default value. Run '
+                '`aivm config init` first, or add this yourself:'
             )
-        if args.dry_run:
-            print(f'DRYRUN: would persist privilege_mode={args.mode!r}, ')
-            print(f'DRYRUN: default base_dir={base_dir}')
-            if firewall_note:
-                print(f'DRYRUN: {firewall_note}')
-            return 0
-        save_store(
-            reg,
-            store,
-            reason=(
-                f'Persist sudoless setup: privilege_mode={args.mode}, '
-                f'default base_dir={base_dir}.'
-            ),
-        )
-        print(f'Persisted behavior.privilege_mode = {args.mode!r}')
-        print(f'Persisted default paths.base_dir = {base_dir}')
-        if firewall_note:
-            print(f'⚠️ {firewall_note}')
-        for rec in reg.vms:
+            _print_base_dir_toml(base_dir)
+            return 2
+        if config_gap and args.persist:
+            if args.dry_run:
+                print(f'DRYRUN: would persist default base_dir={base_dir}')
+            else:
+                reg = load_store(store)
+                assert reg.defaults is not None  # guarded by has_defaults
+                reg.defaults.paths.base_dir = str(base_dir)
+                save_store(
+                    reg,
+                    store,
+                    reason=f'Persist sudoless setup: base_dir={base_dir}.',
+                )
+                print(f'Persisted default paths.base_dir = {base_dir}')
+        elif config_gap:
+            print()
+            print(
+                f'Nothing in your config changed. aivm still resolves VM '
+                f'storage to {resolved_default}, so the ACLs just granted on '
+                f'{base_dir} will go unused until you point it there. Add to '
+                f'{store}:'
+            )
+            _print_base_dir_toml(base_dir)
+            if has_defaults:
+                print('Or re-run with --persist to write exactly that line.')
+        else:
+            print(
+                f'Nothing in your config needs to change; VM storage already '
+                f'resolves to {base_dir}.'
+            )
+
+        print()
+        _print_policy_report(args.config, group_added=group_added)
+        existing_vms = load_store(store).vms if store.exists() else []
+        for rec in existing_vms:
             vm_base = Path(expand(rec.cfg.paths.base_dir))
             if not user_can_write_path(vm_base):
                 print(
@@ -385,14 +466,6 @@ class SudolessSetupCLI(_BaseCommand):
                     f'{vm_base}, which still needs sudo; recreate it or '
                     'move its storage for fully sudoless operation.'
                 )
-        if group_added:
-            print(
-                f'👉 Group membership added. Log out and back in (or run '
-                f'`newgrp {LIBVIRT_GROUP}`) so it takes effect, then run '
-                '`aivm host sudoless check`.'
-            )
-        else:
-            print('Run `aivm host sudoless check` to verify readiness.')
         return 0
 
 

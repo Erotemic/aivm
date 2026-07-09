@@ -57,17 +57,19 @@ If you prefer ``aivm`` to never invoke ``sudo``:
    aivm host sudoless check    # report what is missing
    aivm host sudoless setup    # establish it (sudo used at most once)
 
-Setup adds you to the ``libvirt`` group (the one privileged step), moves the
-default VM storage to a user-owned directory with ``setfacl`` traversal grants
-for ``libvirt-qemu``, disables the managed nftables firewall (it requires
-root; keep it with ``--keep_firewall``), and persists
-``behavior.privilege_mode = "sudoless"``. Log out and back in (or ``newgrp
-libvirt``) after the group change, then re-run the check.
+Setup adds you to the ``libvirt`` group (the one privileged step) and prepares
+a user-owned VM storage directory with ``setfacl`` traversal grants for
+``libvirt-qemu``. It changes nothing in your config -- it prints the one line
+(``defaults.paths.base_dir``) that the storage grant depends on, or writes it
+for you with ``--persist``. Log out and back in (or ``newgrp libvirt``) after
+the group change, then re-run the check.
 
-In sudoless mode new attachments default to ``--mode shared`` (direct
-virtiofs); the ``persistent`` and ``shared-root`` modes rely on host bind
-mounts, which require root. The default ``auto`` mode needs no setup ceremony:
-it simply stops using sudo for whatever already works without it.
+That host work is all the default ``auto`` mode needs: it then stops invoking
+sudo for whatever already works without it. Setting
+``behavior.privilege_mode = "sudoless"`` on top is a separate, stricter
+choice -- aivm will then refuse rather than escalate, which means no nftables
+firewall and no *new* ``persistent``/``shared-root`` attachments, since
+``mount --bind`` requires root.
 
 Notes
 -----

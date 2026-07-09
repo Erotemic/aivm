@@ -143,8 +143,11 @@ Privilege modes (``behavior.privilege_mode``):
   ``--never_sudo``.
 
 Run ``aivm host sudoless check`` to see what your host still needs for
-sudoless operation, and ``aivm host sudoless setup`` to establish it (it uses
-sudo at most once, to add you to the ``libvirt`` group). State-changing
+sudoless operation, and ``aivm host sudoless setup`` to establish the host-side
+prerequisites (it uses sudo at most once, to add you to the ``libvirt``
+group). Setup never changes your config: establishing a capability and
+choosing a policy are different acts, so ``privilege_mode`` and
+``firewall.enabled`` stay yours to set. State-changing
 hypervisor commands keep their approval prompt even when they no longer need
 sudo, so destructive operations never become promptless just because
 escalation stopped being necessary.

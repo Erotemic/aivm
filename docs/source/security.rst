@@ -288,11 +288,12 @@ The current ``aivm`` security posture is intentionally pragmatic:
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
 * Sudoless operation (``behavior.privilege_mode = "sudoless"``) cannot manage
-  the nftables firewall: reconciliation skips it with a warning and
-  ``aivm host sudoless setup`` disables it in the default config unless
-  ``--keep_firewall`` is passed. Choosing sudoless trades away managed
-  network isolation for the never-sudo guarantee; guests then rely on the
-  standard libvirt NAT network behavior alone.
+  the nftables firewall: ``nft`` requires ``CAP_NET_ADMIN`` and has no
+  unprivileged equivalent, so reconciliation skips it with a warning.
+  Choosing sudoless therefore trades away managed network isolation for the
+  never-sudo guarantee; guests then rely on the standard libvirt NAT network
+  behavior alone. Disabling ``firewall.enabled`` is a decision the operator
+  makes explicitly -- no aivm command turns it off for you.
 * The explicit-consent contract survives sudoless operation: state-changing
   hypervisor commands (``virsh``/``virt-install``) prompt for approval even
   when group membership means they no longer need sudo. Destructive
