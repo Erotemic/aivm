@@ -10,7 +10,6 @@ from loguru import logger as log
 from ..config import AgentVMConfig
 from ..config_store import find_attachment_for_vm, load_store
 from ..errors import AIVMError
-from ..privilege import require_sudo_allowed, sudo_allowed
 from ..runtime import require_system_runtime, runtime_is_session
 from ..vm.share import (
     AttachmentAccess,
@@ -225,10 +224,6 @@ def _resolve_attachment(
         # virtiofsd needs the system daemon, and bind-mount modes need root.
         # Git sync is the one transport that works everywhere.
         mode = _normalize_attachment_mode(ATTACHMENT_MODE_GIT)
-    elif not mode_opt and not sudo_allowed():
-        # The default persistent mode relies on host bind mounts, which
-        # need root; sudoless attachments default to direct virtiofs.
-        mode = _normalize_attachment_mode(ATTACHMENT_MODE_SHARED)
     else:
         mode = _normalize_attachment_mode(mode_opt)
     access = _normalize_attachment_access(access_opt)
@@ -287,17 +282,6 @@ def _resolve_attachment(
                 f'  aivm detach {host_src}\n'
                 f'  aivm attach {host_src} --mode git\n'
                 "Or use a VM with runtime.mode = 'system'."
-            ),
-        )
-    if mode in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}:
-        require_sudo_allowed(
-            feature=f"The '{mode}' attachment mode (host bind mounts)",
-            hint=(
-                'Use the sudoless-compatible shared mode instead (existing '
-                'attachments keep their saved mode, so detach first):\n'
-                f'  aivm detach {host_src}\n'
-                f'  aivm attach {host_src} --mode shared\n'
-                "Or set behavior.privilege_mode to 'auto' to allow sudo."
             ),
         )
     if mode == ATTACHMENT_MODE_GIT:

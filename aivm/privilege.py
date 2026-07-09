@@ -223,11 +223,19 @@ def file_write_needs_sudo(path: Path | str) -> bool:
 
 
 def require_sudo_allowed(*, feature: str, hint: str) -> None:
-    """Fail fast when a root-only feature is used in sudoless mode.
+    """Fail fast when an unconditionally root-only feature is used in sudoless mode.
 
-    Use this for operations with no unprivileged implementation (nftables,
-    host bind mounts, package installation) so users get feature-level
-    guidance instead of a failed command deep inside a flow.
+    Only for operations that need root on *every* invocation (nftables,
+    package installation), so users get feature-level guidance instead of a
+    failed command deep inside a flow.
+
+    Do not use this to gate a feature that merely *can* need root. A
+    persistent/shared-root attachment needs a privileged ``mount --bind``
+    only when the bind is missing; reconciling an established one issues no
+    privileged command at all. Gating on the feature refuses work that
+    would have succeeded. Such call sites need no gate: every sudo command
+    passes through CommandManager._reject_sudo_if_sudoless, which rejects
+    on the command actually being run rather than on what might be run.
     """
     if current_privilege_mode() != PrivilegeMode.SUDOLESS:
         return

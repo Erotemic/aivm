@@ -126,9 +126,15 @@ def test_sudoless_manager_rejects_sudo_commands(
         mgr.confirm_sudo_scope(purpose='test escalation', role='modify')
 
 
-def test_sudoless_attachment_mode_guard(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+def test_attachment_resolution_is_privilege_mode_independent(
+    tmp_path: Path,
 ) -> None:
+    """Resolving a bind-mount attachment mode issues no privileged command.
+
+    Whether the mode needs root is decided per command at execution time
+    (an established bind mount needs none), so resolution must not refuse
+    a mode up front.
+    """
     from aivm.attachments.resolve import _resolve_attachment
 
     cfg = AgentVMConfig()
@@ -137,17 +143,13 @@ def test_sudoless_attachment_mode_guard(
     host_src = tmp_path / 'proj'
     host_src.mkdir()
 
-    _activate('sudoless')
-    att = _resolve_attachment(cfg, cfg_path, host_src, '', '', '')
-    assert str(att.mode) == 'shared'
-    with pytest.raises(SudolessModeError, match='bind mounts'):
-        _resolve_attachment(cfg, cfg_path, host_src, '', 'persistent', '')
-    with pytest.raises(SudolessModeError, match='bind mounts'):
-        _resolve_attachment(cfg, cfg_path, host_src, '', 'shared-root', '')
-    # auto keeps the historical default
-    _activate('auto')
-    att = _resolve_attachment(cfg, cfg_path, host_src, '', '', '')
-    assert str(att.mode) == 'persistent'
+    for mode in ('sudoless', 'auto', 'sudo'):
+        _activate(mode)
+        att = _resolve_attachment(cfg, cfg_path, host_src, '', '', '')
+        assert str(att.mode) == 'persistent'
+        for requested in ('persistent', 'shared-root'):
+            att = _resolve_attachment(cfg, cfg_path, host_src, '', requested, '')
+            assert str(att.mode) == requested
 
 
 def test_sudoless_firewall_degradation() -> None:
