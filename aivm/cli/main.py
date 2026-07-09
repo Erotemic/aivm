@@ -18,6 +18,7 @@ from loguru import logger as log
 from ..commands import CommandManager
 from ..config_store import load_store
 from ..errors import AIVMError
+from ..modes import PrivilegeMode
 from ..services import cfg_path, load_cfg_with_path, resolve_cfg_for_code
 from ..status import (
     anticipated_status_sudo_commands,
@@ -145,11 +146,11 @@ class StatusCLI(_BaseCommand):
             print(render_global_status())
             return 0
         mgr = CommandManager.current()
-        if args.sudo and mgr.privilege_mode == 'sudoless':
-            # --sudo cannot override the sudoless guarantee; run the
+        if args.sudo and mgr.privilege_mode == PrivilegeMode.NEVER:
+            # --sudo cannot override the never-sudo guarantee; run the
             # unprivileged probes and say so instead of erroring.
             print(
-                'ℹ️ sudoless mode: ignoring --sudo; showing unprivileged '
+                'ℹ️ privilege_mode = never: ignoring --sudo; showing unprivileged '
                 'status checks only.'
             )
             args.sudo = False

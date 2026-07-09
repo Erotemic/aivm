@@ -53,15 +53,15 @@ class _BaseCommand(kwconf.Config):
         False,
         help='Auto-approve sudo confirmation prompts only.',
     )
-    # Named --never_sudo (not --sudoless) so a mistyped `--sudo` cannot
-    # prefix-abbreviate into the opposite of the user's intent, and (unlike
-    # --no_sudo) its auto-generated negation aliases cannot collide with the
-    # status command's --sudo/--no-sudo flag.
+    # Named --never_sudo rather than anything beginning `--sudo`, so a
+    # mistyped `--sudo` cannot prefix-abbreviate into the opposite of the
+    # user's intent; and unlike --no_sudo, its auto-generated negation
+    # aliases cannot collide with the status command's --sudo/--no-sudo flag.
     never_sudo: bool = kwconf.Flag(
         False,
         help=(
-            'Never invoke sudo for this invocation (forces sudoless mode, '
-            'overriding behavior.privilege_mode; see `aivm host sudoless`).'
+            'Never invoke sudo for this invocation (forces '
+            "behavior.privilege_mode = 'never'; see `aivm host sudoless`)."
         ),
     )
 
@@ -74,7 +74,7 @@ class _BaseCommand(kwconf.Config):
             _resolve_cfg_auto_approve_readonly_sudo(parsed.config)
         )
         privilege_mode = (
-            'sudoless'
+            'never'
             if parsed.never_sudo
             else _resolve_cfg_privilege_mode(parsed.config)
         )
@@ -141,16 +141,20 @@ def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
 
 
 def _resolve_cfg_privilege_mode(config_opt: str | None) -> str:
-    from ..privilege import normalize_privilege_mode
+    from ..modes import DEFAULT_PRIVILEGE_MODE, normalize_privilege_mode
 
+    # An unreadable store falls back to the default, but a store that names
+    # an unknown mode must not: normalize_privilege_mode raises, and letting
+    # that escape is the point -- silently choosing a privilege mode for the
+    # user is what we are trying to avoid.
     try:
         path = cfg_path(config_opt)
-        if path.exists():
-            reg = load_store(path)
-            return normalize_privilege_mode(reg.behavior.privilege_mode)
+        if not path.exists():
+            return str(DEFAULT_PRIVILEGE_MODE)
+        reg = load_store(path)
     except Exception:
-        pass
-    return 'auto'
+        return str(DEFAULT_PRIVILEGE_MODE)
+    return str(normalize_privilege_mode(reg.behavior.privilege_mode))
 
 
 def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:

@@ -1,22 +1,24 @@
-"""Privilege-mode policy and host capability probes for sudoless operation.
+"""Privilege-mode policy and host capability probes.
 
-aivm supports three privilege modes, configured via
-``behavior.privilege_mode`` (or forced per-invocation with ``--sudoless``):
+All three modes answer one question --- *when does aivm invoke sudo?* ---
+configured via ``behavior.privilege_mode`` (or forced to ``'never'`` for
+one invocation with ``--never_sudo``):
 
-* ``'sudo'``     -- classic behavior: privileged host operations run via
-  sudo, with the usual approval prompts.
-* ``'sudoless'`` -- hard guarantee: aivm never invokes sudo. Operations
-  that genuinely require root (nftables firewall management, shared-root /
-  persistent host bind mounts, dependency installation) fail with
-  actionable guidance instead of escalating.
-* ``'auto'``     -- default: probe what already works without privileges
+* ``'never'``     -- refuse rather than escalate. Operations that
+  genuinely require root (nftables firewall management, dependency
+  installation, establishing a *new* host bind mount) fail with
+  actionable guidance. An assertion for CI, not a daily posture.
+* ``'as-needed'`` -- default: probe what already works without privileges
   (system-libvirt access via the ``libvirt`` group, user-writable image
   trees) and use sudo only where the probe says it is required.
+* ``'always'``    -- classic behavior: privileged host operations run via
+  sudo, with the usual approval prompts.
 
 The mode itself lives on :class:`aivm.commands.CommandManager` so the
 never-sudo guarantee is enforced at the one chokepoint every subprocess
-goes through. The helpers here answer the per-family question "does this
-kind of command need sudo right now?" for call sites:
+goes through --- keyed on the command actually being run, never on the
+feature requesting it. The helpers here answer the per-family question
+"does this kind of command need sudo right now?" for call sites:
 
 * :func:`virsh_needs_sudo` -- libvirt client commands (virsh,
   virt-install). Unprivileged access to ``qemu:///system`` works when the
@@ -30,9 +32,11 @@ kind of command need sudo right now?" for call sites:
   than its parent directory.
 
 Run ``aivm host sudoless check`` / ``aivm host sudoless setup`` to inspect
-or establish the host state these probes look for.
+or establish the host state these probes look for. "Sudoless" names a
+property of the *host* (aivm need never escalate on it), which is why that
+command keeps the name while the mode values do not.
 
-Security note: sudoless is a *no-sudo-invocation* guarantee, not a
+Security note: ``'never'`` is a *no-sudo-invocation* guarantee, not a
 reduced-privilege guarantee. Membership in the libvirt group grants control
 of the root system libvirt daemon, which is effectively root-equivalent on
 the host. State-changing hypervisor commands therefore keep the same
@@ -52,13 +56,36 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandManager
-from .errors import SudolessModeError
-from .modes import PrivilegeMode
+from .errors import SudoRequiredError
+from .modes import (
+    PRIVILEGE_MODES,
+    PrivilegeMode,
+    normalize_privilege_mode,
+)
 from .runtime import virsh_cmd
 
 log = logger
 
-PRIVILEGE_MODES = tuple(m.value for m in PrivilegeMode)
+__all__ = [
+    'PRIVILEGE_MODES',
+    'PrivilegeMode',
+    'normalize_privilege_mode',
+    'current_privilege_mode',
+    'libvirt_unprivileged_ok',
+    'virsh_needs_sudo',
+    'sudo_allowed',
+    'path_needs_sudo',
+    'file_write_needs_sudo',
+    'require_sudo_allowed',
+    'user_can_write_path',
+    'user_can_write_file',
+    'user_in_libvirt_group',
+    'qemu_traversal_blockers',
+    'qemu_user_can_traverse',
+    'nearest_existing_ancestor',
+    'LIBVIRT_QEMU_USER',
+    'LIBVIRT_GROUP',
+]
 
 #: The user that Ubuntu system-libvirt runs QEMU processes as. Disk images
 #: and every ancestor directory must be traversable by this user.
@@ -66,21 +93,6 @@ LIBVIRT_QEMU_USER = 'libvirt-qemu'
 
 #: Membership in this group grants unprivileged access to qemu:///system.
 LIBVIRT_GROUP = 'libvirt'
-
-
-def normalize_privilege_mode(value: object) -> PrivilegeMode:
-    """Normalize a configured privilege mode, defaulting to ``AUTO``."""
-    mode = str(value or 'auto').strip().lower()
-    try:
-        return PrivilegeMode(mode)
-    except ValueError:
-        log.warning(
-            "Unknown privilege_mode {!r}; falling back to 'auto'. "
-            'Valid values: {}',
-            value,
-            ', '.join(PRIVILEGE_MODES),
-        )
-        return PrivilegeMode.AUTO
 
 
 def current_privilege_mode() -> PrivilegeMode:
@@ -131,16 +143,16 @@ def libvirt_unprivileged_ok() -> bool:
 def virsh_needs_sudo() -> bool:
     """Return whether libvirt client commands should run via sudo."""
     mode = current_privilege_mode()
-    if mode == PrivilegeMode.SUDO:
+    if mode == PrivilegeMode.ALWAYS:
         return True
-    if mode == PrivilegeMode.SUDOLESS:
+    if mode == PrivilegeMode.NEVER:
         return False
     return not libvirt_unprivileged_ok()
 
 
 def sudo_allowed() -> bool:
     """Return False when the active mode forbids sudo entirely."""
-    return current_privilege_mode() != PrivilegeMode.SUDOLESS
+    return current_privilege_mode() != PrivilegeMode.NEVER
 
 
 def _stat_or_none(path: Path) -> os.stat_result | None:
@@ -192,9 +204,9 @@ def user_can_write_path(path: Path | str) -> bool:
 def path_needs_sudo(path: Path | str) -> bool:
     """Return whether filesystem operations on ``path`` should use sudo."""
     mode = current_privilege_mode()
-    if mode == PrivilegeMode.SUDO:
+    if mode == PrivilegeMode.ALWAYS:
         return True
-    if mode == PrivilegeMode.SUDOLESS:
+    if mode == PrivilegeMode.NEVER:
         return False
     return not user_can_write_path(path)
 
@@ -215,15 +227,15 @@ def user_can_write_file(path: Path | str) -> bool:
 def file_write_needs_sudo(path: Path | str) -> bool:
     """Return whether an in-place write to ``path`` should use sudo."""
     mode = current_privilege_mode()
-    if mode == PrivilegeMode.SUDO:
+    if mode == PrivilegeMode.ALWAYS:
         return True
-    if mode == PrivilegeMode.SUDOLESS:
+    if mode == PrivilegeMode.NEVER:
         return False
     return not user_can_write_file(path)
 
 
 def require_sudo_allowed(*, feature: str, hint: str) -> None:
-    """Fail fast when an unconditionally root-only feature is used in sudoless mode.
+    """Fail fast when an unconditionally root-only feature meets ``never``.
 
     Only for operations that need root on *every* invocation (nftables,
     package installation), so users get feature-level guidance instead of a
@@ -234,14 +246,14 @@ def require_sudo_allowed(*, feature: str, hint: str) -> None:
     only when the bind is missing; reconciling an established one issues no
     privileged command at all. Gating on the feature refuses work that
     would have succeeded. Such call sites need no gate: every sudo command
-    passes through CommandManager._reject_sudo_if_sudoless, which rejects
+    passes through CommandManager._reject_sudo_if_forbidden, which rejects
     on the command actually being run rather than on what might be run.
     """
-    if current_privilege_mode() != PrivilegeMode.SUDOLESS:
+    if current_privilege_mode() != PrivilegeMode.NEVER:
         return
-    raise SudolessModeError(
-        f'{feature} requires privileged host access, but sudoless mode is '
-        'enabled (behavior.privilege_mode = "sudoless").\n'
+    raise SudoRequiredError(
+        f'{feature} requires privileged host access, but sudo is forbidden '
+        '(behavior.privilege_mode = "never").\n'
         f'{hint}'
     )
 

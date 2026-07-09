@@ -65,11 +65,11 @@ Attachment modes:
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
 
-In sudoless mode (``behavior.privilege_mode = "sudoless"``) new attachments
-default to ``shared`` instead of ``persistent``: the ``persistent`` and
-``shared-root`` backends stage host bind mounts, which require root.
-Requesting them explicitly in sudoless mode fails with detach/reattach
-guidance rather than escalating.
+The ``persistent`` and ``shared-root`` backends stage host bind mounts, so
+establishing a *new* one runs ``mount --bind`` and needs root. Reconciling an
+already-established attachment issues no privileged command at all, and is
+therefore unaffected by ``privilege_mode``. Only ``shared`` never needs a
+bind mount.
 
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
@@ -202,9 +202,9 @@ Run without sudo
    aivm host sudoless check
    aivm host sudoless setup
    aivm status            # header shows the active privilege mode
-   aivm vm up --never_sudo  # force sudoless for one invocation
+   aivm vm up --never_sudo  # force privilege_mode='never' for one invocation
 
-The default ``auto`` mode already prefers unprivileged execution and only
+The default ``as-needed`` mode already prefers unprivileged execution and only
 escalates where required, so most hosts need no ceremony: joining the
 ``libvirt`` group removes sudo from every ``virsh``/``virt-install`` call, and
 a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
@@ -214,7 +214,7 @@ change your config: ``behavior.privilege_mode`` and ``firewall.enabled`` are
 yours to set. Pass ``--persist`` to have it write the one value the host work
 depends on, ``defaults.paths.base_dir``.
 
-Setting ``privilege_mode = "sudoless"`` yourself makes ``aivm`` refuse to
+Setting ``privilege_mode = "never"`` yourself makes ``aivm`` refuse to
 invoke sudo at all: the managed nftables firewall is skipped with a warning,
 and establishing a *new* bind-mount attachment fails with guidance.
 

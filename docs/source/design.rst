@@ -170,12 +170,13 @@ Operational command execution
   consistent sudo policy, plan rendering, logging, and error semantics.
 * Keep privilege handling explicit and auditable.
 * Privilege acquisition is a policy, not a property of call sites:
-  ``behavior.privilege_mode`` selects ``auto`` (probe unprivileged
+  ``behavior.privilege_mode`` selects ``as-needed`` (probe unprivileged
   capability -- libvirt group access, user-writable storage trees -- and
-  escalate only where required), ``sudo`` (always escalate), or ``sudoless``
-  (never invoke sudo). ``aivm.privilege`` owns the capability probes and
+  escalate only where required), ``always`` (escalate every
+  privileged-capable operation), or ``never`` (refuse rather than
+  escalate). ``aivm.privilege`` owns the capability probes and
   per-family decisions (``virsh_needs_sudo``, ``path_needs_sudo``); the
-  ``CommandManager`` enforces the sudoless guarantee structurally by
+  ``CommandManager`` enforces the never-sudo guarantee structurally by
   rejecting any sudo command before execution or approval side effects, so a
   call site that forgets to consult the policy fails loudly instead of
   escalating.

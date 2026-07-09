@@ -10,7 +10,7 @@ storage tree with libvirt-qemu traversal ACLs.
 Setup does not change your config. Establishing a capability and choosing a
 policy are different acts: ``behavior.privilege_mode`` and
 ``firewall.enabled`` stay yours to set. Once the host work is done, the
-default ``privilege_mode='auto'`` stops invoking sudo for libvirt and image
+default ``privilege_mode='as-needed'`` stops invoking sudo for libvirt and image
 operations on its own -- no mode flip required, and the firewall keeps
 working. ``--persist`` opts in to the one config value the host work
 genuinely depends on (``defaults.paths.base_dir``, which the ACLs are
@@ -72,36 +72,38 @@ def _print_base_dir_toml(base_dir: Path) -> None:
 def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
     """Return the persisted privilege mode, not the one this run is using.
 
-    Setup temporarily activates an ``auto`` manager so it can run ``usermod``
-    even under a sudoless config, so the live manager is not the answer to
-    "what did the user choose?".
+    Setup temporarily activates an ``as-needed`` manager so it can run
+    ``usermod`` even under ``privilege_mode='never'``, so the live manager is
+    not the answer to "what did the user choose?".
     """
     try:
         path = cfg_path(config_opt)
-        if path.exists():
-            return normalize_privilege_mode(load_store(path).behavior.privilege_mode)
+        if not path.exists():
+            return normalize_privilege_mode(BehaviorConfig().privilege_mode)
+        reg = load_store(path)
     except Exception:
-        pass
-    return normalize_privilege_mode(BehaviorConfig().privilege_mode)
+        return normalize_privilege_mode(BehaviorConfig().privilege_mode)
+    return normalize_privilege_mode(reg.behavior.privilege_mode)
 
 
 def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
     """Report the privilege policy setup deliberately did not change."""
     mode = _configured_privilege_mode(config_opt)
-    if mode == PrivilegeMode.SUDOLESS:
-        print("behavior.privilege_mode = 'sudoless': aivm refuses rather than")
+    if mode == PrivilegeMode.NEVER:
+        print("behavior.privilege_mode = 'never': aivm refuses rather than")
         print('  escalates. It cannot manage the nftables firewall, and cannot')
         print('  establish a *new* persistent/shared-root attachment, because')
         print('  `mount --bind` has no unprivileged implementation.')
         if _firewall_enabled_anywhere(config_opt):
             print(
-                '⚠️ firewall.enabled is true, which sudoless mode cannot honor. '
-                'Disable the firewall or choose a mode that may escalate.'
+                "⚠️ firewall.enabled is true, which privilege_mode = 'never' "
+                'cannot honor. Disable the firewall or choose a mode that may '
+                'escalate.'
             )
-    elif mode == PrivilegeMode.SUDO:
-        print("behavior.privilege_mode = 'sudo': aivm escalates for every")
+    elif mode == PrivilegeMode.ALWAYS:
+        print("behavior.privilege_mode = 'always': aivm escalates for every")
         print('  privileged-capable operation, so the host work above buys you')
-        print("  nothing until you switch to 'auto'.")
+        print("  nothing until you switch to 'as-needed'.")
     else:
         print(f"behavior.privilege_mode = '{mode}', unchanged and correct:")
         print('  once the libvirt group is active, aivm stops invoking sudo for')
@@ -236,7 +238,7 @@ class SudolessCheckCLI(_BaseCommand):
         mode = _configured_privilege_mode(args.config)
         lines.append(
             status_line(
-                True if mode != PrivilegeMode.SUDO else None,
+                True if mode != PrivilegeMode.ALWAYS else None,
                 'privilege mode',
                 f'behavior.privilege_mode = {str(mode)!r}',
             )
@@ -281,10 +283,10 @@ class SudolessSetupCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
-        if mgr.privilege_mode == 'sudoless':
+        if mgr.privilege_mode == PrivilegeMode.NEVER:
             # Setup is the transition tool: it may need one privileged
-            # command (usermod), so it runs with sudo fallback enabled even
-            # when the config already says sudoless.
+            # command (usermod), so it runs with escalation enabled even when
+            # the config forbids sudo.
             print(
                 'ℹ️ Sudoless setup may use sudo once (libvirt group '
                 'membership); everything else runs unprivileged.'
@@ -293,7 +295,7 @@ class SudolessSetupCLI(_BaseCommand):
                 yes=bool(args.yes),
                 yes_sudo=bool(args.yes_sudo),
                 auto_approve_readonly_sudo=mgr.auto_approve_readonly_sudo,
-                privilege_mode='auto',
+                privilege_mode=str(PrivilegeMode.AS_NEEDED),
             )
             CommandManager.activate(mgr)
 

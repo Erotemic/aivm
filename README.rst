@@ -70,7 +70,7 @@ What it provides
    Three opt-in end-to-end test modules live in ``tests/``:
    ``test_e2e_nested.py`` (light smoke path), ``test_e2e_full.py``
    (comprehensive cycle), and ``test_e2e_sudoless.py`` (full lifecycle
-   with ``privilege_mode = "sudoless"``, proving no sudo is invoked).
+   with ``privilege_mode = "never"``, proving no sudo is invoked).
    They are skipped by default; to run them locally set ``AIVM_E2E=1``
    and invoke pytest manually.  All need a host with KVM and (optionally)
    an Ubuntu cloud image cached under ``~/.cache/aivm/e2e``; the first two
@@ -132,15 +132,19 @@ network/firewall/libvirt/image checks.
 
 Privilege modes (``behavior.privilege_mode``):
 
-* ``auto`` (default) probes what already works without sudo -- unprivileged
-  ``qemu:///system`` access via the ``libvirt`` group, user-writable VM
-  storage -- and uses sudo only where required.
-* ``sudo`` always escalates privileged host operations through sudo
-  (the classic behavior).
-* ``sudoless`` never invokes sudo. Root-only features (nftables firewall,
-  shared-root/persistent host bind mounts, dependency install) fail with
-  actionable guidance instead of escalating. Force it per-invocation with
+All three answer one question -- *when does aivm invoke sudo?*
+
+* ``never`` refuses rather than escalating. Operations with no unprivileged
+  implementation (nftables firewall, ``apt-get``, establishing a *new* host
+  bind mount) fail with actionable guidance. Force it per-invocation with
   ``--never_sudo``.
+* ``as-needed`` (default) probes what already works without sudo --
+  unprivileged ``qemu:///system`` access via the ``libvirt`` group,
+  user-writable VM storage -- and uses sudo only where required.
+* ``always`` escalates every privileged-capable host operation through sudo
+  (the classic behavior).
+
+An unrecognized value is an error, not a silent fallback.
 
 Run ``aivm host sudoless check`` to see what your host still needs for
 sudoless operation, and ``aivm host sudoless setup`` to establish the host-side
@@ -205,7 +209,7 @@ receive the new host-qualified default.
    [behavior]
    yes_sudo = false
    auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
-   privilege_mode = "auto"            # "sudo" | "auto" | "sudoless"
+   privilege_mode = "as-needed"       # "never" | "as-needed" | "always"
 
 Common Workflows
 ----------------

@@ -16,6 +16,7 @@ from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_store import AttachmentEntry, load_store, store_path
 from .host import check_commands
+from .modes import PrivilegeMode
 from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
     require_ssh_identity,
@@ -294,11 +295,11 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     if not cfg.firewall.enabled:
         return ProbeOutcome(None, 'disabled in config')
     mgr = CommandManager.current()
-    if mgr.privilege_mode == 'sudoless':
+    if mgr.privilege_mode == PrivilegeMode.NEVER:
         # nft reads require root; there is no unprivileged fallback.
         return ProbeOutcome(
             None,
-            'firewall checks need privileges (unavailable in sudoless mode)',
+            'firewall checks need privileges (privilege_mode = never)',
         )
     if use_sudo and mgr.current_plan() is None:
         with mgr.step(
@@ -377,7 +378,7 @@ def probe_vm_state(
     if (
         dom.code != 0
         and use_sudo
-        and mgr.privilege_mode != 'sudoless'
+        and mgr.privilege_mode != PrivilegeMode.NEVER
         and not virsh_domain_missing(dom.stderr)
     ):
         sudo_used = True

@@ -56,7 +56,7 @@ def test_setup_writes_no_config_by_default(
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='auto')
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
@@ -67,7 +67,7 @@ def test_setup_writes_no_config_by_default(
     assert rc == 0
     assert cfg_path.read_bytes() == before, 'setup rewrote the config store'
     reg = load_store(cfg_path)
-    assert reg.behavior.privilege_mode == 'auto'
+    assert reg.behavior.privilege_mode == 'as-needed'
     assert reg.defaults is None
     assert reg.vms[0].cfg.firewall.enabled is True
 
@@ -92,7 +92,7 @@ def test_setup_persist_writes_only_base_dir(
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
-    store = _store_with_vm(cfg_path, privilege_mode='auto')
+    store = _store_with_vm(cfg_path, privilege_mode='as-needed')
     _add_defaults(cfg_path, store, '/var/lib/libvirt/aivm')
     base_dir = tmp_path / 'vmstore'
 
@@ -110,7 +110,7 @@ def test_setup_persist_writes_only_base_dir(
     assert reg.defaults.paths.base_dir == str(base_dir)
     # The lossy writes the old setup made must not reappear, and no unrelated
     # default may be rewritten on the way past.
-    assert reg.behavior.privilege_mode == 'auto'
+    assert reg.behavior.privilege_mode == 'as-needed'
     assert reg.defaults.firewall.enabled is True
     assert reg.defaults.vm.name == 'chosen-name'
     assert reg.vms[0].cfg.firewall.enabled is True
@@ -126,7 +126,7 @@ def test_setup_persist_refuses_to_materialize_a_defaults_section(
     activate_manager(monkeypatch, yes=True)
     ran = _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='auto')
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
@@ -149,14 +149,14 @@ def test_setup_persist_refuses_to_materialize_a_defaults_section(
     assert any(c[0] == 'setfacl' for c in ran)
 
 
-def test_setup_never_disables_the_firewall_under_sudoless(
+def test_setup_never_disables_the_firewall_under_never_mode(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
-    """A sudoless config gets a warning about nftables, not a silent disable."""
-    activate_manager(monkeypatch, yes=True, privilege_mode='sudoless')
+    """A never-sudo config gets a warning about nftables, not a silent disable."""
+    activate_manager(monkeypatch, yes=True, privilege_mode='never')
     _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='sudoless')
+    _store_with_vm(cfg_path, privilege_mode='never')
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
@@ -168,7 +168,7 @@ def test_setup_never_disables_the_firewall_under_sudoless(
     assert cfg_path.read_bytes() == before
     reg = load_store(cfg_path)
     assert reg.vms[0].cfg.firewall.enabled is True
-    assert reg.behavior.privilege_mode == 'sudoless'
+    assert reg.behavior.privilege_mode == 'never'
     out = capsys.readouterr().out
     assert 'firewall.enabled is true' in out
 
@@ -181,7 +181,7 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
     base_dir = tmp_path / 'vmstore'
-    store = _store_with_vm(cfg_path, privilege_mode='auto')
+    store = _store_with_vm(cfg_path, privilege_mode='as-needed')
     store.defaults = AgentVMConfig()
     store.defaults.paths.base_dir = str(base_dir)
     save_store(store, cfg_path, reason='pin base_dir')
@@ -198,18 +198,18 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
 def test_setup_reads_persisted_mode_not_its_own_escalation_manager(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
-    """Setup swaps in an `auto` manager to run usermod; the report must not.
+    """Setup swaps in an `as-needed` manager to run usermod; the report must not.
 
     The policy report describes what the user chose, so it reads the store
     rather than the manager setup is currently running under.
     """
-    activate_manager(monkeypatch, yes=True, privilege_mode='sudoless')
+    activate_manager(monkeypatch, yes=True, privilege_mode='never')
     _stub_host_probes(monkeypatch)
     monkeypatch.setattr(
         'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: False
     )
     cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='sudoless')
+    _store_with_vm(cfg_path, privilege_mode='never')
 
     rc = SudolessSetupCLI.main(
         argv=False,
@@ -221,8 +221,8 @@ def test_setup_reads_persisted_mode_not_its_own_escalation_manager(
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "behavior.privilege_mode = 'sudoless'" in out
-    assert "= 'auto'" not in out
+    assert "behavior.privilege_mode = 'never'" in out
+    assert "= 'as-needed'" not in out
 
 
 def test_setup_dry_run_touches_nothing(
@@ -231,7 +231,7 @@ def test_setup_dry_run_touches_nothing(
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
     cfg_path = tmp_path / 'config.toml'
-    store = _store_with_vm(cfg_path, privilege_mode='auto')
+    store = _store_with_vm(cfg_path, privilege_mode='as-needed')
     _add_defaults(cfg_path, store, '/var/lib/libvirt/aivm')
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'

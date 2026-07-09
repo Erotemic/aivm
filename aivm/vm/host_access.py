@@ -9,7 +9,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..errors import SudolessModeError
+from ..errors import SudoRequiredError
 from ..privilege import (
     LIBVIRT_QEMU_USER,
     path_needs_sudo,
@@ -39,15 +39,15 @@ def _local_stat_answer(path: Path, *, want_file: bool) -> bool | None:
         return stat_mod.S_ISREG(st.st_mode)
     return True
 
-def _undetermined_existence_error(path: Path, what: str) -> SudolessModeError:
+def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
     """Build the error raised when an existence check cannot be answered."""
-    return SudolessModeError(
+    return SudoRequiredError(
         f'Cannot determine whether the {what} already exists.\n'
         f'Path: {path}\n'
-        'The path is not readable without privileged access, and sudoless '
-        'mode forbids escalation. Assuming it is absent would overwrite or '
-        're-download existing state.\n'
-        "Set behavior.privilege_mode to 'auto' to allow the privileged probe, "
+        'The path is not readable without privileged access, and '
+        "behavior.privilege_mode = 'never' forbids escalation. Assuming it is "
+        'absent would overwrite or re-download existing state.\n'
+        "Set behavior.privilege_mode to 'as-needed' to allow the privileged probe, "
         'or move VM storage to a user-owned directory '
         '(`aivm host sudoless setup`).'
     )
@@ -230,14 +230,15 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             _ensure_qemu_access_unprivileged(base_root, dry_run=dry_run)
             return
         if not sudo_allowed():
-            raise SudolessModeError(
-                'Sudoless VM storage preparation needs `setfacl` to grant '
+            raise SudoRequiredError(
+                'Sudo-free VM storage preparation needs `setfacl` to grant '
                 'libvirt-qemu traversal, but it is not installed. Install '
-                "the `acl` package, or set behavior.privilege_mode to 'auto'."
+                "the `acl` package, or set behavior.privilege_mode to "
+                "'as-needed'."
             )
         log.warning(
             'setfacl is unavailable; falling back to sudo chown/chmod for '
-            'VM storage under {}. Install the `acl` package for sudoless '
+            'VM storage under {}. Install the `acl` package for sudo-free '
             'storage preparation.',
             base_root,
         )

@@ -8,15 +8,22 @@ privileges they need*, controlled by ``behavior.privilege_mode``.
 The modes
 ---------
 
-* ``auto`` (default): probe what already works without sudo and escalate
-  through sudo only where required.
-* ``sudo``: always escalate privileged host operations through sudo (the
-  classic behavior).
-* ``sudoless``: never invoke sudo; operations that genuinely require root
-  fail with guidance instead of escalating.
+All three answer the same question --- *when does aivm invoke sudo?* ---
+so they read as an ordered scale rather than three unrelated words:
 
-The mode is enforced at a single chokepoint —
-``CommandManager._reject_sudo_if_sudoless`` sees every subprocess — so
+* ``never``: refuse rather than escalate. Operations that genuinely
+  require root fail with guidance.
+* ``as-needed`` (default): probe what already works without sudo and
+  escalate only where required.
+* ``always``: escalate for every privileged-capable operation (the
+  classic behavior).
+
+An unrecognized value is an error, not a fallback. Every fallback would
+have to guess, and guessing wrong on a privilege setting means either
+escalating when you forbade it or refusing work you expected to succeed.
+
+The mode is enforced at a single chokepoint ---
+``CommandManager._reject_sudo_if_forbidden`` sees every subprocess --- so
 enforcement keys on the command actually being run, never on the feature
 requesting it. A feature that *can* need root (a ``persistent``
 attachment needs ``mount --bind`` only when the bind is missing) is not
@@ -33,9 +40,9 @@ The two postures
      - Classic (admin-assuming)
      - Sudoless
    * - Configuration
-     - ``privilege_mode = "auto"`` or ``"sudo"`` (default -- nothing to
-       set)
-     - ``privilege_mode = "sudoless"``
+     - ``privilege_mode = "as-needed"`` or ``"always"`` (default --
+       nothing to set)
+     - ``privilege_mode = "never"``
    * - Host privilege needed
      - sudo (prompted per grouped step)
      - ``libvirt`` group membership -- **effectively root-equivalent**,
@@ -65,23 +72,23 @@ The two postures
 Choosing a mode
 ---------------
 
-* **Classic** (``auto``) is the default and the right answer for almost
-  everyone. After ``aivm host sudoless setup`` has put you in the
-  ``libvirt`` group and pointed VM storage at a user-owned tree, ``auto``
-  stops invoking sudo for libvirt and image operations on its own. Sudo
+* **Classic** (``as-needed``) is the default and the right answer for
+  almost everyone. After ``aivm host sudoless setup`` has put you in the
+  ``libvirt`` group and pointed VM storage at a user-owned tree,
+  ``as-needed`` stops invoking sudo for libvirt and image operations on its own. Sudo
   remains for the operations that genuinely require it: the nftables
   firewall, ``apt-get``, and establishing a *new* host bind mount.
   Reconciling an already-established attachment -- the ``aivm code .``
   hot path -- issues no privileged command at all.
-* **Sudoless** is a hard guarantee rather than a preference: aivm raises
-  instead of escalating. It suits CI and audit contexts. Note that it
-  cannot establish a new ``persistent`` or ``shared-root`` attachment,
+* **Sudoless** (``never``) is a hard guarantee rather than a preference:
+  aivm raises instead of escalating. It suits CI and audit contexts. Note
+  that it cannot establish a new ``persistent`` or ``shared-root`` attachment,
   because ``mount --bind`` has no unprivileged implementation, and it
   cannot manage the firewall.
 
 Understand the trade in either case: ``libvirt`` group membership grants
 control of the root daemon, which is root-equivalent on the host.
-Sudoless is a *no-sudo-invocation* guarantee, not a reduced-privilege
+``never`` is a *no-sudo-invocation* guarantee, not a reduced-privilege
 one. See :doc:`security` for the full analysis.
 
 A per-user ``qemu:///session`` runtime was prototyped and removed before

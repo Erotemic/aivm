@@ -28,24 +28,35 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   updated), and plans an uninstall when the knob is disabled. Probe failures
   (VM down, SSH unreachable) become diagnostics notes rather than errors, and
   guard reconciliation never requires a restart.
-* Sudoless operation. A new `behavior.privilege_mode` config knob (`auto` |
-  `sudo` | `sudoless`, default `auto`) controls how aivm acquires privileges:
-  `auto` probes what already works without sudo (libvirt group membership for
-  `qemu:///system`, user-writable image trees) and escalates only when
-  required; `sudoless` is a hard never-sudo guarantee enforced inside
-  `CommandManager`, with root-only features (nftables firewall,
-  shared-root/persistent host bind mounts, dependency install) failing with
-  actionable guidance. A per-invocation `--never_sudo` flag forces the mode.
-  State-changing hypervisor commands (`virsh`/`virt-install` with
-  role=modify) keep their interactive approval prompt even when they run
-  without sudo, so libvirt-group access does not silently drop the
-  confirmation contract for destructive operations.
+* Sudoless operation. A new `behavior.privilege_mode` config knob controls
+  when aivm invokes sudo: `never` | `as-needed` | `always`, default
+  `as-needed`. `as-needed` probes what already works without sudo (libvirt
+  group membership for `qemu:///system`, user-writable image trees) and
+  escalates only where required; `always` escalates every
+  privileged-capable operation; `never` is a hard guarantee enforced inside
+  `CommandManager`, where operations with no unprivileged implementation
+  (nftables firewall, `apt-get`, establishing a *new* host bind mount) fail
+  with actionable guidance. An unrecognized value is an error rather than a
+  silent fallback to the permissive mode. A per-invocation `--never_sudo`
+  flag forces `never`.
+
+  Enforcement keys on the command actually being run, never on the feature
+  requesting it: a `persistent` attachment needs `mount --bind` only when
+  the bind is missing, so reconciling an established attachment issues no
+  privileged command and is refused in no mode. State-changing hypervisor
+  commands (`virsh`/`virt-install` with role=modify) keep their interactive
+  approval prompt even when they run without sudo, so libvirt-group access
+  does not silently drop the confirmation contract for destructive
+  operations.
 * `aivm host sudoless check` reports sudoless readiness (libvirt group, live
   unprivileged libvirt access, user-writable VM storage, libvirt-qemu
   traversal ACLs, firewall compatibility) and `aivm host sudoless setup`
-  establishes it, using sudo at most once (libvirt group membership) and
-  persisting the configuration. In sudoless mode new attachments default to
-  `--mode shared` since the persistent default relies on host bind mounts.
+  establishes the host-side prerequisites, using sudo at most once (libvirt
+  group membership). Setup changes no configuration: establishing a
+  capability and choosing a policy are separate acts, so `privilege_mode`
+  and `firewall.enabled` remain the operator's to set. `--persist` opts in
+  to writing the single value the host work depends on,
+  `defaults.paths.base_dir`.
 
 ### Changed
 * Attaching directories now has mirrors that resolve to exact path matches on the guest and paths relative to root.

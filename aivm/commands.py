@@ -28,8 +28,12 @@ else:
 
 from loguru import logger
 
-from .errors import AIVMError, SudolessModeError
-from .modes import PrivilegeMode
+from .errors import AIVMError, SudoRequiredError
+from .modes import (
+    DEFAULT_PRIVILEGE_MODE,
+    PrivilegeMode,
+    normalize_privilege_mode,
+)
 
 log = logger
 
@@ -552,20 +556,20 @@ class CommandManager:
         yes: bool = False,
         yes_sudo: bool = False,
         auto_approve_readonly_sudo: bool = True,
-        privilege_mode: str = 'auto',
+        privilege_mode: str = str(DEFAULT_PRIVILEGE_MODE),
     ) -> None:
         self.yes = bool(yes)
         self.yes_sudo = bool(yes_sudo)
         self.auto_approve_readonly_sudo = bool(auto_approve_readonly_sudo)
-        # In SUDOLESS this manager refuses to execute any sudo command
+        # Under NEVER this manager refuses to execute any sudo command
         # (enforced in _execute_one and in confirm_sudo_scope) so no code
         # path can escalate silently; call sites consult aivm.privilege
         # helpers to pick sudo=False where an unprivileged path exists.
-        mode = str(privilege_mode or 'auto').strip().lower()
-        try:
-            self.privilege_mode: PrivilegeMode = PrivilegeMode(mode)
-        except ValueError:
-            self.privilege_mode = PrivilegeMode.AUTO
+        # An unknown mode raises rather than defaulting: coercing it here
+        # would silently pick the permissive option.
+        self.privilege_mode: PrivilegeMode = normalize_privilege_mode(
+            privilege_mode
+        )
         self.intent_stack: list[IntentFrame] = []
         self.plan_stack: list[CommandPlan] = []
         self._next_command_id = 0
@@ -818,8 +822,8 @@ class CommandManager:
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return False
-        if self.privilege_mode == PrivilegeMode.SUDOLESS:
-            # Never invoke sudo in sudoless mode, not even `sudo -n true`;
+        if self.privilege_mode == PrivilegeMode.NEVER:
+            # Never invoke sudo under NEVER, not even `sudo -n true`;
             # callers on this path are about to be rejected anyway.
             return True
         if self._sudo_authentication_required is not None:
@@ -875,7 +879,7 @@ class CommandManager:
 
     def _authenticate_sudo(self) -> None:
         """Refresh sudo credentials now so later commands do not surprise."""
-        self._reject_sudo_if_sudoless(['sudo', '-v'], needs_sudo=True)
+        self._reject_sudo_if_forbidden(['sudo', '-v'], needs_sudo=True)
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return
@@ -892,27 +896,28 @@ class CommandManager:
             raise CommandError(cmd, res)
         self._sudo_authentication_required = False
 
-    def _reject_sudo_if_sudoless(
+    def _reject_sudo_if_forbidden(
         self, cmd: Sequence[str] | str, *, needs_sudo: bool
     ) -> None:
-        """Raise when a sudo command would run under sudoless mode.
+        """Raise when a sudo command would run under ``privilege_mode=never``.
 
         This is the structural never-sudo guarantee: every execution path
         funnels through here, so a call site that forgot to consult the
-        privilege helpers fails loudly instead of escalating.
+        privilege helpers fails loudly instead of escalating. Note it keys
+        on the command being run, not on the feature that requested it, so
+        work that turns out to need no privileges is never refused.
         """
-        if not needs_sudo or self.privilege_mode != PrivilegeMode.SUDOLESS:
+        if not needs_sudo or self.privilege_mode != PrivilegeMode.NEVER:
             return
         if os.geteuid() == 0:
             return
-        raise SudolessModeError(
-            'Sudoless mode is enabled (behavior.privilege_mode = '
-            '"sudoless"), but this operation requested privileged host '
-            'access:\n'
+        raise SudoRequiredError(
+            'Sudo is forbidden (behavior.privilege_mode = "never"), but this '
+            'operation requested privileged host access:\n'
             f'  {shell_join(cmd) if not isinstance(cmd, str) else cmd}\n'
             'Run `aivm host sudoless check` to see what is missing for '
-            "sudoless operation, or set behavior.privilege_mode to 'auto' "
-            'to allow sudo fallback.'
+            "sudo-free operation, or set behavior.privilege_mode to "
+            "'as-needed' to escalate only where it is required."
         )
 
     def confirm_sudo_scope(
@@ -926,7 +931,7 @@ class CommandManager:
         """Preflight sudo approval/authentication for an upcoming operation."""
         if os.geteuid() == 0:
             return
-        self._reject_sudo_if_sudoless(
+        self._reject_sudo_if_forbidden(
             preview_cmds[0] if preview_cmds else purpose, needs_sudo=True
         )
         eff_role = self._normalize_role(role)
@@ -1041,7 +1046,7 @@ class CommandManager:
         for item in plan.commands:
             # Reject sudo work before any approval side effect (previews,
             # prompts, `sudo -n true` probes, `sudo -v`) can run.
-            self._reject_sudo_if_sudoless(
+            self._reject_sudo_if_forbidden(
                 item.spec.cmd, needs_sudo=item.spec.sudo
             )
         self._render_plan_preview(plan, _stacklevel=_stacklevel + 1)
@@ -1141,7 +1146,7 @@ class CommandManager:
         Sudo commands go through the full sudo scope confirmation
         (authentication included). Unprivileged state-changing libvirt
         commands get a plain confirmation prompt so the approval contract
-        survives sudoless operation.
+        survives ``privilege_mode='never'``.
         """
         if os.geteuid() == 0:
             return
@@ -1328,7 +1333,7 @@ class CommandManager:
     ) -> CommandResult:
         """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=_stacklevel)
-        self._reject_sudo_if_sudoless(spec.cmd, needs_sudo=spec.sudo)
+        self._reject_sudo_if_forbidden(spec.cmd, needs_sudo=spec.sudo)
         if self._effective_role(spec) == 'modify':
             # Bump before running so probe caches are invalidated even if
             # the mutation fails partway through.

@@ -36,7 +36,8 @@ def _disk_resize_error(
             f"Could not resize disk '{drift.disk_path}': the image is not "
             'writable by your user and the active privilege mode did not '
             'escalate. Fix the image ownership or rerun with '
-            '`behavior.privilege_mode = "sudo"` (or without `--sudoless`).'
+            '`behavior.privilege_mode = "always"` (and without '
+            '`--never_sudo`).'
         )
     else:
         hint = f"Could not resize disk '{drift.disk_path}'."

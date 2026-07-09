@@ -98,7 +98,7 @@ def render_store_toml(
     )
     _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
     _emit_toml_kv(
-        lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'auto')
+        lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'as-needed')
     )
     lines.append('')
 

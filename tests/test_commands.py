@@ -141,7 +141,7 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
         return FakeProc(0, 'ok', '')
 
     prompts = patch_command_runtime(monkeypatch, fake_run)
-    mgr = CommandManager(privilege_mode='sudoless')
+    mgr = CommandManager(privilege_mode='never')
     CommandManager.activate(mgr)
     # Unprivileged reads stay promptless.
     mgr.run(
@@ -170,7 +170,7 @@ def test_sudoless_plan_approval_never_touches_sudo(
 ) -> None:
     """A sudo command entering a plan in sudoless mode is rejected before
     any approval side effect (`sudo -n true`, `sudo -v`, prompts) runs."""
-    from aivm.errors import SudolessModeError
+    from aivm.errors import SudoRequiredError
 
     sudo_calls: list[list[str]] = []
 
@@ -184,11 +184,11 @@ def test_sudoless_plan_approval_never_touches_sudo(
     prompts = patch_command_runtime(
         monkeypatch, fake_run, bypass_sudo_auth=False
     )
-    mgr = CommandManager(privilege_mode='sudoless')
+    mgr = CommandManager(privilege_mode='never')
     CommandManager.activate(mgr)
     import pytest as _pytest
 
-    with _pytest.raises(SudolessModeError):
+    with _pytest.raises(SudoRequiredError):
         with mgr.step('inspect'):
             mgr.submit(
                 ['nft', 'list', 'ruleset'],

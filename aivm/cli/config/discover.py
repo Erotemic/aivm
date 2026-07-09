@@ -18,6 +18,7 @@ from ...config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from ...modes import PrivilegeMode
 from ...runtime import virsh_cmd
 from ...services import cfg_path
 from .._common import _BaseCommand
@@ -44,7 +45,7 @@ class ConfigDiscoverCLI(_BaseCommand):
             capture=True,
         )
         used_sudo = False
-        if names_res.code != 0 and mgr.privilege_mode != 'sudoless':
+        if names_res.code != 0 and mgr.privilege_mode != PrivilegeMode.NEVER:
             used_sudo = True
             names_res = mgr.run(
                 virsh_cmd('list', '--all', '--name'),

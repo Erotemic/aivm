@@ -287,7 +287,7 @@ The current ``aivm`` security posture is intentionally pragmatic:
   explicit trust extension.
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
-* Sudoless operation (``behavior.privilege_mode = "sudoless"``) cannot manage
+* Never-sudo operation (``behavior.privilege_mode = "never"``) cannot manage
   the nftables firewall: ``nft`` requires ``CAP_NET_ADMIN`` and has no
   unprivileged equivalent, so reconciliation skips it with a warning.
   Choosing sudoless therefore trades away managed network isolation for the

@@ -1,7 +1,7 @@
 """End-to-end sudoless lifecycle test.
 
 Runs the full network/VM/attach lifecycle with
-``behavior.privilege_mode = 'sudoless'``, under which the CommandManager
+``behavior.privilege_mode = 'never'``, under which the CommandManager
 refuses to execute any sudo command — so a pass proves the whole flow
 worked without privilege escalation.
 
@@ -110,7 +110,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     store = Store()
     # Setup establishes host capabilities; choosing the never-sudo policy is
     # the user's act, not setup's, so the test makes that choice explicitly.
-    store.behavior.privilege_mode = 'sudoless'
+    store.behavior.privilege_mode = 'never'
     upsert_vm(store, cfg)
     save_store(store, cfg_path)
 
@@ -133,7 +133,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     reg = load_store(cfg_path)
     # Setup must not have touched policy. The mode is the one we wrote, and
     # setup did not invent a defaults section to hold a base_dir override.
-    assert reg.behavior.privilege_mode == 'sudoless'
+    assert reg.behavior.privilege_mode == 'never'
     assert reg.defaults is None
     _run_cli(
         ['host', 'sudoless', 'check', '--config', str(cfg_path)],
@@ -170,7 +170,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
             timeout_s=timeout_s,
             env=env,
         )
-        assert 'Privilege mode: sudoless' in status_res.stdout
+        assert 'Privilege mode: never' in status_res.stdout
 
         attach_res = _run_cli(
             [

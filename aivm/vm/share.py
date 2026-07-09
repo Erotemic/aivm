@@ -22,6 +22,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..modes import PrivilegeMode
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
     require_ssh_identity,
@@ -217,7 +218,7 @@ def _dumpxml_text(
     if (
         (res.code != 0 or not res.stdout.strip())
         and use_sudo
-        and mgr.privilege_mode != 'sudoless'
+        and mgr.privilege_mode != PrivilegeMode.NEVER
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(

@@ -64,9 +64,9 @@ a user-owned VM storage directory with ``setfacl`` traversal grants for
 for you with ``--persist``. Log out and back in (or ``newgrp libvirt``) after
 the group change, then re-run the check.
 
-That host work is all the default ``auto`` mode needs: it then stops invoking
+That host work is all the default ``as-needed`` mode needs: it then stops invoking
 sudo for whatever already works without it. Setting
-``behavior.privilege_mode = "sudoless"`` on top is a separate, stricter
+``behavior.privilege_mode = "never"`` on top is a separate, stricter
 choice -- aivm will then refuse rather than escalate, which means no nftables
 firewall and no *new* ``persistent``/``shared-root`` attachments, since
 ``mount --bind`` requires root.
@@ -75,10 +75,11 @@ Notes
 -----
 
 * ``status --sudo`` enables privileged checks (libvirt/network/firewall/image).
-  In sudoless mode ``--sudo`` is ignored with a notice.
-* ``behavior.privilege_mode`` controls escalation: ``auto`` (default, sudo
-  only where needed), ``sudo`` (classic), ``sudoless`` (never; see above).
-  ``--never_sudo`` forces sudoless for one invocation.
+  Under ``privilege_mode = "never"``, ``--sudo`` is ignored with a notice.
+* ``behavior.privilege_mode`` controls escalation: ``as-needed`` (default,
+  sudo only where needed), ``always`` (classic), ``never`` (refuse rather
+  than escalate; see above). ``--never_sudo`` forces ``never`` for one
+  invocation.
 * ``status --detail`` includes raw diagnostics (virsh/nft/ssh probe outputs).
 * Privileged operations prompt unless ``--yes`` or ``--yes-sudo`` is used.
 * Approvals normally happen once per grouped step, not once per command.

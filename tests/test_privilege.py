@@ -1,4 +1,4 @@
-"""Tests for privilege modes, capability probes, and sudoless enforcement."""
+"""Tests for privilege modes, capability probes, and never-sudo enforcement."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
-from aivm.errors import SudolessModeError
+from aivm.errors import PrivilegeModeError, SudoRequiredError
 from aivm.privilege import (
     file_write_needs_sudo,
     normalize_privilege_mode,
@@ -35,20 +35,35 @@ def _activate(mode: str, **kw: Any) -> CommandManager:
 
 
 def test_normalize_privilege_mode() -> None:
-    assert normalize_privilege_mode('sudo') == 'sudo'
-    assert normalize_privilege_mode(' SUDOLESS ') == 'sudoless'
-    assert normalize_privilege_mode('') == 'auto'
-    assert normalize_privilege_mode(None) == 'auto'
-    assert normalize_privilege_mode('bogus') == 'auto'
+    assert normalize_privilege_mode('always') == 'always'
+    assert normalize_privilege_mode(' NEVER ') == 'never'
+    assert normalize_privilege_mode('as-needed') == 'as-needed'
+    # Unset means "not configured" and takes the default.
+    assert normalize_privilege_mode('') == 'as-needed'
+    assert normalize_privilege_mode(None) == 'as-needed'
+
+
+def test_unknown_privilege_mode_raises_rather_than_defaulting() -> None:
+    """A typo must not silently pick the permissive mode.
+
+    Every fallback guesses, and guessing wrong here means either escalating
+    when the user forbade it or refusing work they expected to succeed.
+    """
+    for bogus in ('bogus', 'sudoless', 'auto', 'sudo'):
+        with pytest.raises(PrivilegeModeError, match='Unknown'):
+            normalize_privilege_mode(bogus)
+    # The manager is a chokepoint too: it must not coerce either.
+    with pytest.raises(PrivilegeModeError):
+        CommandManager(privilege_mode='sudoless')
 
 
 def test_virsh_needs_sudo_per_mode(monkeypatch: MonkeyPatch) -> None:
-    _activate('sudo')
+    _activate('always')
     assert virsh_needs_sudo() is True
-    _activate('sudoless')
+    _activate('never')
     assert virsh_needs_sudo() is False
-    # auto consults the capability probe (pinned False by conftest)
-    _activate('auto')
+    # as-needed consults the capability probe (pinned False by conftest)
+    _activate('as-needed')
     assert virsh_needs_sudo() is True
     monkeypatch.setattr(
         'aivm.privilege.libvirt_unprivileged_ok', lambda: True
@@ -65,7 +80,7 @@ def test_libvirt_probe_is_cached_per_manager(monkeypatch: MonkeyPatch) -> None:
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    _activate('auto', yes=True)
+    _activate('as-needed', yes=True)
     assert _real_libvirt_probe() is True
     assert _real_libvirt_probe() is True
     assert len(calls) == 1
@@ -73,21 +88,21 @@ def test_libvirt_probe_is_cached_per_manager(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_path_privilege_decisions(tmp_path: Path) -> None:
-    _activate('auto')
+    _activate('as-needed')
     writable = tmp_path / 'mine' / 'deep' / 'file.img'
     assert user_can_write_path(writable) is True
     assert path_needs_sudo(writable) is False
     root_only = Path('/proc/1/root/nope')
     assert user_can_write_path(root_only) is False
     assert path_needs_sudo(root_only) is True
-    _activate('sudo')
+    _activate('always')
     assert path_needs_sudo(writable) is True
-    _activate('sudoless')
+    _activate('never')
     assert path_needs_sudo(root_only) is False
 
 
 def test_file_write_privilege_decisions(tmp_path: Path) -> None:
-    _activate('auto')
+    _activate('as-needed')
     locked = tmp_path / 'root-owned.qcow2'
     locked.write_bytes(b'')
     locked.chmod(0o444)
@@ -103,13 +118,13 @@ def test_file_write_privilege_decisions(tmp_path: Path) -> None:
     # A missing target falls back to the directory-based check.
     missing = tmp_path / 'not-yet.qcow2'
     assert file_write_needs_sudo(missing) is False
-    _activate('sudo')
+    _activate('always')
     assert file_write_needs_sudo(writable) is True
-    _activate('sudoless')
+    _activate('never')
     assert file_write_needs_sudo(locked) is False
 
 
-def test_sudoless_manager_rejects_sudo_commands(
+def test_never_mode_manager_rejects_sudo_commands(
     monkeypatch: MonkeyPatch,
 ) -> None:
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
@@ -117,12 +132,12 @@ def test_sudoless_manager_rejects_sudo_commands(
         'aivm.commands.subprocess.run',
         lambda cmd, **kw: FakeProc(0, 'ok', ''),
     )
-    mgr = _activate('sudoless', yes=True)
+    mgr = _activate('never', yes=True)
     res = mgr.run(['true'], sudo=False, check=False)
     assert res.code == 0
-    with pytest.raises(SudolessModeError, match='sudoless'):
+    with pytest.raises(SudoRequiredError, match='never'):
         mgr.run(['whoami'], sudo=True, role='read', check=False)
-    with pytest.raises(SudolessModeError):
+    with pytest.raises(SudoRequiredError):
         mgr.confirm_sudo_scope(purpose='test escalation', role='modify')
 
 
@@ -138,12 +153,12 @@ def test_attachment_resolution_is_privilege_mode_independent(
     from aivm.attachments.resolve import _resolve_attachment
 
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-sudoless'
+    cfg.vm.name = 'vm-never'
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
 
-    for mode in ('sudoless', 'auto', 'sudo'):
+    for mode in ('never', 'as-needed', 'always'):
         _activate(mode)
         att = _resolve_attachment(cfg, cfg_path, host_src, '', '', '')
         assert str(att.mode) == 'persistent'
@@ -163,7 +178,7 @@ def test_existence_probe_distinguishes_absent_from_unknown(
 
     if os.geteuid() == 0:
         pytest.skip('root can stat through any directory')
-    _activate('sudoless')
+    _activate('never')
 
     present = tmp_path / 'here.qcow2'
     present.write_bytes(b'')
@@ -173,7 +188,7 @@ def test_existence_probe_distinguishes_absent_from_unknown(
     assert _sudo_file_exists(tmp_path / 'absent.qcow2') is False
 
     # A real EACCES: the file exists but no ancestor grants traversal, and
-    # sudoless forbids the privileged probe that would settle it.
+    # privilege_mode=never forbids the privileged probe that would settle it.
     locked = tmp_path / 'locked'
     locked.mkdir()
     hidden = locked / 'disk.qcow2'
@@ -194,7 +209,7 @@ def test_ensure_disk_refuses_to_create_over_unknown_state(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
-    _activate('sudoless', yes=True)
+    _activate('never', yes=True)
     monkeypatch.setattr('aivm.vm.disk._sudo_path_exists', lambda p: None)
     ran: list[list[str]] = []
 
@@ -203,7 +218,7 @@ def test_ensure_disk_refuses_to_create_over_unknown_state(
         return FakeProc(0, '', '')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
-    with pytest.raises(SudolessModeError, match='Cannot determine'):
+    with pytest.raises(SudoRequiredError, match='Cannot determine'):
         _ensure_disk(cfg, tmp_path / 'base.img')
     assert not any('qemu-img' in c for cmd in ran for c in cmd)
 
@@ -216,7 +231,7 @@ def test_fetch_image_refuses_to_redownload_over_unknown_state(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     cfg.paths.base_dir = str(tmp_path)
-    _activate('sudoless', yes=True)
+    _activate('never', yes=True)
     monkeypatch.setattr('aivm.vm.images._sudo_file_exists', lambda p: None)
     monkeypatch.setattr(
         'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
@@ -227,24 +242,24 @@ def test_fetch_image_refuses_to_redownload_over_unknown_state(
         raise AssertionError(f'ran a command for an unknown image: {cmd}')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', fail_on_exec)
-    with pytest.raises(SudolessModeError, match='Cannot determine'):
+    with pytest.raises(SudoRequiredError, match='Cannot determine'):
         fetch_image(cfg)
 
 
-def test_sudoless_firewall_degradation() -> None:
+def test_never_mode_firewall_degradation() -> None:
     from aivm.firewall import apply_firewall, read_firewall_tcp_ports
     from aivm.status import probe_firewall
 
     cfg = AgentVMConfig()
     cfg.firewall.enabled = True
-    _activate('sudoless')
+    _activate('never')
     out = probe_firewall(cfg, use_sudo=True)
     assert out.ok is None
-    assert 'sudoless' in out.detail
+    assert 'never' in out.detail
     ports, err = read_firewall_tcp_ports(cfg, use_sudo=True)
     assert ports is None
-    assert 'sudoless' in err
-    with pytest.raises(SudolessModeError, match='nftables'):
+    assert 'never' in err
+    with pytest.raises(SudoRequiredError, match='nftables'):
         apply_firewall(cfg, dry_run=False)
 
 
@@ -257,7 +272,7 @@ def test_qemu_traversal_blockers(tmp_path: Path) -> None:
         pytest.skip('libvirt-qemu user not present on this host')
     if os.geteuid() == 0:
         pytest.skip('root bypasses directory permission checks')
-    _activate('auto')
+    _activate('as-needed')
     locked = tmp_path / 'locked'
     inner = locked / 'store'
     inner.mkdir(parents=True)

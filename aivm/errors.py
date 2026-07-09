@@ -11,10 +11,14 @@ class MissingSSHIdentityError(AIVMError):
     """Raised when SSH identity configuration is required but missing."""
 
 
-class SudolessModeError(AIVMError):
-    """Raised when an operation needs sudo but sudoless mode forbids it.
+class PrivilegeModeError(AIVMError):
+    """Raised when ``behavior.privilege_mode`` names no known mode."""
 
-    The message must tell the user which feature needed privileges and how
-    to proceed (finish sudoless setup, disable the feature, or switch
-    ``behavior.privilege_mode`` back to ``'auto'``/``'sudo'``).
+
+class SudoRequiredError(AIVMError):
+    """Raised when an operation needs sudo but ``privilege_mode='never'``.
+
+    The message must tell the user which command or feature needed
+    privileges and how to proceed (finish ``aivm host sudoless setup``,
+    disable the feature, or choose a privilege mode that may escalate).
     """

@@ -183,7 +183,7 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         feature='Firewall management (nftables)',
         hint=(
             'Disable the managed firewall (firewall.enabled = false) or set '
-            "behavior.privilege_mode to 'auto' to allow sudo for it."
+            "behavior.privilege_mode to 'as-needed' to allow sudo for it."
         ),
     )
     script = _nft_script(cfg)
@@ -231,7 +231,7 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 def firewall_status(cfg: AgentVMConfig) -> str:
     if not sudo_allowed():
         return (
-            'firewall status needs privileges (unavailable in sudoless '
+            'firewall status needs privileges (unavailable when '
             'mode)\n'
         )
     table = cfg.firewall.table
@@ -272,7 +272,7 @@ def read_firewall_tcp_ports(
 
     if not sudo_allowed():
         # nft reads require root; report unavailable instead of escalating.
-        return None, 'firewall checks need privileges (sudoless mode)'
+        return None, 'firewall checks need privileges (privilege_mode = never)'
 
     res = CommandManager.current().run(
         ['nft', '--json', 'list', 'table', 'inet', table],
@@ -436,7 +436,7 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     require_sudo_allowed(
         feature='Firewall management (nftables)',
         hint=(
-            "Set behavior.privilege_mode to 'auto' to allow sudo for "
+            "Set behavior.privilege_mode to 'as-needed' to allow sudo for "
             'firewall operations.'
         ),
     )

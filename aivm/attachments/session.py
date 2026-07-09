@@ -578,9 +578,9 @@ def _reconcile_attached_vm(
         ):
             if not sudo_allowed():
                 log.warning(
-                    'Skipping firewall reconciliation in sudoless mode; '
-                    'nftables requires root. Set firewall.enabled = false '
-                    'to silence this warning.'
+                    'Skipping firewall reconciliation: privilege_mode = '
+                    'never and nftables requires root. Set firewall.enabled '
+                    '= false to silence this warning.'
                 )
             else:
                 # nft reads need root on almost every host, so probing

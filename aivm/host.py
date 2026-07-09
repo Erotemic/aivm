@@ -119,7 +119,7 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         feature='Host dependency installation (apt-get)',
         hint=(
             'Install the packages manually, or run this one command with '
-            "behavior.privilege_mode set to 'auto'."
+            "behavior.privilege_mode set to 'as-needed'."
         ),
     )
     if not host_is_debian_like():

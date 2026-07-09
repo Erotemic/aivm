@@ -26,11 +26,11 @@ def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     """Pin the sudoless capability probe to "unavailable" by default.
 
     Most unit tests fake subprocess execution and assert on the classic
-    sudo-prefixed command shapes. With the default ``privilege_mode='auto'``
+    sudo-prefixed command shapes. With the default ``privilege_mode='as-needed'``
     the first libvirt command would first submit a live
     ``virsh -c qemu:///system list --name`` capability probe, which those
-    strict fakes reject. Pinning the probe to False makes 'auto' behave
-    exactly like 'sudo' in tests; privilege-specific tests override this
+    strict fakes reject. Pinning the probe to False makes 'as-needed'
+    behave exactly like 'always' in tests; privilege-specific tests override this
     fixture explicitly.
     """
     monkeypatch.setattr(
