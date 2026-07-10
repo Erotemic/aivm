@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run linter: `./run_linter.sh`
 - Run type checks: `./run_type_checks.sh`
 - Run doctests: `./run_doctests.sh`
+- Build docs: `./run_docs.sh` (warnings are errors; catches dangling `:doc:`/toctree targets)
 - Run E2E tests: `./run_e2e_tests.sh` (Note: requires `AIVM_E2E=1` or `AIVM_E2E_BOOTSTRAP=1` and a host with libvirt/KVM and sudo privileges)
 
 ### Common CLI Usage (for testing)
