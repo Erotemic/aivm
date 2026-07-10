@@ -95,9 +95,8 @@ def test_render_global_status_includes_runtime_environment(
         'aivm.status.probe_runtime_environment',
         lambda: ProbeOutcome(True, 'virtualized guest (kvm)', ''),
     )
-    monkeypatch.setattr('aivm.status.store_path', lambda: 'dummy.toml')
     monkeypatch.setattr('aivm.status.load_store', lambda _: Store())
-    text = render_global_status()
+    text = render_global_status(Path('dummy.toml'))
     assert 'Runtime environment' in text
     assert 'virtualized guest (kvm)' in text
 

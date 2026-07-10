@@ -147,7 +147,7 @@ class StatusCLI(_BaseCommand):
             cfg = None
             path = None
         if cfg is None or path is None:
-            print(render_global_status())
+            print(render_global_status(cfg_path(args.config)))
             return 0
         mgr = CommandManager.current()
         if args.sudo and mgr.privilege_mode == PrivilegeMode.NEVER:

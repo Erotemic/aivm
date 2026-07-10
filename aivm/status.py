@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .commands import CommandManager
 from .config import AgentVMConfig
-from .config_store import AttachmentEntry, load_store, store_path
+from .config_store import AttachmentEntry, load_store
 from .host import check_commands
 from .modes import PrivilegeMode
 from .privilege import sudo_allowed, virsh_needs_sudo
@@ -929,8 +929,13 @@ def render_status(
     return '\n'.join(lines)
 
 
-def render_global_status() -> str:
-    """Render global status when no single VM context is resolved."""
+def render_global_status(store_cfg_path: Path) -> str:
+    """Render global status when no single VM context is resolved.
+
+    ``store_cfg_path`` is required rather than defaulted: resolving the store
+    here would ignore ``--config`` and describe a file the caller never asked
+    about.
+    """
     lines: list[str] = ['🧭 AIVM Global Status', '']
     missing, missing_opt = check_commands()
     host_ok = len(missing) == 0
@@ -945,9 +950,8 @@ def render_global_status() -> str:
     env = probe_runtime_environment()
     lines.append(status_line(env.ok, 'Runtime environment', env.detail))
 
-    reg_path = store_path()
-    reg = load_store(reg_path)
-    lines.append(status_line(True, 'Config store', str(reg_path)))
+    reg = load_store(store_cfg_path)
+    lines.append(status_line(True, 'Config store', str(store_cfg_path)))
     lines.append('')
     lines.append('📦 Managed Resources')
     lines.append(f'- VMs: {len(reg.vms)}')

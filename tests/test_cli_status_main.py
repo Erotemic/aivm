@@ -30,6 +30,21 @@ network_name = "aivm-net"
 name = "ghost"
 """
 
+_DECOY_STORE = """\
+schema_version = 7
+[[vms]]
+name = "decoy-a"
+network_name = "aivm-net"
+[vms.vm]
+name = "decoy-a"
+
+[[vms]]
+name = "decoy-b"
+network_name = "aivm-net"
+[vms.vm]
+name = "decoy-b"
+"""
+
 
 def test_status_surfaces_config_errors(tmp_path: Path) -> None:
     """A store that parses but does not resolve must not look like "no context".
@@ -53,6 +68,32 @@ def test_status_falls_back_when_store_defines_no_vms(
     rc = StatusCLI.main(argv=False, config=str(store))
     assert rc == 0
     assert 'No VM context resolved for this directory.' in capsys.readouterr().out
+
+
+def test_global_status_reports_the_requested_store(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: CaptureFixture[str]
+) -> None:
+    """Global status must describe the ``--config`` store, not the default one.
+
+    ``render_global_status`` resolving the store itself means the printed path
+    *and* the resource counts come from ``~/.config/aivm/config.toml``,
+    silently reporting on a file the user never named. The decoy default store
+    below carries VMs the named store does not, so a regression shows up as
+    borrowed VM names rather than only as a wrong path.
+    """
+    decoy_dir = tmp_path / 'xdg' / 'aivm'
+    decoy_dir.mkdir(parents=True)
+    (decoy_dir / 'config.toml').write_text(_DECOY_STORE, encoding='utf-8')
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'xdg'))
+
+    store = tmp_path / 'named.toml'
+    store.write_text('schema_version = 7\n', encoding='utf-8')
+    rc = StatusCLI.main(argv=False, config=str(store))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f'Config store - {store.resolve()}' in out
+    assert '- VMs: 0' in out
+    assert 'decoy' not in out
 
 
 def test_status_cli_uses_vm_opt_and_sudo(
@@ -164,7 +205,7 @@ def test_render_global_status_wording(
         'aivm.status.probe_runtime_environment',
         lambda: ProbeOutcome(True, 'ok', ''),
     )
-    monkeypatch.setattr('aivm.status.store_path', lambda: 'dummy.toml')
     monkeypatch.setattr('aivm.status.load_store', lambda _: Store())
-    text = render_global_status()
+    text = render_global_status(Path('dummy.toml'))
     assert 'No VM context resolved for this directory.' in text
+    assert 'dummy.toml' in text
