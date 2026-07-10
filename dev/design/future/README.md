@@ -1,6 +1,6 @@
 # AIVM Roadmap (design-doc index)
 
-Updated: 2026-07-02 (post session-runtime implementation)
+Updated: 2026-07-10 (added guest-os-abstraction brainstorm)
 
 This directory holds forward-looking design documents. This file is the
 index: what each doc covers, its current status, and the recommended
@@ -66,6 +66,18 @@ large share of what these designs assumed would be future work:
 
 ## Other design docs in this directory
 
+- [guest-os-abstraction.md](guest-os-abstraction.md) — **Brainstorm; not
+  designed, not started.** A guest-OS seam so aivm can boot something other
+  than Ubuntu 24.04, with NixOS as the deliberately-hostile second profile.
+  Records a research session: NixOS *does* support the NoCloud seed-ISO path
+  (nixpkgs CI proves it), but `/etc/systemd/system` is a read-only store
+  symlink, which breaks how both guest agents install themselves. Argues the
+  seam must be capability-shaped rather than a data record of nullable
+  fields, since `sshd_dropin_dir: None` silently drops ssh hardening. Also
+  records why no existing library (libosinfo, mkosi, cloud-init's `distros/`,
+  distrobuilder) carries the abstraction, and why image fetching cannot use
+  pooch/`grabdata` (the transport must stay inside `CommandManager`). Has
+  open questions that must be closed before it is executable.
 - [flexible-folder-sharing.md](flexible-folder-sharing.md) — background for
   effort 2 (virtiofs device-slot limits; single-export strategies).
   Partially implemented (`shared-root`, `persistent`).
