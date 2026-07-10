@@ -10,9 +10,14 @@ the ``vm update`` CLI) across the flows it must cover:
 - restoring the shares a previously attached VM already carried, in both
   the per-folder ``shared`` mode and the ``shared-root`` mode.
 
-Every one of these re-patches the same handful of seams around the
-function; :func:`attached_session_harness` installs them once so each
-test overrides only the seam it is exercising.
+Following §6.2 of the 0.5.0 refactor plan, these assert on observable
+artifacts -- the config-store contents left on disk, the cached-IP file
+read back, and the commands recorded at the true guest/virsh boundaries
+-- rather than on which internal seam was called.  The real store,
+attachment-resolution, and attachment-recording code all run; only the
+heavy ``_reconcile_attached_vm`` orchestrator and the ssh/virsh guest
+surfaces stay faked.  :func:`attached_session_harness` installs that
+residue once so each test overrides only the seam it is exercising.
 """
 
 from __future__ import annotations
@@ -28,8 +33,19 @@ from pytest import MonkeyPatch
 from aivm.attachments.session import ReconcileResult, _prepare_attached_session
 from aivm.cli.vm_connect import _bootstrap_vm_for_folder
 from aivm.config import AgentVMConfig
+from aivm.config_store import (
+    Store,
+    load_store,
+    save_store,
+    upsert_attachment,
+    upsert_vm,
+)
+from aivm.errors import AIVMError
+from aivm.services import resolve_cfg_for_code as real_resolve_cfg_for_code
 from aivm.status import ProbeOutcome
+from aivm.vm.paths import _paths
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
+from tests.helpers import activate_manager, make_cfg, noop
 
 
 @dataclass
@@ -60,20 +76,30 @@ class AttachedSessionHarness:
 def attached_session_harness(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> AttachedSessionHarness:
-    """Install the seams every ``_prepare_attached_session`` test re-patches.
+    """Install the residual seams every ``_prepare_attached_session`` test shares.
 
     Defaults describe the happy path: the config resolver returns the
     harness VM (unless a test flips ``state['ready']`` off to force a
-    bootstrap), attachment resolution/reconciliation return the prebuilt
-    literals, and the guest/IP/SSH probes report success.  The bootstrap
-    seams (``InitCLI.main`` and ``create_vm_from_defaults``) record their
-    step name and flip ``state['ready']`` on.
+    bootstrap), the heavy VM reconciliation returns the prebuilt literal,
+    and the ssh probe reports success.  A cached-IP file is written under
+    ``tmp_path`` so the real ``get_ip_cached`` resolves ``10.0.0.2`` off
+    disk instead of blocking on ``wait_for_ip``.  The bootstrap seams
+    (``InitCLI.main`` and ``create_vm_from_defaults``) record their step
+    name and flip ``state['ready']`` on.  Attachment resolution and
+    recording are deliberately *not* faked here -- the tests assert on the
+    store those real helpers leave behind.
     """
+    activate_manager(monkeypatch)
     host_src = tmp_path / 'proj'
     host_src.mkdir()
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'bootstrap-vm'
+    cfg = make_cfg(tmp_path, **{'vm.name': 'bootstrap-vm'})
     cfg_path = tmp_path / 'config.toml'
+
+    # Seed the cached-IP file the real get_ip_cached reads, so IP resolution
+    # is a file-on-disk artifact rather than a stubbed return value.
+    ip_file = _paths(cfg)['ip_file']
+    ip_file.parent.mkdir(parents=True, exist_ok=True)
+    ip_file.write_text('10.0.0.2', encoding='utf-8')
 
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
@@ -119,27 +145,14 @@ def attached_session_harness(
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_attachment',
-        lambda *a, **k: harness.attachment,
-    )
-    monkeypatch.setattr(
         'aivm.attachments.session._reconcile_attached_vm',
         lambda *a, **k: harness.reconcile,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.session._record_attachment',
-        lambda *a, **k: tmp_path / 'dummy',
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.session.get_ip_cached', lambda *a, **k: '10.0.0.2'
     )
     monkeypatch.setattr(
         'aivm.attachments.session.probe_ssh_ready',
         lambda *a, **k: harness.probe,
     )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
-    )
+    monkeypatch.setattr('aivm.attachments.guest.ensure_share_mounted', noop)
     monkeypatch.setattr(
         'aivm.cli.config.InitCLI.main',
         lambda *a, **k: harness.calls.append('config_init') or 0,
@@ -153,6 +166,15 @@ def attached_session_harness(
 def test_prepare_attached_session_bootstraps_missing_vm(
     attached_session_harness: AttachedSessionHarness,
 ) -> None:
+    """A missing VM is bootstrapped, and the attachment lands in the store.
+
+    The bootstrap ``config init`` + ``vm create`` order is the subject, so
+    it stays asserted directly.  Beyond that, the real ``_record_attachment``
+    persists the folder: the store gained VM/network/attachment records are
+    the artifact the bootstrap ultimately produces.  The top-of-function
+    guards are exercised too -- a missing path and a plain file are both
+    refused before any bootstrap work runs.
+    """
     harness = attached_session_harness
     harness.state['ready'] = False
 
@@ -167,6 +189,37 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         yes=True,
         dry_run=False,
     )
+
+    # The path guards must reject bad input before touching the bootstrap.
+    missing = harness.tmp_path / 'does-not-exist'
+    with pytest.raises(FileNotFoundError):
+        _prepare_attached_session(
+            config_opt=None,
+            vm_opt='',
+            host_src=missing,
+            guest_dst_opt='',
+            recreate_if_needed=False,
+            ensure_firewall_opt=True,
+            dry_run=False,
+            yes=True,
+            bootstrap_missing_vm=bootstrap,
+        )
+    a_file = harness.tmp_path / 'a-file'
+    a_file.write_text('x', encoding='utf-8')
+    with pytest.raises(AIVMError):
+        _prepare_attached_session(
+            config_opt=None,
+            vm_opt='',
+            host_src=a_file,
+            guest_dst_opt='',
+            recreate_if_needed=False,
+            ensure_firewall_opt=True,
+            dry_run=False,
+            yes=True,
+            bootstrap_missing_vm=bootstrap,
+        )
+    assert harness.calls == []  # guards abort before any bootstrap work
+
     session = _prepare_attached_session(
         config_opt=None,
         vm_opt='',
@@ -181,10 +234,30 @@ def test_prepare_attached_session_bootstraps_missing_vm(
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert harness.calls == ['config_init', 'vm_create']
 
+    store = load_store(harness.cfg_path)
+    atts = [a for a in store.attachments if a.vm_name == 'bootstrap-vm']
+    assert len(atts) == 1
+    att = atts[0]
+    assert att.host_path == str(harness.host_src.resolve())
+    assert att.mode == 'shared'
+    assert att.access == 'rw'
+    assert att.guest_dst == str(harness.host_src)
+    assert att.tag == 'hostcode-proj'
+    assert att.host_lexical_paths == []
+    assert any(v.name == 'bootstrap-vm' for v in store.vms)
+    assert any(n.name == harness.cfg.network.name for n in store.networks)
+
 
 def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     attached_session_harness: AttachedSessionHarness,
 ) -> None:
+    """Interactive bootstrap forwards ``yes=False`` to init + create.
+
+    ``yes=False`` propagation to the ``config init`` and ``vm create``
+    consent flow is the contract under test, so those kwargs stay asserted
+    directly.  The attachment the run persists to the store is the
+    observable end state.
+    """
     harness = attached_session_harness
     monkeypatch = harness.monkeypatch
     harness.state['ready'] = False
@@ -252,13 +325,24 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert create_kwargs[0]['vm_override'] is None
     assert create_kwargs[0]['initial_attachment_host_src'] == harness.host_src
 
+    # The bootstrapped session still persisted the folder attachment.
+    store = load_store(harness.cfg_path)
+    assert any(a.vm_name == 'bootstrap-vm' for a in store.attachments)
+
 
 def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
     attached_session_harness: AttachedSessionHarness,
 ) -> None:
-    from aivm.config_store import Store, save_store
+    """Stored defaults skip ``config init`` and only run ``vm create``.
 
+    With defaults already in the store the bootstrap should not re-run
+    ``config init``; the ``['vm_create']`` step list is the subject.  The
+    persisted attachment is the artifact the run leaves behind.  A final
+    check drives the sensitive-path guard: when the preflight declines, the
+    function aborts before any config work.
+    """
     harness = attached_session_harness
+    monkeypatch = harness.monkeypatch
     harness.state['ready'] = False
 
     store = Store()
@@ -290,17 +374,48 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert harness.calls == ['vm_create']
 
+    persisted = load_store(harness.cfg_path)
+    assert any(a.vm_name == 'bootstrap-vm' for a in persisted.attachments)
+
+    # A declined sensitive-path preflight must abort at the guard, before
+    # config resolution or any bootstrap work.
+    outcomes = iter([(False, None)])
+
+    def decline_then_allow(*a: Any, **k: Any) -> tuple[bool, None]:
+        del a, k
+        return next(outcomes, (True, None))
+
+    with monkeypatch.context() as m:
+        m.setattr(
+            'aivm.attachments.safety.attachment_safety_preflight',
+            decline_then_allow,
+        )
+        with pytest.raises(AIVMError, match='sensitive path'):
+            _prepare_attached_session(
+                config_opt=str(harness.cfg_path),
+                vm_opt='',
+                host_src=harness.host_src,
+                guest_dst_opt='',
+                recreate_if_needed=False,
+                ensure_firewall_opt=True,
+                dry_run=False,
+                yes=True,
+                bootstrap_missing_vm=bootstrap,
+            )
+
 
 def test_prepare_attached_session_restores_saved_vm_attachments(
     attached_session_harness: AttachedSessionHarness,
 ) -> None:
-    from aivm.config_store import (
-        Store,
-        save_store,
-        upsert_attachment,
-        upsert_vm,
-    )
+    """A running VM's saved ``shared`` attachments are all restored.
 
+    The store is seeded with the primary folder plus a second ``shared``
+    folder.  Real config resolution, ``_resolve_attachment`` and
+    ``_record_attachment`` run; only the virtiofs mapping/attach probes and
+    the guest mount surface stay faked.  The observable artifacts are the
+    ordered guest mounts (primary then secondary) and the store holding
+    both attachment records afterward.
+    """
     harness = attached_session_harness
     monkeypatch = harness.monkeypatch
     host_src = harness.host_src
@@ -328,99 +443,46 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     )
     save_store(store, cfg_path)
 
-    current_attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        source_dir=str(host_src.resolve()),
-        guest_dst='/workspace/proj',
-        tag='hostcode-proj',
-    )
-
-    def fake_resolve_attachment(
-        _cfg: AgentVMConfig,
-        cfg_path: Path,
-        host_path: Path,
-        _guest_dst_opt: str,
-    ) -> ResolvedAttachment:
-        host_path = Path(host_path).resolve()
-        if host_path == host_src.resolve():
-            return current_attachment
-        if host_path == other_src.resolve():
-            return ResolvedAttachment(
-                vm_name=cfg.vm.name,
-                source_dir=str(other_src.resolve()),
-                guest_dst='/workspace/docs',
-                tag='hostcode-docs',
-            )
-        raise AssertionError(f'unexpected host_path={host_path}')
-
+    # Resolve the VM from the real store instead of the bootstrap stub.
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_attachment',
-        fake_resolve_attachment,
+        'aivm.attachments.session.resolve_cfg_for_code',
+        real_resolve_cfg_for_code,
     )
+    # The heavy orchestrator stays faked but passes the resolved attachment
+    # through, reporting a reachable, ssh-ready VM.
     monkeypatch.setattr(
         'aivm.attachments.session._reconcile_attached_vm',
-        lambda *a, **k: ReconcileResult(
-            attachment=current_attachment,
+        lambda cfg, host_src, attachment, **k: ReconcileResult(
+            attachment=attachment,
             cached_ip='10.0.0.2',
             cached_ssh_ok=True,
         ),
     )
 
+    # Faked virtiofs boundary: the secondary is initially absent from the VM
+    # mappings, so restore must attach it before mounting.
     mappings = [(str(host_src.resolve()), 'hostcode-proj')]
-
-    def fake_vm_share_mappings(*a: Any, **k: Any) -> list:
-        del a, k
-        return list(mappings)
-
     monkeypatch.setattr(
-        'aivm.attachments.session.vm_share_mappings', fake_vm_share_mappings
+        'aivm.attachments.session.vm_share_mappings',
+        lambda *a, **k: list(mappings),
     )
 
-    attached: list[tuple[tuple, dict]] = []
-
     def fake_attach_vm_share(*a: Any, **k: Any) -> None:
-        attached.append((a, k))
+        del a, k
         mappings.append((str(other_src.resolve()), 'hostcode-docs'))
 
     monkeypatch.setattr(
         'aivm.attachments.session.attach_vm_share', fake_attach_vm_share
     )
 
-    mounted: list[tuple[tuple, dict]] = []
+    mounted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         'aivm.attachments.guest.ensure_share_mounted',
-        lambda *a, **k: mounted.append((a, k)),
+        lambda *a, **k: mounted.append(k),
     )
     monkeypatch.setattr(
         'aivm.attachments.session.ensure_share_mounted',
-        lambda *a, **k: mounted.append((a, k)),
-    )
-    recorded: list[dict] = []
-
-    def fake_record_attachment(
-        cfg_arg: AgentVMConfig,
-        cfg_path_arg: Path,
-        *,
-        host_src: Path,
-        mode: str,
-        access: str,
-        guest_dst: str,
-        tag: str,
-    ) -> Path:
-        del cfg_arg, cfg_path_arg
-        recorded.append(
-            {
-                'host_src': str(host_src),
-                'mode': mode,
-                'access': access,
-                'guest_dst': guest_dst,
-                'tag': tag,
-            }
-        )
-        return cfg_path
-
-    monkeypatch.setattr(
-        'aivm.attachments.session._record_attachment', fake_record_attachment
+        lambda *a, **k: mounted.append(k),
     )
 
     session = _prepare_attached_session(
@@ -435,30 +497,32 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     )
 
     assert session.cfg.vm.name == 'restore-vm'
-    assert len(attached) == 1
-    attach_args, attach_kwargs = attached[0]
-    assert attach_args[1] == str(other_src.resolve())
-    assert attach_args[2] == 'hostcode-docs'
-    assert attach_kwargs['dry_run'] is False
-    assert [kwargs['guest_dst'] for _, kwargs in mounted] == [
+    # Both folders were mounted in the guest, primary first then secondary.
+    assert [k['guest_dst'] for k in mounted] == [
         '/workspace/proj',
         '/workspace/docs',
     ]
-    assert len(recorded) == 2
-    assert recorded[1]['mode'] == 'shared'
-    assert recorded[1]['guest_dst'] == '/workspace/docs'
+    # Both attachments remain (or become) recorded for the VM.
+    saved = load_store(cfg_path)
+    by_path = {a.host_path: a for a in saved.attachments}
+    assert str(host_src.resolve()) in by_path
+    docs = by_path[str(other_src.resolve())]
+    assert docs.vm_name == 'restore-vm'
+    assert docs.mode == 'shared'
+    assert docs.guest_dst == '/workspace/docs'
 
 
 def test_prepare_attached_session_restores_saved_shared_root_attachments(
     attached_session_harness: AttachedSessionHarness,
 ) -> None:
-    from aivm.config_store import (
-        Store,
-        save_store,
-        upsert_attachment,
-        upsert_vm,
-    )
+    """A running VM's saved ``shared-root`` attachments are all restored.
 
+    Real config resolution and attachment resolution/recording run; the
+    guest-availability helper is faked so its per-attachment kwargs are the
+    artifact -- both the primary and the secondary shared-root folder are
+    made available with the host-side flag set and disruptive rebinds
+    disabled.  The store holding both records is the persisted end state.
+    """
     harness = attached_session_harness
     monkeypatch = harness.monkeypatch
     host_src = harness.host_src
@@ -488,96 +552,41 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
     )
     save_store(store, cfg_path)
 
-    current_attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(host_src.resolve()),
-        guest_dst='/workspace/proj',
-        tag='token-proj',
-    )
-
-    def fake_resolve_attachment(
-        _cfg: AgentVMConfig,
-        cfg_path: Path,
-        host_path: Path,
-        _guest_dst_opt: str,
-    ) -> ResolvedAttachment:
-        host_path = Path(host_path).resolve()
-        if host_path == host_src.resolve():
-            return current_attachment
-        if host_path == other_src.resolve():
-            return ResolvedAttachment(
-                vm_name=cfg.vm.name,
-                mode=AttachmentMode.SHARED_ROOT,
-                source_dir=str(other_src.resolve()),
-                guest_dst='/workspace/docs',
-                tag='token-docs',
-            )
-        raise AssertionError(f'unexpected host_path={host_path}')
-
     monkeypatch.setattr(
-        'aivm.attachments.session._resolve_attachment',
-        fake_resolve_attachment,
+        'aivm.attachments.session.resolve_cfg_for_code',
+        real_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
         'aivm.attachments.session._reconcile_attached_vm',
-        lambda *a, **k: ReconcileResult(
-            attachment=current_attachment,
+        lambda cfg, host_src, attachment, **k: ReconcileResult(
+            attachment=attachment,
             cached_ip='10.0.0.3',
             cached_ssh_ok=True,
         ),
     )
 
-    primary_ready_calls: list[tuple[tuple, dict]] = []
+    primary_ready_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
         'aivm.attachments.session._ensure_attachment_available_in_guest',
         lambda *a, **k: primary_ready_calls.append((a, k)) or None,
     )
 
-    shared_root_host_binds: list[tuple[tuple, dict]] = []
+    shared_root_host_binds: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
         'aivm.attachments.guest._ensure_shared_root_host_bind',
         lambda *a, **k: (
             shared_root_host_binds.append((a, k)) or Path('/tmp/token')
         ),
     )
-    shared_root_vm_mappings: list[tuple[tuple, dict]] = []
+    shared_root_vm_mappings: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
         'aivm.attachments.guest._ensure_shared_root_vm_mapping',
         lambda *a, **k: shared_root_vm_mappings.append((a, k)) or None,
     )
-    shared_root_guest_binds: list[tuple[tuple, dict]] = []
+    shared_root_guest_binds: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(
         'aivm.attachments.guest._ensure_shared_root_guest_bind',
         lambda *a, **k: shared_root_guest_binds.append((a, k)) or None,
-    )
-
-    recorded: list[dict] = []
-
-    def fake_record_attachment(
-        cfg_arg: AgentVMConfig,
-        cfg_path_arg: Path,
-        *,
-        host_src: Path,
-        mode: str,
-        access: str,
-        guest_dst: str,
-        tag: str,
-    ) -> Path:
-        del cfg_arg, cfg_path_arg
-        recorded.append(
-            {
-                'host_src': str(host_src),
-                'mode': mode,
-                'access': access,
-                'guest_dst': guest_dst,
-                'tag': tag,
-            }
-        )
-        return cfg_path
-
-    monkeypatch.setattr(
-        'aivm.attachments.session._record_attachment', fake_record_attachment
     )
 
     session = _prepare_attached_session(
@@ -600,9 +609,16 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
     assert restored_args[2].guest_dst == '/workspace/docs'
     assert restored_kwargs['ensure_shared_root_host_side'] is True
     assert restored_kwargs['allow_disruptive_shared_root_rebind'] is False
+    # The faked guest-availability step short-circuits the lower helpers.
     assert len(shared_root_host_binds) == 0
     assert len(shared_root_vm_mappings) == 0
     assert len(shared_root_guest_binds) == 0
-    assert len(recorded) == 2
-    assert recorded[1]['mode'] == AttachmentMode.SHARED_ROOT
-    assert recorded[1]['guest_dst'] == '/workspace/docs'
+
+    # Both shared-root attachments are recorded for the VM.
+    saved = load_store(cfg_path)
+    by_path = {a.host_path: a for a in saved.attachments}
+    assert str(host_src.resolve()) in by_path
+    docs = by_path[str(other_src.resolve())]
+    assert docs.vm_name == 'restore-shared-root-vm'
+    assert docs.mode == AttachmentMode.SHARED_ROOT
+    assert docs.guest_dst == '/workspace/docs'

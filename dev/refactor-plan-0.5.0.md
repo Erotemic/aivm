@@ -793,19 +793,57 @@ These three would meaningfully reduce remaining test brittleness but they're not
 
 1. ✅ **Build a `RecordingCommandManager` fixture** that captures `mgr.submit`/`mgr.run` calls instead of patching individual helpers. Landed as `tests.helpers.command_recorder` / `CommandRecorder` (over `subprocess.run`) plus `patch_ns` for the namespace-stub runs.
 
-2. **Reshape behavioral tests to assert on observable artifacts** (config-store contents, files written, intent log) rather than function-call shapes. Per-test redesign; cannot be mechanical. Still open.
+2. ✅ **Reshape behavioral tests to assert on observable artifacts** rather than function-call shapes. Done 2026-07-10 across `test_persistent_host.py`, `test_attachment_session_restore.py`, `test_attachment_guest.py`, `test_attachment_session.py`, `test_session_prepare.py`, plus a new `test_session_reconcile.py`.
+
+   **Correction to this item as written:** there is no *intent log*. `CommandManager` pops each `IntentFrame` in `IntentScope.__exit__`, pops each `CommandPlan` in `PlanScope.__exit__`, and drains `_loose_commands` in `_flush_loose_commands`. All three are empty by the time a call returns, and no audit list is retained. The observable artifacts are exactly three: **config-store contents** (`load_store(cfg_path)`), **files on disk**, and **the recorded subprocess command log** (`tests.helpers.command_recorder`, which fakes `aivm.commands.subprocess.run` — the single boundary every ssh/virsh/rsync/mount path funnels through). Captured log output via `capture_logs` is a fourth. Asserting on the intent tree would first require adding an opt-in audit list to `CommandManager`.
+
+   The lever was that one boundary. Stubbing `_run_guest_root_script`, `_sync_*_manifest_*`, `_install_persistent_attachment_replay`, `_record_attachment`, `_resolve_attachment`, `CommandManager.current` and asserting "was called / in what order" collapses onto: fake `subprocess.run`, redirect `aivm.config_store.paths._appdir` at `tmp_path`, let the real code run, read back the store and the files.
 
 3. ✅ **Task 8** — split `tests/test_vm_helpers.py` into focused modules.
 
-### Patches/test ratios after this pass
+### Patches and coverage after the 2026-07-10 pass
 
-| File | Before | After | Notes |
-|---|---:|---:|---|
-| `test_attachment_persistent.py` | 1.7 | n/a | submodule-targeted patches; not directly comparable |
-| `test_vm_helpers.py` | 3.5 | 3.4 | 6 tests removed |
-| `test_cli_vm_detach.py` | — | 6.25 | 4 distinct attachment modes, all kept |
-| `test_attachment_session.py` | 5.7 | 5.7 | mostly necessary behavioral mocks |
-| `test_cli_vm_create.py` | 5.0 | 5.3 | denominator dropped after one prune |
+`monkeypatch.setattr` count, and the coverage of the module each file exercises.
+Coverage rose because the tests stopped stubbing the code and started running it.
+
+| File | setattr before | after | Module | Cov before | after |
+|---|---:|---:|---|---:|---:|
+| `test_persistent_host.py` | 49 | 11 | `persistent/transport.py` | 62% | 71% |
+| | | | `persistent/manifest.py` | 84% | 92% |
+| | | | `persistent/replay.py` | 71% | 80% |
+| `test_attachment_session_restore.py` | 57 | 33 | `attachments/session.py` | 46% | 80% † |
+| `test_attachment_guest.py` | 29 | 12 | `attachments/guest.py` | 83% | 85% |
+| `test_attachment_session.py` | 35 | 29 | (CLI boundary; ~24 stubs irreducible) | | |
+| `test_session_prepare.py` | 27 | 22 | | | |
+| `test_session_reconcile.py` | new | 8 | `_reconcile_attached_vm` | 0% | covered |
+
+† `session.py` reached 80% only once `test_session_reconcile.py` existed. `_reconcile_attached_vm`
+(~270 lines) had **never been executed by any test** — every file stubbed it. It never calls
+`subprocess` directly; everything funnels through `CommandManager.run/submit`, so one
+`command_recorder` over `subprocess.run` plus a `tmp_path`-rooted config runs the whole
+orchestration without a live VM.
+
+Suite-wide: 530 → 440 `monkeypatch.setattr`. `aivm/attachments/` + `commands.py` coverage 75% → 82%.
+
+### Verified by mutation testing
+
+31 mutations injected into `aivm/`; 30 caught. The sweep found four **pre-existing** gaps
+(none introduced by the reshape), all since closed:
+
+- the manifest's `schema_version` was asserted nowhere — it is a host→guest wire format that no
+  code validates;
+- `receive.denyCurrentBranch updateInstead` was asserted nowhere, though it is what lets a
+  host-side `git push` update the guest working tree;
+- `_ensure_guest_symlink` emits `ln -s` from two branches, so a check for *an* `ln -s` could not
+  see one branch degrade to a hard link;
+- the exit-code warning test matched a substring that both the safety-refusal branch and the
+  transport-failure branch contain, so it could not tell them apart.
+
+One surviving mutant is **provably equivalent**: `_record_attachment` passing `str(host_src)`
+rather than `str(host_src.resolve())` as `host_path` is unobservable, because `upsert_attachment`
+re-normalizes through `_norm_dir` → `.resolve()` (`config_store/mutate.py:122`, `parse.py:12`).
+The `.resolve()` in `_record_attachment` is therefore redundant. Harmless, but worth knowing
+before someone "fixes" one side of it.
 
 ---
 

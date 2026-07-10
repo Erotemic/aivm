@@ -3,15 +3,21 @@
 Covers the manifest text, host/guest manifest sync and hash-gated helper
 install, the reconcile flow (skip/replay/propagate/continue-on-error) and
 the host bind-mount that stages a folder under the export root.
+
+These tests fake only the real process boundary
+(``aivm.commands.subprocess.run``, via :func:`command_recorder`) and let the
+production ``transport``/``manifest``/``replay`` code run for real.  They
+assert on observable artifacts -- the manifest file written to disk, the
+recorded command log, and captured log output -- rather than on which
+internal collaborator was called.
 """
 
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
+import shlex
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -29,7 +35,79 @@ from aivm.attachments.persistent import (
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import AttachmentEntry, Store, save_store
-from tests.helpers import FakeCommandManager, FakeProc, activate_manager
+from aivm.persistent_replay import (
+    PERSISTENT_ATTACHMENT_REPLAY_BIN,
+    PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
+)
+from tests.helpers import (
+    CommandRecorder,
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+)
+
+REPLAY_INVOCATION = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
+"""The exact remote script the reconcile flow runs to replay guest mounts."""
+
+
+# ---------------------------------------------------------------------------
+# Local helpers for reading artifacts back out of the recorder
+# ---------------------------------------------------------------------------
+
+
+def _redirect_appdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point the user-owned app-data dir (host manifest home) at ``tmp_path``.
+
+    This is the enabler that lets the real
+    ``_sync_persistent_attachment_manifest_on_host`` write the canonical
+    manifest into the sandbox where the test can read it back.
+    """
+    monkeypatch.setattr(
+        'aivm.config_store.paths._appdir',
+        lambda appname, kind: tmp_path / kind,
+    )
+
+
+def _ssh_scripts(rec: CommandRecorder) -> list[str]:
+    """Every remote script (the last argv token) an ``ssh`` command carried."""
+    return [cmd[-1] for cmd in rec.normalized if cmd and cmd[0] == 'ssh']
+
+
+def _hash_route(
+    initial_status: str,
+    *,
+    fail_when: Callable[[str], bool] | None = None,
+    fail_proc: FakeProc | None = None,
+) -> Callable[[list[str]], FakeProc]:
+    """Build a guest-ssh route for the recorder.
+
+    The first hash-check of any given script reports ``initial_status`` (the
+    drift the guest starts in); a later check of the same script -- the
+    post-install verify -- reports ``MATCH`` so installs are accepted.  When
+    ``fail_when`` matches a remote script, ``fail_proc`` is returned so a
+    single reconcile phase can be made to fail.
+    """
+    seen: dict[str, int] = {}
+
+    def route(cmd: list[str]) -> FakeProc:
+        script = cmd[-1]
+        if fail_when is not None and fail_proc is not None:
+            if fail_when(script):
+                return fail_proc
+        if 'sha256sum' in script:
+            count = seen.get(script, 0)
+            seen[script] = count + 1
+            status = initial_status if count == 0 else 'MATCH'
+            return FakeProc(stdout=f'{status}\n')
+        return FakeProc()
+
+    return route
+
+
+# ---------------------------------------------------------------------------
+# Manifest model + on-disk write (pure; no process boundary involved)
+# ---------------------------------------------------------------------------
 
 
 def test_persistent_manifest_persists_records_and_access_modes(
@@ -75,6 +153,10 @@ def test_persistent_manifest_persists_records_and_access_modes(
 
     payload = json.loads(_persistent_attachment_manifest_text(cfg, cfg_path))
 
+    # The manifest is a wire format: the host writes it, the in-guest replay
+    # helper reads it. Nothing in the code validates schema_version, so pin
+    # it here -- bumping it is a guest-compatibility decision, not a typo.
+    assert payload['schema_version'] == 1
     assert payload['vm_name'] == cfg.vm.name
     assert payload['shared_root_mount'] == '/mnt/aivm-persistent'
     assert [item['shared_root_token'] for item in payload['records']] == [
@@ -129,47 +211,78 @@ def test_persistent_host_manifest_path_uses_app_data_dir(
 def test_persistent_manifest_sync_uses_checksum_rsync(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The host manifest lands on disk and rsync pushes it by checksum.
+
+    Asserts the artifacts: the JSON file the on-host sync writes into the
+    sandbox and the exact rsync/ssh argv the guest push records.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-sync'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
-    save_store(Store(), cfg_path)
-    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=str((tmp_path / 'proj').resolve()),
+            vm_name=cfg.vm.name,
+            mode='persistent',
+            access='rw',
+            guest_dst='/workspace/proj',
+            tag='hostcode-proj',
+            host_lexical_paths=[],
+        )
+    )
+    save_store(store, cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    calls: list[list[str]] = []
+    manifest_path = _sync_persistent_attachment_manifest_on_host(
+        cfg, cfg_path, dry_run=False
+    )
+    # The canonical manifest is really on disk with the real record content.
+    payload = json.loads(manifest_path.read_text())
+    assert payload['vm_name'] == cfg.vm.name
+    assert [rec['shared_root_token'] for rec in payload['records']] == [
+        'hostcode-proj'
+    ]
 
-    def handler(cmd: list) -> SimpleNamespace | None:
-        if cmd and cmd[0] == 'rsync':
-            return SimpleNamespace(
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': FakeProc(stdout=''),
+            'rsync': FakeProc(
                 stdout='>f..t...... persistent-attachments.json\n'
-            )
-        return SimpleNamespace(stdout='')
-
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeCommandManager(handler, calls=calls),
+            ),
+        },
     )
 
     changed = _sync_persistent_attachment_manifest_to_guest(
-        cfg,
-        '10.0.0.5',
-        dry_run=False,
+        cfg, '10.0.0.5', dry_run=False
     )
 
     assert changed is True
-    assert calls[0][:3] == ['ssh', '-o', 'BatchMode=yes']
-    assert any(cmd[0] == 'rsync' for cmd in calls)
-    rsync_cmd = next(cmd for cmd in calls if cmd and cmd[0] == 'rsync')
+    ssh_cmd = rec.only('ssh')
+    assert ssh_cmd[:3] == ['ssh', '-o', 'BatchMode=yes']
+    rsync_cmd = rec.only('rsync')
     assert '--checksum' in rsync_cmd
     assert '--itemize-changes' in rsync_cmd
+    # The push writes through the guest's privileged rsync.
+    idx = rsync_cmd.index('--rsync-path')
+    assert rsync_cmd[idx + 1] == 'sudo -n rsync'
+    # The source really is the manifest the on-host step just wrote.
+    assert str(manifest_path) in rsync_cmd
 
 
 def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A transient rsync banner failure is retried, then succeeds.
+
+    Asserts on the recorded rsync argv (retried twice, carrying the connect
+    timeout) rather than on a stubbed sync collaborator.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-sync-retry'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -177,53 +290,72 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
-    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
     monkeypatch.setattr(
         'aivm.attachments.persistent.transport.time.sleep', lambda s: None
     )
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
 
-    calls: list[list[str]] = []
-    rsync_calls = {'n': 0}
+    attempts = {'rsync': 0}
 
-    def handler(cmd: list) -> SimpleNamespace | None:
-        if cmd and cmd[0] == 'ssh':
-            return SimpleNamespace(stdout='')
-        if cmd and cmd[0] == 'rsync':
-            rsync_calls['n'] += 1
-            if rsync_calls['n'] == 1:
-                return SimpleNamespace(
-                    stdout='',
-                    stderr=(
-                        'Connection timed out during banner exchange\n'
-                        'Connection to 10.0.0.5 port 22 timed out'
-                    ),
-                    code=255,
-                )
-            return SimpleNamespace(
-                stdout='>f..t...... persistent-attachments.json\n',
-                stderr='',
-                code=0,
+    def rsync_route(cmd: list[str]) -> FakeProc:
+        attempts['rsync'] += 1
+        if attempts['rsync'] == 1:
+            return FakeProc(
+                returncode=255,
+                stderr=(
+                    'Connection timed out during banner exchange\n'
+                    'Connection to 10.0.0.5 port 22 timed out'
+                ),
             )
-        return SimpleNamespace(stdout='')
+        return FakeProc(stdout='>f..t...... persistent-attachments.json\n')
 
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeCommandManager(handler, calls=calls),
+    rec = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(stdout=''), 'rsync': rsync_route},
     )
 
     changed = _sync_persistent_attachment_manifest_to_guest(
-        cfg,
-        '10.0.0.5',
-        dry_run=False,
+        cfg, '10.0.0.5', dry_run=False
     )
 
     assert changed is True
-    assert rsync_calls['n'] == 2
-    ssh_cmd = next(cmd for cmd in calls if cmd and cmd[0] == 'ssh')
+    assert attempts['rsync'] == 2
+    assert rec.count('rsync') == 2
+    ssh_cmd = rec.calls[0]
+    assert ssh_cmd[0] == 'ssh'
     assert any('ConnectTimeout=15' in arg for arg in ssh_cmd)
-    rsync_cmd = next(cmd for cmd in calls if cmd and cmd[0] == 'rsync')
+    rsync_cmd = next(cmd for cmd in rec.normalized if cmd[:1] == ['rsync'])
     assert any('ConnectTimeout=15' in arg for arg in rsync_cmd)
+
+
+def test_persistent_manifest_sync_returns_false_when_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty rsync itemize report means the guest manifest was unchanged."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-sync-unchanged'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+
+    rec = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(stdout=''), 'rsync': FakeProc(stdout='')},
+    )
+
+    changed = _sync_persistent_attachment_manifest_to_guest(
+        cfg, '10.0.0.5', dry_run=False
+    )
+
+    assert changed is False
+    assert rec.ran('rsync')
 
 
 @pytest.mark.parametrize(
@@ -236,6 +368,11 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     status: str,
     expect_install: bool,
 ) -> None:
+    """A checksum probe gates the guest install; MATCH installs nothing.
+
+    Lets the real hash-check / install / verify scripts run over ssh and
+    asserts on the sequence and content of the recorded remote scripts.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = f'vm-persistent-install-{status.lower()}'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -243,38 +380,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     cfg.vm.user = 'agent'
     activate_manager(monkeypatch)
 
-    calls: list[tuple[str, str, str | None]] = []
-
-    def fake_run(*args: Any, **kwargs: Any) -> Any:
-        del args
-        summary = str(kwargs.get('summary') or '')
-        script = str(kwargs.get('script') or '')
-        role = kwargs.get('role')
-        calls.append((summary, script, role))
-        if summary == 'Check guest replay helper hash':
-            assert 'cmp -s' not in script
-            assert 'sha256sum' in script
-            assert (
-                'MISSING' in script
-                and 'MATCH' in script
-                and 'MISMATCH' in script
-            )
-            return SimpleNamespace(stdout=f'{status}\n')
-        if summary == 'Install guest replay helper':
-            assert expect_install
-            assert "printf '%s'" in script
-            assert 'install -m 0755' in script
-            assert role == 'modify'
-            return SimpleNamespace(stdout='')
-        if summary == 'Verify guest replay helper hash after install':
-            assert expect_install
-            return SimpleNamespace(stdout='MATCH\n')
-        raise AssertionError(f'unexpected summary: {summary}')
-
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.transport._run_guest_root_script',
-        fake_run,
-    )
+    rec = command_recorder(monkeypatch, {'ssh': _hash_route(status)})
 
     changed = _install_guest_text_if_changed(
         cfg,
@@ -287,46 +393,52 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     )
 
     assert changed is expect_install
-    assert [summary for summary, _, _ in calls] == (
-        [
-            'Check guest replay helper hash',
-            'Install guest replay helper',
-            'Verify guest replay helper hash after install',
-        ]
-        if expect_install
-        else ['Check guest replay helper hash']
-    )
+    scripts = _ssh_scripts(rec)
+
+    def _kind(script: str) -> str:
+        if 'install -m' in script:
+            return 'install'
+        if 'sha256sum' in script:
+            return 'check'
+        return 'other'
+
+    if expect_install:
+        assert [_kind(s) for s in scripts] == ['check', 'install', 'check']
+        install_script = scripts[1]
+        assert 'install -m 0755' in install_script
+        assert "printf '%s'" in install_script
+    else:
+        assert [_kind(s) for s in scripts] == ['check']
+    # Every check script really does a checksum comparison, not a byte cmp.
+    check_script = scripts[0]
+    assert 'sha256sum' in check_script
+    assert 'cmp -s' not in check_script
     assert all(
-        role == 'read' for summary, _, role in calls if 'Check' in summary
+        token in check_script for token in ('MISSING', 'MATCH', 'MISMATCH')
     )
 
 
 def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """When nothing drifted and replay is not forced, no replay runs.
+
+    The observable artifact is the recorded command log: hash checks happen
+    but no install, no daemon-reload and no replay-helper invocation appear.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-reconcile-skip'
     cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    calls: list[tuple[str, tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: calls.append(('host', a, k))
-        or _persistent_host_manifest_path(cfg),
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-        lambda *a, **k: calls.append(('guest-sync', a, k)) or False,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-        lambda *a, **k: calls.append(('install', a, k)) or False,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.transport._run_guest_root_script',
-        lambda *a, **k: calls.append(('replay', a, k)) or None,
+    rec = command_recorder(
+        monkeypatch,
+        {'ssh': _hash_route('MATCH'), 'rsync': FakeProc(stdout='')},
     )
 
     _reconcile_persistent_attachments_in_guest(
@@ -337,43 +449,77 @@ def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
         replay_even_if_unchanged=False,
     )
 
-    assert [item[0] for item in calls] == ['host', 'guest-sync', 'install']
+    # Host manifest really landed on disk.
+    manifest_path = _persistent_host_manifest_path(cfg)
+    assert json.loads(manifest_path.read_text())['vm_name'] == cfg.vm.name
+
+    scripts = _ssh_scripts(rec)
+    assert rec.ran('rsync')
+    assert any('sha256sum' in s for s in scripts)
+    assert not any('install -m' in s for s in scripts)
+    assert not any('systemctl daemon-reload' in s for s in scripts)
+    assert REPLAY_INVOCATION not in scripts
 
 
-def test_persistent_manifest_sync_returns_false_when_unchanged(
+def test_persistent_reconcile_replays_when_guest_manifest_changes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Drift triggers install (with daemon-reload) and a final replay.
+
+    Exercises the whole install path -- helper + unit are written, the unit
+    change reloads systemd, and the replay helper runs last -- asserting on
+    the recorded remote scripts.
+    """
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-sync-unchanged'
+    cfg.vm.name = 'vm-persistent-reconcile-changed'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    calls: list[list[str]] = []
-
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeCommandManager(calls=calls),
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': _hash_route('MISSING'),
+            'rsync': FakeProc(
+                stdout='>f..t...... persistent-attachments.json\n'
+            ),
+        },
     )
 
-    changed = _sync_persistent_attachment_manifest_to_guest(
+    _reconcile_persistent_attachments_in_guest(
         cfg,
+        cfg_path,
         '10.0.0.5',
         dry_run=False,
     )
 
-    assert changed is False
-    assert any(cmd[0] == 'rsync' for cmd in calls)
+    scripts = _ssh_scripts(rec)
+    # Both guest text files were installed (helper 0755, unit 0644).
+    assert any('install -m 0755' in s for s in scripts)
+    assert any('install -m 0644' in s for s in scripts)
+    # The changed unit reloads systemd and re-enables the replay service.
+    assert any(
+        'systemctl daemon-reload' in s
+        and f'systemctl enable {PERSISTENT_ATTACHMENT_REPLAY_SERVICE}' in s
+        for s in scripts
+    )
+    # Replay is the final remote action.
+    assert scripts[-1] == REPLAY_INVOCATION
 
 
-@pytest.mark.parametrize(
-    'phase',
-    ['sync', 'install', 'replay'],
-)
+@pytest.mark.parametrize('phase', ['sync', 'install', 'replay'])
 def test_persistent_reconcile_propagates_primary_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, phase: str
 ) -> None:
+    """A failure at any reconcile phase propagates as a CommandError.
+
+    The failure is a real non-zero exit from the faked process boundary at
+    the phase under test, not a stubbed collaborator raising.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = f'vm-persistent-fail-{phase}'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -381,82 +527,40 @@ def test_persistent_reconcile_propagates_primary_failures(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: cfg_path,
-    )
+    boom = FakeProc(returncode=1, stderr=f'{phase} boom')
     if phase == 'sync':
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError('sync boom')),
-        )
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-            lambda *a, **k: False,
-        )
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.transport._run_guest_root_script',
-            lambda *a, **k: None,
-        )
-        with pytest.raises(RuntimeError, match='sync boom'):
-            _reconcile_persistent_attachments_in_guest(
-                cfg,
-                cfg_path,
-                '10.0.0.5',
-                dry_run=False,
-            )
+        routes: dict[Any, Any] = {'ssh': FakeProc(), 'rsync': boom}
     elif phase == 'install':
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-            lambda *a, **k: False,
-        )
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError('install boom')),
-        )
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.transport._run_guest_root_script',
-            lambda *a, **k: None,
-        )
-        with pytest.raises(RuntimeError, match='install boom'):
-            _reconcile_persistent_attachments_in_guest(
-                cfg,
-                cfg_path,
-                '10.0.0.5',
-                dry_run=False,
-            )
+        routes = {
+            'ssh': _hash_route(
+                'MISSING',
+                fail_when=lambda s: 'install -m' in s,
+                fail_proc=boom,
+            ),
+            'rsync': FakeProc(stdout=''),
+        }
     else:
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-            lambda *a, **k: False,
-        )
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-            lambda *a, **k: False,
-        )
+        routes = {
+            'ssh': _hash_route(
+                'MATCH',
+                fail_when=lambda s: s == REPLAY_INVOCATION,
+                fail_proc=boom,
+            ),
+            'rsync': FakeProc(stdout=''),
+        }
 
-        def fake_run(*args: Any, **kwargs: Any) -> Any:
-            del args
-            if (
-                kwargs.get('summary')
-                == 'Replay persistent attachment mounts inside guest'
-            ):
-                raise RuntimeError('replay boom')
-            return SimpleNamespace(stdout='')
+    command_recorder(monkeypatch, routes)
 
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.transport._run_guest_root_script',
-            fake_run,
+    with pytest.raises(CommandError):
+        _reconcile_persistent_attachments_in_guest(
+            cfg,
+            cfg_path,
+            '10.0.0.5',
+            dry_run=False,
         )
-        with pytest.raises(RuntimeError, match='replay boom'):
-            _reconcile_persistent_attachments_in_guest(
-                cfg,
-                cfg_path,
-                '10.0.0.5',
-                dry_run=False,
-            )
 
 
 @pytest.mark.parametrize(
@@ -475,7 +579,8 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
     Merges the former ``_logs_and_continues`` (sync failure) and
     ``_on_late_failures`` (install/replay failure) tests; the phase axis is
     exactly the stage that raises, mirroring
-    ``test_persistent_reconcile_propagates_primary_failures``.
+    ``test_persistent_reconcile_propagates_primary_failures``.  The captured
+    warning is the artifact.
     """
     cfg = AgentVMConfig()
     cfg.vm.name = f'vm-persistent-continue-on-error-{phase}'
@@ -484,58 +589,38 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.replay.log.warning',
-        lambda fmt, *args: warnings.append(fmt.format(*args)),
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: cfg_path,
+    warnings = capture_logs(
+        monkeypatch,
+        'aivm.attachments.persistent.replay.log',
+        levels=('warning',),
     )
 
+    boom = FakeProc(returncode=1, stderr=f'{phase} boom')
     if phase == 'sync':
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError('sync boom')),
-        )
+        routes: dict[Any, Any] = {'ssh': FakeProc(), 'rsync': boom}
+    elif phase == 'install':
+        routes = {
+            'ssh': _hash_route(
+                'MISSING',
+                fail_when=lambda s: 'install -m' in s,
+                fail_proc=boom,
+            ),
+            'rsync': FakeProc(stdout=''),
+        }
     else:
-        monkeypatch.setattr(
-            'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-            lambda *a, **k: False,
-        )
-        if phase == 'install':
-            monkeypatch.setattr(
-                'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-                lambda *a, **k: (_ for _ in ()).throw(
-                    RuntimeError('install boom')
-                ),
-            )
-            monkeypatch.setattr(
-                'aivm.attachments.persistent.transport._run_guest_root_script',
-                lambda *a, **k: None,
-            )
-        else:
-            monkeypatch.setattr(
-                'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-                lambda *a, **k: False,
-            )
+        routes = {
+            'ssh': _hash_route(
+                'MATCH',
+                fail_when=lambda s: s == REPLAY_INVOCATION,
+                fail_proc=boom,
+            ),
+            'rsync': FakeProc(stdout=''),
+        }
 
-            def fake_run(*args: Any, **kwargs: Any) -> Any:
-                del args
-                if (
-                    kwargs.get('summary')
-                    == 'Replay persistent attachment mounts inside guest'
-                ):
-                    raise RuntimeError('replay boom')
-                return SimpleNamespace(stdout='')
-
-            monkeypatch.setattr(
-                'aivm.attachments.persistent.transport._run_guest_root_script',
-                fake_run,
-            )
+    command_recorder(monkeypatch, routes)
 
     _reconcile_persistent_attachments_in_guest(
         cfg,
@@ -551,6 +636,12 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
 def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A failing reconcile runs on an isolated manager, sparing outer work.
+
+    The pending command queued on the outer manager is neither flushed nor
+    discarded by the reconcile's failure; it still runs (and fails) only when
+    the caller later awaits it.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-continue-on-error-isolation'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -558,6 +649,8 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
     cfg.vm.user = 'agent'
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
     outer = CommandManager(yes=True, yes_sudo=True)
     CommandManager.activate(outer)
 
@@ -567,28 +660,22 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
         eager=False,
     )
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.replay.log.warning',
-        lambda fmt, *args: warnings.append(fmt.format(*args)),
+    warnings = capture_logs(
+        monkeypatch,
+        'aivm.attachments.persistent.replay.log',
+        levels=('warning',),
     )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: cfg_path,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-        lambda *a, **k: False,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-        lambda *a, **k: False,
-    )
-    replay_calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.transport._run_guest_root_script',
-        lambda *a, **k: replay_calls.append(k)
-        or SimpleNamespace(code=1, stdout='', stderr='replay boom'),
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': _hash_route(
+                'MATCH',
+                fail_when=lambda s: s == REPLAY_INVOCATION,
+                fail_proc=FakeProc(returncode=1, stderr='replay boom'),
+            ),
+            'rsync': FakeProc(stdout=''),
+            'python': FakeProc(returncode=7),
+        },
     )
 
     _reconcile_persistent_attachments_in_guest(
@@ -600,7 +687,9 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
     )
 
     assert any('persistent-reconcile: VM' in msg for msg in warnings)
-    assert replay_calls and replay_calls[0]['check'] is False
+    # The reconcile really attempted the replay (and it really failed).
+    assert REPLAY_INVOCATION in _ssh_scripts(rec)
+    # The outer manager's queued command is untouched until awaited.
     assert pending.done() is False
     with pytest.raises(CommandError):
         pending.result()
@@ -609,6 +698,11 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
 def test_persistent_replay_script_nonchecking_path_avoids_error_log(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A non-checking guest failure raises but stays off the error log.
+
+    ``check=False`` means the command layer must not itself log an error;
+    the caller re-raises the guest stderr as a RuntimeError instead.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-nonchecking-replay'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -616,18 +710,11 @@ def test_persistent_replay_script_nonchecking_path_avoids_error_log(
     cfg.vm.user = 'agent'
     activate_manager(monkeypatch)
 
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list, **kwargs: Any) -> Any:
-        del kwargs
-        calls.append(list(cmd))
-        return SimpleNamespace(returncode=1, stdout='', stderr='replay boom')
-
-    errors: list[tuple] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        fake_subprocess_run,
+    rec = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(returncode=1, stderr='replay boom')},
     )
+    errors: list[tuple[Any, Any]] = []
     monkeypatch.setattr(
         'aivm.commands.log.error',
         lambda *args, **kwargs: errors.append((args, kwargs)),
@@ -644,13 +731,18 @@ def test_persistent_replay_script_nonchecking_path_avoids_error_log(
             check=False,
         )
 
-    assert calls
+    assert rec.ran('ssh')
     assert not errors
 
 
 def test_persistent_guest_root_script_retries_transient_banner_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A transient ssh banner failure is retried before succeeding.
+
+    Asserts on the recorded ssh argv (two attempts, carrying the connect
+    timeout) rather than on a scripted command manager.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-guest-root-retry'
     cfg.paths.base_dir = str(tmp_path / 'base')
@@ -661,27 +753,21 @@ def test_persistent_guest_root_script_retries_transient_banner_failures(
         'aivm.attachments.persistent.transport.time.sleep', lambda s: None
     )
 
-    calls: list[list[str]] = []
     attempts = {'n': 0}
 
-    def handler(cmd: list) -> SimpleNamespace | None:
-        del cmd
+    def ssh_route(cmd: list[str]) -> FakeProc:
         attempts['n'] += 1
         if attempts['n'] == 1:
-            return SimpleNamespace(
-                code=255,
-                stdout='',
+            return FakeProc(
+                returncode=255,
                 stderr=(
                     'Connection timed out during banner exchange\n'
                     'Connection to 10.0.0.5 port 22 timed out'
                 ),
             )
-        return SimpleNamespace(code=0, stdout='ok\n', stderr='')
+        return FakeProc(returncode=0, stdout='ok\n')
 
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeCommandManager(handler, calls=calls),
-    )
+    rec = command_recorder(monkeypatch, {'ssh': ssh_route})
 
     result = _run_guest_root_script(
         cfg,
@@ -694,87 +780,29 @@ def test_persistent_guest_root_script_retries_transient_banner_failures(
     )
 
     assert attempts['n'] == 2
+    assert rec.count('ssh') == 2
     assert result is not None
-    ssh_cmd = calls[0]
+    ssh_cmd = rec.calls[0]
     assert ssh_cmd[0] == 'ssh'
     assert any('ConnectTimeout=15' in arg for arg in ssh_cmd)
-
-
-def test_persistent_reconcile_replays_when_guest_manifest_changes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-reconcile-changed'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    cfg_path = tmp_path / 'config.toml'
-    activate_manager(monkeypatch)
-
-    calls: list[tuple[str, tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: calls.append(('host', a, k))
-        or _persistent_host_manifest_path(cfg),
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_to_guest',
-        lambda *a, **k: calls.append(('guest-sync', a, k)) or True,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.replay._install_persistent_attachment_replay',
-        lambda *a, **k: calls.append(('install', a, k)) or False,
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.transport._run_guest_root_script',
-        lambda *a, **k: calls.append(('replay', a, k)) or None,
-    )
-
-    _reconcile_persistent_attachments_in_guest(
-        cfg,
-        cfg_path,
-        '10.0.0.5',
-        dry_run=False,
-    )
-
-    assert [item[0] for item in calls] == [
-        'host',
-        'guest-sync',
-        'install',
-        'replay',
-    ]
-    assert (
-        calls[-1][2]['summary']
-        == 'Replay persistent attachment mounts inside guest'
-    )
 
 
 def test_install_persistent_host_bind_replay_enables_service(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Installing the host replay unit reloads systemd and enables the service.
+
+    Lets the real host-text install run and asserts on the recorded
+    ``install`` / ``systemctl`` argv it submits.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-host-service'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg_path = tmp_path / 'config.toml'
+    _redirect_appdir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
-    calls: list[tuple[str, tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.transport._install_host_text_if_changed',
-        lambda *a, **k: calls.append(('install-host-text', a, k)) or True,
-    )
-
-    class FakeManager:
-        def step(self, *args: Any, **kwargs: Any) -> Any:
-            del args, kwargs
-            return nullcontext()
-
-        def submit(self, cmd: list, **kwargs: Any) -> SimpleNamespace:
-            calls.append(('submit', tuple(cmd), kwargs))
-            return SimpleNamespace(code=0, stdout='', stderr='')
-
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.CommandManager.current',
-        lambda: FakeManager(),
-    )
+    rec = command_recorder(monkeypatch, default=FakeProc())
 
     changed = _install_persistent_host_bind_replay(
         cfg,
@@ -783,13 +811,15 @@ def test_install_persistent_host_bind_replay_enables_service(
     )
 
     assert changed is True
-    submit_cmds = [item[1] for item in calls if item[0] == 'submit']
-    assert ('systemctl', 'daemon-reload') in submit_cmds
-    assert (
-        'systemctl',
-        'enable',
-        'aivm-persistent-host-bind-replay-vm-persistent-host-service.service',
-    ) in submit_cmds
+    # The helper and unit are installed to their host locations.
+    assert rec.ran('install', '-m', '0755')
+    assert rec.ran('install', '-m', '0644')
+    # The changed unit reloads systemd and enables the per-VM service.
+    service_name = (
+        'aivm-persistent-host-bind-replay-vm-persistent-host-service.service'
+    )
+    assert ['systemctl', 'daemon-reload'] in rec.normalized
+    assert ['systemctl', 'enable', service_name] in rec.normalized
 
 
 def test_persistent_root_host_bind_short_circuits_when_already_bound(
@@ -859,20 +889,11 @@ def test_persistent_root_host_bind_issues_direct_mount_command(
         lambda *_a, **_k: False,
     )
 
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: object) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        calls.append(normalized)
-        return FakeProc(0, '', '')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(monkeypatch, default=FakeProc(0, '', ''))
 
     _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
 
-    flat = [' '.join(c) for c in calls]
+    flat = [' '.join(c) for c in rec.normalized]
     assert any(line.startswith('mount --bind ') for line in flat), flat
     assert all(not line.startswith('bash -c ') for line in flat), flat
 

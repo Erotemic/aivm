@@ -45,6 +45,26 @@ writing a fake:
 When several tests differ only by a literal, parametrize them and carry the old
 function name into `pytest.param(..., id=...)` so failures stay greppable.
 
+**Assert on artifacts, not on call shapes.** Do not stub an internal function
+and then assert it was called. Fake only the true process boundary and let the
+real code run. Nearly everything -- ssh, virsh, rsync, mount, nft -- funnels
+through `aivm.commands.subprocess.run`, so one `command_recorder` is usually the
+whole fake. Redirect `aivm.config_store.paths._appdir` at `tmp_path` to catch
+state files. Then assert on one of exactly four artifacts:
+
+1. config-store contents -- `load_store(cfg_path)` after the call;
+2. files on disk under `tmp_path`;
+3. the recorder's command log (`rec.normalized`, `rec.only(...)`);
+4. captured log output (`capture_logs`).
+
+There is **no intent log**: `CommandManager` pops every `IntentFrame` and
+`CommandPlan` and drains `_loose_commands` before returning, so nothing records
+what it intended after the fact. Don't design an assertion around one.
+
+Keep a stub only for a genuine boundary (a live guest, the developer's real
+`~/.ssh/config`, `time.sleep`, an interactive prompt) or when the stubbed thing
+is the subject of a different test file. Say which in a comment.
+
 ### Common CLI Usage (for testing)
 - Initialize config: `aivm config init`
 - Create VM: `aivm vm create`

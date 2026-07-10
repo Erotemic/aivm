@@ -18,7 +18,9 @@ from aivm.cli.vm_attach import VMAttachCLI
 from aivm.cli.vm_connect import VMSSHCLI, VMCodeCLI
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
+    AttachmentEntry,
     Store,
+    load_store,
     save_store,
     upsert_attachment,
     upsert_network,
@@ -29,6 +31,18 @@ from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
 from tests.helpers import patch_ns, returns
 
 AttachEnv = tuple[AgentVMConfig, Path, Path, ResolvedAttachment]
+
+
+def _only_attachment(cfg_path: Path) -> AttachmentEntry:
+    """Return the single attachment record persisted at ``cfg_path``.
+
+    Reading the store back is the observable artifact of a real
+    ``_record_attachment`` call, replacing a stub that only proved the
+    function was invoked.
+    """
+    records = load_store(cfg_path).attachments
+    assert len(records) == 1, records
+    return records[0]
 
 
 @pytest.fixture
@@ -134,9 +148,6 @@ def test_vm_attach_mounts_share_when_vm_running(
         'aivm.cli.vm_attach.attach_vm_share',
         lambda *a, **k: attached.append((a, k)),
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
-    )
 
     resolved: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
@@ -164,6 +175,14 @@ def test_vm_attach_mounts_share_when_vm_running(
     assert args[1] == '10.77.0.55'
     assert kwargs['guest_dst'] == '/workspace/proj'
     assert kwargs['tag'] == 'hostcode-proj'
+    # The real _record_attachment persisted the share; the store is the artifact.
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'shared'
+    assert att.access == 'rw'
+    assert att.guest_dst == '/workspace/proj'
+    assert att.tag == 'hostcode-proj'
+    assert att.host_lexical_paths == []
 
 
 def test_vm_attach_skips_guest_mount_when_vm_not_running(
@@ -177,9 +196,6 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
     )
     monkeypatch.setattr(
         'aivm.cli.vm_attach.attach_vm_share', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
     )
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
@@ -206,6 +222,12 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
         yes=True,
     )
     assert rc == 0
+    # Even with the VM stopped, the attachment is still persisted.
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'shared'
+    assert att.guest_dst == '/workspace/proj'
+    assert att.tag == 'hostcode-proj'
 
 
 def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
@@ -216,9 +238,6 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
         name='vm-persistent-running', mode=AttachmentMode.PERSISTENT
     )
     patch_vm_attach_env(monkeypatch, cfg, cfg_path, attachment, running=True)
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
-    )
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.77',
@@ -253,6 +272,10 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     assert guest_mounts
     assert replays
     assert guest_mounts[0][1]['ensure_shared_root_host_side'] is True
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'persistent'
+    assert att.guest_dst == '/workspace/proj'
 
 
 def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
@@ -263,9 +286,6 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
         name='vm-persistent-stopped', mode=AttachmentMode.PERSISTENT
     )
     patch_vm_attach_env(monkeypatch, cfg, cfg_path, attachment, running=False)
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
-    )
     syncs: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
@@ -301,6 +321,9 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert prepares[0][1]['vm_running'] is False
     assert syncs
     assert refreshes
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'persistent'
 
 
 def test_vm_attach_uses_single_escalating_probe(
@@ -328,9 +351,6 @@ def test_vm_attach_uses_single_escalating_probe(
         lambda *a, **k: attached.append((a, k)),
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
-    )
-    monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.77',
     )
@@ -351,6 +371,9 @@ def test_vm_attach_uses_single_escalating_probe(
     assert attached
     assert mounted
     assert probe_calls == [{'use_sudo': True}]
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'shared'
 
 
 def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
@@ -365,9 +388,6 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
         tag='',
     )
     patch_vm_attach_env(monkeypatch, cfg, cfg_path, attachment, running=True)
-    monkeypatch.setattr(
-        'aivm.cli.vm_attach._record_attachment', lambda *a, **k: cfg_path
-    )
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.88',
@@ -400,6 +420,11 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
     )
     assert rc == 0
     assert len(sync_calls) == 1
+    att = _only_attachment(cfg_path)
+    assert att.host_path == str(host_src.resolve())
+    assert att.mode == 'git'
+    assert att.guest_dst == '/workspace/repo'
+    assert att.tag == ''
 
 
 def test_record_attachment_skips_save_when_unchanged(
@@ -425,6 +450,10 @@ def test_record_attachment_skips_save_when_unchanged(
     )
     save_store(reg, cfg_path)
 
+    # save_store stays faked here: an unchanged record renders byte-identically,
+    # so the persisted file cannot distinguish "skipped the save" from
+    # "re-saved identical content". Observing that the call never happens is the
+    # only proof of the short-circuit.
     save_calls: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.attachments.session.save_store',
@@ -442,6 +471,11 @@ def test_record_attachment_skips_save_when_unchanged(
     )
     assert out == cfg_path
     assert save_calls == []
+    # And the persisted store still holds exactly the one original entry.
+    records = load_store(cfg_path).attachments
+    assert len(records) == 1
+    assert records[0].mode == 'git'
+    assert records[0].guest_dst == guest_dst
 
 
 def test_record_attachment_passes_reason_to_save_store(
@@ -450,9 +484,16 @@ def test_record_attachment_passes_reason_to_save_store(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
+    # A symlinked host_src makes the lexical/resolved paths differ, so the
+    # typed path is also recorded as an alias — exercising that branch.
+    real = tmp_path / 'real-repo'
+    real.mkdir()
     host_src = tmp_path / 'repo'
-    host_src.mkdir()
+    host_src.symlink_to(real)
 
+    # save_store stays faked: it only ever *logs* the reason (never persists
+    # it), and loguru binds its default logger at definition time, so the
+    # reason is observable only by intercepting the call.
     save_kwargs: list[dict] = []
     monkeypatch.setattr(
         'aivm.attachments.session.save_store',

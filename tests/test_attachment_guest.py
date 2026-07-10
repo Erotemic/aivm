@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -16,25 +18,85 @@ from aivm.attachments.guest import (
 )
 from aivm.config import AgentVMConfig
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
-from tests.helpers import FakeProc, activate_manager, capture_logs
+from tests.helpers import (
+    CommandRecorder,
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+)
+
+
+def _ssh_scripts(recorder: CommandRecorder) -> list[str]:
+    """The trailing script argument of every recorded guest ssh command."""
+    return [cmd[-1] for cmd in recorder.normalized if cmd[:1] == ['ssh']]
+
+
+def _assert_every_ln_is_symbolic(script: str) -> None:
+    """Fail if the script links anything with a bare ``ln``.
+
+    ``_ensure_guest_symlink`` emits ``ln -s`` from two different branches
+    -- the empty-directory branch and the nothing-there branch. A check
+    that merely finds *an* ``ln -s`` somewhere in the script cannot see
+    one branch degrade to a hard link, because the other branch's
+    ``ln -s`` still matches. Reject every ``ln`` that is not ``ln -s``.
+    """
+    bare = re.findall(r'\bln\b(?! -s\b)', script)
+    assert not bare, f'script hard-links instead of symlinking: {script}'
+
+
+def _recorded_symlinks(recorder: CommandRecorder) -> list[dict[str, str]]:
+    """Extract every guest symlink the recorded ssh scripts would create.
+
+    The real ``_ensure_guest_symlink`` emits one ssh command per symlink
+    whose script contains ``ln -s <target> <link>``. Reading the pair back
+    out of the recorded script is a stronger artifact than trusting a stub
+    to report the arguments it was handed, and it pins the ``target``/
+    ``link`` order so a swapped-argument regression is observable.
+
+    Every ``ln -s`` in one script must agree on the pair, so that a single
+    corrupted branch cannot hide behind a correct sibling branch.
+    """
+    out: list[dict[str, str]] = []
+    for script in _ssh_scripts(recorder):
+        _assert_every_ln_is_symbolic(script)
+        pairs = re.findall(r'ln -s ([^\s;]+) ([^\s;]+)', script)
+        assert pairs, f'no `ln -s` in recorded script: {script}'
+        assert len(set(pairs)) == 1, f'inconsistent `ln -s` pairs: {pairs}'
+        target, link = pairs[0]
+        out.append({'target_path': target, 'symlink_path': link})
+    return out
+
+
+def _ran_guest_symlink(
+    recorder: CommandRecorder, *, symlink_path: str, target_path: str
+) -> bool:
+    """True when a recorded ssh script links ``symlink_path`` -> ``target_path``.
+
+    Matches the helper's ``ln -s <target> <link>`` argument order, and
+    holds every branch of the script to it (see
+    :func:`_assert_every_ln_is_symbolic`).
+    """
+    needle = f'ln -s {shlex.quote(target_path)} {shlex.quote(symlink_path)}'
+    for script in _ssh_scripts(recorder):
+        if needle in script:
+            _assert_every_ln_is_symbolic(script)
+            return True
+    return False
 
 
 @pytest.fixture
 def guest_ssh_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Activate a manager and stub the guest SSH identity/base-args seams.
+    """Activate a command manager for the guest ``_ensure_*`` helpers.
 
-    Every ``_ensure_guest_*`` test opens by activating a command manager
-    and neutralizing ``require_ssh_identity``/``ssh_base_args`` so the SSH
-    command is built deterministically; no test asserts on the identity
-    path or the base args, so a single set of stand-ins serves them all.
+    Every ``_ensure_guest_*`` test opens by activating a command manager.
+    The real ``require_ssh_identity``/``ssh_base_args`` are left in place so
+    the recorded ssh argv carries the production base args
+    (``StrictHostKeyChecking``, ``IdentitiesOnly``, ``-i <identity>``); each
+    test supplies a non-empty ``ssh_identity_file`` so the identity check
+    passes.
     """
     activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: p or '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
 
 
 def test_upsert_host_git_remote_adds_remote(
@@ -190,13 +252,7 @@ def test_ensure_guest_symlink_creates_new_symlink(
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
 
-    cmds: list[list[str]] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: (
-            cmds.append([str(c) for c in cmd]) or FakeProc(0, '', '')
-        ),
-    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_guest_symlink(
         cfg,
@@ -205,33 +261,38 @@ def test_ensure_guest_symlink_creates_new_symlink(
         target_path='/home/joncrall/code/repo',
     )
 
-    assert len(cmds) == 1
-    assert cmds[0][0] == 'ssh'
-    script = cmds[0][-1]
+    cmd = recorder.only('ssh')
+    # The real ssh_base_args ran, so the identity and hardening flags are
+    # part of the recorded argv (not stubbed away).
+    assert cmd[0] == 'ssh'
+    assert 'StrictHostKeyChecking=accept-new' in cmd
+    assert '/tmp/id_ed25519' in cmd
+    assert cmd[-2] == 'agent@10.0.0.1'
+    script = cmd[-1]
     assert 'ln -s' in script
     assert '/home/joncrall/code/repo' in script
 
 
 @pytest.mark.parametrize(
-    ('exit_code', 'stderr', 'expected_substr'),
+    ('exit_code', 'stderr', 'expected_message'),
     [
         pytest.param(0, '', None, id='noop_on_correct_existing_symlink'),
         pytest.param(
             3,
             'aivm-symlink-warn: /link is a symlink to /other; skipping',
-            'symlink to /other',
+            '/link is a symlink to /other; skipping',
             id='warns_on_wrong_existing_symlink',
         ),
         pytest.param(
             4,
             'aivm-symlink-warn: /link is a non-empty directory; skipping',
-            'non-empty directory',
+            '/link is a non-empty directory; skipping',
             id='warns_on_nonempty_dir',
         ),
         pytest.param(
             5,
             'aivm-symlink-warn: /link is a regular file; skipping',
-            'regular file',
+            '/link is a regular file; skipping',
             id='warns_on_regular_file',
         ),
     ],
@@ -241,27 +302,34 @@ def test_ensure_guest_symlink_exit_code_handling(
     guest_ssh_env: None,
     exit_code: int,
     stderr: str,
-    expected_substr: str | None,
+    expected_message: str | None,
 ) -> None:
-    """The guest symlink helper warns per exit code and is silent on 0."""
+    """The guest symlink helper warns per exit code and is silent on 0.
+
+    Assert the *exact* warning, not a substring of it. Each of these exit
+    codes is a recognized safety refusal, which the helper reports by
+    stripping the ``aivm-symlink-warn:`` marker off the guest's stderr.
+    An unrecognized code instead falls through to the transport-failure
+    branch, which logs the raw stderr inside a ``Guest symlink setup
+    failed ...`` sentence -- and that sentence still *contains* the
+    guest's wording. Matching a substring therefore cannot tell the two
+    branches apart; matching the whole message can.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-symlink-exit'
     cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
     messages = capture_logs(
         monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
     )
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: FakeProc(exit_code, '', stderr),
-    )
+    command_recorder(monkeypatch, {'ssh': FakeProc(exit_code, '', stderr)})
     _ensure_guest_symlink(
         cfg, '10.0.0.1', symlink_path='/link', target_path='/tgt'
     )
-    if expected_substr is None:
+    if expected_message is None:
         assert not messages
     else:
-        assert any(expected_substr in m for m in messages)
+        assert messages == [expected_message]
 
 
 def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
@@ -286,22 +354,11 @@ def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
         tag='hostcode-foobar-abc12345',
     )
 
+    # The virtiofs mount is incidental here: it lives in aivm.vm and has its
+    # own tests. Stubbing it keeps the recorded ssh log to just the symlink
+    # scripts this test is about, while the real _ensure_guest_symlink runs.
     monkeypatch.setattr(
         'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
-    )
-
-    symlink_calls: list[dict] = []
-
-    def fake_ensure_guest_symlink(
-        cfg_arg: Any, ip: str, *, symlink_path: str, target_path: str
-    ) -> None:
-        symlink_calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        )
-
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        fake_ensure_guest_symlink,
     )
 
     # Patch Path.home to something known so mirror can be computed
@@ -309,6 +366,7 @@ def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
     monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: host_home)
 
     activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_attachment_available_in_guest(
         cfg,
@@ -321,11 +379,11 @@ def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
         mirror_home=True,
     )
 
-    # Mirror symlink should have been requested for /home/agent/code/foobar -> guest_dst
+    # Mirror symlink should have been created for /home/agent/code/foobar -> guest_dst
     expected_mirror = '/home/agent/code/foobar'
-    assert any(c['symlink_path'] == expected_mirror for c in symlink_calls), (
-        symlink_calls
-    )
+    assert _ran_guest_symlink(
+        recorder, symlink_path=expected_mirror, target_path=guest_dst
+    ), _recorded_symlinks(recorder)
 
 
 def test_ensure_attachment_no_mirror_when_disabled(
@@ -350,17 +408,14 @@ def test_ensure_attachment_no_mirror_when_disabled(
         tag='hostcode-foobar-abc12345',
     )
 
+    # Mount stubbed for the same reason as the mirror-enabled case: this test
+    # asserts on the symlink decision, not the virtiofs mount.
     monkeypatch.setattr(
         'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
     )
 
-    symlink_calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda *a, **k: symlink_calls.append(k),
-    )
-
     activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_attachment_available_in_guest(
         cfg,
@@ -373,7 +428,9 @@ def test_ensure_attachment_no_mirror_when_disabled(
         mirror_home=False,
     )
 
-    assert symlink_calls == []
+    # No mirror flag and a non-symlink host_src whose lexical form already
+    # equals guest_dst: no guest symlink command is emitted at all.
+    assert _recorded_symlinks(recorder) == []
 
 
 def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
@@ -387,22 +444,21 @@ def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id'
 
-    cmds: list[list[str]] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: (
-            cmds.append([str(c) for c in cmd]) or FakeProc(0, '', '')
-        ),
-    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_guest_git_repo(cfg, '/home/joncrall/code/myrepo')
 
-    assert len(cmds) == 1
-    script = cmds[0][-1]
+    cmd = recorder.only('ssh')
+    assert 'StrictHostKeyChecking=accept-new' in cmd
+    script = cmd[-1]
     assert 'sudo -n mkdir -p' in script
     assert 'sudo -n chown' in script
     assert '/home/joncrall/code/myrepo' in script
     assert 'git init' in script
+    # `updateInstead` is what lets a host-side `git push` move the guest's
+    # checked-out branch; with the default `refuse` the push is rejected and
+    # git-mode silently stops syncing. Pin the value, not just the key.
+    assert 'receive.denyCurrentBranch updateInstead' in script
     assert 'symbolic-ref' not in script
     assert 'working tree' not in script
 
@@ -410,16 +466,25 @@ def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
 def test_ensure_guest_symlink_uses_sudo_for_ln(
     monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
-    """symlink creation and dir removal must use sudo -n so non-writable parents work."""
+    """symlink creation and dir removal must use sudo -n so non-writable parents work.
+
+    The script is assembled before the ssh command runs, so an ssh
+    *transport* failure (a code outside the ``0/3/4/5`` safety set) is
+    orthogonal to how the script is built. Driving code 255 lets this case
+    cover both the sudo-quoting of the script and the distinct
+    transport-failure report the helper emits.
+    """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-sudo-ln'
     cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
-    scripts: list[str] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: scripts.append(cmd[-1]) or FakeProc(0, '', ''),
+    messages = capture_logs(
+        monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
+    )
+    recorder = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(255, '', 'ssh: connect to host 10.0.0.1: timed out')},
     )
 
     _ensure_guest_symlink(
@@ -429,6 +494,7 @@ def test_ensure_guest_symlink_uses_sudo_for_ln(
         target_path='/home/joncrall/code/repo',
     )
 
+    scripts = _ssh_scripts(recorder)
     assert scripts, 'expected SSH command'
     script = scripts[0]
     assert 'sudo -n ln -s' in script
@@ -436,6 +502,8 @@ def test_ensure_guest_symlink_uses_sudo_for_ln(
     # plain ln -s (without sudo) must NOT appear
     assert '\nln -s' not in script
     assert '; ln -s' not in script
+    # A non-safety exit code is reported as a transport failure.
+    assert any('Guest symlink setup failed' in m for m in messages)
 
 
 def test_ensure_guest_git_repo_uses_sudo_mkdir_for_full_path(
@@ -447,16 +515,13 @@ def test_ensure_guest_git_repo_uses_sudo_mkdir_for_full_path(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git-sudo'
     cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
-    scripts: list[str] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: scripts.append(cmd[-1]) or FakeProc(0, '', ''),
-    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_guest_git_repo(cfg, '/home/joncrall/code/myrepo')
 
+    scripts = _ssh_scripts(recorder)
     assert scripts
     script = scripts[0]
     # Must sudo the full path, not just the parent
@@ -476,17 +541,13 @@ def test_ensure_guest_git_repo_allows_existing_dirty_tree(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git-dirty-guest'
     cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
-    scripts: list[str] = []
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: scripts.append(cmd[-1]) or FakeProc(0, '', ''),
-    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _ensure_guest_git_repo(cfg, '/home/joncrall/code/dirty-repo')
 
-    script = scripts[0]
+    script = _ssh_scripts(recorder)[0]
     assert 'git init' in script
     assert 'is not empty and is not a git repo' not in script
     assert 'symbolic-ref' not in script
@@ -580,6 +641,7 @@ def test_apply_guest_derived_symlinks_companion_only(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-deriv'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     real_dir = tmp_path / 'real'
     real_dir.mkdir()
@@ -595,18 +657,14 @@ def test_apply_guest_derived_symlinks_companion_only(
         tag='tag1',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _apply_guest_derived_symlinks(
         cfg, '10.0.0.1', link_dir, attachment, mirror_home=False
     )
 
+    calls = _recorded_symlinks(recorder)
     assert len(calls) == 1
     assert calls[0]['symlink_path'] == str(link_dir.expanduser().absolute())
     assert calls[0]['target_path'] == resolved_dst
@@ -619,6 +677,7 @@ def test_apply_guest_derived_symlinks_dual_mirror_for_symlink_host(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-dual-mirror'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     # Set up: host_home = tmp_path
     # lexical = tmp_path/code/link  (symlink to tmp_path/real/code)
@@ -640,19 +699,15 @@ def test_apply_guest_derived_symlinks_dual_mirror_for_symlink_host(
         tag='tag2',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
     monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: host_home)
 
     _apply_guest_derived_symlinks(
         cfg, '10.0.0.1', link_dir, attachment, mirror_home=True
     )
 
+    calls = _recorded_symlinks(recorder)
     symlink_paths = [c['symlink_path'] for c in calls]
     # Companion symlink at lexical guest path
     assert str(link_dir.expanduser().absolute()) in symlink_paths
@@ -669,6 +724,7 @@ def test_apply_guest_derived_symlinks_no_dup_mirror_when_same(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-nodup'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     # host_home = tmp_path/home/joncrall
     # symlink: tmp_path/home/joncrall/proj -> tmp_path/home/joncrall/proj_real
@@ -687,13 +743,8 @@ def test_apply_guest_derived_symlinks_no_dup_mirror_when_same(
         tag='tag3',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
     monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: tmp_path)
 
     # Not a symlink — no companion, only one mirror
@@ -701,6 +752,7 @@ def test_apply_guest_derived_symlinks_no_dup_mirror_when_same(
         cfg, '10.0.0.1', real_dir, attachment, mirror_home=True
     )
 
+    calls = _recorded_symlinks(recorder)
     # Only one mirror call (for the non-symlink host, resolved branch is skipped)
     mirror_calls = [c for c in calls if '/home/agent' in c['symlink_path']]
     symlink_paths = [c['symlink_path'] for c in mirror_calls]
@@ -715,6 +767,7 @@ def test_apply_guest_derived_symlinks_custom_dst_suppresses_all_mirrors(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-custom-dst'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     host_home = tmp_path
     real_dir = tmp_path / 'code' / 'proj'
@@ -734,19 +787,15 @@ def test_apply_guest_derived_symlinks_custom_dst_suppresses_all_mirrors(
         tag='tag-custom',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
     monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: host_home)
 
     _apply_guest_derived_symlinks(
         cfg, '10.0.0.1', link_dir, attachment, mirror_home=True
     )
 
+    calls = _recorded_symlinks(recorder)
     # Companion symlink (lexical -> custom_dst) is allowed
     companion_calls = [
         c for c in calls if '/home/agent' not in c['symlink_path']
@@ -776,6 +825,7 @@ def test_apply_guest_derived_symlinks_multi_aliases(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-multi-alias'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     real = tmp_path / 'real'
     real.mkdir()
@@ -793,13 +843,8 @@ def test_apply_guest_derived_symlinks_multi_aliases(
         tag='tag-multi',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _apply_guest_derived_symlinks(
         cfg,
@@ -810,6 +855,7 @@ def test_apply_guest_derived_symlinks_multi_aliases(
         extra_lexical_paths=[str(link_a), str(link_b)],
     )
 
+    calls = _recorded_symlinks(recorder)
     symlink_paths = [c['symlink_path'] for c in calls]
     assert str(link_a) in symlink_paths
     assert str(link_b) in symlink_paths
@@ -821,12 +867,12 @@ def test_apply_guest_derived_symlinks_multi_aliases(
 def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Stale alias (resolves elsewhere now) still creates symlink but warns."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-stale'
     cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
 
     real = tmp_path / 'real'
     real.mkdir()
@@ -843,19 +889,12 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
         tag='tag-stale',
     )
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest._ensure_guest_symlink',
-        lambda c, ip, *, symlink_path, target_path: calls.append(
-            {'symlink_path': symlink_path, 'target_path': target_path}
-        ),
+    warnings = capture_logs(
+        monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
     )
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest.log.warning',
-        lambda fmt, *args, **kw: warnings.append(fmt.format(*args, **kw)),
-    )
+    activate_manager(monkeypatch)
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
 
     _apply_guest_derived_symlinks(
         cfg,
@@ -867,6 +906,7 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     )
 
     # Symlink IS still created (mount is at canonical; we mirror the typed path)
+    calls = _recorded_symlinks(recorder)
     assert any(c['symlink_path'] == str(stale_link) for c in calls)
     # And a drift warning was emitted
     assert any('no longer resolves to canonical' in w for w in warnings)
