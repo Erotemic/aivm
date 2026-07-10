@@ -5,11 +5,13 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import pytest
 from pytest import CaptureFixture, MonkeyPatch
 
 from aivm.cli.main import StatusCLI
 from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store
+from aivm.errors import AIVMError
 from aivm.status import (
     ProbeOutcome,
     anticipated_status_sudo_commands,
@@ -17,6 +19,40 @@ from aivm.status import (
 )
 
 main_mod = importlib.import_module('aivm.cli.main')
+
+_BROKEN_STORE = """\
+schema_version = 7
+active_vm = "ghost"
+[[vms]]
+name = "ghost"
+network_name = "aivm-net"
+[vms.vm]
+name = "ghost"
+"""
+
+
+def test_status_surfaces_config_errors(tmp_path: Path) -> None:
+    """A store that parses but does not resolve must not look like "no context".
+
+    ``AIVMError`` subclasses ``RuntimeError``, so a broad ``except RuntimeError``
+    around VM resolution swallows a real, actionable config error and renders
+    the benign global-status fallback in its place.
+    """
+    store = tmp_path / 'config.toml'
+    store.write_text(_BROKEN_STORE, encoding='utf-8')
+    with pytest.raises(AIVMError, match="unknown network 'aivm-net'"):
+        StatusCLI.main(argv=False, config=str(store), vm='ghost')
+
+
+def test_status_falls_back_when_store_defines_no_vms(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The fallback survives: an empty store genuinely has no VM context."""
+    store = tmp_path / 'config.toml'
+    store.write_text('schema_version = 7\n', encoding='utf-8')
+    rc = StatusCLI.main(argv=False, config=str(store))
+    assert rc == 0
+    assert 'No VM context resolved for this directory.' in capsys.readouterr().out
 
 
 def test_status_cli_uses_vm_opt_and_sudo(

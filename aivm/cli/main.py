@@ -17,7 +17,7 @@ from loguru import logger as log
 
 from ..commands import CommandManager
 from ..config_store import load_store
-from ..errors import AIVMError
+from ..errors import AIVMError, NoVMContextError
 from ..modes import PrivilegeMode
 from ..services import cfg_path, load_cfg_with_path, resolve_cfg_for_code
 from ..status import (
@@ -138,7 +138,11 @@ class StatusCLI(_BaseCommand):
                     vm_opt=args.vm,
                     host_src=Path.cwd(),
                 )
-        except RuntimeError as ex:
+        except NoVMContextError as ex:
+            # Only "this store names no single VM" earns the global fallback.
+            # AIVMError subclasses RuntimeError, so catching RuntimeError here
+            # also swallowed broken-config errors (an unresolvable network
+            # reference, say) and rendered them as a reassuring global status.
             log.debug('Status VM-resolution fallback: {}', ex)
             cfg = None
             path = None

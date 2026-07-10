@@ -31,7 +31,7 @@ from .config_store import (
     upsert_vm_with_network,
 )
 from .detect import detect_ssh_identity
-from .errors import AIVMError
+from .errors import AIVMError, NoVMContextError
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .util import which
 
@@ -174,7 +174,7 @@ def maybe_offer_create_ssh_identity(
 
 def choose_vm_interactive(options: list[str], *, reason: str) -> str:
     if not sys.stdin.isatty():
-        raise AIVMError(
+        raise NoVMContextError(
             f'VM selection is ambiguous ({reason}). Re-run with --vm.'
         )
     print(f'Multiple VMs match ({reason}). Select one:')
@@ -203,6 +203,10 @@ def resolve_vm_name(
     explicit ``--vm`` > folder attachment mapping > active VM > single VM >
     interactive selection. This keeps one-command workflows predictable while
     still allowing explicit override.
+
+    Raises :class:`NoVMContextError` when the store simply names no single VM,
+    and a plain :class:`AIVMError` when the request itself cannot be honored
+    (an explicit ``--vm`` that the store does not define).
     """
     log.trace(
         'Resolving VM name config_opt={} vm_opt={} host_src={}',
@@ -235,7 +239,7 @@ def resolve_vm_name(
                     return reg.active_vm, store_path
                 if not sys.stdin.isatty():
                     vm_names = ', '.join(attached_vm_names)
-                    raise AIVMError(
+                    raise NoVMContextError(
                         'Host folder is attached to multiple VMs: '
                         f'{vm_names}. Re-run with --vm.'
                     )
@@ -261,7 +265,7 @@ def resolve_vm_name(
         )
         return chosen, store_path
 
-    raise AIVMError(
+    raise NoVMContextError(
         f'No VM definitions found in config store: {store_path}. '
         'Run `aivm config init` then `aivm vm create` first.'
     )
