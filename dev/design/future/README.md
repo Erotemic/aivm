@@ -116,8 +116,13 @@ tasks; listed with enough context to start.
    the safer default is key-only with password login as an explicit opt-in.
    Breaking change for console recovery workflows — needs a CHANGELOG entry
    and a release-notes callout, not code cleverness.
-5. **`aivm host doctor` should absorb sudoless/rootless preflights** so
-   there is one diagnostic entry point (today: doctor, sudoless check, and
-   status each probe different things).
+5. **`aivm host doctor` should absorb the sudoless preflights** so there is
+   one diagnostic entry point (today: doctor, sudoless check, and status
+   each probe different things). This once read "sudoless/rootless
+   preflights", but the rootless `qemu:///session` runtime was removed in
+   `190ed83` (see `docs/planning/deferred/session-runtime.md`) and has no
+   preflights to absorb. If it returns, its checks belong here too.
 6. **conf.py intersphinx** points at `kwconf.readthedocs.io` which 404s;
-   remove or fix once kwconf docs publish (only remaining Sphinx warning).
+   remove or fix once kwconf docs publish. No longer fails `./run_docs.sh` —
+   inventory-fetch failures are filtered in `docs/source/conf.py`, since
+   reachability is a property of the network, not of the docs.
