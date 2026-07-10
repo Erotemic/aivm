@@ -1727,3 +1727,60 @@ def test_persistent_root_host_bind_issues_direct_mount_command(
     flat = [' '.join(c) for c in calls]
     assert any(line.startswith('mount --bind ') for line in flat), flat
     assert all(not line.startswith('bash -c ') for line in flat), flat
+
+
+def test_persistent_host_bind_escalates_only_for_the_bind_mount(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`persistent` is the default attachment mode, so this is the hot path.
+
+    On a user-owned storage tree the export directories are created without
+    privileges; only `mount --bind`, which has no unprivileged form, escalates.
+    """
+    from aivm.attachments.persistent.host_bind import (
+        _ensure_persistent_root_host_bind,
+    )
+    from aivm.commands import CommandManager
+    from aivm.config import AgentVMConfig
+    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+    from tests.helpers import FakeProc
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persist'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='proj',
+    )
+
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    CommandManager.activate(
+        CommandManager(yes=True, yes_sudo=True, privilege_mode='as-needed')
+    )
+    raw: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(p) for p in cmd]
+        raw.append(parts)
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
+
+    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+
+    def program(parts: list[str]) -> str:
+        rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        rest = rest[1:] if rest[:1] == ['sudo'] else rest
+        return rest[0] if rest else ''
+
+    real = [p for p in raw if p[-1:] != ['true']]
+    escalated = {program(p) for p in real if p[:1] == ['sudo']}
+    plain = {program(p) for p in real if p[:1] != ['sudo']}
+    assert 'mkdir' in plain, raw
+    assert escalated == {'mount'}, raw

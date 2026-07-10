@@ -14,12 +14,13 @@ from ...persistent_replay import (
     persistent_host_replay_python,
     persistent_host_replay_service_unit,
 )
+from ...privilege import path_needs_sudo
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from ...vm.share import AttachmentMode, ResolvedAttachment
 from ..resolve import _normalize_attachment_access
 from ..shared_root import (
-    _needs_privileged_mkdir,
+    _needs_mkdir,
     _shared_root_host_target,
     _target_is_bind_of,
 )
@@ -129,7 +130,7 @@ def _ensure_persistent_root_parent_dir(
     if dry_run:
         print(f'DRYRUN: would create persistent-root parent directory {target}')
         return
-    if not _needs_privileged_mkdir(target):
+    if not _needs_mkdir(target):
         return
     mgr = CommandManager.current()
     with mgr.step(
@@ -139,7 +140,7 @@ def _ensure_persistent_root_parent_dir(
     ):
         mgr.submit(
             ['mkdir', '-p', str(target)],
-            sudo=True,
+            sudo=path_needs_sudo(target),
             role='modify',
             summary='Create persistent-root parent directory',
             detail=f'target={target}',
@@ -192,8 +193,8 @@ def _ensure_persistent_root_host_bind(
     if _target_is_bind_of(source, target):
         return target
     mgr = CommandManager.current()
-    needs_parent = _needs_privileged_mkdir(parent)
-    needs_target = _needs_privileged_mkdir(target)
+    needs_parent = _needs_mkdir(parent)
+    needs_target = _needs_mkdir(target)
     with mgr.step(
         'Prepare persistent-root host bind target',
         why='Ensure the persistent-root staged bind exists without tearing down stable host-side state.',
@@ -202,7 +203,7 @@ def _ensure_persistent_root_host_bind(
         if needs_parent:
             mgr.submit(
                 ['mkdir', '-p', str(parent)],
-                sudo=True,
+                sudo=path_needs_sudo(parent),
                 role='modify',
                 summary='Create persistent-root parent directory',
                 detail=f'target={parent}',
@@ -210,7 +211,7 @@ def _ensure_persistent_root_host_bind(
         if needs_target:
             mgr.submit(
                 ['mkdir', '-p', str(target)],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create persistent-root bind target',
                 detail=f'target={target}',

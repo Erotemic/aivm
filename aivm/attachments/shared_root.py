@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..privilege import path_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..vm import attach_vm_share, vm_share_mappings
 from ..vm.paths import shared_root_host_dir as _shared_root_host_dir
@@ -79,7 +80,7 @@ def _ensure_shared_root_parent_dir(
             f'DRYRUN: would create shared-root parent directory {target}'
         )
         return
-    if not _needs_privileged_mkdir(target):
+    if not _needs_mkdir(target):
         return
     mgr = CommandManager.current()
     with mgr.intent(
@@ -94,7 +95,7 @@ def _ensure_shared_root_parent_dir(
         ):
             mgr.submit(
                 ['mkdir', '-p', str(target)],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create shared-root parent directory',
                 detail=f'target={target}',
@@ -180,7 +181,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '--target',
                     str(target),
                 ],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,
@@ -196,12 +197,17 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
     )
 
 
-def _needs_privileged_mkdir(path: Path) -> bool:
-    """Return True when a privileged ``mkdir -p`` should still be submitted.
+def _needs_mkdir(path: Path) -> bool:
+    """Return True when ``mkdir -p`` should be submitted for ``path``.
 
-    Skip the mkdir only when we can confirm the directory is already there.
-    Any unreadable / unknown state falls back to issuing the privileged mkdir;
-    under sudo it succeeds either way and we stay correct on hardened hosts.
+    Answers only *does this directory need creating*. Whether creating it
+    needs sudo is a separate question for :func:`path_needs_sudo`, asked of
+    the specific path: the export roots live under ``paths.base_dir``, which
+    is user-owned on a host prepared by ``aivm host sudoless setup``.
+
+    Skip the mkdir only when the directory is confirmed present. An
+    unreadable / unknown state issues it anyway: ``mkdir -p`` on an existing
+    directory is a no-op, so acting is safe where refusing to act is not.
     """
     try:
         return not path.is_dir()
@@ -334,8 +340,8 @@ def _ensure_shared_root_host_bind(
             )
 
     parent_dir = _shared_root_host_dir(cfg)
-    needs_parent = _needs_privileged_mkdir(parent_dir)
-    needs_target = _needs_privileged_mkdir(target)
+    needs_parent = _needs_mkdir(parent_dir)
+    needs_target = _needs_mkdir(target)
 
     # The repair branch (stale mountpoint) still needs shell-quoted operands
     # because its umount fallback logic is a single bash script. New code
@@ -351,7 +357,7 @@ def _ensure_shared_root_host_bind(
         if needs_parent:
             mgr.submit(
                 ['mkdir', '-p', str(parent_dir)],
-                sudo=True,
+                sudo=path_needs_sudo(parent_dir),
                 role='modify',
                 summary='Create shared-root parent directory',
                 detail=f'target={parent_dir}',
@@ -359,7 +365,7 @@ def _ensure_shared_root_host_bind(
         if needs_target:
             mgr.submit(
                 ['mkdir', '-p', str(target)],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create project-specific host bind target',
                 detail=f'target={target}',
@@ -667,7 +673,7 @@ def _detach_shared_root_host_bind(
         mounted = (
             mgr.run(
                 ['mountpoint', '-q', str(target)],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,
@@ -716,7 +722,7 @@ def _detach_shared_root_host_bind(
                     )
         mgr.run(
             ['rmdir', str(target)],
-            sudo=True,
+            sudo=path_needs_sudo(target.parent),
             role='modify',
             check=False,
             capture=True,

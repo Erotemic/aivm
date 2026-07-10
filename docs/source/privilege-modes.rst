@@ -75,11 +75,14 @@ Choosing a mode
 * **Classic** (``as-needed``) is the default and the right answer for
   almost everyone. After ``aivm host sudoless setup`` has put you in the
   ``libvirt`` group and pointed VM storage at a user-owned tree,
-  ``as-needed`` stops invoking sudo for libvirt and image operations on its own. Sudo
-  remains for the operations that genuinely require it: the nftables
-  firewall, ``apt-get``, and establishing a *new* host bind mount.
-  Reconciling an already-established attachment -- the ``aivm code .``
-  hot path -- issues no privileged command at all.
+  ``as-needed`` stops invoking sudo on its own: not for libvirt or image
+  operations, and not for creating the bind-mount export directories under
+  ``paths.base_dir``. The decision is made per command against the specific
+  path it touches, so a host that never ran setup behaves exactly as before.
+  Sudo remains only for operations with no unprivileged form: the nftables
+  firewall, ``apt-get``, ``mount --bind``, and ``umount``. Reconciling an
+  already-established attachment -- the ``aivm code .`` hot path -- issues no
+  privileged command at all.
 * **Sudoless** (``never``) is a hard guarantee rather than a preference:
   aivm raises instead of escalating. It suits CI and audit contexts. Note
   that it cannot establish a new ``persistent`` or ``shared-root`` attachment,

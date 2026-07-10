@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import os
 from pathlib import Path
 from typing import Any
 
@@ -545,12 +546,184 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
     assert '  1. Create shared-root parent directory' in messages
     assert '  2. Create project-specific host bind target' in messages
     assert '  3. Bind requested host folder to shared-root target' in messages
-    assert any(
+    # base_dir is user-owned here, so creating the export directories needs no
+    # privileges. Only `mount --bind`, which has no unprivileged form, does.
+    assert any(msg.startswith('     command: mkdir -p ') for msg in messages)
+    assert not any(
         msg.startswith('     command: sudo mkdir -p ') for msg in messages
     )
     assert any(
         msg.startswith('     command: sudo mount --bind ') for msg in messages
     )
+
+
+def test_shared_root_host_bind_creates_export_dirs_without_sudo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A user-owned storage tree needs no privileges to create export dirs.
+
+    This is what `privilege_mode = as-needed` buys after `aivm host sudoless
+    setup`: only `mount --bind` escalates.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared-root-userowned'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    activate_manager(monkeypatch, yes_sudo=True, yes=True)
+    raw: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        raw.append(parts)
+        if parts[:3] == ['sudo', '-n', 'true']:
+            return FakeProc(0, '', '')
+        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        if normalized[:3] == ['findmnt', '-P', '-n']:
+            return FakeProc(1, '', '')
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    def _program_of(parts: list[str]) -> str:
+        rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        rest = rest[1:] if rest[:1] == ['sudo'] else rest
+        return rest[0] if rest else ''
+
+    # `sudo -n true` is the auth probe, not a privileged operation.
+    escalated = [p for p in raw if p[:1] == ['sudo'] and p[-1:] != ['true']]
+    sudoed = {_program_of(p) for p in escalated}
+    plain = {_program_of(p) for p in raw if p[:1] != ['sudo']}
+    # mkdir and findmnt ran unprivileged; only the bind mount escalated.
+    assert 'mkdir' in plain, raw
+    assert 'findmnt' in plain, raw
+    assert 'mkdir' not in sudoed, raw
+    assert sudoed == {'mount'}, raw
+
+
+def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pre-existing root-owned export root still escalates the child mkdir.
+
+    Hosts created before storage moved under the user keep a root-owned
+    ``<base_dir>/<vm>/shared-root``. The decision is per-path, so the export
+    root is skipped (it exists) and the per-project target below it still
+    escalates. Simulated with a directory the invoking user owns but cannot
+    write, which is what ``os.access(W_OK)`` reports for a root-owned one.
+    """
+    if os.geteuid() == 0:
+        pytest.skip('root can write through any mode bits')
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-legacy'
+    base = tmp_path / 'base'
+    export_root = base / cfg.vm.name / 'shared-root'
+    export_root.mkdir(parents=True)
+    export_root.chmod(0o555)
+    cfg.paths.base_dir = str(base)
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    activate_manager(monkeypatch, yes_sudo=True, yes=True)
+    raw: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        raw.append(parts)
+        if parts[:3] == ['sudo', '-n', 'true']:
+            return FakeProc(0, '', '')
+        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        if normalized[:3] == ['findmnt', '-P', '-n']:
+            return FakeProc(1, '', '')
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    try:
+        _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+    finally:
+        export_root.chmod(0o755)
+
+    joined = [' '.join(p) for p in raw]
+    # The export root already exists, so no mkdir is issued for it at all.
+    assert not any(line.endswith(str(export_root)) for line in joined if 'mkdir' in line)
+    # The project target below it is unwritable, so its mkdir escalates.
+    assert any(
+        line.startswith('sudo') and 'mkdir -p' in line and 'hostcode-source' in line
+        for line in joined
+    ), raw
+
+
+def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A root-owned storage tree still escalates the mkdir.
+
+    The decision is per-path, so a host that never ran `sudoless setup`
+    behaves exactly as before.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared-root-rootowned'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source_dir = tmp_path / 'source'
+    source_dir.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        source_dir=str(source_dir.resolve()),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+
+    activate_manager(monkeypatch, yes_sudo=True, yes=True)
+    monkeypatch.setattr(
+        'aivm.attachments.shared_root.path_needs_sudo', lambda p: True
+    )
+    raw: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        raw.append(parts)
+        if parts[:3] == ['sudo', '-n', 'true']:
+            return FakeProc(0, '', '')
+        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        if normalized[:3] == ['findmnt', '-P', '-n']:
+            return FakeProc(1, '', '')
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    def _ran_with_sudo(program: str) -> bool:
+        return any(
+            parts[:1] == ['sudo'] and program in parts for parts in raw
+        )
+
+    assert _ran_with_sudo('mkdir'), raw
+    assert _ran_with_sudo('mount'), raw
 
 
 def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
@@ -571,6 +744,11 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
 
     activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    # The findmnt probe only escalates when the bind target is unreadable
+    # without privileges, which is what a root-owned storage tree means.
+    monkeypatch.setattr(
+        'aivm.attachments.shared_root.path_needs_sudo', lambda p: True
+    )
     messages = _capture_command_logs(monkeypatch)
     prompts: list[str] = []
     monkeypatch.setattr(
@@ -778,3 +956,54 @@ def test_target_is_bind_of_returns_false_on_missing_target(
     source.mkdir()
     target = tmp_path / 'does-not-exist'
     assert _target_is_bind_of(source, target) is False
+
+
+def test_shared_root_detach_escalates_only_for_the_umount(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Detach on a user-owned tree escalates only for `umount`.
+
+    `mountpoint` reads state and `rmdir` removes an entry from a directory
+    the user owns, so neither needs privileges.
+    """
+    from aivm.attachments.shared_root import _detach_shared_root_host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-detach'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        source_dir=str(tmp_path / 'source'),
+        guest_dst='/workspace/source',
+        tag='proj',
+    )
+    # The export root exists and is user-owned, as after a successful attach.
+    (Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root' / 'proj').mkdir(
+        parents=True
+    )
+
+    activate_manager(monkeypatch, yes_sudo=True, yes=True)
+    raw: list[list[str]] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        raw.append(parts)
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    _detach_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    def program(parts: list[str]) -> str:
+        rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        rest = rest[1:] if rest[:1] == ['sudo'] else rest
+        return rest[0] if rest else ''
+
+    real = [p for p in raw if p[-1:] != ['true']]
+    escalated = {program(p) for p in real if p[:1] == ['sudo']}
+    plain = {program(p) for p in real if p[:1] != ['sudo']}
+    assert 'mountpoint' in plain, raw
+    assert 'rmdir' in plain, raw
+    assert escalated == {'umount'}, raw

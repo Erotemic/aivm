@@ -208,7 +208,9 @@ The default ``as-needed`` mode already prefers unprivileged execution and only
 escalates where required, so most hosts need no ceremony: joining the
 ``libvirt`` group removes sudo from every ``virsh``/``virt-install`` call, and
 a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
-work. ``sudoless setup`` establishes those two host capabilities (using sudo
+work and from creating the bind-mount export directories. What remains is the
+set of operations with no unprivileged form at all: ``nft``, ``apt-get``,
+``mount --bind``, and ``umount``. ``sudoless setup`` establishes those two host capabilities (using sudo
 at most once, for ``usermod``) and then reports what it found. It does not
 change your config: ``behavior.privilege_mode`` and ``firewall.enabled`` are
 yours to set. Pass ``--persist`` to have it write the one value the host work

@@ -43,11 +43,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   Enforcement keys on the command actually being run, never on the feature
   requesting it: a `persistent` attachment needs `mount --bind` only when
   the bind is missing, so reconciling an established attachment issues no
-  privileged command and is refused in no mode. State-changing hypervisor
-  commands (`virsh`/`virt-install` with role=modify) keep their interactive
-  approval prompt even when they run without sudo, so libvirt-group access
-  does not silently drop the confirmation contract for destructive
-  operations.
+  privileged command and is refused in no mode. Likewise the sudo decision
+  for each command is made against the specific path it touches, so on a
+  user-owned `paths.base_dir` the bind-mount export directories are created,
+  inspected, and removed without privileges; establishing a shared-root
+  attachment drops from four privileged commands to one (`mount --bind`).
+
+  State-changing hypervisor commands (`virsh`/`virt-install` with
+  role=modify) keep their interactive approval prompt even when they run
+  without sudo, so libvirt-group access does not silently drop the
+  confirmation contract for destructive operations.
 * `aivm host sudoless check` reports sudoless readiness (libvirt group, live
   unprivileged libvirt access, user-writable VM storage, libvirt-qemu
   traversal ACLs, firewall compatibility) and `aivm host sudoless setup`
