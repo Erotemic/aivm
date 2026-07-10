@@ -1,11 +1,19 @@
-"""Shared pytest fixtures."""
+"""Shared pytest fixtures.
+
+The vocabulary these fixtures are built from lives in :mod:`tests.helpers`;
+this module only promotes the pieces that enough files want to receive by
+name rather than import.
+"""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
+from tests.helpers import written_cfg
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +27,15 @@ def _fresh_command_manager() -> None:
     CommandManager.reset_current()
 
 
+@pytest.fixture
+def cfg_path(tmp_path: Path) -> Path:
+    """A saved single-VM config store, sandboxed under ``tmp_path``.
+
+    This is the scaffolding a CLI test opens with: a ``test-vm`` owned by
+    ``agent`` whose every path lives inside the sandbox, written to a
+    ``config.toml`` the CLI can be pointed at with ``--config``.
+    """
+    return written_cfg(tmp_path)
 
 
 @pytest.fixture(autouse=True)

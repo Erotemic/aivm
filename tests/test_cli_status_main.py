@@ -17,7 +17,11 @@ from aivm.status import (
     anticipated_status_sudo_commands,
     render_global_status,
 )
+from tests.helpers import make_cfg, patch_ns, returns
 
+# ``aivm.cli.main`` (the submodule) is shadowed by a ``main`` function on the
+# ``aivm.cli`` package, so monkeypatch's dotted-string resolution cannot reach
+# it; patch attributes on the imported module object instead.
 main_mod = importlib.import_module('aivm.cli.main')
 
 _BROKEN_STORE = """\
@@ -99,8 +103,7 @@ def test_global_status_reports_the_requested_store(
 def test_status_cli_uses_vm_opt_and_sudo(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'chosen-vm'
+    cfg = make_cfg(None, **{'vm.name': 'chosen-vm'})
     cfg_path = tmp_path / 'config.toml'
 
     called: dict[str, object] = {}  # type: ignore
@@ -111,12 +114,8 @@ def test_status_cli_uses_vm_opt_and_sudo(
         called['vm_opt'] = vm_opt
         return cfg, cfg_path
 
-    monkeypatch.setattr(
-        main_mod,
-        'load_cfg_with_path',
-        fake_load_cfg_with_path,
-    )
-    monkeypatch.setattr(main_mod, 'cfg_path', lambda _: cfg_path)
+    monkeypatch.setattr(main_mod, 'load_cfg_with_path', fake_load_cfg_with_path)
+    monkeypatch.setattr(main_mod, 'cfg_path', returns(cfg_path))
     monkeypatch.setattr(
         main_mod.CommandManager,
         'confirm_sudo_scope',
@@ -160,8 +159,7 @@ def test_status_never_mode_ignores_sudo_flag(
     This branch compares against PrivilegeMode.NEVER. A regression to a bare
     mode string would make it dead code and silently escalate.
     """
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'chosen-vm'
+    cfg = make_cfg(None, **{'vm.name': 'chosen-vm'})
     cfg_path = tmp_path / 'config.toml'
     # The mode must come from the store: _BaseCommand.cli() builds the active
     # CommandManager from it, overwriting any manager activated beforehand.
@@ -177,9 +175,9 @@ def test_status_never_mode_ignores_sudo_flag(
         return 'status'
 
     monkeypatch.setattr(
-        main_mod, 'load_cfg_with_path', lambda config, vm_opt='': (cfg, cfg_path)
+        main_mod, 'load_cfg_with_path', returns((cfg, cfg_path))
     )
-    monkeypatch.setattr(main_mod, 'cfg_path', lambda _: cfg_path)
+    monkeypatch.setattr(main_mod, 'cfg_path', returns(cfg_path))
     monkeypatch.setattr(
         main_mod.CommandManager,
         'confirm_sudo_scope',
@@ -200,12 +198,15 @@ def test_status_never_mode_ignores_sudo_flag(
 def test_render_global_status_wording(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr('aivm.status.check_commands', lambda: ([], []))
-    monkeypatch.setattr(
-        'aivm.status.probe_runtime_environment',
-        lambda: ProbeOutcome(True, 'ok', ''),
+    patch_ns(
+        monkeypatch,
+        'aivm.status',
+        {
+            'check_commands': returns(([], [])),
+            'probe_runtime_environment': returns(ProbeOutcome(True, 'ok', '')),
+            'load_store': returns(Store()),
+        },
     )
-    monkeypatch.setattr('aivm.status.load_store', lambda _: Store())
     text = render_global_status(Path('dummy.toml'))
     assert 'No VM context resolved for this directory.' in text
     assert 'dummy.toml' in text

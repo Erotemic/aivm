@@ -66,8 +66,8 @@ The two postures
      - ``aivm host doctor``
      - ``aivm host sudoless check``
    * - E2E proof suite
-     - ``test_e2e_nested.py`` / ``test_e2e_full.py``
-     - ``test_e2e_sudoless.py``
+     - ``tests/e2e/test_nested.py`` / ``tests/e2e/test_full.py``
+     - ``tests/e2e/test_sudoless.py``
 
 Choosing a mode
 ---------------

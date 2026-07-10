@@ -12,11 +12,9 @@ from typing import Any
 
 import pytest
 
-from aivm.cli import AgentVMModalCLI
 from aivm.cli.vm_guard import VMFdGuardCLI
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
-from aivm.config_store import Store, save_store, upsert_vm
 from aivm.fdguard import (
     FDGUARD_BIN,
     FDGUARD_TIMER,
@@ -33,6 +31,7 @@ from aivm.fdguard import (
 from aivm.vm.cloudinit import _render_user_data_text
 from aivm.vm.update import FdGuardDrift, VMUpdateDrift
 from aivm.vm.update.fdguard import _apply_fdguard_drift, _fdguard_drift
+from tests.helpers import run_cli
 
 STOCK_UPDATEDB_CONF = (
     'PRUNE_BIND_MOUNTS="yes"\n'
@@ -206,33 +205,12 @@ def test_cloud_init_omits_fdguard_when_disabled() -> None:
     assert 'aivm-virtiofs-guard' not in text
 
 
-def _write_cfg(tmp_path: Path) -> Path:
-    cfg_path = tmp_path / 'config.toml'
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'test-vm'
-    cfg.vm.user = 'agent'
-    cfg.paths.base_dir = str(tmp_path / 'libvirt')
-    cfg.paths.state_dir = str(tmp_path / 'state')
-    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
-    cfg.paths.ssh_pubkey_path = str(tmp_path / 'id_ed25519.pub')
-    store = Store()
-    upsert_vm(store, cfg)
-    save_store(store, cfg_path)
-    return cfg_path
-
-
-def _run(argv: list[str]) -> int:
-    rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
-    return 0 if rc is None else int(rc)
-
-
 def test_vm_fdguard_dry_run_actions(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    cfg_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cfg_path = _write_cfg(tmp_path)
     for action in ('status', 'install', 'uninstall'):
         assert (
-            _run(
+            run_cli(
                 [
                     'vm',
                     'fdguard',
@@ -249,8 +227,7 @@ def test_vm_fdguard_dry_run_actions(
         assert f'DRYRUN: would run fdguard {action} for VM test-vm' in out
 
 
-def test_vm_fdguard_rejects_bad_action(tmp_path: Path) -> None:
-    cfg_path = _write_cfg(tmp_path)
+def test_vm_fdguard_rejects_bad_action(cfg_path: Path) -> None:
     with pytest.raises(RuntimeError, match='invalid action'):
         VMFdGuardCLI.main(
             argv=False,

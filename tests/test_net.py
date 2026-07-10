@@ -1,4 +1,4 @@
-"""Tests for test net."""
+"""Tests for ``aivm.net`` libvirt network setup, teardown, and route checks."""
 
 from __future__ import annotations
 

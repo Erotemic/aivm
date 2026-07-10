@@ -1,4 +1,4 @@
-"""Tests for test host."""
+"""Tests for ``aivm.host`` command-presence checks and dependency install."""
 
 from __future__ import annotations
 

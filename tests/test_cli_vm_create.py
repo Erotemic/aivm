@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
@@ -18,6 +20,57 @@ from aivm.config_store import (
     upsert_attachment,
     upsert_vm,
 )
+from tests.helpers import noop, patch_ns, returns, write_store
+
+
+@dataclass
+class CreateOpsStub:
+    """Handle over the stubbed ``vm create`` pipeline.
+
+    ``cfg_path`` is the store the CLI is pointed at; ``override`` swaps a
+    single ``aivm.vm.create_ops`` seam for a test that wants to inspect
+    or vary it.
+    """
+
+    cfg_path: Path
+    monkeypatch: MonkeyPatch
+
+    def override(self, **seams: Any) -> None:
+        for name, value in seams.items():
+            self.monkeypatch.setattr(f'aivm.vm.create_ops.{name}', value)
+
+
+@pytest.fixture
+def stub_create_ops(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> CreateOpsStub:
+    """Stub the create pipeline down to store bookkeeping.
+
+    Installs the seven seams that every ``vm create`` test otherwise
+    re-patches by hand: the config-path resolver plus the six
+    ``create_ops`` side effects (network/firewall/VM provisioning, the
+    host-dep install, and the two resource-check probes).  Returns a
+    handle whose ``cfg_path`` is the store the CLI reads and whose
+    ``override`` swaps any individual seam.
+    """
+    cfg_path = tmp_path / 'config.toml'
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.cfg_path',
+        lambda p: cfg_path if p else cfg_path,
+    )
+    patch_ns(
+        monkeypatch,
+        'aivm.vm.create_ops',
+        {
+            'ensure_network': noop,
+            'apply_firewall': noop,
+            'create_or_start_vm': noop,
+            'maybe_install_missing_host_deps': noop,
+            'vm_resource_warning_lines': returns([]),
+            'vm_resource_impossible_lines': returns([]),
+        },
+    )
+    return CreateOpsStub(cfg_path=cfg_path, monkeypatch=monkeypatch)
 
 
 def test_vm_create_summary_shows_password_login_default(tmp_path: Path) -> None:
@@ -62,37 +115,13 @@ def test_vm_create_interactive_edit_updates_password_login(
 
 
 def test_vm_create_uses_defaults_and_adds_vm(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
-    store.defaults = defaults
-    save_store(store, cfg_path)
+    write_store(cfg_path, defaults=defaults)
 
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
     rc = VMCreateCLI.main(
         argv=False, config=str(cfg_path), vm='new-vm', yes=True
     )
@@ -104,41 +133,15 @@ def test_vm_create_uses_defaults_and_adds_vm(
 
 
 def test_vm_create_falls_back_to_existing_vm_when_defaults_missing(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     tmpl = AgentVMConfig()
     tmpl.vm.name = 'template-existing'
     tmpl.vm.cpus = 6
     tmpl.vm.ram_mb = 12288
     tmpl.network.name = 'tmpl-net'
-    upsert_vm(store, tmpl)
-    store.active_vm = tmpl.vm.name
-    save_store(store, cfg_path)
-
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
+    write_store(cfg_path, tmpl, active_vm=tmpl.vm.name)
 
     rc = VMCreateCLI.main(
         argv=False, config=str(cfg_path), vm='demo-vm', yes=True
@@ -153,40 +156,15 @@ def test_vm_create_falls_back_to_existing_vm_when_defaults_missing(
 
 
 def test_vm_create_yes_preserves_existing_active_vm(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
-    store.defaults = defaults
     existing = AgentVMConfig()
     existing.vm.name = 'current-default'
-    upsert_vm(store, existing)
-    store.active_vm = existing.vm.name
-    save_store(store, cfg_path)
-
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    write_store(
+        cfg_path, existing, defaults=defaults, active_vm=existing.vm.name
     )
 
     rc = VMCreateCLI.main(
@@ -202,40 +180,15 @@ def test_vm_create_yes_preserves_existing_active_vm(
 
 
 def test_vm_create_set_default_opt_in(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
-    store.defaults = defaults
     existing = AgentVMConfig()
     existing.vm.name = 'current-default'
-    upsert_vm(store, existing)
-    store.active_vm = existing.vm.name
-    save_store(store, cfg_path)
-
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    write_store(
+        cfg_path, existing, defaults=defaults, active_vm=existing.vm.name
     )
 
     rc = VMCreateCLI.main(
@@ -251,49 +204,23 @@ def test_vm_create_set_default_opt_in(
 
 
 def test_vm_create_interactive_default_prompt_no_keeps_active(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
-    store.defaults = defaults
     existing = AgentVMConfig()
     existing.vm.name = 'current-default'
-    upsert_vm(store, existing)
-    store.active_vm = existing.vm.name
-    save_store(store, cfg_path)
+    write_store(
+        cfg_path, existing, defaults=defaults, active_vm=existing.vm.name
+    )
 
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops._review_vm_create_overrides_interactive',
-        lambda cfg, path: cfg,
-    )
     asked: list[str] = []
-    monkeypatch.setattr(
-        'aivm.vm.create_ops._prompt_set_created_vm_default',
-        lambda vm_name: asked.append(vm_name) or False,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    stub_create_ops.override(
+        _review_vm_create_overrides_interactive=lambda cfg, path: cfg,
+        _prompt_set_created_vm_default=(
+            lambda vm_name: asked.append(vm_name) or False
+        ),
     )
 
     rc = VMCreateCLI.main(
@@ -306,7 +233,6 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
     assert asked == ['new-vm']
     loaded = load_store(cfg_path)
     assert loaded.active_vm == 'current-default'
-
 
 
 def test_vm_delete_removes_vm_and_attachments(
@@ -399,19 +325,14 @@ def test_vm_delete_accepts_positional_vm_name(
 
 
 def test_vm_create_interactive_edit_overrides_defaults(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    monkeypatch: MonkeyPatch, stub_create_ops: CreateOpsStub
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
     defaults.network.name = 'aivm-net'
-    store.defaults = defaults
-    save_store(store, cfg_path)
+    write_store(cfg_path, defaults=defaults)
 
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
     monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
     answers = iter(
         [
@@ -440,25 +361,6 @@ def test_vm_create_interactive_edit_overrides_defaults(
             return 'y'
 
     monkeypatch.setattr('builtins.input', fake_input)
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
 
     rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=False)
     assert rc == 0
@@ -474,59 +376,30 @@ def test_vm_create_interactive_edit_overrides_defaults(
 
 
 def test_vm_create_interactive_abort(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    monkeypatch: MonkeyPatch, stub_create_ops: CreateOpsStub
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
-    store.defaults = AgentVMConfig()
-    save_store(store, cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
+    cfg_path = stub_create_ops.cfg_path
+    write_store(cfg_path, defaults=AgentVMConfig())
     monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: 'n')
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
     with pytest.raises(RuntimeError, match='Aborted by user'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=False)
 
 
 def test_vm_create_warns_when_requested_resources_look_too_high(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    monkeypatch: MonkeyPatch, stub_create_ops: CreateOpsStub
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'warn-vm'
     defaults.vm.ram_mb = 1800
     defaults.vm.cpus = 2
     defaults.vm.disk_gb = 64
-    defaults.paths.base_dir = str(tmp_path)
-    store.defaults = defaults
-    save_store(store, cfg_path)
+    defaults.paths.base_dir = str(cfg_path.parent)
+    write_store(cfg_path, defaults=defaults)
 
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines',
-        lambda cfg: ['warn1', 'warn2'],
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    stub_create_ops.override(
+        vm_resource_warning_lines=returns(['warn1', 'warn2']),
     )
     warns: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
@@ -540,36 +413,21 @@ def test_vm_create_warns_when_requested_resources_look_too_high(
 
 
 def test_vm_create_ensures_network_before_vm_create(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'net-first-vm'
     defaults.network.name = 'net-first'
-    store.defaults = defaults
-    save_store(store, cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
+    write_store(cfg_path, defaults=defaults)
+
     calls: list[str] = []
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network',
-        lambda *a, **k: calls.append('ensure_network'),
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall',
-        lambda *a, **k: calls.append('apply_firewall'),
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm',
-        lambda *a, **k: calls.append('create_or_start_vm'),
+    stub_create_ops.override(
+        ensure_network=lambda *a, **k: calls.append('ensure_network'),
+        apply_firewall=lambda *a, **k: calls.append('apply_firewall'),
+        create_or_start_vm=(
+            lambda *a, **k: calls.append('create_or_start_vm')
+        ),
     )
     rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
@@ -578,88 +436,54 @@ def test_vm_create_ensures_network_before_vm_create(
 
 
 def test_vm_create_errors_when_resources_physically_impossible(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub,
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
+    cfg_path = stub_create_ops.cfg_path
     defaults = AgentVMConfig()
     defaults.vm.name = 'impossible-vm'
     defaults.vm.ram_mb = 8192
     defaults.vm.cpus = 8
-    store.defaults = defaults
-    save_store(store, cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.cfg_path', lambda p: cfg_path if p else cfg_path
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines',
-        lambda cfg: ['vm.cpus=8 exceeds host CPU count=2'],
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
+    write_store(cfg_path, defaults=defaults)
+
+    stub_create_ops.override(
+        vm_resource_impossible_lines=returns(
+            ['vm.cpus=8 exceeds host CPU count=2']
+        ),
     )
     with pytest.raises(RuntimeError, match='not feasible on this host'):
         VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
 
 
 def test_vm_create_initial_persistent_share_uses_final_vm_name(
-    monkeypatch: MonkeyPatch, tmp_path: Path
+    stub_create_ops: CreateOpsStub, tmp_path: Path
 ) -> None:
     """Attached fresh-create resolves the initial share after VM-name edits."""
     from aivm.vm.create_ops import create_vm_from_defaults
 
-    cfg_path = tmp_path / 'config.toml'
+    cfg_path = stub_create_ops.cfg_path
     host_src = tmp_path / 'proj'
     host_src.mkdir()
     base_dir = tmp_path / 'libvirt-aivm'
 
-    store = Store()
     defaults = AgentVMConfig()
     defaults.vm.name = 'template-vm'
     defaults.paths.base_dir = str(base_dir)
-    store.defaults = defaults
-    save_store(store, cfg_path)
+    write_store(cfg_path, defaults=defaults)
 
     def fake_review(cfg: AgentVMConfig, path: Path) -> AgentVMConfig:
         cfg.vm.name = 'fresh-vm'
         return cfg
 
-    monkeypatch.setattr(
-        'aivm.vm.create_ops._review_vm_create_overrides_interactive',
-        fake_review,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
-    )
-
     prepared: list[tuple[str, bool]] = []
-    monkeypatch.setattr(
-        'aivm.vm.create_ops._ensure_persistent_root_parent_dir',
-        lambda cfg, *, dry_run: prepared.append((cfg.vm.name, dry_run)),
-    )
     created: list[tuple[AgentVMConfig, dict]] = []
-    monkeypatch.setattr(
-        'aivm.vm.create_ops.create_or_start_vm',
-        lambda cfg, **kwargs: created.append((cfg, dict(kwargs))),
+    stub_create_ops.override(
+        _review_vm_create_overrides_interactive=fake_review,
+        _ensure_persistent_root_parent_dir=(
+            lambda cfg, *, dry_run: prepared.append((cfg.vm.name, dry_run))
+        ),
+        create_or_start_vm=(
+            lambda cfg, **kwargs: created.append((cfg, dict(kwargs)))
+        ),
     )
 
     rc = create_vm_from_defaults(
@@ -675,5 +499,7 @@ def test_vm_create_initial_persistent_share_uses_final_vm_name(
     assert created
     created_cfg, kwargs = created[0]
     assert created_cfg.vm.name == 'fresh-vm'
-    assert kwargs['share_source_dir'] == str(base_dir / 'fresh-vm' / 'persistent-root')
+    assert kwargs['share_source_dir'] == str(
+        base_dir / 'fresh-vm' / 'persistent-root'
+    )
     assert kwargs['share_tag'] == 'aivm-persistent-root'

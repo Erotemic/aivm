@@ -18,12 +18,6 @@ from aivm.util import CmdError
 from tests.helpers import FakeLog, FakeProc, activate_manager
 
 
-def _activate_manager(**kwargs: Any) -> CommandManager:
-    mgr = CommandManager(**kwargs)
-    CommandManager.activate(mgr)
-    return mgr
-
-
 def test_shell_join_quotes() -> None:
     cmd = ['echo', 'a b', "c'd"]
     s = shell_join(cmd)
@@ -31,8 +25,8 @@ def test_shell_join_quotes() -> None:
     assert 'echo' in s
 
 
-def test_manager_run_success_and_failure() -> None:
-    mgr = _activate_manager()
+def test_manager_run_success_and_failure(monkeypatch: MonkeyPatch) -> None:
+    mgr = activate_manager(monkeypatch, yes_sudo=False)
     ok = mgr.run(['bash', '-c', 'printf ok'], check=True, capture=True)
     assert ok.code == 0
     assert ok.stdout == 'ok'
@@ -42,8 +36,8 @@ def test_manager_run_success_and_failure() -> None:
         mgr.run(['bash', '-c', 'exit 9'], check=True, capture=True)
 
 
-def test_nested_intent_breadcrumb_rendering() -> None:
-    mgr = _activate_manager()
+def test_nested_intent_breadcrumb_rendering(monkeypatch: MonkeyPatch) -> None:
+    mgr = activate_manager(monkeypatch, yes_sudo=False)
     with IntentScope(mgr, 'Create VM'):
         assert mgr.render_breadcrumb() == 'Create VM'
         with IntentScope(mgr, 'Ensure network'):
@@ -448,8 +442,10 @@ def test_plan_preview_labels_read_only_commands(
     )
 
 
-def test_noninteractive_sudo_plan_requires_yes() -> None:
-    _activate_manager()
+def test_noninteractive_sudo_plan_requires_yes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch, yes_sudo=False)
     mgr = CommandManager.current()
 
     with pytest.raises(RuntimeError, match='Re-run with --yes or --yes-sudo'):
@@ -466,7 +462,7 @@ def test_noninteractive_sudo_plan_requires_yes() -> None:
 def test_confirm_file_update_requires_yes_noninteractive(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    mgr = _activate_manager()
+    mgr = activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
     with pytest.raises(RuntimeError, match='Re-run with --yes'):
         mgr.confirm_file_update(
@@ -479,7 +475,7 @@ def test_confirm_file_update_requires_yes_noninteractive(
 def test_confirm_file_update_aborts_on_negative_response(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    mgr = _activate_manager()
+    mgr = activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr(builtins, 'input', lambda _: 'n')
     with pytest.raises(RuntimeError, match='Aborted by user'):

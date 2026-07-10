@@ -17,7 +17,57 @@ from aivm.attachments.shared_root import (
 from aivm.config import AgentVMConfig
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-from tests.helpers import FakeLog, FakeProc, activate_manager
+from tests.helpers import (
+    FakeLog,
+    FakeProc,
+    activate_manager,
+    command_recorder,
+)
+
+
+def _shared_root_attachment(
+    tmp_path: Path,
+    *,
+    name: str = 'vm-shared-root',
+    tag: str = 'hostcode-source',
+    source_name: str = 'source',
+    guest_dst: str = '/workspace/source',
+    access: AttachmentAccess = AttachmentAccess.RW,
+    base_dir: bool = True,
+    make_source: bool = True,
+    resolve_source: bool = True,
+    user: str | None = None,
+    ssh_identity_file: str | None = None,
+) -> tuple[AgentVMConfig, Path, ResolvedAttachment]:
+    """Build the ``cfg`` + ``source_dir`` + ``ResolvedAttachment`` trio.
+
+    Every shared-root test opens with the same scaffolding; the keyword
+    arguments cover the handful of axes that actually differ between
+    tests (the VM name, whether the source directory is created, whether
+    a base storage dir and SSH identity are configured, and the access
+    mode).
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = name
+    if base_dir:
+        cfg.paths.base_dir = str(tmp_path / 'base')
+    if user is not None:
+        cfg.vm.user = user
+    if ssh_identity_file is not None:
+        cfg.paths.ssh_identity_file = ssh_identity_file
+    source_dir = tmp_path / source_name
+    if make_source:
+        source_dir.mkdir()
+    src = str(source_dir.resolve()) if resolve_source else str(source_dir)
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        access=access,
+        source_dir=src,
+        guest_dst=guest_dst,
+        tag=tag,
+    )
+    return cfg, source_dir, attachment
 
 
 def _capture_command_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -35,18 +85,14 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
 ) -> None:
     from aivm.cli.vm_attach import VMAttachCLI
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root'
-    cfg_path = tmp_path / 'config.toml'
-    host_src = tmp_path / 'proj'
-    host_src.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(host_src.resolve()),
+    cfg, host_src, attachment = _shared_root_attachment(
+        tmp_path,
+        source_name='proj',
         guest_dst='/workspace/proj',
         tag='hostcode-proj',
+        base_dir=False,
     )
+    cfg_path = tmp_path / 'config.toml'
 
     monkeypatch.setattr(
         'aivm.cli.vm_attach.load_cfg_with_path',
@@ -107,38 +153,20 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
 def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-bind'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-bind'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        cmd = [str(part) for part in cmd]
-        normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
-        calls.append(normalized)
-        if normalized[:2] == ['mkdir', '-p']:
-            return FakeProc(0, '', '')
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(1, '', '')
-        if normalized[:2] == ['mount', '--bind']:
-            return FakeProc(0, '', '')
-        if normalized[:2] == ['bash', '-c']:
-            return FakeProc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'mkdir -p': FakeProc(0),
+            'findmnt -P -n': FakeProc(1),
+            'mount --bind': FakeProc(0),
+            'bash -c': FakeProc(0),
+        },
+    )
 
     _ensure_shared_root_host_bind(
         cfg,
@@ -147,52 +175,31 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
         dry_run=False,
     )
 
-    command_text = [' '.join(c) for c in calls]
-    assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
-        for line in command_text
+    assert rec.ran(
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
     )
-    assert any('mount --bind' in line for line in command_text)
-    assert all('umount ' not in line for line in command_text)
+    assert rec.ran('mount', '--bind')
+    assert not rec.ran('umount')
 
 
 def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-bind-existing'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-bind-existing'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        cmd = [str(part) for part in cmd]
-        normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
-        calls.append(normalized)
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE=""', ''
-            )
-        if normalized[:2] == ['umount', str(source_dir)]:
-            raise AssertionError('unexpected source-path umount')
-        if normalized[:2] == ['umount', '-l']:
-            raise AssertionError('unexpected lazy umount')
-        if normalized[:2] == ['mount', '--bind']:
-            raise AssertionError('unexpected remount for same source')
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    # An unhandled command raises, so an unexpected umount/mount is caught
+    # by the recorder itself rather than by a hand-written branch.
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'findmnt -P -n': FakeProc(
+                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE=""'
+            ),
+        },
+    )
 
     _ensure_shared_root_host_bind(
         cfg,
@@ -201,52 +208,29 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         dry_run=False,
     )
 
-    command_text = [' '.join(c) for c in calls]
-    assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
-        for line in command_text
+    assert rec.ran(
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
     )
-    assert all(not line.startswith('umount ') for line in command_text)
-    assert all(not line.startswith('mount --bind') for line in command_text)
+    assert not rec.ran('umount')
+    assert not rec.ran('mount', '--bind')
 
 
 def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-bind-device-subpath'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-bind-device-subpath'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        cmd = [str(part) for part in cmd]
-        normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
-        calls.append(normalized)
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(
-                0, f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE=""', ''
-            )
-        if normalized[:2] == ['umount', str(source_dir)]:
-            raise AssertionError('unexpected source-path umount')
-        if normalized[:2] == ['umount', '-l']:
-            raise AssertionError('unexpected lazy umount')
-        if normalized[:2] == ['mount', '--bind']:
-            raise AssertionError('unexpected remount for same source')
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'findmnt -P -n': FakeProc(
+                0, f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE=""'
+            ),
+        },
+    )
 
     _ensure_shared_root_host_bind(
         cfg,
@@ -255,51 +239,34 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         dry_run=False,
     )
 
-    command_text = [' '.join(c) for c in calls]
-    assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
-        for line in command_text
+    assert rec.ran(
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
     )
-    assert all(not line.startswith('umount ') for line in command_text)
-    assert all(not line.startswith('mount --bind') for line in command_text)
+    assert not rec.ran('umount')
+    assert not rec.ran('mount', '--bind')
 
 
 def test_shared_root_host_bind_lazy_unmounts_busy_target(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-bind-busy'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-bind-busy'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
     target = (
         Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root' / attachment.tag
     )
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        cmd = [str(part) for part in cmd]
-        normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
-        calls.append(normalized)
-        if normalized[:2] == ['mkdir', '-p']:
-            return FakeProc(0, '', '')
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
-        if normalized[:2] == ['bash', '-c']:
-            return FakeProc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'mkdir -p': FakeProc(0),
+            'findmnt -P -n': FakeProc(
+                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
+            ),
+            'bash -c': FakeProc(0),
+        },
+    )
 
     _ensure_shared_root_host_bind(
         cfg,
@@ -308,10 +275,7 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
         dry_run=False,
     )
 
-    command_text = [' '.join(c) for c in calls]
-    repair_cmd = next(
-        line for line in command_text if line.startswith('bash -c ')
-    )
+    repair_cmd = rec.only('bash', '-c')[2]
     assert f'umount {target}' in repair_cmd
     assert f'umount -l {target}' in repair_cmd
     assert f'mount --bind {source_dir}' in repair_cmd
@@ -320,38 +284,21 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
 def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-safe-restore'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-safe-restore'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        cmd = [str(part) for part in cmd]
-        normalized = cmd[2:] if cmd[:2] == ['sudo', '-n'] else cmd
-        calls.append(normalized)
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(0, 'SOURCE="/other/source" ROOT="" FSTYPE=""', '')
-        if normalized[0] == 'umount':
-            raise AssertionError('unexpected unmount in non-disruptive mode')
-        if normalized[:2] == ['mount', '--bind']:
-            raise AssertionError(
-                'unexpected bind remount in non-disruptive mode'
-            )
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    # No umount/mount route: if the non-disruptive path issued one, the
+    # recorder would raise on the unexpected command.
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'findmnt -P -n': FakeProc(
+                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
+            ),
+        },
+    )
 
     with pytest.raises(RuntimeError, match='Refusing to replace existing'):
         _ensure_shared_root_host_bind(
@@ -362,51 +309,31 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
             allow_disruptive_rebind=False,
         )
 
-    command_text = [' '.join(c) for c in calls]
-    assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
-        for line in command_text
+    assert rec.ran(
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
     )
-    assert all(not line.startswith('umount ') for line in command_text)
-    assert all(not line.startswith('mount --bind') for line in command_text)
+    assert not rec.ran('umount')
+    assert not rec.ran('mount', '--bind')
 
 
 def test_shared_root_host_bind_tolerates_not_mounted_during_repair(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-not-mounted'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-not-mounted'
     )
 
     activate_manager(monkeypatch)
-    calls: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        calls.append(normalized)
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""', '')
-        if normalized[:2] == ['mkdir', '-p']:
-            return FakeProc(0, '', '')
-        if normalized[:2] == ['bash', '-c']:
-            script = normalized[2]
-            assert '"not mounted"' in script
-            assert 'mount --bind' in script
-            return FakeProc(0, '', '')
-        raise AssertionError(f'unexpected command: {cmd}')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'findmnt -P -n': FakeProc(
+                0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""'
+            ),
+            'mkdir -p': FakeProc(0),
+            'bash -c': FakeProc(0),
+        },
+    )
 
     target = _ensure_shared_root_host_bind(
         cfg,
@@ -416,24 +343,23 @@ def test_shared_root_host_bind_tolerates_not_mounted_during_repair(
     )
 
     assert target.name == attachment.tag
-    command_text = [' '.join(c) for c in calls]
-    assert any(line.startswith('bash -c ') for line in command_text)
+    script = rec.only('bash', '-c')[2]
+    assert '"not mounted"' in script
+    assert 'mount --bind' in script
 
 
 def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-ro'
-    cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        access=AttachmentAccess.RO,
-        source_dir=str((tmp_path / 'source').resolve()),
-        guest_dst='/workspace/source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path,
+        name='vm-shared-root-ro',
         tag='token-source',
+        access=AttachmentAccess.RO,
+        base_dir=False,
+        make_source=False,
+        user='agent',
+        ssh_identity_file='/tmp/id_ed25519',
     )
 
     activate_manager(monkeypatch)
@@ -448,6 +374,8 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     cmds: list[list[str]] = []
     run_kwargs: list[dict] = []
 
+    # A hand fake here (rather than command_recorder) because the test
+    # asserts on the per-call ``timeout`` kwarg, which the recorder drops.
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         cmds.append([str(c) for c in cmd])
         run_kwargs.append(dict(kwargs))
@@ -490,17 +418,8 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
 def test_shared_root_host_bind_prompts_once_per_privileged_step(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-plan'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-plan'
     )
 
     activate_manager(monkeypatch, yes_sudo=False)
@@ -513,6 +432,9 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
+    # Hand fake retained: this test drives the interactive approval flow
+    # (sudo auth probe + ``sudo -v``), which command_recorder deliberately
+    # stubs out via ``confirm_sudo_scope``.
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
@@ -565,37 +487,20 @@ def test_shared_root_host_bind_creates_export_dirs_without_sudo(
     This is what `privilege_mode = as-needed` buys after `aivm host sudoless
     setup`: only `mount --bind` escalates.
     """
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-userowned'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-userowned'
     )
 
     activate_manager(monkeypatch, yes_sudo=True, yes=True)
-    raw: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        raw.append(parts)
-        if parts[:3] == ['sudo', '-n', 'true']:
-            return FakeProc(0, '', '')
-        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(1, '', '')
-        return FakeProc(0, '', '')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {'findmnt -P -n': FakeProc(1)},
+        default=FakeProc(0),
+    )
 
     _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    raw = rec.calls
 
     def _program_of(parts: list[str]) -> str:
         rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
@@ -627,51 +532,36 @@ def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
     if os.geteuid() == 0:
         pytest.skip('root can write through any mode bits')
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-legacy'
-    base = tmp_path / 'base'
-    export_root = base / cfg.vm.name / 'shared-root'
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-legacy'
+    )
+    export_root = Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
     export_root.mkdir(parents=True)
     export_root.chmod(0o555)
-    cfg.paths.base_dir = str(base)
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
-    )
 
     activate_manager(monkeypatch, yes_sudo=True, yes=True)
-    raw: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        raw.append(parts)
-        if parts[:3] == ['sudo', '-n', 'true']:
-            return FakeProc(0, '', '')
-        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(1, '', '')
-        return FakeProc(0, '', '')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {'findmnt -P -n': FakeProc(1)},
+        default=FakeProc(0),
+    )
     try:
         _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
     finally:
         export_root.chmod(0o755)
 
-    joined = [' '.join(p) for p in raw]
+    joined = [' '.join(p) for p in rec.calls]
     # The export root already exists, so no mkdir is issued for it at all.
-    assert not any(line.endswith(str(export_root)) for line in joined if 'mkdir' in line)
+    assert not any(
+        line.endswith(str(export_root)) for line in joined if 'mkdir' in line
+    )
     # The project target below it is unwritable, so its mkdir escalates.
     assert any(
-        line.startswith('sudo') and 'mkdir -p' in line and 'hostcode-source' in line
+        line.startswith('sudo')
+        and 'mkdir -p' in line
+        and 'hostcode-source' in line
         for line in joined
-    ), raw
+    ), rec.calls
 
 
 def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
@@ -682,64 +572,36 @@ def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
     The decision is per-path, so a host that never ran `sudoless setup`
     behaves exactly as before.
     """
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-rootowned'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-rootowned'
     )
 
     activate_manager(monkeypatch, yes_sudo=True, yes=True)
     monkeypatch.setattr(
         'aivm.attachments.shared_root.path_needs_sudo', lambda p: True
     )
-    raw: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        raw.append(parts)
-        if parts[:3] == ['sudo', '-n', 'true']:
-            return FakeProc(0, '', '')
-        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
-        if normalized[:3] == ['findmnt', '-P', '-n']:
-            return FakeProc(1, '', '')
-        return FakeProc(0, '', '')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(
+        monkeypatch,
+        {'findmnt -P -n': FakeProc(1)},
+        default=FakeProc(0),
+    )
 
     _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
 
     def _ran_with_sudo(program: str) -> bool:
         return any(
-            parts[:1] == ['sudo'] and program in parts for parts in raw
+            parts[:1] == ['sudo'] and program in parts for parts in rec.calls
         )
 
-    assert _ran_with_sudo('mkdir'), raw
-    assert _ran_with_sudo('mount'), raw
+    assert _ran_with_sudo('mkdir'), rec.calls
+    assert _ran_with_sudo('mount'), rec.calls
 
 
 def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-readonly'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-shared-root-readonly'
     )
 
     activate_manager(monkeypatch, yes_sudo=False)
@@ -757,6 +619,8 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
+    # Hand fake retained: this test drives the interactive approval flow,
+    # which command_recorder stubs out via ``confirm_sudo_scope``.
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
@@ -810,6 +674,9 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
         lambda prompt: prompts.append(prompt) or 'y',
     )
 
+    # Hand fake retained: drives the interactive approval flow and the
+    # virsh dumpxml/attach-device dispatch, which command_recorder does
+    # not model.
     def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         parts = [str(part) for part in cmd]
@@ -857,17 +724,15 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
 def test_shared_root_guest_bind_preview_uses_semantic_summaries(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root-preview'
-    cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        access=AttachmentAccess.RW,
-        source_dir=str((tmp_path / 'source').resolve()),
-        guest_dst='/workspace/source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path,
+        name='vm-shared-root-preview',
         tag='token-source',
+        access=AttachmentAccess.RW,
+        base_dir=False,
+        make_source=False,
+        user='agent',
+        ssh_identity_file='/tmp/id_ed25519',
     )
 
     activate_manager(monkeypatch)
@@ -880,10 +745,7 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
         'aivm.attachments.shared_root.ssh_base_args',
         lambda *a, **k: ['-i', '/tmp/id_ed25519'],
     )
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: FakeProc(0, '', ''),
-    )
+    command_recorder(monkeypatch, default=FakeProc(0))
 
     _ensure_shared_root_guest_bind(
         cfg,
@@ -968,15 +830,12 @@ def test_shared_root_detach_escalates_only_for_the_umount(
     """
     from aivm.attachments.shared_root import _detach_shared_root_host_bind
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-detach'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED_ROOT,
-        source_dir=str(tmp_path / 'source'),
-        guest_dst='/workspace/source',
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path,
+        name='vm-detach',
         tag='proj',
+        make_source=False,
+        resolve_source=False,
     )
     # The export root exists and is user-owned, as after a successful attach.
     (Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root' / 'proj').mkdir(
@@ -984,15 +843,7 @@ def test_shared_root_detach_escalates_only_for_the_umount(
     )
 
     activate_manager(monkeypatch, yes_sudo=True, yes=True)
-    raw: list[list[str]] = []
-
-    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(part) for part in cmd]
-        raw.append(parts)
-        return FakeProc(0, '', '')
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+    rec = command_recorder(monkeypatch, default=FakeProc(0))
 
     _detach_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
 
@@ -1001,9 +852,9 @@ def test_shared_root_detach_escalates_only_for_the_umount(
         rest = rest[1:] if rest[:1] == ['sudo'] else rest
         return rest[0] if rest else ''
 
-    real = [p for p in raw if p[-1:] != ['true']]
+    real = [p for p in rec.calls if p[-1:] != ['true']]
     escalated = {program(p) for p in real if p[:1] == ['sudo']}
     plain = {program(p) for p in real if p[:1] != ['sudo']}
-    assert 'mountpoint' in plain, raw
-    assert 'rmdir' in plain, raw
-    assert escalated == {'umount'}, raw
+    assert 'mountpoint' in plain, rec.calls
+    assert 'rmdir' in plain, rec.calls
+    assert escalated == {'umount'}, rec.calls

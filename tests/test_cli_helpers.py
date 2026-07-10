@@ -1,4 +1,9 @@
-"""Tests for test cli helpers."""
+"""Tests for shared CLI helpers.
+
+Covers auto share-tag generation, the SSH-config upsert, ``help``
+plan/raw/completion output, config-driven behavior defaults, and the
+``resolve_vm_name`` / SSH-identity service helpers.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 from aivm.services import maybe_offer_create_ssh_identity
 from aivm.vm.share import _auto_share_tag_for_path
+from tests.helpers import make_cfg, write_store
 
 
 def test_auto_share_tag_collision() -> None:
@@ -112,11 +118,8 @@ def test_cli_auto_approve_readonly_sudo_defaults_from_config(
 def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
     cfg_path = tmp_path / 'config.toml'
     store = Store()
-    store.defaults = AgentVMConfig()
-    store.defaults.verbosity = 2
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-verbose'
-    cfg.verbosity = 2
+    store.defaults = make_cfg(None, **{'verbosity': 2})
+    cfg = make_cfg(None, **{'vm.name': 'vm-verbose', 'verbosity': 2})
     upsert_vm(store, cfg)
     store.active_vm = cfg.vm.name
     store.behavior.verbose = 4
@@ -127,14 +130,17 @@ def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
 def test_help_raw_outputs_direct_system_commands(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cfg_path = tmp_path / 'config.toml'
-    store = Store()
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-raw'
-    cfg.network.name = 'net-raw'
-    cfg.firewall.table = 'fw-raw'
-    upsert_vm(store, cfg)
-    save_store(store, cfg_path)
+    cfg_path = write_store(
+        tmp_path / 'config.toml',
+        make_cfg(
+            None,
+            **{
+                'vm.name': 'vm-raw',
+                'network.name': 'net-raw',
+                'firewall.table': 'fw-raw',
+            }
+        ),
+    )
     monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)
     rc = HelpRawCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
@@ -188,12 +194,8 @@ def test_resolve_vm_name_prefers_active_vm_for_multi_attached_folder(
     host_src.mkdir()
 
     store = Store()
-    vm1 = AgentVMConfig()
-    vm1.vm.name = 'vm-a'
-    vm2 = AgentVMConfig()
-    vm2.vm.name = 'vm-b'
-    upsert_vm(store, vm1)
-    upsert_vm(store, vm2)
+    upsert_vm(store, make_cfg(None, **{'vm.name': 'vm-a'}))
+    upsert_vm(store, make_cfg(None, **{'vm.name': 'vm-b'}))
     store.active_vm = 'vm-b'
     upsert_attachment(store, host_path=host_src, vm_name='vm-a')
     upsert_attachment(store, host_path=host_src, vm_name='vm-b')
@@ -217,12 +219,8 @@ def test_resolve_vm_name_errors_noninteractive_for_multi_attached_folder(
     host_src.mkdir()
 
     store = Store()
-    vm1 = AgentVMConfig()
-    vm1.vm.name = 'vm-a'
-    vm2 = AgentVMConfig()
-    vm2.vm.name = 'vm-b'
-    upsert_vm(store, vm1)
-    upsert_vm(store, vm2)
+    upsert_vm(store, make_cfg(None, **{'vm.name': 'vm-a'}))
+    upsert_vm(store, make_cfg(None, **{'vm.name': 'vm-b'}))
     store.active_vm = ''
     upsert_attachment(store, host_path=host_src, vm_name='vm-a')
     upsert_attachment(store, host_path=host_src, vm_name='vm-b')

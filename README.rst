@@ -67,19 +67,20 @@ What it provides
 
 .. note::
 
-   Three opt-in end-to-end test modules live in ``tests/``:
-   ``test_e2e_nested.py`` (light smoke path), ``test_e2e_full.py``
-   (comprehensive cycle), and ``test_e2e_sudoless.py`` (full lifecycle
+   Three opt-in end-to-end test modules live in ``tests/e2e/``:
+   ``test_nested.py`` (light smoke path), ``test_full.py``
+   (comprehensive cycle), and ``test_sudoless.py`` (full lifecycle
    with ``privilege_mode = "never"``, proving no sudo is invoked).
-   They are skipped by default; to run them locally set ``AIVM_E2E=1``
-   and invoke pytest manually.  All need a host with KVM and (optionally)
-   an Ubuntu cloud image cached under ``~/.cache/aivm/e2e``; the first two
-   also need passwordless ``sudo``, while the sudoless module instead
-   needs ``libvirt`` group membership and ``setfacl``.
+   They carry the ``e2e`` marker and are deselected by default; to run them
+   locally set ``AIVM_E2E=1`` and invoke pytest manually.  All need a host
+   with KVM and (optionally) an Ubuntu cloud image cached under
+   ``~/.cache/aivm/e2e``; the first two also need passwordless ``sudo``,
+   while the sudoless module instead needs ``libvirt`` group membership
+   and ``setfacl``.
 
    An additional opt-in bootstrap-context e2e test is available in
-   ``test_e2e_bootstrap_context.py``. It creates a fresh outer VM and runs the
-   host-context e2e suite inside that VM. Enable it with
+   ``tests/e2e/test_bootstrap_context.py``. It creates a fresh outer VM and
+   runs the host-context e2e suite inside that VM. Enable it with
    ``AIVM_E2E_BOOTSTRAP=1`` when running ``./run_e2e_tests.sh``.
 
 Install

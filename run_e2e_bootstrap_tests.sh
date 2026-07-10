@@ -17,4 +17,4 @@ export AIVM_E2E_BOOTSTRAP=1
 export AIVM_E2E_HOST_CONTEXT=0
 export AIVM_E2E_CLI_VERBOSITY="${AIVM_E2E_CLI_VERBOSITY:-2}"
 
-pytest tests/test_e2e_bootstrap_context.py -s -v "$@"
+pytest tests/e2e/test_bootstrap_context.py -s -v "$@"

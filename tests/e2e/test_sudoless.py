@@ -2,7 +2,7 @@
 
 Runs the full network/VM/attach lifecycle with
 ``behavior.privilege_mode = 'never'``, under which the CommandManager
-refuses to execute any sudo command — so a pass proves the whole flow
+refuses to execute any sudo command --- so a pass proves the whole flow
 worked without privilege escalation.
 
 Requirements beyond the usual e2e host (libvirt/KVM):
@@ -18,41 +18,33 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
-import uuid
 from pathlib import Path
 
 import pytest
 
-from aivm.config import AgentVMConfig
-from aivm.config_store import Store, load_store, save_store, upsert_vm
-from tests.test_e2e_nested import (
-    _default_shared_image_path,
-    _ensure_user_cached_image,
+from aivm.config_store import load_store
+from tests.e2e._helpers import (
+    REPO_ROOT,
     _host_context_enabled,
     _make_temp_ssh_material,
     _require_e2e_host_dependencies,
     _run_cli,
+    _sudoless_libvirt_available,
+    apply_shared_image_cache,
+    e2e_teardown,
+    make_e2e_config,
+    run_ssh_command,
+    save_e2e_store,
 )
 
 pytestmark = pytest.mark.e2e
 
 
-def _sudoless_libvirt_available() -> bool:
-    probe = subprocess.run(
-        ['virsh', '-c', 'qemu:///system', 'list', '--name'],
-        check=False,
-        capture_output=True,
-        text=True,
-        stdin=subprocess.DEVNULL,
-    )
-    return probe.returncode == 0
-
-
 def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     if not _host_context_enabled():
         pytest.skip(
-            'Set AIVM_E2E_HOST_CONTEXT=1 (and AIVM_E2E=1) to run host-context e2e tests.'
+            'Set AIVM_E2E_HOST_CONTEXT=1 (and AIVM_E2E=1) to run '
+            'host-context e2e tests.'
         )
     if not _sudoless_libvirt_available():
         pytest.skip(
@@ -66,53 +58,31 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     env = os.environ.copy()
     env['HOME'] = str(home)
 
-    repo_root = Path(__file__).resolve().parent.parent
     timeout_s = int(os.getenv('AIVM_E2E_TIMEOUT', '2400'))
-    _require_e2e_host_dependencies(cwd=repo_root, timeout_s=timeout_s, env=env)
+    _require_e2e_host_dependencies(cwd=REPO_ROOT, timeout_s=timeout_s, env=env)
 
     cfg_path = tmp_path / 'e2e-sudoless.toml'
-    suffix = uuid.uuid4().hex[:6]
-    subnet_octet = 100 + (int(suffix[:2], 16) % 100)
     base_dir = tmp_path / 'vmstore'
-
-    cfg = AgentVMConfig()
-    cfg.vm.name = f'aivm-e2e-sl-{suffix}'
-    cfg.vm.cpus = 1
-    cfg.vm.ram_mb = 2048
-    cfg.vm.disk_gb = 16
-    cfg.network.name = f'aivm-e2e-sl-net-{suffix}'
-    cfg.network.bridge = f'vbs{suffix}'
-    cfg.network.subnet_cidr = f'10.251.{subnet_octet}.0/24'
-    cfg.network.gateway_ip = f'10.251.{subnet_octet}.1'
-    cfg.network.dhcp_start = f'10.251.{subnet_octet}.100'
-    cfg.network.dhcp_end = f'10.251.{subnet_octet}.200'
+    cfg = make_e2e_config(
+        tmp_path,
+        priv=priv,
+        pub=pub,
+        name_prefix='aivm-e2e-sl',
+        net_prefix='aivm-e2e-sl-net',
+        bridge_prefix='vbs',
+        subnet_base='10.251',
+        base_dir=str(base_dir),
+    )
     # nftables management needs root; the sudoless story is "firewall off".
-    cfg.firewall.enabled = False
-    cfg.provision.enabled = False
-    cfg.paths.base_dir = str(base_dir)
-    cfg.paths.state_dir = str(tmp_path / 'state')
-    cfg.paths.ssh_identity_file = str(priv)
-    cfg.paths.ssh_pubkey_path = str(pub)
-
-    if os.getenv('AIVM_E2E_INDEPENDENT_IMAGE') != '1':
-        user_home = Path(os.environ.get('HOME', '~')).expanduser()
-        default_shared = _default_shared_image_path(user_home)
-        shared_img = Path(
-            os.getenv('AIVM_E2E_SHARED_IMAGE', str(default_shared))
-        ).expanduser()
-        _ensure_user_cached_image(shared_img)
-        cfg.image.ubuntu_img_url = f'file://{shared_img}'
+    apply_shared_image_cache(cfg)
 
     share_dir = tmp_path / 'hostshare'
     share_dir.mkdir()
     (share_dir / 'flag.txt').write_text('sudoless', encoding='utf-8')
 
-    store = Store()
     # Setup establishes host capabilities; choosing the never-sudo policy is
     # the user's act, not setup's, so the test makes that choice explicitly.
-    store.behavior.privilege_mode = 'never'
-    upsert_vm(store, cfg)
-    save_store(store, cfg_path)
+    save_e2e_store(cfg_path, cfg, privilege_mode='never')
 
     # Establish sudoless prerequisites through the real setup tool.
     _run_cli(
@@ -126,7 +96,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
             '--config',
             str(cfg_path),
         ],
-        cwd=repo_root,
+        cwd=REPO_ROOT,
         timeout_s=timeout_s,
         env=env,
     )
@@ -137,27 +107,27 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     assert reg.defaults is None
     _run_cli(
         ['host', 'sudoless', 'check', '--config', str(cfg_path)],
-        cwd=repo_root,
+        cwd=REPO_ROOT,
         timeout_s=timeout_s,
         env=env,
     )
 
-    try:
+    with e2e_teardown(cfg_path, env=env, timeout_s=timeout_s):
         _run_cli(
             ['host', 'net', 'create', '--yes', '--config', str(cfg_path)],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
         _run_cli(
             ['vm', 'up', '--yes', '--config', str(cfg_path)],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
         wait_res = _run_cli(
             ['vm', 'wait_ip', '--yes', '--config', str(cfg_path)],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -166,7 +136,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
 
         status_res = _run_cli(
             ['status', '--config', str(cfg_path)],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -182,7 +152,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -190,23 +160,11 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
 
         # Verify the share is usable from inside the guest with a direct
         # ssh command (the CLI `vm ssh` helper is interactive-only).
-        ssh_cmd = [
-            'ssh',
-            '-i',
-            str(priv),
-            '-o',
-            'UserKnownHostsFile=/dev/null',
-            '-o',
-            'StrictHostKeyChecking=accept-new',
-            f'{cfg.vm.user}@{ip}',
-            'cat',
-            str(share_dir / 'flag.txt'),
-        ]
-        proc = subprocess.run(
-            ssh_cmd,
-            check=False,
-            capture_output=True,
-            text=True,
+        proc = run_ssh_command(
+            user=cfg.vm.user,
+            ip=ip,
+            identity_file=priv,
+            remote=['cat', str(share_dir / 'flag.txt')],
             timeout=120,
         )
         assert proc.returncode == 0, proc.stderr
@@ -220,22 +178,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
-        )
-    finally:
-        _run_cli(
-            ['vm', 'delete', '--yes', '--config', str(cfg_path)],
-            cwd=repo_root,
-            timeout_s=timeout_s,
-            env=env,
-            check=False,
-        )
-        _run_cli(
-            ['host', 'net', 'destroy', '--yes', '--config', str(cfg_path)],
-            cwd=repo_root,
-            timeout_s=timeout_s,
-            env=env,
-            check=False,
         )

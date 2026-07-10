@@ -19,6 +19,24 @@ from aivm.vm.share import AttachmentMode, ResolvedAttachment
 from tests.helpers import FakeProc, activate_manager, capture_logs
 
 
+@pytest.fixture
+def guest_ssh_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Activate a manager and stub the guest SSH identity/base-args seams.
+
+    Every ``_ensure_guest_*`` test opens by activating a command manager
+    and neutralizing ``require_ssh_identity``/``ssh_base_args`` so the SSH
+    command is built deterministically; no test asserts on the identity
+    path or the base args, so a single set of stand-ins serves them all.
+    """
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.attachments.guest.require_ssh_identity', lambda p: p or '/id'
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
+    )
+
+
 def test_upsert_host_git_remote_adds_remote(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -165,22 +183,12 @@ def test_upsert_host_git_remote_raises_on_invalid_repo(tmp_path: Path) -> None:
 
 
 def test_ensure_guest_symlink_creates_new_symlink(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-symlink'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
-
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity',
-        lambda p: p or '/tmp/id_ed25519',
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args',
-        lambda *a, **k: ['-i', '/tmp/id_ed25519'],
-    )
 
     cmds: list[list[str]] = []
     monkeypatch.setattr(
@@ -204,143 +212,56 @@ def test_ensure_guest_symlink_creates_new_symlink(
     assert '/home/joncrall/code/repo' in script
 
 
-def test_ensure_guest_symlink_warns_on_wrong_existing_symlink(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ('exit_code', 'stderr', 'expected_substr'),
+    [
+        pytest.param(0, '', None, id='noop_on_correct_existing_symlink'),
+        pytest.param(
+            3,
+            'aivm-symlink-warn: /link is a symlink to /other; skipping',
+            'symlink to /other',
+            id='warns_on_wrong_existing_symlink',
+        ),
+        pytest.param(
+            4,
+            'aivm-symlink-warn: /link is a non-empty directory; skipping',
+            'non-empty directory',
+            id='warns_on_nonempty_dir',
+        ),
+        pytest.param(
+            5,
+            'aivm-symlink-warn: /link is a regular file; skipping',
+            'regular file',
+            id='warns_on_regular_file',
+        ),
+    ],
+)
+def test_ensure_guest_symlink_exit_code_handling(
+    monkeypatch: pytest.MonkeyPatch,
+    guest_ssh_env: None,
+    exit_code: int,
+    stderr: str,
+    expected_substr: str | None,
 ) -> None:
+    """The guest symlink helper warns per exit code and is silent on 0."""
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-symlink-warn'
+    cfg.vm.name = 'vm-symlink-exit'
     cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
-
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity',
-        lambda p: p or '/tmp/id_ed25519',
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args',
-        lambda *a, **k: ['-i', '/tmp/id_ed25519'],
-    )
-
+    cfg.paths.ssh_identity_file = ''
     messages = capture_logs(
         monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
     )
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        # exit code 3 = wrong symlink
-        lambda cmd, **kwargs: FakeProc(
-            3, '', 'aivm-symlink-warn: /link is a symlink to /other; skipping'
-        ),
-    )
-
-    _ensure_guest_symlink(
-        cfg,
-        '10.0.0.1',
-        symlink_path='/link',
-        target_path='/target',
-    )
-
-    assert any('symlink to /other' in m for m in messages)
-
-
-def test_ensure_guest_symlink_noop_on_correct_existing_symlink(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-ok'
-    cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
-    messages = capture_logs(
-        monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
-    )
-    # exit 0 = already correct
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run', lambda cmd, **kwargs: FakeProc(0, '', '')
+        lambda cmd, **kwargs: FakeProc(exit_code, '', stderr),
     )
     _ensure_guest_symlink(
         cfg, '10.0.0.1', symlink_path='/link', target_path='/tgt'
     )
-    assert not messages
-
-
-def test_ensure_guest_symlink_warns_on_nonempty_dir(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-warn-dir'
-    cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
-    messages = capture_logs(
-        monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
-    )
-    # exit 4 = non-empty dir, with warning message
-
-    def _make_ssh_fake(exit_code: int, stderr: str = '') -> Any:
-        def fake(cmd: list[str], **kwargs: Any) -> FakeProc:
-            return FakeProc(exit_code, '', stderr)
-
-        return fake
-
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        _make_ssh_fake(
-            4, 'aivm-symlink-warn: /link is a non-empty directory; skipping'
-        ),
-    )
-    _ensure_guest_symlink(
-        cfg, '10.0.0.1', symlink_path='/link', target_path='/tgt'
-    )
-    assert any('non-empty directory' in m for m in messages)
-
-
-def test_ensure_guest_symlink_warns_on_regular_file(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-warn-file'
-    cfg.vm.user = 'agent'
-    cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
-    messages = capture_logs(
-        monkeypatch, 'aivm.attachments.guest.log', levels=('warning',)
-    )
-
-    def _make_ssh_fake(exit_code: int, stderr: str = '') -> Any:
-        def fake(cmd: list[str], **kwargs: Any) -> FakeProc:
-            return FakeProc(exit_code, '', stderr)
-
-        return fake
-
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        _make_ssh_fake(
-            5, 'aivm-symlink-warn: /link is a regular file; skipping'
-        ),
-    )
-    _ensure_guest_symlink(
-        cfg, '10.0.0.1', symlink_path='/link', target_path='/tgt'
-    )
-    assert any('regular file' in m for m in messages)
+    if expected_substr is None:
+        assert not messages
+    else:
+        assert any(expected_substr in m for m in messages)
 
 
 def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
@@ -456,7 +377,7 @@ def test_ensure_attachment_no_mirror_when_disabled(
 
 
 def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
     """_ensure_guest_git_repo script includes sudo mkdir for parent dirs."""
     from aivm.attachments.guest import _ensure_guest_git_repo
@@ -465,15 +386,6 @@ def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
     cfg.vm.name = 'vm-git-exact'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id'
-
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: p or '/tmp/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args',
-        lambda *a, **k: ['-i', '/tmp/id'],
-    )
 
     cmds: list[list[str]] = []
     monkeypatch.setattr(
@@ -496,20 +408,13 @@ def test_ensure_guest_git_repo_uses_sudo_for_parent_creation(
 
 
 def test_ensure_guest_symlink_uses_sudo_for_ln(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
     """symlink creation and dir removal must use sudo -n so non-writable parents work."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-sudo-ln'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
 
     scripts: list[str] = []
     monkeypatch.setattr(
@@ -534,7 +439,7 @@ def test_ensure_guest_symlink_uses_sudo_for_ln(
 
 
 def test_ensure_guest_git_repo_uses_sudo_mkdir_for_full_path(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
     """Exact-path git repo creation must sudo-mkdir the full root, not just the parent."""
     from aivm.attachments.guest import _ensure_guest_git_repo
@@ -543,13 +448,6 @@ def test_ensure_guest_git_repo_uses_sudo_mkdir_for_full_path(
     cfg.vm.name = 'vm-git-sudo'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
 
     scripts: list[str] = []
     monkeypatch.setattr(
@@ -571,8 +469,7 @@ def test_ensure_guest_git_repo_uses_sudo_mkdir_for_full_path(
 
 
 def test_ensure_guest_git_repo_allows_existing_dirty_tree(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
 ) -> None:
     from aivm.attachments.guest import _ensure_guest_git_repo
 
@@ -580,13 +477,6 @@ def test_ensure_guest_git_repo_allows_existing_dirty_tree(
     cfg.vm.name = 'vm-git-dirty-guest'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = ''
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
 
     scripts: list[str] = []
     monkeypatch.setattr(
@@ -605,6 +495,7 @@ def test_ensure_guest_git_repo_allows_existing_dirty_tree(
 def test_ensure_git_clone_attachment_skips_push_and_dirty_warning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    guest_ssh_env: None,
 ) -> None:
     from aivm.attachments.guest import _ensure_git_clone_attachment
 
@@ -646,13 +537,6 @@ def test_ensure_git_clone_attachment_skips_push_and_dirty_warning(
         tag='',
     )
 
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.guest.require_ssh_identity', lambda p: '/tmp/id'
-    )
-    monkeypatch.setattr(
-        'aivm.attachments.guest.ssh_base_args', lambda *a, **k: []
-    )
     monkeypatch.setattr(
         'aivm.attachments.guest._upsert_ssh_config_entry',
         lambda *a, **k: (tmp_path / 'ssh-config', False),
@@ -935,7 +819,9 @@ def test_apply_guest_derived_symlinks_multi_aliases(
 
 
 def test_apply_guest_derived_symlinks_warns_on_stale_alias(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Stale alias (resolves elsewhere now) still creates symlink but warns."""
     cfg = AgentVMConfig()

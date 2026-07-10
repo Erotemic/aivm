@@ -1,4 +1,4 @@
-"""Tests for test firewall."""
+"""Tests for ``aivm.firewall`` nftables script generation and application."""
 
 from __future__ import annotations
 

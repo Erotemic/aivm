@@ -597,24 +597,13 @@ pytest -q
 
 ---
 
-### Task 8 (optional) — Split `tests/test_vm_helpers.py` ⏸ DEFERRED
+### Task 8 (optional) — Split `tests/test_vm_helpers.py` ✅ DONE
 
-**Decision recorded (2026-05-21):** Not done in this refactor pass. After the §7 test-sprawl pruning, `tests/test_vm_helpers.py` is down to 1664 L / 41 tests / 139 patches. Still the biggest test file but no longer a stop-the-presses problem. Revisit when the next source-side change in `aivm/vm/` would otherwise force a giant test-file diff.
+**Decision recorded (2026-05-21):** Deferred. After the §7 test-sprawl pruning, `tests/test_vm_helpers.py` was down to 1664 L / 41 tests / 139 patches. Still the biggest test file but no longer a stop-the-presses problem.
 
-**Goal:** Break `tests/test_vm_helpers.py` (1969 L) into focused test modules so future moves of source code don't require editing one giant file.
+**Done (2026-07-10):** Split as part of the test-sprawl pass. The file is gone; its 46 cases now live in seven modules named for the `aivm/vm/` module each covers: `test_vm_connectivity.py`, `test_vm_share.py`, `test_vm_create.py`, `test_vm_cloudinit.py`, `test_vm_images.py`, `test_vm_domain.py`, `test_vm_host_access.py`.
 
-**Why it helps:** Test-file size doesn't directly affect users, but it does affect every refactor PR's diff size and reviewer fatigue.
-
-**Suggested split:**
-
-- `tests/test_vm_share_helpers.py` — tests targeting `aivm/vm/share.py` helpers.
-- `tests/test_vm_lifecycle_helpers.py` — tests targeting `aivm/vm/lifecycle.py`.
-- `tests/test_vm_drift_helpers.py` — tests targeting `aivm/vm/drift.py` (if any here, otherwise leave with `test_vm_drift.py`).
-
-**Steps:**
-1. Group tests in `test_vm_helpers.py` by what they exercise.
-2. Move each group into a new file.
-3. Run `pytest -q tests/` to confirm coverage is unchanged.
+Note the split follows the *real* source layout, not the one this plan guessed at: `shutdown_vm`/`restart_vm` live in `aivm/vm/domain.py` and `create_or_start_vm` in `aivm/vm/create.py` — `lifecycle.py` holds only `detect_host_timezone`, already covered by `test_timezone_detect.py`. So there is no `test_vm_lifecycle_helpers.py`.
 
 **Validation:**
 
@@ -802,11 +791,11 @@ Triggered by Task 5: the persistent split was blocked by ~50 monkeypatches in `t
 
 These three would meaningfully reduce remaining test brittleness but they're not easy wins:
 
-1. **Build a `RecordingCommandManager` fixture** that captures `mgr.submit`/`mgr.run` calls instead of patching individual helpers. Would remove ~50–80 patches across `test_attachment_session.py`, `test_cli_vm_create.py`, and `test_attachment_guest.py`. Substantial test-infra work.
+1. ✅ **Build a `RecordingCommandManager` fixture** that captures `mgr.submit`/`mgr.run` calls instead of patching individual helpers. Landed as `tests.helpers.command_recorder` / `CommandRecorder` (over `subprocess.run`) plus `patch_ns` for the namespace-stub runs.
 
-2. **Reshape behavioral tests to assert on observable artifacts** (config-store contents, files written, intent log) rather than function-call shapes. Per-test redesign; cannot be mechanical.
+2. **Reshape behavioral tests to assert on observable artifacts** (config-store contents, files written, intent log) rather than function-call shapes. Per-test redesign; cannot be mechanical. Still open.
 
-3. **Task 8** — split `tests/test_vm_helpers.py` (1664 L) into focused modules. Pure file move, deferred above.
+3. ✅ **Task 8** — split `tests/test_vm_helpers.py` into focused modules.
 
 ### Patches/test ratios after this pass
 

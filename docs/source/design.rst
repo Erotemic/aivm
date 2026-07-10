@@ -350,7 +350,7 @@ should be evolved in these areas:
 * ``aivm/status.py``:
   status reporting should eventually reflect both named-path cache and any
   content-addressable fallback resolution.
-* E2E/shared cache helpers in ``tests/test_e2e_nested.py``:
+* E2E/shared cache helpers in ``tests/e2e/_helpers.py``:
   keep local cache path/version conventions aligned with digest-addressable
   behavior once implemented in runtime code.
 * Folder sharing backend flexibility:

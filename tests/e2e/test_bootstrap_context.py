@@ -5,8 +5,10 @@ This test validates a two-level flow:
 1) current host context creates a fresh outer VM
 2) inside that outer VM, a small set of documented user workflows are run
 
-It is intentionally opt-in because runtime is long and environment requirements
-are strict.
+It is intentionally opt-in because runtime is long and environment
+requirements are strict.  Shared scaffolding is imported from
+:mod:`tests.e2e._helpers`; the streaming remote-script runner below is
+unique to this suite.
 """
 
 from __future__ import annotations
@@ -14,24 +16,22 @@ from __future__ import annotations
 import os
 import subprocess
 import textwrap
-import uuid
 from pathlib import Path
 
 import pytest
 
-from aivm.config import AgentVMConfig
-from aivm.config_store import Store, save_store, upsert_vm
-from tests.test_e2e_nested import (
+from tests.e2e._helpers import (
+    REPO_ROOT,
+    _bootstrap_context_enabled,
     _make_temp_ssh_material,
     _run_cli,
+    e2e_teardown,
+    make_e2e_config,
+    require_passwordless_sudo,
+    save_e2e_store,
 )
 
 pytestmark = pytest.mark.e2e
-
-
-def _bootstrap_context_enabled() -> bool:
-    raw = os.getenv('AIVM_E2E_BOOTSTRAP', '0')
-    return str(raw).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def _run_remote_script(
@@ -132,21 +132,12 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         [f'--verbose={cli_verbosity}'] if cli_verbosity > 0 else []
     )
 
-    sudo_probe = subprocess.run(
-        ['sudo', '-n', 'true'], check=False, capture_output=True, text=True
-    )
-    if sudo_probe.returncode != 0:
-        detail = (sudo_probe.stderr or sudo_probe.stdout or '').strip()
-        raise AssertionError(
-            'Bootstrap e2e requires passwordless sudo (`sudo -n true` failed).'
-            + (f'\n--- sudo output ---\n{detail}\n' if detail else '')
-        )
+    require_passwordless_sudo()
 
-    repo_root = Path(__file__).resolve().parent.parent
     timeout_s = int(os.getenv('AIVM_E2E_TIMEOUT', '3600'))
     doctor = _run_cli(
         ['host', 'doctor', *cli_verbosity_args, '--sudo'],
-        cwd=repo_root,
+        cwd=REPO_ROOT,
         timeout_s=timeout_s,
         env=env,
         check=False,
@@ -161,30 +152,21 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         )
 
     cfg_path = tmp_path / 'e2e-bootstrap.toml'
-    suffix = uuid.uuid4().hex[:6]
-    subnet_octet = 100 + (int(suffix[:2], 16) % 100)
-    cfg = AgentVMConfig()
     # Keep outer bootstrap VM/network isolated from host-context e2e fixtures.
-    cfg.vm.name = f'aivm-e2e-bootstrap-{suffix}'
-    cfg.vm.cpus = 2
-    cfg.vm.ram_mb = 4096
-    cfg.vm.disk_gb = 24
-    cfg.network.name = f'aivm-e2e-boot-net-{suffix}'
-    cfg.network.bridge = f'vbrb{suffix[:4]}'
-    cfg.network.subnet_cidr = f'10.251.{subnet_octet}.0/24'
-    cfg.network.gateway_ip = f'10.251.{subnet_octet}.1'
-    cfg.network.dhcp_start = f'10.251.{subnet_octet}.100'
-    cfg.network.dhcp_end = f'10.251.{subnet_octet}.200'
-    cfg.firewall.enabled = False
-    cfg.provision.enabled = False
-    cfg.paths.base_dir = '/var/lib/libvirt/aivm-e2e-bootstrap'
-    cfg.paths.state_dir = str(tmp_path / 'state')
-    cfg.paths.ssh_identity_file = str(priv)
-    cfg.paths.ssh_pubkey_path = str(pub)
-
-    store = Store()
-    upsert_vm(store, cfg)
-    save_store(store, cfg_path)
+    cfg = make_e2e_config(
+        tmp_path,
+        priv=priv,
+        pub=pub,
+        name_prefix='aivm-e2e-bootstrap',
+        net_prefix='aivm-e2e-boot-net',
+        bridge_prefix='vbrb',
+        subnet_base='10.251',
+        cpus=2,
+        ram_mb=4096,
+        disk_gb=24,
+        base_dir='/var/lib/libvirt/aivm-e2e-bootstrap',
+    )
+    save_e2e_store(cfg_path, cfg)
 
     guest_repo_path = '/workspace/aivm'
     inner_timeout_s = int(os.getenv('AIVM_E2E_BOOTSTRAP_TIMEOUT', '7200'))
@@ -268,7 +250,12 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
         """
     )
 
-    try:
+    with e2e_teardown(
+        cfg_path,
+        env=env,
+        timeout_s=timeout_s,
+        extra_args=cli_verbosity_args,
+    ):
         # Bring up the first-layer guest, mount the repo, then exercise the
         # documented nested bootstrap workflow inside it.
         _run_cli(
@@ -281,7 +268,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -294,7 +281,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -307,7 +294,7 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -317,14 +304,14 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
                 'vm',
                 'attach',
                 *cli_verbosity_args,
-                str(repo_root),
+                str(REPO_ROOT),
                 '--guest_dst',
                 guest_repo_path,
                 '--yes',
                 '--config',
                 str(cfg_path),
             ],
-            cwd=repo_root,
+            cwd=REPO_ROOT,
             timeout_s=timeout_s,
             env=env,
         )
@@ -335,34 +322,4 @@ def test_e2e_bootstrap_context(tmp_path: Path) -> None:
             env=env,
             timeout_s=inner_timeout_s,
             script=remote_script,
-        )
-    finally:
-        _run_cli(
-            [
-                'vm',
-                'delete',
-                *cli_verbosity_args,
-                '--yes',
-                '--config',
-                str(cfg_path),
-            ],
-            cwd=repo_root,
-            timeout_s=timeout_s,
-            env=env,
-            check=False,
-        )
-        _run_cli(
-            [
-                'host',
-                'net',
-                'destroy',
-                *cli_verbosity_args,
-                '--yes',
-                '--config',
-                str(cfg_path),
-            ],
-            cwd=repo_root,
-            timeout_s=timeout_s,
-            env=env,
-            check=False,
         )

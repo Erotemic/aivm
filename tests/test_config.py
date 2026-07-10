@@ -1,4 +1,4 @@
-"""Tests for test config."""
+"""Tests for the ``aivm.config`` model: load/save, TOML dump, and defaults."""
 
 from __future__ import annotations
 

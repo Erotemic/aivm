@@ -28,151 +28,158 @@ def _clear_safety_cache() -> Any:
     _reset_sensitive_approval_cache()
 
 
-def test_detect_sensitive_paths_flags_home_directly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def _resolve_spec(home: Path, tmp: Path, spec: str) -> Path:
+    """Resolve a param spec to a path: ``.``=home, ``TMP/x``=tmp/x, else home/x."""
+    if spec == '.':
+        return home
+    if spec.startswith('TMP/'):
+        return tmp / spec[len('TMP/') :]
+    return home / spec
+
+
+@pytest.mark.parametrize(
+    ('make_dirs', 'target', 'expected'),
+    [
+        pytest.param(
+            ['.'], '.', [('is', 'home directory')], id='flags_home_directly'
+        ),
+        pytest.param(
+            ['.ssh/keys'],
+            '.ssh/keys',
+            [(None, '~/.ssh')],
+            id='flags_subdir_of_ssh',
+        ),
+        pytest.param(
+            ['.aws'],
+            '.',
+            # Both home itself and the .aws subdir should be reported.
+            [(None, 'home directory'), (None, '~/.aws')],
+            id='flags_parent_that_contains_aws',
+        ),
+        pytest.param(
+            ['.', 'TMP/projects/demo'],
+            'TMP/projects/demo',
+            [],
+            id='ignores_unrelated_directory',
+        ),
+        # A normal project directory inside ``~`` (e.g. ``~/code/foo``) must
+        # NOT trip the home-directory guard. Only credential subdirs
+        # (``~/.ssh`` etc.) should flag, and the home directory only when
+        # attached *as* home or as a parent of home.
+        pytest.param(
+            ['code/myproject'],
+            'code/myproject',
+            [],
+            id='does_not_flag_plain_subdir_of_home',
+        ),
+    ],
+)
+def test_detect_sensitive_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    make_dirs: list[str],
+    target: str,
+    expected: list[tuple[str | None, str]],
 ) -> None:
     fake_home = tmp_path / 'home' / 'agent'
-    fake_home.mkdir(parents=True)
+    for spec in make_dirs:
+        _resolve_spec(fake_home, tmp_path, spec).mkdir(
+            parents=True, exist_ok=True
+        )
     monkeypatch.setenv('HOME', str(fake_home))
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
 
-    hits = detect_sensitive_paths(fake_home)
+    hits = detect_sensitive_paths(_resolve_spec(fake_home, tmp_path, target))
 
-    assert any(
-        hit.relation == 'is' and hit.label == 'home directory' for hit in hits
+    if not expected:
+        assert hits == []
+        return
+    labels = {hit.label for hit in hits}
+    for relation, label in expected:
+        if relation is None:
+            assert label in labels
+        else:
+            assert any(
+                h.relation == relation and h.label == label for h in hits
+            )
+
+
+@pytest.mark.parametrize(
+    (
+        'existing_host',
+        'existing_vm',
+        'existing_guest_dst',
+        'target',
+        'expected',
+    ),
+    [
+        pytest.param(
+            'parent',
+            'vm-a',
+            '/mnt/work',
+            'child',
+            ('child-of', 'parent'),
+            id='finds_child',
+        ),
+        pytest.param(
+            'child',
+            'vm-a',
+            '/mnt/subproj',
+            'parent',
+            ('parent-of', 'child'),
+            id='finds_parent',
+        ),
+        pytest.param(
+            'parent',
+            'other-vm',
+            None,
+            'child',
+            None,
+            id='ignores_other_vms',
+        ),
+        pytest.param(
+            'parent',
+            'vm-a',
+            None,
+            'parent',
+            None,
+            id='ignores_exact_match',
+        ),
+    ],
+)
+def test_detect_overlapping_attachments(
+    tmp_path: Path,
+    existing_host: str,
+    existing_vm: str,
+    existing_guest_dst: str | None,
+    target: str,
+    expected: tuple[str, str] | None,
+) -> None:
+    parent = tmp_path / 'work'
+    child = parent / 'subproj'
+    parent.mkdir()
+    child.mkdir()
+    paths = {'parent': parent, 'child': child}
+
+    entry_kwargs: dict[str, Any] = {
+        'host_path': str(paths[existing_host]),
+        'vm_name': existing_vm,
+    }
+    if existing_guest_dst is not None:
+        entry_kwargs['guest_dst'] = existing_guest_dst
+    existing = [AttachmentEntry(**entry_kwargs)]
+
+    hits = detect_overlapping_attachments(
+        paths[target], existing, vm_name='vm-a'
     )
 
-
-def test_detect_sensitive_paths_flags_subdir_of_ssh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_home = tmp_path / 'home' / 'agent'
-    ssh_dir = fake_home / '.ssh'
-    ssh_dir.mkdir(parents=True)
-    monkeypatch.setenv('HOME', str(fake_home))
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
-
-    sub = ssh_dir / 'keys'
-    sub.mkdir()
-
-    hits = detect_sensitive_paths(sub)
-    labels = {hit.label for hit in hits}
-
-    assert '~/.ssh' in labels
-
-
-def test_detect_sensitive_paths_flags_parent_that_contains_aws(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_home = tmp_path / 'home' / 'agent'
-    aws_dir = fake_home / '.aws'
-    aws_dir.mkdir(parents=True)
-    monkeypatch.setenv('HOME', str(fake_home))
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
-
-    hits = detect_sensitive_paths(fake_home)
-    labels = {hit.label for hit in hits}
-
-    # Both home itself and the .aws subdir should be reported.
-    assert 'home directory' in labels
-    assert '~/.aws' in labels
-
-
-def test_detect_sensitive_paths_ignores_unrelated_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fake_home = tmp_path / 'home' / 'agent'
-    fake_home.mkdir(parents=True)
-    monkeypatch.setenv('HOME', str(fake_home))
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
-
-    unrelated = tmp_path / 'projects' / 'demo'
-    unrelated.mkdir(parents=True)
-
-    assert detect_sensitive_paths(unrelated) == []
-
-
-def test_detect_sensitive_paths_does_not_flag_plain_subdir_of_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A normal project directory inside ``~`` (e.g. ``~/code/foo``) must NOT
-    trip the home-directory guard. Only credential subdirs (``~/.ssh`` etc.)
-    should flag, and the home directory only when attached *as* home or as a
-    parent of home.
-    """
-    fake_home = tmp_path / 'home' / 'agent'
-    project = fake_home / 'code' / 'myproject'
-    project.mkdir(parents=True)
-    monkeypatch.setenv('HOME', str(fake_home))
-    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
-
-    assert detect_sensitive_paths(project) == []
-
-
-def test_detect_overlapping_attachments_finds_child(tmp_path: Path) -> None:
-    parent = tmp_path / 'work'
-    child = parent / 'subproj'
-    parent.mkdir()
-    child.mkdir()
-
-    existing = [
-        AttachmentEntry(
-            host_path=str(parent),
-            vm_name='vm-a',
-            guest_dst='/mnt/work',
-        )
-    ]
-
-    hits = detect_overlapping_attachments(child, existing, vm_name='vm-a')
-
+    if expected is None:
+        assert hits == []
+        return
+    relation, other = expected
     assert len(hits) == 1
-    assert hits[0].relation == 'child-of'
-    assert hits[0].other_path == parent
-
-
-def test_detect_overlapping_attachments_finds_parent(tmp_path: Path) -> None:
-    parent = tmp_path / 'work'
-    child = parent / 'subproj'
-    parent.mkdir()
-    child.mkdir()
-
-    existing = [
-        AttachmentEntry(
-            host_path=str(child),
-            vm_name='vm-a',
-            guest_dst='/mnt/subproj',
-        )
-    ]
-
-    hits = detect_overlapping_attachments(parent, existing, vm_name='vm-a')
-
-    assert len(hits) == 1
-    assert hits[0].relation == 'parent-of'
-    assert hits[0].other_path == child
-
-
-def test_detect_overlapping_ignores_other_vms(tmp_path: Path) -> None:
-    parent = tmp_path / 'work'
-    child = parent / 'sub'
-    parent.mkdir()
-    child.mkdir()
-
-    existing = [
-        AttachmentEntry(host_path=str(parent), vm_name='other-vm'),
-    ]
-
-    assert detect_overlapping_attachments(child, existing, vm_name='vm-a') == []
-
-
-def test_detect_overlapping_ignores_exact_match(tmp_path: Path) -> None:
-    folder = tmp_path / 'work'
-    folder.mkdir()
-
-    existing = [
-        AttachmentEntry(host_path=str(folder), vm_name='vm-a'),
-    ]
-
-    assert detect_overlapping_attachments(folder, existing, vm_name='vm-a') == []
+    assert hits[0].relation == relation
+    assert hits[0].other_path == paths[other]
 
 
 def test_confirm_sensitive_attach_yes_flag_bypasses(tmp_path: Path) -> None:
@@ -183,9 +190,7 @@ def test_confirm_sensitive_attach_yes_flag_bypasses(tmp_path: Path) -> None:
             label='~/.ssh',
         )
     ]
-    assert (
-        confirm_sensitive_attach(tmp_path, hits, yes=True) is True
-    )
+    assert confirm_sensitive_attach(tmp_path, hits, yes=True) is True
 
 
 def test_confirm_sensitive_attach_no_hits_passes(tmp_path: Path) -> None:
@@ -208,9 +213,7 @@ def test_confirm_sensitive_attach_rejects_when_non_tty(
             label='~/.ssh',
         )
     ]
-    assert (
-        confirm_sensitive_attach(tmp_path, hits, yes=False) is False
-    )
+    assert confirm_sensitive_attach(tmp_path, hits, yes=False) is False
 
 
 def test_confirm_sensitive_attach_requires_exact_yes(
@@ -230,13 +233,9 @@ def test_confirm_sensitive_attach_requires_exact_yes(
         )
     ]
     monkeypatch.setattr('builtins.input', lambda *_a, **_k: 'y')
-    assert (
-        confirm_sensitive_attach(tmp_path, hits, yes=False) is False
-    )
+    assert confirm_sensitive_attach(tmp_path, hits, yes=False) is False
     monkeypatch.setattr('builtins.input', lambda *_a, **_k: 'yes')
-    assert (
-        confirm_sensitive_attach(tmp_path, hits, yes=False) is True
-    )
+    assert confirm_sensitive_attach(tmp_path, hits, yes=False) is True
 
 
 def test_confirm_overlap_off_ramp_default_no(
