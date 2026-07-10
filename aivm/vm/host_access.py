@@ -52,30 +52,58 @@ def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
         '(`aivm host sudoless setup`).'
     )
 
+# The privileged probe reports its answer on stdout because the exit status
+# cannot carry one: `test -e` exits 1 for "absent", and `sudo` also exits 1
+# when authentication fails or the sudoers policy refuses the command. Only a
+# shell that actually ran `test` can print a sentinel, so stdout separates
+# "the probe answered" from "the probe never ran".
+_PROBE_PRESENT = 'AIVM_PROBE_PRESENT'
+_PROBE_ABSENT = 'AIVM_PROBE_ABSENT'
+
+def _existence_probe_argv(path: Path, *, want_file: bool) -> list[str]:
+    """Build the privileged existence probe command for ``path``.
+
+    ``path`` is passed as a shell positional rather than interpolated into the
+    script, so a path containing quotes or spaces cannot alter the test.
+    """
+    flag = '-f' if want_file else '-e'
+    script = (
+        f'if test {flag} "$1"; then printf %s {_PROBE_PRESENT}; '
+        f'else printf %s {_PROBE_ABSENT}; fi'
+    )
+    return ['sh', '-c', script, 'sh', str(path)]
+
+def _sudo_existence_probe(path: Path, *, want_file: bool) -> bool | None:
+    """Answer an existence check with sudo, or None if sudo could not answer."""
+    res = CommandManager.current().run(
+        _existence_probe_argv(path, want_file=want_file),
+        sudo=True,
+        role='read',
+        check=False,
+        capture=True,
+    )
+    answer = (res.stdout or '').strip()
+    if answer == _PROBE_PRESENT:
+        return True
+    if answer == _PROBE_ABSENT:
+        return False
+    return None
+
 def _sudo_path_exists(path: Path) -> bool | None:
     """Return whether ``path`` exists, or None when that cannot be determined.
 
     The privileged probe only runs when an unprivileged stat cannot answer
-    (for example under a root-only image directory). When it cannot answer
-    and sudo is forbidden, the result is None -- *unknown*, which is not the
-    same as absent. Callers must not read None as a green light to create.
+    (for example under a root-only image directory). When neither can answer
+    -- sudo is forbidden, refused, or failed -- the result is None, *unknown*,
+    which is not the same as absent. Callers must not read None as a green
+    light to create.
     """
     local = _local_stat_answer(path, want_file=False)
     if local is not None:
         return local
     if not sudo_allowed():
         return None
-    mgr = CommandManager.current()
-    return (
-        mgr.run(
-            ['test', '-e', str(path)],
-            sudo=True,
-            role='read',
-            check=False,
-            capture=True,
-        ).code
-        == 0
-    )
+    return _sudo_existence_probe(path, want_file=False)
 
 def _sudo_file_exists(path: Path) -> bool | None:
     """Return whether ``path`` is a regular file, or None when undeterminable.
@@ -87,17 +115,7 @@ def _sudo_file_exists(path: Path) -> bool | None:
         return local
     if not sudo_allowed():
         return None
-    mgr = CommandManager.current()
-    return (
-        mgr.run(
-            ['test', '-f', str(path)],
-            sudo=True,
-            role='read',
-            check=False,
-            capture=True,
-        ).code
-        == 0
-    )
+    return _sudo_existence_probe(path, want_file=True)
 
 def _submit_qemu_dir_prepare(
     mgr: CommandManager,

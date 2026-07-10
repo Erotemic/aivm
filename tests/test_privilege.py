@@ -201,6 +201,119 @@ def test_existence_probe_distinguishes_absent_from_unknown(
         locked.chmod(0o700)
 
 
+def test_escalated_existence_probe_reports_unknown_when_sudo_is_denied(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A refused `sudo` must not be read as "the path is absent".
+
+    `test -e` exits 1 for absent, and `sudo` also exits 1 when the sudoers
+    policy does not permit the command. Deriving the answer from the exit code
+    alone conflates the two, and the callers turn "absent" into `qemu-img
+    create` (truncating a live qcow2) or a re-download and `mv -f` over the
+    image cache.
+
+    The user here can authenticate -- `sudo -n true` and `sudo -n -v` succeed
+    -- but sudoers only whitelists specific commands, so `test` is refused.
+    That is the shape a restricted NOPASSWD sudoers file produces.
+    """
+    from aivm.vm.host_access import _sudo_file_exists, _sudo_path_exists
+
+    if os.geteuid() == 0:
+        pytest.skip('root can stat through any directory')
+    _activate('as-needed', yes=True)
+
+    # Locally undeterminable (EACCES), so the privileged probe is what answers.
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    hidden = locked / 'disk.qcow2'
+    hidden.write_bytes(b'')
+    locked.chmod(0o000)
+
+    refused: list[list[str]] = []
+
+    def sudo_policy_denies(cmd: list[str], **kwargs: Any) -> FakeProc:
+        assert cmd[0] == 'sudo'
+        if cmd[-1] in {'true', '-v'}:  # `sudo -n true` / `sudo -n -v`
+            return FakeProc(0, '', '')
+        refused.append(list(cmd))
+        return FakeProc(
+            1, '', 'Sorry, user agent is not allowed to execute ...'
+        )
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', sudo_policy_denies)
+    try:
+        assert _sudo_path_exists(hidden) is None
+        assert _sudo_file_exists(hidden) is None
+    finally:
+        locked.chmod(0o700)
+    assert refused, 'the privileged probe never ran'
+
+
+def test_escalated_existence_probe_parses_its_stdout_sentinels(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """The privileged probe's answer comes from stdout, not the exit code."""
+    from aivm.vm.host_access import (
+        _PROBE_ABSENT,
+        _PROBE_PRESENT,
+        _sudo_path_exists,
+    )
+
+    if os.geteuid() == 0:
+        pytest.skip('root can stat through any directory')
+    _activate('as-needed', yes=True)
+
+    locked = tmp_path / 'locked'
+    locked.mkdir()
+    hidden = locked / 'disk.qcow2'
+    locked.chmod(0o000)
+
+    cases: list[tuple[FakeProc, bool | None]] = [
+        (FakeProc(0, _PROBE_PRESENT, ''), True),
+        (FakeProc(0, _PROBE_ABSENT, ''), False),
+        (FakeProc(1, '', 'sudo: a password is required'), None),
+        (FakeProc(0, 'unexpected chatter', ''), None),
+    ]
+    try:
+        for proc, expected in cases:
+            monkeypatch.setattr(
+                'aivm.commands.subprocess.run',
+                lambda cmd, pinned=proc, **kwargs: pinned,
+            )
+            assert _sudo_path_exists(hidden) is expected
+    finally:
+        locked.chmod(0o700)
+
+
+def test_existence_probe_argv_emits_sentinels_for_real(tmp_path: Path) -> None:
+    """The shell snippet the probe escalates really does print the sentinels."""
+    import subprocess
+
+    from aivm.vm.host_access import (
+        _PROBE_ABSENT,
+        _PROBE_PRESENT,
+        _existence_probe_argv,
+    )
+
+    present = tmp_path / 'here.qcow2'
+    present.write_bytes(b'')
+    absent = tmp_path / 'gone.qcow2'
+
+    def probe(path: Path, *, want_file: bool) -> str:
+        argv = _existence_probe_argv(path, want_file=want_file)
+        return subprocess.run(
+            argv, capture_output=True, text=True, check=False
+        ).stdout
+
+    assert probe(present, want_file=True) == _PROBE_PRESENT
+    assert probe(present, want_file=False) == _PROBE_PRESENT
+    assert probe(absent, want_file=True) == _PROBE_ABSENT
+    assert probe(absent, want_file=False) == _PROBE_ABSENT
+    # A directory exists but is not a regular file.
+    assert probe(tmp_path, want_file=False) == _PROBE_PRESENT
+    assert probe(tmp_path, want_file=True) == _PROBE_ABSENT
+
+
 def test_ensure_disk_refuses_to_create_over_unknown_state(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
