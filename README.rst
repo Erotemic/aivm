@@ -117,6 +117,12 @@ appear at higher verbosity.
 If you prefer an explicit flow, ``aivm config init`` is required before
 ``aivm vm create``.
 
+Interactive ``aivm config init`` shows the detected defaults once, then lets
+you accept them, edit the generated TOML in ``$EDITOR``/``$VISUAL`` (falling
+back to ``nano`` or ``micro``), or use a prompt-by-prompt editor.  Subsequent
+confirmation steps show only changed values instead of repeating the full
+defaults table.
+
 See also:
 
 * `Design Contract <docs/source/design.rst>`_

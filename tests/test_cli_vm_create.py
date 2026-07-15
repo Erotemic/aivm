@@ -38,27 +38,83 @@ def test_vm_create_interactive_edit_updates_password_login(
 
     cfg = AgentVMConfig()
     cfg.vm.allow_password_login = False
-    answers = iter([
-        'e',  # edit values
-        '',  # vm.name
-        '',  # vm.user
-        '',  # vm.cpus
-        '',  # vm.ram_mb
-        '',  # vm.disk_gb
-        'y',  # vm.allow_password_login
-        'debug-pass',  # vm.password
-        '',  # network.name
-        '',  # network.subnet_cidr
-        '',  # network.gateway_ip
-        '',  # network.dhcp_start
-        '',  # network.dhcp_end
-        'y',  # confirm
-    ])
+    answers = iter(
+        [
+            'e',  # edit values
+            '',  # vm.name
+            '',  # vm.user
+            '',  # vm.cpus
+            '',  # vm.ram_mb
+            '',  # vm.disk_gb
+            'y',  # vm.allow_password_login
+            '',  # network.name
+            '',  # network.subnet_cidr
+            '',  # network.gateway_ip
+            '',  # network.dhcp_start
+            '',  # network.dhcp_end
+            'y',  # confirm
+        ]
+    )
     monkeypatch.setattr('aivm.vm.create_ops.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.getpass.getpass', lambda _: 'debug-pass'
+    )
     out = _review_vm_create_overrides_interactive(cfg, tmp_path / 'config.toml')
     assert out.vm.allow_password_login is True
     assert out.vm.password == 'debug-pass'
+
+
+def test_vm_create_reviewed_config_uses_concise_confirmation(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aivm.vm.create_ops import create_vm_from_defaults
+
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.vm.name = 'reviewed-vm'
+    save_store(store, cfg_path)
+
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.ensure_network', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.apply_firewall', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    )
+    prompts: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return ''
+
+    monkeypatch.setattr('builtins.input', fake_input)
+
+    rc = create_vm_from_defaults(
+        cfg_path,
+        yes=False,
+        configuration_reviewed=True,
+        set_default=True,
+    )
+
+    assert rc == 0
+    assert any('configuration reviewed above' in prompt for prompt in prompts)
+    assert 'Create VM from defaults' not in capsys.readouterr().out
 
 
 def test_vm_create_uses_defaults_and_adds_vm(
@@ -308,7 +364,6 @@ def test_vm_create_interactive_default_prompt_no_keeps_active(
     assert loaded.active_vm == 'current-default'
 
 
-
 def test_vm_delete_removes_vm_and_attachments(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -329,7 +384,9 @@ def test_vm_delete_removes_vm_and_attachments(
         'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None
+    )
     rc = VMDeleteCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     loaded = load_store(cfg_path)
@@ -352,7 +409,9 @@ def test_vm_delete_warns_when_network_becomes_unused(
         'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None)
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_lifecycle.log.warning',
         lambda *a, **k: warns.append((a, k)),
@@ -675,5 +734,7 @@ def test_vm_create_initial_persistent_share_uses_final_vm_name(
     assert created
     created_cfg, kwargs = created[0]
     assert created_cfg.vm.name == 'fresh-vm'
-    assert kwargs['share_source_dir'] == str(base_dir / 'fresh-vm' / 'persistent-root')
+    assert kwargs['share_source_dir'] == str(
+        base_dir / 'fresh-vm' / 'persistent-root'
+    )
     assert kwargs['share_tag'] == 'aivm-persistent-root'

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import shlex
 from pathlib import Path
 from typing import Any
 
 import kwconf
 
-from ...commands import CommandManager
 from ...config_store import (
     find_vm,
     load_config_document,
@@ -18,8 +15,8 @@ from ...config_store import (
 )
 from ...errors import AIVMError
 from ...services import cfg_path
-from ...util import which
 from .._common import _BaseCommand
+from .editor import edit_path, select_editor_command
 from .paths import _role_source, _vm_config_source
 
 
@@ -70,28 +67,19 @@ class ConfigEditCLI(_BaseCommand):
 
 def _editor_command(args: Any) -> list[str]:
     """Return the editor command prefix selected by CLI args/environment."""
-    order = ['VISUAL', 'EDITOR'] if args.visual else ['EDITOR', 'VISUAL']
-    candidates = [
-        str(args.editor or '').strip(),
-        *(os.environ.get(key, '') for key in order),
-    ]
-    editor_cmd = next((x for x in candidates if x), '')
-    if not editor_cmd:
-        editor_cmd = which('nano') or which('vi') or ''
-    if not editor_cmd:
-        raise AIVMError('No editor found. Set $EDITOR or pass --editor.')
-    return shlex.split(editor_cmd)
+    command = select_editor_command(
+        editor=str(args.editor or ''),
+        prefer_visual=bool(args.visual),
+        fallbacks=('nano', 'vi'),
+        required=True,
+    )
+    assert command is not None
+    return command
 
 
 def _edit_path(path: Path, args: Any) -> None:
     """Open a config path in the selected editor."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text('', encoding='utf-8')
-    parts = _editor_command(args) + [str(path)]
-    CommandManager.current().run(
-        parts, sudo=False, check=True, capture=False
-    )
+    edit_path(path, _editor_command(args))
 
 
 def _resolve_config_edit_target(

@@ -33,6 +33,9 @@ Path B: Explicit config-store setup
 
 This path is explicit and reproducible. ``aivm config init`` establishes VM
 defaults and SSH identity configuration; ``aivm vm create`` provisions the VM.
+During interactive init, choose the editor path for direct TOML editing or the
+prompt-by-prompt path for a terminal-only walkthrough.  The detected defaults
+table is shown once; later confirmations summarize only values that changed.
 
 After either path
 -----------------

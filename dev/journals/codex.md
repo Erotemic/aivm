@@ -2411,3 +2411,10 @@ What I am confident about: the change is limited to default-name generation,
 help/docs that expose examples, config-init/create summaries, and focused tests
 for hostname sanitization plus tunnel-name behavior. Cloud-init and SSH config
 already consume `cfg.vm.name`, so they naturally inherit the canonical name.
+
+## 2026-07-15 15:35:00 -0400
+I focused on the fresh-bootstrap configuration review UX after a real remote-machine first run made the same defaults table appear repeatedly. The main design choice was to separate full review from change review: a configuration gets one complete table, while later edits produce a compact before/after summary. I added an explicit editor path and retained prompt-by-prompt editing so the workflow remains usable without editor familiarity or even an installed editor. Automatic editor fallback intentionally stops at nano/micro rather than silently dropping a user into vi; explicitly configured EDITOR/VISUAL values are still respected.
+
+I also extracted shared review presentation and editor-selection helpers instead of layering special cases into config init and VM creation. The composed `aivm ssh .` bootstrap now calls the config-init service seam directly and marks the persisted configuration as already reviewed, allowing VM creation to ask a concise confirmation without reprinting the table. Standalone `aivm vm create` keeps its full review. Password login remains enabled and stored exactly as before, but terminal entry is hidden with getpass.
+
+The largest risk is that this touches interactive transcript contracts across config init, VM create, and folder bootstrap. I added focused tests for editor editing, editor-unavailable fallback, invalid TOML recovery, hidden password entry, changed-value summaries, and concise reviewed-config confirmation. The targeted suite is green except for an unrelated root-only file-writability test that also failed on the untouched base when run as root; I will verify the broader suite as an unprivileged user before packaging the overlay.

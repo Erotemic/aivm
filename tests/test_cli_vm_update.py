@@ -87,9 +87,7 @@ def test_apply_vm_update_disk_resize_lock_error_is_graceful(
         disk_path='/var/lib/libvirt/aivm/vm/images/vm.qcow2',
     )
 
-    def fake_run(
-        self: object, cmd: list[str], **kwargs: Any
-    ) -> CmdResult:
+    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
         del kwargs
         if cmd[:2] == ['qemu-img', 'resize']:
             raise CommandError(
@@ -368,7 +366,9 @@ def test_vm_update_drift_escalates_for_disk_probe(
             return CmdResult(0, '{"virtual-size": 42949672960}', '')
         raise AssertionError(f'Unexpected cmd={cmd!r} sudo={sudo}')
 
-    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr(
+        'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
     drift, running = _vm_update_drift(cfg, yes=False)
     assert running is True
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -423,7 +423,9 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
             return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
         raise AssertionError(f'Unexpected command: {cmd!r}')
 
-    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr(
+        'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
     assert any('falling back to virsh domblkinfo' in n for n in drift.notes)
@@ -455,7 +457,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
-        'aivm.cli.config.InitCLI.main',
+        'aivm.cli.config.init.initialize_config_defaults',
         lambda *a, **k: calls.append('config_init') or 0,
     )
 
@@ -570,13 +572,13 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.config.InitCLI.main', fake_init)
+    monkeypatch.setattr(
+        'aivm.cli.config.init.initialize_config_defaults', fake_init
+    )
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_connect.sys.stdin.isatty', lambda: True
-    )
+    monkeypatch.setattr('aivm.cli.vm_connect.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda prompt='': 'y')
     monkeypatch.setattr(
         'aivm.attachments.session._resolve_attachment',
@@ -641,11 +643,11 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert init_kwargs == [
         {
-            'argv': False,
-            'config': None,
+            'config_opt': str(cfg_path),
             'yes': False,
             'defaults': False,
             'force': False,
+            'standalone_guidance': False,
         }
     ]
     assert len(create_kwargs) == 1
@@ -655,6 +657,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert create_kwargs[0]['dry_run'] is False
     assert create_kwargs[0]['force'] is False
     assert create_kwargs[0]['vm_override'] is None
+    assert create_kwargs[0]['configuration_reviewed'] is True
     assert create_kwargs[0]['initial_attachment_host_src'] == host_src
 
 
@@ -690,7 +693,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         fake_resolve_cfg_for_code,
     )
     monkeypatch.setattr(
-        'aivm.cli.config.InitCLI.main',
+        'aivm.cli.config.init.initialize_config_defaults',
         lambda *a, **k: calls.append('config_init') or 0,
     )
 

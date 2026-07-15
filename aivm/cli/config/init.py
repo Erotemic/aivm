@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import getpass
 import sys
+import tempfile
+import tomllib
+from copy import deepcopy
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -10,14 +15,38 @@ import kwconf
 from loguru import logger
 
 from ...config import AgentVMConfig
-from ...config_store import load_store, save_store
+from ...config_review import (
+    ConfigReviewItem,
+    agent_vm_review_items,
+    print_config_changes,
+    print_config_review,
+    render_config_review,
+)
+from ...config_store import (
+    Store,
+    load_store,
+    parse_store_toml,
+    render_store_defaults_toml,
+    save_store,
+)
 from ...detect import auto_defaults
 from ...errors import AIVMError
 from ...resource_checks import vm_resource_warning_lines
 from ...services import cfg_path, maybe_offer_create_ssh_identity
 from .._common import _BaseCommand
+from .editor import edit_path, select_editor_command
 
 log = logger
+
+_EDITABLE_SECTIONS = (
+    'vm',
+    'network',
+    'firewall',
+    'image',
+    'provision',
+    'paths',
+    'virtiofs',
+)
 
 
 class InitCLI(_BaseCommand):
@@ -35,119 +64,92 @@ class InitCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = cfg_path(args.config)
-        reg = load_store(path)
-        cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
-        maybe_offer_create_ssh_identity(
-            cfg,
+        return initialize_config_defaults(
+            config_opt=args.config,
             yes=bool(args.yes),
-            prompt_reason=(
-                'Generate a dedicated SSH keypair so aivm can access and '
-                'provision VMs without reusing a generic personal key name.'
-            ),
+            defaults=bool(args.defaults),
+            force=bool(args.force),
+            standalone_guidance=True,
         )
-        if not bool(args.yes) and not bool(args.defaults):
-            cfg = _review_init_defaults_interactive(cfg, path)
-        else:
-            _warn_high_resource_defaults(cfg)
-            warn_lines = _ssh_key_setup_warning_lines(cfg)
-            for line in warn_lines:
-                print(line)
-        if reg.defaults is not None and not args.force:
-            print(
-                f'Config defaults already exist in store: {path}',
-                file=sys.stderr,
-            )
-            print('Use --force to overwrite defaults.', file=sys.stderr)
-            return 2
-        reg.defaults = cfg
-        save_store(reg, path)
-        print(f'Updated config defaults: {path}')
+
+
+def initialize_config_defaults(
+    *,
+    config_opt: str | None,
+    yes: bool,
+    defaults: bool,
+    force: bool,
+    standalone_guidance: bool,
+) -> int:
+    """Initialize defaults, with wording appropriate to the calling workflow."""
+    path = cfg_path(config_opt)
+    reg = load_store(path)
+    cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
+    maybe_offer_create_ssh_identity(
+        cfg,
+        yes=yes,
+        prompt_reason=(
+            'Generate a dedicated SSH keypair so aivm can access and '
+            'provision VMs without reusing a generic personal key name.'
+        ),
+    )
+    if not yes and not defaults:
+        cfg = _review_init_defaults_interactive(cfg, path)
+    else:
+        _show_init_advisories(cfg)
+    if reg.defaults is not None and not force:
+        print(
+            f'Config defaults already exist in store: {path}',
+            file=sys.stderr,
+        )
+        print('Use --force to overwrite defaults.', file=sys.stderr)
+        return 2
+    reg.defaults = cfg
+    save_store(reg, path)
+    print(f'Updated config defaults: {path}')
+    if standalone_guidance:
         print(
             'No VM created. Use `aivm vm create` to create one from defaults.'
         )
-        return 0
+    return 0
 
 
-def _format_bool(value: bool) -> str:
-    """Return a stable human-readable boolean for review prompts."""
-    return 'true' if bool(value) else 'false'
-
-
-def _format_secret(value: str) -> str:
-    """Avoid echoing configured passwords in review summaries."""
-    return '(configured)' if str(value or '') else '(empty)'
+def _init_review_items(
+    cfg: AgentVMConfig, path: Path
+) -> list[ConfigReviewItem]:
+    return agent_vm_review_items(
+        cfg,
+        path,
+        config_store_meaning='config destination',
+        vm_name_meaning='default VM name, guest hostname, and SSH alias',
+        include_ssh_paths=True,
+    )
 
 
 def _init_default_summary_rows(
     cfg: AgentVMConfig, path: Path
 ) -> list[tuple[str, str, str]]:
-    """Return rows for the config-init defaults review summary."""
-    password_note = (
-        'used for console/SSH password auth when vm.allow_password_login=true'
-    )
+    """Return legacy tuple rows for callers/tests that consume this helper."""
     return [
-        ('config_store', str(path), 'config destination'),
-        (
-            'vm.name',
-            cfg.vm.name,
-            'default VM name, guest hostname, and SSH alias',
-        ),
-        ('vm.user', cfg.vm.user, 'guest login user'),
-        ('vm.cpus', str(cfg.vm.cpus), 'virtual CPUs'),
-        ('vm.ram_mb', str(cfg.vm.ram_mb), 'RAM in MiB'),
-        ('vm.disk_gb', str(cfg.vm.disk_gb), 'root disk size'),
-        (
-            'vm.allow_password_login',
-            _format_bool(cfg.vm.allow_password_login),
-            'enables password login on console and SSH',
-        ),
-        ('vm.password', _format_secret(cfg.vm.password), password_note),
-        ('network.name', cfg.network.name, 'libvirt network'),
-        ('network.subnet_cidr', cfg.network.subnet_cidr, 'guest subnet'),
-        ('network.gateway_ip', cfg.network.gateway_ip, 'guest gateway'),
-        ('network.dhcp_start', cfg.network.dhcp_start, 'DHCP range start'),
-        ('network.dhcp_end', cfg.network.dhcp_end, 'DHCP range end'),
-        (
-            'paths.ssh_identity_file',
-            cfg.paths.ssh_identity_file or '(empty)',
-            'private key used by aivm',
-        ),
-        (
-            'paths.ssh_pubkey_path',
-            cfg.paths.ssh_pubkey_path or '(empty)',
-            'public key injected into the guest',
-        ),
+        (item.key, item.display, item.meaning)
+        for item in _init_review_items(cfg, path)
     ]
 
 
 def _render_init_default_summary(cfg: AgentVMConfig, path: Path) -> str:
     """Render a plain-text review summary before persisting defaults."""
-    lines = ['Detected defaults for `aivm config init`:']
-    for key, value, note in _init_default_summary_rows(cfg, path):
-        if note:
-            lines.append(f'  {key}: {value}  # {note}')
-        else:
-            lines.append(f'  {key}: {value}')
-    return '\n'.join(lines)
+    return render_config_review(
+        'Detected defaults for `aivm config init`',
+        _init_review_items(cfg, path),
+    )
 
 
 def _print_init_default_summary(cfg: AgentVMConfig, path: Path) -> None:
-    """Print the config-init review summary, using Rich when available."""
-    try:
-        from rich.console import Console
-        from rich.table import Table
-    except Exception:  # pragma: no cover - exercised only without rich
-        print(_render_init_default_summary(cfg, path))
-        return
-
-    table = Table(title='Detected defaults for `aivm config init`')
-    table.add_column('Setting', style='bold cyan', no_wrap=True)
-    table.add_column('Value', overflow='fold')
-    table.add_column('Meaning', style='dim', overflow='fold')
-    for key, value, note in _init_default_summary_rows(cfg, path):
-        table.add_row(key, value, note)
-    Console().print(table)
+    """Print the full config-init defaults table exactly once per review."""
+    print_config_review(
+        'Detected defaults for `aivm config init`',
+        _init_review_items(cfg, path),
+    )
 
 
 def _ssh_key_setup_warning_lines(cfg: AgentVMConfig) -> list[str]:
@@ -180,8 +182,23 @@ def _warn_high_resource_defaults(cfg: AgentVMConfig) -> None:
         log.warning('Config-init default resource warning: {}', line)
 
 
+def _show_init_advisories(cfg: AgentVMConfig) -> None:
+    _warn_high_resource_defaults(cfg)
+    warn_lines = _ssh_key_setup_warning_lines(cfg)
+    if warn_lines:
+        print('')
+        for line in warn_lines:
+            print(line)
+
+
 def _prompt_with_default(prompt: str, default: str) -> str:
     raw = input(f'{prompt} [{default}]: ').strip()
+    return raw if raw else default
+
+
+def _prompt_password_with_default(prompt: str, default: str) -> str:
+    state = 'configured; Enter keeps current' if default else 'empty'
+    raw = getpass.getpass(f'{prompt} [{state}]: ')
     return raw if raw else default
 
 
@@ -214,10 +231,150 @@ def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
         print("Please answer 'y' or 'n'.")
 
 
+def _edit_init_defaults_with_prompts(cfg: AgentVMConfig) -> AgentVMConfig:
+    """Walk through the commonly changed init values one at a time."""
+    cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
+    cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
+    cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
+    cfg.vm.ram_mb = _prompt_int_with_default('vm.ram_mb', cfg.vm.ram_mb)
+    cfg.vm.disk_gb = _prompt_int_with_default('vm.disk_gb', cfg.vm.disk_gb)
+    cfg.vm.allow_password_login = _prompt_bool_with_default(
+        'vm.allow_password_login', cfg.vm.allow_password_login
+    )
+    if cfg.vm.allow_password_login:
+        cfg.vm.password = _prompt_password_with_default(
+            'vm.password', cfg.vm.password
+        )
+    cfg.network.name = _prompt_with_default('network.name', cfg.network.name)
+    cfg.network.subnet_cidr = _prompt_with_default(
+        'network.subnet_cidr', cfg.network.subnet_cidr
+    )
+    cfg.network.gateway_ip = _prompt_with_default(
+        'network.gateway_ip', cfg.network.gateway_ip
+    )
+    cfg.network.dhcp_start = _prompt_with_default(
+        'network.dhcp_start', cfg.network.dhcp_start
+    )
+    cfg.network.dhcp_end = _prompt_with_default(
+        'network.dhcp_end', cfg.network.dhcp_end
+    )
+    cfg.paths.ssh_identity_file = _prompt_with_default(
+        'paths.ssh_identity_file', cfg.paths.ssh_identity_file or ''
+    )
+    cfg.paths.ssh_pubkey_path = _prompt_with_default(
+        'paths.ssh_pubkey_path', cfg.paths.ssh_pubkey_path or ''
+    )
+    return cfg
+
+
+def _validate_editor_document(
+    text: str, template: AgentVMConfig
+) -> AgentVMConfig:
+    """Parse an editor document while rejecting misspelled config keys."""
+    raw = tomllib.loads(text)
+    unexpected_root = sorted(set(raw) - {'defaults'})
+    if unexpected_root:
+        raise ValueError(
+            'only [defaults.*] tables may be edited here; unexpected keys: '
+            + ', '.join(unexpected_root)
+        )
+    defaults_raw = raw.get('defaults')
+    if not isinstance(defaults_raw, dict):
+        raise ValueError('the edited file must contain [defaults.*] tables')
+    unexpected_defaults = sorted(
+        set(defaults_raw) - {'verbosity', *_EDITABLE_SECTIONS}
+    )
+    if unexpected_defaults:
+        raise ValueError(
+            'unknown defaults sections/keys: ' + ', '.join(unexpected_defaults)
+        )
+    for section in _EDITABLE_SECTIONS:
+        body = defaults_raw.get(section)
+        if body is None:
+            continue
+        if not isinstance(body, dict):
+            raise ValueError(f'defaults.{section} must be a TOML table')
+        valid = {field.name for field in fields(getattr(template, section))}
+        unknown = sorted(set(body) - valid)
+        if unknown:
+            raise ValueError(
+                f'unknown defaults.{section} keys: ' + ', '.join(unknown)
+            )
+    parsed = parse_store_toml(text)
+    if parsed.defaults is None:
+        raise ValueError('the edited file did not define defaults')
+    return parsed.defaults
+
+
+def _editor_document(cfg: AgentVMConfig) -> str:
+    header = (
+        '# Edit the detected AIVM defaults below.\n'
+        '# Save and exit to return to AIVM. This temporary file may contain\n'
+        '# the guest password in plain text, matching the persisted config format.\n\n'
+    )
+    return header + render_store_defaults_toml(Store(defaults=deepcopy(cfg)))
+
+
+def _edit_init_defaults_in_editor(
+    cfg: AgentVMConfig,
+) -> tuple[AgentVMConfig, bool]:
+    """Edit defaults in a temporary TOML file.
+
+    Returns ``(cfg, use_prompts)``. Prompt mode is selected automatically when
+    no friendly editor is available, and can also be chosen after validation
+    errors.
+    """
+    command = select_editor_command(fallbacks=('nano', 'micro'), required=False)
+    if command is None:
+        print(
+            'No editor was found via $EDITOR/$VISUAL, nano, or micro; '
+            'using prompt-by-prompt editing instead.'
+        )
+        return cfg, True
+
+    with tempfile.TemporaryDirectory(prefix='aivm-config-init-') as temp_dir:
+        edit_file = Path(temp_dir) / 'defaults.toml'
+        edit_file.write_text(_editor_document(cfg), encoding='utf-8')
+        edit_file.chmod(0o600)
+        while True:
+            print(f'Opening defaults in {command[0]}.')
+            edit_path(edit_file, command)
+            try:
+                edited = _validate_editor_document(
+                    edit_file.read_text(encoding='utf-8'), cfg
+                )
+            except (OSError, ValueError, tomllib.TOMLDecodeError) as ex:
+                print(f'Could not use the edited defaults: {ex}')
+                ans = (
+                    input(
+                        'Reopen editor, use prompts, or discard edits? '
+                        '[E/p/d]: '
+                    )
+                    .strip()
+                    .lower()
+                )
+                if ans in {'p', 'prompt', 'prompts'}:
+                    return cfg, True
+                if ans in {'d', 'discard', 'n', 'no'}:
+                    return cfg, False
+                continue
+            return edited, False
+
+
+def _print_init_changes(
+    before: AgentVMConfig, after: AgentVMConfig, path: Path
+) -> None:
+    print('')
+    print_config_changes(
+        _init_review_items(before, path),
+        _init_review_items(after, path),
+    )
+
+
 def _review_init_defaults_interactive(
     cfg: AgentVMConfig, path: Path
 ) -> AgentVMConfig:
-    """Interactive review/edit loop for ``aivm config init`` defaults."""
+    """Review detected defaults once, then summarize only subsequent changes."""
     if not sys.stdin.isatty():
         raise AIVMError(
             'Config init defaults require confirmation in interactive mode. '
@@ -225,60 +382,31 @@ def _review_init_defaults_interactive(
         )
     log.trace('Start interactive default review')
     _print_init_default_summary(cfg, path)
-    _warn_high_resource_defaults(cfg)
-    warn_lines = _ssh_key_setup_warning_lines(cfg)
-    if warn_lines:
-        print('')
-        for line in warn_lines:
-            print(line)
+    _show_init_advisories(cfg)
     while True:
-        ans = input('Use these values? [Y/e/n] (e=edit): ').strip().lower()
+        ans = (
+            input(
+                'Use these values? [Y/e/p/n] (e=editor, p=prompt-by-prompt): '
+            )
+            .strip()
+            .lower()
+        )
         if ans in {'', 'y', 'yes'}:
             return cfg
         if ans in {'n', 'no'}:
             raise AIVMError('Aborted by user.')
-        if ans in {'e', 'edit'}:
-            cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
-            cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
-            cfg.vm.ram_mb = _prompt_int_with_default('vm.ram_mb', cfg.vm.ram_mb)
-            cfg.vm.disk_gb = _prompt_int_with_default(
-                'vm.disk_gb', cfg.vm.disk_gb
-            )
-            cfg.vm.allow_password_login = _prompt_bool_with_default(
-                'vm.allow_password_login', cfg.vm.allow_password_login
-            )
-            if cfg.vm.allow_password_login:
-                cfg.vm.password = _prompt_with_default(
-                    'vm.password', cfg.vm.password
-                )
-            cfg.network.name = _prompt_with_default(
-                'network.name', cfg.network.name
-            )
-            cfg.network.subnet_cidr = _prompt_with_default(
-                'network.subnet_cidr', cfg.network.subnet_cidr
-            )
-            cfg.network.gateway_ip = _prompt_with_default(
-                'network.gateway_ip', cfg.network.gateway_ip
-            )
-            cfg.network.dhcp_start = _prompt_with_default(
-                'network.dhcp_start', cfg.network.dhcp_start
-            )
-            cfg.network.dhcp_end = _prompt_with_default(
-                'network.dhcp_end', cfg.network.dhcp_end
-            )
-            cfg.paths.ssh_identity_file = _prompt_with_default(
-                'paths.ssh_identity_file', cfg.paths.ssh_identity_file or ''
-            )
-            cfg.paths.ssh_pubkey_path = _prompt_with_default(
-                'paths.ssh_pubkey_path', cfg.paths.ssh_pubkey_path or ''
-            )
-            print('')
-            _print_init_default_summary(cfg, path)
-            _warn_high_resource_defaults(cfg)
-            warn_lines = _ssh_key_setup_warning_lines(cfg)
-            if warn_lines:
-                print('')
-                for line in warn_lines:
-                    print(line)
+        if ans in {'p', 'prompt', 'prompts'}:
+            before = deepcopy(cfg)
+            cfg = _edit_init_defaults_with_prompts(cfg)
+            _print_init_changes(before, cfg, path)
+            _show_init_advisories(cfg)
             continue
-        print("Please answer 'y', 'e', or 'n'.")
+        if ans in {'e', 'edit', 'editor'}:
+            before = deepcopy(cfg)
+            cfg, use_prompts = _edit_init_defaults_in_editor(cfg)
+            if use_prompts:
+                cfg = _edit_init_defaults_with_prompts(cfg)
+            _print_init_changes(before, cfg, path)
+            _show_init_advisories(cfg)
+            continue
+        print("Please answer 'y', 'e', 'p', or 'n'.")

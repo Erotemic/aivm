@@ -72,15 +72,19 @@ def _bootstrap_vm_for_folder(
         if ans not in {'', 'y', 'yes'}:
             raise AIVMError('Aborted by user.') from ex
     if need_init:
-        from .config import InitCLI
+        from .config.init import initialize_config_defaults
 
-        InitCLI.main(
-            argv=False,
-            config=config_opt,
+        init_rc = initialize_config_defaults(
+            config_opt=str(missing_store_path),
             yes=bool(yes),
             defaults=bool(yes),
             force=False,
+            standalone_guidance=False,
         )
+        if init_rc != 0:
+            raise AIVMError(
+                'Could not initialize config defaults for VM creation.'
+            ) from ex
     create_ops.create_vm_from_defaults(
         missing_store_path,
         vm_override=vm_opt if vm_opt else None,
@@ -88,6 +92,7 @@ def _bootstrap_vm_for_folder(
         force=False,
         dry_run=bool(dry_run),
         yes=bool(yes),
+        configuration_reviewed=bool(need_init and not yes),
         initial_attachment_host_src=host_src,
         initial_attachment_guest_dst=guest_dst_opt,
         initial_attachment_mode=attach_mode_opt,
@@ -99,9 +104,7 @@ class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
     timeout: int = kwconf.Value(360, parser=int, help='Timeout seconds.')
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -221,9 +224,7 @@ def _start_remote_tunnel_session(
         f'{cfg.vm.user}@{ip}',
         remote,
     ]
-    CommandManager.current().run(
-        cmd, sudo=False, check=True, capture=False
-    )
+    CommandManager.current().run(cmd, sudo=False, check=True, capture=False)
 
 
 def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
@@ -280,13 +281,19 @@ def _print_remote_session_recipe(
     print('  # Then, on your local VS Code Desktop:')
     print('  #   1. Install/enable the Remote - Tunnels extension:')
     print('  #        code --install-extension ms-vscode.remote-server')
-    print('  #   2. Sign in with the same GitHub/Microsoft account used by the tunnel.')
+    print(
+        '  #   2. Sign in with the same GitHub/Microsoft account used by the tunnel.'
+    )
     print('  #   3. Open: Remote Explorer: Focus on Remotes (Tunnels/SSH) View')
     print(f'  #   4. Under Tunnels, connect to: {tunnel_name}')
     print()
     print('Alternative: Remote-SSH can work only if your workstation can reach')
-    print('the VM, for example with a local SSH config entry that uses ProxyJump')
-    print('through this remote host. The plain VM IP below is normally reachable')
+    print(
+        'the VM, for example with a local SSH config entry that uses ProxyJump'
+    )
+    print(
+        'through this remote host. The plain VM IP below is normally reachable'
+    )
     print('from the remote host, not directly from your workstation.')
     print()
     print('  # Plain SSH shell on the guest from this remote host:')
@@ -318,9 +325,11 @@ class VMCodeCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
-        '',
-        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+        kwconf.Value(
+            '',
+            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+        )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
@@ -349,9 +358,7 @@ class VMCodeCLI(_BaseCommand):
             'attach. Useful for scripts / non-interactive callers.'
         ),
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -477,9 +484,11 @@ class VMSSHCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
-        '',
-        help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+        kwconf.Value(
+            '',
+            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+        )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
@@ -493,9 +502,7 @@ class VMSSHCLI(_BaseCommand):
         True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
