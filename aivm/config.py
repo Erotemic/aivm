@@ -202,7 +202,7 @@ class VirtiofsConfig:
     intentionally ignores non-empty values for now: AIVM must not silently
     generate host-side executables/scripts and configure libvirt to run them.
 
-    See ``dev/design/future/virtiofsd-inode-file-handles.md`` before
+    See ``docs/source/virtiofs.rst`` before
     re-enabling any strategy for passing ``--inode-file-handles``.
     """
 

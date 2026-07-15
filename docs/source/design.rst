@@ -360,10 +360,6 @@ should be evolved in these areas:
   continue investigating ``virtiofsd`` FD retention/growth on ``shared-root``
   and ``persistent`` exports. ``dev/devcheck/debug-harness.sh`` is the current
   evidence-gathering tool, but the root cause is not solved.
-* Settings sync:
-  the previous ``aivm vm sync_settings`` feature has been removed. Reconsider
-  synchronization later only with an explicit design for reliability,
-  conflict behavior, and user intent.
 
 
 Non-goals

@@ -43,10 +43,10 @@ avoids, permanently, to everyone, to skip a password prompt. No.
 **A polkit-mediated or setuid helper.** This is how libvirt does it, but
 libvirt ships that helper as a distro package with an upstream security posture
 behind it. For nftables, aivm would have to ship its own root-executed binary
-and policy file. This repository already has a written rule against exactly
-that shape — see the `VirtiofsConfig` docstring in `aivm/config.py` and the
-line drawn in `dev/design/future/refactor-before-rootless.md`: aivm must not
-generate host-side executables and configure something privileged to run them.
+and policy file. This repository already rejects that shape: the
+`VirtiofsConfig` docstring in `aivm/config.py` states that aivm must not
+generate host-side executables
+and configure something privileged to run them.
 
 **Guest-side egress filtering.** Avoids host root entirely, but moves the
 enforcement point inside the trust boundary it is supposed to enforce: guest

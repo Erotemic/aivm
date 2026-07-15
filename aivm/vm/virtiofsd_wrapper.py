@@ -12,7 +12,7 @@ Current managed-libvirt mode therefore does **not** install wrappers and does
 only so update drift detection can recognize old AIVM-managed wrapper paths and
 remove them from existing VM XML.
 
-See ``dev/design/future/virtiofsd-inode-file-handles.md`` before reintroducing
+See ``docs/source/virtiofs.rst`` before reintroducing
 any inode-file-handles strategy.
 """
 
@@ -122,7 +122,7 @@ def wrapper_content(mode: str, real_binary: str = DEFAULT_VIRTIOFSD_BINARY) -> s
     raise RuntimeError(
         'AIVM-generated host-side virtiofsd wrappers are disabled. '
         f'Requested inode-file-handles mode was {mode!r}. See '
-        'dev/design/future/virtiofsd-inode-file-handles.md.'
+        'docs/source/virtiofs.rst.'
     )
 
 
@@ -136,5 +136,5 @@ def ensure_wrapper_installed(
     raise RuntimeError(
         'AIVM-generated host-side virtiofsd wrappers are disabled. '
         f'Requested inode-file-handles mode was {mode!r}. See '
-        'dev/design/future/virtiofsd-inode-file-handles.md.'
+        'docs/source/virtiofs.rst.'
     )

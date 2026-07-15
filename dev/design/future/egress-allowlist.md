@@ -93,9 +93,7 @@ endpoints by failure.
   runtime with sudo available — add the guard via
   `aivm/privilege.py::require_sudo_allowed` exactly like
   `apply_firewall` does today, and a config-lint warning for
-  `egress.mode="allowlist"` + `privilege_mode="sudoless"`. (The rootless/
-  session runtime gets its own story later: passt supports outbound
-  restrictions; out of scope here.)
+  `egress.mode="allowlist"` + `privilege_mode="sudoless"`.
 * **dnsmasq options**: the managed network XML is rendered in
   `aivm/net.py::ensure_network` — add
   `<dnsmasq:options>` entries (libvirt supports the dnsmasq namespace)

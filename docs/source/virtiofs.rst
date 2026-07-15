@@ -203,8 +203,7 @@ the delivery paths are currently unacceptable or unavailable:
 * **Generated wrapper binaries**: rewriting ``<binary path=...>`` to an
   aivm-generated wrapper script broke VM startup ("virtiofsd died
   unexpectedly") and was rejected on host-trust grounds — aivm must not
-  make libvirt execute generated host-side code. This decision is recorded
-  in ``dev/design/future/virtiofsd-inode-file-handles.md``.
+  make libvirt execute generated host-side code.
 * **Capabilities**: decoding a file handle (``open_by_handle_at``) requires
   ``CAP_DAC_READ_SEARCH``. virtiofsd's default capability set drops it, so
   the flag must be paired with ``--modcaps=+dac_read_search``. Note the

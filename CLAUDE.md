@@ -44,8 +44,4 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Command Manager**: Subprocess execution is centralized through a command manager that organizes logs into semantic steps and handles sudo approvals.
 - **Reconciliation Flow**: Many operations (like `aivm code .`) use a reconcile flow that ensures the VM, network, and folder attachments are in the desired state before proceeding.
 - **Privilege Model**: The tool distinguishes between read-only probes (often auto-approved) and state-changing operations that require explicit user confirmation.
-- **Two independent mode axes** (`aivm/modes.py`), often confused:
-    - `behavior.privilege_mode` -- *how* aivm escalates: probe and escalate only where required (default), always sudo, or never sudo.
-    - `runtime.mode` -- *which* libvirt daemon a VM lives on: the root `qemu:///system` daemon, or the per-user `qemu:///session` daemon.
-  Folder sharing over virtiofs is constrained by the *runtime*, not the privilege mode: `qemu:///session` has no privileged daemon to spawn `virtiofsd`, so session VMs cannot share folders until `dev/design/future/external-virtiofsd.md` lands. On the system runtime, `libvirt` group membership makes virtiofs work with no sudo at all.
 - **Enforce privilege at the command, not the feature**: whether an operation needs root is a property of the command being run, not of the feature requesting it. A `persistent` attachment needs `mount --bind` only when the bind is missing. Gate on the command (`CommandManager._reject_sudo_if_sudoless` sees every one) rather than refusing a feature that *might* need root.

@@ -7,7 +7,7 @@ externally-managed virtiofsd.
 |---|---|
 | Added in | `cd3886f` — *"Add the rootless session runtime (qemu:///session) as a first-class mode"* |
 | Removed in | `190ed83` — *"Remove the rootless qemu:///session runtime"* |
-| Design docs | `dev/design/future/rootless-vms.md`, `dev/design/future/external-virtiofsd.md` |
+| Related active design | `dev/design/future/external-virtiofsd.md` |
 | Never shipped | Correct. `cd3886f` landed on the unmerged `dev/sudoless` branch. No released version of `aivm` ever exposed it. |
 
 ## What it was
@@ -48,7 +48,7 @@ source tree. "Rootless" buys *aivm needs no root* and pays for it in *escape
 containment*. The removed `docs/source/runtimes.rst` described it as "the
 strongest host-privilege posture," which was misleading.
 
-**Its niche is already covered.** The stated goal in `rootless-vms.md` was
+**Its niche is already covered.** The runtime was intended to provide
 "no host sudo in normal create/start/stop/status/ssh/code paths." The system
 runtime plus `libvirt` group membership plus `privilege_mode = "auto"`
 already achieves that: `virsh` reaches `qemu:///system` unprivileged via the

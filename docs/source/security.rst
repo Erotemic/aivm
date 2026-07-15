@@ -328,15 +328,12 @@ Near-term improvements (low UX impact):
 * Add explicit fail-closed checks for workflows that assume firewall isolation
   (for example, abort/warn before ``code``/``ssh`` when expected rules are
   missing).
-* Add strong warnings and optional confirmation gates for high-risk shared
-  paths (home directory roots, SSH/config/credential directories).
 * Improve runtime visibility when writable host shares are active.
 * Tighten SSH probing defaults to avoid insecure host-key modes in routine
   checks.
 
 Medium-term improvements (some UX tradeoff):
 
-* Add optional per-attachment read-only share mode.
 * Add optional egress policy modes (for example, allowlist-oriented networking
   for high-risk sessions while keeping standard mode for normal development).
 * Add profile-style presets in config (for example ``balanced`` vs
@@ -401,9 +398,6 @@ Current state:
 
 Potential direction:
 
-* Add first-class share policy controls (read-only mode where feasible,
-  stronger path-risk warnings, and clearer runtime indicators of trust
-  extension).
 * Explore exposing virtiofs-related hardening knobs when reliably portable
   across supported host stacks (sandbox/idmap controls).
 
