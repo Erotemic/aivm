@@ -52,7 +52,9 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
         'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -149,7 +151,9 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
 
     command_text = [' '.join(c) for c in calls]
     assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
+        line.startswith(
+            'findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint'
+        )
         for line in command_text
     )
     assert any('mount --bind' in line for line in command_text)
@@ -182,7 +186,9 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE=""', ''
+                0,
+                f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE="" OPTIONS="rw"',
+                '',
             )
         if normalized[:2] == ['umount', str(source_dir)]:
             raise AssertionError('unexpected source-path umount')
@@ -203,7 +209,9 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
 
     command_text = [' '.join(c) for c in calls]
     assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
+        line.startswith(
+            'findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint'
+        )
         for line in command_text
     )
     assert all(not line.startswith('umount ') for line in command_text)
@@ -236,7 +244,9 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         calls.append(normalized)
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return FakeProc(
-                0, f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE=""', ''
+                0,
+                f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE="" OPTIONS="rw"',
+                '',
             )
         if normalized[:2] == ['umount', str(source_dir)]:
             raise AssertionError('unexpected source-path umount')
@@ -257,7 +267,9 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
 
     command_text = [' '.join(c) for c in calls]
     assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
+        line.startswith(
+            'findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint'
+        )
         for line in command_text
     )
     assert all(not line.startswith('umount ') for line in command_text)
@@ -364,7 +376,9 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
 
     command_text = [' '.join(c) for c in calls]
     assert any(
-        line.startswith('findmnt -P -n -o SOURCE,ROOT,FSTYPE --target')
+        line.startswith(
+            'findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint'
+        )
         for line in command_text
     )
     assert all(not line.startswith('umount ') for line in command_text)
@@ -466,7 +480,8 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     mount_script = cmds[0][-1]
     remote_script = cmds[1][-1]
     assert run_kwargs[0]['timeout'] == 20
-    assert 'sudo -n mount -t virtiofs -o ro' in mount_script
+    assert 'sudo -n mount -t virtiofs -o ro' not in mount_script
+    assert 'sudo -n mount -t virtiofs aivm-shared-root' in mount_script
     assert 'sudo -n mount --bind' in remote_script
     assert 'mount -o remount,bind,ro' in remote_script
     assert 'umount -l' in remote_script
@@ -588,7 +603,9 @@ def test_shared_root_host_bind_creates_export_dirs_without_sudo(
         if parts[:3] == ['sudo', '-n', 'true']:
             return FakeProc(0, '', '')
         normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        normalized = (
+            normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        )
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return FakeProc(1, '', '')
         return FakeProc(0, '', '')
@@ -666,10 +683,14 @@ def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
 
     joined = [' '.join(p) for p in raw]
     # The export root already exists, so no mkdir is issued for it at all.
-    assert not any(line.endswith(str(export_root)) for line in joined if 'mkdir' in line)
+    assert not any(
+        line.endswith(str(export_root)) for line in joined if 'mkdir' in line
+    )
     # The project target below it is unwritable, so its mkdir escalates.
     assert any(
-        line.startswith('sudo') and 'mkdir -p' in line and 'hostcode-source' in line
+        line.startswith('sudo')
+        and 'mkdir -p' in line
+        and 'hostcode-source' in line
         for line in joined
     ), raw
 
@@ -708,7 +729,9 @@ def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
         if parts[:3] == ['sudo', '-n', 'true']:
             return FakeProc(0, '', '')
         normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        normalized = normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        normalized = (
+            normalized[1:] if normalized[:1] == ['sudo'] else normalized
+        )
         if normalized[:3] == ['findmnt', '-P', '-n']:
             return FakeProc(1, '', '')
         return FakeProc(0, '', '')
@@ -718,9 +741,7 @@ def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
     _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
 
     def _ran_with_sudo(program: str) -> bool:
-        return any(
-            parts[:1] == ['sudo'] and program in parts for parts in raw
-        )
+        return any(parts[:1] == ['sudo'] and program in parts for parts in raw)
 
     assert _ran_with_sudo('mkdir'), raw
     assert _ran_with_sudo('mount'), raw
@@ -786,7 +807,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE --target '
+            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )
@@ -1007,3 +1028,39 @@ def test_shared_root_detach_escalates_only_for_the_umount(
     assert 'mountpoint' in plain, raw
     assert 'rmdir' in plain, raw
     assert escalated == {'umount'}, raw
+
+
+def test_shared_root_read_only_is_enforced_on_host_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-host-ro'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    source = tmp_path / 'source'
+    source.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED_ROOT,
+        access=AttachmentAccess.RO,
+        source_dir=str(source),
+        guest_dst='/workspace/source',
+        tag='hostcode-source',
+    )
+    activate_manager(monkeypatch)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        normalized = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
+        calls.append(normalized)
+        if normalized[:3] == ['findmnt', '-P', '-n']:
+            return FakeProc(1, '', '')
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
+
+    _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    assert any(cmd[:2] == ['mount', '--bind'] for cmd in calls)
+    assert any(cmd[:3] == ['mount', '-o', 'remount,bind,ro'] for cmd in calls)

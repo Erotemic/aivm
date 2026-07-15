@@ -207,6 +207,7 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
 
     attach_vm_share(cfg, source_dir, tag, dry_run=False)
     command_calls = [c for c in calls if c[:3] != ['sudo', '-n', 'true']]
+
     def _norm(call: list[str]) -> list[str]:
         if call[:2] == ['sudo', '-n']:
             call = call[2:]
@@ -517,9 +518,9 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
         ['virsh', 'domstate', 'vm-paused'],
         ['virsh', 'resume', 'vm-paused'],
     ]
-    assert not any(
-        c[:2] == ['virsh', 'start'] for c in normalized_calls
-    ), 'paused VM must be resumed, not started'
+    assert not any(c[:2] == ['virsh', 'start'] for c in normalized_calls), (
+        'paused VM must be resumed, not started'
+    )
 
 
 def test_create_or_start_shutting_down_vm_raises_friendly_error(
@@ -1775,3 +1776,41 @@ def test_local_stat_answer_tristate(tmp_path: Path) -> None:
         assert _local_stat_answer(inner, want_file=True) is None
     finally:
         locked.chmod(0o755)
+
+
+def test_attach_vm_share_read_only_is_in_libvirt_xml(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-readonly-share'
+    source = tmp_path / "source & 'quoted'"
+    source.mkdir()
+    activate_manager(monkeypatch, yes_sudo=True)
+    captured_xml: list[str] = []
+
+    def fake_subprocess_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        parts = [str(part) for part in cmd]
+        for part in parts:
+            candidate = Path(part)
+            if candidate.is_file() and candidate.name.startswith('tmp'):
+                text = candidate.read_text(encoding='utf-8')
+                if '<filesystem' in text:
+                    captured_xml.append(text)
+        return FakeProc(0, '', '')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
+
+    attach_vm_share(
+        cfg,
+        str(source),
+        "tag&'unsafe",
+        vm_running=False,
+        read_only=True,
+    )
+
+    assert len(captured_xml) == 1
+    xml = captured_xml[0]
+    assert '<readonly/>' in xml
+    assert '&amp;' in xml
+    assert 'dir="tag&amp;\'unsafe"' in xml

@@ -9,6 +9,7 @@ from aivm.firewall import (
     _effective_bridge_and_gateway,
     _nft_script,
     apply_firewall,
+    effective_firewall_table,
     firewall_status,
 )
 from tests.helpers import FakeProc, activate_manager
@@ -110,12 +111,13 @@ def test_firewall_status_uses_readonly_step(
         or FakeProc(stdout='table inet aivm_fw {}'),
     )
 
+    table = effective_firewall_table(cfg)
     text = firewall_status(cfg)
 
     assert text == 'table inet aivm_fw {}'
     assert calls == [
         (
-            ['sudo', 'nft', 'list', 'table', 'inet', 'aivm_fw'],
+            ['sudo', 'nft', 'list', 'table', 'inet', table],
             {
                 'input': None,
                 'capture_output': True,
@@ -145,3 +147,36 @@ def test_apply_firewall_runs_delete_then_apply(
     apply_firewall(cfg, dry_run=False)
     assert calls[0][0][:4] == ['nft', 'delete', 'table', 'inet']
     assert calls[1][0] == ['nft', '-f', '-']
+
+
+def test_firewall_tables_are_isolated_per_network() -> None:
+    cfg_a = AgentVMConfig()
+    cfg_a.firewall.table = 'aivm_fw'
+    cfg_a.network.name = 'net-a'
+    cfg_a.network.bridge = 'virbr-a'
+    cfg_a.network.subnet_cidr = '10.70.0.0/24'
+
+    cfg_b = AgentVMConfig()
+    cfg_b.firewall.table = 'aivm_fw'
+    cfg_b.network.name = 'net-b'
+    cfg_b.network.bridge = 'virbr-b'
+    cfg_b.network.subnet_cidr = '10.80.0.0/24'
+
+    assert effective_firewall_table(cfg_a) != effective_firewall_table(cfg_b)
+    assert effective_firewall_table(cfg_a).startswith('aivm_fw_')
+    assert effective_firewall_table(cfg_b).startswith('aivm_fw_')
+
+
+def test_firewall_dry_run_does_not_probe_virsh(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    activate_manager(monkeypatch, isatty=True)
+
+    def fail_run(*args: object, **kwargs: object) -> FakeProc:
+        del args, kwargs
+        raise AssertionError('firewall dry-run must not execute subprocesses')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', fail_run)
+
+    apply_firewall(cfg, dry_run=True)

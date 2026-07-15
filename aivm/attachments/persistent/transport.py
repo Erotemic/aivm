@@ -36,9 +36,33 @@ def _install_host_text_if_changed(
     *,
     label: str,
     dry_run: bool,
+    force_sudo: bool = False,
+    owner: str = '',
+    group: str = '',
 ) -> bool:
     new_bytes = text.encode('utf-8')
-    if target.exists() and target.read_bytes() == new_bytes:
+    content_matches = False
+    metadata_matches = not owner and not group
+    try:
+        st = target.lstat()
+        content_matches = target.is_file() and target.read_bytes() == new_bytes
+        if owner or group:
+            import grp
+            import pwd
+            import stat
+
+            expected_uid = pwd.getpwnam(owner).pw_uid if owner else st.st_uid
+            expected_gid = grp.getgrnam(group).gr_gid if group else st.st_gid
+            expected_mode = int(mode, 8) & 0o7777
+            metadata_matches = (
+                stat.S_ISREG(st.st_mode)
+                and st.st_uid == expected_uid
+                and st.st_gid == expected_gid
+                and (st.st_mode & 0o7777) == expected_mode
+            )
+    except (FileNotFoundError, OSError):
+        pass
+    if content_matches and metadata_matches:
         return False
     if dry_run:
         print(f'DRYRUN: would install {label} to {target}')
@@ -53,16 +77,47 @@ def _install_host_text_if_changed(
             why=f'Install updated host-side {label} content for persistent attachment replay.',
             approval_scope=f'{label.replace(" ", "-")}:host:{target}',
         ):
-            host_sudo = path_needs_sudo(target.parent)
+            host_sudo = force_sudo or path_needs_sudo(target.parent)
+            if owner or group:
+                install_dir_cmd = ['install', '-d', '-m', '0755']
+                if owner:
+                    install_dir_cmd.extend(['-o', owner])
+                if group:
+                    install_dir_cmd.extend(['-g', group])
+                install_dir_cmd.append(str(target.parent))
+                mgr.submit(
+                    install_dir_cmd,
+                    sudo=host_sudo,
+                    role='modify',
+                    summary=f'Create protected parent directory for {label}',
+                    detail=f'target={target.parent}',
+                )
+                # The protected parent is now root-controlled. Removing an
+                # unexpected symlink or stale file before install prevents the
+                # content comparison path from preserving unsafe metadata.
+                mgr.submit(
+                    ['rm', '-f', '--', str(target)],
+                    sudo=host_sudo,
+                    role='modify',
+                    summary=f'Remove stale destination for {label}',
+                    detail=f'target={target}',
+                )
+            else:
+                mgr.submit(
+                    ['mkdir', '-p', str(target.parent)],
+                    sudo=host_sudo,
+                    role='modify',
+                    summary=f'Create parent directory for {label}',
+                    detail=f'target={target.parent}',
+                )
+            install_cmd = ['install', '-m', mode]
+            if owner:
+                install_cmd.extend(['-o', owner])
+            if group:
+                install_cmd.extend(['-g', group])
+            install_cmd.extend([tmp_name, str(target)])
             mgr.submit(
-                ['mkdir', '-p', str(target.parent)],
-                sudo=host_sudo,
-                role='modify',
-                summary=f'Create parent directory for {label}',
-                detail=f'target={target.parent}',
-            )
-            mgr.submit(
-                ['install', '-m', mode, tmp_name, str(target)],
+                install_cmd,
                 sudo=host_sudo,
                 role='modify',
                 summary=f'Install {label}',
@@ -162,7 +217,7 @@ def _guest_text_install_script(target: str, text: str, mode: str) -> str:
         [
             'set -euo pipefail',
             'tmp="$(mktemp)"',
-            f"printf '%s' {text_q} > \"$tmp\"",
+            f'printf \'%s\' {text_q} > "$tmp"',
             f'sudo -n mkdir -p {target_dir}',
             f'sudo -n install -m {mode} "$tmp" {target_q}',
             'rm -f "$tmp"',
@@ -242,9 +297,7 @@ def _run_guest_ssh_script_with_retry(
             transport_error
         ):
             log.warning(
-                (
-                    'Transient SSH failure while {} (attempt {}/{}): {}'
-                ),
+                ('Transient SSH failure while {} (attempt {}/{}): {}'),
                 summary,
                 attempt + 1,
                 retries + 1,
@@ -297,9 +350,7 @@ def _run_rsync_with_retry(
             transport_error
         ):
             log.warning(
-                (
-                    'Transient rsync failure while {} (attempt {}/{}): {}'
-                ),
+                ('Transient rsync failure while {} (attempt {}/{}): {}'),
                 summary,
                 attempt + 1,
                 retries + 1,
@@ -345,7 +396,10 @@ def _diagnose_guest_text_mismatch(
     actual_sha256 = ''
     actual_len = -1
     if stats is not None:
-        lines = [line.strip() for line in str(getattr(stats, 'stdout', '') or '').splitlines()]
+        lines = [
+            line.strip()
+            for line in str(getattr(stats, 'stdout', '') or '').splitlines()
+        ]
         if lines:
             actual_sha256 = lines[0]
         if len(lines) > 1:
@@ -426,7 +480,9 @@ def _install_guest_text_if_changed(
         )
     if dry_run or check_result is None:
         return False
-    status_lines = str(getattr(check_result, 'stdout', '') or '').strip().splitlines()
+    status_lines = (
+        str(getattr(check_result, 'stdout', '') or '').strip().splitlines()
+    )
     status = status_lines[-1].strip().upper() if status_lines else ''
     if status not in {'MATCH', 'MISSING', 'MISMATCH'}:
         raise RuntimeError(
@@ -471,7 +527,9 @@ def _install_guest_text_if_changed(
                 .splitlines()
             )
             verify_status = (
-                verify_status_lines[-1].strip().upper() if verify_status_lines else ''
+                verify_status_lines[-1].strip().upper()
+                if verify_status_lines
+                else ''
             )
             if verify_status != 'MATCH':
                 _diagnose_guest_text_mismatch(

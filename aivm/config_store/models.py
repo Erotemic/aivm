@@ -46,3 +46,7 @@ class Store:
     networks: list[NetworkEntry] = field(default_factory=list)
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
+    # Private optimistic-concurrency metadata populated by load_store().
+    # It is deliberately excluded from repr/equality and never serialized.
+    _source_path: str = field(default='', repr=False, compare=False)
+    _source_fingerprint: str = field(default='', repr=False, compare=False)

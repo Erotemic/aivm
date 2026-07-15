@@ -488,3 +488,30 @@ def test_confirm_file_update_aborts_on_negative_response(
             path='/tmp/ssh-config',
             purpose='Update SSH entry',
         )
+
+
+def test_missing_executable_returns_127_when_check_is_false() -> None:
+    mgr = _activate_manager()
+
+    result = mgr.run(
+        ['/aivm-command-that-does-not-exist-7b65d1'],
+        check=False,
+        capture=True,
+    )
+
+    assert result.code == 127
+    assert 'command not found' in result.stderr
+
+
+def test_missing_executable_raises_command_error_when_checked() -> None:
+    from aivm.commands import CommandError
+
+    mgr = _activate_manager()
+    with pytest.raises(CommandError) as exc_info:
+        mgr.run(
+            ['/aivm-command-that-does-not-exist-7b65d1'],
+            check=True,
+            capture=True,
+        )
+
+    assert exc_info.value.result.code == 127

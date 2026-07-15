@@ -916,7 +916,7 @@ class CommandManager:
             'operation requested privileged host access:\n'
             f'  {shell_join(cmd) if not isinstance(cmd, str) else cmd}\n'
             'Run `aivm host sudoless check` to see what is missing for '
-            "sudo-free operation, or set behavior.privilege_mode to "
+            'sudo-free operation, or set behavior.privilege_mode to '
             "'as-needed' to escalate only where it is required."
         )
 
@@ -1242,9 +1242,7 @@ class CommandManager:
                     and role == 'read'
                     and self.auto_approve_readonly_sudo
                     and not (
-                        self.yes
-                        or self.yes_sudo
-                        or self._approve_all_remaining
+                        self.yes or self.yes_sudo or self._approve_all_remaining
                     )
                     and os.geteuid() != 0
                     and self.sudo_authentication_required()
@@ -1377,6 +1375,22 @@ class CommandManager:
                 proc.stdout or '',
                 proc.stderr or '',
             )
+        except FileNotFoundError as ex:
+            missing = ex.filename or (cmd[0] if cmd else '<empty command>')
+            res = CommandResult(127, '', f'command not found: {missing}')
+            local_log.warning('Command executable not found cmd={}', run_line)
+            if spec.check:
+                raise CommandError(cmd, res) from ex
+            return res
+        except PermissionError as ex:
+            denied = ex.filename or (cmd[0] if cmd else '<empty command>')
+            res = CommandResult(126, '', f'command is not executable: {denied}')
+            local_log.warning(
+                'Command executable is not permitted cmd={}', run_line
+            )
+            if spec.check:
+                raise CommandError(cmd, res) from ex
+            return res
         except subprocess.TimeoutExpired as ex:
             stdout = ex.stdout or ''
             stderr = ex.stderr or ''

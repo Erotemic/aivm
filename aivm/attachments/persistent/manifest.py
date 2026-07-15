@@ -6,8 +6,11 @@ Hosts the canonical desired-state manifest writes (under user-owned
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import shlex
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -20,6 +23,7 @@ from ...config_store import (
 )
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_GUEST_STATE_PATH,
+    PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR,
     PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME,
     PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX,
     PERSISTENT_ROOT_GUEST_MOUNT_ROOT,
@@ -55,8 +59,103 @@ def _persistent_host_manifest_path(cfg: AgentVMConfig) -> Path:
     )
 
 
+def _persistent_host_replay_manifest_path(cfg: AgentVMConfig) -> Path:
+    """Root-owned manifest consumed by the privileged host replay service."""
+    raw = str(cfg.vm.name or '').strip()
+    safe = re.sub(r'[^A-Za-z0-9_.-]+', '-', raw).strip('.-') or 'vm'
+    digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:10]
+    filename = f'{safe[:80]}-{digest}.json'
+    return Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR) / filename
+
+
+def _approved_state_directories_are_safe() -> bool:
+    paths = [
+        Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR).parent,
+        Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR),
+    ]
+    for path in paths:
+        try:
+            info = path.lstat()
+        except OSError:
+            return False
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & 0o022
+        ):
+            return False
+    return True
+
+
+def _ensure_approved_state_directories(*, dry_run: bool) -> None:
+    """Create a root-controlled chain beneath /var/lib without following links."""
+    if _approved_state_directories_are_safe():
+        return
+    parent = Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR).parent
+    state_dir = Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR)
+    if dry_run:
+        print(
+            'DRYRUN: would secure persistent host replay state directories '
+            f'{parent} and {state_dir}'
+        )
+        return
+    # The first directory is directly below trusted /var/lib. Once it is
+    # corrected to root:root 0755, an unprivileged process can no longer race
+    # replacement of the second directory.
+    script = (
+        'set -eu; '
+        f'for path in {shlex.quote(str(parent))} {shlex.quote(str(state_dir))}; do '
+        'if [ -L "$path" ]; then '
+        'echo "refusing symlink in persistent replay state path: $path" >&2; exit 1; '
+        'fi; '
+        'install -d -m 0755 -o root -g root -- "$path"; '
+        'done'
+    )
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Secure persistent host replay state directory',
+        why=(
+            'The root replay service may only consume manifests beneath a '
+            'root-owned, non-user-writable directory chain.'
+        ),
+        approval_scope='persistent-host-replay-state-dir',
+    ):
+        mgr.submit(
+            ['bash', '-c', script],
+            sudo=True,
+            role='modify',
+            summary='Create root-owned persistent replay state directories',
+            detail=f'target={state_dir}',
+        )
+
+
+def _sync_persistent_host_replay_manifest(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    dry_run: bool,
+) -> Path:
+    """Install the replay input into root-owned, non-user-writable storage."""
+    target = _persistent_host_replay_manifest_path(cfg)
+    _ensure_approved_state_directories(dry_run=dry_run)
+    manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
+    transport._install_host_text_if_changed(
+        target,
+        manifest_text,
+        '0644',
+        label='approved persistent host replay manifest',
+        dry_run=dry_run,
+        force_sudo=True,
+        owner='root',
+        group='root',
+    )
+    return target
+
+
 def _persistent_host_replay_service_name(vm_name: str) -> str:
-    return f'{PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX}-{vm_name}.service'
+    return (
+        f'{PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX}-{vm_name}.service'
+    )
 
 
 def _persistent_attachment_records_for_vm(

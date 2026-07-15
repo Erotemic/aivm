@@ -247,3 +247,25 @@ def test_vm_hardware_drift(
     keys = {item.key for item in report.items}
     assert 'cpus' in keys
     assert 'ram_mb' in keys
+
+
+def test_missing_diagnostic_tools_are_inconclusive(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    monkeypatch.setattr(
+        'aivm.status.CommandManager.run',
+        lambda self, *a, **k: CmdResult(127, '', 'command not found'),
+    )
+
+    network = probe_network(cfg, use_sudo=False)
+    firewall = probe_firewall(cfg, use_sudo=False)
+    vm, defined = probe_vm_state(cfg, use_sudo=False)
+
+    assert network.ok is None
+    assert 'virsh unavailable' in network.detail
+    assert firewall.ok is None
+    assert 'nft unavailable' in firewall.detail
+    assert vm.ok is None
+    assert defined is None
+    assert 'virsh unavailable' in vm.detail

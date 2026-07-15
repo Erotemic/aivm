@@ -419,6 +419,7 @@ def _restore_saved_vm_attachments(
                     aligned.source_dir,
                     aligned.tag,
                     dry_run=False,
+                    read_only=(aligned.access == ATTACHMENT_ACCESS_RO),
                 )
             except Exception as ex:
                 log.warning(
@@ -754,6 +755,9 @@ def _reconcile_attached_vm(
                             virtiofs_mapping[1],
                             dry_run=False,
                             vm_running=True,
+                            read_only=(
+                                attachment.access == ATTACHMENT_ACCESS_RO
+                            ),
                         )
                     has_share = True
                 except Exception as ex:
@@ -983,12 +987,8 @@ def _prepare_attached_session(
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
         _reg_for_aliases = load_store(cfg_path)
-        _saved = find_attachment_for_vm(
-            _reg_for_aliases, host_src, cfg.vm.name
-        )
-        _primary_aliases = (
-            list(_saved.host_lexical_paths) if _saved else []
-        )
+        _saved = find_attachment_for_vm(_reg_for_aliases, host_src, cfg.vm.name)
+        _primary_aliases = list(_saved.host_lexical_paths) if _saved else []
         _ensure_attachment_available_in_guest(
             cfg,
             host_src,

@@ -59,9 +59,7 @@ def _make_guest_replay_fake_run(
         nonlocal root_mount
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return FakeProc(
-                returncode=0 if target in mounts else 1
-            )
+            return FakeProc(returncode=0 if target in mounts else 1)
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
@@ -162,7 +160,6 @@ def test_persistent_replay_templates_are_deterministic_in_process() -> None:
     assert host_unit_a == host_unit_b
 
 
-
 def test_persistent_replay_service_unit_waits_for_guest_manifest() -> None:
     from aivm.persistent_replay import (
         PERSISTENT_ATTACHMENT_GUEST_STATE_PATH,
@@ -171,7 +168,9 @@ def test_persistent_replay_service_unit_waits_for_guest_manifest() -> None:
 
     unit = persistent_replay_service_unit()
 
-    assert f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    assert (
+        f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    )
 
 
 def test_persistent_host_replay_service_unit_renders_values() -> None:
@@ -342,7 +341,9 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     save_store(Store(), cfg_path)
     _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
     activate_manager(monkeypatch)
-    monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.transport.time.sleep', lambda s: None
+    )
 
     calls: list[list[str]] = []
     rsync_calls = {'n': 0}
@@ -392,7 +393,10 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     [('MISSING', True), ('MATCH', False), ('MISMATCH', True)],
 )
 def test_persistent_guest_text_sync_checks_hash_before_installing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str, expect_install: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: str,
+    expect_install: bool,
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = f'vm-persistent-install-{status.lower()}'
@@ -412,7 +416,11 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
         if summary == 'Check guest replay helper hash':
             assert 'cmp -s' not in script
             assert 'sha256sum' in script
-            assert 'MISSING' in script and 'MATCH' in script and 'MISMATCH' in script
+            assert (
+                'MISSING' in script
+                and 'MATCH' in script
+                and 'MISMATCH' in script
+            )
             return SimpleNamespace(stdout=f'{status}\n')
         if summary == 'Install guest replay helper':
             assert expect_install
@@ -450,10 +458,9 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
         if expect_install
         else ['Check guest replay helper hash']
     )
-    assert all(role == 'read' for summary, _, role in calls if 'Check' in summary)
-
-
-
+    assert all(
+        role == 'read' for summary, _, role in calls if 'Check' in summary
+    )
 
 
 def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
@@ -826,7 +833,9 @@ def test_persistent_guest_root_script_retries_transient_banner_failures(
     cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
     cfg.vm.user = 'agent'
     activate_manager(monkeypatch)
-    monkeypatch.setattr('aivm.attachments.persistent.transport.time.sleep', lambda s: None)
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.transport.time.sleep', lambda s: None
+    )
 
     calls: list[list[str]] = []
     attempts = {'n': 0}
@@ -1026,9 +1035,7 @@ def test_persistent_replay_helper_treats_plain_root_directory_as_unmounted(
                 else 1
             )
         if cmd and cmd[0] == 'findmnt' and '--target' in cmd:
-            return FakeProc(
-                stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
-            )
+            return FakeProc(stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"')
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
@@ -1234,9 +1241,7 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
         del check, capture_output, text, stdout, stderr, kwargs
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return FakeProc(
-                returncode=0 if target in mounts else 1
-            )
+            return FakeProc(returncode=0 if target in mounts else 1)
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
@@ -1268,9 +1273,7 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
             ]
             return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
-            return FakeProc(
-                returncode=16, stderr='umount: target is busy'
-            )
+            return FakeProc(returncode=16, stderr='umount: target is busy')
         if cmd[:2] == ['mount', '-t']:
             return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
@@ -1357,9 +1360,7 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
         del check, capture_output, text, stdout, stderr, kwargs
         if cmd[:2] == ['mountpoint', '-q']:
             target = cmd[-1]
-            return FakeProc(
-                returncode=0 if target in mounts else 1
-            )
+            return FakeProc(returncode=0 if target in mounts else 1)
         if cmd and cmd[0] == 'findmnt' and '--mountpoint' in cmd:
             target = cmd[-1]
             info = mounts.get(target)
@@ -1391,9 +1392,7 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
             ]
             return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
-            return FakeProc(
-                returncode=16, stderr='umount: target is busy'
-            )
+            return FakeProc(returncode=16, stderr='umount: target is busy')
         if cmd[:2] == ['mount', '-t']:
             return FakeProc()
         if cmd and cmd[0] == 'mount' and '--bind' in cmd:
@@ -1597,8 +1596,6 @@ def test_persistent_replay_helper_ignores_enabled_child_under_enabled_parent(
     assert '/workspace/proj/sub' not in mounts
 
 
-
-
 def test_install_persistent_host_bind_replay_enables_service(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1673,14 +1670,34 @@ def test_persistent_root_host_bind_short_circuits_when_already_bound(
         lambda *_a, **_k: True,
     )
 
-    def _fail_subprocess(*_a: object, **_k: object) -> FakeProc:
-        raise AssertionError(
-            'no subprocess should run when the bind is already in place'
-        )
+    calls: list[list[str]] = []
 
-    monkeypatch.setattr('aivm.commands.subprocess.run', _fail_subprocess)
+    def _findmnt_only(cmd: list[str], **_k: object) -> FakeProc:
+        normalized = [str(part) for part in cmd]
+        normalized = (
+            normalized[2:] if normalized[:2] == ['sudo', '-n'] else normalized
+        )
+        calls.append(normalized)
+        if normalized[:3] == ['findmnt', '-P', '-n']:
+            return FakeProc(
+                0,
+                'SOURCE="/source" ROOT="" FSTYPE="none" OPTIONS="rw"',
+                '',
+            )
+        raise AssertionError(f'unexpected mutating subprocess: {cmd}')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', _findmnt_only)
 
     _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+    assert len(calls) == 1
+    assert calls[0][:6] == [
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,ROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
+    ]
 
 
 def test_persistent_root_host_bind_issues_direct_mount_command(
@@ -1784,3 +1801,45 @@ def test_persistent_host_bind_escalates_only_for_the_bind_mount(
     plain = {program(p) for p in real if p[:1] != ['sudo']}
     assert 'mkdir' in plain, raw
     assert escalated == {'mount'}, raw
+
+
+def test_persistent_host_replay_rejects_unsafe_tokens() -> None:
+    from aivm.persistent_replay import persistent_host_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_host_replay_python())
+
+    for token in ('../ssh', '/etc', '.', '..', 'name/child', ''):
+        with pytest.raises(
+            RuntimeError, match='invalid persistent host bind token'
+        ):
+            ns['validate_token'](token)
+
+
+def test_persistent_host_replay_service_is_root_scoped() -> None:
+    from aivm.persistent_replay import persistent_host_replay_service_unit
+
+    unit = persistent_host_replay_service_unit(
+        vm_name='vm-safe',
+        manifest_path='/var/lib/aivm/persistent-host/vm-safe.json',
+        export_root='/var/lib/aivm/vms/vm-safe/persistent-root',
+    )
+
+    assert 'User=root' in unit
+    assert 'Group=root' in unit
+    assert 'NoNewPrivileges=yes' in unit
+    assert '--vm-name "vm-safe"' in unit
+    assert '--manifest "/var/lib/aivm/persistent-host/vm-safe.json"' in unit
+
+
+def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
+    from aivm.attachments.persistent import (
+        _persistent_host_replay_manifest_path,
+    )
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm/unsafe name'
+    path = _persistent_host_replay_manifest_path(cfg)
+
+    assert path.parent == Path('/var/lib/aivm/persistent-host')
+    assert '/' not in path.name
+    assert path.suffix == '.json'
