@@ -59,7 +59,11 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     env['HOME'] = str(home)
 
     timeout_s = int(os.getenv('AIVM_E2E_TIMEOUT', '2400'))
-    _require_e2e_host_dependencies(cwd=REPO_ROOT, timeout_s=timeout_s, env=env)
+    # The lifecycle under test never escalates, so the dependency preflight
+    # must not require passwordless sudo either.
+    _require_e2e_host_dependencies(
+        cwd=REPO_ROOT, timeout_s=timeout_s, env=env, sudo=False
+    )
 
     cfg_path = tmp_path / 'e2e-sudoless.toml'
     base_dir = tmp_path / 'vmstore'

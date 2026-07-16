@@ -219,11 +219,14 @@ def run_ssh_command(
 
 
 def _require_e2e_host_dependencies(
-    *, cwd: Path, timeout_s: int, env: dict[str, str]
+    *, cwd: Path, timeout_s: int, env: dict[str, str], sudo: bool = True
 ) -> None:
     # Fail fast with actionable guidance before spending minutes on VM setup.
+    # ``sudo=False`` is for the sudoless suite: its lifecycle never escalates,
+    # so its preflight must not demand passwordless sudo either.
+    argv = ['host', 'doctor'] + (['--sudo'] if sudo else [])
     doctor = _run_cli(
-        ['host', 'doctor', '--sudo'],
+        argv,
         cwd=cwd,
         timeout_s=timeout_s,
         env=env,
@@ -232,7 +235,7 @@ def _require_e2e_host_dependencies(
     if doctor.returncode != 0:
         raise AssertionError(
             'E2E host dependencies are not ready. '
-            '`aivm host doctor --sudo` failed.\n'
+            f'`aivm {" ".join(argv)}` failed.\n'
             'Install missing dependencies (e.g. `aivm host install_deps --yes`) '
             'and rerun.\n'
             f'--- output ---\n{doctor.stdout}\n'
