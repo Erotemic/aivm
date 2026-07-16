@@ -580,8 +580,12 @@ class SudolessSetupCLI(_BaseCommand):
             if not user_can_write_path(vm_base):
                 print(
                     f'⚠️ Existing VM {rec.name!r} stores images under '
-                    f'{vm_base}, which still needs sudo; recreate it or '
-                    'move its storage for fully sudoless operation.'
+                    f'{vm_base}, which still needs sudo. Once the new '
+                    'base_dir is persisted, `aivm vm create --force` '
+                    'recreates it there from a fresh image (guest state is '
+                    'lost). To keep guest state instead, move the storage '
+                    'by hand and update paths.base_dir in its [[vms]] '
+                    'entry.'
                 )
         return 0
 
