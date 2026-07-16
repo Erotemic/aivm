@@ -129,6 +129,25 @@ def _ensure_approved_state_directories(*, dry_run: bool) -> None:
         )
 
 
+def _persistent_host_replay_state_needed(
+    cfg: AgentVMConfig, cfg_path: Path
+) -> bool:
+    """True when the root replay service has, or must be told about, work.
+
+    An installed manifest must track record changes -- including down to
+    empty, so a detach of the last persistent folder still propagates.  But
+    with no enabled persistent record and nothing previously installed there
+    is no replay state to create, secure, or update: privilege gates on the
+    command, not the feature, so a VM that never opted into persistent
+    attachments must not demand root for their replay machinery (e.g.
+    ``vm up`` under ``privilege_mode='never'``).
+    """
+    if _persistent_host_replay_manifest_path(cfg).exists():
+        return True
+    records = _persistent_attachment_records_for_vm(cfg, cfg_path)
+    return any(rec.enabled for rec in records)
+
+
 def _sync_persistent_host_replay_manifest(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -137,6 +156,8 @@ def _sync_persistent_host_replay_manifest(
 ) -> Path:
     """Install the replay input into root-owned, non-user-writable storage."""
     target = _persistent_host_replay_manifest_path(cfg)
+    if not _persistent_host_replay_state_needed(cfg, cfg_path):
+        return target
     _ensure_approved_state_directories(dry_run=dry_run)
     manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
     transport._install_host_text_if_changed(

@@ -34,6 +34,13 @@ def _install_persistent_host_bind_replay(
     *,
     dry_run: bool,
 ) -> bool:
+    if not manifest._persistent_host_replay_state_needed(cfg, cfg_path):
+        log.info(
+            'No persistent attachments recorded for VM {}; not installing '
+            'the host replay service.',
+            cfg.vm.name,
+        )
+        return False
     approved_manifest_path = manifest._sync_persistent_host_replay_manifest(
         cfg, cfg_path, dry_run=dry_run
     )

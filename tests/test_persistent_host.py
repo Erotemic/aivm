@@ -79,9 +79,10 @@ def _redirect_replay_state_dir(
 ) -> Path:
     """Point the root-owned replay-manifest namespace at ``tmp_path``.
 
-    The sandbox directory never exists, so the safety probe deterministically
-    reports it unsafe and the reconcile issues its securing commands
-    regardless of the state of the host's real ``/var/lib/aivm``.
+    Keeps the ``exists()`` gate and any securing/install commands aimed at
+    the sandbox rather than the host's real ``/var/lib/aivm``.  The sandbox
+    dir does not exist and is not root-owned, so when replay state *is*
+    needed the safety probe deterministically reports it unsafe.
     """
     state_dir = tmp_path / 'approved-replay-state'
     monkeypatch.setattr(
@@ -92,13 +93,33 @@ def _redirect_replay_state_dir(
     return state_dir
 
 
+def _record_persistent_attachment(
+    cfg: AgentVMConfig, cfg_path: Path, tmp_path: Path
+) -> None:
+    """Persist one enabled persistent attachment record for ``cfg``'s VM."""
+    store = Store()
+    store.attachments.append(
+        AttachmentEntry(
+            host_path=str((tmp_path / 'proj').resolve()),
+            vm_name=cfg.vm.name,
+            mode='persistent',
+            access='rw',
+            guest_dst='/workspace/proj',
+            tag='hostcode-proj',
+            host_lexical_paths=[],
+        )
+    )
+    save_store(store, cfg_path)
+
+
 def _replay_state_routes() -> dict[str, FakeProc]:
     """Recorder routes for the host-side root replay-manifest sync.
 
-    Reconcile now secures a root-owned state dir (``bash -c 'install -d
-    ...'``) and installs the approved manifest (``install``/``rm``) before
-    touching the guest; these argv commands are host-local and never carry
-    an ssh script, so they stay out of ``_ssh_scripts`` assertions.
+    When a VM has persistent records (or a previously installed manifest),
+    reconcile secures a root-owned state dir (``bash -c 'install -d ...'``)
+    and installs the approved manifest (``install``/``rm``) before touching
+    the guest; these argv commands are host-local and never carry an ssh
+    script, so they stay out of ``_ssh_scripts`` assertions.
     """
     return {
         'bash': FakeProc(),
@@ -490,7 +511,6 @@ def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
         {
             'ssh': _hash_route('MATCH'),
             'rsync': FakeProc(stdout=''),
-            **_replay_state_routes(),
         },
     )
 
@@ -541,7 +561,6 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
             'rsync': FakeProc(
                 stdout='>f..t...... persistent-attachments.json\n'
             ),
-            **_replay_state_routes(),
         },
     )
 
@@ -608,7 +627,6 @@ def test_persistent_reconcile_propagates_primary_failures(
             'rsync': FakeProc(stdout=''),
         }
 
-    routes.update(_replay_state_routes())
     command_recorder(monkeypatch, routes)
 
     with pytest.raises(CommandError):
@@ -678,7 +696,6 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
             'rsync': FakeProc(stdout=''),
         }
 
-    routes.update(_replay_state_routes())
     command_recorder(monkeypatch, routes)
 
     _reconcile_persistent_attachments_in_guest(
@@ -735,7 +752,6 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
             ),
             'rsync': FakeProc(stdout=''),
             'python': FakeProc(returncode=7),
-            **_replay_state_routes(),
         },
     )
 
@@ -854,13 +870,17 @@ def test_install_persistent_host_bind_replay_enables_service(
     """Installing the host replay unit reloads systemd and enables the service.
 
     Lets the real host-text install run and asserts on the recorded
-    ``install`` / ``systemctl`` argv it submits.
+    ``install`` / ``systemctl`` argv it submits.  The VM has a persistent
+    attachment recorded -- without one the install is deliberately a no-op
+    (see the state-gate tests below).
     """
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-persistent-host-service'
     cfg.paths.base_dir = str(tmp_path / 'base')
     cfg_path = tmp_path / 'config.toml'
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+    _record_persistent_attachment(cfg, cfg_path, tmp_path)
     activate_manager(monkeypatch)
 
     rec = command_recorder(monkeypatch, default=FakeProc())
@@ -881,6 +901,99 @@ def test_install_persistent_host_bind_replay_enables_service(
     )
     assert ['systemctl', 'daemon-reload'] in rec.normalized
     assert ['systemctl', 'enable', service_name] in rec.normalized
+
+
+def test_persistent_host_replay_state_untouched_without_records(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No persistent records and nothing installed → zero host commands.
+
+    The root-owned replay state (/var/lib/aivm) exists for persistent
+    attachments; a VM that has none must not demand root to materialize it.
+    This is the `vm up` path under privilege_mode='never': the recorder has
+    no routes, so any command at all -- notably the sudo `install -d`
+    securing step -- fails the test.
+    """
+    from aivm.attachments.persistent import (
+        _reconcile_persistent_host_binds,
+        _sync_persistent_host_replay_manifest,
+    )
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-no-persistent'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)  # a VM with no attachments at all
+    _redirect_appdir(monkeypatch, tmp_path)
+    state_dir = _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(monkeypatch, {})  # strict: any command raises
+
+    target = _sync_persistent_host_replay_manifest(
+        cfg, cfg_path, dry_run=False
+    )
+    installed = _install_persistent_host_bind_replay(
+        cfg, cfg_path, dry_run=False
+    )
+    _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=False)
+
+    assert rec.normalized == []
+    assert installed is False
+    assert target.parent == state_dir
+    assert not state_dir.exists()
+
+
+def test_persistent_host_replay_manifest_still_updates_after_last_detach(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An installed manifest keeps tracking records down to empty.
+
+    Detaching the last persistent folder leaves no records, but the root
+    replay service still holds the old manifest; the sync must rewrite it to
+    the empty desired state rather than skip.  The staged manifest content
+    is captured at the faked install boundary and is the artifact.
+    """
+    from aivm.attachments.persistent import (
+        _sync_persistent_host_replay_manifest,
+    )
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-detached-persistent'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)  # records already gone
+    _redirect_appdir(monkeypatch, tmp_path)
+    state_dir = _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    # The previously installed manifest, still naming a record.
+    from aivm.attachments.persistent import (
+        _persistent_host_replay_manifest_path,
+    )
+
+    state_dir.mkdir(parents=True)
+    manifest_path = _persistent_host_replay_manifest_path(cfg)
+    manifest_path.write_text('{"records": [{"tag": "old"}]}', encoding='utf-8')
+
+    staged: list[str] = []
+
+    def capture_manifest(cmd: list[str]) -> FakeProc:
+        # install -m 0644 -o root -g root <tmpfile> <target>: read the staged
+        # file now, before the sync's finally-block unlinks it.
+        staged.append(Path(cmd[-2]).read_text(encoding='utf-8'))
+        return FakeProc()
+
+    rec = command_recorder(
+        monkeypatch,
+        {**_replay_state_routes(), ('install', '-m', '0644'): capture_manifest},
+    )
+
+    _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+
+    assert rec.ran('install')
+    assert len(staged) == 1
+    assert json.loads(staged[0])['records'] == []
 
 
 def test_persistent_root_host_bind_short_circuits_when_already_bound(
