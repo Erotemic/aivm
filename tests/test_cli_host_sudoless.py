@@ -527,9 +527,18 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     assert cfg_path.read_bytes() == before
 
     script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
-    assert f'chgrp -R libvirt {tree}' in script
-    assert f'chmod -R g+rwX {tree}' in script
+    assert f'tree={tree}' in script
+    assert 'chgrp libvirt' in script
+    assert 'chmod g+rwX' in script
     assert 'chmod g+s' in script
+    # Never a blanket recursive pass: every operation goes through find
+    # with the mountpoint prune list, computed from the kernel mount table
+    # at execution time (binds of user folders live under the tree).
+    assert 'chgrp -R' not in script
+    assert 'chmod -R' not in script
+    assert '/proc/self/mounts' in script
+    assert script.count('"${prune[@]}"') == 3
+    assert '! -type l' in script
     # The handoff runs escalated, between shutdown and restart.
     raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
     assert raw_bash[0] == 'sudo'
@@ -617,4 +626,98 @@ def test_adopt_reports_when_nothing_needs_adopting(
     out = capsys.readouterr().out
     assert rc == 0
     assert 'Nothing to adopt' in out
+    assert rec.normalized == []
+
+
+def test_attachment_mounts_under_decodes_and_filters(tmp_path: Path) -> None:
+    """Mount enumeration keeps strictly-below targets, decoding \\040."""
+    from aivm.cli.host_sudoless import _attachment_mounts_under
+
+    tree = tmp_path / 'storage'
+    mounts = tmp_path / 'mounts'
+    mounts.write_text(
+        # outside the tree: ignored
+        '/dev/sda1 / ext4 rw 0 0\n'
+        f'/dev/sda1 {tmp_path}/elsewhere ext4 rw 0 0\n'
+        # the tree itself (not strictly below): ignored
+        f'/dev/sda1 {tree} ext4 rw 0 0\n'
+        # binds below the tree: returned, octal escapes decoded
+        f'/dev/sda1 {tree}/vm/persistent-root/hostcode-a ext4 rw 0 0\n'
+        f'/dev/sdb1 {tree}/vm/shared-root/with\\040space ext4 rw 0 0\n',
+        encoding='utf-8',
+    )
+
+    got = _attachment_mounts_under(tree, mounts_path=str(mounts))
+
+    assert got == [
+        f'{tree}/vm/persistent-root/hostcode-a',
+        f'{tree}/vm/shared-root/with space',
+    ]
+
+
+def test_adopt_lists_bind_mounts_it_will_exclude(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """The preflight names every excluded bind before anything runs."""
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='shut off'
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless._attachment_mounts_under',
+        lambda t, **k: [
+            f'{t}/vm-a/persistent-root/hostcode-proj',
+            f'{t}/vm-a/shared-root/hostcode-docs',
+        ],
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert '2 attached folder(s) are bind-mounted under this tree' in out
+    assert 'persistent-root/hostcode-proj' in out
+    assert 'shared-root/hostcode-docs' in out
+    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+
+
+def test_adopt_refuses_mountpoints_find_cannot_match(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """A glob-metacharacter mountpoint cannot be pruned reliably: refuse."""
+    from tests.helpers import command_recorder
+
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path = tmp_path / 'config.toml'
+    tree = tmp_path / 'storage'
+    tree.mkdir()
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir=str(tree),
+        firewall_enabled=False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_can_write_path',
+        lambda p: str(p) != str(tree),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless._attachment_mounts_under',
+        lambda t, **k: [f'{t}/vm-a/persistent-root/host*code'],
+    )
+    rec = command_recorder(monkeypatch, {})  # strict: any command raises
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert 'cannot be safely excluded' in out
+    assert 'Detach those folders first' in out
     assert rec.normalized == []

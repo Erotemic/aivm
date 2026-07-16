@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -149,6 +150,40 @@ def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
         return cfg
 
 
+def _decode_mounts_field(field: str) -> str:
+    r"""Decode the octal escapes /proc/self/mounts uses (``\040`` = space)."""
+    return re.sub(
+        r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field
+    )
+
+
+def _attachment_mounts_under(
+    tree: Path, *, mounts_path: str = '/proc/self/mounts'
+) -> list[str]:
+    """Mountpoints strictly below ``tree``, per the kernel mount table.
+
+    Attachment export roots live *under* VM storage
+    (``<base_dir>/<vm>/{persistent,shared}-root/<token>``) and each token is
+    a live bind mount of a real user folder -- same inodes, so a recursive
+    operation on the tree would rewrite the user's actual files.  Anything
+    this returns must be excluded from recursive passes.  ``findmnt
+    --submounts`` cannot do this job (it prints nothing when ``tree`` is not
+    itself a mountpoint) and ``-xdev`` cannot either (a bind keeps the
+    source's device number).
+    """
+    prefix = str(tree).rstrip('/') + '/'
+    mounts: list[str] = []
+    with open(mounts_path, encoding='utf-8') as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            target = _decode_mounts_field(parts[1])
+            if target.startswith(prefix):
+                mounts.append(target)
+    return sorted(mounts)
+
+
 def _adopt_script(tree: Path) -> str:
     """The one privileged command of adoption: group-own ``tree`` in place.
 
@@ -156,18 +191,46 @@ def _adopt_script(tree: Path) -> str:
     members; setgid dirs keep new entries in the group; the default ACLs
     keep future files group-writable regardless of umask and preserve
     libvirt-qemu traversal even if a directory later drops ``o+x``.
+
+    Every recursive pass prunes the mountpoints below the tree: those are
+    bind mounts of real user folders (see :func:`_attachment_mounts_under`),
+    and recursing through one rewrites the user's actual files.  The mount
+    table is read *inside* the script -- the approval prompt and sudo
+    password can sit for minutes, long enough for a replay service or a
+    concurrent attach to add a bind -- and the script refuses outright when
+    the table is unreadable or a mountpoint's name cannot be safely handed
+    to ``find -path`` (glob characters, escapes beyond plain spaces).
+    Symlinks are skipped: unlike ``chgrp -R``, per-entry ``chgrp``/``chmod``
+    would follow a link and modify its target.
     """
     q = shlex.quote(str(tree))
-    return (
-        'set -eu; '
-        f'chgrp -R {LIBVIRT_GROUP} {q}; '
-        f'chmod -R g+rwX {q}; '
-        f'find {q} -type d -exec chmod g+s {{}} +; '
-        'if command -v setfacl >/dev/null 2>&1; then '
-        f'find {q} -type d -exec setfacl '
+    setfacl_args = (
         f'-m u:{LIBVIRT_QEMU_USER}:x '
         f'-m default:group:{LIBVIRT_GROUP}:rwX '
-        f'-m default:user:{LIBVIRT_QEMU_USER}:x {{}} +; '
+        f'-m default:user:{LIBVIRT_QEMU_USER}:x'
+    )
+    return (
+        'set -euo pipefail; '
+        f'tree={q}; '
+        '[ -r /proc/self/mounts ] || { '
+        'echo "refusing: cannot read /proc/self/mounts, so bind mounts '
+        'under $tree cannot be excluded" >&2; exit 3; }; '
+        'prune=(); '
+        'while IFS= read -r mp; do '
+        '[ -n "$mp" ] || continue; '
+        'case "$mp" in (*[\\\\*?[]*) '
+        'echo "refusing: mountpoint under $tree has characters find -path '
+        'cannot match safely: $mp" >&2; exit 3;; esac; '
+        'prune+=( -path "$mp" -prune -o ); '
+        "done < <(awk -v t=\"$tree/\" "
+        "'{ gsub(/\\\\040/, \" \", $2); if (index($2, t) == 1) print $2 }' "
+        '/proc/self/mounts); '
+        f'find "$tree" "${{prune[@]}}" ! -type l '
+        f'-exec chgrp {LIBVIRT_GROUP} {{}} + -exec chmod g+rwX {{}} +; '
+        'find "$tree" "${prune[@]}" -type d -exec chmod g+s {} +; '
+        'if command -v setfacl >/dev/null 2>&1; then '
+        f'find "$tree" "${{prune[@]}}" -type d '
+        f'-exec setfacl {setfacl_args} {{}} +; '
         'fi'
     )
 
@@ -186,6 +249,15 @@ def _adopt_one_tree(
         f'group write, so {LIBVIRT_GROUP} members manage VM storage there '
         'without sudo. VM disks and definitions are not touched.'
     )
+    mounts = _attachment_mounts_under(tree)
+    if mounts:
+        print(
+            f'{len(mounts)} attached folder(s) are bind-mounted under this '
+            'tree; they are excluded from the ownership change and stay '
+            'exactly as they are:'
+        )
+        for mp in mounts:
+            print(f'  - {mp}')
     if running:
         print(
             f'Stopping {", ".join(running)} first: libvirt records disk '
@@ -197,8 +269,9 @@ def _adopt_one_tree(
         for name in running:
             print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
         print(
-            f'DRYRUN: chgrp -R {LIBVIRT_GROUP} {tree}; chmod -R g+rwX; '
-            'setgid dirs; grant group/qemu ACLs'
+            f'DRYRUN: chgrp {LIBVIRT_GROUP} + chmod g+rwX + setgid dirs + '
+            f'group/qemu ACLs across {tree}, pruning every mountpoint below '
+            'it'
         )
         return
     for name in running:
@@ -245,9 +318,27 @@ def _run_storage_adoption(
         if len(tree.resolve().parts) < _ADOPT_MIN_DEPTH:
             print(
                 f'❌ Refusing to adopt {tree}: too close to the filesystem '
-                'root to chgrp -R safely. Point VM storage at a dedicated '
-                'directory first.'
+                'root to change ownership recursively. Point VM storage at '
+                'a dedicated directory first.'
             )
+            return 2
+        # The script prunes each mountpoint below the tree via find -path,
+        # which matches glob patterns; a mountpoint whose name find cannot
+        # match literally could not be reliably excluded, so refuse.
+        unsafe = [
+            mp
+            for mp in _attachment_mounts_under(tree)
+            if any(ch in mp for ch in '*?[\\\t\n')
+        ]
+        if unsafe:
+            print(
+                f'❌ Refusing to adopt {tree}: mountpoints below it have '
+                'names that cannot be safely excluded from the recursive '
+                'ownership change:'
+            )
+            for mp in unsafe:
+                print(f'  - {mp!r}')
+            print('Detach those folders first, then re-run.')
             return 2
     for tree in trees:
         _adopt_one_tree(args, mgr, tree, _vms_stored_under(args.config, tree))

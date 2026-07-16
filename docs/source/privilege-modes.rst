@@ -85,7 +85,11 @@ Choosing a mode
   group write), briefly stopping any running VM stored there -- libvirt
   records disk ownership at start and restores it at shutdown, so the
   change must land while the VM is off. Disks, domain definitions, and
-  config are untouched.
+  config are untouched. Attachment export roots under the tree are live
+  bind mounts of real user folders; adoption reads the kernel mount table
+  at execution time, lists them, and excludes them from the ownership
+  change entirely (refusing to run at all if they cannot be excluded
+  safely).
   Sudo remains only for operations with no unprivileged form: the nftables
   firewall, ``apt-get``, ``mount --bind``, and ``umount``. Reconciling an
   already-established attachment -- the ``aivm code .`` hot path -- issues no
