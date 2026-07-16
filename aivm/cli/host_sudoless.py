@@ -383,8 +383,9 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
         if _firewall_enabled_anywhere(config_opt):
             print(
                 "⚠️ firewall.enabled is true, which privilege_mode = 'never' "
-                'cannot honor. Disable the firewall or choose a mode that may '
-                'escalate.'
+                "cannot honor. Choose a mode that may escalate ('as-needed') "
+                'to keep it; disabling the firewall would satisfy the mode '
+                "at the cost of the guest's egress containment."
             )
     elif mode == PrivilegeMode.ALWAYS:
         print("behavior.privilege_mode = 'always': aivm escalates for every")
@@ -447,12 +448,26 @@ class SudolessCheckCLI(_BaseCommand):
         sudo_needs: list[str] = []  # costs sudo; a failure only under 'never'
 
         def friction_line(
-            ok: bool, label: str, detail: str, need: str
+            ok: bool,
+            label: str,
+            detail: str,
+            need: str,
+            icon: str | None = None,
         ) -> str:
-            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise."""
+            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise.
+
+            ``icon`` overrides the non-strict rendering for items setup
+            cannot trim (🧱: a wall, not a warning).
+            """
             if not ok:
                 sudo_needs.append(need)
-            return status_line(ok, label, detail, warn_only=not strict)
+            return status_line(
+                ok,
+                label,
+                detail,
+                warn_only=not strict,
+                icon=None if strict else icon,
+            )
 
         in_group = user_in_libvirt_group()
         lines.append(
@@ -581,12 +596,15 @@ class SudolessCheckCLI(_BaseCommand):
                     False,
                     'firewall compatibility',
                     'firewall.enabled requires root nftables access, which '
-                    'has no unprivileged equivalent; disable it to run fully '
-                    'without sudo'
+                    "has no unprivileged equivalent, so privilege_mode "
+                    "'never' cannot apply it. The firewall is the guest's "
+                    'egress containment; disabling it trades that away'
                     if strict
-                    else 'applying nftables rules uses sudo; disable '
-                    'firewall.enabled to avoid it',
+                    else 'nftables needs root, so applying firewall rules '
+                    'uses sudo. There is no sudo-free form; this is the '
+                    'cost of guest egress containment, not a setup gap',
                     'the nftables firewall',
+                    icon='🧱',
                 )
             )
 
@@ -621,10 +639,20 @@ class SudolessCheckCLI(_BaseCommand):
                 f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
                 'used for: ' + '; '.join(needs) + '.'
             )
-            print(
-                '   `aivm host sudoless setup` trims that list; '
-                "privilege_mode = 'never' forbids escalation outright."
-            )
+            fixable = [n for n in needs if n != 'the nftables firewall']
+            if fixable:
+                print(
+                    '   `aivm host sudoless setup` can remove: '
+                    + '; '.join(fixable)
+                    + '.'
+                )
+            if 'the nftables firewall' in needs:
+                print(
+                    '   The firewall has no sudo-free form (nft needs '
+                    'root), and it is what stands between the guest and '
+                    'your local network. Sudo here is the firewall '
+                    'working, not a problem to fix.'
+                )
             return 0
         print('✅ Host is ready for sudoless operation.')
         return 0

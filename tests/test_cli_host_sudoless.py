@@ -721,3 +721,35 @@ def test_adopt_refuses_mountpoints_find_cannot_match(
     assert 'cannot be safely excluded' in out
     assert 'Detach those folders first' in out
     assert rec.normalized == []
+
+
+def test_check_never_recommends_disabling_the_firewall(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """Firewall sudo is presented as inherent, never as a thing to disable.
+
+    The firewall is the guest's egress containment; check must not hand out
+    'disable it' as a convenience tip.  With everything else green the
+    verdict also must not point at `sudoless setup`, which cannot remove
+    this item.
+    """
+    cfg_path = tmp_path / 'config.toml'
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir=str(tmp_path / 'mine'),
+        firewall_enabled=True,
+    )
+    _stub_check_probes(monkeypatch)
+
+    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert 'disable' not in out.lower()
+    assert 'egress containment' in out
+    assert 'not a problem to fix' in out
+    assert 'sudoless setup' not in out  # nothing setup-fixable remains
+    # A wall, not a warning: no amount of setup removes this item.
+    assert '🧱 firewall compatibility' in out
+    assert '⚠️' not in out
