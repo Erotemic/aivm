@@ -79,6 +79,13 @@ Choosing a mode
   operations, and not for creating the bind-mount export directories under
   ``paths.base_dir``. The decision is made per command against the specific
   path it touches, so a host that never ran setup behaves exactly as before.
+  A host with existing VMs created under root-owned storage does not need
+  to move or recreate them: ``aivm host sudoless setup --adopt`` hands the
+  existing tree to the ``libvirt`` group in place (``root:libvirt`` with
+  group write), briefly stopping any running VM stored there -- libvirt
+  records disk ownership at start and restores it at shutdown, so the
+  change must land while the VM is off. Disks, domain definitions, and
+  config are untouched.
   Sudo remains only for operations with no unprivileged form: the nftables
   firewall, ``apt-get``, ``mount --bind``, and ``umount``. Reconciling an
   already-established attachment -- the ``aivm code .`` hot path -- issues no

@@ -78,6 +78,7 @@ __all__ = [
     'file_write_needs_sudo',
     'require_sudo_allowed',
     'user_can_write_path',
+    'user_owns_path',
     'user_can_write_file',
     'user_in_libvirt_group',
     'qemu_traversal_blockers',
@@ -176,6 +177,17 @@ def nearest_existing_ancestor(path: Path) -> Path | None:
         if parent == p:
             return None
         p = parent
+
+
+def user_owns_path(path: Path | str) -> bool:
+    """True when the invoking user owns ``path``.
+
+    ``chmod``/``setfacl`` require ownership, not writability: a
+    group-writable directory (e.g. adopted ``root:libvirt`` storage) passes
+    :func:`user_can_write_path` yet still refuses unprivileged ACL changes.
+    """
+    st = _stat_or_none(Path(path))
+    return st is not None and st.st_uid == os.geteuid()
 
 
 def user_can_write_path(path: Path | str) -> bool:

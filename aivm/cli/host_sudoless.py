@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ import kwconf
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
-from ..config_store import load_store, save_store
+from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
@@ -42,6 +43,13 @@ from ..privilege import (
 from ..services import cfg_path
 from ..status import status_line
 from ..util import expand, which
+from ..vm.domain import (
+    _get_vm_state,
+    _is_vm_active,
+    _start_vm,
+    _wait_for_vm_state,
+    shutdown_vm,
+)
 from ._common import _BaseCommand
 
 #: Where setup puts VM storage when the configured base_dir needs root.
@@ -92,6 +100,160 @@ def _storage_dirs_to_grade(config_opt: str | None) -> list[tuple[Path, str]]:
     if not dirs:
         dirs[Path(expand(PathsConfig().base_dir))] = ['new VMs']
     return [(d, ', '.join(users)) for d, users in dirs.items()]
+
+
+#: Adoption chgrp -R's a tree; refuse anything shallow enough to be a
+#: system directory rather than a dedicated storage tree.
+_ADOPT_MIN_DEPTH = 4
+
+
+def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
+    """Names of stored VMs whose ``base_dir`` is ``tree``."""
+    try:
+        path = cfg_path(config_opt)
+        if not path.exists():
+            return []
+        reg = load_store(path)
+    except Exception:
+        return []
+    return sorted(
+        rec.name
+        for rec in reg.vms
+        if rec.cfg.paths.base_dir
+        and Path(expand(rec.cfg.paths.base_dir)) == tree
+    )
+
+
+def _adoptable_storage_trees(config_opt: str | None) -> list[Path]:
+    """Existing storage dirs from the store that still need sudo."""
+    return [
+        tree
+        for tree, _used_by in _storage_dirs_to_grade(config_opt)
+        if tree.is_dir() and not user_can_write_path(tree)
+    ]
+
+
+def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
+    """Materialize a stored VM's config; fall back to a name-only config.
+
+    The lifecycle helpers adoption drives (``shutdown_vm``) only read
+    ``cfg.vm.name``, so a store whose network record is missing must not
+    block the storage handoff.
+    """
+    try:
+        reg = load_store(cfg_path(config_opt))
+        return materialize_vm_cfg(reg, name)
+    except Exception:
+        cfg = AgentVMConfig()
+        cfg.vm.name = name
+        return cfg
+
+
+def _adopt_script(tree: Path) -> str:
+    """The one privileged command of adoption: group-own ``tree`` in place.
+
+    ``chgrp``/``chmod g+rwX`` make the tree manageable by libvirt-group
+    members; setgid dirs keep new entries in the group; the default ACLs
+    keep future files group-writable regardless of umask and preserve
+    libvirt-qemu traversal even if a directory later drops ``o+x``.
+    """
+    q = shlex.quote(str(tree))
+    return (
+        'set -eu; '
+        f'chgrp -R {LIBVIRT_GROUP} {q}; '
+        f'chmod -R g+rwX {q}; '
+        f'find {q} -type d -exec chmod g+s {{}} +; '
+        'if command -v setfacl >/dev/null 2>&1; then '
+        f'find {q} -type d -exec setfacl '
+        f'-m u:{LIBVIRT_QEMU_USER}:x '
+        f'-m default:group:{LIBVIRT_GROUP}:rwX '
+        f'-m default:user:{LIBVIRT_QEMU_USER}:x {{}} +; '
+        'fi'
+    )
+
+
+def _adopt_one_tree(
+    args: Any, mgr: CommandManager, tree: Path, vm_names: list[str]
+) -> None:
+    """Hand one storage tree to the libvirt group, cycling running VMs."""
+    running: list[str] = []
+    for name in vm_names:
+        code, state, _err = _get_vm_state(name)
+        if code == 0 and _is_vm_active(state):
+            running.append(name)
+    print(
+        f'Adopting {tree}: ownership becomes root:{LIBVIRT_GROUP} with '
+        f'group write, so {LIBVIRT_GROUP} members manage VM storage there '
+        'without sudo. VM disks and definitions are not touched.'
+    )
+    if running:
+        print(
+            f'Stopping {", ".join(running)} first: libvirt records disk '
+            'ownership when a VM starts and restores it at shutdown, so a '
+            'change made while running would be silently undone. The VM '
+            'restarts as soon as the handoff is done.'
+        )
+    if args.dry_run:
+        for name in running:
+            print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
+        print(
+            f'DRYRUN: chgrp -R {LIBVIRT_GROUP} {tree}; chmod -R g+rwX; '
+            'setgid dirs; grant group/qemu ACLs'
+        )
+        return
+    for name in running:
+        print(f'Shutting down VM {name} ...')
+        shutdown_vm(_cfg_for_stored_vm(args.config, name))
+        _wait_for_vm_state(name, 'shut off', timeout_s=180, poll_interval_s=2)
+    with mgr.step(
+        'Hand VM storage to the libvirt group',
+        why=(
+            'Group-owning the existing tree in place removes the need for '
+            'sudo on VM image operations without moving or recreating '
+            'anything.'
+        ),
+        approval_scope=f'sudoless-adopt:{tree}',
+    ):
+        mgr.submit(
+            ['bash', '-c', _adopt_script(tree)],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
+            detail=f'tree={tree}',
+        )
+    for name in running:
+        print(f'Starting VM {name} again ...')
+        _start_vm(name)
+    print(f'✅ Adopted {tree}; file operations there no longer need sudo.')
+
+
+def _run_storage_adoption(
+    args: Any, mgr: CommandManager, *, group_added: bool
+) -> int:
+    trees = _adoptable_storage_trees(args.config)
+    if not trees:
+        print(
+            'Nothing to adopt: every storage directory your config uses is '
+            'already writable without sudo.'
+        )
+        print()
+        _print_policy_report(args.config, group_added=group_added)
+        return 0
+    for tree in trees:
+        if len(tree.resolve().parts) < _ADOPT_MIN_DEPTH:
+            print(
+                f'❌ Refusing to adopt {tree}: too close to the filesystem '
+                'root to chgrp -R safely. Point VM storage at a dedicated '
+                'directory first.'
+            )
+            return 2
+    for tree in trees:
+        _adopt_one_tree(args, mgr, tree, _vms_stored_under(args.config, tree))
+    print()
+    _print_policy_report(args.config, group_added=group_added)
+    return 0
 
 
 def _print_base_dir_toml(base_dir: Path) -> None:
@@ -238,14 +400,24 @@ class SudolessCheckCLI(_BaseCommand):
         any_blockers = False
         for base_dir, used_by in _storage_dirs_to_grade(args.config):
             writable = user_can_write_path(base_dir)
+            if writable:
+                storage_detail = f'{base_dir} ({used_by})'
+            elif base_dir.is_dir():
+                storage_detail = (
+                    f'{base_dir} ({used_by}) needs sudo; `aivm host '
+                    'sudoless setup --adopt` hands it to the libvirt '
+                    'group in place'
+                )
+            else:
+                storage_detail = (
+                    f'{base_dir} ({used_by}) needs sudo; `aivm host '
+                    'sudoless setup` prepares a user-owned dir'
+                )
             lines.append(
                 friction_line(
                     writable,
                     'VM storage writable',
-                    f'{base_dir} ({used_by})'
-                    if writable
-                    else f'{base_dir} ({used_by}) needs sudo; '
-                    '`aivm host sudoless setup` prepares a user-owned dir',
+                    storage_detail,
                     f'VM storage under {base_dir}',
                 )
             )
@@ -392,6 +564,16 @@ class SudolessSetupCLI(_BaseCommand):
             'firewall.enabled stay yours to set.'
         ),
     )
+    adopt: bool = kwconf.Flag(
+        False,
+        help=(
+            'Instead of preparing a new user-owned directory, hand the '
+            'existing root-owned VM storage to the libvirt group in place. '
+            'VM disks and definitions are untouched and no config change '
+            'is needed; running VMs stored there are briefly stopped and '
+            'restarted.'
+        ),
+    )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
@@ -448,6 +630,13 @@ class SudolessSetupCLI(_BaseCommand):
                             summary=f'Add {user} to the {LIBVIRT_GROUP} group',
                         )
                 group_added = True
+
+        if args.adopt:
+            # Adoption keeps every VM exactly where it is; only ownership
+            # changes. It is the mode-switch path for hosts with existing
+            # sudo-era VMs; the flow below instead prepares a fresh
+            # user-owned tree for hosts starting clean.
+            return _run_storage_adoption(args, mgr, group_added=group_added)
 
         # The ACLs below are granted on one specific directory, so they are
         # worthless unless aivm goes on to use it. Prefer the directory the
@@ -580,12 +769,10 @@ class SudolessSetupCLI(_BaseCommand):
             if not user_can_write_path(vm_base):
                 print(
                     f'⚠️ Existing VM {rec.name!r} stores images under '
-                    f'{vm_base}, which still needs sudo. Once the new '
-                    'base_dir is persisted, `aivm vm create --force` '
-                    'recreates it there from a fresh image (guest state is '
-                    'lost). To keep guest state instead, move the storage '
-                    'by hand and update paths.base_dir in its [[vms]] '
-                    'entry.'
+                    f'{vm_base}, which still needs sudo. Run `aivm host '
+                    'sudoless setup --adopt` to hand that storage to the '
+                    'libvirt group in place -- the VM is untouched (briefly '
+                    'stopped if running) and no config change is needed.'
                 )
         return 0
 

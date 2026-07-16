@@ -15,7 +15,7 @@ from ..privilege import (
     path_needs_sudo,
     qemu_traversal_blockers,
     sudo_allowed,
-    user_can_write_path,
+    user_owns_path,
 )
 from ..util import which
 
@@ -197,40 +197,46 @@ def _ensure_qemu_access_unprivileged(
                     summary=f'Create {d.name or "VM"} directory',
                     detail=f'target={d}',
                 )
-    # Grant traversal on the VM tree itself (idempotent) plus any user-owned
-    # ancestor that currently blocks libvirt-qemu (setup handles the rest).
-    blockers = [
-        b
-        for b in (qemu_traversal_blockers(base_root) or [])
-        if b not in subdirs
-    ]
-    own_blockers = [b for b in blockers if user_can_write_path(b)]
-    foreign_blockers = [b for b in blockers if not user_can_write_path(b)]
-    with mgr.intent(
-        'Grant qemu traversal',
-        why=(
-            'QEMU runs as libvirt-qemu and must be able to reach the VM '
-            'image tree through every ancestor directory.'
-        ),
-        role='modify',
-    ):
-        with mgr.step(
-            'Grant libvirt-qemu traversal ACLs',
+    # Grant traversal only where it is actually missing. A dir that already
+    # lets libvirt-qemu through (o+x, group, or an existing ACL) needs no
+    # command at all -- privilege gates on the command, not the feature.
+    # ``setfacl`` also requires *ownership*, not writability: adopted
+    # root:libvirt storage is group-writable but must not be touched here.
+    blockers: list[Path] = []
+    for d in subdirs:
+        for b in qemu_traversal_blockers(d) or []:
+            if b not in blockers:
+                blockers.append(b)
+    if not blockers:
+        return
+    own_blockers = [b for b in blockers if user_owns_path(b)]
+    foreign_blockers = [b for b in blockers if not user_owns_path(b)]
+    if own_blockers:
+        with mgr.intent(
+            'Grant qemu traversal',
             why=(
-                'Add per-user execute ACLs instead of loosening world '
-                'permissions or changing ownership.'
+                'QEMU runs as libvirt-qemu and must be able to reach the VM '
+                'image tree through every ancestor directory.'
             ),
-            approval_scope=f'vm-storage-acl:{base_root}',
+            role='modify',
         ):
-            for d in [*subdirs, *own_blockers]:
-                mgr.submit(
-                    ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(d)],
-                    sudo=False,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary=f'Allow libvirt-qemu to traverse {d}',
-                )
+            with mgr.step(
+                'Grant libvirt-qemu traversal ACLs',
+                why=(
+                    'Add per-user execute ACLs instead of loosening world '
+                    'permissions or changing ownership.'
+                ),
+                approval_scope=f'vm-storage-acl:{base_root}',
+            ):
+                for d in own_blockers:
+                    mgr.submit(
+                        ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(d)],
+                        sudo=False,
+                        role='modify',
+                        check=True,
+                        capture=True,
+                        summary=f'Allow libvirt-qemu to traverse {d}',
+                    )
     if foreign_blockers:
         log.warning(
             'libvirt-qemu cannot traverse {} (not owned by you). '

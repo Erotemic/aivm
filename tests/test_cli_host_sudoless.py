@@ -442,3 +442,179 @@ def test_firewall_enabled_anywhere_reads_network_records(
         firewall_enabled=True,
     )
     assert _firewall_enabled_anywhere(str(cfg_path)) is True
+
+
+# ---------------------------------------------------------------------------
+# `aivm host sudoless setup --adopt`
+# ---------------------------------------------------------------------------
+
+
+def _adopt_env(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    *,
+    initial_state: str,
+) -> tuple[Path, Path, Any]:
+    """A store with one VM on a root-owned tree, plus a scripted recorder.
+
+    ``initial_state`` is what ``virsh domstate`` reports until a
+    ``virsh shutdown`` is recorded, after which it reports ``shut off`` --
+    letting the real shutdown/wait code run against the fake boundary.
+    """
+    from tests.helpers import command_recorder
+
+    cfg_path = tmp_path / 'config.toml'
+    tree = tmp_path / 'rootish-store'
+    tree.mkdir()
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir=str(tree),
+        firewall_enabled=False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_can_write_path',
+        lambda p: str(p) != str(tree),
+    )
+    monkeypatch.setattr('aivm.vm.domain.time.sleep', lambda s: None)
+
+    state = {'value': initial_state}
+
+    def domstate(cmd: list[str]) -> FakeProc:
+        return FakeProc(0, state['value'] + '\n')
+
+    def shutdown(cmd: list[str]) -> FakeProc:
+        state['value'] = 'shut off'
+        return FakeProc(0, '', '')
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh domstate': domstate,
+            'virsh shutdown': shutdown,
+            'virsh start': FakeProc(0),
+            'bash -c': FakeProc(0),
+        },
+    )
+    return cfg_path, tree, rec
+
+
+def test_adopt_cycles_running_vm_around_the_group_handoff(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """A running VM is stopped, the tree group-owned, and the VM restarted.
+
+    The ordering matters: libvirt restores the disk ownership it recorded
+    at start, so the chgrp must land while the VM is off.  The privileged
+    script is the artifact: chgrp/chmod/setgid on exactly the adopted tree.
+    """
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='running'
+    )
+    before = cfg_path.read_bytes()
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    # The store is untouched: adoption changes ownership, not config.
+    assert cfg_path.read_bytes() == before
+
+    script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
+    assert f'chgrp -R libvirt {tree}' in script
+    assert f'chmod -R g+rwX {tree}' in script
+    assert 'chmod g+s' in script
+    # The handoff runs escalated, between shutdown and restart.
+    raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
+    assert raw_bash[0] == 'sudo'
+    order = [c[:2] for c in rec.normalized]
+    assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
+    assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
+    assert 'Stopping vm-a first' in out
+    assert 'restarts as soon as the handoff is done' in out
+
+
+def test_adopt_leaves_stopped_vm_alone(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """A VM that is already off is not started by adoption."""
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='shut off'
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    assert rc == 0
+    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+    assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
+    assert not any(c[:2] == ['virsh', 'start'] for c in rec.normalized)
+
+
+def test_adopt_refuses_shallow_system_paths(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """chgrp -R on something like /var/lib must be refused outright."""
+    from tests.helpers import command_recorder
+
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path = tmp_path / 'config.toml'
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir='/var/lib',
+        firewall_enabled=False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_can_write_path', lambda p: False
+    )
+    rec = command_recorder(monkeypatch, {})  # strict: any command raises
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert 'Refusing to adopt /var/lib' in out
+    assert rec.normalized == []
+
+
+def test_adopt_reports_when_nothing_needs_adopting(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """All-writable storage means adoption runs no commands at all."""
+    from tests.helpers import command_recorder
+
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path = tmp_path / 'config.toml'
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir=str(tmp_path / 'mine'),
+        firewall_enabled=False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+    )
+    rec = command_recorder(monkeypatch, {})  # strict: any command raises
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert 'Nothing to adopt' in out
+    assert rec.normalized == []
