@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from loguru import logger
 
@@ -336,6 +337,7 @@ def attach_vm_share(
     *,
     dry_run: bool = False,
     vm_running: bool | None = None,
+    read_only: bool = False,
 ) -> None:
     """Attach a virtiofs share mapping to an existing VM definition."""
     cfg = cfg.expanded_paths()
@@ -350,19 +352,25 @@ def attach_vm_share(
     if dry_run:
         log.info(
             'DRYRUN: attach virtiofs share source={} tag={} binary={}',
-            source_dir, tag, binary_path or '(libvirt default)',
+            source_dir,
+            tag,
+            binary_path or '(libvirt default)',
         )
         return
     binary_xml = (
-        f"  <binary path='{binary_path}'/>\n" if binary_path else ''
+        f'  <binary path={quoteattr(binary_path)}/>\n' if binary_path else ''
     )
+    source_attr = quoteattr(source_dir)
+    tag_attr = quoteattr(tag)
+    readonly_xml = '  <readonly/>\n' if read_only else ''
     xml = (
         "<filesystem type='mount' accessmode='passthrough'>\n"
         "  <driver type='virtiofs'/>\n"
-        f"{binary_xml}"
-        f"  <source dir='{source_dir}'/>\n"
-        f"  <target dir='{tag}'/>\n"
-        "</filesystem>\n"
+        f'{binary_xml}'
+        f'  <source dir={source_attr}/>\n'
+        f'  <target dir={tag_attr}/>\n'
+        f'{readonly_xml}'
+        '</filesystem>\n'
     )
     with tempfile.NamedTemporaryFile('w', delete=False) as f:
         f.write(xml)
@@ -420,18 +428,26 @@ def attach_vm_share(
 
 
 def detach_vm_share(
-    cfg: AgentVMConfig, source_dir: str, tag: str, *, dry_run: bool = False
+    cfg: AgentVMConfig,
+    source_dir: str,
+    tag: str,
+    *,
+    dry_run: bool = False,
+    read_only: bool = False,
 ) -> bool:
     """Detach a virtiofs share mapping from an existing VM definition."""
     cfg = cfg.expanded_paths()
     if not source_dir or not tag:
         return False
     source_dir = str(Path(source_dir).resolve())
+    source_attr = quoteattr(source_dir)
+    tag_attr = quoteattr(tag)
+    readonly_xml = '  <readonly/>\n' if read_only else ''
     xml = f"""<filesystem type='mount' accessmode='passthrough'>
   <driver type='virtiofs'/>
-  <source dir='{source_dir}'/>
-  <target dir='{tag}'/>
-</filesystem>
+  <source dir={source_attr}/>
+  <target dir={tag_attr}/>
+{readonly_xml}</filesystem>
 """
     if dry_run:
         log.info(

@@ -16,17 +16,13 @@ independent limitations:
    fix is virtiofsd's `--inode-file-handles=prefer` (file-handle-backed
    inodes, no persistent fd), but libvirt's `<filesystem>` XML exposes no
    way to pass it, and generated host-side wrapper scripts were tried and
-   explicitly rejected (see `virtiofsd-inode-file-handles.md` and the
-   correction note in `refactor-before-rootless.md`). The shipped
+   explicitly rejected on host-trust grounds. The shipped
    `aivm vm fdguard` guest timer (`aivm/cli/vm_guard.py`,
    `virtiofs.fd_guard*` in `aivm/config.py`, `docs/source/virtiofs.rst`)
    is a mitigation that prunes guest caches; it does not remove the
    underlying design problem.
 2. **A wedged virtiofsd cannot be restarted without a VM restart.**
    libvirt supervises the daemon; aivm has no per-share lifecycle control.
-3. **Rootless `shared` attachments are blocked.** In a `qemu:///session`
-   runtime (see `rootless-vms.md`) there is no privileged daemon to spawn
-   virtiofsd; someone must run it as the user.
 
 ## Decided direction
 
@@ -47,8 +43,8 @@ system `virtiofsd`, launched by a unit file aivm writes under the user's
 `~/.config/systemd/user/` (guest-side helper generation of this kind is
 already accepted practice — the persistent replay unit and fdguard do it
 in the guest; this extends the pattern to *user-owned host services*,
-which stays inside the "no root-owned generated executables" line drawn
-in `refactor-before-rootless.md`).
+which does not place generated executables in a privileged host startup
+path).
 
 Requirements background:
 
@@ -65,7 +61,6 @@ Requirements background:
   `--sandbox=none --inode-file-handles=prefer` (file handles need the
   capability: grant via the unit's `AmbientCapabilities=` when the user
   service manager permits, else fall back to O_PATH mode and log it).
-  For **session** runtime it runs plain-unprivileged.
 
 ## Design
 
@@ -168,8 +163,9 @@ finally gets a lawful consumer.
    the share without VM restart.
 4. `aivm vm update` converges a VM from libvirt-backend shares to
    external-backend shares (and back) per config.
-5. System-mode e2e suites pass with both backend values; sudoless e2e
-   passes with `backend=external` (no sudo anywhere in the flow).
+5. E2E suites pass with both backend values; sudoless E2E passes with
+   `backend=external` when the selected attachment path requires no host
+   bind mount.
 6. The EMFILE reproduction from
    `dev/devcheck/virtiofsd_emfile_case_report_2026_05_17.md` (updatedb
    sweep over a large attached tree) does not grow host fd count when

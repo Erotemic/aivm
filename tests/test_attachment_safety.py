@@ -434,3 +434,34 @@ def test_run_vm_attach_aborts_on_declined_overlap(
         )
     )
     assert rc == 2
+
+
+def test_detect_sensitive_paths_follows_symlink_to_ssh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / 'home' / 'agent'
+    ssh_dir = fake_home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    monkeypatch.setenv('HOME', str(fake_home))
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: fake_home))
+
+    alias = tmp_path / 'innocent-project'
+    alias.symlink_to(ssh_dir, target_is_directory=True)
+
+    hits = detect_sensitive_paths(alias)
+
+    assert any(hit.label == '~/.ssh' for hit in hits)
+
+
+def test_overlap_detection_follows_symlink_alias(tmp_path: Path) -> None:
+    parent = tmp_path / 'work'
+    child = parent / 'subproject'
+    child.mkdir(parents=True)
+    alias = tmp_path / 'alias'
+    alias.symlink_to(child, target_is_directory=True)
+    existing = [AttachmentEntry(host_path=str(parent), vm_name='vm-a')]
+
+    hits = detect_overlapping_attachments(alias, existing, vm_name='vm-a')
+
+    assert len(hits) == 1
+    assert hits[0].relation == 'child-of'

@@ -1,6 +1,7 @@
 """Implementation modules for AIVM's desired-state config store."""
 
 from .io import (
+    ConcurrentStoreUpdateError,
     ConfigSource,
     LoadedStore,
     format_existing_config,
@@ -54,6 +55,7 @@ __all__ = [
     'load_config_document',
     'is_split_layout',
     'LoadedStore',
+    'ConcurrentStoreUpdateError',
     'ConfigSource',
     'NetworkEntry',
     'Store',

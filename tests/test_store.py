@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
@@ -133,7 +134,9 @@ def test_remove_attachment_removes_single_vm_mapping(tmp_path: Path) -> None:
     assert remaining[0].vm_name == 'vm2'
 
 
-def test_parse_nested_vm_attachments_equivalent_to_global(tmp_path: Path) -> None:
+def test_parse_nested_vm_attachments_equivalent_to_global(
+    tmp_path: Path,
+) -> None:
     """The future split-friendly nested schema keeps the flat model."""
     project = tmp_path / 'project'
     project.mkdir()
@@ -238,23 +241,23 @@ def test_load_split_layout_by_literal_concatenation(tmp_path: Path) -> None:
     project.mkdir()
 
     config.write_text(
-        '''
+        """
 schema_version = 5
 active_vm = "vm-a"
 
 [behavior]
 yes_sudo = true
-'''.lstrip(),
+""".lstrip(),
         encoding='utf-8',
     )
     networks.write_text(
-        '''
+        """
 [[networks]]
 name = "aivm-net"
 
 [networks.network]
 subnet_cidr = "10.77.0.0/24"
-'''.lstrip(),
+""".lstrip(),
         encoding='utf-8',
     )
     (vms_dir / 'vm-a.toml').write_text(
@@ -294,19 +297,19 @@ def test_split_layout_rejects_duplicate_vm_definitions(tmp_path: Path) -> None:
     vms_dir = tmp_path / 'vms'
     vms_dir.mkdir()
     config.write_text(
-        '''
+        """
 [[vms]]
 name = "vm-a"
 network_name = "aivm-net"
-'''.lstrip(),
+""".lstrip(),
         encoding='utf-8',
     )
     (vms_dir / 'vm-a.toml').write_text(
-        '''
+        """
 [[vms]]
 name = "vm-a"
 network_name = "aivm-net"
-'''.lstrip(),
+""".lstrip(),
         encoding='utf-8',
     )
 
@@ -318,8 +321,9 @@ network_name = "aivm-net"
         load_config_document(config)
 
 
-
-def test_save_store_split_writes_concatenation_friendly_fragments(tmp_path: Path) -> None:
+def test_save_store_split_writes_concatenation_friendly_fragments(
+    tmp_path: Path,
+) -> None:
     """Split writer decomposes the logical store without changing meaning."""
     store = Store()
     store.defaults = AgentVMConfig()
@@ -568,7 +572,9 @@ def test_find_attachment_for_vm_matches_by_alias(tmp_path: Path) -> None:
     assert via_alias is canonical
 
 
-def test_find_attachment_for_vm_matches_by_resolved_path(tmp_path: Path) -> None:
+def test_find_attachment_for_vm_matches_by_resolved_path(
+    tmp_path: Path,
+) -> None:
     """If a user later attaches a different symlink chain that resolves to the same
     canonical host_path, lookup must find the existing record so it can be updated
     rather than duplicated."""
@@ -600,3 +606,44 @@ def test_find_attachment_for_vm_matches_by_resolved_path(tmp_path: Path) -> None
     via_other_symlink = find_attachment_for_vm(store, link_b, 'vm-b')
     assert via_other_symlink is not None
     assert via_other_symlink.host_path == str(real.resolve())
+
+
+def test_save_store_rejects_stale_loaded_revision(tmp_path: Path) -> None:
+    from aivm.config_store import ConcurrentStoreUpdateError
+
+    path = tmp_path / 'config.toml'
+    save_store(Store(), path)
+    first = load_store(path)
+    stale = load_store(path)
+
+    first.active_vm = 'first-writer'
+    save_store(first, path)
+    stale.active_vm = 'stale-writer'
+
+    with pytest.raises(ConcurrentStoreUpdateError):
+        save_store(stale, path)
+
+    assert load_store(path).active_vm == 'first-writer'
+
+
+def test_save_store_uses_atomic_replace(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    import aivm.config_store.io as store_io
+
+    path = tmp_path / 'config.toml'
+    replacements: list[tuple[Path, Path]] = []
+    original_replace = store_io.os.replace
+
+    def record_replace(src: str, dst: str) -> None:
+        replacements.append((Path(src), Path(dst)))
+        original_replace(src, dst)
+
+    monkeypatch.setattr(store_io.os, 'replace', record_replace)
+    save_store(Store(active_vm='atomic'), path)
+
+    assert replacements
+    src, dst = replacements[-1]
+    assert dst == path.resolve()
+    assert src.parent == path.parent
+    assert load_store(path).active_vm == 'atomic'

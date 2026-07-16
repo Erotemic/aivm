@@ -86,7 +86,7 @@ def _apply_virtiofs_binary_drift(
         raise AIVMError(
             'Refusing to configure AIVM-generated host-side virtiofsd wrappers. '
             'Managed libvirt mode now only removes old AIVM wrapper paths. '
-            'See dev/design/future/virtiofsd-inode-file-handles.md.'
+            'See docs/source/virtiofs.rst.'
         )
 
     if dry_run:

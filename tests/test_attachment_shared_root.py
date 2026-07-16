@@ -98,7 +98,9 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
         'aivm.cli.vm_attach.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr('aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path)
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attachment',
         lambda *a, **k: attachment,
@@ -176,7 +178,7 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert rec.ran('mount', '--bind')
     assert not rec.ran('umount')
@@ -196,7 +198,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE=""'
+                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE="" OPTIONS="rw"'
             ),
         },
     )
@@ -209,7 +211,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -227,7 +229,8 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE=""'
+                0,
+                f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE="" OPTIONS="rw"',
             ),
         },
     )
@@ -240,7 +243,7 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -310,7 +313,7 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE', '--target'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -394,7 +397,8 @@ def test_shared_root_guest_bind_read_only_sets_bind_remount_ro(
     mount_script = cmds[0][-1]
     remote_script = cmds[1][-1]
     assert run_kwargs[0]['timeout'] == 20
-    assert 'sudo -n mount -t virtiofs -o ro' in mount_script
+    assert 'sudo -n mount -t virtiofs -o ro' not in mount_script
+    assert 'sudo -n mount -t virtiofs aivm-shared-root' in mount_script
     assert 'sudo -n mount --bind' in remote_script
     assert 'mount -o remount,bind,ro' in remote_script
     assert 'umount -l' in remote_script
@@ -650,7 +654,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE --target '
+            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )
@@ -858,3 +862,24 @@ def test_shared_root_detach_escalates_only_for_the_umount(
     assert 'mountpoint' in plain, rec.calls
     assert 'rmdir' in plain, rec.calls
     assert escalated == {'umount'}, rec.calls
+
+
+def test_shared_root_read_only_is_enforced_on_host_bind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A read-only attachment remounts the new host bind ``ro``."""
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-host-ro', access=AttachmentAccess.RO
+    )
+
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {'findmnt -P -n': FakeProc(1)},
+        default=FakeProc(0),
+    )
+
+    _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+
+    assert rec.ran('mount', '--bind')
+    assert rec.ran('mount', '-o', 'remount,bind,ro')

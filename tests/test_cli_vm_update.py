@@ -82,9 +82,7 @@ def test_apply_vm_update_disk_resize_lock_error_is_graceful(
         disk_path='/var/lib/libvirt/aivm/vm/images/vm.qcow2',
     )
 
-    def fake_run(
-        self: object, cmd: list[str], **kwargs: Any
-    ) -> CmdResult:
+    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
         del kwargs
         if cmd[:2] == ['qemu-img', 'resize']:
             raise CommandError(
@@ -373,7 +371,9 @@ def test_vm_update_drift_escalates_for_disk_probe(
             return CmdResult(0, '{"virtual-size": 42949672960}', '')
         raise AssertionError(f'Unexpected cmd={cmd!r} sudo={sudo}')
 
-    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr(
+        'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
     drift, running = _vm_update_drift(cfg, yes=False)
     assert running is True
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -428,7 +428,9 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
             return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
         raise AssertionError(f'Unexpected command: {cmd!r}')
 
-    monkeypatch.setattr('aivm.vm.update.detect.CommandManager.run', fake_run_cmd)
+    monkeypatch.setattr(
+        'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
     assert any('falling back to virsh domblkinfo' in n for n in drift.notes)

@@ -24,8 +24,10 @@ from ..attachments.persistent import (
     _reconcile_persistent_attachments_in_guest,
     _reconcile_persistent_host_binds,
     _sync_persistent_attachment_manifest_on_host,
+    _sync_persistent_host_replay_manifest,
 )
 from ..attachments.resolve import (
+    ATTACHMENT_ACCESS_RO,
     ATTACHMENT_MODE_PERSISTENT,
     ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
@@ -197,6 +199,7 @@ def _ensure_attachment_in_vm_definition(
                 attachment.source_dir,
                 attachment.tag,
                 dry_run=False,
+                read_only=(attachment.access == ATTACHMENT_ACCESS_RO),
             )
     elif (
         attachment.mode
@@ -395,6 +398,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             cfg_path,
             dry_run=False,
         )
+        _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
         if vm_defined and not vm_running:
             refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
     if vm_running:
@@ -512,6 +516,7 @@ def _detach_persistent_attachment(
             cfg_path,
             dry_run=False,
         )
+        _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
     if not vm_running:
         return False
     try:
@@ -627,7 +632,11 @@ def run_vm_detach(request: VMDetachRequest) -> int:
     detach_failed = False
     if mode == ATTACHMENT_MODE_SHARED and vm_defined is True and att.tag:
         detached_share = detach_vm_share(
-            cfg, att.host_path, att.tag, dry_run=False
+            cfg,
+            att.host_path,
+            att.tag,
+            dry_run=False,
+            read_only=(resolved.access == ATTACHMENT_ACCESS_RO),
         )
     elif mode == ATTACHMENT_MODE_SHARED_ROOT:
         (
@@ -708,9 +717,7 @@ def run_persistent_host_replay(
             f'DRYRUN: would replay host-side persistent bind mounts for VM {cfg.vm.name}'
         )
     else:
-        print(
-            f'Replayed host-side persistent bind mounts for VM {cfg.vm.name}'
-        )
+        print(f'Replayed host-side persistent bind mounts for VM {cfg.vm.name}')
     return 0
 
 
@@ -750,17 +757,17 @@ class VMAttachCLI(_BaseCommand):
         '.', position=1, help='Host directory to attach.'
     )
     guest_dst: str = kwconf.Value('', help='Guest mount path override.')
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = kwconf.Value(
-        '',
-        help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+        kwconf.Value(
+            '',
+            help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+        )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -796,9 +803,7 @@ class VMDetachCLI(_BaseCommand):
     host_src: str = kwconf.Value(
         '.', position=1, help='Host directory to detach.'
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -818,9 +823,7 @@ class VMPersistentHostReplayCLI(_BaseCommand):
     """Replay host-side persistent bind mounts from the saved manifest."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -838,9 +841,7 @@ class VMInstallPersistentHostReplayServiceCLI(_BaseCommand):
     """Install and enable a host systemd service for persistent bind replay."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

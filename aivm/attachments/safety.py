@@ -84,6 +84,16 @@ def _sensitive_candidates() -> list[tuple[Path, str]]:
     return out
 
 
+def _canonical_path(path: Path) -> Path:
+    """Return the filesystem path that an attachment will actually export.
+
+    Policy checks must follow symlinks because attachment resolution and
+    libvirt do.  ``strict=False`` keeps diagnostics useful for paths whose
+    final component disappears between validation and reporting.
+    """
+    return Path(path).expanduser().resolve(strict=False)
+
+
 def _is_same_or_under(child: Path, ancestor: Path) -> bool:
     """Return True if ``child`` equals ``ancestor`` or is contained in it."""
     try:
@@ -113,12 +123,12 @@ def detect_sensitive_paths(host_src: Path) -> list[SensitiveHit]:
     credential subdirs like ``~/.ssh`` still trip ``child-of`` because
     descending into them is itself attaching key material.
     """
-    host_src = Path(host_src).expanduser().absolute()
+    host_src = _canonical_path(host_src)
     hits: list[SensitiveHit] = []
     seen: set[Path] = set()
     for candidate, label in _sensitive_candidates():
         try:
-            candidate_abs = candidate.expanduser().absolute()
+            candidate_abs = _canonical_path(candidate)
         except (OSError, RuntimeError):
             continue
         if candidate_abs in seen:
@@ -156,14 +166,14 @@ def detect_overlapping_attachments(
     already treats them as idempotent updates rather than overlaps. Only
     strict parent/child relationships within the same VM are flagged.
     """
-    host_src = Path(host_src).expanduser().absolute()
+    host_src = _canonical_path(host_src)
     hits: list[OverlapHit] = []
     for att in existing:
         if att.vm_name != vm_name:
             continue
         if not att.host_path:
             continue
-        other = Path(att.host_path).expanduser().absolute()
+        other = _canonical_path(Path(att.host_path))
         if other == host_src:
             continue
         if _is_same_or_under(host_src, other):
@@ -192,7 +202,9 @@ def _format_sensitive_warning(host_src: Path, hits: list[SensitiveHit]) -> str:
     ]
     for hit in hits:
         if hit.relation == 'is':
-            lines.append(f'    - host_src IS {hit.label} ({hit.sensitive_path})')
+            lines.append(
+                f'    - host_src IS {hit.label} ({hit.sensitive_path})'
+            )
         elif hit.relation == 'parent-of':
             lines.append(
                 f'    - host_src CONTAINS {hit.label} ({hit.sensitive_path})'
@@ -217,14 +229,10 @@ def _format_overlap_warning(host_src: Path, hits: list[OverlapHit]) -> str:
     ]
     for hit in hits:
         rel = (
-            'is a parent of'
-            if hit.relation == 'parent-of'
-            else 'is a child of'
+            'is a parent of' if hit.relation == 'parent-of' else 'is a child of'
         )
         guest = f' (guest_dst={hit.guest_dst})' if hit.guest_dst else ''
-        lines.append(
-            f'    - host_src {rel} {hit.other_path}{guest}'
-        )
+        lines.append(f'    - host_src {rel} {hit.other_path}{guest}')
     lines.append(
         '  Overlapping mounts cause confusing shadowing and double-write '
         'paths inside the guest.'
@@ -330,11 +338,11 @@ def attachment_safety_preflight(
         the user declined, or the environment is non-interactive and lacked
         ``--yes``. In dry-run mode ``ok`` is always True.
     """
-    host_src_abs = Path(host_src).expanduser().absolute()
-    sensitive_hits = detect_sensitive_paths(host_src)
+    host_src_abs = _canonical_path(host_src)
+    sensitive_hits = detect_sensitive_paths(host_src_abs)
     if existing_attachments is not None and vm_name is not None:
         overlap_hits = detect_overlapping_attachments(
-            host_src, existing_attachments, vm_name
+            host_src_abs, existing_attachments, vm_name
         )
     else:
         overlap_hits = []
@@ -399,9 +407,7 @@ def confirm_overlapping_attach(
         )
         return False
     print(msg, file=sys.stderr)
-    ans = input(
-        'Continue with overlapping attachment? [y/N]: '
-    ).strip().lower()
+    ans = input('Continue with overlapping attachment? [y/N]: ').strip().lower()
     return ans in {'y', 'yes'}
 
 

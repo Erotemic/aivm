@@ -74,6 +74,39 @@ def _ssh_scripts(rec: CommandRecorder) -> list[str]:
     return [cmd[-1] for cmd in rec.normalized if cmd and cmd[0] == 'ssh']
 
 
+def _redirect_replay_state_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Point the root-owned replay-manifest namespace at ``tmp_path``.
+
+    The sandbox directory never exists, so the safety probe deterministically
+    reports it unsafe and the reconcile issues its securing commands
+    regardless of the state of the host's real ``/var/lib/aivm``.
+    """
+    state_dir = tmp_path / 'approved-replay-state'
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.manifest.'
+        'PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR',
+        str(state_dir),
+    )
+    return state_dir
+
+
+def _replay_state_routes() -> dict[str, FakeProc]:
+    """Recorder routes for the host-side root replay-manifest sync.
+
+    Reconcile now secures a root-owned state dir (``bash -c 'install -d
+    ...'``) and installs the approved manifest (``install``/``rm``) before
+    touching the guest; these argv commands are host-local and never carry
+    an ssh script, so they stay out of ``_ssh_scripts`` assertions.
+    """
+    return {
+        'bash': FakeProc(),
+        'install': FakeProc(),
+        'rm': FakeProc(),
+    }
+
+
 def _hash_route(
     initial_status: str,
     *,
@@ -206,6 +239,21 @@ def test_persistent_host_manifest_path_uses_app_data_dir(
         / 'persistent-attachments.json'
     )
     assert str(cfg.paths.base_dir) not in str(path)
+
+
+def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
+    """The replay manifest lives in root-owned storage, VM name flattened."""
+    from aivm.attachments.persistent import (
+        _persistent_host_replay_manifest_path,
+    )
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm/unsafe name'
+    path = _persistent_host_replay_manifest_path(cfg)
+
+    assert path.parent == Path('/var/lib/aivm/persistent-host')
+    assert '/' not in path.name
+    assert path.suffix == '.json'
 
 
 def test_persistent_manifest_sync_uses_checksum_rsync(
@@ -434,11 +482,16 @@ def test_persistent_reconcile_skips_replay_when_not_forced_and_unchanged(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
     rec = command_recorder(
         monkeypatch,
-        {'ssh': _hash_route('MATCH'), 'rsync': FakeProc(stdout='')},
+        {
+            'ssh': _hash_route('MATCH'),
+            'rsync': FakeProc(stdout=''),
+            **_replay_state_routes(),
+        },
     )
 
     _reconcile_persistent_attachments_in_guest(
@@ -478,6 +531,7 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
     rec = command_recorder(
@@ -487,6 +541,7 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
             'rsync': FakeProc(
                 stdout='>f..t...... persistent-attachments.json\n'
             ),
+            **_replay_state_routes(),
         },
     )
 
@@ -528,6 +583,7 @@ def test_persistent_reconcile_propagates_primary_failures(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
     boom = FakeProc(returncode=1, stderr=f'{phase} boom')
@@ -552,6 +608,7 @@ def test_persistent_reconcile_propagates_primary_failures(
             'rsync': FakeProc(stdout=''),
         }
 
+    routes.update(_replay_state_routes())
     command_recorder(monkeypatch, routes)
 
     with pytest.raises(CommandError):
@@ -590,6 +647,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
     activate_manager(monkeypatch)
 
     warnings = capture_logs(
@@ -620,6 +678,7 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
             'rsync': FakeProc(stdout=''),
         }
 
+    routes.update(_replay_state_routes())
     command_recorder(monkeypatch, routes)
 
     _reconcile_persistent_attachments_in_guest(
@@ -650,6 +709,7 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
     cfg_path = tmp_path / 'config.toml'
     save_store(Store(), cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
     outer = CommandManager(yes=True, yes_sudo=True)
     CommandManager.activate(outer)
@@ -675,6 +735,7 @@ def test_persistent_reconcile_continue_on_error_isolates_outer_command_queue(
             ),
             'rsync': FakeProc(stdout=''),
             'python': FakeProc(returncode=7),
+            **_replay_state_routes(),
         },
     )
 
@@ -825,7 +886,7 @@ def test_install_persistent_host_bind_replay_enables_service(
 def test_persistent_root_host_bind_short_circuits_when_already_bound(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Skip the privileged step entirely when target is already bound to source."""
+    """An existing bind is probed for access mode but never re-mounted."""
     from aivm.attachments.persistent.host_bind import (
         _ensure_persistent_root_host_bind,
     )
@@ -851,14 +912,30 @@ def test_persistent_root_host_bind_short_circuits_when_already_bound(
         lambda *_a, **_k: True,
     )
 
-    def _fail_subprocess(*_a: object, **_k: object) -> FakeProc:
-        raise AssertionError(
-            'no subprocess should run when the bind is already in place'
-        )
-
-    monkeypatch.setattr('aivm.commands.subprocess.run', _fail_subprocess)
+    # Strict recorder: the read-only findmnt access probe is the only
+    # subprocess allowed; a mount/remount would raise as unrouted.
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'findmnt -P -n': FakeProc(
+                0,
+                'SOURCE="/source" ROOT="" FSTYPE="none" OPTIONS="rw"',
+                '',
+            ),
+        },
+    )
 
     _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+
+    assert len(rec.normalized) == 1
+    assert rec.only('findmnt')[:6] == [
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,ROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
+    ]
 
 
 def test_persistent_root_host_bind_issues_direct_mount_command(

@@ -468,7 +468,13 @@ def test_firewall_reconciled_when_table_missing(
     )
 
     assert rec.only('nft', '-f', '-') == ['nft', '-f', '-']
-    assert rec.count('nft', 'list', 'table', 'inet', cfg.firewall.table) == 1
+    # The managed table is namespaced per network, not the raw config value.
+    from aivm.firewall import effective_firewall_table
+
+    assert (
+        rec.count('nft', 'list', 'table', 'inet', effective_firewall_table(cfg))
+        == 1
+    )
 
 
 def test_firewall_skipped_and_warned_when_privilege_never(

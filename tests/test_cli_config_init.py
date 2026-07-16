@@ -187,7 +187,7 @@ def test_config_init_defaults_warns_when_ssh_keys_missing(
     assert log_calls
 
 
-def test_config_init_prompt_mentions_edit_shortcut(
+def test_config_init_prompt_mentions_editor_and_prompt_shortcuts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
@@ -211,7 +211,7 @@ def test_config_init_prompt_mentions_edit_shortcut(
         argv=False, config=str(cfg_path), yes=False, defaults=False
     )
     assert rc == 0
-    assert any('(e=edit)' in p for p in prompts)
+    assert any('(e=editor, p=prompt-by-prompt)' in p for p in prompts)
 
 
 def test_config_init_interactive_edit_updates_hardware(
@@ -229,7 +229,8 @@ def test_config_init_interactive_edit_updates_hardware(
     )
     answers = iter(
         [
-            'e',  # use edit flow
+            'p',  # use prompt-by-prompt flow
+            '',  # vm.name
             '',  # vm.user
             '2',  # vm.cpus
             '3072',  # vm.ram_mb
@@ -305,13 +306,13 @@ def test_config_init_interactive_edit_updates_password_login(
         },
     )
     answers = iter([
-        'e',  # edit values
+        'p',  # prompt-by-prompt values
+        '',  # vm.name
         '',  # vm.user
         '',  # vm.cpus
         '',  # vm.ram_mb
         '',  # vm.disk_gb
         'y',  # vm.allow_password_login
-        'debug-pass',  # vm.password
         '',  # network.name
         '',  # network.subnet_cidr
         '',  # network.gateway_ip
@@ -322,6 +323,9 @@ def test_config_init_interactive_edit_updates_password_login(
         'y',  # confirm
     ])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(
+        'aivm.cli.config.init.getpass.getpass', lambda _: 'debug-pass'
+    )
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=False
     )
@@ -329,3 +333,111 @@ def test_config_init_interactive_edit_updates_password_login(
     text = cfg_path.read_text(encoding='utf-8')
     assert 'allow_password_login = true' in text
     assert 'password = "debug-pass"' in text
+
+
+def test_config_init_editor_path_shows_full_table_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+
+    def fake_edit(path: Path, command: list[str]) -> None:
+        assert command == ['fake-editor']
+        text = path.read_text(encoding='utf-8')
+        path.write_text(text.replace('cpus = 4', 'cpus = 3'), encoding='utf-8')
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(['fake-editor']),
+            'edit_path': fake_edit,
+        },
+    )
+    answers = iter(['e', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.count('Detected defaults for `aivm config init`') == 1
+    assert 'Updated values' in out
+    assert 'cpus = 3' in cfg_path.read_text(encoding='utf-8')
+
+
+def test_config_init_editor_unavailable_falls_back_to_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+
+    def fake_prompt_edit(cfg: AgentVMConfig) -> AgentVMConfig:
+        cfg.vm.cpus = 5
+        return cfg
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(None),
+            '_edit_init_defaults_with_prompts': fake_prompt_edit,
+        },
+    )
+    answers = iter(['e', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    assert 'cpus = 5' in cfg_path.read_text(encoding='utf-8')
+
+
+def test_config_init_invalid_editor_document_can_be_reopened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    calls = 0
+
+    def fake_edit(path: Path, command: list[str]) -> None:
+        nonlocal calls
+        del command
+        calls += 1
+        text = path.read_text(encoding='utf-8')
+        if calls == 1:
+            text = text.replace('cpus = 4', 'cpuz = 3')
+        else:
+            text = text.replace('cpuz = 3', 'cpus = 3')
+        path.write_text(text, encoding='utf-8')
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(['fake-editor']),
+            'edit_path': fake_edit,
+        },
+    )
+    answers = iter(['e', '', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    assert calls == 2
+    assert 'cpus = 3' in cfg_path.read_text(encoding='utf-8')

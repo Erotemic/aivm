@@ -1,8 +1,10 @@
-"""Determinism of the persistent replay helper and service-unit templates."""
+"""Determinism and safety of the persistent replay helper/unit templates."""
 
 from __future__ import annotations
 
 import subprocess
+
+import pytest
 
 from tests.persistent_helpers import _exec_guest_replay_helper
 
@@ -79,3 +81,33 @@ def test_persistent_host_replay_service_unit_renders_values() -> None:
     assert 'ConditionPathExists=/tmp/manifest.json' in unit
     assert '{service_name}' not in unit
     assert '{manifest_path}' not in unit
+
+
+def test_persistent_host_replay_rejects_unsafe_tokens() -> None:
+    """The host replay helper refuses tokens that could escape its root."""
+    from aivm.persistent_replay import persistent_host_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_host_replay_python())
+
+    for token in ('../ssh', '/etc', '.', '..', 'name/child', ''):
+        with pytest.raises(
+            RuntimeError, match='invalid persistent host bind token'
+        ):
+            ns['validate_token'](token)
+
+
+def test_persistent_host_replay_service_is_root_scoped() -> None:
+    """The host replay unit runs as root with no-new-privileges."""
+    from aivm.persistent_replay import persistent_host_replay_service_unit
+
+    unit = persistent_host_replay_service_unit(
+        vm_name='vm-safe',
+        manifest_path='/var/lib/aivm/persistent-host/vm-safe.json',
+        export_root='/var/lib/aivm/vms/vm-safe/persistent-root',
+    )
+
+    assert 'User=root' in unit
+    assert 'Group=root' in unit
+    assert 'NoNewPrivileges=yes' in unit
+    assert '--vm-name "vm-safe"' in unit
+    assert '--manifest "/var/lib/aivm/persistent-host/vm-safe.json"' in unit

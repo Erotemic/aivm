@@ -11,6 +11,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import (
     DEFAULT_UBUNTU_NOBLE_IMG_URL,
+    DEPRECATED_IMAGE_URL_REPLACEMENTS,
     SUPPORTED_IMAGE_SHA256,
     AgentVMConfig,
 )
@@ -25,6 +26,45 @@ from .host_access import (
 from .paths import _paths
 
 log = logger
+
+
+def _resolve_effective_image_url(image_url: str) -> str:
+    """Return a retained supported URL for known obsolete built-in defaults."""
+    requested = str(image_url or DEFAULT_UBUNTU_NOBLE_IMG_URL).strip()
+    replacement = DEPRECATED_IMAGE_URL_REPLACEMENTS.get(requested)
+    if replacement:
+        log.warning(
+            'Configured image URL points at an expired Ubuntu daily-build '
+            'archive; using the retained release archive instead.\n'
+            '  expired: {}\n'
+            '  retained: {}',
+            requested,
+            replacement,
+        )
+        return replacement
+    return requested
+
+
+def _is_transfer_command_error(ex: CmdError) -> bool:
+    """Return True when ``ex`` came from the image copy/download command."""
+    cmd = [str(part) for part in ex.cmd] if not isinstance(ex.cmd, str) else []
+    return any(Path(part).name in {'curl', 'cp'} for part in cmd)
+
+
+def _image_transfer_failure_message(
+    *, source: str, staging_path: Path, error: CmdError
+) -> str:
+    """Build an actionable error without obscuring the original command result."""
+    source_label = 'URL' if urlparse(source).scheme != 'file' else 'Source'
+    return (
+        'Base image transfer failed. VM creation stopped before the staging '
+        'file was promoted into the image cache.\n'
+        f'{source_label}: {source}\n'
+        f'Staging path: {staging_path}\n'
+        f'Command exit code: {error.result.code}\n'
+        'AIVM will remove any stale .part file before the next download attempt.'
+    )
+
 
 def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
     digest = SUPPORTED_IMAGE_SHA256.get(image_url, '').strip().lower()
@@ -77,6 +117,7 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
         'Use a supported image URL, or add this URL + SHA256 to SUPPORTED_IMAGE_SHA256.'
     )
 
+
 def _verify_image_sha256(
     *, image_path: Path, expected_sha256: str | None, source: str
 ) -> None:
@@ -115,13 +156,18 @@ def _verify_image_sha256(
         )
     log.info('Base image checksum verified: {}', image_path)
 
+
 def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
     log.trace('fetch_image vm={} dry_run={}', cfg.vm.name, dry_run)
     log.debug('Fetching Ubuntu cloud image')
     p = _paths(cfg, dry_run=dry_run)
     base_img = p['img_dir'] / cfg.image.cache_name
     tmp_img = Path(str(base_img) + '.part')
-    url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
+    requested_url = cfg.image.ubuntu_img_url or DEFAULT_UBUNTU_NOBLE_IMG_URL
+    url = _resolve_effective_image_url(requested_url)
+    if url != requested_url:
+        # Carry the compatibility repair forward when the VM record is saved.
+        cfg.image.ubuntu_img_url = url
     expected_sha256, checksum_source = _resolve_expected_image_sha256(
         image_url=url
     )
@@ -204,119 +250,117 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         ),
         role='modify',
     ):
-        with mgr.step(
-            'Fetch and verify base image',
-            why=(
-                'Prepare the image directory, refresh any stale partial file, '
-                'transfer the image atomically, and verify its checksum before '
-                'it is reused.'
-            ),
-            approval_scope=f'image-fetch:{cfg.vm.name}',
-        ):
-            mkdir_handle = mgr.submit(
-                ['mkdir', '-p', str(p['img_dir'])],
-                sudo=use_sudo,
-                role='modify',
-                check=True,
-                capture=True,
-                summary='Create VM image directory',
-                detail=f'target={p["img_dir"]}',
-            )
-            cleanup_tmp_handle = mgr.submit(
-                ['rm', '-f', str(tmp_img)],
-                sudo=use_sudo,
-                role='modify',
-                check=False,
-                capture=True,
-                summary='Remove stale partial image file',
-                detail=f'target={tmp_img}',
-            )
-            transfer_cmd = (
-                ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
-                if local_file_src is not None
-                else [
-                    'curl',
-                    '-L',
-                    '--fail',
-                    '--progress-bar',
-                    '-o',
-                    str(tmp_img),
-                    url,
-                ]
-            )
-            transfer_handle = mgr.submit(
-                transfer_cmd,
-                sudo=use_sudo,
-                role='modify',
-                check=False,
-                capture=(local_file_src is not None),
-                summary=(
-                    'Copy local base image into staging file'
-                    if local_file_src is not None
-                    else 'Download base image into staging file'
+        try:
+            with mgr.step(
+                'Fetch and verify base image',
+                why=(
+                    'Prepare the image directory, refresh any stale partial file, '
+                    'transfer the image atomically, and verify its checksum before '
+                    'it is reused.'
                 ),
-                detail=(
-                    f'source={local_file_src} destination={tmp_img}'
-                    if local_file_src is not None
-                    else f'url={url} destination={tmp_img}'
-                ),
-            )
-            move_handle = mgr.submit(
-                ['mv', '-f', str(tmp_img), str(base_img)],
-                sudo=use_sudo,
-                role='modify',
-                check=True,
-                capture=True,
-                summary='Move staged base image into cache',
-                detail=f'source={tmp_img} destination={base_img}',
-            )
-            checksum_handle = mgr.submit(
-                ['sha256sum', str(base_img)],
-                sudo=use_sudo,
-                role='read',
-                check=True,
-                capture=True,
-                summary='Compute base image checksum',
-                detail=f'path={base_img} source={checksum_source}',
-            )
-            mkdir_handle.result()
-            cleanup_tmp_handle.result()
-            transfer_res = transfer_handle.result()
-            if transfer_res.code != 0:
-                mgr.submit(
+                approval_scope=f'image-fetch:{cfg.vm.name}',
+            ):
+                mkdir_handle = mgr.submit(
+                    ['mkdir', '-p', str(p['img_dir'])],
+                    sudo=use_sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary='Create VM image directory',
+                    detail=f'target={p["img_dir"]}',
+                )
+                cleanup_tmp_handle = mgr.submit(
                     ['rm', '-f', str(tmp_img)],
                     sudo=use_sudo,
                     role='modify',
                     check=False,
                     capture=True,
-                    summary='Remove incomplete staging image after transfer failure',
+                    summary='Remove stale partial image file',
                     detail=f'target={tmp_img}',
-                ).result()
-                raise CmdError(transfer_cmd, transfer_res)
-            move_handle.result()
-            checksum_out = checksum_handle.stdout
-            actual = (
-                checksum_out.strip().split()[0].lower()
-                if checksum_out.strip()
-                else ''
-            )
-            if expected_sha256 and actual != expected_sha256:
-                mgr.submit(
-                    ['rm', '-f', str(base_img)],
+                )
+                transfer_cmd = (
+                    ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
+                    if local_file_src is not None
+                    else [
+                        'curl',
+                        '-L',
+                        '--fail',
+                        '--progress-bar',
+                        '-o',
+                        str(tmp_img),
+                        url,
+                    ]
+                )
+                transfer_handle = mgr.submit(
+                    transfer_cmd,
                     sudo=use_sudo,
                     role='modify',
-                    check=False,
-                    capture=True,
-                    summary='Remove invalid base image after checksum mismatch',
-                    detail=f'path={base_img}',
-                ).result()
-                raise AIVMError(
-                    'Downloaded base image checksum mismatch; removed invalid image.\n'
-                    f'Path: {base_img}\n'
-                    f'Expected: {expected_sha256}\n'
-                    f'Actual:   {actual}\n'
-                    'Re-run to retry download, or use a supported pinned image URL.'
+                    check=True,
+                    capture=(local_file_src is not None),
+                    summary=(
+                        'Copy local base image into staging file'
+                        if local_file_src is not None
+                        else 'Download base image into staging file'
+                    ),
+                    detail=(
+                        f'source={local_file_src} destination={tmp_img}'
+                        if local_file_src is not None
+                        else f'url={url} destination={tmp_img}'
+                    ),
                 )
-            log.info('Base image checksum verified: {}', base_img)
+                move_handle = mgr.submit(
+                    ['mv', '-f', str(tmp_img), str(base_img)],
+                    sudo=use_sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary='Move staged base image into cache',
+                    detail=f'source={tmp_img} destination={base_img}',
+                )
+                checksum_handle = mgr.submit(
+                    ['sha256sum', str(base_img)],
+                    sudo=use_sudo,
+                    role='read',
+                    check=True,
+                    capture=True,
+                    summary='Compute base image checksum',
+                    detail=f'path={base_img} source={checksum_source}',
+                )
+                mkdir_handle.result()
+                cleanup_tmp_handle.result()
+                transfer_handle.result()
+                move_handle.result()
+                checksum_out = checksum_handle.stdout
+        except CmdError as ex:
+            if _is_transfer_command_error(ex):
+                raise AIVMError(
+                    _image_transfer_failure_message(
+                        source=url, staging_path=tmp_img, error=ex
+                    )
+                ) from ex
+            raise
+        actual = (
+            checksum_out.strip().split()[0].lower()
+            if checksum_out.strip()
+            else ''
+        )
+        if expected_sha256 and actual != expected_sha256:
+            mgr.submit(
+                ['rm', '-f', str(base_img)],
+                sudo=use_sudo,
+                role='modify',
+                check=False,
+                capture=True,
+                summary='Remove invalid base image after checksum mismatch',
+                detail=f'path={base_img}',
+            ).result()
+            raise AIVMError(
+                'Downloaded base image checksum mismatch; removed invalid image.\n'
+                f'Path: {base_img}\n'
+                f'Expected: {expected_sha256}\n'
+                f'Actual:   {actual}\n'
+                'Re-run to retry download, or use a supported pinned image URL.'
+            )
+        log.info('Base image checksum verified: {}', base_img)
     log.info('Downloaded base image: {}', base_img)
     return base_img

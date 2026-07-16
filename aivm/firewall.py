@@ -6,6 +6,8 @@ restricted" behavior unless caller config loosens/tightens policy.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeGuard
 
@@ -21,6 +23,31 @@ from .xmlutil import parse_domain_xml
 JsonObj: TypeAlias = Mapping[str, object]
 
 log = logger
+
+
+def effective_firewall_table(cfg: AgentVMConfig) -> str:
+    """Return the network-specific nftables table managed for ``cfg``.
+
+    A configured table name is a namespace prefix, not a globally shared
+    singleton.  Including stable network identity prevents applying or removing
+    one network policy from replacing another network's rules.
+    """
+    base = re.sub(
+        r'[^A-Za-z0-9_.-]+', '_', str(cfg.firewall.table or '').strip()
+    )
+    base = base.strip('._-') or 'aivm_sandbox'
+    network = re.sub(
+        r'[^A-Za-z0-9_.-]+', '_', str(cfg.network.name or '').strip()
+    )
+    network = network.strip('._-') or 'network'
+    # Network name is the stable system-wide identity. Bridge and subnet are
+    # mutable configuration; including them would orphan the old firewall
+    # table every time a network is edited.
+    identity = str(cfg.network.name or '')
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:10]
+    suffix = f'{network[:32]}_{digest}'
+    max_base = max(1, 127 - len(suffix) - 1)
+    return f'{base[:max_base]}_{suffix}'
 
 
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
@@ -109,9 +136,12 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
     return bridge, gateway
 
 
-def _nft_script(cfg: AgentVMConfig) -> str:
-    table = cfg.firewall.table
-    br, gw = _effective_bridge_and_gateway(cfg)
+def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
+    table = effective_firewall_table(cfg)
+    if inspect_live:
+        br, gw = _effective_bridge_and_gateway(cfg)
+    else:
+        br, gw = cfg.network.bridge, cfg.network.gateway_ip
     blocks = list(cfg.firewall.block_cidrs) + list(
         cfg.firewall.extra_block_cidrs or []
     )
@@ -186,8 +216,8 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             "behavior.privilege_mode to 'as-needed' to allow sudo for it."
         ),
     )
-    script = _nft_script(cfg)
-    table = cfg.firewall.table
+    script = _nft_script(cfg, inspect_live=not dry_run)
+    table = effective_firewall_table(cfg)
     if dry_run:
         log.info('DRYRUN: nft -f - <<EOF\\n{}\\nEOF', script.rstrip())
         return
@@ -230,11 +260,8 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
 def firewall_status(cfg: AgentVMConfig) -> str:
     if not sudo_allowed():
-        return (
-            'firewall status needs privileges (unavailable when '
-            'mode)\n'
-        )
-    table = cfg.firewall.table
+        return 'firewall status needs privileges (unavailable when mode)\n'
+    table = effective_firewall_table(cfg)
     mgr = CommandManager.current()
     with mgr.intent(
         f'Inspect firewall table {table}',
@@ -267,7 +294,7 @@ def read_firewall_tcp_ports(
     # TODO: this function can be a lot cleaner and server other use-cases
     # currently only used in drift detection.
 
-    table = cfg.firewall.table
+    table = effective_firewall_table(cfg)
     bridge = cfg.network.bridge
 
     if not sudo_allowed():
@@ -440,7 +467,7 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             'firewall operations.'
         ),
     )
-    table = cfg.firewall.table
+    table = effective_firewall_table(cfg)
     if dry_run:
         log.info('DRYRUN: nft delete table inet {}', table)
         return

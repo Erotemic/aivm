@@ -20,6 +20,7 @@ from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from ...vm.share import AttachmentMode, ResolvedAttachment
 from ..resolve import _normalize_attachment_access
 from ..shared_root import (
+    _ensure_host_bind_access,
     _needs_mkdir,
     _shared_root_host_target,
     _target_is_bind_of,
@@ -33,7 +34,9 @@ def _install_persistent_host_bind_replay(
     *,
     dry_run: bool,
 ) -> bool:
-    del cfg_path
+    approved_manifest_path = manifest._sync_persistent_host_replay_manifest(
+        cfg, cfg_path, dry_run=dry_run
+    )
     helper_changed = transport._install_host_text_if_changed(
         Path(PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN),
         persistent_host_replay_python(),
@@ -46,7 +49,7 @@ def _install_persistent_host_bind_replay(
         Path('/etc/systemd/system') / service_name,
         persistent_host_replay_service_unit(
             vm_name=cfg.vm.name,
-            manifest_path=str(manifest._persistent_host_manifest_path(cfg)),
+            manifest_path=str(approved_manifest_path),
             export_root=str(_persistent_root_host_dir(cfg)),
         ),
         '0644',
@@ -86,6 +89,9 @@ def _reconcile_persistent_host_binds(
     dry_run: bool,
     vm_running: bool | None = None,
 ) -> None:
+    manifest._sync_persistent_host_replay_manifest(
+        cfg, cfg_path, dry_run=dry_run
+    )
     records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
     for record in records:
         if not record.enabled:
@@ -191,6 +197,7 @@ def _ensure_persistent_root_host_bind(
     # prompted for sudo. _target_is_bind_of is a pure stat check that doesn't
     # need sudo and won't false-positive on unrelated mounts.
     if _target_is_bind_of(source, target):
+        _ensure_host_bind_access(target, attachment.access)
         return target
     mgr = CommandManager.current()
     needs_parent = _needs_mkdir(parent)
@@ -223,6 +230,10 @@ def _ensure_persistent_root_host_bind(
             summary='Bind requested host folder into persistent-root target',
             detail=f'source={source} target={target}',
         )
+    # A newly created bind is writable by default; only ro requires a
+    # second host-side remount. Existing binds are always probed above.
+    if attachment.access == 'ro':
+        _ensure_host_bind_access(target, attachment.access)
     return target
 
 

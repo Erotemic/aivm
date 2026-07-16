@@ -19,8 +19,20 @@ from .util import expand
 # TODO(design): replace the ad-hoc URL + hash globals here with a network asset
 # dataclass/registry that can describe the primary URL, SHA256, mirrors,
 # torrent magnet, and IPFS CID for a pinned image artifact.
-# Pinned daily image path so URL and hash are coupled to a specific artifact.
-DEFAULT_UBUNTU_NOBLE_IMG_URL = 'https://cloud-images.ubuntu.com/noble/20260225/noble-server-cloudimg-amd64.img'
+# Pin a retained release archive rather than a dated daily-build directory.
+# Ubuntu garbage-collects old daily directories, while release archives remain
+# available and preserve the exact artifact/checksum pairing.
+LEGACY_UBUNTU_NOBLE_IMG_URL = (
+    'https://cloud-images.ubuntu.com/noble/20260225/'
+    'noble-server-cloudimg-amd64.img'
+)
+DEFAULT_UBUNTU_NOBLE_IMG_URL = (
+    'https://cloud-images.ubuntu.com/releases/noble/release-20260225/'
+    'ubuntu-24.04-server-cloudimg-amd64.img'
+)
+DEPRECATED_IMAGE_URL_REPLACEMENTS = {
+    LEGACY_UBUNTU_NOBLE_IMG_URL: DEFAULT_UBUNTU_NOBLE_IMG_URL,
+}
 SUPPORTED_IMAGE_SHA256 = {
     DEFAULT_UBUNTU_NOBLE_IMG_URL: '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21',
 }

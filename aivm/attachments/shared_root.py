@@ -33,25 +33,22 @@ def _shared_root_guest_mount_cmd(
     *,
     read_only: bool,
 ) -> list[str]:
+    # The VM-level export must stay writable so rw and ro child binds can
+    # coexist. Read-only policy is enforced on each host bind and guest child
+    # bind, never by remounting the shared root.
+    del read_only
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     mount_cmd = (
-        f'sudo -n mount -t virtiofs -o ro {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
-        f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-        if read_only
-        else f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
+        f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
         f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
     )
-    remount_cmd = (
-        f'sudo -n mount -o remount,ro {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-        if read_only
-        else f'sudo -n mount -o remount,rw {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-    )
+    remount_cmd = f'sudo -n mount -o remount,rw {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
     remote = (
         'set -euo pipefail; '
         f'sudo -n mkdir -p {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; '
         f'if mountpoint -q {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; then '
         f'opts="$(findmnt -n -o OPTIONS --target {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)} 2>/dev/null || true)"; '
-        f'case ",$opts," in *,{"ro" if read_only else "rw"},*) : ;; *) {remount_cmd} ;; esac; '
+        f'case ",$opts," in *,rw,*) : ;; *) {remount_cmd} ;; esac; '
         'else '
         f'{mount_cmd}; '
         'fi'
@@ -76,9 +73,7 @@ def _ensure_shared_root_parent_dir(
 ) -> None:
     target = _shared_root_host_dir(cfg)
     if dry_run:
-        print(
-            f'DRYRUN: would create shared-root parent directory {target}'
-        )
+        print(f'DRYRUN: would create shared-root parent directory {target}')
         return
     if not _needs_mkdir(target):
         return
@@ -140,6 +135,7 @@ class FindmntTargetInfo:
     source: str = ''
     root: str = ''
     fstype: str = ''
+    options: str = ''
     code: int = 1
 
     @property
@@ -177,8 +173,8 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '-P',
                     '-n',
                     '-o',
-                    'SOURCE,ROOT,FSTYPE',
-                    '--target',
+                    'SOURCE,ROOT,FSTYPE,OPTIONS',
+                    '--mountpoint',
                     str(target),
                 ],
                 sudo=path_needs_sudo(target),
@@ -193,6 +189,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
         source=values.get('SOURCE', ''),
         root=values.get('ROOT', ''),
         fstype=values.get('FSTYPE', ''),
+        options=values.get('OPTIONS', ''),
         code=res.code,
     )
 
@@ -242,6 +239,42 @@ def _target_is_bind_of(source: Path, target: Path) -> bool:
         source_stat.st_dev == target_stat.st_dev
         and source_stat.st_ino == target_stat.st_ino
     )
+
+
+def _mount_options_include(options: str, desired: str) -> bool:
+    return desired in {part.strip() for part in str(options or '').split(',')}
+
+
+def _ensure_host_bind_access(
+    target: Path,
+    access: str,
+    *,
+    probe: FindmntTargetInfo | None = None,
+) -> None:
+    """Enforce bind-mount access on the host, outside guest control."""
+    desired = (
+        ATTACHMENT_ACCESS_RO
+        if str(access or '').strip() == ATTACHMENT_ACCESS_RO
+        else ATTACHMENT_ACCESS_RW
+    )
+    current = probe or _probe_findmnt_target_source(target)
+    if current.is_mountpoint and _mount_options_include(
+        current.options, desired
+    ):
+        return
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Enforce host bind access mode',
+        why='Apply the attachment read/write policy to the host bind mount so a privileged guest cannot weaken it.',
+        approval_scope=f'shared-root-host-access:{target}:{desired}',
+    ):
+        mgr.submit(
+            ['mount', '-o', f'remount,bind,{desired}', str(target)],
+            sudo=True,
+            role='modify',
+            summary=f'Remount host bind {desired}',
+            detail=f'target={target}',
+        )
 
 
 def _shared_root_host_bind_matches_source(
@@ -319,6 +352,8 @@ def _ensure_shared_root_host_bind(
     # without touching sudo or running findmnt. Covers the common "already
     # attached" path that `aivm code .` and repeated `aivm attach .` runs hit.
     if _target_is_bind_of(source, target):
+        probe = _probe_findmnt_target_source(target)
+        _ensure_host_bind_access(target, attachment.access, probe=probe)
         return target
 
     probe = _probe_findmnt_target_source(target)
@@ -330,6 +365,7 @@ def _ensure_shared_root_host_bind(
         # identity show that the existing bind already exposes the requested
         # source.
         if _shared_root_host_bind_matches_source(source, target, probe):
+            _ensure_host_bind_access(target, attachment.access, probe=probe)
             return target
         if not allow_disruptive_rebind:
             raise AIVMError(
@@ -426,6 +462,11 @@ def _ensure_shared_root_host_bind(
                 detail=f'source={source_dir} target={target}',
             )
 
+    # A fresh bind is writable by default. Only read-only policy needs an
+    # immediate host-side remount; existing binds are probed above so a
+    # prior read-only mount can still be deliberately changed back to rw.
+    if attachment.access == ATTACHMENT_ACCESS_RO:
+        _ensure_host_bind_access(target, attachment.access)
     return target
 
 

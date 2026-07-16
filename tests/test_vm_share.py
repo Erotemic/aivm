@@ -121,6 +121,46 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
     assert virsh_calls[1][:2] == ['virsh', 'attach-device']
 
 
+def test_attach_vm_share_read_only_is_in_libvirt_xml(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A read-only attach emits ``<readonly/>`` and XML-escapes the values."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-readonly-share'
+    source = tmp_path / "source & 'quoted'"
+    source.mkdir()
+    activate_manager(monkeypatch)
+    captured_xml: list[str] = []
+
+    def capture_device_xml(cmd: list[str]) -> FakeProc:
+        # The device XML lives in a temp file consumed by attach-device;
+        # read it at call time, before the file can be cleaned up.
+        captured_xml.append(Path(cmd[3]).read_text(encoding='utf-8'))
+        return FakeProc(0, '', '')
+
+    command_recorder(
+        monkeypatch,
+        {
+            'true': FakeProc(0, '', ''),
+            'virsh attach-device': capture_device_xml,
+        },
+    )
+
+    attach_vm_share(
+        cfg,
+        str(source),
+        "tag&'unsafe",
+        vm_running=False,
+        read_only=True,
+    )
+
+    assert len(captured_xml) == 1
+    xml = captured_xml[0]
+    assert '<readonly/>' in xml
+    assert '&amp;' in xml
+    assert 'dir="tag&amp;\'unsafe"' in xml
+
+
 def test_ensure_share_mounted_retries_then_succeeds(
     monkeypatch: MonkeyPatch,
 ) -> None:

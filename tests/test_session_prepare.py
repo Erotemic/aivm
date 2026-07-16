@@ -154,7 +154,7 @@ def attached_session_harness(
     )
     monkeypatch.setattr('aivm.attachments.guest.ensure_share_mounted', noop)
     monkeypatch.setattr(
-        'aivm.cli.config.InitCLI.main',
+        'aivm.cli.config.init.initialize_config_defaults',
         lambda *a, **k: harness.calls.append('config_init') or 0,
     )
     monkeypatch.setattr(
@@ -276,7 +276,9 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
         harness.state['ready'] = True
         return 0
 
-    monkeypatch.setattr('aivm.cli.config.InitCLI.main', fake_init)
+    monkeypatch.setattr(
+        'aivm.cli.config.init.initialize_config_defaults', fake_init
+    )
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
     )
@@ -309,11 +311,11 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert session.cfg.vm.name == 'bootstrap-vm'
     assert init_kwargs == [
         {
-            'argv': False,
-            'config': None,
+            'config_opt': str(harness.cfg_path.resolve()),
             'yes': False,
             'defaults': False,
             'force': False,
+            'standalone_guidance': False,
         }
     ]
     assert len(create_kwargs) == 1
@@ -323,6 +325,7 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert create_kwargs[0]['dry_run'] is False
     assert create_kwargs[0]['force'] is False
     assert create_kwargs[0]['vm_override'] is None
+    assert create_kwargs[0]['configuration_reviewed'] is True
     assert create_kwargs[0]['initial_attachment_host_src'] == harness.host_src
 
     # The bootstrapped session still persisted the folder attachment.

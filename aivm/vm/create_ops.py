@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import sys
 from copy import deepcopy
 from dataclasses import asdict
@@ -27,6 +28,13 @@ from ..attachments.shared_root import (
 )
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_review import (
+    ConfigReviewItem,
+    agent_vm_review_items,
+    print_config_changes,
+    print_config_review,
+    render_config_review,
+)
 from ..config_store import (
     find_network,
     find_vm,
@@ -51,76 +59,52 @@ if TYPE_CHECKING:
     from ..config_store import Store
 
 
-def _format_bool(value: bool) -> str:
-    """Return a stable human-readable boolean for review prompts."""
-    return 'true' if bool(value) else 'false'
-
-
-def _format_secret(value: str) -> str:
-    """Avoid echoing configured passwords in review summaries."""
-    return '(configured)' if str(value or '') else '(empty)'
+def _vm_create_review_items(
+    cfg: AgentVMConfig, path: Path
+) -> list[ConfigReviewItem]:
+    return agent_vm_review_items(
+        cfg,
+        path,
+        config_store_meaning='config source',
+        vm_name_meaning='VM name, guest hostname, and SSH alias',
+        include_ssh_paths=False,
+    )
 
 
 def _vm_create_summary_rows(
     cfg: AgentVMConfig, path: Path
 ) -> list[tuple[str, str, str]]:
-    """Return rows for the VM-create review summary."""
-    password_note = (
-        'used for console/SSH password auth when vm.allow_password_login=true'
-    )
+    """Return legacy tuple rows for callers/tests that consume this helper."""
     return [
-        ('config_store', str(path), 'config source'),
-        ('vm.name', cfg.vm.name, 'VM name, guest hostname, and SSH alias'),
-        ('vm.user', cfg.vm.user, 'guest login user'),
-        ('vm.cpus', str(cfg.vm.cpus), 'virtual CPUs'),
-        ('vm.ram_mb', str(cfg.vm.ram_mb), 'RAM in MiB'),
-        ('vm.disk_gb', str(cfg.vm.disk_gb), 'root disk size'),
-        (
-            'vm.allow_password_login',
-            _format_bool(cfg.vm.allow_password_login),
-            'enables password login on console and SSH',
-        ),
-        ('vm.password', _format_secret(cfg.vm.password), password_note),
-        ('network.name', cfg.network.name, 'libvirt network'),
-        ('network.subnet_cidr', cfg.network.subnet_cidr, 'guest subnet'),
-        ('network.gateway_ip', cfg.network.gateway_ip, 'guest gateway'),
-        ('network.dhcp_start', cfg.network.dhcp_start, 'DHCP range start'),
-        ('network.dhcp_end', cfg.network.dhcp_end, 'DHCP range end'),
+        (item.key, item.display, item.meaning)
+        for item in _vm_create_review_items(cfg, path)
     ]
 
 
 def _render_vm_create_summary(cfg: AgentVMConfig, path: Path) -> str:
     """Render a plain-text summary of VM create defaults for tests/fallback."""
-    lines = ['Create VM from defaults:']
-    for key, value, note in _vm_create_summary_rows(cfg, path):
-        if note:
-            lines.append(f'  {key}: {value}  # {note}')
-        else:
-            lines.append(f'  {key}: {value}')
-    return '\n'.join(lines)
+    return render_config_review(
+        'Create VM from defaults', _vm_create_review_items(cfg, path)
+    )
 
 
 def _print_vm_create_summary(cfg: AgentVMConfig, path: Path) -> None:
     """Print the VM-create review summary, using Rich when available."""
-    try:
-        from rich.console import Console
-        from rich.table import Table
-    except Exception:  # pragma: no cover - exercised only without rich
-        print(_render_vm_create_summary(cfg, path))
-        return
-
-    table = Table(title='Create VM from defaults', show_header=True)
-    table.add_column('Setting', style='bold cyan', no_wrap=True)
-    table.add_column('Value', overflow='fold')
-    table.add_column('Meaning', style='dim', overflow='fold')
-    for key, value, note in _vm_create_summary_rows(cfg, path):
-        table.add_row(key, value, note)
-    Console().print(table)
+    print_config_review(
+        'Create VM from defaults', _vm_create_review_items(cfg, path)
+    )
 
 
 def _prompt_with_default(prompt: str, default: str) -> str:
     """Prompt for a string value with a default."""
     raw = input(f'{prompt} [{default}]: ').strip()
+    return raw if raw else default
+
+
+def _prompt_password_with_default(prompt: str, default: str) -> str:
+    """Prompt without echoing the password already present in plain config."""
+    state = 'configured; Enter keeps current' if default else 'empty'
+    raw = getpass.getpass(f'{prompt} [{state}]: ')
     return raw if raw else default
 
 
@@ -189,6 +173,7 @@ def _review_vm_create_overrides_interactive(
         if ans in {'n', 'no'}:
             raise AIVMError('Aborted by user.')
         if ans in {'e', 'edit'}:
+            before = deepcopy(cfg)
             cfg.vm.name = _prompt_with_default('vm.name', cfg.vm.name)
             cfg.vm.user = _prompt_with_default('vm.user', cfg.vm.user)
             cfg.vm.cpus = _prompt_int_with_default('vm.cpus', cfg.vm.cpus)
@@ -200,7 +185,7 @@ def _review_vm_create_overrides_interactive(
                 'vm.allow_password_login', cfg.vm.allow_password_login
             )
             if cfg.vm.allow_password_login:
-                cfg.vm.password = _prompt_with_default(
+                cfg.vm.password = _prompt_password_with_default(
                     'vm.password', cfg.vm.password
                 )
             cfg.network.name = _prompt_with_default(
@@ -219,9 +204,30 @@ def _review_vm_create_overrides_interactive(
                 'network.dhcp_end', cfg.network.dhcp_end
             )
             print('')
-            _print_vm_create_summary(cfg, path)
+            print_config_changes(
+                _vm_create_review_items(before, path),
+                _vm_create_review_items(cfg, path),
+            )
             continue
         print("Please answer 'y', 'e', or 'n'.")
+
+
+def _confirm_reviewed_vm_create(cfg: AgentVMConfig) -> AgentVMConfig:
+    """Confirm creation without repeating a configuration reviewed moments ago."""
+    while True:
+        ans = (
+            input(
+                f'Create VM `{cfg.vm.name}` from the configuration reviewed above? '
+                '[Y/n]: '
+            )
+            .strip()
+            .lower()
+        )
+        if ans in {'', 'y', 'yes'}:
+            return cfg
+        if ans in {'n', 'no'}:
+            raise AIVMError('Aborted by user.')
+        print("Please answer 'y' or 'n'.")
 
 
 def _resolve_create_config(
@@ -327,6 +333,7 @@ def create_vm_from_defaults(
     force: bool = False,
     dry_run: bool = False,
     yes: bool = False,
+    configuration_reviewed: bool = False,
     initial_attachment_host_src: Path | None = None,
     initial_attachment_guest_dst: str = '',
     initial_attachment_mode: str = '',
@@ -351,6 +358,10 @@ def create_vm_from_defaults(
         force: Whether to overwrite existing VM entry.
         dry_run: Whether to print actions without running.
         yes: Whether to skip all prompts.
+        configuration_reviewed: Whether this exact config was already reviewed
+            by the interactive config-init flow. In that case, ask only for a
+            concise create confirmation instead of printing the full table
+            again.
         initial_attachment_host_src: Optional host folder that should be
             present in the initial VM domain definition. Used by fresh
             ``aivm code`` / ``aivm ssh`` bootstrap flows to avoid live
@@ -378,7 +389,10 @@ def create_vm_from_defaults(
 
     # Interactive review unless --yes
     if not yes:
-        cfg = _review_vm_create_overrides_interactive(cfg, cfg_path)
+        if configuration_reviewed:
+            cfg = _confirm_reviewed_vm_create(cfg)
+        else:
+            cfg = _review_vm_create_overrides_interactive(cfg, cfg_path)
 
     # Check for impossible resources
     problems = vm_resource_impossible_lines(cfg)

@@ -45,10 +45,12 @@ from .manifest import (
     _persistent_attachment_manifest_text,
     _persistent_attachment_records_for_vm,
     _persistent_host_manifest_path,
+    _persistent_host_replay_manifest_path,
     _persistent_host_replay_service_name,
     _persistent_host_state_dir,
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_attachment_manifest_to_guest,
+    _sync_persistent_host_replay_manifest,
 )
 from .replay import (
     _install_persistent_attachment_replay,
@@ -82,6 +84,7 @@ __all__ = [
     '_persistent_attachment_manifest_text',
     '_persistent_attachment_records_for_vm',
     '_persistent_host_manifest_path',
+    '_persistent_host_replay_manifest_path',
     '_persistent_host_replay_service_name',
     '_persistent_host_state_dir',
     '_persistent_root_host_dir',
@@ -92,6 +95,7 @@ __all__ = [
     '_run_guest_ssh_script_with_retry',
     '_run_rsync_with_retry',
     '_sync_persistent_attachment_manifest_on_host',
+    '_sync_persistent_host_replay_manifest',
     '_sync_persistent_attachment_manifest_to_guest',
     '_write_text_if_changed',
     'host_bind',

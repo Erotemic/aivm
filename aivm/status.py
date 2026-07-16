@@ -15,6 +15,7 @@ from pathlib import Path
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_store import AttachmentEntry, load_store
+from .firewall import effective_firewall_table
 from .host import check_commands
 from .modes import PrivilegeMode
 from .privilege import sudo_allowed, virsh_needs_sudo
@@ -251,6 +252,8 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     raw = (info.stdout + '\n' + info.stderr).strip()
     if info.code != 0:
         raw_detail = (info.stderr or info.stdout or '').strip()
+        if info.code in {126, 127}:
+            return ProbeOutcome(None, 'virsh unavailable on this host', raw)
         detail = raw_detail.lower()
         if 'permission denied' in detail or 'authentication failed' in detail:
             return ProbeOutcome(
@@ -281,9 +284,7 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             f'{cfg.network.name} active (autostart={"yes" if autostart else "no"})',
             raw,
         )
-    return ProbeOutcome(
-        False, f'{cfg.network.name} defined but inactive', raw
-    )
+    return ProbeOutcome(False, f'{cfg.network.name} defined but inactive', raw)
 
 
 def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
@@ -308,30 +309,32 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
                 'Check whether the managed nftables table already exists '
                 'before deciding whether firewall repair is needed.'
             ),
-            approval_scope=f'firewall-probe:{cfg.firewall.table}',
+            approval_scope=f'firewall-probe:{effective_firewall_table(cfg)}',
         ):
             res = mgr.submit(
-                ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+                ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
                 sudo=True,
                 role='read',
                 check=False,
                 capture=True,
                 eager=True,
-                summary=f'Inspect nftables table inet {cfg.firewall.table}',
+                summary=f'Inspect nftables table inet {effective_firewall_table(cfg)}',
             ).result()
     else:
         res = mgr.run(
-            ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
             sudo=use_sudo,
             check=False,
             capture=True,
-            summary=f'Inspect nftables table inet {cfg.firewall.table}',
+            summary=f'Inspect nftables table inet {effective_firewall_table(cfg)}',
         )
     raw = (res.stdout + '\n' + res.stderr).strip()
     if res.code == 0:
         return ProbeOutcome(
-            True, f'table inet {cfg.firewall.table} present', raw
+            True, f'table inet {effective_firewall_table(cfg)} present', raw
         )
+    if res.code in {126, 127}:
+        return ProbeOutcome(None, 'nft unavailable on this host', raw)
     detail = (res.stderr or res.stdout or '').strip().lower()
     if 'operation not permitted' in detail or 'permission denied' in detail:
         return ProbeOutcome(
@@ -339,7 +342,9 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             'requires privileges (run status --sudo for firewall checks)',
             raw,
         )
-    return ProbeOutcome(False, f'table inet {cfg.firewall.table} missing', raw)
+    return ProbeOutcome(
+        False, f'table inet {effective_firewall_table(cfg)} missing', raw
+    )
 
 
 def _command_output_block(cmd: list[str], stdout: str, stderr: str) -> str:
@@ -376,7 +381,7 @@ def probe_vm_state(
         summary=f'Inspect VM definition {cfg.vm.name}',
     )
     if (
-        dom.code != 0
+        dom.code not in {0, 126, 127}
         and use_sudo
         and mgr.privilege_mode != PrivilegeMode.NEVER
         and not virsh_domain_missing(dom.stderr)
@@ -392,6 +397,11 @@ def probe_vm_state(
         )
     if dom.code != 0:
         diag = _command_output_block(dominfo_cmd, dom.stdout, dom.stderr)
+        if dom.code in {126, 127}:
+            return (
+                ProbeOutcome(None, 'virsh unavailable on this host', diag),
+                None,
+            )
         raw_detail = (dom.stderr or dom.stdout or '').strip()
         detail = raw_detail.lower()
         if 'permission denied' in detail or 'authentication failed' in detail:
@@ -431,6 +441,8 @@ def probe_vm_state(
             ),
         ]
     )
+    if state_res.code in {126, 127}:
+        return ProbeOutcome(None, 'virsh unavailable on this host', diag), None
     return ProbeOutcome(
         'running' in state.lower(), f'{cfg.vm.name} state={state}', diag
     ), True
@@ -529,9 +541,13 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         cmd, sudo=False, check=False, capture=True
     )
     if res.code == 0:
-        return ProbeOutcome(True, 'configured packages/tools appear present', '')
+        return ProbeOutcome(
+            True, 'configured packages/tools appear present', ''
+        )
     diag = (res.stdout + '\n' + res.stderr).strip()
-    return ProbeOutcome(False, 'one or more configured packages/tools missing', diag)
+    return ProbeOutcome(
+        False, 'one or more configured packages/tools missing', diag
+    )
 
 
 def anticipated_status_sudo_commands(
@@ -548,7 +564,7 @@ def anticipated_status_sudo_commands(
     )
     cmds: list[list[str]] = [
         list(virsh_cmd('net-info', cfg.network.name)),
-        ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+        ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
         ['test', '-f', str(base_img)],
         list(virsh_cmd('dominfo', cfg.vm.name)),
         list(virsh_cmd('domstate', cfg.vm.name)),
@@ -691,9 +707,7 @@ def render_status(
             counted=False,
         )
     else:
-        report.check(
-            None, 'VM shared folders', 'VM not defined', counted=False
-        )
+        report.check(None, 'VM shared folders', 'VM not defined', counted=False)
 
     # TODO: we probably want to clean up the detail that is shown here, but do want more than just
     # the path that is shared. We want what mode it is shared in, which VMs if is shared with, what its access is.
@@ -822,7 +836,7 @@ def render_status(
             lines.append('```')
         lines.append('')
 
-        lines.append(f'Firewall (inet {cfg.firewall.table})')
+        lines.append(f'Firewall (inet {effective_firewall_table(cfg)})')
         if cfg.firewall.enabled:
             lines.append('```text')
             lines.append(clip(fw.diag or '(no output)'))
