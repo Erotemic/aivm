@@ -46,9 +46,21 @@ class ProbeOutcome:
     diag: str = ''
 
 
-def status_line(ok: bool | None, label: str, detail: str = '') -> str:
-    """Render a single user-facing status line with consistent icons."""
-    icon = '✅' if ok is True else ('➖' if ok is None else '❌')
+def status_line(
+    ok: bool | None, label: str, detail: str = '', *, warn_only: bool = False
+) -> str:
+    """Render a single user-facing status line with consistent icons.
+
+    ``warn_only`` renders a failing item as ⚠️ instead of ❌ -- for reports
+    where the item costs something (typically sudo) without violating the
+    user's configured policy.
+    """
+    if ok is True:
+        icon = '✅'
+    elif ok is None:
+        icon = '➖'
+    else:
+        icon = '⚠️' if warn_only else '❌'
     suffix = f' - {detail}' if detail else ''
     return f'{icon} {label}{suffix}'
 

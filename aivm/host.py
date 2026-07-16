@@ -50,8 +50,9 @@ def check_commands_with_sudo() -> tuple[list[str], str | None]:
     )
     if sudo_probe.code != 0:
         return [], (
-            'sudo -n is not available. Configure passwordless sudo for e2e '
-            'or run without --sudo checks.'
+            'non-interactive sudo (sudo -n) is not available. Run `sudo -v` '
+            'to cache credentials and retry, or run `aivm host doctor` '
+            'without --sudo.'
         )
     missing = []
     for cmd in REQUIRED_CMDS:

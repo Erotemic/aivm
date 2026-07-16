@@ -61,6 +61,39 @@ def _effective_default_base_dir(config_opt: str | None) -> Path:
     return Path(expand(PathsConfig().base_dir))
 
 
+def _storage_dirs_to_grade(config_opt: str | None) -> list[tuple[Path, str]]:
+    """Return ``(dir, used_by)`` pairs for the storage the store actually uses.
+
+    Readiness is a property of the directories aivm will really touch: each
+    distinct ``base_dir`` of a stored VM, plus the persisted defaults dir
+    (what new VMs get) when one is set.  The built-in default only matters
+    when the store records neither -- grading it despite every actual VM
+    living elsewhere would fail hosts that are in fact fully ready.
+    """
+    dirs: dict[Path, list[str]] = {}
+    reg = None
+    try:
+        path = cfg_path(config_opt)
+        if path.exists():
+            reg = load_store(path)
+    except Exception:
+        reg = None
+    if reg is not None:
+        if reg.defaults is not None and reg.defaults.paths.base_dir:
+            dirs.setdefault(
+                Path(expand(reg.defaults.paths.base_dir)), []
+            ).append('new VMs')
+        for rec in reg.vms:
+            base = rec.cfg.paths.base_dir
+            if base:
+                dirs.setdefault(Path(expand(base)), []).append(
+                    f'vm {rec.name!r}'
+                )
+    if not dirs:
+        dirs[Path(expand(PathsConfig().base_dir))] = ['new VMs']
+    return [(d, ', '.join(users)) for d, users in dirs.items()]
+
+
 def _print_base_dir_toml(base_dir: Path) -> None:
     """Print the exact config lines that point VM storage at ``base_dir``."""
     print()
@@ -119,7 +152,13 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
 
 
 def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
-    """Return True when any stored config still enables the nft firewall."""
+    """Return True when any stored config still enables the nft firewall.
+
+    Firewall settings live on ``[[networks]]`` records (VM entries keep only
+    a ``network_name`` pointer, and ``rec.cfg.firewall`` is the *default*,
+    not the persisted value -- see ``materialize_vm_cfg``), so the network
+    records and the defaults section are the two truth sources.
+    """
     try:
         path = cfg_path(config_opt)
         if not path.exists():
@@ -127,34 +166,53 @@ def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
         reg = load_store(path)
         if reg.defaults is not None and reg.defaults.firewall.enabled:
             return True
-        if reg.defaults is None and not reg.vms:
+        if reg.defaults is None and not reg.networks:
             return AgentVMConfig().firewall.enabled
-        return any(rec.cfg.firewall.enabled for rec in reg.vms)
+        return any(net.firewall.enabled for net in reg.networks)
     except Exception:
         return True
 
 
 class SudolessCheckCLI(_BaseCommand):
-    """Report whether this host can run aivm without sudo."""
+    """Report where aivm still needs sudo on this host.
+
+    Verdicts follow the configured ``behavior.privilege_mode``.  Under
+    ``'never'`` any item that would force an escalation is a failure (the
+    chosen policy cannot be honored).  Under ``'as-needed'`` (the default)
+    those same items are friction, not failure: they are reported as ⚠️
+    with a summary of what sudo will be used for, and the exit code stays 0
+    unless something breaks VM operation in *every* mode.
+    """
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        mode = _configured_privilege_mode(args.config)
+        strict = mode == PrivilegeMode.NEVER
         lines: list[str] = ['🔐 Sudoless readiness']
-        ok_overall = True
+        broken: list[str] = []  # breaks VMs regardless of privilege mode
+        sudo_needs: list[str] = []  # costs sudo; a failure only under 'never'
+
+        def friction_line(
+            ok: bool, label: str, detail: str, need: str
+        ) -> str:
+            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise."""
+            if not ok:
+                sudo_needs.append(need)
+            return status_line(ok, label, detail, warn_only=not strict)
 
         in_group = user_in_libvirt_group()
         lines.append(
-            status_line(
+            friction_line(
                 in_group,
                 f'{LIBVIRT_GROUP} group membership',
                 'grants unprivileged qemu:///system access'
                 if in_group
                 else f'run `sudo usermod -aG {LIBVIRT_GROUP} {getpass.getuser()}` '
                 'or `aivm host sudoless setup`',
+                'libvirt access (virsh)',
             )
         )
-        ok_overall &= in_group
 
         live_access = libvirt_unprivileged_ok()
         live_detail = 'virsh reaches qemu:///system without sudo'
@@ -169,73 +227,106 @@ class SudolessCheckCLI(_BaseCommand):
                 )
             )
         lines.append(
-            status_line(live_access, 'live libvirt access', live_detail)
-        )
-        ok_overall &= live_access
-
-        base_dir = _effective_default_base_dir(args.config)
-        writable = user_can_write_path(base_dir)
-        lines.append(
-            status_line(
-                writable,
-                'VM storage writable',
-                f'{base_dir}'
-                if writable
-                else f'{base_dir} needs sudo; pick a user-owned dir via '
-                '`aivm host sudoless setup --base_dir ...`',
+            friction_line(
+                live_access,
+                'live libvirt access',
+                live_detail,
+                'libvirt access (virsh)',
             )
         )
-        ok_overall &= writable
 
-        blockers = qemu_traversal_blockers(base_dir)
-        if blockers is None:
+        any_blockers = False
+        for base_dir, used_by in _storage_dirs_to_grade(args.config):
+            writable = user_can_write_path(base_dir)
+            lines.append(
+                friction_line(
+                    writable,
+                    'VM storage writable',
+                    f'{base_dir} ({used_by})'
+                    if writable
+                    else f'{base_dir} ({used_by}) needs sudo; '
+                    '`aivm host sudoless setup` prepares a user-owned dir',
+                    f'VM storage under {base_dir}',
+                )
+            )
+            blockers = qemu_traversal_blockers(base_dir)
+            if blockers is None:
+                lines.append(
+                    status_line(
+                        None,
+                        f'{LIBVIRT_QEMU_USER} traversal',
+                        'undetermined (libvirt not fully installed?)',
+                    )
+                )
+            else:
+                if blockers:
+                    # qemu cannot read images it cannot reach; that breaks VM
+                    # start in every privilege mode, not just 'never'.
+                    broken.append(f'qemu traversal to {base_dir}')
+                    any_blockers = True
+                lines.append(
+                    status_line(
+                        not blockers,
+                        f'{LIBVIRT_QEMU_USER} traversal',
+                        f'qemu can reach {base_dir}'
+                        if not blockers
+                        else 'blocked by: '
+                        + ', '.join(str(b) for b in blockers)
+                        + ' (setup grants ACLs on dirs you own)',
+                    )
+                )
+
+        setfacl_ok = which('setfacl') is not None
+        if setfacl_ok:
             lines.append(
                 status_line(
-                    None,
-                    f'{LIBVIRT_QEMU_USER} traversal',
-                    'undetermined (libvirt not fully installed?)',
+                    True,
+                    'setfacl available',
+                    'used to grant qemu traversal without loosening '
+                    'permissions',
+                )
+            )
+        elif any_blockers:
+            broken.append('setfacl (needed to fix the traversal above)')
+            lines.append(
+                status_line(
+                    False, 'setfacl available', 'install the `acl` package'
                 )
             )
         else:
             lines.append(
                 status_line(
-                    not blockers,
-                    f'{LIBVIRT_QEMU_USER} traversal',
-                    f'qemu can reach {base_dir}'
-                    if not blockers
-                    else 'blocked by: '
-                    + ', '.join(str(b) for b in blockers)
-                    + ' (setup grants ACLs on dirs you own)',
+                    None,
+                    'setfacl available',
+                    'not installed; only needed when granting qemu traversal '
+                    'on user-owned storage',
                 )
             )
-            ok_overall &= not blockers
-
-        setfacl_ok = which('setfacl') is not None
-        lines.append(
-            status_line(
-                setfacl_ok,
-                'setfacl available',
-                'used to grant qemu traversal without loosening permissions'
-                if setfacl_ok
-                else 'install the `acl` package',
-            )
-        )
-        ok_overall &= setfacl_ok
 
         fw_enabled = _firewall_enabled_anywhere(args.config)
-        lines.append(
-            status_line(
-                None if not fw_enabled else False,
-                'firewall compatibility',
-                'firewall disabled; nothing needs root'
-                if not fw_enabled
-                else 'firewall.enabled requires root nftables access, which '
-                'has no unprivileged equivalent; disable it to run fully '
-                'without sudo',
+        if not fw_enabled:
+            lines.append(
+                status_line(
+                    None,
+                    'firewall compatibility',
+                    'firewall disabled; nothing needs root',
+                )
             )
-        )
+        else:
+            lines.append(
+                friction_line(
+                    False,
+                    'firewall compatibility',
+                    'firewall.enabled requires root nftables access, which '
+                    'has no unprivileged equivalent; disable it to run fully '
+                    'without sudo'
+                    if strict
+                    else 'applying nftables rules uses sudo; disable '
+                    'firewall.enabled to avoid it',
+                    'the nftables firewall',
+                )
+            )
 
-        mode = _configured_privilege_mode(args.config)
         lines.append(
             status_line(
                 True if mode != PrivilegeMode.ALWAYS else None,
@@ -245,11 +336,35 @@ class SudolessCheckCLI(_BaseCommand):
         )
 
         print('\n'.join(lines))
-        if ok_overall:
+        needs = list(dict.fromkeys(sudo_needs))
+        if broken:
+            print(
+                '❌ Broken in every privilege mode: '
+                + '; '.join(dict.fromkeys(broken))
+                + '. Run `aivm host sudoless setup`.'
+            )
+            return 2
+        if strict:
+            if needs:
+                print(
+                    "❌ privilege_mode = 'never' cannot be honored yet; "
+                    'run `aivm host sudoless setup`.'
+                )
+                return 2
             print('✅ Host is ready for sudoless operation.')
             return 0
-        print('❌ Host is not fully ready; run `aivm host sudoless setup`.')
-        return 2
+        if needs:
+            print(
+                f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
+                'used for: ' + '; '.join(needs) + '.'
+            )
+            print(
+                '   `aivm host sudoless setup` trims that list; '
+                "privilege_mode = 'never' forbids escalation outright."
+            )
+            return 0
+        print('✅ Host is ready for sudoless operation.')
+        return 0
 
 
 class SudolessSetupCLI(_BaseCommand):
