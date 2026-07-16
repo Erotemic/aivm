@@ -210,3 +210,19 @@ def test_dash_dash_sudo_does_not_abbreviate_to_never_sudo() -> None:
 
     with _pytest.raises(SystemExit):
         ListCLI.cli(argv=['--sudo'])
+
+
+def test_real_sudo_is_forbidden_in_unit_tests() -> None:
+    """The conftest guard fails any unit test reaching real ``sudo``.
+
+    A test that forgets to fake ``aivm.commands.subprocess.run`` and
+    escalates would otherwise run real root commands on hosts with
+    passwordless sudo and die on a password prompt everywhere else; the
+    guard makes the outcome deterministic. This pins the guard itself.
+    """
+    import subprocess
+
+    import pytest
+
+    with pytest.raises(AssertionError, match='real sudo command'):
+        subprocess.run(['sudo', '-n', 'true'])

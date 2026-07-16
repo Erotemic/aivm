@@ -39,6 +39,46 @@ def cfg_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _forbid_real_sudo(
+    request: pytest.FixtureRequest, monkeypatch: MonkeyPatch
+) -> None:
+    """Fail any unit test whose command execution reaches real ``sudo``.
+
+    Unit tests fake ``aivm.commands.subprocess.run``; a test that misses
+    the fake escalates *for real* on hosts with passwordless sudo -- the
+    suite once wrote root-owned files under ``/var/lib/aivm`` this way --
+    and fails with a password-prompt error everywhere else.  Wrapping the
+    real ``subprocess.run`` turns that machine-dependent outcome into one
+    deterministic, loud failure.  A test's own monkeypatch of
+    ``aivm.commands.subprocess.run`` replaces this wrapper for its
+    duration, so recorder-driven tests are unaffected.  E2E suites run
+    real commands by design and are exempt via their ``e2e`` marker.
+    """
+    if request.node.get_closest_marker('e2e'):
+        return
+    import subprocess
+
+    real_run = subprocess.run
+
+    def guarded_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        argv = (
+            [str(part) for part in cmd]
+            if isinstance(cmd, (list, tuple))
+            else [str(cmd)]
+        )
+        if argv and Path(argv[0]).name == 'sudo':
+            raise AssertionError(
+                f'unit test attempted a real sudo command: {argv!r}. '
+                'Fake the process boundary (tests.helpers.command_recorder '
+                'over aivm.commands.subprocess.run) or stub the escalating '
+                'seam.'
+            )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', guarded_run)
+
+
+@pytest.fixture(autouse=True)
 def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     """Pin the sudoless capability probe to "unavailable" by default.
 

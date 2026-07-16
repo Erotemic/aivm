@@ -198,6 +198,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     save_store(reg, cfg_path)
 
     syncs: list[Any] = []
+    replay_syncs: list[Any] = []
     replays: list[Any] = []
     patch_ns(
         monkeypatch,
@@ -220,6 +221,11 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
             '_sync_persistent_attachment_manifest_on_host': records(
                 syncs, cfg_path
             ),
+            # The root-owned replay manifest sync escalates for real; the
+            # seam is the subject of test_persistent_host.py.
+            '_sync_persistent_host_replay_manifest': records(
+                replay_syncs, cfg_path
+            ),
             '_reconcile_persistent_attachments_in_guest': records(replays),
         },
     )
@@ -233,4 +239,5 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
 
     assert rc == 0
     assert syncs
+    assert replay_syncs
     assert replays

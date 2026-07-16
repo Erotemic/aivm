@@ -248,6 +248,13 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
         'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: syncs.append((a, k)) or cfg_path,
     )
+    # The root-owned replay manifest sync escalates for real; the seam is
+    # the subject of test_persistent_host.py, so stub it here.
+    replay_syncs: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
+        lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
+    )
     guest_mounts: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.cli.vm_attach._ensure_attachment_available_in_guest',
@@ -269,6 +276,7 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
 
     assert rc == 0
     assert syncs
+    assert replay_syncs
     assert guest_mounts
     assert replays
     assert guest_mounts[0][1]['ensure_shared_root_host_side'] is True
@@ -290,6 +298,13 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     monkeypatch.setattr(
         'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
         lambda *a, **k: syncs.append((a, k)) or cfg_path,
+    )
+    # The root-owned replay manifest sync escalates for real; the seam is
+    # the subject of test_persistent_host.py, so stub it here.
+    replay_syncs: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
+        lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
     )
     prepares: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
@@ -320,6 +335,7 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert prepares
     assert prepares[0][1]['vm_running'] is False
     assert syncs
+    assert replay_syncs
     assert refreshes
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
