@@ -9,8 +9,8 @@ one open ``O_PATH`` file descriptor on the host (it lacks
 kernel only releases those inodes (FUSE ``FORGET``) under memory pressure or
 an explicit ``drop_caches`` write, so on large-RAM guests the daemon's fd
 count grows monotonically toward ``min(RLIMIT_NOFILE, fs.nr_open)`` --
-typically 1,048,576 -- after which every lookup/open on the share fails and
-the guest sees ``EMFILE`` (``[Errno 24] Too many open files``).
+typically about one million -- after which every lookup/open on the share
+fails and the guest sees ``EMFILE`` (``[Errno 24] Too many open files``).
 
 Two guest-side facts make this both deterministic and fixable from inside
 the VM:
@@ -21,16 +21,17 @@ the VM:
    re-walked nightly, touching every inode -- one sweep over a multi-million
    inode share saturates virtiofsd on its own.
 2. The guest-visible ``fuse_inode`` slab count tracks the host daemon's
-   path-backed fd count almost 1:1, so the guest can observe the pressure it
-   is creating and shed it (``drop_caches=2``) before the host ceiling is
-   reached. Measured on 2026-05-17: a guest cache drop took the hot daemon
-   from 999,778 fds to 45 within ~30 seconds.
+   path-backed fd count almost 1:1 for the observed topology, so the guest
+   can observe the pressure it is creating and shed reclaimable dentries and
+   inodes before the host ceiling is reached. Measured on 2026-05-17: a
+   guest cache drop took the hot daemon from 999,778 fds to 45 within about
+   30 seconds.
 
 The guard installed here is a small root-owned script run from a systemd
 timer inside the guest. Each tick it (a) idempotently ensures updatedb
-prunes virtiofs and (b) flushes guest dentry/inode caches when the fuse
-inode count crosses a watermark. See ``docs/source/virtiofs.rst`` for the
-full analysis.
+prunes virtiofs, (b) observes guest-global FUSE inode pressure, and (c) uses
+soft and emergency watermarks to decide when to shed metadata caches. See
+``docs/source/virtiofs.rst`` for the full analysis and tradeoffs.
 
 This module is intentionally dependency-light so VM bootstrap code can
 import it without pulling in the higher-level attachments package.
@@ -51,7 +52,8 @@ FDGUARD_TIMER_PATH = f'/etc/systemd/system/{FDGUARD_TIMER}'
 FDGUARD_STATE = '/run/aivm-virtiofs-guard.json'
 
 DEFAULT_FDGUARD_THRESHOLD = 500_000
-DEFAULT_FDGUARD_INTERVAL_SEC = 60
+DEFAULT_FDGUARD_EMERGENCY_THRESHOLD = 750_000
+DEFAULT_FDGUARD_INTERVAL_SEC = 600
 
 
 def fdguard_python() -> str:
@@ -63,17 +65,23 @@ def fdguard_python() -> str:
     """
     header = textwrap.dedent(
         f'''\
-        #!/usr/bin/env python3
-        """aivm virtiofs guard: keep guest fuse inode cache below the host fd budget.
+        #!/usr/bin/python3
+        """aivm virtiofs guard: control guest-created virtiofs fd pressure.
 
-        Host virtiofsd holds one O_PATH fd per inode this guest keeps cached;
-        those fds are only released when the guest evicts the inode (FUSE
-        FORGET). This script runs from {FDGUARD_TIMER} and:
+        Host virtiofsd normally holds one O_PATH fd per inode this guest keeps
+        cached. Those fds are released when the guest evicts the inode and
+        sends a FUSE FORGET. This script runs from {FDGUARD_TIMER} and:
 
         1. ensures /etc/updatedb.conf prunes virtiofs so the nightly
-           plocate-updatedb sweep does not walk every shared inode; and
-        2. writes 2 to /proc/sys/vm/drop_caches (dentries+inodes only) when
-           the fuse_inode slab count exceeds THRESHOLD from {FDGUARD_CONF}.
+           plocate-updatedb sweep does not walk every shared inode;
+        2. observes the guest-global fuse_inode slab count; and
+        3. sheds reclaimable dentry/inode caches at a soft watermark, while
+           an emergency watermark bypasses cooldown after sustained pressure.
+
+        It writes 2 to /proc/sys/vm/drop_caches, which evicts reclaimable
+        dentries and inodes but leaves page cache and dirty data intact. A
+        first pass avoids global sync; sync plus a second pass is used only
+        when the immediate reclaim does not get below the soft watermark.
 
         Managed by aivm (aivm/fdguard.py); local edits may be overwritten.
         """
@@ -91,40 +99,59 @@ def fdguard_python() -> str:
             "AIVM_VIRTIOFS_GUARD_DROP_CACHES", "/proc/sys/vm/drop_caches")
         UPDATEDB_CONF = os.environ.get(
             "AIVM_VIRTIOFS_GUARD_UPDATEDB_CONF", "/etc/updatedb.conf")
+        MOUNTINFO_PATH = os.environ.get(
+            "AIVM_VIRTIOFS_GUARD_MOUNTINFO", "/proc/self/mountinfo")
         STATE_PATH = os.environ.get(
             "AIVM_VIRTIOFS_GUARD_STATE", "{FDGUARD_STATE}")
+        ACTION_LOG_PATH = os.environ.get(
+            "AIVM_VIRTIOFS_GUARD_ACTION_LOG", "")
+        SETTLE_SEC = float(os.environ.get(
+            "AIVM_VIRTIOFS_GUARD_SETTLE_SEC", "5"))
 
         DEFAULT_THRESHOLD = {DEFAULT_FDGUARD_THRESHOLD}
+        DEFAULT_EMERGENCY_THRESHOLD = {DEFAULT_FDGUARD_EMERGENCY_THRESHOLD}
         '''
     )
     body = textwrap.dedent(
         '''\
-        # After a flush that fails to reclaim (inodes pinned by open files or
-        # inotify watchers), do not re-flush every tick: wait for the cooldown
-        # or for meaningful regrowth over the post-flush floor.
+        # If normal-pressure reclaim is ineffective because inodes are pinned
+        # by open files, process CWDs, or inotify watches, do not discard warm
+        # metadata every tick. The emergency watermark always bypasses this.
         COOLDOWN_SEC = 900
-        REGROW_FACTOR = 1.10
 
-        def read_threshold():
+        def read_watermarks():
+            soft = DEFAULT_THRESHOLD
+            emergency = DEFAULT_EMERGENCY_THRESHOLD
             try:
                 with open(CONF_PATH, "r", encoding="utf-8") as file:
                     text = file.read()
             except OSError:
-                return DEFAULT_THRESHOLD
+                return soft, emergency
+            values = {}
             for line in text.splitlines():
                 line = line.strip()
-                if line.startswith("THRESHOLD="):
-                    value = line.split("=", 1)[1].strip()
-                    try:
-                        parsed = int(value)
-                    except ValueError:
-                        return DEFAULT_THRESHOLD
-                    if parsed > 0:
-                        return parsed
-            return DEFAULT_THRESHOLD
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+            try:
+                parsed = int(values.get("THRESHOLD", soft))
+                if parsed > 0:
+                    soft = parsed
+            except ValueError:
+                pass
+            try:
+                parsed = int(values.get("EMERGENCY_THRESHOLD", emergency))
+                if parsed > soft:
+                    emergency = parsed
+            except ValueError:
+                pass
+            if emergency <= soft:
+                emergency = max(DEFAULT_EMERGENCY_THRESHOLD, soft + 1)
+            return soft, emergency
 
         def fuse_inode_active():
-            """Count of allocated fuse_inode slab objects (needs root)."""
+            """Return the guest-global count of active fuse_inode objects."""
             try:
                 with open(SLABINFO_PATH, "r", encoding="utf-8") as file:
                     for line in file:
@@ -135,18 +162,37 @@ def fdguard_python() -> str:
                 return None
             return 0
 
+        def virtiofs_mounted():
+            """Return True/False for a live virtiofs mount, or None on error."""
+            try:
+                with open(MOUNTINFO_PATH, "r", encoding="utf-8") as file:
+                    for line in file:
+                        if " - " not in line:
+                            continue
+                        tail = line.split(" - ", 1)[1].split()
+                        if tail and tail[0].lower() in {
+                            "virtiofs", "fuse.virtiofs"
+                        }:
+                            return True
+            except OSError:
+                return None
+            return False
+
         def ensure_updatedb_prunes_virtiofs():
-            """Idempotently add virtiofs to PRUNEFS. Returns a message or None."""
+            """Return (status, message), where status may be degraded."""
             try:
                 with open(UPDATEDB_CONF, "r", encoding="utf-8") as file:
                     text = file.read()
             except FileNotFoundError:
-                return None
+                return "not-applicable", None
             except OSError as ex:
-                return f"cannot read {UPDATEDB_CONF}: {ex}"
+                return "degraded", f"cannot read {UPDATEDB_CONF}: {ex}"
             match = re.search(r'^(PRUNEFS\\s*=\\s*")([^"]*)(")', text, flags=re.M)
             if match is None:
-                return f"{UPDATEDB_CONF} has no PRUNEFS line; leaving unmodified"
+                return (
+                    "degraded",
+                    f"{UPDATEDB_CONF} has no PRUNEFS line; leaving unmodified",
+                )
             tokens = match.group(2).split()
             lowered = {token.lower() for token in tokens}
             missing = [
@@ -155,118 +201,315 @@ def fdguard_python() -> str:
                 if token.lower() not in lowered
             ]
             if not missing:
-                return None
+                return "ok", None
             new_value = " ".join(missing + tokens)
             new_text = text[: match.start(2)] + new_value + text[match.end(2):]
             tmp_path = UPDATEDB_CONF + ".aivm-tmp"
             try:
-                mode = os.stat(UPDATEDB_CONF).st_mode & 0o7777
+                stat = os.stat(UPDATEDB_CONF)
                 with open(tmp_path, "w", encoding="utf-8") as file:
                     file.write(new_text)
-                os.chmod(tmp_path, mode)
+                    file.flush()
+                    os.fsync(file.fileno())
+                if os.geteuid() == 0:
+                    os.chown(tmp_path, stat.st_uid, stat.st_gid)
+                os.chmod(tmp_path, stat.st_mode & 0o7777)
                 os.replace(tmp_path, UPDATEDB_CONF)
             except OSError as ex:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-                return f"cannot update {UPDATEDB_CONF}: {ex}"
-            return f"added {' '.join(missing)} to PRUNEFS in {UPDATEDB_CONF}"
+                return "degraded", f"cannot update {UPDATEDB_CONF}: {ex}"
+            return (
+                "updated",
+                f"added {' '.join(missing)} to PRUNEFS in {UPDATEDB_CONF}",
+            )
 
         def read_state():
             try:
                 with open(STATE_PATH, "r", encoding="utf-8") as file:
                     data = json.load(file)
             except (OSError, ValueError):
-                return None
+                return {}
             if not isinstance(data, dict):
-                return None
+                return {}
             return data
 
-        def write_state(post_count):
-            data = {"ts": time.time(), "post": int(post_count)}
+        def write_state(data):
+            payload = dict(data)
+            payload["version"] = 2
+            tmp_path = STATE_PATH + ".tmp"
             try:
-                with open(STATE_PATH, "w", encoding="utf-8") as file:
-                    json.dump(data, file)
+                with open(tmp_path, "w", encoding="utf-8") as file:
+                    json.dump(payload, file, sort_keys=True)
+                    file.write("\\n")
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(tmp_path, STATE_PATH)
+            except OSError:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        def record_action(action):
+            if not ACTION_LOG_PATH:
+                return
+            try:
+                with open(ACTION_LOG_PATH, "a", encoding="utf-8") as file:
+                    file.write(action + "\\n")
             except OSError:
                 pass
 
-        def flush_caches():
-            if DROP_CACHES_PATH == "/proc/sys/vm/drop_caches":
-                # Flush dirty pages first so dirty inodes are also evictable.
-                # Skipped under test-path overrides to keep tests hermetic.
+        def drop_inode_caches(*, sync_first):
+            if sync_first and DROP_CACHES_PATH == "/proc/sys/vm/drop_caches":
+                record_action("sync")
                 os.sync()
-            with open(DROP_CACHES_PATH, "w") as file:
+            record_action("drop_caches")
+            with open(DROP_CACHES_PATH, "w", encoding="utf-8") as file:
                 file.write("2\\n")
 
-        def print_status():
-            threshold = read_threshold()
-            count = fuse_inode_active()
-            shown = "unavailable (need root)" if count is None else str(count)
-            print(f"fuse_inode active: {shown}")
-            print(f"threshold: {threshold}")
-            pruned = "unknown"
+        def settle_and_count():
+            if SETTLE_SEC > 0:
+                time.sleep(SETTLE_SEC)
+            return fuse_inode_active()
+
+        def updatedb_status():
             try:
                 with open(UPDATEDB_CONF, "r", encoding="utf-8") as file:
                     text = file.read()
-                match = re.search(r'^PRUNEFS\\s*=\\s*"([^"]*)"', text, flags=re.M)
+                match = re.search(
+                    r'^PRUNEFS\\s*=\\s*"([^"]*)"', text, flags=re.M
+                )
                 if match is None:
-                    pruned = "no PRUNEFS line"
-                else:
-                    tokens = {token.lower() for token in match.group(1).split()}
-                    pruned = "yes" if "virtiofs" in tokens else "NO"
+                    return "no PRUNEFS line"
+                tokens = {token.lower() for token in match.group(1).split()}
+                wanted = {"virtiofs", "fuse.virtiofs"}
+                return "yes" if wanted <= tokens else "NO"
             except FileNotFoundError:
-                pruned = "n/a (no updatedb.conf)"
+                return "n/a (no updatedb.conf)"
             except OSError:
-                pass
-            print(f"updatedb prunes virtiofs: {pruned}")
+                return "unknown"
+
+        def age_text(timestamp):
+            try:
+                age = max(0, int(time.time() - float(timestamp)))
+            except (TypeError, ValueError):
+                return "unknown"
+            return f"{age}s ago"
+
+        def print_status():
+            soft, emergency = read_watermarks()
+            count = fuse_inode_active()
+            mounted = virtiofs_mounted()
+            shown = "unavailable (need root)" if count is None else str(count)
+            mounted_shown = (
+                "unknown" if mounted is None else ("yes" if mounted else "no")
+            )
+            print(f"fuse_inode active (all FUSE mounts): {shown}")
+            print(f"virtiofs mounted: {mounted_shown}")
+            print(f"soft threshold: {soft}")
+            print(f"emergency threshold: {emergency}")
+            if count is None:
+                pressure = "unknown"
+            elif count >= emergency:
+                pressure = "EMERGENCY"
+            elif count >= soft:
+                pressure = "soft watermark exceeded"
+            else:
+                pressure = "normal"
+            print(f"current pressure: {pressure}")
+            print(f"updatedb prunes virtiofs: {updatedb_status()}")
             state = read_state()
-            if state:
-                age = int(time.time() - float(state.get("ts", 0)))
-                print(f"last flush: {age}s ago (post-flush fuse inodes: {state.get('post')})")
+            if not state:
+                print("last check: never (since boot)")
+                print("last flush: never (since boot)")
+                print("health: unknown")
+                return
+            action = state.get("last_action", "unknown")
+            print(
+                f"last check: {age_text(state.get('last_check_ts'))} "
+                f"(action: {action})"
+            )
+            if state.get("last_flush_ts"):
+                print(
+                    f"last flush: {age_text(state.get('last_flush_ts'))} "
+                    f"({state.get('pre_flush')} -> {state.get('post_flush')}; "
+                    f"stages: {state.get('flush_stages', 'unknown')})"
+                )
             else:
                 print("last flush: never (since boot)")
+            degraded = state.get("degraded_reason")
+            print(f"health: {'DEGRADED: ' + degraded if degraded else 'ok'}")
 
         def main(argv):
             if "--status" in argv:
                 print_status()
                 return 0
-            message = ensure_updatedb_prunes_virtiofs()
-            if message:
-                print(f"aivm-virtiofs-guard: {message}")
+
+            now = time.time()
+            previous = read_state()
+            soft, emergency = read_watermarks()
+            prune_status, prune_message = ensure_updatedb_prunes_virtiofs()
+            if prune_message:
+                print(f"aivm-virtiofs-guard: {prune_message}")
+
             count = fuse_inode_active()
+            mounted = virtiofs_mounted()
+            state = dict(previous)
+            state.update(
+                {
+                    "last_check_ts": now,
+                    "soft_threshold": soft,
+                    "emergency_threshold": emergency,
+                    "fuse_inode_count": count,
+                    "virtiofs_mounted": mounted,
+                    "updatedb_status": prune_status,
+                }
+            )
+            degraded_reasons = []
+            if prune_status == "degraded":
+                degraded_reasons.append(prune_message or "updatedb pruning failed")
             if count is None:
+                message = (
+                    "cannot read fuse_inode slab "
+                    f"from {SLABINFO_PATH} (need root)"
+                )
+                degraded_reasons.append(message)
+                state["last_action"] = "probe-failed"
+                state["degraded_reason"] = "; ".join(degraded_reasons)
+                write_state(state)
+                print(f"aivm-virtiofs-guard: {message}", file=sys.stderr)
+                return 1
+
+            if mounted is None:
+                degraded_reasons.append(
+                    f"cannot read mount information from {MOUNTINFO_PATH}"
+                )
+                state["last_action"] = "mount-probe-failed"
+                state["pressure_degraded_reason"] = ""
+                state["degraded_reason"] = "; ".join(degraded_reasons)
+                write_state(state)
+                return 1
+            if mounted is False:
+                state["last_action"] = "no-virtiofs-mount"
+                state["pressure_degraded_reason"] = ""
+                state["degraded_reason"] = "; ".join(degraded_reasons)
+                write_state(state)
+                return 1 if degraded_reasons else 0
+
+            if count < soft:
+                state["last_action"] = "below-soft-watermark"
+                state["pressure_degraded_reason"] = ""
+                state["degraded_reason"] = "; ".join(degraded_reasons)
+                write_state(state)
+                return 1 if degraded_reasons else 0
+
+            emergency_mode = count >= emergency
+            try:
+                since_flush = now - float(previous.get("last_flush_ts", 0))
+            except (TypeError, ValueError):
+                since_flush = COOLDOWN_SEC + 1
+            if not emergency_mode and since_flush < COOLDOWN_SEC:
+                state["last_action"] = "soft-watermark-cooldown"
+                pressure_reason = str(
+                    previous.get("pressure_degraded_reason", "")
+                ).strip()
+                if pressure_reason:
+                    degraded_reasons.append(pressure_reason)
+                state["pressure_degraded_reason"] = pressure_reason
+                state["degraded_reason"] = "; ".join(
+                    dict.fromkeys(reason for reason in degraded_reasons if reason)
+                )
+                write_state(state)
+                return 1 if degraded_reasons else 0
+
+            pre = count
+            mode = "emergency" if emergency_mode else "soft"
+            stages = ["drop_caches"]
+            try:
+                drop_inode_caches(sync_first=False)
+            except OSError as ex:
+                message = f"cannot drop guest dentry/inode caches: {ex}"
+                degraded_reasons.append(message)
+                state.update(
+                    {
+                        "last_action": f"{mode}-watermark-flush-failed",
+                        "last_flush_attempt_ts": now,
+                        "pre_flush": pre,
+                        "post_flush": pre,
+                        "flush_stages": "drop_caches(error)",
+                        "pressure_degraded_reason": message,
+                        "degraded_reason": "; ".join(degraded_reasons),
+                    }
+                )
+                write_state(state)
+                print(f"aivm-virtiofs-guard: {message}", file=sys.stderr)
+                return 1
+            post = settle_and_count()
+
+            # A second, more expensive pass is reserved for ineffective
+            # immediate reclaim. sync makes dirty metadata eligible, but is
+            # deliberately avoided on the normal fast path.
+            if post is None or post >= soft:
+                stages.append("sync+drop_caches")
+                try:
+                    drop_inode_caches(sync_first=True)
+                except OSError as ex:
+                    degraded_reasons.append(
+                        f"cannot complete sync+drop_caches fallback: {ex}"
+                    )
+                else:
+                    second = settle_and_count()
+                    if second is not None:
+                        post = second
+
+            post_shown = "?" if post is None else post
+            print(
+                "aivm-virtiofs-guard: flushed guest dentry/inode caches "
+                f"at {mode} watermark: fuse inodes {pre} -> {post_shown} "
+                f"(soft {soft}, emergency {emergency}; "
+                f"stages {','.join(stages)})"
+            )
+
+            pressure_reason = ""
+            if post is None:
+                pressure_reason = "cannot read fuse_inode count after flush"
+            elif post >= emergency:
+                pressure_reason = (
+                    "fuse inode count remains above the emergency watermark; "
+                    "inodes are likely pinned by open files, process working "
+                    "directories, or inotify watchers"
+                )
+            elif post >= soft:
+                pressure_reason = (
+                    "fuse inode count remains above the soft watermark; "
+                    "reclaimable metadata was not sufficient"
+                )
+            if pressure_reason:
+                degraded_reasons.append(pressure_reason)
+
+            state.update(
+                {
+                    "last_action": f"{mode}-watermark-flush",
+                    "last_flush_attempt_ts": now,
+                    "last_flush_ts": now,
+                    "pre_flush": pre,
+                    "post_flush": post,
+                    "flush_stages": ",".join(stages),
+                    "pressure_degraded_reason": pressure_reason,
+                    "degraded_reason": "; ".join(degraded_reasons),
+                }
+            )
+            write_state(state)
+            if degraded_reasons:
                 print(
-                    "aivm-virtiofs-guard: cannot read fuse_inode slab "
-                    f"from {SLABINFO_PATH} (need root)",
+                    "aivm-virtiofs-guard: WARNING: "
+                    + "; ".join(degraded_reasons),
                     file=sys.stderr,
                 )
                 return 1
-            threshold = read_threshold()
-            if count < threshold:
-                return 0
-            state = read_state()
-            if state is not None:
-                age = time.time() - float(state.get("ts", 0))
-                floor = int(state.get("post", 0))
-                if age < COOLDOWN_SEC and count < floor * REGROW_FACTOR:
-                    return 0
-            flush_caches()
-            post = fuse_inode_active()
-            post_shown = "?" if post is None else post
-            print(
-                "aivm-virtiofs-guard: flushed guest dentry/inode caches: "
-                f"fuse inodes {count} -> {post_shown} (threshold {threshold})"
-            )
-            if post is not None and post >= threshold * 0.9:
-                print(
-                    "aivm-virtiofs-guard: WARNING: fuse inode count stayed "
-                    f"near the threshold after a flush ({post}); inodes are "
-                    "likely pinned by open files or inotify watchers "
-                    "(editors, file watchers). virtiofsd fd pressure cannot "
-                    "be shed for those until they are closed."
-                )
-            write_state(post if post is not None else count)
             return 0
 
         if __name__ == "__main__":
@@ -278,31 +521,41 @@ def fdguard_python() -> str:
 
 def fdguard_conf_text(
     threshold: int = DEFAULT_FDGUARD_THRESHOLD,
+    emergency_threshold: int = DEFAULT_FDGUARD_EMERGENCY_THRESHOLD,
 ) -> str:
-    if int(threshold) <= 0:
+    threshold = int(threshold)
+    emergency_threshold = int(emergency_threshold)
+    if threshold <= 0:
         raise ValueError('fd guard threshold must be a positive integer')
+    if emergency_threshold <= threshold:
+        raise ValueError(
+            'fd guard emergency threshold must be greater than the soft threshold'
+        )
     return textwrap.dedent(
-        f'''\
+        f"""\
         # aivm virtiofs guard configuration (KEY=VALUE).
-        # THRESHOLD: flush guest dentry/inode caches when the fuse_inode slab
-        # count exceeds this value. Keep it well below the host virtiofsd fd
-        # ceiling, min(RLIMIT_NOFILE, fs.nr_open) -- typically 1,048,576.
-        THRESHOLD={int(threshold)}
-        '''
+        # THRESHOLD is the soft watermark. Crossing it permits a metadata-cache
+        # flush unless a recent ineffective flush is still in cooldown.
+        THRESHOLD={threshold}
+        # EMERGENCY_THRESHOLD bypasses cooldown. Keep it comfortably below the
+        # host virtiofsd fd ceiling, min(RLIMIT_NOFILE, fs.nr_open), which is
+        # commonly about one million but must be checked when host limits differ.
+        EMERGENCY_THRESHOLD={emergency_threshold}
+        """
     )
 
 
 def fdguard_service_unit() -> str:
     return textwrap.dedent(
-        f'''\
+        f"""\
         [Unit]
-        Description=aivm virtiofs guard (fd watermark flush + updatedb prune)
+        Description=aivm virtiofs guard (fd watermarks + updatedb prune)
 
         [Service]
         Type=oneshot
         ExecStart={FDGUARD_BIN}
         TimeoutStartSec=600
-        '''
+        """
     )
 
 
@@ -312,18 +565,18 @@ def fdguard_timer_unit(
     if int(interval_sec) <= 0:
         raise ValueError('fd guard interval must be a positive integer')
     return textwrap.dedent(
-        f'''\
+        f"""\
         [Unit]
         Description=Run the aivm virtiofs guard periodically
 
         [Timer]
         OnBootSec=90
         OnUnitActiveSec={int(interval_sec)}s
-        AccuracySec=30s
+        AccuracySec=60s
 
         [Install]
         WantedBy=timers.target
-        '''
+        """
     )
 
 
@@ -334,30 +587,52 @@ def _b64(text: str) -> str:
 def fdguard_install_script(
     *,
     threshold: int = DEFAULT_FDGUARD_THRESHOLD,
+    emergency_threshold: int = DEFAULT_FDGUARD_EMERGENCY_THRESHOLD,
     interval_sec: int = DEFAULT_FDGUARD_INTERVAL_SEC,
 ) -> str:
-    """Guest shell script that installs/updates the guard over SSH.
+    """Guest shell script that atomically installs the guard over SSH.
 
     File payloads travel base64-encoded so no quoting rules apply to the
-    embedded Python/unit content.
+    embedded Python/unit content. Each payload is written to a sibling
+    temporary path and renamed into place, so readers never observe a
+    partially written managed file.
     """
     payloads = [
         (FDGUARD_BIN, '0755', fdguard_python()),
-        (FDGUARD_CONF, '0644', fdguard_conf_text(threshold)),
-        (f'/etc/systemd/system/{FDGUARD_SERVICE}', '0644', fdguard_service_unit()),
-        (f'/etc/systemd/system/{FDGUARD_TIMER}', '0644', fdguard_timer_unit(interval_sec)),
+        (
+            FDGUARD_CONF,
+            '0644',
+            fdguard_conf_text(threshold, emergency_threshold),
+        ),
+        (
+            f'/etc/systemd/system/{FDGUARD_SERVICE}',
+            '0644',
+            fdguard_service_unit(),
+        ),
+        (
+            f'/etc/systemd/system/{FDGUARD_TIMER}',
+            '0644',
+            fdguard_timer_unit(interval_sec),
+        ),
     ]
+    temp_paths = ' '.join(f'{path}.aivm-new.$$' for path, _, _ in payloads)
     lines = [
         'set -eu',
         'sudo -n mkdir -p /usr/local/libexec /etc/aivm /etc/systemd/system',
+        f"trap 'sudo -n rm -f {temp_paths} 2>/dev/null || true' EXIT HUP INT TERM",
     ]
     for path, mode, content in payloads:
         encoded = _b64(content)
+        tmp_path = f'{path}.aivm-new.$$'
         lines.append(
-            f"printf '%s' {encoded} | base64 -d | sudo -n tee {path} >/dev/null"
+            f"printf '%s' {encoded} | base64 -d | "
+            f'sudo -n tee {tmp_path} >/dev/null'
         )
-        lines.append(f'sudo -n chmod {mode} {path}')
+        lines.append(f'sudo -n chmod {mode} {tmp_path}')
+        lines.append(f'sudo -n chown root:root {tmp_path}')
+        lines.append(f'sudo -n mv -f {tmp_path} {path}')
     lines += [
+        'trap - EXIT HUP INT TERM',
         'sudo -n systemctl daemon-reload',
         f'sudo -n systemctl enable --now {FDGUARD_TIMER}',
         f'sudo -n systemctl start {FDGUARD_SERVICE}',
@@ -370,12 +645,13 @@ def fdguard_install_script(
 def _guard_payload_files(
     *,
     threshold: int,
+    emergency_threshold: int,
     interval_sec: int,
 ) -> dict[str, str]:
     """Map probe hash keys to the file contents the guard should have."""
     return {
         'sha_bin': fdguard_python(),
-        'sha_conf': fdguard_conf_text(threshold),
+        'sha_conf': fdguard_conf_text(threshold, emergency_threshold),
         'sha_service': fdguard_service_unit(),
         'sha_timer': fdguard_timer_unit(interval_sec),
     }
@@ -384,23 +660,26 @@ def _guard_payload_files(
 def fdguard_expected_hashes(
     *,
     threshold: int = DEFAULT_FDGUARD_THRESHOLD,
+    emergency_threshold: int = DEFAULT_FDGUARD_EMERGENCY_THRESHOLD,
     interval_sec: int = DEFAULT_FDGUARD_INTERVAL_SEC,
 ) -> dict[str, str]:
     """sha256 of each guard file as the current config would render it."""
     return {
         key: hashlib.sha256(content.encode('utf-8')).hexdigest()
         for key, content in _guard_payload_files(
-            threshold=threshold, interval_sec=interval_sec
+            threshold=threshold,
+            emergency_threshold=emergency_threshold,
+            interval_sec=interval_sec,
         ).items()
     }
 
 
 def fdguard_probe_script() -> str:
-    """Read-only guest script reporting guard install state as KEY=VALUE.
+    """Read-only guest script reporting install and timer health.
 
-    Emits ``installed``, ``timer_enabled``, and a ``sha_*`` line per managed
-    file (empty value when the file is absent) so drift detection can compare
-    against :func:`fdguard_expected_hashes` without sudo.
+    Emits ``installed``, timer enable/active state, the latest oneshot
+    service result, and a ``sha_*`` line per managed file so drift detection
+    can compare against :func:`fdguard_expected_hashes` without sudo.
     """
     hash_targets = {
         'sha_bin': FDGUARD_BIN,
@@ -414,10 +693,14 @@ def fdguard_probe_script() -> str:
         'else echo "installed=no"; fi',
         f'echo "timer_enabled=$(systemctl is-enabled {FDGUARD_TIMER} '
         '2>/dev/null || echo not-found)"',
+        f'echo "timer_active=$(systemctl is-active {FDGUARD_TIMER} '
+        '2>/dev/null || echo inactive)"',
+        f'echo "service_result=$(systemctl show {FDGUARD_SERVICE} '
+        '--property=Result --value 2>/dev/null || echo unknown)"',
     ]
     for key, path in hash_targets.items():
         lines.append(
-            f'printf \'{key}=%s\\n\' '
+            f"printf '{key}=%s\\n' "
             f'"$(sha256sum {path} 2>/dev/null | cut -d\' \' -f1)"'
         )
     return '\n'.join(lines)
@@ -444,8 +727,11 @@ def fdguard_status_script() -> str:
             f'echo "== {FDGUARD_TIMER} =="',
             f'systemctl is-enabled {FDGUARD_TIMER} 2>&1 || true',
             f'systemctl is-active {FDGUARD_TIMER} 2>&1 || true',
+            f'systemctl show {FDGUARD_SERVICE} --property=Result '
+            '--property=ExecMainStatus 2>&1 || true',
             'echo "== recent guard runs =="',
-            f'sudo -n journalctl -u {FDGUARD_SERVICE} -n 15 --no-pager --output cat 2>&1 || true',
+            f'sudo -n journalctl -u {FDGUARD_SERVICE} -n 15 --no-pager '
+            '--output cat 2>&1 || true',
             'echo "== guard status =="',
             f'if [ -x {FDGUARD_BIN} ]; then sudo -n {FDGUARD_BIN} --status; '
             f'else echo "guard not installed ({FDGUARD_BIN} missing)"; fi',
@@ -457,10 +743,13 @@ def fdguard_uninstall_script() -> str:
     return '\n'.join(
         [
             'set -eu',
-            f'sudo -n systemctl disable --now {FDGUARD_TIMER} 2>/dev/null || true',
+            f'sudo -n systemctl disable --now {FDGUARD_TIMER} '
+            '2>/dev/null || true',
             f'sudo -n rm -f /etc/systemd/system/{FDGUARD_TIMER} '
-            f'/etc/systemd/system/{FDGUARD_SERVICE} {FDGUARD_BIN} {FDGUARD_CONF}',
+            f'/etc/systemd/system/{FDGUARD_SERVICE} {FDGUARD_BIN} '
+            f'{FDGUARD_CONF}',
             'sudo -n systemctl daemon-reload',
-            'echo "aivm: virtiofs guard uninstalled"',
+            'echo "aivm: virtiofs guard uninstalled; the safe updatedb '
+            'PRUNEFS entries are intentionally retained"',
         ]
     )

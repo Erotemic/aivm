@@ -6,7 +6,8 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 * Guest-side virtiofs fd guard (`aivm vm fdguard`, on by default via the new
-  `virtiofs.fd_guard`, `virtiofs.fd_guard_threshold`, and
+  `virtiofs.fd_guard`, `virtiofs.fd_guard_threshold`,
+  `virtiofs.fd_guard_emergency_threshold`, and
   `virtiofs.fd_guard_interval_sec` config knobs). Root cause work on the
   long-lived virtiofs EMFILE failure identified that (a) host `virtiofsd`
   holds one `O_PATH` fd per guest-cached inode and only releases it on guest
@@ -14,15 +15,18 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   walked every attached inode because Ubuntu's default `PRUNEFS` lacks
   `virtiofs`, deterministically saturating the ~1M host fd ceiling. The guard
   is a guest systemd timer that idempotently prunes virtiofs from
-  `/etc/updatedb.conf` and flushes guest dentry/inode caches when the
-  `fuse_inode` slab count crosses a watermark (default 500k), releasing the
-  host-side descriptors before EMFILE. New VMs install it via cloud-init;
+  `/etc/updatedb.conf` and uses soft/emergency FUSE-inode watermarks
+  (default 500k/750k) to flush reclaimable guest metadata caches. The
+  emergency watermark bypasses cooldown, while the default 10-minute check
+  interval intentionally tolerates short bursts and targets sustained
+  accumulation. New VMs install it via cloud-init;
   `aivm vm fdguard --action install` retrofits existing VMs and replaces
   host-side periodic `aivm vm flush_caches` jobs. See
   `docs/source/virtiofs.rst`.
 * `aivm vm update` now reconciles the virtiofs fd guard against config like
   any other drift: while the VM is running and reachable it probes the guest
-  (install state, timer enablement, sha256 of each managed guard file),
+  (install state, timer enablement/activity, latest service result, sha256
+  of each managed guard file),
   plans an install/refresh when `virtiofs.fd_guard = true` and the guest is
   missing/stale (e.g. threshold changed or aivm's embedded guard script was
   updated), and plans an uninstall when the knob is disabled. Probe failures

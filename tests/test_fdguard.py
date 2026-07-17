@@ -7,6 +7,8 @@ import json
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -61,10 +63,19 @@ class _GuardHarness:
         self.slabinfo = tmp_path / 'slabinfo'
         self.drop_caches = tmp_path / 'drop_caches'
         self.updatedb_conf = tmp_path / 'updatedb.conf'
+        self.mountinfo = tmp_path / 'mountinfo'
         self.state = tmp_path / 'state.json'
-        self.conf.write_text(fdguard_conf_text(200000), encoding='utf-8')
+        self.action_log = tmp_path / 'actions.log'
+        self.settle_sec = '0'
+        self.conf.write_text(
+            fdguard_conf_text(200000, 300000), encoding='utf-8'
+        )
         self.drop_caches.write_text('', encoding='utf-8')
         self.updatedb_conf.write_text(STOCK_UPDATEDB_CONF, encoding='utf-8')
+        self.mountinfo.write_text(
+            '36 25 0:42 / /mnt/shared rw - virtiofs shared rw\n',
+            encoding='utf-8',
+        )
 
     def env(self) -> dict[str, str]:
         import os
@@ -75,7 +86,10 @@ class _GuardHarness:
             AIVM_VIRTIOFS_GUARD_SLABINFO=str(self.slabinfo),
             AIVM_VIRTIOFS_GUARD_DROP_CACHES=str(self.drop_caches),
             AIVM_VIRTIOFS_GUARD_UPDATEDB_CONF=str(self.updatedb_conf),
+            AIVM_VIRTIOFS_GUARD_MOUNTINFO=str(self.mountinfo),
             AIVM_VIRTIOFS_GUARD_STATE=str(self.state),
+            AIVM_VIRTIOFS_GUARD_ACTION_LOG=str(self.action_log),
+            AIVM_VIRTIOFS_GUARD_SETTLE_SEC=self.settle_sec,
         )
 
     def run(self, *argv: str) -> subprocess.CompletedProcess[str]:
@@ -113,17 +127,73 @@ def test_fdguard_adds_virtiofs_to_prunefs_idempotently(tmp_path: Path) -> None:
     assert harness.updatedb_conf.read_text().count('virtiofs') == 2
 
 
-def test_fdguard_flushes_above_threshold(tmp_path: Path) -> None:
+def test_fdguard_flushes_above_soft_threshold(tmp_path: Path) -> None:
     harness = _GuardHarness(tmp_path)
     harness.slabinfo.write_text(_slabinfo_text(250000), encoding='utf-8')
     res = harness.run()
-    assert res.returncode == 0
-    assert 'flushed guest dentry/inode caches' in res.stdout
+    # The fixture count cannot shrink, so health is degraded after both stages.
+    assert res.returncode == 1
+    assert 'at soft watermark' in res.stdout
     assert harness.drop_caches.read_text() == '2\n'
+    assert harness.action_log.read_text().splitlines() == [
+        'drop_caches',
+        'drop_caches',
+    ]
     state = json.loads(harness.state.read_text())
-    assert state['post'] == 250000
-    # The fixture count cannot shrink, so the pinned-floor warning fires.
-    assert 'pinned by open files or inotify watchers' in res.stdout
+    assert state['pre_flush'] == 250000
+    assert state['post_flush'] == 250000
+    assert state['flush_stages'] == 'drop_caches,sync+drop_caches'
+    assert 'remains above the soft watermark' in res.stderr
+
+
+def test_fdguard_avoids_sync_when_first_drop_reclaims(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.settle_sec = '0.2'
+    harness.slabinfo.write_text(_slabinfo_text(250000), encoding='utf-8')
+    thread_errors: list[BaseException] = []
+
+    def lower_count_after_drop() -> None:
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if (
+                    harness.action_log.exists()
+                    and harness.action_log.stat().st_size
+                ):
+                    harness.slabinfo.write_text(
+                        _slabinfo_text(100000), encoding='utf-8'
+                    )
+                    return
+                time.sleep(0.005)
+            raise AssertionError('guard did not attempt drop_caches')
+        except BaseException as ex:
+            thread_errors.append(ex)
+
+    worker = threading.Thread(target=lower_count_after_drop)
+    worker.start()
+    res = harness.run()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert thread_errors == []
+    assert res.returncode == 0
+    assert 'stages drop_caches)' in res.stdout
+    assert harness.action_log.read_text().splitlines() == ['drop_caches']
+    state = json.loads(harness.state.read_text())
+    assert state['post_flush'] == 100000
+    assert state['flush_stages'] == 'drop_caches'
+    assert state['degraded_reason'] == ''
+
+
+def test_fdguard_reports_malformed_updatedb_as_degraded(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.slabinfo.write_text(_slabinfo_text(100), encoding='utf-8')
+    harness.updatedb_conf.write_text('PRUNEPATHS="/tmp"\n', encoding='utf-8')
+    res = harness.run()
+    assert res.returncode == 1
+    assert 'has no PRUNEFS line' in res.stdout
+    state = json.loads(harness.state.read_text())
+    assert state['updatedb_status'] == 'degraded'
+    assert 'has no PRUNEFS line' in state['degraded_reason']
 
 
 def test_fdguard_silent_below_threshold(tmp_path: Path) -> None:
@@ -138,15 +208,78 @@ def test_fdguard_silent_below_threshold(tmp_path: Path) -> None:
     assert harness.drop_caches.read_text() == ''
 
 
-def test_fdguard_cooldown_suppresses_reflush(tmp_path: Path) -> None:
+def test_fdguard_soft_cooldown_suppresses_reflush(tmp_path: Path) -> None:
     harness = _GuardHarness(tmp_path)
     harness.slabinfo.write_text(_slabinfo_text(250000), encoding='utf-8')
     assert 'flushed' in harness.run().stdout
     harness.drop_caches.write_text('', encoding='utf-8')
-    # Count unchanged (pinned floor) within cooldown: no second flush.
+    harness.action_log.write_text('', encoding='utf-8')
+    # Count unchanged below emergency within cooldown: no second flush.
     res = harness.run()
     assert 'flushed' not in res.stdout
     assert harness.drop_caches.read_text() == ''
+    assert harness.action_log.read_text() == ''
+
+
+def test_fdguard_emergency_bypasses_cooldown(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.slabinfo.write_text(_slabinfo_text(250000), encoding='utf-8')
+    assert 'flushed' in harness.run().stdout
+    harness.action_log.write_text('', encoding='utf-8')
+    harness.slabinfo.write_text(_slabinfo_text(350000), encoding='utf-8')
+    res = harness.run()
+    assert 'at emergency watermark' in res.stdout
+    assert harness.action_log.read_text().splitlines() == [
+        'drop_caches',
+        'drop_caches',
+    ]
+
+
+def test_fdguard_does_not_flush_without_virtiofs_mount(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.slabinfo.write_text(_slabinfo_text(350000), encoding='utf-8')
+    harness.mountinfo.write_text(
+        '36 25 0:42 / /mnt/ssh rw - fuse.sshfs remote rw\n',
+        encoding='utf-8',
+    )
+    res = harness.run()
+    assert res.returncode == 0
+    assert harness.drop_caches.read_text() == ''
+    state = json.loads(harness.state.read_text())
+    assert state['last_action'] == 'no-virtiofs-mount'
+
+
+def test_fdguard_does_not_flush_when_mount_probe_fails(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.slabinfo.write_text(_slabinfo_text(350000), encoding='utf-8')
+    harness.mountinfo.unlink()
+    res = harness.run()
+    assert res.returncode == 1
+    assert harness.drop_caches.read_text() == ''
+    state = json.loads(harness.state.read_text())
+    assert state['last_action'] == 'mount-probe-failed'
+    assert 'cannot read mount information' in state['degraded_reason']
+
+
+def test_fdguard_failed_flush_does_not_start_cooldown(tmp_path: Path) -> None:
+    harness = _GuardHarness(tmp_path)
+    harness.slabinfo.write_text(_slabinfo_text(250000), encoding='utf-8')
+    harness.drop_caches.unlink()
+    harness.drop_caches.mkdir()
+
+    first = harness.run()
+    assert first.returncode == 1
+    first_state = json.loads(harness.state.read_text())
+    assert first_state['last_action'] == 'soft-watermark-flush-failed'
+    assert 'last_flush_ts' not in first_state
+
+    harness.action_log.write_text('', encoding='utf-8')
+    second = harness.run()
+    assert second.returncode == 1
+    assert 'soft-watermark-cooldown' not in second.stdout
+    second_state = json.loads(harness.state.read_text())
+    assert second_state['last_action'] == 'soft-watermark-flush-failed'
+    assert harness.action_log.read_text().splitlines() == ['drop_caches']
 
 
 def test_fdguard_status_reports_fields(tmp_path: Path) -> None:
@@ -154,8 +287,11 @@ def test_fdguard_status_reports_fields(tmp_path: Path) -> None:
     harness.slabinfo.write_text(_slabinfo_text(1234), encoding='utf-8')
     res = harness.run('--status')
     assert res.returncode == 0
-    assert 'fuse_inode active: 1234' in res.stdout
-    assert 'threshold: 200000' in res.stdout
+    assert 'fuse_inode active (all FUSE mounts): 1234' in res.stdout
+    assert 'virtiofs mounted: yes' in res.stdout
+    assert 'soft threshold: 200000' in res.stdout
+    assert 'emergency threshold: 300000' in res.stdout
+    assert 'current pressure: normal' in res.stdout
     assert 'updatedb prunes virtiofs: NO' in res.stdout
     # Status is read-only: it must not edit updatedb.conf or flush.
     assert harness.updatedb_conf.read_text() == STOCK_UPDATEDB_CONF
@@ -163,31 +299,42 @@ def test_fdguard_status_reports_fields(tmp_path: Path) -> None:
 
 
 def test_fdguard_conf_and_units_render() -> None:
-    assert 'THRESHOLD=42' in fdguard_conf_text(42)
+    conf = fdguard_conf_text(42, 84)
+    assert 'THRESHOLD=42' in conf
+    assert 'EMERGENCY_THRESHOLD=84' in conf
     with pytest.raises(ValueError):
-        fdguard_conf_text(0)
+        fdguard_conf_text(0, 84)
+    with pytest.raises(ValueError):
+        fdguard_conf_text(84, 42)
     assert f'ExecStart={FDGUARD_BIN}' in fdguard_service_unit()
     assert 'OnUnitActiveSec=90s' in fdguard_timer_unit(90)
+    assert 'AccuracySec=60s' in fdguard_timer_unit(90)
     with pytest.raises(ValueError):
         fdguard_timer_unit(-1)
 
 
 def test_fdguard_install_script_payloads_round_trip() -> None:
-    script = fdguard_install_script(threshold=314159, interval_sec=45)
+    script = fdguard_install_script(
+        threshold=314159, emergency_threshold=400000, interval_sec=45
+    )
     payloads = re.findall(r"printf '%s' ([A-Za-z0-9+/=]+) \| base64 -d", script)
     assert len(payloads) == 4
     decoded = [base64.b64decode(p).decode('utf-8') for p in payloads]
     assert decoded[0] == fdguard_python()
-    assert decoded[1] == fdguard_conf_text(314159)
+    assert decoded[1] == fdguard_conf_text(314159, 400000)
     assert decoded[2] == fdguard_service_unit()
     assert decoded[3] == fdguard_timer_unit(45)
     assert f'systemctl enable --now {FDGUARD_TIMER}' in script
+    assert '.aivm-new.$$' in script
+    assert 'sudo -n mv -f' in script
     assert 'sudo -n' in script
 
 
 def test_fdguard_status_and_uninstall_scripts() -> None:
     assert FDGUARD_BIN in fdguard_status_script()
-    assert f'systemctl disable --now {FDGUARD_TIMER}' in fdguard_uninstall_script()
+    assert (
+        f'systemctl disable --now {FDGUARD_TIMER}' in fdguard_uninstall_script()
+    )
 
 
 def test_cloud_init_includes_fdguard_by_default() -> None:
@@ -195,7 +342,13 @@ def test_cloud_init_includes_fdguard_by_default() -> None:
     text = _render_user_data_text(cfg, pubkey='ssh-ed25519 AAAA test')
     assert FDGUARD_BIN in text
     assert f'systemctl enable --now {FDGUARD_TIMER}' in text
+    assert (
+        f'systemctl start {FDGUARD_TIMER.removesuffix(".timer")}.service'
+        in text
+    )
     assert 'THRESHOLD=500000' in text
+    assert 'EMERGENCY_THRESHOLD=750000' in text
+    assert 'OnUnitActiveSec=600s' in text
 
 
 def test_cloud_init_omits_fdguard_when_disabled() -> None:
@@ -203,6 +356,15 @@ def test_cloud_init_omits_fdguard_when_disabled() -> None:
     cfg.virtiofs.fd_guard = False
     text = _render_user_data_text(cfg, pubkey='ssh-ed25519 AAAA test')
     assert 'aivm-virtiofs-guard' not in text
+
+
+def test_vm_fdguard_cli_description_explains_mechanism() -> None:
+    description = VMFdGuardCLI.__doc__ or ''
+    assert 'one ``O_PATH`` file descriptor' in description
+    assert 'soft watermark' in description
+    assert 'emergency watermark' in description
+    assert 'brief bursts' in description
+    assert 'flush_caches' in description
 
 
 def test_vm_fdguard_dry_run_actions(
@@ -276,11 +438,14 @@ def _drift_cfg(tmp_path: Path) -> AgentVMConfig:
 def _probe_output(cfg: AgentVMConfig, **overrides: str) -> str:
     expected = fdguard_expected_hashes(
         threshold=int(cfg.virtiofs.fd_guard_threshold),
+        emergency_threshold=int(cfg.virtiofs.fd_guard_emergency_threshold),
         interval_sec=int(cfg.virtiofs.fd_guard_interval_sec),
     )
     state = {
         'installed': 'yes',
         'timer_enabled': 'enabled',
+        'timer_active': 'active',
+        'service_result': 'success',
         **expected,
         **overrides,
     }
@@ -339,6 +504,19 @@ def test_fdguard_drift_none_when_in_sync(
     assert notes == ()
 
 
+def test_fdguard_drift_reports_failed_service_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    _patch_reachable_guest(
+        monkeypatch, _probe_output(cfg, service_result='exit-code')
+    )
+    drift, notes = _fdguard_drift(cfg, vm_running=True)
+    assert drift is None
+    assert any('latest service result' in note for note in notes)
+    assert any('exit-code' in note for note in notes)
+
+
 def test_fdguard_drift_installs_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -354,13 +532,24 @@ def test_fdguard_drift_installs_when_missing(
     assert drift.ip == '10.0.0.5'
 
 
-def test_fdguard_drift_installs_on_stale_conf(
+def test_fdguard_drift_installs_when_timer_inactive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = _drift_cfg(tmp_path)
     _patch_reachable_guest(
-        monkeypatch, _probe_output(cfg, sha_conf='deadbeef')
+        monkeypatch, _probe_output(cfg, timer_active='inactive')
     )
+    drift, _ = _fdguard_drift(cfg, vm_running=True)
+    assert drift is not None
+    assert drift.action == 'install'
+    assert 'not active' in drift.reason
+
+
+def test_fdguard_drift_installs_on_stale_conf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _drift_cfg(tmp_path)
+    _patch_reachable_guest(monkeypatch, _probe_output(cfg, sha_conf='deadbeef'))
     drift, _ = _fdguard_drift(cfg, vm_running=True)
     assert drift is not None
     assert drift.action == 'install'
@@ -408,7 +597,9 @@ def test_apply_fdguard_drift_runs_install_over_ssh(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg = _drift_cfg(tmp_path)
-    seen = _patch_reachable_guest(monkeypatch, 'aivm: virtiofs guard installed\n')
+    seen = _patch_reachable_guest(
+        monkeypatch, 'aivm: virtiofs guard installed\n'
+    )
     drift = VMUpdateDrift(
         fd_guard=FdGuardDrift(action='install', reason='missing', ip='10.0.0.5')
     )

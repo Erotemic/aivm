@@ -83,6 +83,8 @@ def _fdguard_drift(
     state = parse_fdguard_probe(res.stdout or '')
     installed = state.get('installed') == 'yes'
     timer_enabled = state.get('timer_enabled') == 'enabled'
+    timer_active = state.get('timer_active') == 'active'
+    service_result = state.get('service_result', '')
 
     if not desired:
         if installed or timer_enabled:
@@ -117,8 +119,18 @@ def _fdguard_drift(
             ),
             (),
         )
+    if not timer_active:
+        return (
+            FdGuardDrift(
+                action='install',
+                reason=f'{FDGUARD_TIMER} is not active in the guest',
+                ip=ip,
+            ),
+            (),
+        )
     expected = fdguard_expected_hashes(
         threshold=int(cfg.virtiofs.fd_guard_threshold),
+        emergency_threshold=int(cfg.virtiofs.fd_guard_emergency_threshold),
         interval_sec=int(cfg.virtiofs.fd_guard_interval_sec),
     )
     stale = sorted(
@@ -137,7 +149,14 @@ def _fdguard_drift(
             ),
             (),
         )
-    return None, ()
+    notes: tuple[str, ...] = ()
+    if service_result and service_result != 'success':
+        notes = (
+            'The virtiofs fd guard timer is installed and active, but its '
+            f'latest service result is {service_result!r}. Run '
+            '`aivm vm fdguard` for health details.',
+        )
+    return None, notes
 
 
 def _apply_fdguard_drift(
@@ -152,6 +171,7 @@ def _apply_fdguard_drift(
     else:
         script = fdguard_install_script(
             threshold=int(cfg.virtiofs.fd_guard_threshold),
+            emergency_threshold=int(cfg.virtiofs.fd_guard_emergency_threshold),
             interval_sec=int(cfg.virtiofs.fd_guard_interval_sec),
         )
     if dry_run:
@@ -185,7 +205,8 @@ def _apply_fdguard_drift(
     else:
         print(
             f'Installed/refreshed virtiofs fd guard in {cfg.vm.name} '
-            f'(threshold={cfg.virtiofs.fd_guard_threshold}, '
+            f'(soft={cfg.virtiofs.fd_guard_threshold}, '
+            f'emergency={cfg.virtiofs.fd_guard_emergency_threshold}, '
             f'interval={cfg.virtiofs.fd_guard_interval_sec}s).'
         )
     return True

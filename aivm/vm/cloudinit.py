@@ -35,6 +35,7 @@ from .paths import _paths
 
 log = logger
 
+
 def _invoking_host_uid_gid() -> tuple[int, int]:
     """Resolve the host UID/GID to bake into the guest user account.
 
@@ -53,6 +54,7 @@ def _invoking_host_uid_gid() -> tuple[int, int]:
 def _cloud_init_instance_id_token_path(cfg: AgentVMConfig) -> Path:
     return _paths(cfg, dry_run=False)['state_dir'] / 'instance-id-token'
 
+
 def _cloud_init_instance_id(cfg: AgentVMConfig) -> str:
     token_path = _cloud_init_instance_id_token_path(cfg)
     token = ''
@@ -63,6 +65,7 @@ def _cloud_init_instance_id(cfg: AgentVMConfig) -> str:
     if token:
         return f'{cfg.vm.name}-{token}'
     return cfg.vm.name
+
 
 def refresh_cloud_init_seed_for_next_boot(
     cfg: AgentVMConfig,
@@ -101,6 +104,7 @@ def refresh_cloud_init_seed_for_next_boot(
         ):
             token_path.write_text(next_token + '\n', encoding='utf-8')
         _write_cloud_init(cfg, dry_run=False)
+
 
 def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
     """Render the cloud-init ``user-data`` document for ``cfg``.
@@ -166,6 +170,10 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
     fdguard_runcmd = ''
     if cfg.virtiofs.fd_guard:
         indent14 = ' ' * 14
+        fdguard_conf = fdguard_conf_text(
+            cfg.virtiofs.fd_guard_threshold,
+            cfg.virtiofs.fd_guard_emergency_threshold,
+        )
         fdguard_write_files = (
             f'\n          - path: {FDGUARD_BIN}\n'
             '            permissions: "0755"\n'
@@ -174,7 +182,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
             f'          - path: {FDGUARD_CONF}\n'
             '            permissions: "0644"\n'
             '            content: |\n'
-            f'{textwrap.indent(fdguard_conf_text(cfg.virtiofs.fd_guard_threshold).rstrip(), indent14)}\n'
+            f'{textwrap.indent(fdguard_conf.rstrip(), indent14)}\n'
             f'          - path: /etc/systemd/system/{FDGUARD_SERVICE}\n'
             '            permissions: "0644"\n'
             '            content: |\n'
@@ -184,7 +192,10 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
             '            content: |\n'
             f'{textwrap.indent(fdguard_timer_unit(cfg.virtiofs.fd_guard_interval_sec).rstrip(), indent14)}'
         )
-        fdguard_runcmd = f'\n          - systemctl enable --now {FDGUARD_TIMER}'
+        fdguard_runcmd = (
+            f'\n          - systemctl enable --now {FDGUARD_TIMER}'
+            f'\n          - systemctl start {FDGUARD_SERVICE}'
+        )
 
     if cfg.vm.allow_password_login:
         if '\n' in cfg.vm.password:

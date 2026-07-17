@@ -3,7 +3,7 @@ Virtiofs sharing and the EMFILE problem
 
 This page explains why long-lived virtiofs attachments have historically
 failed with ``Too many open files`` (``EMFILE`` / ``OSError: [Errno 24]``),
-what triggers it, and how aivm now prevents it automatically. It replaces
+what triggers it, and how aivm now mitigates it automatically. It replaces
 the guidance of running periodic host-side ``aivm vm flush_caches`` jobs.
 
 TL;DR
@@ -21,9 +21,10 @@ TL;DR
   **not** in the stock ``PRUNEFS`` list, so every attached tree was fully
   re-walked (every inode touched) every night.
 * aivm now installs a guest-side systemd timer (the *virtiofs guard*) that
-  (a) keeps updatedb from indexing virtiofs mounts and (b) flushes guest
-  dentry/inode caches when the cached-inode count crosses a watermark,
-  releasing the host-side descriptors before the ceiling is reached.
+  (a) keeps updatedb from indexing virtiofs mounts and (b) uses soft and
+  emergency watermarks to flush guest dentry/inode caches under sustained
+  pressure. It intentionally tolerates short bursts and is not a strict
+  instantaneous bound on the host daemon's descriptor count.
   New VMs get it via cloud-init; retrofit existing VMs with
   ``aivm vm fdguard --action install``.
 
@@ -95,25 +96,40 @@ guard** (``/usr/local/libexec/aivm-virtiofs-guard``, run every
 ``virtiofs.fd_guard_interval_sec`` seconds by
 ``aivm-virtiofs-guard.timer``). Each tick it:
 
-1. **Prunes indexers** — idempotently ensures ``virtiofs`` is in
-   ``PRUNEFS`` in ``/etc/updatedb.conf`` (self-healing if plocate is
-   installed or reconfigured later).
-2. **Watches the watermark** — reads the ``fuse_inode`` slab count from
-   ``/proc/slabinfo``. This guest-visible number tracks the host daemon's
-   path-backed fd count nearly 1:1, so the guest can see the pressure it is
-   creating without any host cooperation.
-3. **Sheds pressure when needed** — if the count exceeds
-   ``virtiofs.fd_guard_threshold`` (default 500,000, i.e. ~50% of the usual
-   host ceiling), it runs ``sync`` and writes ``2`` to
-   ``/proc/sys/vm/drop_caches`` (dentries and inodes only; page cache is
-   untouched). The resulting FUSE ``FORGET`` storm lets virtiofsd close its
-   retained descriptors within seconds. A cooldown prevents flush-thrash
-   when inodes are pinned (see below).
+1. **Prunes indexers** — idempotently and atomically ensures both
+   ``virtiofs`` and ``fuse.virtiofs`` are in ``PRUNEFS`` in
+   ``/etc/updatedb.conf``. A missing ``updatedb.conf`` is harmless; an
+   unreadable or malformed file is recorded as degraded health rather than
+   silently treated as success.
+2. **Checks whether virtiofs is mounted** — the guest-global ``fuse_inode``
+   slab includes other FUSE filesystems such as sshfs. The guard therefore
+   does not flush merely because another FUSE filesystem is busy when no
+   virtiofs mount is present.
+3. **Observes two watermarks** — it reads the guest-global ``fuse_inode``
+   count from ``/proc/slabinfo``. In the observed aivm topology this tracks
+   host virtiofsd path-backed fds nearly 1:1, but it is a conservative proxy,
+   not a per-mount or per-daemon measurement.
+4. **Sheds pressure in two stages** — crossing the soft watermark
+   (``fd_guard_threshold``, default 500,000) permits a flush unless a recent
+   ineffective flush is in cooldown. Crossing the emergency watermark
+   (``fd_guard_emergency_threshold``, default 750,000) bypasses cooldown. The
+   first pass writes ``2`` to ``/proc/sys/vm/drop_caches`` without a global
+   ``sync``. Only when the count remains above the soft watermark does it run
+   ``sync`` and try once more. Value ``2`` evicts reclaimable dentries and
+   inodes; it does not discard dirty data or file page cache.
+5. **Records health** — ``/run/aivm-virtiofs-guard.json`` records the last
+   check, action, pre/post counts, flush stages, updatedb status, and any
+   degraded reason. ``aivm vm fdguard`` displays this together with timer and
+   systemd service health.
 
-Because the guard is closed-loop, it does nothing while the cache is small
-(no blind periodic flushes discarding warm caches) and reacts within one
-interval when a mass traversal starts — a blind 30-minute host cron can be
-both too aggressive when idle and too slow during a fast sweep.
+The default interval is deliberately relaxed to 600 seconds (10 minutes).
+This means a short burst can cross either watermark and finish before a
+check; that is intentional. The guard is aimed at long-lived accumulation
+and repeated broad walks, not at enforcing a strict instantaneous cap. At
+the next tick, emergency pressure bypasses cooldown and triggers an immediate
+recovery attempt. A blind host cron is still worse: it flushes even when
+idle, cannot remove the updatedb trigger, and has no pressure or health
+feedback.
 
 Deployment — the guard is config-driven and reconciled like everything
 else:
@@ -121,25 +137,29 @@ else:
 * **New VMs**: installed automatically via cloud-init when
   ``virtiofs.fd_guard`` is enabled (the default).
 * **Existing VMs**: ``aivm vm update`` detects guard drift against config
-  while the VM is running and reachable — not installed, timer disabled,
-  or installed files differing from what current config renders (e.g. a
-  changed ``fd_guard_threshold`` or a newer aivm) — plans the
+  while the VM is running and reachable — not installed, timer disabled or
+  inactive, or installed files differing from what current config renders
+  (e.g. changed watermarks/interval or a newer aivm) — plans the
   install/refresh/uninstall alongside CPU/RAM/disk changes, and applies it
   over SSH. Setting ``fd_guard = false`` and running ``aivm vm update``
   uninstalls it. If the VM is down or unreachable, update reports a note
   and reconciles on a later run; no restart is ever required.
 * **Manual control**: ``aivm vm fdguard`` remains for direct use —
-  ``status`` (the default action) shows the timer state, recent guard
-  runs, the live fuse inode count, threshold, and whether updatedb is
-  pruned; ``--action install`` / ``--action uninstall`` apply immediately
-  without a full update pass.
+  ``status`` (the default action) shows timer/service state, recent guard
+  runs, the live guest-global FUSE inode count, both watermarks, updatedb
+  pruning, and degraded health; ``--action install`` /
+  ``--action uninstall`` apply immediately
+  without a full update pass. Uninstall removes the timer, service, helper,
+  and guard config, but intentionally leaves the safe updatedb ``PRUNEFS``
+  entries in place.
 
 Config knobs (``[virtiofs]`` in ``~/.config/aivm/config.toml``)::
 
    [virtiofs]
-   fd_guard = true              # install the guard in guests
-   fd_guard_threshold = 500000  # flush when cached fuse inodes exceed this
-   fd_guard_interval_sec = 60   # guard check period
+   fd_guard = true                         # install the guard in guests
+   fd_guard_threshold = 500000             # soft watermark
+   fd_guard_emergency_threshold = 750000   # bypass cooldown here
+   fd_guard_interval_sec = 600             # check every 10 minutes
 
 Retiring old workarounds
 ------------------------
@@ -158,7 +178,9 @@ The invariant to preserve is::
 
    max guest-cached virtiofs inodes  <  min(virtiofsd RLIMIT_NOFILE, fs.nr_open)
 
-* The guard bounds the left side (default 500,000).
+* The guard attempts to control the left side with a 500,000 soft
+  watermark and a 750,000 emergency watermark. Because it polls rather than
+  intercepting lookups, neither value is a strict instantaneous bound.
 * The right side is typically 1,048,576 (``fs.nr_open`` default; virtiofsd
   raises its own soft limit to ``min(1,000,000, nr_open)``).
 * Each retained descriptor costs host kernel memory (a ``struct file`` plus
@@ -166,19 +188,21 @@ The invariant to preserve is::
   million-fd daemon also pins ~1 GB of host slab. Raising host limits
   (``fs.nr_open`` + ``prlimit --nofile`` on a live daemon) buys headroom in
   an emergency but does not change the growth behavior; prefer the guard.
-* On the guest side, 500k cached fuse inodes cost ~0.5–0.7 GB of guest slab;
-  lower ``fd_guard_threshold`` on small-RAM guests if needed.
+* On the guest side, 500k cached FUSE inodes cost roughly 0.5–0.7 GB of
+  guest slab; lower both watermarks on small-RAM guests if needed. Keep the
+  emergency watermark comfortably below the actual host virtiofsd soft
+  ``RLIMIT_NOFILE``. The guest cannot discover that host-side limit itself.
 
 Residual risks and hygiene
 --------------------------
 
 * **Pinned inodes cannot be shed.** ``drop_caches`` cannot evict inodes
   held by open files, process CWDs, or inotify watches (editors and file
-  watchers such as VS Code hold many). If the guard flushes and the count
-  stays near the threshold, it logs a warning and backs off for a cooldown
-  period rather than flushing every tick. If you see that warning
-  persistently, a guest process is holding a huge watched/open set; the
-  fix is to close it (or raise host limits).
+  watchers such as VS Code hold many). If a soft-watermark flush is
+  ineffective, the guard backs off for a cooldown period rather than
+  flushing every tick; the emergency watermark still bypasses cooldown. If
+  degraded health persists, a guest process is probably holding a huge
+  watched/open set. Close the pinning process or raise host limits.
 * **Keep attachments narrow.** Every attached inode is potential fd
   pressure. Avoid attaching home directories or trees dominated by
   ``.venv``/``target``/report forests when the workload does not need

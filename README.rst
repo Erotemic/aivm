@@ -347,15 +347,16 @@ itself: Ubuntu's stock nightly ``updatedb`` sweep walks virtiofs mounts
 inode every day.
 
 aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
-``updatedb`` and flushes guest dentry/inode caches when the cached-inode
-count crosses a watermark, releasing the host descriptors before the ceiling
-is reached. The guard is config-driven (``[virtiofs] fd_guard = true``, the
-default): new VMs get it via cloud-init, and ``aivm vm update`` reconciles
-existing running VMs — installing, refreshing after config/version changes,
-or uninstalling when disabled — so no manual setup or host-side
-``aivm vm flush_caches`` cron jobs are needed. ``aivm vm fdguard`` (default
-action ``status``) shows the live state and offers direct
-install/uninstall.
+``updatedb`` and observes the guest-global FUSE inode cache. A soft watermark
+permits a metadata-cache flush subject to cooldown; a higher emergency
+watermark bypasses cooldown. Checks run every 10 minutes by default, so brief
+bursts are intentionally tolerated while sustained accumulation is repaired.
+The guard is config-driven (``[virtiofs] fd_guard = true``, the default): new
+VMs get it via cloud-init, and ``aivm vm update`` reconciles existing running
+VMs — installing, refreshing after config/version changes, or uninstalling
+when disabled — so no manual setup or host-side ``aivm vm flush_caches`` cron
+jobs are needed. ``aivm vm fdguard`` (default action ``status``) shows live
+watermarks, timer/service health, recent actions, and updatedb-prune state.
 
 Remaining guidance:
 

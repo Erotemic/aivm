@@ -226,16 +226,16 @@ class VirtiofsConfig:
     # Guest-side virtiofs fd guard (see docs/source/virtiofs.rst and
     # aivm/fdguard.py). Host virtiofsd pins one O_PATH fd per inode the
     # guest keeps cached and hits EMFILE at min(RLIMIT_NOFILE, fs.nr_open),
-    # typically 1,048,576. The guard runs inside the guest from a systemd
-    # timer: it keeps updatedb from sweeping virtiofs shares nightly and
-    # flushes guest dentry/inode caches when the fuse inode count crosses
-    # ``fd_guard_threshold``. New VMs get it via cloud-init when enabled;
-    # existing running VMs are reconciled by ``aivm vm update`` (install,
-    # refresh on config/version change, uninstall when disabled), and
-    # ``aivm vm fdguard`` offers direct manual control.
+    # typically about one million. The guard removes the known nightly
+    # updatedb trigger, then checks guest-global FUSE inode pressure on a
+    # deliberately relaxed timer. Crossing the soft threshold triggers a
+    # metadata-cache flush subject to cooldown; crossing the emergency
+    # threshold bypasses cooldown. New VMs get it via cloud-init when
+    # enabled; existing running VMs are reconciled by ``aivm vm update``.
     fd_guard: bool = True
     fd_guard_threshold: int = 500_000
-    fd_guard_interval_sec: int = 60
+    fd_guard_emergency_threshold: int = 750_000
+    fd_guard_interval_sec: int = 600
 
 
 @dataclass
