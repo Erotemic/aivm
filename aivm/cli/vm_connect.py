@@ -573,15 +573,23 @@ class VMSSHCLI(_BaseCommand):
             check=False,
             capture=False,
         )
-        if ssh_result.code != 0:
+        if ssh_result.code == 255:
+            # 255 is ssh's own exit status: the connection or transport
+            # failed. Anything else is simply what the user's login shell
+            # last returned (`exit` after a failed command propagates that
+            # command's status) and is not aivm's error to report.
             log.error(
-                'SSH command failed (exit code {}) for {}@{}',
-                ssh_result.code,
+                'SSH connection to {}@{} failed; check that the VM is '
+                'running and reachable (aivm status).',
                 cfg.vm.user,
                 ip,
             )
-            return int(ssh_result.code) if ssh_result.code else 1
+            return 1
         print(f'SSH session ended for {cfg.vm.user}@{ip}')
+        if ssh_result.code:
+            log.debug(
+                'Interactive shell exited with status {}', ssh_result.code
+            )
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
         print(f'Folder registered in {session.reg_path}')

@@ -574,3 +574,77 @@ def test_vm_connect_clis_pass_lexical_host_src_to_session(
     assert captured, 'expected _prepare_attached_session to be called'
     passed = captured[0]['host_src']
     assert passed == host_src.expanduser().absolute()
+
+
+@pytest.mark.parametrize(
+    ('ssh_exit', 'expect_rc', 'expect_error'),
+    [
+        pytest.param(0, 0, False, id='clean_exit'),
+        pytest.param(127, 0, False, id='shell_status_is_not_our_error'),
+        pytest.param(255, 1, True, id='ssh_transport_failure'),
+    ],
+)
+def test_vm_ssh_reports_only_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    ssh_exit: int,
+    expect_rc: int,
+    expect_error: bool,
+) -> None:
+    """An interactive shell's exit status is the user's, not an aivm error.
+
+    `exit` propagates the last command's status, so ending a session after
+    a typo'd command used to print a scary ERROR for a perfectly healthy
+    run. Only ssh's own exit code 255 (connection/transport failure) is
+    aivm's to report.
+    """
+    from tests.helpers import (
+        FakeProc,
+        activate_manager,
+        capture_logs,
+        command_recorder,
+    )
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ssh-exit'
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.SHARED,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, []),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (tmp_path / 'ssh_config', False),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.require_ssh_identity', lambda p: p
+    )
+    errors = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('error',)
+    )
+    command_recorder(monkeypatch, {'ssh': FakeProc(ssh_exit, '', '')})
+
+    rc = VMSSHCLI.main(
+        argv=False, config=str(cfg_path), host_src=str(host_src), yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == expect_rc
+    if expect_error:
+        assert any('SSH connection' in msg for msg in errors)
+        assert 'SSH session ended' not in out
+    else:
+        assert errors == []
+        assert 'SSH session ended' in out
