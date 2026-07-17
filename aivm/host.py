@@ -146,6 +146,9 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         'openssh-client',
         'iproute2',
         'nftables',
+        # setfacl/getfacl: sudo-free storage prep and storage adoption grant
+        # libvirt-qemu traversal via POSIX ACLs instead of chown/chmod.
+        'acl',
     ]
     del assume_yes
     mgr = CommandManager.current()
