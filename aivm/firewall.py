@@ -50,6 +50,20 @@ def effective_firewall_table(cfg: AgentVMConfig) -> str:
     return f'{base[:max_base]}_{suffix}'
 
 
+def _legacy_firewall_table(cfg: AgentVMConfig) -> str | None:
+    """The pre-namespacing table name, when it differs from the derived one.
+
+    Before tables were namespaced per network, the managed table was
+    exactly ``cfg.firewall.table``. An upgraded host can still carry that
+    table with active drop rules, silently filtering alongside (and
+    shadowing) the new one, so apply/remove must clean it up.
+    """
+    legacy = str(cfg.firewall.table or '').strip()
+    if legacy and legacy != effective_firewall_table(cfg):
+        return legacy
+    return None
+
+
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
     return isinstance(value, Mapping)
 
@@ -246,6 +260,24 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove previous nftables table inet {table} if present',
             )
+            legacy = _legacy_firewall_table(cfg)
+            if legacy:
+                mgr.submit(
+                    ['nft', 'delete', 'table', 'inet', legacy],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary=(
+                        f'Remove pre-upgrade nftables table inet {legacy} '
+                        'if present'
+                    ),
+                    detail=(
+                        'Older aivm versions installed rules under the '
+                        'configured table name directly; a leftover copy '
+                        'would keep filtering alongside the new table.'
+                    ),
+                )
             mgr.submit(
                 ['nft', '-f', '-'],
                 sudo=True,
@@ -490,4 +522,17 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove nftables table inet {table}',
             )
+            legacy = _legacy_firewall_table(cfg)
+            if legacy:
+                mgr.submit(
+                    ['nft', 'delete', 'table', 'inet', legacy],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary=(
+                        f'Remove pre-upgrade nftables table inet {legacy} '
+                        'if present'
+                    ),
+                )
     log.info('Firewall removed (table=inet {}).', table)

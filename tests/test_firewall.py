@@ -146,7 +146,71 @@ def test_apply_firewall_runs_delete_then_apply(
     )
     apply_firewall(cfg, dry_run=False)
     assert calls[0][0][:4] == ['nft', 'delete', 'table', 'inet']
-    assert calls[1][0] == ['nft', '-f', '-']
+    assert calls[1][0][:4] == ['nft', 'delete', 'table', 'inet']
+    assert calls[2][0] == ['nft', '-f', '-']
+
+
+def test_apply_firewall_cleans_up_the_pre_upgrade_table(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Upgrading from the un-namespaced table must not orphan it.
+
+    Older aivm installed rules under cfg.firewall.table directly; the
+    namespaced table now sits alongside it, and a leftover legacy table
+    keeps dropping traffic (making allowlist edits look ineffective).
+    Apply deletes both the current derived table and the legacy name.
+    """
+    from aivm.firewall import effective_firewall_table
+
+    cfg = AgentVMConfig()
+    cfg.firewall.table = 'aivm_sandbox'
+    calls = []
+
+    activate_manager(monkeypatch, yes_sudo=False, euid=0)
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
+    )
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
+    )
+
+    apply_firewall(cfg, dry_run=False)
+
+    deleted = [
+        c[0][4] for c in calls if c[0][:4] == ['nft', 'delete', 'table', 'inet']
+    ]
+    assert deleted == [effective_firewall_table(cfg), 'aivm_sandbox']
+    # The freshly loaded ruleset must target only the namespaced table.
+    load = next(c for c in calls if c[0] == ['nft', '-f', '-'])
+    script = load[1]['input']
+    assert effective_firewall_table(cfg) in script
+    assert 'table inet aivm_sandbox ' not in script
+
+
+def test_remove_firewall_cleans_up_the_pre_upgrade_table(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """fw remove deletes the namespaced table and the legacy name."""
+    from aivm.firewall import effective_firewall_table, remove_firewall
+
+    cfg = AgentVMConfig()
+    cfg.firewall.table = 'aivm_sandbox'
+    calls = []
+
+    activate_manager(monkeypatch, yes_sudo=False, euid=0)
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
+    )
+
+    remove_firewall(cfg, dry_run=False)
+
+    deleted = [
+        c[0][4] for c in calls if c[0][:4] == ['nft', 'delete', 'table', 'inet']
+    ]
+    assert deleted == [effective_firewall_table(cfg), 'aivm_sandbox']
 
 
 def test_firewall_tables_are_isolated_per_network() -> None:
