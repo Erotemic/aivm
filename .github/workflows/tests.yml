@@ -8,8 +8,20 @@ name: PurePyCI
 
 on:
   push:
+    # Restricting push triggers to the default branch avoids running
+    # the whole pipeline twice (push + pull_request events) for every
+    # push to a PR branch. Feature branches are covered by the
+    # pull_request trigger; release branches and tags are handled by
+    # release.yml.
+    branches: [ main ]
   pull_request:
     branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded runs on the same ref are cancelled; deploy-bearing refs
+  # never trigger this workflow (release.yml owns them).
+  cancel-in-progress: true
 
 jobs:
   lint_job:
@@ -81,7 +93,8 @@ jobs:
         # Get path to installed package
         MOD_DPATH=$(python -c "import aivm, os; print(os.path.dirname(aivm.__file__))")
         echo "MOD_DPATH = $MOD_DPATH"
-        python -m pytest --verbose -m "not e2e" --cov=aivm $MOD_DPATH ../tests
+        MOD_NAME=aivm
+        python -m pytest --verbose -p pytester -p no:doctest --xdoctest -m "not e2e" --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
         cd ..
     - name: Test full loose sdist
       env: {}
@@ -97,7 +110,8 @@ jobs:
         # Get path to installed package
         MOD_DPATH=$(python -c "import aivm, os; print(os.path.dirname(aivm.__file__))")
         echo "MOD_DPATH = $MOD_DPATH"
-        python -m pytest --verbose -m "not e2e" --cov=aivm $MOD_DPATH ../tests
+        MOD_NAME=aivm
+        python -m pytest --verbose -p pytester -p no:doctest --xdoctest -m "not e2e" --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
         cd ..
     - uses: actions/upload-artifact@v6.0.0
       name: Upload sdist artifact
@@ -109,7 +123,7 @@ jobs:
     # Build the pure-python wheels independently on a per-platform basis.
     # These will be tested later in the test_purepy_wheels step.
     ##
-    name: ${{ matrix.python-version }} on ${{ matrix.os }}, arch=${{ matrix.arch }} with ${{ matrix.install-extras }}
+    name: Build wheel ${{ matrix.python-version }} on ${{ matrix.os }}, arch=${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -148,7 +162,6 @@ jobs:
     # build_purepy_wheels step in this independent environment.
     ##
     name: ${{ matrix.python-version }} on ${{ matrix.os }}, arch=${{ matrix.arch }} with ${{ matrix.install-extras }}
-    if: "! startsWith(github.event.ref, 'refs/heads/release')"
     runs-on: ${{ matrix.os }}
     needs:
     - build_purepy_wheels
@@ -292,7 +305,6 @@ jobs:
         ---
         "
         python -m pytest --verbose -p pytester -p no:doctest --xdoctest -m "not e2e" --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
-        echo "pytest command finished, moving the coverage file to the repo root"
         ls -al
         # Move coverage file to a new name
         mv .coverage "../.coverage.$WORKSPACE_DNAME"

@@ -8,6 +8,8 @@ name: PurePyRelease
 
 on:
   push:
+    branches: [ main, 'release*' ]
+    tags: [ '*' ]
   workflow_dispatch:
 
 jobs:
@@ -45,7 +47,7 @@ jobs:
     ##
     # Build the pure-python wheels used by the release workflow.
     ##
-    name: ${{ matrix.python-version }} on ${{ matrix.os }}, arch=${{ matrix.arch }} with ${{ matrix.install-extras }}
+    name: Build wheel ${{ matrix.python-version }} on ${{ matrix.os }}, arch=${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -293,6 +295,8 @@ jobs:
       if: (startsWith(github.event.ref, 'refs/heads/release'))
       run: |-
         export VERSION=$(python -c 'import ast, pathlib; tree = ast.parse(pathlib.Path('"'"'aivm/__init__.py'"'"').read_text()); print(next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "__version__" for t in n.targets)))')
+        echo "VERSION=$VERSION"
+        test -n "$VERSION" || { echo "failed to parse version" ; exit 1; }
         git tag "v$VERSION"
         git push origin "v$VERSION"
     - uses: softprops/action-gh-release@v1

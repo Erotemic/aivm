@@ -202,3 +202,7 @@ use_setup_py = false
 use_pyproject_requirements = true
 ci_pypi_trusted_publishing = true
 ci_gpg_secret_transport = "direct_ci"
+# Deselect e2e tests in CI by marker (they need libvirt/KVM and sudo); keep
+# this in test_command -- not addopts -- so the e2e runner can still name
+# them by path.
+test_command = 'python -m pytest --verbose -p pytester -p no:doctest --xdoctest -m "not e2e" --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests'
