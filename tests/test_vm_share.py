@@ -84,6 +84,30 @@ def test_vm_has_virtiofs_shared_memory(monkeypatch: MonkeyPatch) -> None:
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 
+def test_dumpxml_missing_virsh_does_not_escalate_to_sudo(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A 127 probe (no virsh executable) is not retried under sudo.
+
+    On a host without libvirt clients the unprivileged dumpxml probe fails
+    with ``command not found``; retrying under sudo cannot conjure the
+    missing binary and would only trigger an auth prompt. The read reports
+    the XML unreadable after exactly one attempt.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vmx'
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {'virsh dumpxml': FakeProc(127, '', 'command not found: virsh')},
+    )
+    assert vm_share_mappings(cfg, use_sudo=True) == []
+    # One unprivileged attempt, no sudo retry (a retry would match the same
+    # normalized route and bump the count).
+    assert rec.count('virsh', 'dumpxml', 'vmx') == 1
+    assert all(call[0] != 'sudo' for call in rec.calls)
+
+
 def _share_device_xml(source_dir: str, tag: str, *, readonly: bool) -> str:
     """Domain XML carrying one virtiofs device for dumpxml routes."""
     ro = '<readonly/>' if readonly else ''

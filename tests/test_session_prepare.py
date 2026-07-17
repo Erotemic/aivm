@@ -45,7 +45,14 @@ from aivm.services import resolve_cfg_for_code as real_resolve_cfg_for_code
 from aivm.status import ProbeOutcome
 from aivm.vm.paths import _paths
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
-from tests.helpers import activate_manager, make_cfg, noop
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    command_recorder,
+    domain_xml_with_shares,
+    make_cfg,
+    noop,
+)
 
 
 @dataclass
@@ -468,6 +475,24 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     monkeypatch.setattr(
         'aivm.attachments.session.vm_share_mappings',
         lambda *a, **k: list(mappings),
+    )
+    # The drift access check reads the domain XML at the subprocess boundary
+    # only after a name-level mapping hit, i.e. post-attach for the
+    # secondary; script a reply carrying both rw devices so no real virsh
+    # runs.
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh dumpxml': FakeProc(
+                0,
+                domain_xml_with_shares(
+                    [
+                        (str(host_src.resolve()), 'hostcode-proj'),
+                        (str(other_src.resolve()), 'hostcode-docs'),
+                    ]
+                ),
+            )
+        },
     )
 
     def fake_attach_vm_share(*a: Any, **k: Any) -> None:

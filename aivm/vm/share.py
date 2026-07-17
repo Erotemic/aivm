@@ -220,6 +220,9 @@ def _dumpxml_text(
         (res.code != 0 or not res.stdout.strip())
         and use_sudo
         and mgr.privilege_mode != PrivilegeMode.NEVER
+        # 127 means the virsh executable itself is missing; sudo cannot
+        # conjure it and the retry would only trigger an auth prompt.
+        and res.code != 127
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(

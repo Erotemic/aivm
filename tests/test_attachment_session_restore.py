@@ -31,7 +31,13 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
-from tests.helpers import activate_manager, capture_logs
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+    domain_xml_with_shares,
+)
 
 
 def test_git_mode_in_prepare_session_gets_companion_symlink(
@@ -307,6 +313,20 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
         'aivm.attachments.session.vm_share_mappings',
         lambda *a, **k: [(str(secondary_src.resolve()), 'tag-secondary')],
     )
+    # The access check inside drift_attachment_has_mapping reads the domain
+    # XML at the subprocess boundary; script the dumpxml reply with the same
+    # rw device so no real virsh runs.
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh dumpxml': FakeProc(
+                0,
+                domain_xml_with_shares(
+                    [(str(secondary_src.resolve()), 'tag-secondary')]
+                ),
+            )
+        },
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.ensure_share_mounted', lambda *a, **k: None
     )
@@ -569,6 +589,22 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
             (str(shared_fail_src.resolve()), 'tag-shared-fail'),
         ],
     )
+    # Script the dumpxml reply the drift access check reads, mirroring the
+    # faked mappings, so no real virsh runs at the subprocess boundary.
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh dumpxml': FakeProc(
+                0,
+                domain_xml_with_shares(
+                    [
+                        (str(shared_src.resolve()), 'tag-shared'),
+                        (str(shared_fail_src.resolve()), 'tag-shared-fail'),
+                    ]
+                ),
+            )
+        },
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.ensure_share_mounted',
         fake_ensure_share_mounted,
@@ -787,6 +823,19 @@ def test_restore_uses_lexical_path_for_companion_symlink(
         'aivm.attachments.session.vm_share_mappings',
         lambda *a, **k: [(str(real_dir.resolve()), 'tag-lex-restore')],
     )
+    # Script the dumpxml reply the drift access check reads, mirroring the
+    # faked mappings, so no real virsh runs at the subprocess boundary.
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh dumpxml': FakeProc(
+                0,
+                domain_xml_with_shares(
+                    [(str(real_dir.resolve()), 'tag-lex-restore')]
+                ),
+            )
+        },
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.ensure_share_mounted', lambda *a, **k: None
     )
@@ -859,6 +908,17 @@ def test_restore_non_symlink_attachment_unchanged(
     monkeypatch.setattr(
         'aivm.attachments.session.vm_share_mappings',
         lambda *a, **k: [(str(real_dir.resolve()), 'tag-plain')],
+    )
+    # Script the dumpxml reply the drift access check reads, mirroring the
+    # faked mappings, so no real virsh runs at the subprocess boundary.
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh dumpxml': FakeProc(
+                0,
+                domain_xml_with_shares([(str(real_dir.resolve()), 'tag-plain')]),
+            )
+        },
     )
     monkeypatch.setattr(
         'aivm.attachments.session.ensure_share_mounted', lambda *a, **k: None

@@ -6,6 +6,8 @@ it.  These helpers are that seam's vocabulary, promoted here so each test
 file does not re-declare its own copy:
 
 - :class:`FakeProc` stands in for ``subprocess.CompletedProcess``.
+- :func:`domain_xml_with_shares` renders a ``virsh dumpxml`` reply whose
+  virtiofs devices match a test's faked share mappings.
 - :func:`activate_manager` activates a fresh ``CommandManager`` and pins
   the euid/isatty probes that decide sudo-prompt behavior.
 - :func:`patch_command_runtime` is the heavier variant for tests that
@@ -48,6 +50,30 @@ class FakeProc:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def domain_xml_with_shares(
+    mappings: Iterable[tuple[str, str]], *, readonly_tags: Iterable[str] = ()
+) -> str:
+    """Render ``virsh dumpxml`` output carrying one virtiofs device per mapping.
+
+    ``mappings`` are ``(source_dir, target_tag)`` pairs; tags listed in
+    ``readonly_tags`` get a ``<readonly/>`` element (host-boundary ro
+    enforcement), the rest are writable at the device level.  Use this to
+    script the dumpxml route so the detailed access check in
+    ``attachment_has_mapping`` sees the same shares a test fakes at the
+    ``vm_share_mappings`` seam.
+    """
+    ro = set(readonly_tags)
+    devices = ''.join(
+        "<filesystem type='mount' accessmode='passthrough'>"
+        "<driver type='virtiofs'/>"
+        f"<source dir='{src}'/><target dir='{tag}'/>"
+        f'{"<readonly/>" if tag in ro else ""}'
+        '</filesystem>'
+        for src, tag in mappings
+    )
+    return f'<domain><devices>{devices}</devices></domain>'
 
 
 def activate_manager(
