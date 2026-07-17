@@ -36,6 +36,7 @@ from .share import (
     vm_has_share,
     vm_has_virtiofs_shared_memory,
     vm_share_mappings,
+    vm_share_mappings_detailed,
 )
 
 __all__ = [
@@ -60,6 +61,7 @@ __all__ = [
     'vm_has_share',
     'vm_has_virtiofs_shared_memory',
     'vm_share_mappings',
+    'vm_share_mappings_detailed',
     'vm_status',
     'wait_for_ip',
     'wait_for_ssh',

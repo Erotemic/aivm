@@ -84,10 +84,27 @@ def test_vm_has_virtiofs_shared_memory(monkeypatch: MonkeyPatch) -> None:
     assert vm_has_virtiofs_shared_memory(cfg, use_sudo=False) is False
 
 
+def _share_device_xml(source_dir: str, tag: str, *, readonly: bool) -> str:
+    """Domain XML carrying one virtiofs device for dumpxml routes."""
+    ro = '<readonly/>' if readonly else ''
+    return f"""
+<domain>
+  <devices>
+    <filesystem type='mount' accessmode='passthrough'>
+      <driver type='virtiofs'/>
+      <source dir='{source_dir}'/>
+      <target dir='{tag}'/>
+      {ro}
+    </filesystem>
+  </devices>
+</domain>
+"""
+
+
 def test_attach_vm_share_treats_existing_mapping_as_satisfied(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An already-present mapping makes a failed live attach a no-op."""
+    """An already-present mapping (same access) makes a failed attach a no-op."""
     cfg = AgentVMConfig()
     cfg.vm.name = 'vmx'
     source = tmp_path / 'src'
@@ -107,11 +124,10 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
                 'error: Requested operation is not valid: '
                 'Target already exists',
             ),
+            'virsh dumpxml': FakeProc(
+                0, _share_device_xml(source_dir, tag, readonly=False), ''
+            ),
         },
-    )
-    monkeypatch.setattr(
-        'aivm.vm.share.vm_share_mappings',
-        lambda *_a, **_k: [(source_dir, tag)],
     )
 
     attach_vm_share(cfg, source_dir, tag, dry_run=False)
@@ -119,6 +135,71 @@ def test_attach_vm_share_treats_existing_mapping_as_satisfied(
     virsh_calls = [c for c in rec.normalized if c[:1] == ['virsh']]
     assert virsh_calls[0][:2] == ['virsh', 'domstate']
     assert virsh_calls[1][:2] == ['virsh', 'attach-device']
+    assert not rec.ran('virsh', 'detach-device')
+
+
+def test_attach_vm_share_reattaches_when_device_access_disagrees(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pre-<readonly/> device is replaced when the record wants ro.
+
+    Upgrade path: a saved access='ro' share created before host-boundary
+    enforcement existed is writable at the device level. Treating it as
+    satisfied would leave the ro promise guest-enforced only, so attach
+    must detach the old device and attach one carrying <readonly/>.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ro-upgrade'
+    source = tmp_path / 'src'
+    source.mkdir()
+    source_dir = str(source.resolve())
+    tag = 'hostcode-src'
+
+    activate_manager(monkeypatch)
+    attach_xml: list[str] = []
+    attach_replies = iter(
+        [
+            FakeProc(
+                1,
+                '',
+                'error: Requested operation is not valid: '
+                'Target already exists',
+            ),
+            FakeProc(0, '', ''),
+        ]
+    )
+
+    def attach_device(cmd: list[str]) -> FakeProc:
+        # cmd = ['virsh', 'attach-device', vm, tmpfile, ...]; read the
+        # device XML at call time, before the temp file goes away.
+        attach_xml.append(Path(cmd[3]).read_text(encoding='utf-8'))
+        return next(attach_replies)
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'true': FakeProc(0, '', ''),
+            'virsh attach-device': attach_device,
+            'virsh detach-device': FakeProc(0, '', ''),
+            'virsh domstate': FakeProc(0, 'shut off\n', ''),
+            # The existing device lacks <readonly/>.
+            'virsh dumpxml': FakeProc(
+                0, _share_device_xml(source_dir, tag, readonly=False), ''
+            ),
+        },
+    )
+
+    attach_vm_share(
+        cfg, source_dir, tag, dry_run=False, vm_running=False, read_only=True
+    )
+
+    assert rec.ran('virsh', 'detach-device')
+    assert len(attach_xml) == 2
+    assert '<readonly/>' in attach_xml[1]
+    # The replacement happened in order: failed attach, detach, re-attach.
+    ops = [c[1] for c in rec.normalized if c[:1] == ['virsh']]
+    assert ops.index('detach-device') < len(ops) - 1
+    assert ops[-1] == 'attach-device'
 
 
 def test_attach_vm_share_read_only_is_in_libvirt_xml(

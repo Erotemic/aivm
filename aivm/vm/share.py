@@ -290,10 +290,16 @@ def vm_has_share(
     return False
 
 
-def vm_share_mappings(
+def vm_share_mappings_detailed(
     cfg: AgentVMConfig, *, use_sudo: bool = True
-) -> list[tuple[str, str]]:
-    """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
+) -> list[tuple[str, str, bool]]:
+    """Return virtiofs mappings as (source_dir, target_tag, read_only).
+
+    ``read_only`` reports the ``<readonly/>`` element on the libvirt
+    device -- the host/device boundary enforcement -- not the guest-side
+    mount option. A device lacking it is writable at the host boundary no
+    matter what the guest mounted.
+    """
     xml_text = _dumpxml_text(
         cfg,
         use_sudo=use_sudo,
@@ -303,7 +309,7 @@ def vm_share_mappings(
     root = parse_domain_xml(xml_text)
     if root is None:
         return []
-    mappings: list[tuple[str, str]] = []
+    mappings: list[tuple[str, str, bool]] = []
     for fs in root.findall('.//devices/filesystem'):
         if not _is_virtiofs_filesystem(fs):
             continue
@@ -312,8 +318,22 @@ def vm_share_mappings(
         src_dir = src.attrib.get('dir', '') if src is not None else ''
         tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir or tgt_dir:
-            mappings.append((src_dir, tgt_dir))
+            mappings.append(
+                (src_dir, tgt_dir, fs.find('readonly') is not None)
+            )
     return mappings
+
+
+def vm_share_mappings(
+    cfg: AgentVMConfig, *, use_sudo: bool = True
+) -> list[tuple[str, str]]:
+    """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
+    return [
+        (src, tag)
+        for src, tag, _ro in vm_share_mappings_detailed(
+            cfg, use_sudo=use_sudo
+        )
+    ]
 
 
 def _resolve_virtiofs_binary_for_attach(
@@ -415,13 +435,38 @@ def attach_vm_share(
         return
     msg = ((res.stderr or '') + '\n' + (res.stdout or '')).lower()
     if 'target already exists' in msg:
-        current = vm_share_mappings(cfg, use_sudo=virsh_needs_sudo())
-        if any(src == source_dir and tgt == tag for src, tgt in current):
+        current = vm_share_mappings_detailed(cfg, use_sudo=virsh_needs_sudo())
+        for src, tgt, current_ro in current:
+            if src != source_dir or tgt != tag:
+                continue
+            if current_ro == read_only:
+                log.info(
+                    'Virtiofs mapping already present for vm={} source={} tag={}; treating attach as satisfied.',
+                    cfg.vm.name,
+                    source_dir,
+                    tag,
+                )
+                return
+            # An existing device whose host-boundary access disagrees with
+            # the requested mode (typically a pre-<readonly/> ro share) is
+            # not satisfied: replace it so the enforcement is real.
             log.info(
-                'Virtiofs mapping already present for vm={} source={} tag={}; treating attach as satisfied.',
+                'Virtiofs mapping for vm={} source={} tag={} exists with '
+                'read_only={} but {} is requested; reattaching the device '
+                'to enforce it at the host boundary.',
                 cfg.vm.name,
                 source_dir,
                 tag,
+                current_ro,
+                read_only,
+            )
+            detach_vm_share(cfg, source_dir, tag, read_only=current_ro)
+            attach_vm_share(
+                cfg,
+                source_dir,
+                tag,
+                vm_running=is_running,
+                read_only=read_only,
             )
             return
     raise CmdError(attach_cmd, res)

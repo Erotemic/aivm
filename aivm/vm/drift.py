@@ -29,10 +29,12 @@ from ..runtime import virsh_cmd
 from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
+    AttachmentAccess,
     AttachmentMode,
     ResolvedAttachment,
     align_attachment_tag_with_mappings,
     vm_share_mappings,
+    vm_share_mappings_detailed,
 )
 
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
@@ -272,8 +274,22 @@ def attachment_has_mapping(
         return any(
             src == expected_src and tag == expected_tag for src, tag in mappings
         )
-    return any(
+    if not any(
         src == att.source_dir and tag == att.tag for src, tag in mappings
+    ):
+        return False
+    # A direct share is satisfied only when the device's host-boundary
+    # access agrees with the record: a pre-<readonly/> ro share is writable
+    # at the device level however the guest mounted it, and must be
+    # replaced, not accepted. The detailed read hits the manager's cached
+    # domain XML, so no extra probe runs.
+    want_ro = att.access == AttachmentAccess.RO
+    detailed = vm_share_mappings_detailed(cfg, use_sudo=virsh_needs_sudo())
+    if not detailed:
+        return True  # XML unreadable here; keep the name-level answer
+    return any(
+        src == att.source_dir and tag == att.tag and ro == want_ro
+        for src, tag, ro in detailed
     )
 
 
