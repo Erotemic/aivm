@@ -7,6 +7,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from loguru import logger as log
+
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
@@ -173,7 +175,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '-P',
                     '-n',
                     '-o',
-                    'SOURCE,ROOT,FSTYPE,OPTIONS',
+                    'SOURCE,FSROOT,FSTYPE,OPTIONS',
                     '--mountpoint',
                     str(target),
                 ],
@@ -184,10 +186,21 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                 summary='Inspect current source for host bind target',
                 detail=f'target={target}',
             )
+    if res.code != 0 and (res.stderr or '').strip():
+        # findmnt exits 1 both for "target is not a mountpoint" (silent) and
+        # for a malformed invocation (stderr). The latter must not be read
+        # as "no mount here": that misreading once turned every session into
+        # a privileged remount, because the probe named a column findmnt
+        # does not have (ROOT instead of FSROOT).
+        log.warning(
+            'findmnt probe for {} failed rather than reporting no mount: {}',
+            target,
+            res.stderr.strip(),
+        )
     values = _parse_findmnt_pairs(res.stdout or '')
     return FindmntTargetInfo(
         source=values.get('SOURCE', ''),
-        root=values.get('ROOT', ''),
+        root=values.get('FSROOT', ''),
         fstype=values.get('FSTYPE', ''),
         options=values.get('OPTIONS', ''),
         code=res.code,

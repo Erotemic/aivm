@@ -1032,7 +1032,7 @@ def test_persistent_root_host_bind_short_circuits_when_already_bound(
         {
             'findmnt -P -n': FakeProc(
                 0,
-                'SOURCE="/source" ROOT="" FSTYPE="none" OPTIONS="rw"',
+                'SOURCE="/source" FSROOT="" FSTYPE="none" OPTIONS="rw"',
                 '',
             ),
         },
@@ -1046,7 +1046,7 @@ def test_persistent_root_host_bind_short_circuits_when_already_bound(
         '-P',
         '-n',
         '-o',
-        'SOURCE,ROOT,FSTYPE,OPTIONS',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
         '--mountpoint',
     ]
 
