@@ -35,6 +35,10 @@ def _require_host_identities() -> None:
         pwd.getpwnam('libvirt-qemu')
     except KeyError:
         pytest.skip('Adoption e2e needs the libvirt group and libvirt-qemu user.')
+    import shutil
+
+    if shutil.which('setfacl') is None or shutil.which('getfacl') is None:
+        pytest.skip('Adoption e2e needs the acl package (setfacl/getfacl).')
 
 
 def _sudo(*cmd: str) -> None:
@@ -96,6 +100,7 @@ def test_adopt_script_prunes_live_bind_mounts(tmp_path: Path) -> None:
         facl = subprocess.run(
             ['getfacl', '-p', str(source)], capture_output=True, text=True
         )
+        assert facl.returncode == 0, facl.stderr
         assert 'libvirt' not in facl.stdout
 
         # The symlink target outside the tree is untouched.
@@ -112,3 +117,53 @@ def test_adopt_script_prunes_live_bind_mounts(tmp_path: Path) -> None:
     finally:
         _sudo('umount', str(mountpoint))
         _sudo('chown', '-R', f'{os.getuid()}:{os.getgid()}', str(tree))
+
+
+def test_adopt_script_resolves_symlinked_tree_before_pruning(
+    tmp_path: Path,
+) -> None:
+    """A symlink-spelled tree still prunes its binds (mounts are canonical).
+
+    /proc/self/mounts reports canonical paths; a prune list computed
+    against a symlinked spelling would be empty and the ownership pass
+    would recurse into the bind. The script's realpath canonicalization
+    is the last line of defense when a caller hands it an alias.
+    """
+    if os.getenv('AIVM_E2E') != '1':
+        pytest.skip('Set AIVM_E2E=1 to run e2e tests.')
+    require_passwordless_sudo()
+    _require_host_identities()
+
+    real = (tmp_path / 'real-tree').resolve()
+    alias = tmp_path / 'alias'
+    mountpoint = real / 'vm1' / 'persistent-root' / 'hostcode-proj'
+    source = tmp_path / 'source'
+    mountpoint.mkdir(parents=True)
+    source.mkdir()
+    alias.symlink_to(real)
+    precious = source / 'precious.txt'
+    precious.write_text('data', encoding='utf-8')
+
+    _sudo('mount', '--bind', str(source), str(mountpoint))
+    try:
+        _sudo('chown', '-R', 'root:root', str(real))
+        _sudo(
+            'chown', '-R', f'{os.getuid()}:{os.getgid()}', str(source)
+        )
+
+        # Hand the script the ALIAS: pruning only works if it resolves.
+        proc = subprocess.run(
+            ['sudo', '-n', 'bash', '-c', _adopt_script(alias)],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+        st = precious.stat()
+        assert st.st_uid == os.getuid()
+        assert st.st_gid == os.getgid()
+        libvirt_gid = grp.getgrnam('libvirt').gr_gid
+        assert (real / 'vm1').stat().st_gid == libvirt_gid
+    finally:
+        _sudo('umount', str(mountpoint))
+        _sudo('chown', '-R', f'{os.getuid()}:{os.getgid()}', str(real))

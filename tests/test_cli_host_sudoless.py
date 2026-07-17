@@ -464,7 +464,7 @@ def _adopt_env(
     from tests.helpers import command_recorder
 
     cfg_path = tmp_path / 'config.toml'
-    tree = tmp_path / 'rootish-store'
+    tree = (tmp_path / 'rootish-store').resolve()
     tree.mkdir()
     _check_store(
         cfg_path,
@@ -478,6 +478,11 @@ def _adopt_env(
     monkeypatch.setattr(
         'aivm.cli.host_sudoless.user_can_write_path',
         lambda p: str(p) != str(tree),
+    )
+    # The post-adopt traversal verification probes real host state (o+x /
+    # ACLs), which a sandboxed tmp tree cannot satisfy deterministically.
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: []
     )
     monkeypatch.setattr('aivm.vm.domain.time.sleep', lambda s: None)
 
@@ -753,3 +758,191 @@ def test_check_never_recommends_disabling_the_firewall(
     # A wall, not a warning: no amount of setup removes this item.
     assert '🧱 firewall compatibility' in out
     assert '⚠️' not in out
+
+
+def test_adopt_aborts_when_vm_state_cannot_be_determined(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """An unreadable VM state must abort before any mutation.
+
+    A running-but-unseen VM would silently undo the ownership handoff at
+    its next shutdown, so 'probe failed' may never be read as 'stopped'.
+    """
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='running'
+    )
+    rec.route(
+        'virsh domstate',
+        FakeProc(1, '', 'error: failed to connect to the hypervisor'),
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert 'Cannot determine the state of VM' in out
+    assert 'Aborting before any change' in out
+    assert not any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+    assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
+
+
+def test_adopt_treats_missing_domain_as_stopped(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A store record without a defined domain is normal; adoption proceeds."""
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='running'
+    )
+    rec.route(
+        'virsh domstate',
+        FakeProc(1, '', "error: failed to get domain 'vm-a'"),
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    assert rc == 0
+    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+    assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
+    assert not any(c[:2] == ['virsh', 'start'] for c in rec.normalized)
+
+
+def test_adopt_restarts_stopped_vm_when_the_handoff_fails(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """A failing privileged script must not strand the VM it stopped."""
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='running'
+    )
+    rec.route('bash -c', FakeProc(1, '', 'chgrp: cannot access ...'))
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert 'did not complete' in out
+    order = [c[:2] for c in rec.normalized]
+    assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
+    # The restart still ran, after the failure.
+    assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
+
+
+def test_adopt_requires_setfacl_before_touching_anything(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """Group ownership alone does not grant qemu traversal; refuse early.
+
+    libvirt-qemu is not a libvirt-group member, so without the ACLs the
+    adopted tree may be untraversable and the VM unbootable.
+    """
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='running'
+    )
+    monkeypatch.setattr('aivm.cli.host_sudoless.which', lambda name: None)
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert 'needs setfacl' in out
+    assert rec.normalized == []
+
+
+def test_adopt_fails_when_traversal_still_blocked_after_handoff(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """Success is verified, not assumed: blocked qemu traversal fails loudly."""
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path, tree, rec = _adopt_env(
+        monkeypatch, tmp_path, initial_state='shut off'
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: [tree]
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 2, out
+    assert 'still cannot' in out
+
+
+def test_adopt_canonicalizes_and_dedupes_storage_spellings(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """Symlinked/dotted base_dir spellings resolve to one physical adoption.
+
+    The mount table reports canonical paths, so the prune list (and the VM
+    cycling set) must be keyed by the resolved tree: two VMs whose configs
+    spell the same tree differently get one privileged pass, and the script
+    receives the canonical path.
+    """
+    from tests.helpers import command_recorder
+
+    activate_manager(monkeypatch, yes=True, yes_sudo=True)
+    cfg_path = tmp_path / 'config.toml'
+    real = (tmp_path / 'real-store').resolve()
+    real.mkdir()
+    link = tmp_path / 'alias'
+    link.symlink_to(real)
+
+    # Two VMs: one via the symlink, one via a dotted spelling.
+    cfg_a = AgentVMConfig()
+    cfg_a.vm.name = 'vm-a'
+    cfg_a.firewall.enabled = False
+    cfg_a.paths.base_dir = str(link)
+    cfg_b = AgentVMConfig()
+    cfg_b.vm.name = 'vm-b'
+    cfg_b.firewall.enabled = False
+    cfg_b.paths.base_dir = str(tmp_path / 'x' / '..' / 'real-store')
+    store = Store()
+    store.behavior.privilege_mode = 'as-needed'
+    upsert_vm(store, cfg_a)
+    upsert_vm(store, cfg_b)
+    save_store(store, cfg_path, reason='test fixture')
+
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.user_can_write_path',
+        lambda p: str(p) != str(real),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: []
+    )
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh domstate': FakeProc(0, 'shut off\n'),
+            'bash -c': FakeProc(0),
+        },
+    )
+
+    rc = SudolessSetupCLI.main(
+        argv=False, config=str(cfg_path), adopt=True, yes=True
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    scripts = [c[-1] for c in rec.normalized if c[:2] == ['bash', '-c']]
+    # One physical tree -> one privileged pass, on the canonical path.
+    assert len(scripts) == 1
+    assert f'tree={real}' in scripts[0]
+    assert str(link) not in scripts[0]
+    # Both VMs are grouped onto the resolved tree (probed once each).
+    assert rec.count('virsh', 'domstate', 'vm-a') == 1
+    assert rec.count('virsh', 'domstate', 'vm-b') == 1

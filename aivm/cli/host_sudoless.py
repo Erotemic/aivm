@@ -109,7 +109,7 @@ _ADOPT_MIN_DEPTH = 4
 
 
 def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
-    """Names of stored VMs whose ``base_dir`` is ``tree``."""
+    """Names of stored VMs whose ``base_dir`` is (an alias of) ``tree``."""
     try:
         path = cfg_path(config_opt)
         if not path.exists():
@@ -121,17 +121,27 @@ def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
         rec.name
         for rec in reg.vms
         if rec.cfg.paths.base_dir
-        and Path(expand(rec.cfg.paths.base_dir)) == tree
+        and Path(expand(rec.cfg.paths.base_dir)).resolve() == tree
     )
 
 
 def _adoptable_storage_trees(config_opt: str | None) -> list[Path]:
-    """Existing storage dirs from the store that still need sudo."""
-    return [
-        tree
-        for tree, _used_by in _storage_dirs_to_grade(config_opt)
-        if tree.is_dir() and not user_can_write_path(tree)
-    ]
+    """Existing storage dirs from the store that still need sudo.
+
+    Trees are canonicalized and deduplicated: the kernel mount table
+    reports canonical paths, so the mountpoint exclusion (and everything
+    downstream -- VM grouping, the privileged script, display) must run on
+    the resolved path, never on a config spelling that may contain ``..``
+    or symlinks. Two spellings of one physical tree are one adoption.
+    """
+    seen: dict[Path, None] = {}
+    for tree, _used_by in _storage_dirs_to_grade(config_opt):
+        if not tree.is_dir():
+            continue
+        resolved = tree.resolve()
+        if not user_can_write_path(resolved):
+            seen.setdefault(resolved, None)
+    return list(seen)
 
 
 def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
@@ -212,6 +222,10 @@ def _adopt_script(tree: Path) -> str:
     return (
         'set -euo pipefail; '
         f'tree={q}; '
+        # Canonicalize at execution time: mountpoint exclusion compares
+        # against kernel-reported (canonical) paths, so a symlink anywhere
+        # in the configured spelling would empty the prune list.
+        'tree="$(realpath -e -- "$tree")"; '
         '[ -r /proc/self/mounts ] || { '
         'echo "refusing: cannot read /proc/self/mounts, so bind mounts '
         'under $tree cannot be excluded" >&2; exit 3; }; '
@@ -235,15 +249,44 @@ def _adopt_script(tree: Path) -> str:
     )
 
 
+def _domain_is_missing(err: str) -> bool:
+    """True when a virsh state probe failed because no such domain exists.
+
+    A store record without a defined domain is a normal pre-create state
+    and adoption may proceed; any *other* probe failure (connection,
+    permission) means the VM could be running unseen, so the caller must
+    abort before mutating storage.
+    """
+    text = (err or '').lower()
+    return 'domain not found' in text or 'failed to get domain' in text
+
+
+def _start_vm_if_stopped(name: str) -> None:
+    """Restart ``name`` unless it is already active again."""
+    code, state, _err = _get_vm_state(name)
+    if code == 0 and _is_vm_active(state):
+        return
+    _start_vm(name)
+
+
 def _adopt_one_tree(
     args: Any, mgr: CommandManager, tree: Path, vm_names: list[str]
-) -> None:
+) -> bool:
     """Hand one storage tree to the libvirt group, cycling running VMs."""
     running: list[str] = []
     for name in vm_names:
-        code, state, _err = _get_vm_state(name)
-        if code == 0 and _is_vm_active(state):
-            running.append(name)
+        code, state, err = _get_vm_state(name)
+        if code == 0:
+            if _is_vm_active(state):
+                running.append(name)
+        elif not _domain_is_missing(err):
+            print(
+                f'❌ Cannot determine the state of VM {name!r} before '
+                f'adopting {tree}: {err.strip() or "unknown probe error"}. '
+                'Aborting before any change; a running VM would silently '
+                'undo the ownership handoff at its next shutdown.'
+            )
+            return False
     print(
         f'Adopting {tree}: ownership becomes root:{LIBVIRT_GROUP} with '
         f'group write, so {LIBVIRT_GROUP} members manage VM storage there '
@@ -273,33 +316,63 @@ def _adopt_one_tree(
             f'group/qemu ACLs across {tree}, pruning every mountpoint below '
             'it'
         )
-        return
-    for name in running:
-        print(f'Shutting down VM {name} ...')
-        shutdown_vm(_cfg_for_stored_vm(args.config, name))
-        _wait_for_vm_state(name, 'shut off', timeout_s=180, poll_interval_s=2)
-    with mgr.step(
-        'Hand VM storage to the libvirt group',
-        why=(
-            'Group-owning the existing tree in place removes the need for '
-            'sudo on VM image operations without moving or recreating '
-            'anything.'
-        ),
-        approval_scope=f'sudoless-adopt:{tree}',
-    ):
-        mgr.submit(
-            ['bash', '-c', _adopt_script(tree)],
-            sudo=True,
-            role='modify',
-            check=True,
-            capture=True,
-            summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
-            detail=f'tree={tree}',
+        return True
+    stopped: list[str] = []
+    ok = True
+    try:
+        for name in running:
+            print(f'Shutting down VM {name} ...')
+            stopped.append(name)
+            shutdown_vm(_cfg_for_stored_vm(args.config, name))
+            _wait_for_vm_state(
+                name, 'shut off', timeout_s=180, poll_interval_s=2
+            )
+        with mgr.step(
+            'Hand VM storage to the libvirt group',
+            why=(
+                'Group-owning the existing tree in place removes the need '
+                'for sudo on VM image operations without moving or '
+                'recreating anything.'
+            ),
+            approval_scope=f'sudoless-adopt:{tree}',
+        ):
+            mgr.submit(
+                ['bash', '-c', _adopt_script(tree)],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
+                detail=f'tree={tree}',
+            )
+    except Exception as ex:
+        print(f'❌ Adoption of {tree} did not complete: {ex}')
+        ok = False
+    finally:
+        # Every VM this run stopped gets a restart attempt, whether or not
+        # the handoff succeeded and regardless of earlier restart failures.
+        for name in stopped:
+            try:
+                print(f'Starting VM {name} again ...')
+                _start_vm_if_stopped(name)
+            except Exception as ex:
+                ok = False
+                print(
+                    f'❌ Could not restart VM {name!r}: {ex}\n'
+                    f'   Start it manually: aivm vm up --vm {name}'
+                )
+    if not ok:
+        return False
+    blockers = qemu_traversal_blockers(tree)
+    if blockers:
+        print(
+            f'⚠️ Adopted {tree}, but {LIBVIRT_QEMU_USER} still cannot '
+            'traverse: ' + ', '.join(str(b) for b in blockers) + '. '
+            'VM start may fail until execute access is granted there.'
         )
-    for name in running:
-        print(f'Starting VM {name} again ...')
-        _start_vm(name)
+        return False
     print(f'✅ Adopted {tree}; file operations there no longer need sudo.')
+    return True
 
 
 def _run_storage_adoption(
@@ -314,6 +387,15 @@ def _run_storage_adoption(
         print()
         _print_policy_report(args.config, group_added=group_added)
         return 0
+    if which('setfacl') is None:
+        # Group ownership alone does not grant libvirt-qemu traversal (it
+        # is not a libvirt-group member); the ACLs are load-bearing.
+        print(
+            '❌ Adoption needs setfacl to grant libvirt-qemu traversal on '
+            'the adopted tree. Install the `acl` package (`aivm host '
+            'install_deps` includes it), then re-run.'
+        )
+        return 2
     for tree in trees:
         if len(tree.resolve().parts) < _ADOPT_MIN_DEPTH:
             print(
@@ -340,11 +422,13 @@ def _run_storage_adoption(
                 print(f'  - {mp!r}')
             print('Detach those folders first, then re-run.')
             return 2
-    for tree in trees:
+    results = [
         _adopt_one_tree(args, mgr, tree, _vms_stored_under(args.config, tree))
+        for tree in trees
+    ]
     print()
     _print_policy_report(args.config, group_added=group_added)
-    return 0
+    return 0 if all(results) else 2
 
 
 def _print_base_dir_toml(base_dir: Path) -> None:
