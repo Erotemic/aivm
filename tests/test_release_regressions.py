@@ -53,7 +53,9 @@ def test_fdguard_defaults_are_complete() -> None:
 
 
 def test_adopt_e2e_imports_renamed_module() -> None:
-    source = Path('tests/e2e/test_adopt.py').read_text(encoding='utf-8')
+    source = (Path(__file__).parent / 'e2e/test_adopt.py').read_text(
+        encoding='utf-8'
+    )
     assert 'aivm.cli.host_permissions' in source
 
 
