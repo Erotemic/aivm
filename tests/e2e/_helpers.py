@@ -58,7 +58,7 @@ def _bootstrap_context_enabled() -> bool:
     return str(raw).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-def _sudoless_libvirt_available() -> bool:
+def _libvirt_without_sudo_available() -> bool:
     probe = subprocess.run(
         ['virsh', '-c', 'qemu:///system', 'list', '--name'],
         check=False,
@@ -222,7 +222,7 @@ def _require_e2e_host_dependencies(
     *, cwd: Path, timeout_s: int, env: dict[str, str], sudo: bool = True
 ) -> None:
     # Fail fast with actionable guidance before spending minutes on VM setup.
-    # ``sudo=False`` is for the sudoless suite: its lifecycle never escalates,
+    # ``sudo=False`` is for the privilege-never suite: its lifecycle never escalates,
     # so its preflight must not demand passwordless sudo either.
     argv = ['host', 'doctor'] + (['--sudo'] if sudo else [])
     doctor = _run_cli(
@@ -398,7 +398,7 @@ def save_e2e_store(
     """Persist a single-VM store holding ``cfg`` to ``cfg_path``.
 
     ``privilege_mode`` is written onto ``behavior`` before the VM is
-    upserted; the sudoless suite uses it to record the user's ``'never'``
+    upserted; the privilege-never suite uses it to record the user's ``'never'``
     choice as an explicit act rather than a side effect of setup.
     """
     store = Store()

@@ -88,7 +88,7 @@ breakage and terrible performance. Keep repos under ``~`` inside the
 distro; access them from Windows via ``\\wsl$`` if needed.
 
 **Group membership does not take effect in open shells.**
-After ``usermod -aG libvirt ...`` (done by ``aivm host sudoless setup``),
+After ``usermod -aG libvirt ...`` (done by ``aivm host permissions setup``),
 close all distro shells -- or ``wsl --shutdown`` -- and reopen.
 ``sg libvirt -c '...'`` works for a single command in the meantime.
 

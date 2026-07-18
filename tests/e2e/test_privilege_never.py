@@ -1,4 +1,4 @@
-"""End-to-end sudoless lifecycle test.
+"""End-to-end ``privilege_mode = 'never'`` lifecycle test.
 
 Runs the full network/VM/attach lifecycle with
 ``behavior.privilege_mode = 'never'``, under which the CommandManager
@@ -26,10 +26,10 @@ from aivm.config_store import load_store
 from tests.e2e._helpers import (
     REPO_ROOT,
     _host_context_enabled,
+    _libvirt_without_sudo_available,
     _make_temp_ssh_material,
     _require_e2e_host_dependencies,
     _run_cli,
-    _sudoless_libvirt_available,
     apply_shared_image_cache,
     e2e_teardown,
     make_e2e_config,
@@ -40,19 +40,19 @@ from tests.e2e._helpers import (
 pytestmark = pytest.mark.e2e
 
 
-def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
+def test_e2e_privilege_never_lifecycle(tmp_path: Path) -> None:
     if not _host_context_enabled():
         pytest.skip(
             'Set AIVM_E2E_HOST_CONTEXT=1 (and AIVM_E2E=1) to run '
             'host-context e2e tests.'
         )
-    if not _sudoless_libvirt_available():
+    if not _libvirt_without_sudo_available():
         pytest.skip(
-            'Sudoless e2e needs libvirt group membership with live '
+            'The privilege-never e2e test needs libvirt group membership with live '
             'qemu:///system access.'
         )
     if shutil.which('setfacl') is None:
-        pytest.skip('Sudoless e2e needs setfacl (acl package).')
+        pytest.skip('The privilege-never e2e test needs setfacl (acl package).')
 
     home, priv, pub = _make_temp_ssh_material(tmp_path)
     env = os.environ.copy()
@@ -65,7 +65,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
         cwd=REPO_ROOT, timeout_s=timeout_s, env=env, sudo=False
     )
 
-    cfg_path = tmp_path / 'e2e-sudoless.toml'
+    cfg_path = tmp_path / 'e2e-privilege-never.toml'
     base_dir = tmp_path / 'vmstore'
     cfg = make_e2e_config(
         tmp_path,
@@ -77,22 +77,22 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
         subnet_base='10.251',
         base_dir=str(base_dir),
     )
-    # nftables management needs root; the sudoless story is "firewall off".
+    # nftables management needs root; the never policy requires the firewall off.
     apply_shared_image_cache(cfg)
 
     share_dir = tmp_path / 'hostshare'
     share_dir.mkdir()
-    (share_dir / 'flag.txt').write_text('sudoless', encoding='utf-8')
+    (share_dir / 'flag.txt').write_text('privilege-never', encoding='utf-8')
 
     # Setup establishes host capabilities; choosing the never-sudo policy is
     # the user's act, not setup's, so the test makes that choice explicitly.
     save_e2e_store(cfg_path, cfg, privilege_mode='never')
 
-    # Establish sudoless prerequisites through the real setup tool.
+    # Establish host permission prerequisites through the real setup tool.
     _run_cli(
         [
             'host',
-            'sudoless',
+            'permissions',
             'setup',
             '--yes',
             '--base_dir',
@@ -110,7 +110,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
     assert reg.behavior.privilege_mode == 'never'
     assert reg.defaults is None
     _run_cli(
-        ['host', 'sudoless', 'check', '--config', str(cfg_path)],
+        ['host', 'permissions', 'check', '--config', str(cfg_path)],
         cwd=REPO_ROOT,
         timeout_s=timeout_s,
         env=env,
@@ -172,7 +172,7 @@ def test_e2e_sudoless_lifecycle(tmp_path: Path) -> None:
             timeout=120,
         )
         assert proc.returncode == 0, proc.stderr
-        assert 'sudoless' in proc.stdout
+        assert 'privilege-never' in proc.stdout
 
         _run_cli(
             [

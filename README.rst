@@ -69,13 +69,13 @@ What it provides
 
    Three opt-in end-to-end test modules live in ``tests/e2e/``:
    ``test_nested.py`` (light smoke path), ``test_full.py``
-   (comprehensive cycle), and ``test_sudoless.py`` (full lifecycle
+   (comprehensive cycle), and ``test_privilege_never.py`` (full lifecycle
    with ``privilege_mode = "never"``, proving no sudo is invoked).
    They carry the ``e2e`` marker and are deselected by default; to run them
    locally set ``AIVM_E2E=1`` and invoke pytest manually.  All need a host
    with KVM and (optionally) an Ubuntu cloud image cached under
    ``~/.cache/aivm/e2e``; the first two also need passwordless ``sudo``,
-   while the sudoless module instead needs ``libvirt`` group membership
+   while the ``privilege_never`` module instead needs ``libvirt`` group membership
    and ``setfacl``.
 
    An additional opt-in bootstrap-context e2e test is available in
@@ -153,8 +153,8 @@ All three answer one question -- *when does aivm invoke sudo?*
 
 An unrecognized value is an error, not a silent fallback.
 
-Run ``aivm host sudoless check`` to see what your host still needs for
-sudoless operation, and ``aivm host sudoless setup`` to establish the host-side
+Run ``aivm host permissions check`` to inspect the permissions used by
+routine VM operations, and ``aivm host permissions setup`` to establish the host-side
 prerequisites (it uses sudo at most once, to add you to the ``libvirt``
 group). Setup never changes your config: establishing a capability and
 choosing a policy are different acts, so ``privilege_mode`` and
@@ -347,16 +347,15 @@ itself: Ubuntu's stock nightly ``updatedb`` sweep walks virtiofs mounts
 inode every day.
 
 aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
-``updatedb`` and observes the guest-global FUSE inode cache. A soft watermark
-permits a metadata-cache flush subject to cooldown; a higher emergency
-watermark bypasses cooldown. Checks run every 10 minutes by default, so brief
-bursts are intentionally tolerated while sustained accumulation is repaired.
-The guard is config-driven (``[virtiofs] fd_guard = true``, the default): new
-VMs get it via cloud-init, and ``aivm vm update`` reconciles existing running
-VMs — installing, refreshing after config/version changes, or uninstalling
-when disabled — so no manual setup or host-side ``aivm vm flush_caches`` cron
-jobs are needed. ``aivm vm fdguard`` (default action ``status``) shows live
-watermarks, timer/service health, recent actions, and updatedb-prune state.
+``updatedb`` and flushes guest dentry/inode caches when the cached-inode
+count crosses a watermark, releasing the host descriptors before the ceiling
+is reached. The guard is config-driven (``[virtiofs] fd_guard = true``, the
+default): new VMs get it via cloud-init, and ``aivm vm update`` reconciles
+existing running VMs — installing, refreshing after config/version changes,
+or uninstalling when disabled — so no manual setup or host-side
+``aivm vm flush_caches`` cron jobs are needed. ``aivm vm fdguard`` (default
+action ``status``) shows the live state and offers direct
+install/uninstall.
 
 Remaining guidance:
 

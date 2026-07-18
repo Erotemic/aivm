@@ -6,7 +6,7 @@ Status: **candidate idea. Not implemented, not decided.** Written 2026-07-10.
 
 The managed nftables firewall is the one aivm feature that always requires root
 and always will. `nft` needs `CAP_NET_ADMIN`. Under
-`behavior.privilege_mode = "as-needed"` — after `aivm host sudoless setup` has
+`behavior.privilege_mode = "as-needed"` — after `aivm host permissions setup` has
 put you in the `libvirt` group and moved VM storage under your own user — the
 firewall becomes the last routine source of sudo password prompts.
 
@@ -102,7 +102,7 @@ and firewall drift, not on the `aivm code .` hot path.
 
 Worth stating plainly, because it cuts both ways depending on posture.
 
-If you are **already in the `libvirt` group** — which `aivm host sudoless setup`
+If you are **already in the `libvirt` group** — which `aivm host permissions setup`
 arranges, and which `aivm/privilege.py` documents as *effectively
 root-equivalent on the host* — then a `NOPASSWD` rule for reading one nftables
 table adds no meaningful capability. You could already control the root libvirt
@@ -121,11 +121,11 @@ control and should not be recommended to anyone.
 aivm must **print** the recipe, never install it. Installing sudoers rules is
 the operator's act, and setup commands do not change system or user
 configuration on the user's behalf — the same principle that took the config
-writes out of `aivm host sudoless setup` (see commit `71b1904`).
+writes out of `aivm host permissions setup` (see commit `71b1904`).
 
-The natural home is `aivm host sudoless check`, which already reports the
-firewall as the outstanding blocker to sudo-free operation. It could print the
-two read-only lines, substituted with the real `firewall.table` value and the
+The natural home is `aivm host permissions check`, which already reports
+the firewall as the outstanding remaining reason routine operation invokes
+sudo. It could print the two read-only lines, substituted with the real `firewall.table` value and the
 invoking user, with a note that `nft -f -` is deliberately excluded and why.
 
 ## Open questions
@@ -137,5 +137,5 @@ invoking user, with a note that `nft -f -` is deliberately excluded and why.
    own table. Should it be in the recipe? It removes guest egress confinement
    without a password, but a user who can `nft -f -` interactively can do that
    anyway. Leaning no, on the grounds that it is not on the frequent path.
-3. Should `aivm host sudoless check` detect an existing rule and report the
+3. Should `aivm host permissions check` detect an existing rule and report the
    firewall as satisfied rather than blocked?

@@ -5,8 +5,8 @@ Status: design ready for implementation; not started
 
 ## Problem
 
-The e2e suites (`tests/test_e2e_nested.py`, `test_e2e_full.py`,
-`test_e2e_sudoless.py`; opt-in via `AIVM_E2E=1`, see
+The e2e suites (`tests/e2e/test_nested.py`, `tests/e2e/test_full.py`,
+`tests/e2e/test_privilege_never.py`; opt-in via `AIVM_E2E=1`, see
 `run_e2e_tests.sh`) are the project's most effective regression
 detector — they have caught real bugs that the 470+ unit tests missed in
 nearly every recent development session (silently-wrong URIs, permission
@@ -28,7 +28,7 @@ the real command paths.
   image URL from `aivm/config.py::DEFAULT_UBUNTU_NOBLE_IMG_URL` so the
   download happens roughly once per image bump.
 * Sudo: GitHub runners have passwordless sudo, so even the sudo-path
-  suites work. The sudoless suite additionally needs libvirt group
+  suites work. The `privilege_never` suite additionally needs libvirt group
   membership for the runner user + re-login semantics — use `sudo -u` a
   fresh login shell or `sg libvirt` to pick up the group without a real
   re-login.
@@ -62,7 +62,7 @@ jobs:
       - name: Setup libvirt access
         run: sudo usermod -aG libvirt,kvm "$USER" && sudo systemctl start libvirtd
       - name: Run e2e
-        run: sg libvirt -c 'AIVM_E2E=1 AIVM_E2E_HOST_CONTEXT=1 pytest tests/test_e2e_nested.py tests/test_e2e_sudoless.py -v'
+        run: sg libvirt -c 'AIVM_E2E=1 AIVM_E2E_HOST_CONTEXT=1 pytest tests/e2e/test_nested.py tests/e2e/test_privilege_never.py -v'
 ```
 
 (Sketch, not final: the implementing agent should verify each step
@@ -71,10 +71,10 @@ two fragile spots.)
 
 ### Suite tiering
 
-* **PR gate (required)**: `test_e2e_nested.py` (fast smoke) +
-  `test_e2e_sudoless.py` (never-sudo guarantee; also the best canary for
+* **PR gate (required)**: `tests/e2e/test_nested.py` (fast smoke) +
+  `tests/e2e/test_privilege_never.py` (never-sudo guarantee; also the best canary for
   privilege regressions). Budget: < 10 min.
-* **main/nightly (non-blocking)**: add `test_e2e_full.py` and, when they
+* **main/nightly (non-blocking)**: add `tests/e2e/test_full.py` and, when they
   exist, the external-virtiofsd / egress / snapshot e2e modules.
 * Keep `AIVM_E2E_BOOTSTRAP` (outer-VM bootstrap suite) out of CI — it
   nests a second VM level and is too slow/flaky for shared runners.
@@ -108,18 +108,18 @@ repo currently relies on developers running these locally.
 1. Fix the e2e storage/mount leak (fixture-based cleanup + assert no
    `aivm-e2e` mounts remain at module teardown). Run locally.
 2. Add the unit-test workflow; confirm green.
-3. Add the e2e workflow with only `test_e2e_nested.py`; iterate on the
+3. Add the e2e workflow with only `tests/e2e/test_nested.py`; iterate on the
    KVM/libvirt setup steps until green (this is the empirical part —
    budget several workflow iterations).
-4. Add `test_e2e_sudoless.py` (needs the `sg libvirt` group trick +
+4. Add `tests/e2e/test_privilege_never.py` (needs the `sg libvirt` group trick +
    `setfacl` present — the acl package is in the install list).
-5. Add the nightly job with `test_e2e_full.py`.
+5. Add the nightly job with `tests/e2e/test_full.py`.
 6. Document in README (replace "run them locally" note with local + CI
    description) and mark the required checks in repo settings.
 
 ## Acceptance criteria
 
-1. PRs run smoke + sudoless e2e on GitHub-hosted runners in < 15 min
+1. PRs run smoke + privilege-never e2e on GitHub-hosted runners in < 15 min
    with the image cache warm.
 2. A deliberate regression (e.g. break `virsh_system_cmd` URI) fails the
    PR gate.

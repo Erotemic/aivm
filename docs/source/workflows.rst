@@ -199,8 +199,8 @@ Run without sudo
 
 .. code-block:: bash
 
-   aivm host sudoless check
-   aivm host sudoless setup
+   aivm host permissions check
+   aivm host permissions setup
    aivm status            # header shows the active privilege mode
    aivm vm up --never_sudo  # force privilege_mode='never' for one invocation
 
@@ -210,8 +210,9 @@ escalates where required, so most hosts need no ceremony: joining the
 a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
 work and from creating the bind-mount export directories. What remains is the
 set of operations with no unprivileged form at all: ``nft``, ``apt-get``,
-``mount --bind``, and ``umount``. ``sudoless setup`` establishes those two host capabilities (using sudo
-at most once, for ``usermod``) and then reports what it found. It does not
+``mount --bind``, and ``umount``. ``aivm host permissions setup``
+establishes those two host capabilities (using sudo at most once, for
+``usermod``) and then reports what it found. It does not
 change your config: ``behavior.privilege_mode`` and ``firewall.enabled`` are
 yours to set. Pass ``--persist`` to have it write the one value the host work
 depends on, ``defaults.paths.base_dir``.

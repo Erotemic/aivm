@@ -23,7 +23,7 @@ from ..services import resolve_cfg_fallback
 from ..vm import fetch_image
 from ._common import _BaseCommand
 from .firewall import FirewallModalCLI
-from .host_sudoless import SudolessModalCLI
+from .host_permissions import HostPermissionsModalCLI
 from .net import NetModalCLI
 
 
@@ -151,4 +151,4 @@ class HostModalCLI(kwconf.ModalCLI):
     image_fetch = ImageFetchCLI
     net = NetModalCLI
     fw = FirewallModalCLI
-    sudoless = SudolessModalCLI
+    permissions = HostPermissionsModalCLI

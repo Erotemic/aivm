@@ -80,7 +80,7 @@ def _forbid_real_sudo(
 
 @pytest.fixture(autouse=True)
 def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
-    """Pin the sudoless capability probe to "unavailable" by default.
+    """Pin the libvirt-without-sudo capability probe to "unavailable" by default.
 
     Most unit tests fake subprocess execution and assert on the classic
     sudo-prefixed command shapes. With the default ``privilege_mode='as-needed'``
@@ -91,5 +91,5 @@ def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     fixture explicitly.
     """
     monkeypatch.setattr(
-        'aivm.privilege.libvirt_unprivileged_ok', lambda: False
+        'aivm.privilege.libvirt_without_sudo_ok', lambda: False
     )

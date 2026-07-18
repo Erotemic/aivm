@@ -38,7 +38,7 @@ The two postures
 
    * -
      - Classic (admin-assuming)
-     - Sudoless
+     - Never invoke sudo
    * - Configuration
      - ``privilege_mode = "as-needed"`` or ``"always"`` (default --
        nothing to set)
@@ -61,40 +61,36 @@ The two postures
        ``shared`` needs no bind mount at all.
    * - Setup
      - none
-     - ``aivm host sudoless setup``
+     - ``aivm host permissions setup``
    * - Preflight report
      - ``aivm host doctor``
-     - ``aivm host sudoless check``
+     - ``aivm host permissions check``
    * - E2E proof suite
      - ``tests/e2e/test_nested.py`` / ``tests/e2e/test_full.py``
-     - ``tests/e2e/test_sudoless.py``
+     - ``tests/e2e/test_privilege_never.py``
 
 Choosing a mode
 ---------------
 
 * **Classic** (``as-needed``) is the default and the right answer for
-  almost everyone. After ``aivm host sudoless setup`` has put you in the
+  almost everyone. After ``aivm host permissions setup`` has put you in the
   ``libvirt`` group and pointed VM storage at a user-owned tree,
   ``as-needed`` stops invoking sudo on its own: not for libvirt or image
   operations, and not for creating the bind-mount export directories under
   ``paths.base_dir``. The decision is made per command against the specific
   path it touches, so a host that never ran setup behaves exactly as before.
   A host with existing VMs created under root-owned storage does not need
-  to move or recreate them: ``aivm host sudoless setup --adopt`` hands the
+  to move or recreate them: ``aivm host permissions setup --adopt`` hands the
   existing tree to the ``libvirt`` group in place (``root:libvirt`` with
   group write), briefly stopping any running VM stored there -- libvirt
   records disk ownership at start and restores it at shutdown, so the
   change must land while the VM is off. Disks, domain definitions, and
-  config are untouched. Attachment export roots under the tree are live
-  bind mounts of real user folders; adoption reads the kernel mount table
-  at execution time, lists them, and excludes them from the ownership
-  change entirely (refusing to run at all if they cannot be excluded
-  safely).
+  config are untouched.
   Sudo remains only for operations with no unprivileged form: the nftables
   firewall, ``apt-get``, ``mount --bind``, and ``umount``. Reconciling an
   already-established attachment -- the ``aivm code .`` hot path -- issues no
   privileged command at all.
-* **Sudoless** (``never``) is a hard guarantee rather than a preference:
+* **Never invoke sudo** (``never``) is a hard guarantee rather than a preference:
   aivm raises instead of escalating. It suits CI and audit contexts. Note
   that it cannot establish a new ``persistent`` or ``shared-root`` attachment,
   because ``mount --bind`` has no unprivileged implementation, and it

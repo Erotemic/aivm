@@ -49,7 +49,7 @@ def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
         'absent would overwrite or re-download existing state.\n'
         "Set behavior.privilege_mode to 'as-needed' to allow the privileged probe, "
         'or move VM storage to a user-owned directory '
-        '(`aivm host sudoless setup`).'
+        '(`aivm host permissions setup`).'
     )
 
 # The privileged probe reports its answer on stdout because the exit status
@@ -240,7 +240,7 @@ def _ensure_qemu_access_unprivileged(
     if foreign_blockers:
         log.warning(
             'libvirt-qemu cannot traverse {} (not owned by you). '
-            'Run `aivm host sudoless setup` or grant execute access '
+            'Run `aivm host permissions setup` or grant execute access '
             'manually.',
             ', '.join(str(b) for b in foreign_blockers),
         )
@@ -262,8 +262,8 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             )
         log.warning(
             'setfacl is unavailable; falling back to sudo chown/chmod for '
-            'VM storage under {}. Install the `acl` package for sudo-free '
-            'storage preparation.',
+            'VM storage under {}. Install the `acl` package so '
+            'storage preparation can avoid sudo.',
             base_root,
         )
     grp = 'libvirt-qemu'

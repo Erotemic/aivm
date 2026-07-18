@@ -132,7 +132,7 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
     """State-changing virsh commands prompt even when sudo is not needed.
 
     With libvirt group membership, destructive hypervisor operations run
-    without sudo in auto/sudoless modes; they must not silently lose the
+    without sudo in as-needed/never modes; they must not silently lose the
     confirmation prompt they had in the sudo era.
     """
 
@@ -165,10 +165,10 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
     assert len(prompts) == 1
 
 
-def test_sudoless_plan_approval_never_touches_sudo(
+def test_never_privilege_plan_approval_never_touches_sudo(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """A sudo command entering a plan in sudoless mode is rejected before
+    """A sudo command entering a plan under privilege_mode=never is rejected before
     any approval side effect (`sudo -n true`, `sudo -v`, prompts) runs."""
     from aivm.errors import SudoRequiredError
 

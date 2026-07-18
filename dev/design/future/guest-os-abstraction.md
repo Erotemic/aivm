@@ -7,8 +7,7 @@ questions in the last section have to be closed first, and several of the
 facts marked `[I]` (inferred) need to be verified against a real NixOS guest
 before anyone writes code.
 
-Anchors below were verified against the tree at commit `fdd3585`
-(`dev/sudoless`).
+Anchors below were verified against the tree at commit `fdd3585`.
 
 ---
 
@@ -470,8 +469,9 @@ IPFS is on the critical path *for shipping*, though not for *developing*:
 ## 9. Migration landmines
 
 **Config compat.** `image.ubuntu_img_url` is a public TOML field, touched
-across ~15 test sites plus [`tests/test_e2e_sudoless.py:104`](../../../tests/test_e2e_sudoless.py)
-and [`tests/test_e2e_full.py:127`](../../../tests/test_e2e_full.py). It
+across ~15 test sites plus
+[`tests/e2e/test_privilege_never.py`](../../../tests/e2e/test_privilege_never.py)
+and [`tests/e2e/test_full.py`](../../../tests/e2e/test_full.py). It
 becomes `image.url` + `image.id`, with `ubuntu_img_url` kept readable as an
 alias for one release behind a `log.warning`. First-class deprecation support
 in `kwconf` was discussed and deliberately deferred; hand-roll the alias in
@@ -504,7 +504,7 @@ Additionally:
   is no code path where a capability silently does nothing.
 - `aivm status` reports each `NotApplicable` with its reason, and each failed
   image precondition (§7.1) by name.
-- Both profiles boot end-to-end under `tests/test_e2e_sudoless.py`, which is
+- Both profiles boot end-to-end under `tests/e2e/test_privilege_never.py`, which is
   already CI-compatible (no passwordless sudo needed) and is the template.
 - Ubuntu behavior is byte-identical before and after the refactor. Golden-file
   the current rendered `user-data` first, then refactor against it.

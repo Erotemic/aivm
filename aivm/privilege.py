@@ -31,10 +31,10 @@ feature requesting it. The helpers here answer the per-family question
   (for example ``qemu-img resize``). Judged by the file's own mode rather
   than its parent directory.
 
-Run ``aivm host sudoless check`` / ``aivm host sudoless setup`` to inspect
-or establish the host state these probes look for. "Sudoless" names a
-property of the *host* (aivm need never escalate on it), which is why that
-command keeps the name while the mode values do not.
+Run ``aivm host permissions check`` / ``aivm host permissions setup`` to
+inspect or establish the host state these probes look for. Host permissions
+and privilege policy are separate: setup prepares direct libvirt and storage
+access, while ``behavior.privilege_mode`` decides when escalation is allowed.
 
 Security note: ``'never'`` is a *no-sudo-invocation* guarantee, not a
 reduced-privilege guarantee. Membership in the libvirt group grants control
@@ -71,7 +71,7 @@ __all__ = [
     'PrivilegeMode',
     'normalize_privilege_mode',
     'current_privilege_mode',
-    'libvirt_unprivileged_ok',
+    'libvirt_without_sudo_ok',
     'virsh_needs_sudo',
     'sudo_allowed',
     'path_needs_sudo',
@@ -92,7 +92,7 @@ __all__ = [
 #: and every ancestor directory must be traversable by this user.
 LIBVIRT_QEMU_USER = 'libvirt-qemu'
 
-#: Membership in this group grants unprivileged access to qemu:///system.
+#: Membership in this group grants direct access to qemu:///system.
 LIBVIRT_GROUP = 'libvirt'
 
 
@@ -101,8 +101,8 @@ def current_privilege_mode() -> PrivilegeMode:
     return CommandManager.current().privilege_mode
 
 
-def libvirt_unprivileged_ok() -> bool:
-    """Return True when qemu:///system is reachable without privileges.
+def libvirt_without_sudo_ok() -> bool:
+    """Return True when qemu:///system is reachable without sudo.
 
     The probe result is cached on the current CommandManager for the
     lifetime of the run (group membership does not change mid-invocation).
@@ -111,7 +111,7 @@ def libvirt_unprivileged_ok() -> bool:
         return True
     mgr = CommandManager.current()
     cache = mgr.probe_cache.setdefault('privilege', {})
-    cached = cache.get('libvirt_unprivileged_ok')
+    cached = cache.get('libvirt_without_sudo_ok')
     if cached is not None:
         return bool(cached)
     # Run as a loose command outside any open plan: virsh_needs_sudo() is
@@ -128,7 +128,7 @@ def libvirt_unprivileged_ok() -> bool:
             capture=True,
             input_text='',
             env={**os.environ, 'LC_ALL': 'C'},
-            summary='Probe unprivileged system-libvirt access',
+            summary='Probe system-libvirt access without sudo',
             detail=(
                 'Determine whether virsh can reach qemu:///system without '
                 'sudo (libvirt group membership).'
@@ -137,7 +137,7 @@ def libvirt_unprivileged_ok() -> bool:
     finally:
         mgr.plan_stack = saved_plan_stack
     ok = res.code == 0
-    cache['libvirt_unprivileged_ok'] = ok
+    cache['libvirt_without_sudo_ok'] = ok
     return ok
 
 
@@ -148,7 +148,7 @@ def virsh_needs_sudo() -> bool:
         return True
     if mode == PrivilegeMode.NEVER:
         return False
-    return not libvirt_unprivileged_ok()
+    return not libvirt_without_sudo_ok()
 
 
 def sudo_allowed() -> bool:
@@ -275,7 +275,7 @@ def user_in_libvirt_group() -> bool:
 
     Checks the group database, not just the current process credentials,
     so a fresh ``usermod -aG libvirt`` counts even before re-login (the
-    live probe in :func:`libvirt_unprivileged_ok` is still authoritative
+    live probe in :func:`libvirt_without_sudo_ok` is still authoritative
     for whether access works *now*).
     """
     try:

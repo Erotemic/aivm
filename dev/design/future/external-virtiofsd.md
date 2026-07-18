@@ -91,7 +91,7 @@ finally gets a lawful consumer.
    * `remove_share_service(...)`, `restart_share_service(...)`,
      `share_service_status(...)`.
    * All through `CommandManager` (`systemctl --user` is unprivileged;
-     works in every privilege mode including sudoless).
+     works in every privilege mode including ``privilege_mode="never"``).
 2. **Attach/detach integration** — `aivm/vm/share.py::attach_vm_share`
    and `detach_vm_share` branch on the backend: external backend first
    ensures the service, then attach-device with the `<source socket=>`
@@ -124,7 +124,7 @@ finally gets a lawful consumer.
 
 * virtiofsd binary missing or too old for a requested flag: probe
   `virtiofsd --version`/`--help` once per manager (cache in
-  `mgr.probe_cache`, like `libvirt_unprivileged_ok`), degrade flags with
+  `mgr.probe_cache`, like `libvirt_without_sudo_ok`), degrade flags with
   a warning rather than failing the attach.
 * Stale socket file with no live daemon: `ensure_share_service` removes
   the socket before start (virtiofsd refuses to bind otherwise).
@@ -163,7 +163,7 @@ finally gets a lawful consumer.
    the share without VM restart.
 4. `aivm vm update` converges a VM from libvirt-backend shares to
    external-backend shares (and back) per config.
-5. E2E suites pass with both backend values; sudoless E2E passes with
+5. E2E suites pass with both backend values; the privilege-never E2E suite passes with
    `backend=external` when the selected attachment path requires no host
    bind mount.
 6. The EMFILE reproduction from

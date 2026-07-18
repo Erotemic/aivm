@@ -48,5 +48,5 @@ policy and snapshots are independent of those efforts and of each other.
 3. **QEMU guest agent.** Add the guest-agent channel and prefer it for readiness,
    IP discovery, and diagnostics before falling back to SSH/libvirt leases.
 4. **Unified host diagnostics.** Fold the useful checks from
-   `aivm host sudoless check` into `aivm host doctor` so operators have one
+   `aivm host permissions check` into `aivm host doctor` so operators have one
    readiness entry point.

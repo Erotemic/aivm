@@ -915,8 +915,9 @@ class CommandManager:
             'Sudo is forbidden (behavior.privilege_mode = "never"), but this '
             'operation requested privileged host access:\n'
             f'  {shell_join(cmd) if not isinstance(cmd, str) else cmd}\n'
-            'Run `aivm host sudoless check` to see what is missing for '
-            'sudo-free operation, or set behavior.privilege_mode to '
+            'Run `aivm host permissions check` to see which host permissions '
+            'are missing, or which features still require sudo. Set '
+            'behavior.privilege_mode to '
             "'as-needed' to escalate only where it is required."
         )
 

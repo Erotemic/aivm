@@ -64,10 +64,10 @@ Host boundary (trusted):
 
 * Host user account and local filesystem.
 * Host ``sudo`` privileges when explicitly approved by the operator.
-* ``libvirt`` group membership, when the operator opts into sudoless
-  operation. This is effectively root-equivalent: controlling the system
+* ``libvirt`` group membership, when the operator prepares direct
+  system-libvirt access. This is effectively root-equivalent: controlling the system
   libvirt daemon lets a principal run arbitrary configuration as root.
-  Sudoless mode is therefore a *no-sudo-invocation* guarantee (``aivm``
+  The ``never`` policy is therefore a *no-sudo-invocation* guarantee (``aivm``
   never executes ``sudo``), not a reduced-privilege guarantee.
 
 Guest boundary (untrusted):
@@ -290,11 +290,11 @@ The current ``aivm`` security posture is intentionally pragmatic:
 * Never-sudo operation (``behavior.privilege_mode = "never"``) cannot manage
   the nftables firewall: ``nft`` requires ``CAP_NET_ADMIN`` and has no
   unprivileged equivalent, so reconciliation skips it with a warning.
-  Choosing sudoless therefore trades away managed network isolation for the
-  never-sudo guarantee; guests then rely on the standard libvirt NAT network
-  behavior alone. Disabling ``firewall.enabled`` is a decision the operator
+  Choosing ``privilege_mode = "never"`` therefore trades away managed
+  network isolation for the no-sudo-invocation guarantee; guests then
+  rely on the standard libvirt NAT network behavior alone. Disabling ``firewall.enabled`` is a decision the operator
   makes explicitly -- no aivm command turns it off for you.
-* The explicit-consent contract survives sudoless operation: state-changing
+* The explicit-consent contract survives operation without sudo: state-changing
   hypervisor commands (``virsh``/``virt-install``) prompt for approval even
   when group membership means they no longer need sudo. Destructive
   operations never become promptless because escalation stopped being

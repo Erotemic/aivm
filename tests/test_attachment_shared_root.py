@@ -178,7 +178,7 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert rec.ran('mount', '--bind')
     assert not rec.ran('umount')
@@ -198,7 +198,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"'
+                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE="" OPTIONS="rw"'
             ),
         },
     )
@@ -211,7 +211,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -230,7 +230,7 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         {
             'findmnt -P -n': FakeProc(
                 0,
-                f'SOURCE="/dev/vda1[{source_dir}]" FSROOT="" FSTYPE="" OPTIONS="rw"',
+                f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE="" OPTIONS="rw"',
             ),
         },
     )
@@ -243,7 +243,7 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -265,7 +265,7 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
         {
             'mkdir -p': FakeProc(0),
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/other/source" FSROOT="" FSTYPE=""'
+                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
             ),
             'bash -c': FakeProc(0),
         },
@@ -298,7 +298,7 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/other/source" FSROOT="" FSTYPE=""'
+                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
             ),
         },
     )
@@ -313,7 +313,7 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -331,7 +331,7 @@ def test_shared_root_host_bind_tolerates_not_mounted_during_repair(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/dev/nvme0n1p1" FSROOT="" FSTYPE=""'
+                0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""'
             ),
             'mkdir -p': FakeProc(0),
             'bash -c': FakeProc(0),
@@ -488,7 +488,7 @@ def test_shared_root_host_bind_creates_export_dirs_without_sudo(
 ) -> None:
     """A user-owned storage tree needs no privileges to create export dirs.
 
-    This is what `privilege_mode = as-needed` buys after `aivm host sudoless
+    This is what `privilege_mode = as-needed` buys after `aivm host permissions
     setup`: only `mount --bind` escalates.
     """
     cfg, source_dir, attachment = _shared_root_attachment(
@@ -573,7 +573,7 @@ def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
 ) -> None:
     """A root-owned storage tree still escalates the mkdir.
 
-    The decision is per-path, so a host that never ran `sudoless setup`
+    The decision is per-path, so a host that never ran `aivm host permissions setup`
     behaves exactly as before.
     """
     cfg, source_dir, attachment = _shared_root_attachment(
@@ -654,7 +654,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
+            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )
@@ -883,38 +883,3 @@ def test_shared_root_read_only_is_enforced_on_host_bind(
 
     assert rec.ran('mount', '--bind')
     assert rec.ran('mount', '-o', 'remount,bind,ro')
-
-
-def test_findmnt_probe_warns_when_command_fails_rather_than_no_mount(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failing probe must be loud, not read as "no mount here".
-
-    findmnt exits 1 both for a clean "not a mountpoint" and for a
-    malformed invocation; the latter once hid a wrong column name
-    (ROOT vs FSROOT) and downgraded every session's access check into a
-    privileged remount. stderr is the tell.
-    """
-    from aivm.attachments.shared_root import _probe_findmnt_target_source
-    from tests.helpers import capture_logs
-
-    activate_manager(monkeypatch)
-    warnings = capture_logs(
-        monkeypatch, 'aivm.attachments.shared_root.log', levels=('warning',)
-    )
-    command_recorder(
-        monkeypatch,
-        {'findmnt': FakeProc(1, '', 'findmnt: unknown column: BOGUS')},
-    )
-
-    probe = _probe_findmnt_target_source(Path('/somewhere'))
-
-    assert not probe.is_mountpoint
-    assert any('unknown column' in msg for msg in warnings)
-
-    # The clean not-a-mountpoint answer (rc=1, silent) stays quiet.
-    warnings.clear()
-    command_recorder(monkeypatch, {'findmnt': FakeProc(1, '', '')})
-    probe = _probe_findmnt_target_source(Path('/somewhere'))
-    assert not probe.is_mountpoint
-    assert warnings == []

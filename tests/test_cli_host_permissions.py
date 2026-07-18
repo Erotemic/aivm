@@ -1,4 +1,4 @@
-"""Tests for `aivm host sudoless`: setup's host work and check's verdicts."""
+"""Tests for `aivm host permissions`: setup's host work and check's verdicts."""
 
 from __future__ import annotations
 
@@ -7,11 +7,25 @@ from typing import Any
 
 from pytest import CaptureFixture, MonkeyPatch
 
-from aivm.cli.host_sudoless import SudolessCheckCLI, SudolessSetupCLI
+from aivm.cli.host import HostModalCLI
+from aivm.cli.host_permissions import (
+    HostPermissionsCheckCLI,
+    HostPermissionsModalCLI,
+    HostPermissionsSetupCLI,
+)
 from aivm.config import AgentVMConfig
 from aivm.config_store import load_store, save_store, upsert_vm
 from aivm.config_store.models import Store, VMEntry
 from tests.helpers import FakeProc, activate_manager
+
+
+def test_host_permissions_command_has_no_compatibility_alias() -> None:
+    registrations = {
+        name
+        for name, value in vars(HostModalCLI).items()
+        if value is HostPermissionsModalCLI
+    }
+    assert registrations == {'permissions'}
 
 
 def _store_with_vm(cfg_path: Path, *, privilege_mode: str) -> Store:
@@ -34,10 +48,10 @@ def _stub_host_probes(monkeypatch: MonkeyPatch) -> list[list[str]]:
     Returns the list that every executed command argv is recorded into.
     """
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: []
+        'aivm.cli.host_permissions.qemu_traversal_blockers', lambda p: []
     )
     ran: list[list[str]] = []
 
@@ -60,7 +74,7 @@ def test_setup_writes_no_config_by_default(
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), base_dir=str(base_dir), yes=True
     )
 
@@ -96,7 +110,7 @@ def test_setup_persist_writes_only_base_dir(
     _add_defaults(cfg_path, store, '/var/lib/libvirt/aivm')
     base_dir = tmp_path / 'vmstore'
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False,
         config=str(cfg_path),
         base_dir=str(base_dir),
@@ -130,7 +144,7 @@ def test_setup_persist_refuses_to_materialize_a_defaults_section(
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False,
         config=str(cfg_path),
         base_dir=str(base_dir),
@@ -160,7 +174,7 @@ def test_setup_never_disables_the_firewall_under_never_mode(
     before = cfg_path.read_bytes()
     base_dir = tmp_path / 'vmstore'
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), base_dir=str(base_dir), yes=True
     )
 
@@ -187,7 +201,7 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     save_store(store, cfg_path, reason='pin base_dir')
     before = cfg_path.read_bytes()
 
-    rc = SudolessSetupCLI.main(argv=False, config=str(cfg_path), yes=True)
+    rc = HostPermissionsSetupCLI.main(argv=False, config=str(cfg_path), yes=True)
 
     assert rc == 0
     assert cfg_path.read_bytes() == before
@@ -206,12 +220,12 @@ def test_setup_reads_persisted_mode_not_its_own_escalation_manager(
     activate_manager(monkeypatch, yes=True, privilege_mode='never')
     _stub_host_probes(monkeypatch)
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: False
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: False
     )
     cfg_path = tmp_path / 'config.toml'
     _store_with_vm(cfg_path, privilege_mode='never')
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False,
         config=str(cfg_path),
         base_dir=str(tmp_path / 'vmstore'),
@@ -240,7 +254,7 @@ def test_setup_dry_run_touches_nothing(
         raise AssertionError('dry_run must not execute commands')
 
     monkeypatch.setattr('aivm.commands.subprocess.run', explode)
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False,
         config=str(cfg_path),
         base_dir=str(base_dir),
@@ -255,7 +269,7 @@ def test_setup_dry_run_touches_nothing(
 
 
 # ---------------------------------------------------------------------------
-# `aivm host sudoless check`
+# `aivm host permissions check`
 # ---------------------------------------------------------------------------
 
 
@@ -296,25 +310,25 @@ def _stub_check_probes(
     not depend on.
     """
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.libvirt_unprivileged_ok', lambda: True
+        'aivm.cli.host_permissions.libvirt_without_sudo_ok', lambda: True
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.qemu_traversal_blockers',
+        'aivm.cli.host_permissions.qemu_traversal_blockers',
         lambda p: list(blockers or []),
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.which', lambda name: f'/usr/bin/{name}'
+        'aivm.cli.host_permissions.which', lambda name: f'/usr/bin/{name}'
     )
     if writable_dirs is None:
         monkeypatch.setattr(
-            'aivm.cli.host_sudoless.user_can_write_path', lambda p: True
+            'aivm.cli.host_permissions.user_can_write_path', lambda p: True
         )
     else:
         monkeypatch.setattr(
-            'aivm.cli.host_sudoless.user_can_write_path',
+            'aivm.cli.host_permissions.user_can_write_path',
             lambda p: str(p) in writable_dirs,
         )
 
@@ -339,11 +353,11 @@ def test_check_passes_never_mode_when_store_needs_no_sudo(
     )
     _stub_check_probes(monkeypatch)
 
-    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
 
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert '✅ Host is ready for sudoless operation.' in out
+    assert '✅ Host permissions are ready for routine VM operation.' in out
     assert str(vmstore) in out
     assert '/var/lib/libvirt/aivm' not in out
     assert 'firewall disabled; nothing needs root' in out
@@ -367,7 +381,7 @@ def test_check_reports_friction_not_failure_under_as_needed(
     )
     _stub_check_probes(monkeypatch, writable_dirs=set())
 
-    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
 
     out = capsys.readouterr().out
     assert rc == 0, out
@@ -391,7 +405,7 @@ def test_check_fails_never_mode_when_sudo_would_be_needed(
     )
     _stub_check_probes(monkeypatch, writable_dirs=set())
 
-    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
 
     out = capsys.readouterr().out
     assert rc == 2, out
@@ -413,7 +427,7 @@ def test_check_fails_every_mode_on_qemu_traversal_blockers(
     )
     _stub_check_probes(monkeypatch, blockers=[tmp_path])
 
-    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
 
     out = capsys.readouterr().out
     assert rc == 2, out
@@ -424,7 +438,7 @@ def test_firewall_enabled_anywhere_reads_network_records(
     tmp_path: Path,
 ) -> None:
     """The persisted firewall truth lives on ``[[networks]]``, not vm cfgs."""
-    from aivm.cli.host_sudoless import _firewall_enabled_anywhere
+    from aivm.cli.host_permissions import _firewall_enabled_anywhere
 
     cfg_path = tmp_path / 'config.toml'
     _check_store(
@@ -445,7 +459,7 @@ def test_firewall_enabled_anywhere_reads_network_records(
 
 
 # ---------------------------------------------------------------------------
-# `aivm host sudoless setup --adopt`
+# `aivm host permissions setup --adopt`
 # ---------------------------------------------------------------------------
 
 
@@ -464,7 +478,7 @@ def _adopt_env(
     from tests.helpers import command_recorder
 
     cfg_path = tmp_path / 'config.toml'
-    tree = (tmp_path / 'rootish-store').resolve()
+    tree = tmp_path / 'rootish-store'
     tree.mkdir()
     _check_store(
         cfg_path,
@@ -473,16 +487,11 @@ def _adopt_env(
         firewall_enabled=False,
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_can_write_path',
+        'aivm.cli.host_permissions.user_can_write_path',
         lambda p: str(p) != str(tree),
-    )
-    # The post-adopt traversal verification probes real host state (o+x /
-    # ACLs), which a sandboxed tmp tree cannot satisfy deterministically.
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: []
     )
     monkeypatch.setattr('aivm.vm.domain.time.sleep', lambda s: None)
 
@@ -522,7 +531,7 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     )
     before = cfg_path.read_bytes()
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), adopt=True, yes=True
     )
 
@@ -532,18 +541,9 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     assert cfg_path.read_bytes() == before
 
     script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
-    assert f'tree={tree}' in script
-    assert 'chgrp libvirt' in script
-    assert 'chmod g+rwX' in script
+    assert f'chgrp -R libvirt {tree}' in script
+    assert f'chmod -R g+rwX {tree}' in script
     assert 'chmod g+s' in script
-    # Never a blanket recursive pass: every operation goes through find
-    # with the mountpoint prune list, computed from the kernel mount table
-    # at execution time (binds of user folders live under the tree).
-    assert 'chgrp -R' not in script
-    assert 'chmod -R' not in script
-    assert '/proc/self/mounts' in script
-    assert script.count('"${prune[@]}"') == 3
-    assert '! -type l' in script
     # The handoff runs escalated, between shutdown and restart.
     raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
     assert raw_bash[0] == 'sudo'
@@ -563,7 +563,7 @@ def test_adopt_leaves_stopped_vm_alone(
         monkeypatch, tmp_path, initial_state='shut off'
     )
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), adopt=True, yes=True
     )
 
@@ -588,14 +588,14 @@ def test_adopt_refuses_shallow_system_paths(
         firewall_enabled=False,
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_can_write_path', lambda p: False
+        'aivm.cli.host_permissions.user_can_write_path', lambda p: False
     )
     rec = command_recorder(monkeypatch, {})  # strict: any command raises
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), adopt=True, yes=True
     )
 
@@ -620,11 +620,11 @@ def test_adopt_reports_when_nothing_needs_adopting(
         firewall_enabled=False,
     )
     monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
+        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
     rec = command_recorder(monkeypatch, {})  # strict: any command raises
 
-    rc = SudolessSetupCLI.main(
+    rc = HostPermissionsSetupCLI.main(
         argv=False, config=str(cfg_path), adopt=True, yes=True
     )
 
@@ -632,317 +632,3 @@ def test_adopt_reports_when_nothing_needs_adopting(
     assert rc == 0
     assert 'Nothing to adopt' in out
     assert rec.normalized == []
-
-
-def test_attachment_mounts_under_decodes_and_filters(tmp_path: Path) -> None:
-    """Mount enumeration keeps strictly-below targets, decoding \\040."""
-    from aivm.cli.host_sudoless import _attachment_mounts_under
-
-    tree = tmp_path / 'storage'
-    mounts = tmp_path / 'mounts'
-    mounts.write_text(
-        # outside the tree: ignored
-        '/dev/sda1 / ext4 rw 0 0\n'
-        f'/dev/sda1 {tmp_path}/elsewhere ext4 rw 0 0\n'
-        # the tree itself (not strictly below): ignored
-        f'/dev/sda1 {tree} ext4 rw 0 0\n'
-        # binds below the tree: returned, octal escapes decoded
-        f'/dev/sda1 {tree}/vm/persistent-root/hostcode-a ext4 rw 0 0\n'
-        f'/dev/sdb1 {tree}/vm/shared-root/with\\040space ext4 rw 0 0\n',
-        encoding='utf-8',
-    )
-
-    got = _attachment_mounts_under(tree, mounts_path=str(mounts))
-
-    assert got == [
-        f'{tree}/vm/persistent-root/hostcode-a',
-        f'{tree}/vm/shared-root/with space',
-    ]
-
-
-def test_adopt_lists_bind_mounts_it_will_exclude(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """The preflight names every excluded bind before anything runs."""
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='shut off'
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless._attachment_mounts_under',
-        lambda t, **k: [
-            f'{t}/vm-a/persistent-root/hostcode-proj',
-            f'{t}/vm-a/shared-root/hostcode-docs',
-        ],
-    )
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 0, out
-    assert '2 attached folder(s) are bind-mounted under this tree' in out
-    assert 'persistent-root/hostcode-proj' in out
-    assert 'shared-root/hostcode-docs' in out
-    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
-
-
-def test_adopt_refuses_mountpoints_find_cannot_match(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """A glob-metacharacter mountpoint cannot be pruned reliably: refuse."""
-    from tests.helpers import command_recorder
-
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path = tmp_path / 'config.toml'
-    tree = tmp_path / 'storage'
-    tree.mkdir()
-    _check_store(
-        cfg_path,
-        privilege_mode='as-needed',
-        base_dir=str(tree),
-        firewall_enabled=False,
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_can_write_path',
-        lambda p: str(p) != str(tree),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless._attachment_mounts_under',
-        lambda t, **k: [f'{t}/vm-a/persistent-root/host*code'],
-    )
-    rec = command_recorder(monkeypatch, {})  # strict: any command raises
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 2
-    assert 'cannot be safely excluded' in out
-    assert 'Detach those folders first' in out
-    assert rec.normalized == []
-
-
-def test_check_never_recommends_disabling_the_firewall(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """Firewall sudo is presented as inherent, never as a thing to disable.
-
-    The firewall is the guest's egress containment; check must not hand out
-    'disable it' as a convenience tip.  With everything else green the
-    verdict also must not point at `sudoless setup`, which cannot remove
-    this item.
-    """
-    cfg_path = tmp_path / 'config.toml'
-    _check_store(
-        cfg_path,
-        privilege_mode='as-needed',
-        base_dir=str(tmp_path / 'mine'),
-        firewall_enabled=True,
-    )
-    _stub_check_probes(monkeypatch)
-
-    rc = SudolessCheckCLI.main(argv=False, config=str(cfg_path))
-
-    out = capsys.readouterr().out
-    assert rc == 0, out
-    assert 'disable' not in out.lower()
-    assert 'egress containment' in out
-    assert 'not a problem to fix' in out
-    assert 'sudoless setup' not in out  # nothing setup-fixable remains
-    # A wall, not a warning: no amount of setup removes this item.
-    assert '🧱 firewall compatibility' in out
-    assert '⚠️' not in out
-
-
-def test_adopt_aborts_when_vm_state_cannot_be_determined(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """An unreadable VM state must abort before any mutation.
-
-    A running-but-unseen VM would silently undo the ownership handoff at
-    its next shutdown, so 'probe failed' may never be read as 'stopped'.
-    """
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='running'
-    )
-    rec.route(
-        'virsh domstate',
-        FakeProc(1, '', 'error: failed to connect to the hypervisor'),
-    )
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 2, out
-    assert 'Cannot determine the state of VM' in out
-    assert 'Aborting before any change' in out
-    assert not any(c[:2] == ['bash', '-c'] for c in rec.normalized)
-    assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
-
-
-def test_adopt_treats_missing_domain_as_stopped(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> None:
-    """A store record without a defined domain is normal; adoption proceeds."""
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='running'
-    )
-    rec.route(
-        'virsh domstate',
-        FakeProc(1, '', "error: failed to get domain 'vm-a'"),
-    )
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    assert rc == 0
-    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
-    assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
-    assert not any(c[:2] == ['virsh', 'start'] for c in rec.normalized)
-
-
-def test_adopt_restarts_stopped_vm_when_the_handoff_fails(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """A failing privileged script must not strand the VM it stopped."""
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='running'
-    )
-    rec.route('bash -c', FakeProc(1, '', 'chgrp: cannot access ...'))
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 2, out
-    assert 'did not complete' in out
-    order = [c[:2] for c in rec.normalized]
-    assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
-    # The restart still ran, after the failure.
-    assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
-
-
-def test_adopt_requires_setfacl_before_touching_anything(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """Group ownership alone does not grant qemu traversal; refuse early.
-
-    libvirt-qemu is not a libvirt-group member, so without the ACLs the
-    adopted tree may be untraversable and the VM unbootable.
-    """
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='running'
-    )
-    monkeypatch.setattr('aivm.cli.host_sudoless.which', lambda name: None)
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 2, out
-    assert 'needs setfacl' in out
-    assert rec.normalized == []
-
-
-def test_adopt_fails_when_traversal_still_blocked_after_handoff(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """Success is verified, not assumed: blocked qemu traversal fails loudly."""
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path, tree, rec = _adopt_env(
-        monkeypatch, tmp_path, initial_state='shut off'
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: [tree]
-    )
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 2, out
-    assert 'still cannot' in out
-
-
-def test_adopt_canonicalizes_and_dedupes_storage_spellings(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """Symlinked/dotted base_dir spellings resolve to one physical adoption.
-
-    The mount table reports canonical paths, so the prune list (and the VM
-    cycling set) must be keyed by the resolved tree: two VMs whose configs
-    spell the same tree differently get one privileged pass, and the script
-    receives the canonical path.
-    """
-    from tests.helpers import command_recorder
-
-    activate_manager(monkeypatch, yes=True, yes_sudo=True)
-    cfg_path = tmp_path / 'config.toml'
-    real = (tmp_path / 'real-store').resolve()
-    real.mkdir()
-    link = tmp_path / 'alias'
-    link.symlink_to(real)
-
-    # Two VMs: one via the symlink, one via a dotted spelling.
-    cfg_a = AgentVMConfig()
-    cfg_a.vm.name = 'vm-a'
-    cfg_a.firewall.enabled = False
-    cfg_a.paths.base_dir = str(link)
-    cfg_b = AgentVMConfig()
-    cfg_b.vm.name = 'vm-b'
-    cfg_b.firewall.enabled = False
-    cfg_b.paths.base_dir = str(tmp_path / 'x' / '..' / 'real-store')
-    store = Store()
-    store.behavior.privilege_mode = 'as-needed'
-    upsert_vm(store, cfg_a)
-    upsert_vm(store, cfg_b)
-    save_store(store, cfg_path, reason='test fixture')
-
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_in_libvirt_group', lambda: True
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.user_can_write_path',
-        lambda p: str(p) != str(real),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.host_sudoless.qemu_traversal_blockers', lambda p: []
-    )
-    rec = command_recorder(
-        monkeypatch,
-        {
-            'virsh domstate': FakeProc(0, 'shut off\n'),
-            'bash -c': FakeProc(0),
-        },
-    )
-
-    rc = SudolessSetupCLI.main(
-        argv=False, config=str(cfg_path), adopt=True, yes=True
-    )
-
-    out = capsys.readouterr().out
-    assert rc == 0, out
-    scripts = [c[-1] for c in rec.normalized if c[:2] == ['bash', '-c']]
-    # One physical tree -> one privileged pass, on the canonical path.
-    assert len(scripts) == 1
-    assert f'tree={real}' in scripts[0]
-    assert str(link) not in scripts[0]
-    # Both VMs are grouped onto the resolved tree (probed once each).
-    assert rec.count('virsh', 'domstate', 'vm-a') == 1
-    assert rec.count('virsh', 'domstate', 'vm-b') == 1

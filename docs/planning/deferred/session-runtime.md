@@ -8,7 +8,7 @@ externally-managed virtiofsd.
 | Added in | `cd3886f` — *"Add the rootless session runtime (qemu:///session) as a first-class mode"* |
 | Removed in | `190ed83` — *"Remove the rootless qemu:///session runtime"* |
 | Related active design | `dev/design/future/external-virtiofsd.md` |
-| Never shipped | Correct. `cd3886f` landed on the unmerged `dev/sudoless` branch. No released version of `aivm` ever exposed it. |
+| Never shipped | Correct. `cd3886f` landed on an unmerged pre-release branch. No released version of `aivm` ever exposed it. |
 
 ## What it was
 

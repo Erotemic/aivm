@@ -61,7 +61,7 @@ class _BaseCommand(kwconf.Config):
         False,
         help=(
             'Never invoke sudo for this invocation (forces '
-            "behavior.privilege_mode = 'never'; see `aivm host sudoless`)."
+            "behavior.privilege_mode = 'never'; see `aivm host permissions`)."
         ),
     )
 

@@ -1,27 +1,24 @@
-"""CLI commands that inspect and establish sudoless operation.
+"""CLI commands that inspect and establish host permissions.
 
-"Sudoless" here names a property of the *host*, not a mode aivm runs in: a
-host is sudoless-ready when aivm never needs to escalate to do its ordinary
-work. ``aivm host sudoless check`` reports whether this host is there yet.
-``aivm host sudoless setup`` establishes the host-side prerequisites --
+``aivm host permissions check`` reports whether the current account can
+perform routine system-libvirt and VM-storage operations without sudo, while
+separately identifying features that inherently require escalation.
+``aivm host permissions setup`` establishes the host-side prerequisites:
 libvirt group membership (its one privileged step) and a user-owned VM
 storage tree with libvirt-qemu traversal ACLs.
 
-Setup does not change your config. Establishing a capability and choosing a
-policy are different acts: ``behavior.privilege_mode`` and
+Setup does not change privilege policy. ``behavior.privilege_mode`` and
 ``firewall.enabled`` stay yours to set. Once the host work is done, the
-default ``privilege_mode='as-needed'`` stops invoking sudo for libvirt and image
-operations on its own -- no mode flip required, and the firewall keeps
-working. ``--persist`` opts in to the one config value the host work
-genuinely depends on (``defaults.paths.base_dir``, which the ACLs are
-granted on), and writes nothing else.
+default ``privilege_mode='as-needed'`` stops invoking sudo for libvirt and
+image operations on its own. ``--persist`` opts in to the one config value
+the host work genuinely depends on (``defaults.paths.base_dir``, which the
+ACLs are granted on), and writes nothing else.
 """
 
 from __future__ import annotations
 
 import getpass
 import os
-import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -35,7 +32,7 @@ from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
     LIBVIRT_QEMU_USER,
-    libvirt_unprivileged_ok,
+    libvirt_without_sudo_ok,
     normalize_privilege_mode,
     qemu_traversal_blockers,
     user_can_write_path,
@@ -109,7 +106,7 @@ _ADOPT_MIN_DEPTH = 4
 
 
 def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
-    """Names of stored VMs whose ``base_dir`` is (an alias of) ``tree``."""
+    """Names of stored VMs whose ``base_dir`` is ``tree``."""
     try:
         path = cfg_path(config_opt)
         if not path.exists():
@@ -121,27 +118,17 @@ def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
         rec.name
         for rec in reg.vms
         if rec.cfg.paths.base_dir
-        and Path(expand(rec.cfg.paths.base_dir)).resolve() == tree
+        and Path(expand(rec.cfg.paths.base_dir)) == tree
     )
 
 
 def _adoptable_storage_trees(config_opt: str | None) -> list[Path]:
-    """Existing storage dirs from the store that still need sudo.
-
-    Trees are canonicalized and deduplicated: the kernel mount table
-    reports canonical paths, so the mountpoint exclusion (and everything
-    downstream -- VM grouping, the privileged script, display) must run on
-    the resolved path, never on a config spelling that may contain ``..``
-    or symlinks. Two spellings of one physical tree are one adoption.
-    """
-    seen: dict[Path, None] = {}
-    for tree, _used_by in _storage_dirs_to_grade(config_opt):
-        if not tree.is_dir():
-            continue
-        resolved = tree.resolve()
-        if not user_can_write_path(resolved):
-            seen.setdefault(resolved, None)
-    return list(seen)
+    """Existing storage dirs from the store that still need sudo."""
+    return [
+        tree
+        for tree, _used_by in _storage_dirs_to_grade(config_opt)
+        if tree.is_dir() and not user_can_write_path(tree)
+    ]
 
 
 def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
@@ -160,40 +147,6 @@ def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
         return cfg
 
 
-def _decode_mounts_field(field: str) -> str:
-    r"""Decode the octal escapes /proc/self/mounts uses (``\040`` = space)."""
-    return re.sub(
-        r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), field
-    )
-
-
-def _attachment_mounts_under(
-    tree: Path, *, mounts_path: str = '/proc/self/mounts'
-) -> list[str]:
-    """Mountpoints strictly below ``tree``, per the kernel mount table.
-
-    Attachment export roots live *under* VM storage
-    (``<base_dir>/<vm>/{persistent,shared}-root/<token>``) and each token is
-    a live bind mount of a real user folder -- same inodes, so a recursive
-    operation on the tree would rewrite the user's actual files.  Anything
-    this returns must be excluded from recursive passes.  ``findmnt
-    --submounts`` cannot do this job (it prints nothing when ``tree`` is not
-    itself a mountpoint) and ``-xdev`` cannot either (a bind keeps the
-    source's device number).
-    """
-    prefix = str(tree).rstrip('/') + '/'
-    mounts: list[str] = []
-    with open(mounts_path, encoding='utf-8') as fh:
-        for line in fh:
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            target = _decode_mounts_field(parts[1])
-            if target.startswith(prefix):
-                mounts.append(target)
-    return sorted(mounts)
-
-
 def _adopt_script(tree: Path) -> str:
     """The one privileged command of adoption: group-own ``tree`` in place.
 
@@ -201,106 +154,36 @@ def _adopt_script(tree: Path) -> str:
     members; setgid dirs keep new entries in the group; the default ACLs
     keep future files group-writable regardless of umask and preserve
     libvirt-qemu traversal even if a directory later drops ``o+x``.
-
-    Every recursive pass prunes the mountpoints below the tree: those are
-    bind mounts of real user folders (see :func:`_attachment_mounts_under`),
-    and recursing through one rewrites the user's actual files.  The mount
-    table is read *inside* the script -- the approval prompt and sudo
-    password can sit for minutes, long enough for a replay service or a
-    concurrent attach to add a bind -- and the script refuses outright when
-    the table is unreadable or a mountpoint's name cannot be safely handed
-    to ``find -path`` (glob characters, escapes beyond plain spaces).
-    Symlinks are skipped: unlike ``chgrp -R``, per-entry ``chgrp``/``chmod``
-    would follow a link and modify its target.
     """
     q = shlex.quote(str(tree))
-    setfacl_args = (
+    return (
+        'set -eu; '
+        f'chgrp -R {LIBVIRT_GROUP} {q}; '
+        f'chmod -R g+rwX {q}; '
+        f'find {q} -type d -exec chmod g+s {{}} +; '
+        'if command -v setfacl >/dev/null 2>&1; then '
+        f'find {q} -type d -exec setfacl '
         f'-m u:{LIBVIRT_QEMU_USER}:x '
         f'-m default:group:{LIBVIRT_GROUP}:rwX '
-        f'-m default:user:{LIBVIRT_QEMU_USER}:x'
-    )
-    return (
-        'set -euo pipefail; '
-        f'tree={q}; '
-        # Canonicalize at execution time: mountpoint exclusion compares
-        # against kernel-reported (canonical) paths, so a symlink anywhere
-        # in the configured spelling would empty the prune list.
-        'tree="$(realpath -e -- "$tree")"; '
-        '[ -r /proc/self/mounts ] || { '
-        'echo "refusing: cannot read /proc/self/mounts, so bind mounts '
-        'under $tree cannot be excluded" >&2; exit 3; }; '
-        'prune=(); '
-        'while IFS= read -r mp; do '
-        '[ -n "$mp" ] || continue; '
-        'case "$mp" in (*[\\\\*?[]*) '
-        'echo "refusing: mountpoint under $tree has characters find -path '
-        'cannot match safely: $mp" >&2; exit 3;; esac; '
-        'prune+=( -path "$mp" -prune -o ); '
-        "done < <(awk -v t=\"$tree/\" "
-        "'{ gsub(/\\\\040/, \" \", $2); if (index($2, t) == 1) print $2 }' "
-        '/proc/self/mounts); '
-        f'find "$tree" "${{prune[@]}}" ! -type l '
-        f'-exec chgrp {LIBVIRT_GROUP} {{}} + -exec chmod g+rwX {{}} +; '
-        'find "$tree" "${prune[@]}" -type d -exec chmod g+s {} +; '
-        'if command -v setfacl >/dev/null 2>&1; then '
-        f'find "$tree" "${{prune[@]}}" -type d '
-        f'-exec setfacl {setfacl_args} {{}} +; '
+        f'-m default:user:{LIBVIRT_QEMU_USER}:x {{}} +; '
         'fi'
     )
 
 
-def _domain_is_missing(err: str) -> bool:
-    """True when a virsh state probe failed because no such domain exists.
-
-    A store record without a defined domain is a normal pre-create state
-    and adoption may proceed; any *other* probe failure (connection,
-    permission) means the VM could be running unseen, so the caller must
-    abort before mutating storage.
-    """
-    text = (err or '').lower()
-    return 'domain not found' in text or 'failed to get domain' in text
-
-
-def _start_vm_if_stopped(name: str) -> None:
-    """Restart ``name`` unless it is already active again."""
-    code, state, _err = _get_vm_state(name)
-    if code == 0 and _is_vm_active(state):
-        return
-    _start_vm(name)
-
-
 def _adopt_one_tree(
     args: Any, mgr: CommandManager, tree: Path, vm_names: list[str]
-) -> bool:
+) -> None:
     """Hand one storage tree to the libvirt group, cycling running VMs."""
     running: list[str] = []
     for name in vm_names:
-        code, state, err = _get_vm_state(name)
-        if code == 0:
-            if _is_vm_active(state):
-                running.append(name)
-        elif not _domain_is_missing(err):
-            print(
-                f'❌ Cannot determine the state of VM {name!r} before '
-                f'adopting {tree}: {err.strip() or "unknown probe error"}. '
-                'Aborting before any change; a running VM would silently '
-                'undo the ownership handoff at its next shutdown.'
-            )
-            return False
+        code, state, _err = _get_vm_state(name)
+        if code == 0 and _is_vm_active(state):
+            running.append(name)
     print(
         f'Adopting {tree}: ownership becomes root:{LIBVIRT_GROUP} with '
         f'group write, so {LIBVIRT_GROUP} members manage VM storage there '
         'without sudo. VM disks and definitions are not touched.'
     )
-    mounts = _attachment_mounts_under(tree)
-    if mounts:
-        print(
-            f'{len(mounts)} attached folder(s) are bind-mounted under this '
-            'tree; they are excluded from the ownership change and stay '
-            'exactly as they are:'
-        )
-        for mp in mounts:
-            print(f'  - {mp}')
     if running:
         print(
             f'Stopping {", ".join(running)} first: libvirt records disk '
@@ -312,67 +195,36 @@ def _adopt_one_tree(
         for name in running:
             print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
         print(
-            f'DRYRUN: chgrp {LIBVIRT_GROUP} + chmod g+rwX + setgid dirs + '
-            f'group/qemu ACLs across {tree}, pruning every mountpoint below '
-            'it'
+            f'DRYRUN: chgrp -R {LIBVIRT_GROUP} {tree}; chmod -R g+rwX; '
+            'setgid dirs; grant group/qemu ACLs'
         )
-        return True
-    stopped: list[str] = []
-    ok = True
-    try:
-        for name in running:
-            print(f'Shutting down VM {name} ...')
-            stopped.append(name)
-            shutdown_vm(_cfg_for_stored_vm(args.config, name))
-            _wait_for_vm_state(
-                name, 'shut off', timeout_s=180, poll_interval_s=2
-            )
-        with mgr.step(
-            'Hand VM storage to the libvirt group',
-            why=(
-                'Group-owning the existing tree in place removes the need '
-                'for sudo on VM image operations without moving or '
-                'recreating anything.'
-            ),
-            approval_scope=f'sudoless-adopt:{tree}',
-        ):
-            mgr.submit(
-                ['bash', '-c', _adopt_script(tree)],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
-                detail=f'tree={tree}',
-            )
-    except Exception as ex:
-        print(f'❌ Adoption of {tree} did not complete: {ex}')
-        ok = False
-    finally:
-        # Every VM this run stopped gets a restart attempt, whether or not
-        # the handoff succeeded and regardless of earlier restart failures.
-        for name in stopped:
-            try:
-                print(f'Starting VM {name} again ...')
-                _start_vm_if_stopped(name)
-            except Exception as ex:
-                ok = False
-                print(
-                    f'❌ Could not restart VM {name!r}: {ex}\n'
-                    f'   Start it manually: aivm vm up --vm {name}'
-                )
-    if not ok:
-        return False
-    blockers = qemu_traversal_blockers(tree)
-    if blockers:
-        print(
-            f'⚠️ Adopted {tree}, but {LIBVIRT_QEMU_USER} still cannot '
-            'traverse: ' + ', '.join(str(b) for b in blockers) + '. '
-            'VM start may fail until execute access is granted there.'
+        return
+    for name in running:
+        print(f'Shutting down VM {name} ...')
+        shutdown_vm(_cfg_for_stored_vm(args.config, name))
+        _wait_for_vm_state(name, 'shut off', timeout_s=180, poll_interval_s=2)
+    with mgr.step(
+        'Hand VM storage to the libvirt group',
+        why=(
+            'Group-owning the existing tree in place removes the need for '
+            'sudo on VM image operations without moving or recreating '
+            'anything.'
+        ),
+        approval_scope=f'host-permissions-adopt:{tree}',
+    ):
+        mgr.submit(
+            ['bash', '-c', _adopt_script(tree)],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
+            detail=f'tree={tree}',
         )
-        return False
+    for name in running:
+        print(f'Starting VM {name} again ...')
+        _start_vm(name)
     print(f'✅ Adopted {tree}; file operations there no longer need sudo.')
-    return True
 
 
 def _run_storage_adoption(
@@ -387,48 +239,19 @@ def _run_storage_adoption(
         print()
         _print_policy_report(args.config, group_added=group_added)
         return 0
-    if which('setfacl') is None:
-        # Group ownership alone does not grant libvirt-qemu traversal (it
-        # is not a libvirt-group member); the ACLs are load-bearing.
-        print(
-            '❌ Adoption needs setfacl to grant libvirt-qemu traversal on '
-            'the adopted tree. Install the `acl` package (`aivm host '
-            'install_deps` includes it), then re-run.'
-        )
-        return 2
     for tree in trees:
         if len(tree.resolve().parts) < _ADOPT_MIN_DEPTH:
             print(
                 f'❌ Refusing to adopt {tree}: too close to the filesystem '
-                'root to change ownership recursively. Point VM storage at '
-                'a dedicated directory first.'
+                'root to chgrp -R safely. Point VM storage at a dedicated '
+                'directory first.'
             )
             return 2
-        # The script prunes each mountpoint below the tree via find -path,
-        # which matches glob patterns; a mountpoint whose name find cannot
-        # match literally could not be reliably excluded, so refuse.
-        unsafe = [
-            mp
-            for mp in _attachment_mounts_under(tree)
-            if any(ch in mp for ch in '*?[\\\t\n')
-        ]
-        if unsafe:
-            print(
-                f'❌ Refusing to adopt {tree}: mountpoints below it have '
-                'names that cannot be safely excluded from the recursive '
-                'ownership change:'
-            )
-            for mp in unsafe:
-                print(f'  - {mp!r}')
-            print('Detach those folders first, then re-run.')
-            return 2
-    results = [
+    for tree in trees:
         _adopt_one_tree(args, mgr, tree, _vms_stored_under(args.config, tree))
-        for tree in trees
-    ]
     print()
     _print_policy_report(args.config, group_added=group_added)
-    return 0 if all(results) else 2
+    return 0
 
 
 def _print_base_dir_toml(base_dir: Path) -> None:
@@ -467,9 +290,8 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
         if _firewall_enabled_anywhere(config_opt):
             print(
                 "⚠️ firewall.enabled is true, which privilege_mode = 'never' "
-                "cannot honor. Choose a mode that may escalate ('as-needed') "
-                'to keep it; disabling the firewall would satisfy the mode '
-                "at the cost of the guest's egress containment."
+                'cannot honor. Disable the firewall or choose a mode that may '
+                'escalate.'
             )
     elif mode == PrivilegeMode.ALWAYS:
         print("behavior.privilege_mode = 'always': aivm escalates for every")
@@ -486,7 +308,7 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
             f'👉 Group membership added. Log out and back in (or run `newgrp '
             f'{LIBVIRT_GROUP}`) so it takes effect.'
         )
-    print('Run `aivm host sudoless check` to verify readiness.')
+    print('Run `aivm host permissions check` to verify readiness.')
 
 
 def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
@@ -511,7 +333,7 @@ def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
         return True
 
 
-class SudolessCheckCLI(_BaseCommand):
+class HostPermissionsCheckCLI(_BaseCommand):
     """Report where aivm still needs sudo on this host.
 
     Verdicts follow the configured ``behavior.privilege_mode``.  Under
@@ -527,50 +349,36 @@ class SudolessCheckCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         mode = _configured_privilege_mode(args.config)
         strict = mode == PrivilegeMode.NEVER
-        lines: list[str] = ['🔐 Sudoless readiness']
+        lines: list[str] = ['🔐 Host permission readiness']
         broken: list[str] = []  # breaks VMs regardless of privilege mode
         sudo_needs: list[str] = []  # costs sudo; a failure only under 'never'
 
         def friction_line(
-            ok: bool,
-            label: str,
-            detail: str,
-            need: str,
-            icon: str | None = None,
+            ok: bool, label: str, detail: str, need: str
         ) -> str:
-            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise.
-
-            ``icon`` overrides the non-strict rendering for items setup
-            cannot trim (🧱: a wall, not a warning).
-            """
+            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise."""
             if not ok:
                 sudo_needs.append(need)
-            return status_line(
-                ok,
-                label,
-                detail,
-                warn_only=not strict,
-                icon=None if strict else icon,
-            )
+            return status_line(ok, label, detail, warn_only=not strict)
 
         in_group = user_in_libvirt_group()
         lines.append(
             friction_line(
                 in_group,
                 f'{LIBVIRT_GROUP} group membership',
-                'grants unprivileged qemu:///system access'
+                'grants direct qemu:///system access without sudo'
                 if in_group
                 else f'run `sudo usermod -aG {LIBVIRT_GROUP} {getpass.getuser()}` '
-                'or `aivm host sudoless setup`',
+                'or `aivm host permissions setup`',
                 'libvirt access (virsh)',
             )
         )
 
-        live_access = libvirt_unprivileged_ok()
+        live_access = libvirt_without_sudo_ok()
         live_detail = 'virsh reaches qemu:///system without sudo'
         if not live_access:
             live_detail = (
-                'unprivileged virsh cannot reach qemu:///system'
+                'virsh cannot reach qemu:///system without sudo'
                 + (
                     ' (group added but not active in this session; log out/in '
                     f'or use `newgrp {LIBVIRT_GROUP}`)'
@@ -595,13 +403,13 @@ class SudolessCheckCLI(_BaseCommand):
             elif base_dir.is_dir():
                 storage_detail = (
                     f'{base_dir} ({used_by}) needs sudo; `aivm host '
-                    'sudoless setup --adopt` hands it to the libvirt '
+                    'permissions setup --adopt` hands it to the libvirt '
                     'group in place'
                 )
             else:
                 storage_detail = (
                     f'{base_dir} ({used_by}) needs sudo; `aivm host '
-                    'sudoless setup` prepares a user-owned dir'
+                    'permissions setup` prepares a user-owned dir'
                 )
             lines.append(
                 friction_line(
@@ -680,15 +488,12 @@ class SudolessCheckCLI(_BaseCommand):
                     False,
                     'firewall compatibility',
                     'firewall.enabled requires root nftables access, which '
-                    "has no unprivileged equivalent, so privilege_mode "
-                    "'never' cannot apply it. The firewall is the guest's "
-                    'egress containment; disabling it trades that away'
+                    'has no unprivileged equivalent; disable it to run fully '
+                    'without sudo'
                     if strict
-                    else 'nftables needs root, so applying firewall rules '
-                    'uses sudo. There is no sudo-free form; this is the '
-                    'cost of guest egress containment, not a setup gap',
+                    else 'applying nftables rules uses sudo; disable '
+                    'firewall.enabled to avoid it',
                     'the nftables firewall',
-                    icon='🧱',
                 )
             )
 
@@ -706,48 +511,38 @@ class SudolessCheckCLI(_BaseCommand):
             print(
                 '❌ Broken in every privilege mode: '
                 + '; '.join(dict.fromkeys(broken))
-                + '. Run `aivm host sudoless setup`.'
+                + '. Run `aivm host permissions setup`.'
             )
             return 2
         if strict:
             if needs:
                 print(
                     "❌ privilege_mode = 'never' cannot be honored yet; "
-                    'run `aivm host sudoless setup`.'
+                    'run `aivm host permissions setup`.'
                 )
                 return 2
-            print('✅ Host is ready for sudoless operation.')
+            print('✅ Host permissions are ready for routine VM operation.')
             return 0
         if needs:
             print(
                 f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
                 'used for: ' + '; '.join(needs) + '.'
             )
-            fixable = [n for n in needs if n != 'the nftables firewall']
-            if fixable:
-                print(
-                    '   `aivm host sudoless setup` can remove: '
-                    + '; '.join(fixable)
-                    + '.'
-                )
-            if 'the nftables firewall' in needs:
-                print(
-                    '   The firewall has no sudo-free form (nft needs '
-                    'root), and it is what stands between the guest and '
-                    'your local network. Sudo here is the firewall '
-                    'working, not a problem to fix.'
-                )
+            print(
+                '   `aivm host permissions setup` trims that list; '
+                "privilege_mode = 'never' forbids escalation outright."
+            )
             return 0
-        print('✅ Host is ready for sudoless operation.')
+        print('✅ Host permissions are ready for routine VM operation.')
         return 0
 
 
-class SudolessSetupCLI(_BaseCommand):
-    """Prepare this host for sudoless aivm operation.
+class HostPermissionsSetupCLI(_BaseCommand):
+    """Prepare host permissions for routine aivm operation.
 
-    Uses sudo at most once (libvirt group membership); everything else is
-    unprivileged: creating a user-owned VM storage directory and granting
-    libvirt-qemu traversal via POSIX ACLs. Your config is not modified
+    Uses sudo at most once (libvirt group membership); everything else
+    runs without escalation: creating a user-owned VM storage directory and
+    granting libvirt-qemu traversal via POSIX ACLs. Your config is not modified
     unless you pass ``--persist``, and even then only
     ``defaults.paths.base_dir`` is written.
     """
@@ -788,8 +583,8 @@ class SudolessSetupCLI(_BaseCommand):
             # command (usermod), so it runs with escalation enabled even when
             # the config forbids sudo.
             print(
-                'ℹ️ Sudoless setup may use sudo once (libvirt group '
-                'membership); everything else runs unprivileged.'
+                'ℹ️ Host permission setup may use sudo once (libvirt group '
+                'membership); everything else runs without escalation.'
             )
             mgr = CommandManager(
                 yes=bool(args.yes),
@@ -808,7 +603,7 @@ class SudolessSetupCLI(_BaseCommand):
                 print(f'DRYRUN: sudo usermod -aG {LIBVIRT_GROUP} {user}')
             else:
                 with mgr.intent(
-                    'Enable unprivileged libvirt access',
+                    'Enable libvirt access without sudo',
                     why=(
                         'Membership in the libvirt group lets virsh reach '
                         'qemu:///system without sudo (polkit rule shipped '
@@ -819,10 +614,10 @@ class SudolessSetupCLI(_BaseCommand):
                     with mgr.step(
                         'Add user to libvirt group',
                         why=(
-                            'This is the one privileged step of sudoless '
-                            'setup; everything else runs unprivileged.'
+                            'This is the one privileged step of host permission '
+                            'setup; everything else runs without escalation.'
                         ),
-                        approval_scope='sudoless-setup-group',
+                        approval_scope='host-permissions-setup-group',
                     ):
                         mgr.submit(
                             ['usermod', '-aG', LIBVIRT_GROUP, user],
@@ -867,7 +662,7 @@ class SudolessSetupCLI(_BaseCommand):
             print(f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs')
         else:
             with mgr.intent(
-                'Prepare sudoless VM storage',
+                'Prepare VM storage permissions',
                 why=(
                     'VM images and cloud-init artifacts live in a '
                     'user-owned tree so no file operation needs sudo.'
@@ -881,7 +676,7 @@ class SudolessSetupCLI(_BaseCommand):
                         'access on every ancestor of the image tree; targeted '
                         'ACLs grant that without changing ownership.'
                     ),
-                    approval_scope=f'sudoless-setup-storage:{base_dir}',
+                    approval_scope=f'host-permissions-setup-storage:{base_dir}',
                 ):
                     mgr.submit(
                         ['mkdir', '-p', str(base_dir)],
@@ -944,7 +739,7 @@ class SudolessSetupCLI(_BaseCommand):
                 save_store(
                     reg,
                     store,
-                    reason=f'Persist sudoless setup: base_dir={base_dir}.',
+                    reason=f'Persist host permission setup: base_dir={base_dir}.',
                 )
                 print(f'Persisted default paths.base_dir = {base_dir}')
         elif config_gap:
@@ -973,15 +768,15 @@ class SudolessSetupCLI(_BaseCommand):
                 print(
                     f'⚠️ Existing VM {rec.name!r} stores images under '
                     f'{vm_base}, which still needs sudo. Run `aivm host '
-                    'sudoless setup --adopt` to hand that storage to the '
+                    'permissions setup --adopt` to hand that storage to the '
                     'libvirt group in place -- the VM is untouched (briefly '
                     'stopped if running) and no config change is needed.'
                 )
         return 0
 
 
-class SudolessModalCLI(kwconf.ModalCLI):
-    """Inspect or establish sudoless (never-sudo) operation for this host."""
+class HostPermissionsModalCLI(kwconf.ModalCLI):
+    """Inspect or establish host permissions for routine VM operation."""
 
-    check = SudolessCheckCLI
-    setup = SudolessSetupCLI
+    check = HostPermissionsCheckCLI
+    setup = HostPermissionsSetupCLI

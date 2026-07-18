@@ -46,8 +46,8 @@ After either path
    aivm status --sudo
    aivm vm update
 
-Optional: sudoless operation
-----------------------------
+Optional: routine operation without sudo
+----------------------------------------
 
 The default posture assumes an administrator: system libvirt plus sudo
 prompts, with no setup ceremony. :doc:`privilege-modes` compares the
@@ -57,8 +57,8 @@ If you prefer ``aivm`` to never invoke ``sudo``:
 
 .. code-block:: bash
 
-   aivm host sudoless check    # report what is missing
-   aivm host sudoless setup    # establish it (sudo used at most once)
+   aivm host permissions check    # report what is missing
+   aivm host permissions setup    # establish it (sudo used at most once)
 
 Setup adds you to the ``libvirt`` group (the one privileged step) and prepares
 a user-owned VM storage directory with ``setfacl`` traversal grants for

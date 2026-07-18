@@ -30,6 +30,6 @@ class SudoRequiredError(AIVMError):
     """Raised when an operation needs sudo but ``privilege_mode='never'``.
 
     The message must tell the user which command or feature needed
-    privileges and how to proceed (finish ``aivm host sudoless setup``,
+    privileges and how to proceed (finish ``aivm host permissions setup``,
     disable the feature, or choose a privilege mode that may escalate).
     """

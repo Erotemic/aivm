@@ -93,7 +93,7 @@ endpoints by failure.
   runtime with sudo available — add the guard via
   `aivm/privilege.py::require_sudo_allowed` exactly like
   `apply_firewall` does today, and a config-lint warning for
-  `egress.mode="allowlist"` + `privilege_mode="sudoless"`.
+  `egress.mode="allowlist"` + `privilege_mode="never"`.
 * **dnsmasq options**: the managed network XML is rendered in
   `aivm/net.py::ensure_network` — add
   `<dnsmasq:options>` entries (libvirt supports the dnsmasq namespace)
@@ -133,7 +133,7 @@ endpoints by failure.
 3. Drift detection reports and `vm update` repairs missing egress rules
    and a dead proxy service.
 4. Denials are visible (log file surfaced by `status --detail`).
-5. sudoless + allowlist is rejected with actionable guidance, not a deep
-   command failure.
+5. ``privilege_mode="never"`` + allowlist is rejected with actionable
+   guidance, not a deep command failure.
 6. Documentation states the protocol limitation (proxy-capable protocols
    only) and the threat it does/doesn't address.

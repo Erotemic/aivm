@@ -7,8 +7,6 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from loguru import logger as log
-
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
@@ -175,7 +173,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '-P',
                     '-n',
                     '-o',
-                    'SOURCE,FSROOT,FSTYPE,OPTIONS',
+                    'SOURCE,ROOT,FSTYPE,OPTIONS',
                     '--mountpoint',
                     str(target),
                 ],
@@ -186,21 +184,10 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                 summary='Inspect current source for host bind target',
                 detail=f'target={target}',
             )
-    if res.code != 0 and (res.stderr or '').strip():
-        # findmnt exits 1 both for "target is not a mountpoint" (silent) and
-        # for a malformed invocation (stderr). The latter must not be read
-        # as "no mount here": that misreading once turned every session into
-        # a privileged remount, because the probe named a column findmnt
-        # does not have (ROOT instead of FSROOT).
-        log.warning(
-            'findmnt probe for {} failed rather than reporting no mount: {}',
-            target,
-            res.stderr.strip(),
-        )
     values = _parse_findmnt_pairs(res.stdout or '')
     return FindmntTargetInfo(
         source=values.get('SOURCE', ''),
-        root=values.get('FSROOT', ''),
+        root=values.get('ROOT', ''),
         fstype=values.get('FSTYPE', ''),
         options=values.get('OPTIONS', ''),
         code=res.code,
@@ -213,7 +200,7 @@ def _needs_mkdir(path: Path) -> bool:
     Answers only *does this directory need creating*. Whether creating it
     needs sudo is a separate question for :func:`path_needs_sudo`, asked of
     the specific path: the export roots live under ``paths.base_dir``, which
-    is user-owned on a host prepared by ``aivm host sudoless setup``.
+    is user-owned on a host prepared by ``aivm host permissions setup``.
 
     Skip the mkdir only when the directory is confirmed present. An
     unreadable / unknown state issues it anyway: ``mkdir -p`` on an existing

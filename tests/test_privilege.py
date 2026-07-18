@@ -24,7 +24,7 @@ from aivm.privilege import (
 
 # Captured at import time, before the conftest fixture pins the module
 # attribute, so the real probe body stays testable.
-from aivm.privilege import libvirt_unprivileged_ok as _real_libvirt_probe
+from aivm.privilege import libvirt_without_sudo_ok as _real_libvirt_probe
 from tests.helpers import FakeProc
 
 
@@ -49,12 +49,12 @@ def test_unknown_privilege_mode_raises_rather_than_defaulting() -> None:
     Every fallback guesses, and guessing wrong here means either escalating
     when the user forbade it or refusing work they expected to succeed.
     """
-    for bogus in ('bogus', 'sudoless', 'auto', 'sudo'):
+    for bogus in ('bogus', 'rootless', 'auto', 'sudo'):
         with pytest.raises(PrivilegeModeError, match='Unknown'):
             normalize_privilege_mode(bogus)
     # The manager is a chokepoint too: it must not coerce either.
     with pytest.raises(PrivilegeModeError):
-        CommandManager(privilege_mode='sudoless')
+        CommandManager(privilege_mode='rootless')
 
 
 def test_virsh_needs_sudo_per_mode(monkeypatch: MonkeyPatch) -> None:
@@ -66,7 +66,7 @@ def test_virsh_needs_sudo_per_mode(monkeypatch: MonkeyPatch) -> None:
     _activate('as-needed')
     assert virsh_needs_sudo() is True
     monkeypatch.setattr(
-        'aivm.privilege.libvirt_unprivileged_ok', lambda: True
+        'aivm.privilege.libvirt_without_sudo_ok', lambda: True
     )
     assert virsh_needs_sudo() is False
 
