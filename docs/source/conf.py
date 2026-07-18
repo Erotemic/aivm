@@ -235,7 +235,7 @@ intersphinx_mapping = {
     'ubelt': ('https://ubelt.readthedocs.io/en/latest/', None),
     'xdoctest': ('https://xdoctest.readthedocs.io/en/latest/', None),
     'networkx': ('https://networkx.org/documentation/stable/', None),
-    'kwconf': ('https://kwconf.readthedocs.io/en/latest/', None),
+    'scriptconfig': ('https://scriptconfig.readthedocs.io/en/latest/', None),
     'rich': ('https://rich.readthedocs.io/en/latest/', None),
     'numpy': ('https://numpy.org/doc/stable/', None),
     'sympy': ('https://docs.sympy.org/latest/', None),
@@ -1058,36 +1058,9 @@ def fix_rst_todo_section(lines):
     ...
 
 
-def _exempt_intersphinx_fetch_failures():
-    """Keep an unreachable inventory from failing a ``-W`` build.
-
-    Whether ``objects.inv`` can be fetched is a property of the network, not
-    of this documentation: kwconf's inventory currently 404s, and an offline
-    build reaches none of them. Under ``-W`` that turns an environmental
-    condition into a build failure. Sphinx logs this warning with no subtype,
-    so ``suppress_warnings`` cannot reach it; filter it on the logger instead,
-    which runs before the ``-W`` handler that would raise.
-
-    Unresolved *references* still warn -- only the fetch itself is exempt.
-    """
-    import logging as py_logging
-
-    from sphinx.ext.intersphinx import _load
-
-    class _DropInventoryFetchFailure(py_logging.Filter):
-        def filter(self, record: py_logging.LogRecord) -> bool:
-            return 'failed to reach any of the inventories' not in (
-                record.getMessage()
-            )
-
-    _load.LOGGER.logger.addFilter(_DropInventoryFetchFailure())
-
-
 def setup(app):
     import sphinx
     import sphinx.application
-
-    _exempt_intersphinx_fetch_failures()
 
     app: sphinx.application.Sphinx = app
     app.add_domain(PatchedPythonDomain, override=True)
