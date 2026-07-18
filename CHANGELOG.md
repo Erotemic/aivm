@@ -2,7 +2,10 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.5.0 - Unreleased
+## Version 0.5.1 - Unreleased
+
+
+## Version 0.5.0 - Released 2026-07-18
 
 ### Added
 * Guest-side virtiofs fd guard (`aivm vm fdguard`, on by default via the new
