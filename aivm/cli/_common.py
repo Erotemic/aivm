@@ -18,6 +18,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config_store import find_vm, load_store
+from ..errors import PrivilegeModeError
 from ..services import cfg_path
 
 log = logger
@@ -53,18 +54,6 @@ class _BaseCommand(kwconf.Config):
         False,
         help='Auto-approve sudo confirmation prompts only.',
     )
-    # Named --never_sudo rather than anything beginning `--sudo`, so a
-    # mistyped `--sudo` cannot prefix-abbreviate into the opposite of the
-    # user's intent; and unlike --no_sudo, its auto-generated negation
-    # aliases cannot collide with the status command's --sudo/--no-sudo flag.
-    never_sudo: bool = kwconf.Flag(
-        False,
-        help=(
-            'Never invoke sudo for this invocation (forces '
-            "behavior.privilege_mode = 'never'; see `aivm host permissions`)."
-        ),
-    )
-
     @classmethod
     def cli(cls, *args: Any, **kwargs: Any) -> Self:  # type: ignore
         parsed = cast(Self, super().cli(*args, **kwargs))
@@ -73,11 +62,14 @@ class _BaseCommand(kwconf.Config):
         cfg_auto_approve_readonly_sudo = (
             _resolve_cfg_auto_approve_readonly_sudo(parsed.config)
         )
-        privilege_mode = (
-            'never'
-            if parsed.never_sudo
-            else _resolve_cfg_privilege_mode(parsed.config)
-        )
+        privilege_mode = _resolve_cfg_privilege_mode(parsed.config)
+        if str(privilege_mode).strip().lower() == 'never':
+            raise PrivilegeModeError(
+                'behavior.privilege_mode = never is not supported in this '
+                'release. Managed nftables and new host bind mounts still '
+                'require escalation, so aivm refuses to advertise a global '
+                'no-sudo guarantee. Use as-needed or always.'
+            )
         effective_yes_sudo = bool(parsed.yes_sudo or parsed.yes or cfg_yes_sudo)
         setattr(parsed, 'yes_sudo', effective_yes_sudo)
         _CURRENT_YES_SUDO.set(effective_yes_sudo)

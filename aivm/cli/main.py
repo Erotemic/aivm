@@ -18,7 +18,6 @@ from loguru import logger as log
 from ..commands import CommandManager
 from ..config_store import load_store
 from ..errors import AIVMError, NoVMContextError
-from ..modes import PrivilegeMode
 from ..services import cfg_path, load_cfg_with_path, resolve_cfg_for_code
 from ..status import (
     anticipated_status_sudo_commands,
@@ -150,14 +149,6 @@ class StatusCLI(_BaseCommand):
             print(render_global_status(cfg_path(args.config)))
             return 0
         mgr = CommandManager.current()
-        if args.sudo and mgr.privilege_mode == PrivilegeMode.NEVER:
-            # --sudo cannot override the never-sudo guarantee; run the
-            # unprivileged probes and say so instead of erroring.
-            print(
-                'ℹ️ privilege_mode = never: ignoring --sudo; showing unprivileged '
-                'status checks only.'
-            )
-            args.sudo = False
         with mgr.intent(
             f'Inspect status for {cfg.vm.name}',
             why='Summarize host, network, firewall, VM, and SSH readiness for this managed VM.',
@@ -198,6 +189,7 @@ class AgentVMModalCLI(kwconf.ModalCLI):
 
 
 def main(argv: list[str] | None = None) -> None:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
     except AIVMError as ex:
@@ -213,4 +205,6 @@ def main(argv: list[str] | None = None) -> None:
         raise
 
     assert isinstance(rc, int)
+    if rc == 1 and any(arg in {'-h', '--help'} for arg in effective_argv):
+        rc = 0
     sys.exit(rc)

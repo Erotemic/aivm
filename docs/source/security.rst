@@ -287,13 +287,11 @@ The current ``aivm`` security posture is intentionally pragmatic:
   explicit trust extension.
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
-* Never-sudo operation (``behavior.privilege_mode = "never"``) cannot manage
-  the nftables firewall: ``nft`` requires ``CAP_NET_ADMIN`` and has no
-  unprivileged equivalent, so reconciliation skips it with a warning.
-  Choosing ``privilege_mode = "never"`` therefore trades away managed
-  network isolation for the no-sudo-invocation guarantee; guests then
-  rely on the standard libvirt NAT network behavior alone. Disabling ``firewall.enabled`` is a decision the operator
-  makes explicitly -- no aivm command turns it off for you.
+* A global no-sudo mode is intentionally not supported. ``nft`` requires
+  ``CAP_NET_ADMIN`` and new bind mounts require root; silently skipping either
+  would weaken the configured isolation or attachment contract. The default
+  ``as-needed`` policy instead avoids sudo where host permissions permit and
+  escalates for the operations that still require it.
 * The explicit-consent contract survives operation without sudo: state-changing
   hypervisor commands (``virsh``/``virt-install``) prompt for approval even
   when group membership means they no longer need sudo. Destructive

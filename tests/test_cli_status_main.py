@@ -11,7 +11,7 @@ from pytest import CaptureFixture, MonkeyPatch
 from aivm.cli.main import StatusCLI
 from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store
-from aivm.errors import AIVMError
+from aivm.errors import AIVMError, PrivilegeModeError
 from aivm.status import (
     ProbeOutcome,
     anticipated_status_sudo_commands,
@@ -151,48 +151,16 @@ def test_status_cli_uses_vm_opt_and_sudo(
     assert called['render'] == ('chosen-vm', cfg_path, False, True)
 
 
-def test_status_never_mode_ignores_sudo_flag(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+def test_status_rejects_retired_never_mode(
+    tmp_path: Path,
 ) -> None:
-    """`--sudo` cannot override privilege_mode=never; it downgrades to probes.
-
-    This branch compares against PrivilegeMode.NEVER. A regression to a bare
-    mode string would make it dead code and silently escalate.
-    """
-    cfg = make_cfg(None, **{'vm.name': 'chosen-vm'})
-    cfg_path = tmp_path / 'config.toml'
-    # The mode must come from the store: _BaseCommand.cli() builds the active
-    # CommandManager from it, overwriting any manager activated beforehand.
     store = Store()
     store.behavior.privilege_mode = 'never'
-    save_store(store, cfg_path, reason='never-mode fixture')
-    called: dict[str, object] = {}
+    cfg_path = tmp_path / 'config.toml'
+    save_store(store, cfg_path, reason='retired-mode fixture')
 
-    def fake_render(
-        cfg_arg: AgentVMConfig, path_arg: Path, *, detail: bool, use_sudo: bool
-    ) -> str:
-        called['use_sudo'] = use_sudo
-        return 'status'
-
-    monkeypatch.setattr(
-        main_mod, 'load_cfg_with_path', returns((cfg, cfg_path))
-    )
-    monkeypatch.setattr(main_mod, 'cfg_path', returns(cfg_path))
-    monkeypatch.setattr(
-        main_mod.CommandManager,
-        'confirm_sudo_scope',
-        lambda self, **k: called.setdefault('sudo_scope', k),
-    )
-    monkeypatch.setattr(main_mod, 'render_status', fake_render)
-
-    rc = StatusCLI.main(
-        argv=False, config=str(cfg_path), vm='chosen-vm', sudo=True, yes=True
-    )
-
-    assert rc == 0
-    assert called['use_sudo'] is False, '--sudo survived privilege_mode=never'
-    assert 'sudo_scope' not in called, 'never mode must not preflight sudo'
-    assert 'ignoring --sudo' in capsys.readouterr().out
+    with pytest.raises(PrivilegeModeError, match='not supported'):
+        StatusCLI.main(argv=False, config=str(cfg_path), sudo=True)
 
 
 def test_render_global_status_wording(

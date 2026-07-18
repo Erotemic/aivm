@@ -163,30 +163,6 @@ def test_setup_persist_refuses_to_materialize_a_defaults_section(
     assert any(c[0] == 'setfacl' for c in ran)
 
 
-def test_setup_never_disables_the_firewall_under_never_mode(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """A never-sudo config gets a warning about nftables, not a silent disable."""
-    activate_manager(monkeypatch, yes=True, privilege_mode='never')
-    _stub_host_probes(monkeypatch)
-    cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='never')
-    before = cfg_path.read_bytes()
-    base_dir = tmp_path / 'vmstore'
-
-    rc = HostPermissionsSetupCLI.main(
-        argv=False, config=str(cfg_path), base_dir=str(base_dir), yes=True
-    )
-
-    assert rc == 0
-    assert cfg_path.read_bytes() == before
-    reg = load_store(cfg_path)
-    assert reg.vms[0].cfg.firewall.enabled is True
-    assert reg.behavior.privilege_mode == 'never'
-    out = capsys.readouterr().out
-    assert 'firewall.enabled is true' in out
-
-
 def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
@@ -207,36 +183,6 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     assert cfg_path.read_bytes() == before
     out = capsys.readouterr().out
     assert 'Nothing in your config needs to change' in out
-
-
-def test_setup_reads_persisted_mode_not_its_own_escalation_manager(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """Setup swaps in an `as-needed` manager to run usermod; the report must not.
-
-    The policy report describes what the user chose, so it reads the store
-    rather than the manager setup is currently running under.
-    """
-    activate_manager(monkeypatch, yes=True, privilege_mode='never')
-    _stub_host_probes(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.cli.host_permissions.user_in_libvirt_group', lambda: False
-    )
-    cfg_path = tmp_path / 'config.toml'
-    _store_with_vm(cfg_path, privilege_mode='never')
-
-    rc = HostPermissionsSetupCLI.main(
-        argv=False,
-        config=str(cfg_path),
-        base_dir=str(tmp_path / 'vmstore'),
-        yes=True,
-        yes_sudo=True,
-    )
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "behavior.privilege_mode = 'never'" in out
-    assert "= 'as-needed'" not in out
 
 
 def test_setup_dry_run_touches_nothing(
@@ -333,36 +279,6 @@ def _stub_check_probes(
         )
 
 
-def test_check_passes_never_mode_when_store_needs_no_sudo(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """The e2e shape: user-owned storage + firewall off + mode 'never' → 0.
-
-    Regression test: check used to grade the built-in /var/lib default
-    instead of the VM's actual base_dir, and read ``rec.cfg.firewall``
-    (always the default True) instead of the network record's persisted
-    value, so this exact store failed with rc 2.
-    """
-    cfg_path = tmp_path / 'config.toml'
-    vmstore = tmp_path / 'vmstore'
-    _check_store(
-        cfg_path,
-        privilege_mode='never',
-        base_dir=str(vmstore),
-        firewall_enabled=False,
-    )
-    _stub_check_probes(monkeypatch)
-
-    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
-
-    out = capsys.readouterr().out
-    assert rc == 0, out
-    assert '✅ Host permissions are ready for routine VM operation.' in out
-    assert str(vmstore) in out
-    assert '/var/lib/libvirt/aivm' not in out
-    assert 'firewall disabled; nothing needs root' in out
-
-
 def test_check_reports_friction_not_failure_under_as_needed(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
@@ -390,27 +306,6 @@ def test_check_reports_friction_not_failure_under_as_needed(
     assert 'sudo will be used for:' in out
     assert 'the nftables firewall' in out
     assert 'VM storage under /var/lib/libvirt/aivm' in out
-
-
-def test_check_fails_never_mode_when_sudo_would_be_needed(
-    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
-) -> None:
-    """The same friction is a hard failure once the user chose 'never'."""
-    cfg_path = tmp_path / 'config.toml'
-    _check_store(
-        cfg_path,
-        privilege_mode='never',
-        base_dir='/var/lib/libvirt/aivm',
-        firewall_enabled=True,
-    )
-    _stub_check_probes(monkeypatch, writable_dirs=set())
-
-    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
-
-    out = capsys.readouterr().out
-    assert rc == 2, out
-    assert '❌' in out
-    assert "privilege_mode = 'never' cannot be honored yet" in out
 
 
 def test_check_fails_every_mode_on_qemu_traversal_blockers(
@@ -443,7 +338,7 @@ def test_firewall_enabled_anywhere_reads_network_records(
     cfg_path = tmp_path / 'config.toml'
     _check_store(
         cfg_path,
-        privilege_mode='never',
+        privilege_mode='as-needed',
         base_dir=str(tmp_path / 'vmstore'),
         firewall_enabled=False,
     )
@@ -451,7 +346,7 @@ def test_firewall_enabled_anywhere_reads_network_records(
 
     _check_store(
         cfg_path,
-        privilege_mode='never',
+        privilege_mode='as-needed',
         base_dir=str(tmp_path / 'vmstore'),
         firewall_enabled=True,
     )
@@ -493,6 +388,10 @@ def _adopt_env(
         'aivm.cli.host_permissions.user_can_write_path',
         lambda p: str(p) != str(tree),
     )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.which',
+        lambda name: '/usr/bin/setfacl' if name == 'setfacl' else None,
+    )
     monkeypatch.setattr('aivm.vm.domain.time.sleep', lambda s: None)
 
     state = {'value': initial_state}
@@ -519,12 +418,7 @@ def _adopt_env(
 def test_adopt_cycles_running_vm_around_the_group_handoff(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
-    """A running VM is stopped, the tree group-owned, and the VM restarted.
-
-    The ordering matters: libvirt restores the disk ownership it recorded
-    at start, so the chgrp must land while the VM is off.  The privileged
-    script is the artifact: chgrp/chmod/setgid on exactly the adopted tree.
-    """
+    """A running VM is stopped, storage is adopted, and it is restarted."""
     activate_manager(monkeypatch, yes=True, yes_sudo=True)
     cfg_path, tree, rec = _adopt_env(
         monkeypatch, tmp_path, initial_state='running'
@@ -541,9 +435,10 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     assert cfg_path.read_bytes() == before
 
     script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
-    assert f'chgrp -R libvirt {tree}' in script
-    assert f'chmod -R g+rwX {tree}' in script
-    assert 'chmod g+s' in script
+    assert 'os.walk' in script
+    assert '/proc/self/mountinfo' in script
+    assert "followlinks=False" in script
+    assert str(tree) in script
     # The handoff runs escalated, between shutdown and restart.
     raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
     assert raw_bash[0] == 'sudo'
@@ -551,7 +446,7 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
     assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
     assert 'Stopping vm-a first' in out
-    assert 'restarts as soon as the handoff is done' in out
+    assert 'will be restarted even if' in out
 
 
 def test_adopt_leaves_stopped_vm_alone(

@@ -67,16 +67,12 @@ What it provides
 
 .. note::
 
-   Three opt-in end-to-end test modules live in ``tests/e2e/``:
-   ``test_nested.py`` (light smoke path), ``test_full.py``
-   (comprehensive cycle), and ``test_privilege_never.py`` (full lifecycle
-   with ``privilege_mode = "never"``, proving no sudo is invoked).
-   They carry the ``e2e`` marker and are deselected by default; to run them
-   locally set ``AIVM_E2E=1`` and invoke pytest manually.  All need a host
-   with KVM and (optionally) an Ubuntu cloud image cached under
-   ``~/.cache/aivm/e2e``; the first two also need passwordless ``sudo``,
-   while the ``privilege_never`` module instead needs ``libvirt`` group membership
-   and ``setfacl``.
+   Opt-in end-to-end tests live in ``tests/e2e/``. They carry the ``e2e``
+   marker and are deselected by default; to run them locally set
+   ``AIVM_E2E=1`` and invoke pytest manually. The VM lifecycle suites need a
+   host with KVM, passwordless ``sudo``, and optionally a cached Ubuntu image
+   under ``~/.cache/aivm/e2e``. Storage-adoption tests additionally require
+   ``setfacl`` and exercise real bind mounts under a scratch tree.
 
    An additional opt-in bootstrap-context e2e test is available in
    ``tests/e2e/test_bootstrap_context.py``. It creates a fresh outer VM and
@@ -139,24 +135,23 @@ network/firewall/libvirt/image checks.
 
 Privilege modes (``behavior.privilege_mode``):
 
-All three answer one question -- *when does aivm invoke sudo?*
+Both answer one question -- *when does aivm invoke sudo?*
 
-* ``never`` refuses rather than escalating. Operations with no unprivileged
-  implementation (nftables firewall, ``apt-get``, establishing a *new* host
-  bind mount) fail with actionable guidance. Force it per-invocation with
-  ``--never_sudo``.
 * ``as-needed`` (default) probes what already works without sudo --
   unprivileged ``qemu:///system`` access via the ``libvirt`` group,
   user-writable VM storage -- and uses sudo only where required.
 * ``always`` escalates every privileged-capable host operation through sudo
   (the classic behavior).
 
-An unrecognized value is an error, not a silent fallback.
+An unrecognized value is an error, not a silent fallback. A global
+no-sudo mode is not exposed because managed nftables and new host bind mounts
+still require root on the supported runtime.
 
 Run ``aivm host permissions check`` to inspect the permissions used by
-routine VM operations, and ``aivm host permissions setup`` to establish the host-side
-prerequisites (it uses sudo at most once, to add you to the ``libvirt``
-group). Setup never changes your config: establishing a capability and
+routine VM operations, and ``aivm host permissions setup`` to establish the
+host-side prerequisites. Normal setup may use sudo to add you to the
+``libvirt`` group; ``--adopt`` additionally runs one privileged metadata pass
+for each existing storage tree. Setup never changes your config: establishing a capability and
 choosing a policy are different acts, so ``privilege_mode`` and
 ``firewall.enabled`` stay yours to set. State-changing
 hypervisor commands keep their approval prompt even when they no longer need

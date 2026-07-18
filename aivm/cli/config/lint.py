@@ -6,10 +6,7 @@ import sys
 import tomllib
 from dataclasses import fields
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from _typeshed import DataclassInstance
+from typing import Any, cast
 
 from ...config import (
     FirewallConfig,
@@ -47,9 +44,9 @@ class ConfigLintCLI(_BaseCommand):
         return 2
 
 
-def _field_names(cls: type['DataclassInstance']) -> set[str]:
+def _field_names(cls: type[Any]) -> set[str]:
     """Small helper for dataclass-backed lint allow-lists."""
-    return {f.name for f in fields(cls)}
+    return {f.name for f in fields(cast(Any, cls))}
 
 
 def _lint_store_file(path: Path) -> list[str]:

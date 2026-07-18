@@ -4,8 +4,9 @@
 perform routine system-libvirt and VM-storage operations without sudo, while
 separately identifying features that inherently require escalation.
 ``aivm host permissions setup`` establishes the host-side prerequisites:
-libvirt group membership (its one privileged step) and a user-owned VM
-storage tree with libvirt-qemu traversal ACLs.
+libvirt group membership and a user-owned VM storage tree with libvirt-qemu
+traversal ACLs. ``--adopt`` additionally performs a privileged in-place
+metadata pass over each existing storage tree.
 
 Setup does not change privilege policy. ``behavior.privilege_mode`` and
 ``firewall.enabled`` stay yours to set. Once the host work is done, the
@@ -20,6 +21,7 @@ from __future__ import annotations
 import getpass
 import os
 import shlex
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ import kwconf
 from ..commands import CommandManager
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
+from ..errors import AIVMError
 from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
@@ -100,9 +103,49 @@ def _storage_dirs_to_grade(config_opt: str | None) -> list[tuple[Path, str]]:
     return [(d, ', '.join(users)) for d, users in dirs.items()]
 
 
-#: Adoption chgrp -R's a tree; refuse anything shallow enough to be a
-#: system directory rather than a dedicated storage tree.
-_ADOPT_MIN_DEPTH = 4
+#: Adoption changes metadata recursively. Reject broad system roots even when
+#: they happen to be configured as a storage directory.
+_PROTECTED_ADOPT_PATHS = {
+    Path('/'),
+    Path('/bin'),
+    Path('/boot'),
+    Path('/dev'),
+    Path('/etc'),
+    Path('/home'),
+    Path('/lib'),
+    Path('/lib64'),
+    Path('/mnt'),
+    Path('/opt'),
+    Path('/proc'),
+    Path('/root'),
+    Path('/run'),
+    Path('/sbin'),
+    Path('/srv'),
+    Path('/sys'),
+    Path('/tmp'),
+    Path('/usr'),
+    Path('/var'),
+    Path('/var/lib'),
+    Path('/var/lib/libvirt'),
+}
+
+
+def _adopt_safety_error(tree: Path) -> str | None:
+    """Return why ``tree`` is too broad for recursive metadata changes."""
+    try:
+        resolved = tree.resolve(strict=True)
+    except OSError as ex:
+        return f'cannot resolve the storage directory: {ex}'
+    if not resolved.is_dir():
+        return 'the configured storage path is not a directory'
+    protected = set(_PROTECTED_ADOPT_PATHS)
+    try:
+        protected.add(Path.home().resolve(strict=True))
+    except OSError:
+        pass
+    if resolved in protected:
+        return 'the path is a broad system or home directory, not dedicated VM storage'
+    return None
 
 
 def _vms_stored_under(config_opt: str | None, tree: Path) -> list[str]:
@@ -148,26 +191,99 @@ def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
 
 
 def _adopt_script(tree: Path) -> str:
-    """The one privileged command of adoption: group-own ``tree`` in place.
+    """Render the privileged in-place storage metadata handoff.
 
-    ``chgrp``/``chmod g+rwX`` make the tree manageable by libvirt-group
-    members; setgid dirs keep new entries in the group; the default ACLs
-    keep future files group-writable regardless of umask and preserve
-    libvirt-qemu traversal even if a directory later drops ``o+x``.
+    The walk never follows symlinks and prunes every descendant mount point
+    listed in ``/proc/self/mountinfo``. That second rule is essential: a bind
+    mount can live on the same filesystem, so ``find -xdev`` is not sufficient.
     """
-    q = shlex.quote(str(tree))
-    return (
-        'set -eu; '
-        f'chgrp -R {LIBVIRT_GROUP} {q}; '
-        f'chmod -R g+rwX {q}; '
-        f'find {q} -type d -exec chmod g+s {{}} +; '
-        'if command -v setfacl >/dev/null 2>&1; then '
-        f'find {q} -type d -exec setfacl '
-        f'-m u:{LIBVIRT_QEMU_USER}:x '
-        f'-m default:group:{LIBVIRT_GROUP}:rwX '
-        f'-m default:user:{LIBVIRT_QEMU_USER}:x {{}} +; '
-        'fi'
+    program = textwrap.dedent(
+        f"""\
+        import grp
+        import os
+        import stat
+        import subprocess
+        from pathlib import Path
+
+        tree = Path(os.path.realpath({str(tree)!r}))
+        libvirt_gid = grp.getgrnam({LIBVIRT_GROUP!r}).gr_gid
+
+        def decode_mount_field(text):
+            out = []
+            index = 0
+            while index < len(text):
+                if (
+                    text[index:index + 1] == '\\'
+                    and index + 3 < len(text)
+                    and text[index + 1:index + 4].isdigit()
+                ):
+                    out.append(chr(int(text[index + 1:index + 4], 8)))
+                    index += 4
+                else:
+                    out.append(text[index])
+                    index += 1
+            return ''.join(out)
+
+        mountpoints = set()
+        with open('/proc/self/mountinfo', encoding='utf-8') as file:
+            for line in file:
+                fields = line.split()
+                if len(fields) >= 5:
+                    mountpoint = Path(decode_mount_field(fields[4]))
+                    if mountpoint != tree and tree in mountpoint.parents:
+                        mountpoints.add(mountpoint)
+
+        directories = []
+        for root_text, dirnames, filenames in os.walk(
+            tree, topdown=True, followlinks=False
+        ):
+            root = Path(root_text)
+            kept = []
+            for name in dirnames:
+                path = root / name
+                if path.is_symlink() or path in mountpoints:
+                    continue
+                kept.append(name)
+            dirnames[:] = kept
+
+            directories.append(root)
+            paths = [root]
+            paths.extend(root / name for name in filenames)
+            for path in paths:
+                if path.is_symlink():
+                    continue
+                info = path.stat(follow_symlinks=False)
+                mode = stat.S_IMODE(info.st_mode)
+                mode |= stat.S_IRGRP | stat.S_IWGRP
+                if path.is_dir() or mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+                    mode |= stat.S_IXGRP
+                if path.is_dir():
+                    mode |= stat.S_ISGID
+                os.chown(path, -1, libvirt_gid, follow_symlinks=False)
+                os.chmod(path, mode, follow_symlinks=False)
+
+        if subprocess.run(
+            ['sh', '-c', 'command -v setfacl >/dev/null 2>&1']
+        ).returncode == 0:
+            for offset in range(0, len(directories), 128):
+                chunk = [str(path) for path in directories[offset:offset + 128]]
+                subprocess.run(
+                    [
+                        'setfacl',
+                        '-m',
+                        'u:{LIBVIRT_QEMU_USER}:x',
+                        '-m',
+                        'default:group:{LIBVIRT_GROUP}:rwX',
+                        '-m',
+                        'default:user:{LIBVIRT_QEMU_USER}:x',
+                        '--',
+                        *chunk,
+                    ],
+                    check=True,
+                )
+        """
     )
+    return f'python3 -c {shlex.quote(program)}'
 
 
 def _adopt_one_tree(
@@ -180,50 +296,76 @@ def _adopt_one_tree(
         if code == 0 and _is_vm_active(state):
             running.append(name)
     print(
-        f'Adopting {tree}: ownership becomes root:{LIBVIRT_GROUP} with '
-        f'group write, so {LIBVIRT_GROUP} members manage VM storage there '
-        'without sudo. VM disks and definitions are not touched.'
+        f'Adopting {tree} in place: group ownership and access metadata are '
+        f'updated recursively for {LIBVIRT_GROUP}. Disk bytes, VM definitions, '
+        'and storage paths are not changed.'
     )
     if running:
         print(
             f'Stopping {", ".join(running)} first: libvirt records disk '
-            'ownership when a VM starts and restores it at shutdown, so a '
-            'change made while running would be silently undone. The VM '
-            'restarts as soon as the handoff is done.'
+            'ownership when a VM starts and restores it at shutdown. Every VM '
+            'that reaches the shut-off state will be restarted even if the '
+            'metadata handoff fails.'
         )
     if args.dry_run:
         for name in running:
             print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
         print(
-            f'DRYRUN: chgrp -R {LIBVIRT_GROUP} {tree}; chmod -R g+rwX; '
-            'setgid dirs; grant group/qemu ACLs'
+            f'DRYRUN: recursively grant {LIBVIRT_GROUP} access under {tree}; '
+            'prune mounted subtrees and symlinks; set setgid/default ACLs'
         )
         return
-    for name in running:
-        print(f'Shutting down VM {name} ...')
-        shutdown_vm(_cfg_for_stored_vm(args.config, name))
-        _wait_for_vm_state(name, 'shut off', timeout_s=180, poll_interval_s=2)
-    with mgr.step(
-        'Hand VM storage to the libvirt group',
-        why=(
-            'Group-owning the existing tree in place removes the need for '
-            'sudo on VM image operations without moving or recreating '
-            'anything.'
-        ),
-        approval_scope=f'host-permissions-adopt:{tree}',
-    ):
-        mgr.submit(
-            ['bash', '-c', _adopt_script(tree)],
-            sudo=True,
-            role='modify',
-            check=True,
-            capture=True,
-            summary=f'Group-own {tree} for {LIBVIRT_GROUP}',
-            detail=f'tree={tree}',
+
+    stopped: list[str] = []
+    pending_error: BaseException | None = None
+    try:
+        for name in running:
+            print(f'Shutting down VM {name} ...')
+            shutdown_vm(_cfg_for_stored_vm(args.config, name))
+            _wait_for_vm_state(
+                name, 'shut off', timeout_s=180, poll_interval_s=2
+            )
+            stopped.append(name)
+        with mgr.step(
+            'Hand VM storage to the libvirt group',
+            why=(
+                'Changing access metadata on the existing tree removes sudo '
+                'from routine image operations without moving or recreating '
+                'the VM.'
+            ),
+            approval_scope=f'host-permissions-adopt:{tree}',
+        ):
+            mgr.submit(
+                ['bash', '-c', _adopt_script(tree)],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
+                detail=f'tree={tree}; descendant mounts and symlinks pruned',
+            )
+    except BaseException as ex:
+        pending_error = ex
+
+    restart_errors: list[str] = []
+    for name in stopped:
+        try:
+            print(f'Starting VM {name} again ...')
+            _start_vm(name)
+        except Exception as ex:
+            restart_errors.append(f'{name}: {ex}')
+
+    if pending_error is not None:
+        if restart_errors:
+            pending_error.add_note(
+                'Additionally failed to restart: ' + '; '.join(restart_errors)
+            )
+        raise pending_error.with_traceback(pending_error.__traceback__)
+    if restart_errors:
+        raise AIVMError(
+            'Storage adoption completed, but some VMs did not restart: '
+            + '; '.join(restart_errors)
         )
-    for name in running:
-        print(f'Starting VM {name} again ...')
-        _start_vm(name)
     print(f'✅ Adopted {tree}; file operations there no longer need sudo.')
 
 
@@ -240,13 +382,20 @@ def _run_storage_adoption(
         _print_policy_report(args.config, group_added=group_added)
         return 0
     for tree in trees:
-        if len(tree.resolve().parts) < _ADOPT_MIN_DEPTH:
+        safety_error = _adopt_safety_error(tree)
+        if safety_error is not None:
             print(
-                f'❌ Refusing to adopt {tree}: too close to the filesystem '
-                'root to chgrp -R safely. Point VM storage at a dedicated '
-                'directory first.'
+                f'❌ Refusing to adopt {tree}: {safety_error}. Point VM '
+                'storage at a dedicated directory first.'
             )
             return 2
+    if which('setfacl') is None:
+        print(
+            '❌ Storage adoption requires setfacl so existing and future '
+            f'files remain reachable by {LIBVIRT_QEMU_USER}. Install the acl '
+            'package before retrying.'
+        )
+        return 2
     for tree in trees:
         _adopt_one_tree(args, mgr, tree, _vms_stored_under(args.config, tree))
     print()
@@ -263,12 +412,7 @@ def _print_base_dir_toml(base_dir: Path) -> None:
 
 
 def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
-    """Return the persisted privilege mode, not the one this run is using.
-
-    Setup temporarily activates an ``as-needed`` manager so it can run
-    ``usermod`` even under ``privilege_mode='never'``, so the live manager is
-    not the answer to "what did the user choose?".
-    """
+    """Return the persisted privilege mode."""
     try:
         path = cfg_path(config_opt)
         if not path.exists():
@@ -282,27 +426,15 @@ def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
 def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
     """Report the privilege policy setup deliberately did not change."""
     mode = _configured_privilege_mode(config_opt)
-    if mode == PrivilegeMode.NEVER:
-        print("behavior.privilege_mode = 'never': aivm refuses rather than")
-        print('  escalates. It cannot manage the nftables firewall, and cannot')
-        print('  establish a *new* persistent/shared-root attachment, because')
-        print('  `mount --bind` has no unprivileged implementation.')
-        if _firewall_enabled_anywhere(config_opt):
-            print(
-                "⚠️ firewall.enabled is true, which privilege_mode = 'never' "
-                'cannot honor. Disable the firewall or choose a mode that may '
-                'escalate.'
-            )
-    elif mode == PrivilegeMode.ALWAYS:
+    if mode == PrivilegeMode.ALWAYS:
         print("behavior.privilege_mode = 'always': aivm escalates for every")
         print('  privileged-capable operation, so the host work above buys you')
         print("  nothing until you switch to 'as-needed'.")
     else:
         print(f"behavior.privilege_mode = '{mode}', unchanged and correct:")
         print('  once the libvirt group is active, aivm stops invoking sudo for')
-        print('  libvirt and image operations on its own. Sudo remains only for')
-        print('  the nftables firewall, apt-get, and establishing a new host')
-        print('  bind mount.')
+        print('  libvirt and image operations on its own. Sudo remains for')
+        print('  managed nftables, apt-get, and establishing a new host bind mount.')
     if group_added:
         print(
             f'👉 Group membership added. Log out and back in (or run `newgrp '
@@ -336,30 +468,26 @@ def _firewall_enabled_anywhere(config_opt: str | None) -> bool:
 class HostPermissionsCheckCLI(_BaseCommand):
     """Report where aivm still needs sudo on this host.
 
-    Verdicts follow the configured ``behavior.privilege_mode``.  Under
-    ``'never'`` any item that would force an escalation is a failure (the
-    chosen policy cannot be honored).  Under ``'as-needed'`` (the default)
-    those same items are friction, not failure: they are reported as ⚠️
-    with a summary of what sudo will be used for, and the exit code stays 0
-    unless something breaks VM operation in *every* mode.
+    Under ``'as-needed'`` (the default), operations that still need sudo are
+    reported as friction rather than failure. The exit code is nonzero only
+    when something breaks VM operation regardless of privilege policy.
     """
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mode = _configured_privilege_mode(args.config)
-        strict = mode == PrivilegeMode.NEVER
         lines: list[str] = ['🔐 Host permission readiness']
         broken: list[str] = []  # breaks VMs regardless of privilege mode
-        sudo_needs: list[str] = []  # costs sudo; a failure only under 'never'
+        sudo_needs: list[str] = []
 
         def friction_line(
             ok: bool, label: str, detail: str, need: str
         ) -> str:
-            """A sudo-costing item: ❌ under 'never', ⚠️ otherwise."""
+            """Render an operation that still costs sudo as a warning."""
             if not ok:
                 sudo_needs.append(need)
-            return status_line(ok, label, detail, warn_only=not strict)
+            return status_line(ok, label, detail, warn_only=True)
 
         in_group = user_in_libvirt_group()
         lines.append(
@@ -431,7 +559,7 @@ class HostPermissionsCheckCLI(_BaseCommand):
             else:
                 if blockers:
                     # qemu cannot read images it cannot reach; that breaks VM
-                    # start in every privilege mode, not just 'never'.
+                    # start regardless of privilege policy.
                     broken.append(f'qemu traversal to {base_dir}')
                     any_blockers = True
                 lines.append(
@@ -487,11 +615,7 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 friction_line(
                     False,
                     'firewall compatibility',
-                    'firewall.enabled requires root nftables access, which '
-                    'has no unprivileged equivalent; disable it to run fully '
-                    'without sudo'
-                    if strict
-                    else 'applying nftables rules uses sudo; disable '
+                    'applying nftables rules uses sudo; disable '
                     'firewall.enabled to avoid it',
                     'the nftables firewall',
                 )
@@ -514,24 +638,12 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 + '. Run `aivm host permissions setup`.'
             )
             return 2
-        if strict:
-            if needs:
-                print(
-                    "❌ privilege_mode = 'never' cannot be honored yet; "
-                    'run `aivm host permissions setup`.'
-                )
-                return 2
-            print('✅ Host permissions are ready for routine VM operation.')
-            return 0
         if needs:
             print(
                 f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
                 'used for: ' + '; '.join(needs) + '.'
             )
-            print(
-                '   `aivm host permissions setup` trims that list; '
-                "privilege_mode = 'never' forbids escalation outright."
-            )
+            print('   `aivm host permissions setup` trims that list.')
             return 0
         print('✅ Host permissions are ready for routine VM operation.')
         return 0
@@ -540,9 +652,9 @@ class HostPermissionsCheckCLI(_BaseCommand):
 class HostPermissionsSetupCLI(_BaseCommand):
     """Prepare host permissions for routine aivm operation.
 
-    Uses sudo at most once (libvirt group membership); everything else
-    runs without escalation: creating a user-owned VM storage directory and
-    granting libvirt-qemu traversal via POSIX ACLs. Your config is not modified
+    Normal setup may use sudo for libvirt group membership. Adoption also
+    uses one privileged in-place metadata pass over each existing storage tree.
+    Your config is not modified
     unless you pass ``--persist``, and even then only
     ``defaults.paths.base_dir`` is written.
     """
@@ -565,11 +677,11 @@ class HostPermissionsSetupCLI(_BaseCommand):
     adopt: bool = kwconf.Flag(
         False,
         help=(
-            'Instead of preparing a new user-owned directory, hand the '
-            'existing root-owned VM storage to the libvirt group in place. '
-            'VM disks and definitions are untouched and no config change '
-            'is needed; running VMs stored there are briefly stopped and '
-            'restarted.'
+            'Instead of preparing a new user-owned directory, grant the '
+            'libvirt group access to existing VM storage in place. File '
+            'ownership, modes, and ACLs change recursively, but disk bytes, '
+            'VM definitions, and storage paths do not. Descendant mounts and '
+            'symlinks are pruned. Running VMs are briefly stopped and restarted.'
         ),
     )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
@@ -578,21 +690,6 @@ class HostPermissionsSetupCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
-        if mgr.privilege_mode == PrivilegeMode.NEVER:
-            # Setup is the transition tool: it may need one privileged
-            # command (usermod), so it runs with escalation enabled even when
-            # the config forbids sudo.
-            print(
-                'ℹ️ Host permission setup may use sudo once (libvirt group '
-                'membership); everything else runs without escalation.'
-            )
-            mgr = CommandManager(
-                yes=bool(args.yes),
-                yes_sudo=bool(args.yes_sudo),
-                auto_approve_readonly_sudo=mgr.auto_approve_readonly_sudo,
-                privilege_mode=str(PrivilegeMode.AS_NEEDED),
-            )
-            CommandManager.activate(mgr)
 
         group_added = False
         if not user_in_libvirt_group():
@@ -614,8 +711,8 @@ class HostPermissionsSetupCLI(_BaseCommand):
                     with mgr.step(
                         'Add user to libvirt group',
                         why=(
-                            'This is the one privileged step of host permission '
-                            'setup; everything else runs without escalation.'
+                            'This privileged step grants direct access to the '
+                            'system libvirt daemon for future commands.'
                         ),
                         approval_scope='host-permissions-setup-group',
                     ):

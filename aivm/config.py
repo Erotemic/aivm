@@ -195,12 +195,11 @@ class BehaviorConfig:
     auto_approve_readonly_sudo: bool = True
     verbose: int = 1
     # When aivm invokes sudo for privileged host operations:
-    #   'never'     - refuse rather than escalate; operations with no
-    #                 unprivileged implementation (nftables, apt-get, a new
-    #                 `mount --bind`) fail with guidance.
     #   'as-needed' - probe what works without sudo (libvirt group membership,
     #                 user-writable image trees) and escalate only when needed.
     #   'always'    - use sudo for every privileged-capable operation.
+    # A global no-sudo mode is intentionally not exposed: managed nftables and
+    # new host bind mounts still require root on the supported runtime.
     # See `aivm host permissions check` for what this host still needs.
     privilege_mode: str = 'as-needed'
 
@@ -235,7 +234,8 @@ class VirtiofsConfig:
     # ``aivm vm fdguard`` offers direct manual control.
     fd_guard: bool = True
     fd_guard_threshold: int = 500_000
-    fd_guard_interval_sec: int = 60
+    fd_guard_emergency_threshold: int = 750_000
+    fd_guard_interval_sec: int = 600
 
 
 @dataclass

@@ -58,31 +58,26 @@ If you prefer ``aivm`` to never invoke ``sudo``:
 .. code-block:: bash
 
    aivm host permissions check    # report what is missing
-   aivm host permissions setup    # establish it (sudo used at most once)
+   aivm host permissions setup    # establish routine host access
 
-Setup adds you to the ``libvirt`` group (the one privileged step) and prepares
+Normal setup may use sudo to add you to the ``libvirt`` group, then prepares
 a user-owned VM storage directory with ``setfacl`` traversal grants for
 ``libvirt-qemu``. It changes nothing in your config -- it prints the one line
 (``defaults.paths.base_dir``) that the storage grant depends on, or writes it
 for you with ``--persist``. Log out and back in (or ``newgrp libvirt``) after
 the group change, then re-run the check.
 
-That host work is all the default ``as-needed`` mode needs: it then stops invoking
-sudo for whatever already works without it. Setting
-``behavior.privilege_mode = "never"`` on top is a separate, stricter
-choice -- aivm will then refuse rather than escalate, which means no nftables
-firewall and no *new* ``persistent``/``shared-root`` attachments, since
-``mount --bind`` requires root.
+That host work is all the default ``as-needed`` mode needs: it then stops
+invoking sudo for whatever already works without it. Root is still required for
+managed nftables and for establishing new host bind mounts, so a global
+no-sudo mode is intentionally not exposed.
 
 Notes
 -----
 
 * ``status --sudo`` enables privileged checks (libvirt/network/firewall/image).
-  Under ``privilege_mode = "never"``, ``--sudo`` is ignored with a notice.
 * ``behavior.privilege_mode`` controls escalation: ``as-needed`` (default,
-  sudo only where needed), ``always`` (classic), ``never`` (refuse rather
-  than escalate; see above). ``--never_sudo`` forces ``never`` for one
-  invocation.
+  sudo only where needed) or ``always`` (classic).
 * ``status --detail`` includes raw diagnostics (virsh/nft/ssh probe outputs).
 * Privileged operations prompt unless ``--yes`` or ``--yes-sudo`` is used.
 * Approvals normally happen once per grouped step, not once per command.

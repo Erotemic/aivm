@@ -1,105 +1,39 @@
 Privilege modes
 ===============
 
-``aivm`` runs its VMs on the root system libvirt daemon
-(``qemu:///system``). What varies is *how host commands acquire the
-privileges they need*, controlled by ``behavior.privilege_mode``.
+``aivm`` runs VMs on the root system libvirt daemon
+(``qemu:///system``). ``behavior.privilege_mode`` controls when host commands
+use sudo.
 
-The modes
----------
-
-All three answer the same question --- *when does aivm invoke sudo?* ---
-so they read as an ordered scale rather than three unrelated words:
-
-* ``never``: refuse rather than escalate. Operations that genuinely
-  require root fail with guidance.
-* ``as-needed`` (default): probe what already works without sudo and
-  escalate only where required.
-* ``always``: escalate for every privileged-capable operation (the
-  classic behavior).
-
-An unrecognized value is an error, not a fallback. Every fallback would
-have to guess, and guessing wrong on a privilege setting means either
-escalating when you forbade it or refusing work you expected to succeed.
-
-The mode is enforced at a single chokepoint ---
-``CommandManager._reject_sudo_if_forbidden`` sees every subprocess --- so
-enforcement keys on the command actually being run, never on the feature
-requesting it. A feature that *can* need root (a ``persistent``
-attachment needs ``mount --bind`` only when the bind is missing) is not
-refused up front; the command that needs root is.
-
-The two postures
-----------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 26 37 37
-
-   * -
-     - Classic (admin-assuming)
-     - Never invoke sudo
-   * - Configuration
-     - ``privilege_mode = "as-needed"`` or ``"always"`` (default --
-       nothing to set)
-     - ``privilege_mode = "never"``
-   * - Host privilege needed
-     - sudo (prompted per grouped step)
-     - ``libvirt`` group membership -- **effectively root-equivalent**,
-       but ``aivm`` itself never runs sudo
-   * - VM storage
-     - ``/var/lib/libvirt/aivm`` (root-owned)
-     - user-owned tree + ``setfacl`` traversal for ``libvirt-qemu``
-   * - nftables firewall
-     - available
-     - unavailable (``nft`` requires root, with no unprivileged
-       equivalent)
-   * - Attachment modes
-     - all (``persistent`` default)
-     - all, except that establishing a *new* bind mount
-       (``persistent`` / ``shared-root``) needs one ``mount --bind``.
-       ``shared`` needs no bind mount at all.
-   * - Setup
-     - none
-     - ``aivm host permissions setup``
-   * - Preflight report
-     - ``aivm host doctor``
-     - ``aivm host permissions check``
-   * - E2E proof suite
-     - ``tests/e2e/test_nested.py`` / ``tests/e2e/test_full.py``
-     - ``tests/e2e/test_privilege_never.py``
-
-Choosing a mode
+Supported modes
 ---------------
 
-* **Classic** (``as-needed``) is the default and the right answer for
-  almost everyone. After ``aivm host permissions setup`` has put you in the
-  ``libvirt`` group and pointed VM storage at a user-owned tree,
-  ``as-needed`` stops invoking sudo on its own: not for libvirt or image
-  operations, and not for creating the bind-mount export directories under
-  ``paths.base_dir``. The decision is made per command against the specific
-  path it touches, so a host that never ran setup behaves exactly as before.
-  A host with existing VMs created under root-owned storage does not need
-  to move or recreate them: ``aivm host permissions setup --adopt`` hands the
-  existing tree to the ``libvirt`` group in place (``root:libvirt`` with
-  group write), briefly stopping any running VM stored there -- libvirt
-  records disk ownership at start and restores it at shutdown, so the
-  change must land while the VM is off. Disks, domain definitions, and
-  config are untouched.
-  Sudo remains only for operations with no unprivileged form: the nftables
-  firewall, ``apt-get``, ``mount --bind``, and ``umount``. Reconciling an
-  already-established attachment -- the ``aivm code .`` hot path -- issues no
-  privileged command at all.
-* **Never invoke sudo** (``never``) is a hard guarantee rather than a preference:
-  aivm raises instead of escalating. It suits CI and audit contexts. Note
-  that it cannot establish a new ``persistent`` or ``shared-root`` attachment,
-  because ``mount --bind`` has no unprivileged implementation, and it
-  cannot manage the firewall.
+* ``as-needed`` (default): probe what already works without sudo and escalate
+  only where required.
+* ``always``: escalate for every privileged-capable operation.
 
-Understand the trade in either case: ``libvirt`` group membership grants
-control of the root daemon, which is root-equivalent on the host.
-``never`` is a *no-sudo-invocation* guarantee, not a reduced-privilege
-one. See :doc:`security` for the full analysis.
+Unknown values are errors. In particular, the former experimental ``never``
+value is not supported or advertised. The current runtime still needs root for
+managed nftables and for establishing new host bind mounts. Pretending those
+operations have an unprivileged implementation would either weaken isolation or
+make ordinary workflows fail unpredictably.
 
-A per-user ``qemu:///session`` runtime was prototyped and removed before
-release; see ``docs/planning/deferred/session-runtime.md``.
+Reducing sudo use
+-----------------
+
+``aivm host permissions check`` reports where the host still needs escalation.
+``aivm host permissions setup`` can add the invoking user to the ``libvirt``
+group and prepare user-manageable storage. After that work, ``as-needed``
+usually avoids sudo for libvirt and image operations while retaining it for
+operations that really require root.
+
+Existing VMs do not need to be recreated. ``aivm host permissions setup
+--adopt`` stops running VMs, changes access metadata on their existing storage
+in place, and restarts them. It does not move storage, rewrite disk bytes, or
+replace domain definitions. The recursive pass prunes descendant mounts and
+symlinks so attachment bind mounts cannot carry the metadata change into the
+user's source tree.
+
+``libvirt`` group membership grants control of the root daemon and is therefore
+effectively root-equivalent. Reducing sudo prompts is not the same as reducing
+the account's host authority. See :doc:`security` for the full analysis.

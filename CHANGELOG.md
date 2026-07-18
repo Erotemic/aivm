@@ -28,17 +28,15 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   updated), and plans an uninstall when the knob is disabled. Probe failures
   (VM down, SSH unreachable) become diagnostics notes rather than errors, and
   guard reconciliation never requires a restart.
-* Privilege-aware operation. A new `behavior.privilege_mode` config knob controls
-  when aivm invokes sudo: `never` | `as-needed` | `always`, default
-  `as-needed`. `as-needed` probes what already works without sudo (libvirt
+* Privilege-aware operation. A new `behavior.privilege_mode` config knob
+  controls when aivm invokes sudo: `as-needed` or `always`, defaulting to
+  `as-needed`. The default probes what already works without sudo (libvirt
   group membership for `qemu:///system`, user-writable image trees) and
-  escalates only where required; `always` escalates every
-  privileged-capable operation; `never` is a hard guarantee enforced inside
-  `CommandManager`, where operations with no unprivileged implementation
-  (nftables firewall, `apt-get`, establishing a *new* host bind mount) fail
-  with actionable guidance. An unrecognized value is an error rather than a
-  silent fallback to the permissive mode. A per-invocation `--never_sudo`
-  flag forces `never`.
+  escalates only where required; `always` escalates every privileged-capable
+  operation. Unknown values, including the experimental `never` value, are
+  rejected rather than silently changing the privilege policy. A global
+  no-sudo guarantee is not advertised because managed nftables and new host
+  bind mounts still require root on the supported runtime.
 
   Enforcement keys on the command actually being run, never on the feature
   requesting it: a `persistent` attachment needs `mount --bind` only when
@@ -79,7 +77,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   independently, so `set -eu` never applied and a failed drop_caches write
   (e.g. missing guest passwordless sudo) still exited 0 and was reported as
   success.
-* Attaching directories now uses consistent guest locations between different attach modes 
+* Attaching directories now uses consistent guest locations between different attach modes
 * Read-only access is now documented and wired through the new persistent attachment replay path.
 * Tightened local annotations in firewall, VM update rendering, and persistent attachment transport helpers so the package is clean for the reported mypy diagnostics.
 * Tightened dynamic test helper annotations so `ty check tests` can type-check replay namespaces, fake subprocess hooks, and legacy boolean tool-spec cases.

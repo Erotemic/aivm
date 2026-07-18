@@ -178,7 +178,7 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert rec.ran('mount', '--bind')
     assert not rec.ran('umount')
@@ -198,7 +198,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" ROOT="" FSTYPE="" OPTIONS="rw"'
+                0, f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"'
             ),
         },
     )
@@ -211,7 +211,7 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -230,7 +230,7 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
         {
             'findmnt -P -n': FakeProc(
                 0,
-                f'SOURCE="/dev/vda1[{source_dir}]" ROOT="" FSTYPE="" OPTIONS="rw"',
+                f'SOURCE="/dev/vda1[{source_dir}]" FSROOT="" FSTYPE="" OPTIONS="rw"',
             ),
         },
     )
@@ -243,7 +243,7 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -265,7 +265,7 @@ def test_shared_root_host_bind_lazy_unmounts_busy_target(
         {
             'mkdir -p': FakeProc(0),
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
+                0, 'SOURCE="/other/source" FSROOT="" FSTYPE=""'
             ),
             'bash -c': FakeProc(0),
         },
@@ -298,7 +298,7 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/other/source" ROOT="" FSTYPE=""'
+                0, 'SOURCE="/other/source" FSROOT="" FSTYPE=""'
             ),
         },
     )
@@ -313,7 +313,7 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,ROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -331,7 +331,7 @@ def test_shared_root_host_bind_tolerates_not_mounted_during_repair(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, 'SOURCE="/dev/nvme0n1p1" ROOT="" FSTYPE=""'
+                0, 'SOURCE="/dev/nvme0n1p1" FSROOT="" FSTYPE=""'
             ),
             'mkdir -p': FakeProc(0),
             'bash -c': FakeProc(0),
@@ -654,7 +654,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,ROOT,FSTYPE,OPTIONS --mountpoint '
+            '     command (read-only): sudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )

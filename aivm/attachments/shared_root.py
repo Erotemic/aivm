@@ -173,7 +173,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '-P',
                     '-n',
                     '-o',
-                    'SOURCE,ROOT,FSTYPE,OPTIONS',
+                    'SOURCE,FSROOT,FSTYPE,OPTIONS',
                     '--mountpoint',
                     str(target),
                 ],
@@ -187,7 +187,7 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
     values = _parse_findmnt_pairs(res.stdout or '')
     return FindmntTargetInfo(
         source=values.get('SOURCE', ''),
-        root=values.get('ROOT', ''),
+        root=values.get('FSROOT', ''),
         fstype=values.get('FSTYPE', ''),
         options=values.get('OPTIONS', ''),
         code=res.code,

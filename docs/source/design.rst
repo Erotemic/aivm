@@ -172,14 +172,11 @@ Operational command execution
 * Privilege acquisition is a policy, not a property of call sites:
   ``behavior.privilege_mode`` selects ``as-needed`` (probe unprivileged
   capability -- libvirt group access, user-writable storage trees -- and
-  escalate only where required), ``always`` (escalate every
-  privileged-capable operation), or ``never`` (refuse rather than
-  escalate). ``aivm.privilege`` owns the capability probes and
-  per-family decisions (``virsh_needs_sudo``, ``path_needs_sudo``); the
-  ``CommandManager`` enforces the never-sudo guarantee structurally by
-  rejecting any sudo command before execution or approval side effects, so a
-  call site that forgets to consult the policy fails loudly instead of
-  escalating.
+  escalate only where required) or ``always`` (escalate every
+  privileged-capable operation). ``aivm.privilege`` owns the capability
+  probes and per-family decisions (``virsh_needs_sudo``,
+  ``path_needs_sudo``). A global no-sudo mode is not exposed while managed
+  nftables and new host bind mounts still require root.
 * Because all ``virsh``/``virt-install`` commands can now run unprivileged,
   they pin ``-c qemu:///system`` explicitly (bare unprivileged ``virsh``
   would silently target ``qemu:///session``), and state-changing hypervisor
