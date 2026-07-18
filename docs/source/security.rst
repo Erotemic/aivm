@@ -1,5 +1,5 @@
 Security Model (Malicious-Guest Focus)
-=====================================
+=======================================
 
 Purpose and scope
 -----------------
@@ -54,7 +54,7 @@ Important nuance:
 References:
 
 * QEMU’s statement on attack surface (emulated devices, monitor): `QEMU Security`_
-* KVM escape case study (example of kernel-level breakout): `Project Zero: EPYC escape (CVE-2021-29657)`_
+* KVM escape case study (example of kernel-level breakout): `Project Zero EPYC escape (CVE-2021-29657)`_
 
 
 Trust boundaries and data classification
@@ -64,6 +64,11 @@ Host boundary (trusted):
 
 * Host user account and local filesystem.
 * Host ``sudo`` privileges when explicitly approved by the operator.
+* ``libvirt`` group membership, when the operator prepares direct
+  system-libvirt access. This is effectively root-equivalent: controlling the system
+  libvirt daemon lets a principal run arbitrary configuration as root.
+  The ``never`` policy is therefore a *no-sudo-invocation* guarantee (``aivm``
+  never executes ``sudo``), not a reduced-privilege guarantee.
 
 Guest boundary (untrusted):
 
@@ -187,8 +192,8 @@ boundaries (including VM boundaries), depending on CPU model and mitigation stat
 
 References:
 
-* Linux kernel documentation for L1TF/L1 Terminal Fault: `Linux kernel doc: L1TF (CVE-2018-3646 class)`_
-* Ubuntu vulnerability note for L1TF (virtualization impact): `Ubuntu: L1TF vulnerability page`_
+* Linux kernel documentation for L1TF/L1 Terminal Fault: `Linux kernel doc on L1TF (CVE-2018-3646 class)`_
+* Ubuntu vulnerability note for L1TF (virtualization impact): `Ubuntu L1TF vulnerability page`_
 
 5) Denial of Service (DoS) against the host
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -206,25 +211,33 @@ References:
 6) Long-lived virtiofs file-descriptor retention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Current ``aivm`` attachment modes that use ``shared-root`` or ``persistent``
-rely on a long-lived virtiofs export containing host-side bind-mounted
-subtrees. In real use this has produced intermittent ``Too many open files`` /
-``OSError: [Errno 24]`` failures during ordinary filesystem traversal.
+Host-side ``virtiofsd`` keeps one open ``O_PATH`` descriptor per inode the
+guest caches, and the guest holds those caches indefinitely on large-RAM
+VMs, so long-lived exports historically saturated the daemon's fd limit
+(typically 1,048,576) and surfaced in the guest as intermittent
+``Too many open files`` / ``OSError: [Errno 24]`` during ordinary
+traversal. The dominant trigger was the guest's stock nightly
+``updatedb`` sweep, which walks virtiofs mounts because Ubuntu's default
+``PRUNEFS`` does not include ``virtiofs``.
 
-The working interpretation is that host-side ``virtiofsd`` workers can retain a
-large number of path-backed file descriptors across exported token trees. This
-is currently treated as a reliability and availability risk rather than a
-solved security boundary issue. Restarting the VM usually clears the bad
-runtime state; ``persistent`` mode reduces mount churn but does not remove the
-underlying virtiofs/submount design.
+This is a reliability and availability risk rather than a security
+boundary issue. It is now mitigated automatically by the guest-side
+virtiofs guard (updatedb pruning plus a watermark-triggered cache flush);
+see :doc:`virtiofs` for the mechanism, tuning, and incident runbook.
 
 Operator guidance:
 
+* keep the guard enabled (``virtiofs.fd_guard``, default on); retrofit
+  older VMs with ``aivm vm fdguard --action install``
 * keep shared folders narrow and explicit
 * avoid leaving stale attachments exposed
 * prefer Git-mode handoff when live writable sharing is unnecessary
-* restart long-lived VMs when traversal begins failing with ``Too many open files``
+* if traversal still fails with ``Too many open files``, follow the
+  incident runbook in :doc:`virtiofs`; a VM restart remains the
+  last-resort reset
 
+
+.. _Historical examples:
 
 Historical examples (selected)
 ------------------------------
@@ -243,7 +256,7 @@ Examples relevant to KVM/QEMU/libvirt-style deployments:
   configurations. (`Red Hat vhost-net CVE-2019-14835`_)
 
 * **KVM breakout not relying on QEMU userspace (CVE-2021-29657)**: a KVM/AMD
-  vulnerability writeup and exploitation discussion. (`Project Zero: EPYC escape (CVE-2021-29657)`_,
+  vulnerability writeup and exploitation discussion. (`Project Zero EPYC escape (CVE-2021-29657)`_,
   `CVE-2021-29657 (NVD)`_)
 
 * **QEMU virtio-net use-after-free (CVE-2021-3748)**: a virtio device bug that
@@ -258,7 +271,7 @@ Examples relevant to KVM/QEMU/libvirt-style deployments:
 * **virglrenderer / 3D acceleration guest→host escape (CVE-2019-18389)**:
   highlights why enabling graphics/3D acceleration increases surface area.
   (``aivm`` defaults should avoid graphics/3D for untrusted guests.)
-  (`Ubuntu: CVE-2019-18389`_)
+  (`Ubuntu advisory for CVE-2019-18389`_)
 
 These are *examples*, not an exhaustive list.
 
@@ -274,6 +287,22 @@ The current ``aivm`` security posture is intentionally pragmatic:
   explicit trust extension.
 * Firewall isolation is available to reduce guest access to host-local/private
   networks, but it must be enabled and successfully applied.
+* A global no-sudo mode is intentionally not supported. ``nft`` requires
+  ``CAP_NET_ADMIN`` and new bind mounts require root; silently skipping either
+  would weaken the configured isolation or attachment contract. The default
+  ``as-needed`` policy instead avoids sudo where host permissions permit and
+  escalates for the operations that still require it.
+* The explicit-consent contract survives operation without sudo: state-changing
+  hypervisor commands (``virsh``/``virt-install``) prompt for approval even
+  when group membership means they no longer need sudo. Destructive
+  operations never become promptless because escalation stopped being
+  necessary.
+* QEMU runs as the dedicated ``libvirt-qemu`` user, not as the invoking
+  user, so a hypervisor escape lands in an account that cannot read the
+  host user's home directory, SSH keys, or source trees. This is a
+  deliberate reason to prefer the root system daemon over a per-user
+  ``qemu:///session`` daemon, which would run QEMU under the invoking
+  user's own UID.
 * Long-lived virtiofs-backed shares have a known file-descriptor growth/retention
   failure mode that has been mitigated through persistent replay and better
   cleanup paths, but not solved.
@@ -297,15 +326,12 @@ Near-term improvements (low UX impact):
 * Add explicit fail-closed checks for workflows that assume firewall isolation
   (for example, abort/warn before ``code``/``ssh`` when expected rules are
   missing).
-* Add strong warnings and optional confirmation gates for high-risk shared
-  paths (home directory roots, SSH/config/credential directories).
 * Improve runtime visibility when writable host shares are active.
 * Tighten SSH probing defaults to avoid insecure host-key modes in routine
   checks.
 
 Medium-term improvements (some UX tradeoff):
 
-* Add optional per-attachment read-only share mode.
 * Add optional egress policy modes (for example, allowlist-oriented networking
   for high-risk sessions while keeping standard mode for normal development).
 * Add profile-style presets in config (for example ``balanced`` vs
@@ -370,9 +396,6 @@ Current state:
 
 Potential direction:
 
-* Add first-class share policy controls (read-only mode where feasible,
-  stronger path-risk warnings, and clearer runtime indicators of trust
-  extension).
 * Explore exposing virtiofs-related hardening knobs when reliably portable
   across supported host stacks (sandbox/idmap controls).
 
@@ -434,10 +457,25 @@ What ``aivm`` does not do:
 * Copy private key material into the VM.
 * Intentionally persist private key contents in the config store.
 
+Default password login (important):
+
+* The default config also enables SSH *password* authentication for the guest
+  user with a well-known default password (``vm.allow_password_login = true``,
+  ``vm.password = "agent"``). This is a deliberate convenience for local
+  console/SSH recovery, but it means any principal that can reach the VM's
+  address on the libvirt NAT network can log in with ``agent``/``agent``.
+* On a single-user host with the default NAT network this is reachable only
+  from the host itself and from the guest. Change the password or set
+  ``allow_password_login = false`` (key-only) before exposing the VM network
+  more widely; password changes are baked into cloud-init at create time, so
+  this is best decided before VM creation.
+
 Operator guidance:
 
 * Do not use SSH agent forwarding into the VM.
 * Keep per-VM ``known_hosts`` files; avoid disabling host key checking.
+* Prefer key-only login (``allow_password_login = false``) when the default
+  password convenience is not needed.
 
 (See also QEMU security notes about “sensitive configuration” patterns when
 management channels are overly powerful.)
@@ -518,14 +556,14 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 
 .. _Red Hat vhost-net CVE-2019-14835: https://access.redhat.com/security/vulnerabilities/kernel-vhost
 
-.. _Project Zero: EPYC escape (CVE-2021-29657): https://projectzero.google/2021/06/an-epyc-escape-case-study-of-kvm.html
+.. _Project Zero EPYC escape (CVE-2021-29657): https://projectzero.google/2021/06/an-epyc-escape-case-study-of-kvm.html
 .. _CVE-2021-29657 (NVD): https://nvd.nist.gov/vuln/detail/CVE-2021-29657
 
 .. _CVE-2021-3748 (NVD): https://nvd.nist.gov/vuln/detail/CVE-2021-3748
 
 .. _CVE-2020-35517 record: https://www.cve.org/CVERecord?id=CVE-2020-35517
 
-.. _Linux kernel doc: L1TF (CVE-2018-3646 class): https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html
-.. _Ubuntu: L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
+.. _Linux kernel doc on L1TF (CVE-2018-3646 class): https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html
+.. _Ubuntu L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
 
-.. _Ubuntu: CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389
+.. _Ubuntu advisory for CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389

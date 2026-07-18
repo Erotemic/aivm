@@ -26,6 +26,9 @@ Guidance for contributors (human or AI agents) working in this repository.
 
 ## Development Notes
 - Keep changes focused and incremental.
+- Treat the latest released CLI and on-disk config format as the
+  backwards-compatibility surface. Unreleased feature-branch internals do
+  not need compatibility shims.
 - Preserve non-interactive usability (`--yes`, `--dry_run`).
 - Keep docs updated when CLI behavior or command tree changes.
 - Write code first for correctness/clarity, then do a short second pass to add

@@ -9,6 +9,7 @@ from __future__ import annotations
 import textwrap
 
 PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME = 'persistent-attachments.json'
+PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR = '/var/lib/aivm/persistent-host'
 PERSISTENT_ATTACHMENT_GUEST_STATE_DIR = '/var/lib/aivm'
 PERSISTENT_ATTACHMENT_GUEST_STATE_PATH = (
     f'{PERSISTENT_ATTACHMENT_GUEST_STATE_DIR}/attachments.json'
@@ -357,6 +358,7 @@ def persistent_replay_service_unit() -> str:
         [Unit]
         Description=aivm persistent attachment replay
         After=local-fs.target
+        ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}
 
         [Service]
         Type=oneshot
@@ -368,16 +370,20 @@ def persistent_replay_service_unit() -> str:
     )
 
 
-
 def persistent_host_replay_python() -> str:
     return textwrap.dedent(
-        f"""        #!/usr/bin/env python3
+        """\
+        #!/usr/bin/env python3
         import argparse
         import json
         import os
+        import re
+        import stat
         import subprocess
         import sys
         from pathlib import Path
+
+        TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
         def run(cmd, check=True, capture=False):
             return subprocess.run(
@@ -388,8 +394,62 @@ def persistent_host_replay_python() -> str:
                 stderr=subprocess.PIPE if capture else None,
             )
 
+        def validate_manifest_file(path):
+            manifest = Path(path)
+            st = os.stat(manifest, follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode):
+                raise RuntimeError(f"host replay manifest is not a regular file: {manifest}")
+            if st.st_uid != 0:
+                raise RuntimeError(f"host replay manifest is not root-owned: {manifest}")
+            if st.st_mode & 0o022:
+                raise RuntimeError(f"host replay manifest is group/other writable: {manifest}")
+            return manifest
+
+        def validate_token(raw):
+            token = str(raw or "").strip()
+            if not TOKEN_RE.fullmatch(token) or token in {".", ".."}:
+                raise RuntimeError(f"invalid persistent host bind token: {token!r}")
+            return token
+
+        def canonical_directory(raw, *, label):
+            path = Path(str(raw or "").strip())
+            if not path.is_absolute():
+                raise RuntimeError(f"{label} must be absolute: {path}")
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError as ex:
+                raise RuntimeError(f"{label} does not exist: {path}") from ex
+            if not resolved.is_dir():
+                raise RuntimeError(f"{label} is not a directory: {resolved}")
+            return resolved
+
+        def canonical_export_root(raw):
+            path = Path(str(raw or "").strip())
+            if not path.is_absolute():
+                raise RuntimeError(f"export root must be absolute: {path}")
+            if path.is_symlink():
+                raise RuntimeError(f"export root must not be a symlink: {path}")
+            path.mkdir(mode=0o755, parents=True, exist_ok=True)
+            resolved = path.resolve(strict=True)
+            if not resolved.is_dir():
+                raise RuntimeError(f"export root is not a directory: {resolved}")
+            return resolved
+
+        def target_for(export_root, token):
+            root = canonical_export_root(export_root)
+            target = root / validate_token(token)
+            if target.parent != root:
+                raise RuntimeError(f"persistent bind target escapes export root: {target}")
+            if target.is_symlink():
+                raise RuntimeError(f"persistent bind target must not be a symlink: {target}")
+            target.mkdir(mode=0o755, exist_ok=True)
+            resolved = target.resolve(strict=True)
+            if resolved.parent != root or resolved == root:
+                raise RuntimeError(f"persistent bind target escapes export root: {resolved}")
+            return root, resolved
+
         def is_mountpoint(target):
-            return subprocess.run(["mountpoint", "-q", target]).returncode == 0
+            return subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0
 
         def same_tree(source, target):
             try:
@@ -402,74 +462,73 @@ def persistent_host_replay_python() -> str:
                 and src_stat.st_ino == dst_stat.st_ino
             )
 
+        def enforce_access(target, raw_access):
+            desired = "ro" if str(raw_access or "").strip() == "ro" else "rw"
+            result = run(
+                ["findmnt", "-n", "-o", "OPTIONS", "--mountpoint", str(target)],
+                check=False,
+                capture=True,
+            )
+            options = {item.strip() for item in (result.stdout or "").split(",")}
+            if desired in options:
+                return
+            run(["mount", "-o", f"remount,bind,{desired}", str(target)])
+
         def ensure_record(export_root, record):
-            token = str(record.get("shared_root_token") or "").strip()
-            source_dir = str(record.get("source_dir") or "").strip()
             enabled = bool(record.get("enabled", True))
             if not enabled:
                 return
-            if not token:
-                print(
-                    "WARNING: skipping persistent host bind record with missing shared_root_token",
-                    file=sys.stderr,
-                )
-                return
-            if not source_dir:
-                print(
-                    f"WARNING: skipping persistent host bind record {{token}} with missing source_dir",
-                    file=sys.stderr,
-                )
-                return
-            if not os.path.isdir(source_dir):
-                print(
-                    f"WARNING: skipping persistent host bind record {{token}} because source_dir is missing: {{source_dir}}",
-                    file=sys.stderr,
-                )
-                return
-            target = str(Path(export_root) / token)
-            os.makedirs(target, exist_ok=True)
-            if is_mountpoint(target) and same_tree(source_dir, target):
+            token = validate_token(record.get("shared_root_token"))
+            source = canonical_directory(record.get("source_dir"), label=f"source_dir for {token}")
+            _, target = target_for(export_root, token)
+            if is_mountpoint(target) and same_tree(source, target):
+                enforce_access(target, record.get("access"))
                 return
             if is_mountpoint(target):
-                run(["umount", target])
-                if is_mountpoint(target) and same_tree(source_dir, target):
-                    return
+                run(["umount", str(target)])
                 if is_mountpoint(target):
-                    raise RuntimeError(
-                        f"could not replace existing persistent host bind {{target}}"
-                    )
-            run(["mount", "--bind", source_dir, target])
-            if not (is_mountpoint(target) and same_tree(source_dir, target)):
-                raise RuntimeError(
-                    f"could not verify persistent host bind {{target}} -> {{source_dir}}"
-                )
+                    raise RuntimeError(f"could not replace existing persistent host bind {target}")
+            run(["mount", "--bind", str(source), str(target)])
+            if not (is_mountpoint(target) and same_tree(source, target)):
+                raise RuntimeError(f"could not verify persistent host bind {target} -> {source}")
+            enforce_access(target, record.get("access"))
 
         def prune_stale_mounts(export_root, desired_tokens):
-            root = Path(export_root)
-            if not root.exists():
-                return
+            root = canonical_export_root(export_root)
             for child in root.iterdir():
                 if child.name in desired_tokens:
                     continue
-                if is_mountpoint(str(child)):
+                if child.is_symlink() or child.parent != root:
+                    continue
+                if is_mountpoint(child):
                     run(["umount", str(child)])
 
         def main(argv=None):
             parser = argparse.ArgumentParser()
             parser.add_argument("--manifest", required=True)
             parser.add_argument("--export-root", required=True)
+            parser.add_argument("--vm-name", required=True)
             parser.add_argument("--prune-stale", action="store_true")
             args = parser.parse_args(argv)
 
-            with open(args.manifest, "r", encoding="utf-8") as file:
+            manifest = validate_manifest_file(args.manifest)
+            with manifest.open("r", encoding="utf-8") as file:
                 payload = json.load(file)
+            if payload.get("vm_name") != args.vm_name:
+                raise RuntimeError(
+                    f"host replay manifest VM mismatch: expected {args.vm_name!r}, "
+                    f"found {payload.get('vm_name')!r}"
+                )
 
             desired_tokens = set()
-            for record in payload.get("records", []):
+            records = payload.get("records", [])
+            if not isinstance(records, list):
+                raise RuntimeError("host replay manifest records must be a list")
+            for record in records:
+                if not isinstance(record, dict):
+                    raise RuntimeError("host replay manifest contains a non-object record")
                 if bool(record.get("enabled", True)):
-                    token = str(record.get("shared_root_token") or "").strip()
-                    if token:
-                        desired_tokens.add(token)
+                    desired_tokens.add(validate_token(record.get("shared_root_token")))
                 ensure_record(args.export_root, record)
 
             if args.prune_stale:
@@ -481,6 +540,11 @@ def persistent_host_replay_python() -> str:
     )
 
 
+def _systemd_exec_arg(value: str) -> str:
+    if '\n' in value or '\r' in value:
+        raise ValueError('systemd arguments must not contain newlines')
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
 
 def persistent_host_replay_service_unit(
     *,
@@ -488,7 +552,12 @@ def persistent_host_replay_service_unit(
     manifest_path: str,
     export_root: str,
 ) -> str:
-    service_name = f"{PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX}-{vm_name}"
+    service_name = (
+        f'{PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX}-{vm_name}'
+    )
+    manifest_q = _systemd_exec_arg(manifest_path)
+    export_q = _systemd_exec_arg(export_root)
+    vm_q = _systemd_exec_arg(vm_name)
     return textwrap.dedent(
         f"""        [Unit]
         Description={service_name}
@@ -497,7 +566,12 @@ def persistent_host_replay_service_unit(
 
         [Service]
         Type=oneshot
-        ExecStart={PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN} --manifest {manifest_path} --export-root {export_root} --prune-stale
+        User=root
+        Group=root
+        UMask=0022
+        NoNewPrivileges=yes
+        PrivateTmp=yes
+        ExecStart={PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN} --manifest {manifest_q} --export-root {export_q} --vm-name {vm_q} --prune-stale
 
         [Install]
         WantedBy=multi-user.target

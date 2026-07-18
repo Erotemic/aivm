@@ -19,10 +19,12 @@ export AIVM_E2E_HOST_CONTEXT="${AIVM_E2E_HOST_CONTEXT:-1}"
 
 # Run with -s (no capture) and -v (verbose) so you can watch progress in real-time.
 tests=(
-  tests/test_e2e_nested.py
-  tests/test_e2e_full.py
+  tests/e2e/test_nested.py
+  tests/e2e/test_full.py
+  tests/e2e/test_adopt.py
+  tests/e2e/test_host_bind_probe.py
 )
 if [[ "${AIVM_E2E_BOOTSTRAP:-0}" == "1" ]]; then
-  tests+=(tests/test_e2e_bootstrap_context.py)
+  tests+=(tests/e2e/test_bootstrap_context.py)
 fi
 pytest "${tests[@]}" -s -v "$@"

@@ -10,24 +10,21 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-import scriptconfig as scfg
+import kwconf
+from loguru import logger as log
 
 from ..commands import CommandManager
+from ..config_store import load_store
+from ..errors import AIVMError, NoVMContextError
+from ..services import cfg_path, load_cfg_with_path, resolve_cfg_for_code
 from ..status import (
     anticipated_status_sudo_commands,
     render_global_status,
     render_status,
 )
-from ..store import load_store
-from ._common import (
-    _BaseCommand,
-    _cfg_path,
-    _load_cfg_with_path,
-    _resolve_cfg_for_code,
-    log,
-)
+from ._common import _BaseCommand
 from .config import ConfigModalCLI
 from .help import HelpModalCLI
 from .host import HostModalCLI
@@ -37,7 +34,7 @@ from .vm import VMSSHCLI, VMAttachCLI, VMCodeCLI, VMDetachCLI, VMModalCLI
 class ListCLI(_BaseCommand):
     """List managed VMs, managed networks, and attached host folders."""
 
-    section: Any = scfg.Value(
+    section: Literal['all', 'vms', 'networks', 'folders'] = kwconf.Value(
         'all',
         help='One of: all, vms, networks, folders.',
     )
@@ -48,11 +45,11 @@ class ListCLI(_BaseCommand):
         want = str(args.section or 'all').strip().lower()
         allowed = {'all', 'vms', 'networks', 'folders'}
         if want not in allowed:
-            raise RuntimeError(
+            raise AIVMError(
                 f'--section must be one of: {", ".join(sorted(allowed))}'
             )
 
-        reg_path = _cfg_path(args.config)
+        reg_path = cfg_path(args.config)
         reg = load_store(reg_path)
 
         if want in {'all', 'vms'}:
@@ -112,18 +109,16 @@ class ListCLI(_BaseCommand):
 class StatusCLI(_BaseCommand):
     """Report setup progress across host, network, VM, SSH, and provisioning."""
 
-    sudo: Any = scfg.Value(
+    sudo: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Run privileged status checks (virsh/nft/image) with sudo.',
     )
-    vm: Any = scfg.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    detail: Any = scfg.Value(
+    detail: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Include raw diagnostics (virsh/nft/ssh probe outputs).',
         alias=['details'],
     )
@@ -134,20 +129,24 @@ class StatusCLI(_BaseCommand):
         cfg = None
         path = None
         try:
-            if args.config is not None or _cfg_path(None).exists():
-                cfg, path = _load_cfg_with_path(args.config, vm_opt=args.vm)
+            if args.config is not None or cfg_path(None).exists():
+                cfg, path = load_cfg_with_path(args.config, vm_opt=args.vm)
             else:
-                cfg, path = _resolve_cfg_for_code(
+                cfg, path = resolve_cfg_for_code(
                     config_opt=None,
                     vm_opt=args.vm,
                     host_src=Path.cwd(),
                 )
-        except RuntimeError as ex:
+        except NoVMContextError as ex:
+            # Only "this store names no single VM" earns the global fallback.
+            # AIVMError subclasses RuntimeError, so catching RuntimeError here
+            # also swallowed broken-config errors (an unresolvable network
+            # reference, say) and rendered them as a reassuring global status.
             log.debug('Status VM-resolution fallback: {}', ex)
             cfg = None
             path = None
         if cfg is None or path is None:
-            print(render_global_status())
+            print(render_global_status(cfg_path(args.config)))
             return 0
         mgr = CommandManager.current()
         with mgr.intent(
@@ -174,7 +173,7 @@ class StatusCLI(_BaseCommand):
         return 0
 
 
-class AgentVMModalCLI(scfg.ModalCLI):
+class AgentVMModalCLI(kwconf.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents."""
 
     help = HelpModalCLI
@@ -190,18 +189,22 @@ class AgentVMModalCLI(scfg.ModalCLI):
 
 
 def main(argv: list[str] | None = None) -> None:
-    # if argv is None:
-    #     argv = sys.argv[1:]
-
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
     try:
         rc = AgentVMModalCLI.main(argv=argv, _noexit=True)
-    except Exception as ex:
+    except AIVMError as ex:
+        # Domain-level failures are expected error conditions: surface the
+        # message cleanly without dumping an internal traceback.
         print(f'ERROR: {ex}', file=sys.stderr)
+        log.error('aivm error: {}', ex)
+        sys.exit(2)
+    except Exception as ex:
+        # Unexpected failures propagate with their traceback (which repeats
+        # the message), so log for the record but do not print it twice.
         log.error('Unhandled aivm error: {}', ex)
         raise
-        sys.exit(2)
 
-    # if any(flag in argv for flag in ('-h', '--help')):
-    #     sys.exit(0)
     assert isinstance(rc, int)
+    if rc == 1 and any(arg in {'-h', '--help'} for arg in effective_argv):
+        rc = 0
     sys.exit(rc)

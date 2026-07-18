@@ -8,6 +8,8 @@ that expected vs actual state comparison works correctly for hardware
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from aivm.config import (
     AgentVMConfig,
     FirewallConfig,
@@ -202,9 +204,44 @@ class TestExpectedMappingForAttachment:
 class TestAttachmentHasMapping:
     """Tests for attachment_has_mapping helper."""
 
-    def test_mapping_exists_shared_mode(self) -> None:
+    @staticmethod
+    def _shared_env(
+        monkeypatch: 'pytest.MonkeyPatch', *, device_readonly: bool
+    ) -> AgentVMConfig:
+        """A real cfg whose domain XML carries one direct share device.
+
+        The access check reads the device's ``<readonly/>`` element from
+        the domain XML, so shared-mode tests script the dumpxml reply
+        rather than mock the config.
+        """
+        from tests.helpers import FakeProc, activate_manager, command_recorder
+
+        cfg = AgentVMConfig()
+        cfg.vm.name = 'test-vm'
+        readonly = '<readonly/>' if device_readonly else ''
+        xml = f"""
+<domain>
+  <devices>
+    <filesystem type='mount' accessmode='passthrough'>
+      <driver type='virtiofs'/>
+      <source dir='/home/user/project'/>
+      <target dir='my-tag'/>
+      {readonly}
+    </filesystem>
+  </devices>
+</domain>
+"""
+        activate_manager(monkeypatch)
+        command_recorder(
+            monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')}
+        )
+        return cfg
+
+    def test_mapping_exists_shared_mode(
+        self, monkeypatch: 'pytest.MonkeyPatch'
+    ) -> None:
         """Test when mapping exists for shared mode."""
-        cfg = MagicMock(spec=AgentVMConfig)
+        cfg = self._shared_env(monkeypatch, device_readonly=False)
         att = ResolvedAttachment(
             vm_name='test-vm',
             mode=AttachmentMode.SHARED,
@@ -216,6 +253,46 @@ class TestAttachmentHasMapping:
             ('/home/user/project', 'my-tag'),
             ('/other/path', 'other-tag'),
         ]
+        assert attachment_has_mapping(cfg, att, mappings) is True
+
+    def test_mapping_with_wrong_access_is_not_satisfied(
+        self, monkeypatch: 'pytest.MonkeyPatch'
+    ) -> None:
+        """A ro record with a non-readonly device must read as missing.
+
+        Pre-<readonly/> devices are writable at the host boundary; treating
+        them as satisfied would leave the ro promise guest-enforced only.
+        """
+        from aivm.vm.share import AttachmentAccess
+
+        cfg = self._shared_env(monkeypatch, device_readonly=False)
+        att = ResolvedAttachment(
+            vm_name='test-vm',
+            mode=AttachmentMode.SHARED,
+            access=AttachmentAccess.RO,
+            source_dir='/home/user/project',
+            tag='my-tag',
+            guest_dst='/guest/path',
+        )
+        mappings = [('/home/user/project', 'my-tag')]
+        assert attachment_has_mapping(cfg, att, mappings) is False
+
+    def test_mapping_with_matching_readonly_device_is_satisfied(
+        self, monkeypatch: 'pytest.MonkeyPatch'
+    ) -> None:
+        """A ro record whose device carries <readonly/> is satisfied."""
+        from aivm.vm.share import AttachmentAccess
+
+        cfg = self._shared_env(monkeypatch, device_readonly=True)
+        att = ResolvedAttachment(
+            vm_name='test-vm',
+            mode=AttachmentMode.SHARED,
+            access=AttachmentAccess.RO,
+            source_dir='/home/user/project',
+            tag='my-tag',
+            guest_dst='/guest/path',
+        )
+        mappings = [('/home/user/project', 'my-tag')]
         assert attachment_has_mapping(cfg, att, mappings) is True
 
     def test_mapping_missing_shared_mode(self) -> None:

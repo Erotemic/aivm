@@ -2358,3 +2358,72 @@ which is the intended cleanup.
 What I am confident about: focused tests for attachment sessions, config, CLI
 helpers, and dry-run behavior pass; the full test suite passes; and
 `python -m compileall aivm tests` succeeds.
+
+## 2026-07-01 13:57:07 -0400
+
+Fixed a narrow set of mypy diagnostics that surfaced after the kwconf CLI typing
+pass. The changes are intentionally local: annotate firewall TCP port sets,
+avoid reusing VM update rendering variable names across incompatible inferred
+types, keep retry helpers' last-result variables typed as `CommandResult | None`,
+and split guest hash status line lists from their final string status values.
+
+State of mind / reflection: this felt like cleanup fallout from adding more type
+coverage rather than a behavior bug hunt. The best fix was to make the existing
+intent explicit and avoid forcing casts or broader ignores.
+
+Uncertainties / risks: I could not run mypy in this sandbox because it is not
+installed here, so the fix is based on the exact diagnostics reported by the
+user and local syntax checks. The changes do not alter runtime control flow.
+
+Tradeoffs: I left larger transport typing oddities alone, including the existing
+`getattr` compatibility pattern around command results, because the request was
+for the six reported diagnostics and not a broader transport refactor.
+
+What I am confident about: the touched Python modules compile with
+`python -m py_compile`, and each edit directly addresses one of the reported
+mypy error sites without changing behavior.
+
+## 2026-07-01 14:25:00 -0400
+
+Changed the implicit default VM name from the single global-looking `aivm-2404`
+value to a host-qualified factory that produces names like `aivm-2404-workstation` from
+the host's own short hostname. The same canonical name is used as the libvirt
+VM name, guest hostname, and generated SSH alias because splitting those names
+would make daily use more confusing. Existing explicit config values are not
+migrated, but configs that omit the name now receive the new factory value.
+
+State of mind / reflection: this change felt like the right boundary between
+local convenience and multi-host clarity. The old name was pleasant but too easy
+to confuse once config, SSH aliases, logs, attachments, and synced snippets
+leave the immediate libvirt host context.
+
+Uncertainties / risks: this intentionally changes behavior for users who relied
+on the implicit omitted-name default. That is acceptable for this pass, but it
+means tests and docs should describe the break honestly rather than pretending
+old implicit configs are preserved.
+
+Tradeoffs: I avoided an automatic migration or compatibility special-case for
+`aivm-2404`. I also adjusted VS Code tunnel naming so a newly host-qualified VM
+name does not get the host suffix appended twice, while older/custom names still
+receive the hypervisor suffix for tunnel disambiguation.
+
+What I am confident about: the change is limited to default-name generation,
+help/docs that expose examples, config-init/create summaries, and focused tests
+for hostname sanitization plus tunnel-name behavior. Cloud-init and SSH config
+already consume `cfg.vm.name`, so they naturally inherit the canonical name.
+
+## 2026-07-15 15:35:00 -0400
+I focused on the fresh-bootstrap configuration review UX after a real remote-machine first run made the same defaults table appear repeatedly. The main design choice was to separate full review from change review: a configuration gets one complete table, while later edits produce a compact before/after summary. I added an explicit editor path and retained prompt-by-prompt editing so the workflow remains usable without editor familiarity or even an installed editor. Automatic editor fallback intentionally stops at nano/micro rather than silently dropping a user into vi; explicitly configured EDITOR/VISUAL values are still respected.
+
+I also extracted shared review presentation and editor-selection helpers instead of layering special cases into config init and VM creation. The composed `aivm ssh .` bootstrap now calls the config-init service seam directly and marks the persisted configuration as already reviewed, allowing VM creation to ask a concise confirmation without reprinting the table. Standalone `aivm vm create` keeps its full review. Password login remains enabled and stored exactly as before, but terminal entry is hidden with getpass.
+
+The largest risk is that this touches interactive transcript contracts across config init, VM create, and folder bootstrap. I added focused tests for editor editing, editor-unavailable fallback, invalid TOML recovery, hidden password entry, changed-value summaries, and concise reviewed-config confirmation. The targeted suite is green except for an unrelated root-only file-writability test that also failed on the untouched base when run as root; I will verify the broader suite as an unprivileged user before packaging the overlay.
+
+## 2026-07-15 15:40:29 -0400
+Cleaned the planning and contributor documentation so active work is no longer mixed with completed, removed, or rejected plans. I reduced TODO.md to actionable items, made the active roadmap list only current efforts, removed obsolete refactor/rootless/brainstorm documents, and deleted stale future-work bullets for features that already exist or were intentionally rejected.
+
+The main judgment call was whether to preserve old implementation plans as historical documents. I chose deletion because git already preserves that history and their location under dev/design/future made them actively misleading. I kept the dedicated deferred session-runtime record because it explains a removed user-visible architecture and contains practical cleanup/resurrection information that is still useful.
+
+Risks are mostly documentation discoverability: someone searching the working tree will no longer find the old detailed refactor plans, though they remain available through git history. I updated all live cross-references before deleting files and retained the genuinely unfinished test-infrastructure work in the concise roadmap.
+
+I am confident the remaining roadmap now reflects actual outstanding work, completed attachment-safety/read-only items no longer appear as future promises, the rejected password-default change is gone, and contributor guidance now states the intended compatibility boundary directly instead of leaving it as a TODO.

@@ -1,4 +1,4 @@
-"""Tests for test import."""
+"""Smoke test that the top-level ``aivm`` package imports cleanly."""
 
 
 def test_import() -> None:

@@ -1,9 +1,8 @@
-"""Tests for the virtiofsd wrapper / inode-file-handles plumbing.
+"""Tests for legacy virtiofsd wrapper cleanup plumbing.
 
-Covers the pure logic (no subprocess): mode normalization, wrapper-path
-resolution (mode-suffixed), content generation, drift detection against
-synthetic dumpxml input, and store round-trip of the new per-VM
-``virtiofs.inode_file_handles`` field.
+AIVM no longer installs generated host-side virtiofsd wrappers in normal
+managed-libvirt mode. These tests keep enough recognition logic to remove old
+wrapper paths from existing VM XML and to preserve config round-trips.
 """
 
 from __future__ import annotations
@@ -13,20 +12,22 @@ from pathlib import Path
 
 import pytest
 
-from aivm import config, store
-from aivm.vm import update_ops, virtiofsd_wrapper
+from aivm import config
+from aivm import config_store as store
+from aivm.vm import update, virtiofsd_wrapper
 
 BASE = '/var/lib/libvirt/aivm'
 PREFER_PATH = f'{BASE}/virtiofsd-wrapper-prefer.sh'
+PREFER_NOEXT_PATH = f'{BASE}/virtiofsd-wrapper-prefer'
 NEVER_PATH = f'{BASE}/virtiofsd-wrapper-never.sh'
 MANDATORY_PATH = f'{BASE}/virtiofsd-wrapper-mandatory.sh'
 
 
-def test_normalize_mode_accepts_valid_and_rejects_garbage() -> None:
-    assert virtiofsd_wrapper.normalize_mode('prefer') == 'prefer'
-    assert virtiofsd_wrapper.normalize_mode('PREFER') == 'prefer'
-    assert virtiofsd_wrapper.normalize_mode('  mandatory  ') == 'mandatory'
-    assert virtiofsd_wrapper.normalize_mode('never') == 'never'
+def test_normalize_mode_disables_generated_host_wrappers() -> None:
+    assert virtiofsd_wrapper.normalize_mode('prefer') == ''
+    assert virtiofsd_wrapper.normalize_mode('PREFER') == ''
+    assert virtiofsd_wrapper.normalize_mode('  mandatory  ') == ''
+    assert virtiofsd_wrapper.normalize_mode('never') == ''
     assert virtiofsd_wrapper.normalize_mode('') == ''
     assert virtiofsd_wrapper.normalize_mode(None) == ''
     assert virtiofsd_wrapper.normalize_mode('bogus') == ''
@@ -45,41 +46,40 @@ def test_wrapper_path_rejects_invalid_mode() -> None:
         virtiofsd_wrapper.wrapper_path(BASE, 'bogus')
 
 
-def test_desired_binary_path_returns_wrapper_for_valid_mode() -> None:
-    assert virtiofsd_wrapper.desired_binary_path(BASE, 'prefer') == PREFER_PATH
+def test_desired_binary_path_never_returns_generated_wrapper() -> None:
+    assert virtiofsd_wrapper.desired_binary_path(BASE, 'prefer') is None
     assert virtiofsd_wrapper.desired_binary_path(BASE, '') is None
     assert virtiofsd_wrapper.desired_binary_path(BASE, 'bogus') is None
 
 
 def test_is_managed_wrapper_path_matches_any_mode_suffix() -> None:
-    for p in (PREFER_PATH, NEVER_PATH, MANDATORY_PATH):
+    for p in (PREFER_PATH, PREFER_NOEXT_PATH, NEVER_PATH, MANDATORY_PATH):
         assert virtiofsd_wrapper.is_managed_wrapper_path(BASE, p), p
     assert not virtiofsd_wrapper.is_managed_wrapper_path(BASE, '')
     assert not virtiofsd_wrapper.is_managed_wrapper_path(
         BASE, '/usr/libexec/virtiofsd'
     )
-    # A different base_dir shouldn't claim our wrapper.
-    assert not virtiofsd_wrapper.is_managed_wrapper_path('/other', PREFER_PATH)
 
 
-def test_wrapper_content_has_exec_line_for_each_mode() -> None:
-    for mode in ('never', 'prefer', 'mandatory'):
-        body = virtiofsd_wrapper.wrapper_content(mode)
-        assert body.startswith('#!/bin/bash\n')
-        assert (
-            f'exec /usr/libexec/virtiofsd --inode-file-handles={mode} "$@"'
-            in body
-        )
+def test_is_managed_wrapper_path_recognizes_historical_default_base() -> None:
+    # Repair must still work if the current config has a custom paths.base_dir.
+    assert virtiofsd_wrapper.is_managed_wrapper_path('/other', PREFER_PATH)
+    assert virtiofsd_wrapper.is_managed_wrapper_path(
+        '/other', '/var/lib/libvirt/aivm/aivm-2404/virtiofsd-wrapper-prefer.sh'
+    )
+    assert not virtiofsd_wrapper.is_managed_wrapper_path(
+        '/other', '/tmp/virtiofsd-wrapper-prefer.sh'
+    )
 
 
-def test_wrapper_content_rejects_invalid_mode() -> None:
-    with pytest.raises(ValueError):
-        virtiofsd_wrapper.wrapper_content('bogus')
+def test_wrapper_content_is_disabled() -> None:
+    with pytest.raises(RuntimeError, match='host-side virtiofsd wrappers are disabled'):
+        virtiofsd_wrapper.wrapper_content('prefer')
 
 
-def test_virtiofs_config_defaults_to_prefer_per_vm() -> None:
+def test_virtiofs_config_defaults_to_managed_libvirt() -> None:
     cfg = config.AgentVMConfig()
-    assert cfg.virtiofs.inode_file_handles == 'prefer'
+    assert cfg.virtiofs.inode_file_handles == ''
 
 
 def test_behavior_config_unchanged_by_virtiofs_relocation() -> None:
@@ -149,38 +149,49 @@ def _cfg_with_mode(mode: str) -> config.AgentVMConfig:
     return cfg
 
 
-def test_drift_detection_finds_missing_and_default_binary() -> None:
+def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> None:
     cfg = _cfg_with_mode('prefer')
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=None)
     )
-    assert mode == 'prefer'
-    tags = [d.tag for d in drift]
-    assert tags == ['aivm-shared-root', 'aivm-persistent-root']
-    assert all(d.desired == PREFER_PATH for d in drift)
+    assert mode == ''
+    assert drift == ()
 
 
-def test_drift_detection_skips_correctly_wrapped_devices() -> None:
+def test_drift_detection_removes_old_wrapper_even_if_config_requests_prefer() -> None:
     cfg = _cfg_with_mode('prefer')
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=PREFER_PATH)
     )
-    assert mode == 'prefer'
+    assert mode == ''
     tags = [d.tag for d in drift]
-    # Only the first device (no <binary>) drifts; the second is already
-    # pointing at the right wrapper.
-    assert tags == ['aivm-shared-root']
+    assert tags == ['aivm-persistent-root']
+    assert drift[0].current == PREFER_PATH
+    assert drift[0].desired == ''
 
 
 def test_drift_detection_reverse_when_wrapper_disabled() -> None:
     cfg = _cfg_with_mode('')
     # Even a different-mode wrapper counts as "managed" and should be
     # reverted to default when the config disables overrides.
-    mode, drift = update_ops._virtiofs_binary_drift(
+    mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=NEVER_PATH)
     )
     assert mode == ''
     tags = [d.tag for d in drift]
     assert tags == ['aivm-persistent-root']
     assert drift[0].current == NEVER_PATH
+    assert drift[0].desired == ''
+
+
+
+def test_drift_detection_repairs_wrapper_even_when_base_dir_changed() -> None:
+    cfg = _cfg_with_mode('')
+    cfg.paths.base_dir = '/custom/aivm-base'
+    mode, drift = update._virtiofs_binary_drift(
+        cfg, _xml_with_two_virtiofs_devices(wrapper_path=PREFER_PATH)
+    )
+    assert mode == ''
+    assert [d.tag for d in drift] == ['aivm-persistent-root']
+    assert drift[0].current == PREFER_PATH
     assert drift[0].desired == ''

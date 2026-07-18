@@ -39,11 +39,13 @@ daily path is:
 
 The current attachment model is centered on explicit host-folder registration:
 
-* ``shared-root`` is the default for new attachments. It uses one VM-level
-  virtiofs export plus host/guest bind mounts.
-* ``persistent`` is an opt-in successor path with persisted attachment
-  declarations and replay helpers. It mitigates repeated mount churn, but it is
-  still built on virtiofs.
+* ``persistent`` is the default for new attachments. It uses a dedicated
+  ``persistent-root`` virtiofs export, persisted attachment declarations, and
+  replay helpers so attachment intent survives VM reboot/reconcile cycles.
+* ``shared-root`` is the legacy single-export path. It still uses one VM-level
+  virtiofs export plus host/guest bind mounts, but new attachments no longer
+  choose it unless ``--mode shared-root`` is explicit or a saved attachment
+  already uses that mode.
 * ``shared`` is the older direct per-folder virtiofs mode and is mostly useful
   for simple/small attachment sets.
 * ``git`` bootstraps a guest-local Git repo and host remote plumbing. It is not
@@ -65,16 +67,16 @@ What it provides
 
 .. note::
 
-   Two opt-in end-to-end test modules live in ``tests/``: ``test_e2e_nested.py``
-   (light smoke path) and ``test_e2e_full.py`` (comprehensive cycle).  They are
-   skipped by default; to run them locally set ``AIVM_E2E=1`` and invoke pytest
-   manually.  These tests require a host with libvirt/KVM, passwordless ``sudo``
-   and (optionally) an Ubuntu cloud image cached under
-   ``~/.cache/aivm/e2e``.
+   Opt-in end-to-end tests live in ``tests/e2e/``. They carry the ``e2e``
+   marker and are deselected by default; to run them locally set
+   ``AIVM_E2E=1`` and invoke pytest manually. The VM lifecycle suites need a
+   host with KVM, passwordless ``sudo``, and optionally a cached Ubuntu image
+   under ``~/.cache/aivm/e2e``. Storage-adoption tests additionally require
+   ``setfacl`` and exercise real bind mounts under a scratch tree.
 
    An additional opt-in bootstrap-context e2e test is available in
-   ``test_e2e_bootstrap_context.py``. It creates a fresh outer VM and runs the
-   host-context e2e suite inside that VM. Enable it with
+   ``tests/e2e/test_bootstrap_context.py``. It creates a fresh outer VM and
+   runs the host-context e2e suite inside that VM. Enable it with
    ``AIVM_E2E_BOOTSTRAP=1`` when running ``./run_e2e_tests.sh``.
 
 Install
@@ -89,7 +91,9 @@ Fast Start
 
 Recommended for new repos:
 
-Currently ``aivm config init``  is required, but we will make that implicit in a future version.
+No explicit setup is required first: if VM context is missing, ``aivm code .``
+offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
+(run them yourself for the explicit, reproducible path).
 
 .. code-block:: bash
 
@@ -110,17 +114,49 @@ appear at higher verbosity.
 If you prefer an explicit flow, ``aivm config init`` is required before
 ``aivm vm create``.
 
+Interactive ``aivm config init`` shows the detected defaults once, then lets
+you accept them, edit the generated TOML in ``$EDITOR``/``$VISUAL`` (falling
+back to ``nano`` or ``micro``), or use a prompt-by-prompt editor.  Subsequent
+confirmation steps show only changed values instead of repeating the full
+defaults table.
+
 See also:
 
 * `Design Contract <docs/source/design.rst>`_
 * `Quickstart <docs/source/quickstart.rst>`_
 * `Workflows <docs/source/workflows.rst>`_
+* `Running under WSL2 <docs/source/wsl.rst>`_
 
 Status and sudo behavior
 ------------------------
 
 By default, ``aivm status`` avoids privileged probes. Use ``--sudo`` for
 network/firewall/libvirt/image checks.
+
+Privilege modes (``behavior.privilege_mode``):
+
+Both answer one question -- *when does aivm invoke sudo?*
+
+* ``as-needed`` (default) probes what already works without sudo --
+  unprivileged ``qemu:///system`` access via the ``libvirt`` group,
+  user-writable VM storage -- and uses sudo only where required.
+* ``always`` escalates every privileged-capable host operation through sudo
+  (the classic behavior).
+
+An unrecognized value is an error, not a silent fallback. A global
+no-sudo mode is not exposed because managed nftables and new host bind mounts
+still require root on the supported runtime.
+
+Run ``aivm host permissions check`` to inspect the permissions used by
+routine VM operations, and ``aivm host permissions setup`` to establish the
+host-side prerequisites. Normal setup may use sudo to add you to the
+``libvirt`` group; ``--adopt`` additionally runs one privileged metadata pass
+for each existing storage tree. Setup never changes your config: establishing a capability and
+choosing a policy are different acts, so ``privilege_mode`` and
+``firewall.enabled`` stay yours to set. State-changing
+hypervisor commands keep their approval prompt even when they no longer need
+sudo, so destructive operations never become promptless just because
+escalation stopped being necessary.
 
 Command manager defaults:
 
@@ -152,10 +188,11 @@ Interactive approval semantics:
 * ``a`` approves the current step and all later steps
 * ``s`` shows the full exact commands for the current step, then reprompts
 
-For example, the default ``shared-root`` path used by ``aivm ssh .`` /
-``aivm code .`` now groups attachment reconciliation into named steps such as
+For example, the default ``persistent`` path used by ``aivm ssh .`` /
+``aivm code .`` groups attachment reconciliation into named steps such as
 inspecting host bind state, preparing host bind targets, ensuring the VM
-virtiofs mapping, and mounting/verifying the bind inside the guest.
+virtiofs mapping, syncing the persisted manifest, and mounting/verifying the
+bind inside the guest.
 
 Readable previews may abbreviate long shell payloads, but the full exact
 commands are still available on demand in the approval prompt and are always
@@ -163,11 +200,18 @@ logged when they actually run.
 
 Config defaults:
 
+New configs use a host-qualified default VM name derived from ``$HOSTNAME``.
+For example, on a host named ``workstation``, the generated VM name, guest hostname,
+and primary SSH alias are all ``aivm-2404-workstation``. Existing explicit config
+values are not migrated; configs that relied on an omitted implicit name now
+receive the new host-qualified default.
+
 .. code-block:: toml
 
    [behavior]
    yes_sudo = false
    auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
+   privilege_mode = "as-needed"       # "never" | "as-needed" | "always"
 
 Common Workflows
 ----------------
@@ -191,22 +235,23 @@ Folder attachment
 
    aivm attach .
    aivm detach .
-   aivm vm attach --vm aivm-2404 --host_src .
+   aivm vm attach --vm aivm-2404-$HOSTNAME --host_src .
    aivm attach . --mode git
 
 Attachment modes:
 
-* ``shared-root`` (default for new attachments): legacy behavior. One VM-level virtiofs mapping
-  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
-  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
-  guest.
-* ``persistent``: preferred new persistent-attachment path. It uses a dedicated
-  VM-level virtiofs export at
+* ``persistent`` (default for new attachments): the preferred persistent-
+  attachment path. It uses a dedicated VM-level virtiofs export at
   ``/var/lib/libvirt/aivm/<vm>/persistent-root`` plus stable staged host binds,
   writes a persisted attachment manifest, installs a guest systemd replay
   helper at VM bootstrap, and lets boot / ``aivm code .`` / ``aivm ssh .``
   repair guest-visible bind mounts from that manifest instead of rebuilding
   every attachment from scratch.
+* ``shared-root``: legacy single-export behavior. One VM-level virtiofs mapping
+  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
+  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
+  guest. Existing saved ``shared-root`` attachments continue to use this mode,
+  and new attachments can still request it with ``--mode shared-root``.
 * ``shared``: direct per-folder virtiofs mapping from host source to guest. This
   is simpler but consumes one VM virtiofs device slot per folder.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing. It
@@ -236,7 +281,7 @@ PCI/PCIe capacity), which surfaces from libvirt as errors like
 
 ``shared-root`` and ``persistent`` reduce this pressure by using one persistent
 virtiofs mapping per VM and per-attachment host/guest bind mounts.
-Its host-side preparation is also designed to avoid mutating the ownership or
+Their host-side preparation is also designed to avoid mutating the ownership or
 permissions of the user's source tree; ``aivm`` prepares only its own internal
 directories and does not recursively rewrite a bind-mounted project path.
 
@@ -257,22 +302,22 @@ push or pull project contents automatically for git-mode attachments.
 
 * New folder (no saved attachment): creates/uses a git-mode attachment and
   defaults the guest destination to the exact host path.
-* Folder previously attached as ``shared`` or ``shared-root``: returns an error
-  (mode mismatch). Detach + reattach is required to switch modes.
+* Folder previously attached in any non-``git`` mode, including ``shared``,
+  ``shared-root``, or ``persistent``: returns an error (mode mismatch). Detach +
+  reattach is required to switch modes.
 * ``aivm code .`` without ``--mode``: reuses saved mode if present; otherwise
-  creates a new ``shared-root`` attachment.
+  creates a new ``persistent`` attachment.
 
 Migration note:
 
-* ``persistent`` is the rollout path for eventually replacing legacy
-  ``shared-root`` attachment churn. Existing ``shared-root`` attachments keep
-  working unchanged. Reattach a folder with ``aivm detach .`` then
-  ``aivm attach . --mode persistent`` when you want the new persisted replay
-  behavior.
+* ``persistent`` has become the default path for new attachments. Existing
+  ``shared-root`` attachments keep working unchanged. Reattach a folder with
+  ``aivm detach .`` then ``aivm attach . --mode persistent`` when you want an
+  older saved attachment to move to the persisted replay behavior.
 
 Mode selection behavior:
 
-* New folder (no saved attachment record): defaults to ``shared-root`` unless
+* New folder (no saved attachment record): defaults to ``persistent`` unless
   ``--mode`` is explicitly set.
 * Existing folder attachment: omitting ``--mode`` reuses the saved mode for that
   ``(host folder, VM)`` pair.
@@ -284,31 +329,36 @@ Mode selection behavior:
    aivm detach .
    aivm attach . --mode git
 
-Known issue: long-lived virtiofs FD growth
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Known issue: long-lived virtiofs FD growth (now auto-mitigated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Long-lived VMs that use ``shared-root`` or ``persistent`` can still hit a
-virtiofs-related file-descriptor failure mode. The observed symptom is ordinary
-guest or host traversal failing with errors like ``OSError: [Errno 24] Too many
-open files`` / ``Too many open files`` even when the shell's normal
-``ulimit -n`` is high.
+Host-side ``virtiofsd`` keeps one open descriptor per inode the guest caches,
+and guests never evict those caches on their own, so long-lived virtiofs
+attachments historically saturated the daemon's fd ceiling (~1M) and ordinary
+traversal failed with ``OSError: [Errno 24] Too many open files`` even though
+``ulimit -n`` looked fine. The dominant trigger turned out to be the guest OS
+itself: Ubuntu's stock nightly ``updatedb`` sweep walks virtiofs mounts
+(``virtiofs`` is missing from the default ``PRUNEFS``), touching every shared
+inode every day.
 
-The best current interpretation is that one or more host-side ``virtiofsd``
-workers can retain a large number of path-backed file descriptors across the
-export tree after heavy traversal of long-lived shared folders. Restarting the
-VM usually clears the bad runtime state. The ``persistent`` mode reduces mount
-churn and stale declaration problems, but it does not eliminate the underlying
-virtiofs/submount behavior.
+aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
+``updatedb`` and flushes guest dentry/inode caches when the cached-inode
+count crosses a watermark, releasing the host descriptors before the ceiling
+is reached. The guard is config-driven (``[virtiofs] fd_guard = true``, the
+default): new VMs get it via cloud-init, and ``aivm vm update`` reconciles
+existing running VMs — installing, refreshing after config/version changes,
+or uninstalling when disabled — so no manual setup or host-side
+``aivm vm flush_caches`` cron jobs are needed. ``aivm vm fdguard`` (default
+action ``status``) shows the live state and offers direct
+install/uninstall.
 
-Current mitigations and guidance:
+Remaining guidance:
 
-* prefer fewer, narrower shared folders
-* detach stale attachments and avoid leaving old token trees exposed
+* prefer fewer, narrower shared folders; detach stale attachments
 * use ``--mode git`` for repos that do not need live writable host sharing
-* restart the VM if traversal begins failing with ``Too many open files``
-* use ``dev/devcheck/debug-harness.sh`` when collecting host/guest evidence
-
-This is a known limitation, not a solved problem.
+* ``aivm vm flush_caches`` remains as a manual recovery command
+* see ``docs/source/virtiofs.rst`` for the full mechanism, tuning knobs
+  (``[virtiofs] fd_guard*``), and the incident runbook
 
 Inventory and visibility
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -330,9 +380,13 @@ Config-store lifecycle (explicit flow)
    aivm config init
    aivm vm create
    aivm vm update
+   aivm vm edit
    aivm config discover
    aivm config show
    aivm config edit
+   aivm config lint
+   aivm config format
+   aivm config paths
    aivm help plan
    aivm help tree
    aivm help completion

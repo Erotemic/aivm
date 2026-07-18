@@ -6,7 +6,8 @@ restricted" behavior unless caller config loosens/tightens policy.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
+import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, TypeGuard
 
@@ -14,11 +15,53 @@ from loguru import logger
 
 from .commands import CommandManager
 from .config import AgentVMConfig
-from .runtime import virsh_system_cmd
+from .errors import AIVMError
+from .privilege import require_sudo_allowed, sudo_allowed
+from .runtime import virsh_cmd
+from .xmlutil import parse_domain_xml
 
 JsonObj: TypeAlias = Mapping[str, object]
 
 log = logger
+
+
+def effective_firewall_table(cfg: AgentVMConfig) -> str:
+    """Return the network-specific nftables table managed for ``cfg``.
+
+    A configured table name is a namespace prefix, not a globally shared
+    singleton.  Including stable network identity prevents applying or removing
+    one network policy from replacing another network's rules.
+    """
+    base = re.sub(
+        r'[^A-Za-z0-9_.-]+', '_', str(cfg.firewall.table or '').strip()
+    )
+    base = base.strip('._-') or 'aivm_sandbox'
+    network = re.sub(
+        r'[^A-Za-z0-9_.-]+', '_', str(cfg.network.name or '').strip()
+    )
+    network = network.strip('._-') or 'network'
+    # Network name is the stable system-wide identity. Bridge and subnet are
+    # mutable configuration; including them would orphan the old firewall
+    # table every time a network is edited.
+    identity = str(cfg.network.name or '')
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:10]
+    suffix = f'{network[:32]}_{digest}'
+    max_base = max(1, 127 - len(suffix) - 1)
+    return f'{base[:max_base]}_{suffix}'
+
+
+def _legacy_firewall_table(cfg: AgentVMConfig) -> str | None:
+    """The pre-namespacing table name, when it differs from the derived one.
+
+    Before tables were namespaced per network, the managed table was
+    exactly ``cfg.firewall.table``. An upgraded host can still carry that
+    table with active drop rules, silently filtering alongside (and
+    shadowing) the new one, so apply/remove must clean it up.
+    """
+    legacy = str(cfg.firewall.table or '').strip()
+    if legacy and legacy != effective_firewall_table(cfg):
+        return legacy
+    return None
 
 
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
@@ -32,9 +75,9 @@ def _normalize_port_list(ports: list[int]) -> list[int]:
         try:
             p = int(raw)
         except Exception as ex:
-            raise RuntimeError(f'Invalid firewall port value: {raw!r}') from ex
+            raise AIVMError(f'Invalid firewall port value: {raw!r}') from ex
         if p < 1 or p > 65535:
-            raise RuntimeError(
+            raise AIVMError(
                 f'Invalid firewall port {p}; expected range 1..65535.'
             )
         if p in seen:
@@ -59,7 +102,7 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
             approval_scope=f'network-xml:{cfg.network.name}',
         ):
             res = mgr.submit(
-                virsh_system_cmd('net-dumpxml', cfg.network.name),
+                virsh_cmd('net-dumpxml', cfg.network.name),
                 sudo=True,
                 role='read',
                 check=False,
@@ -69,7 +112,7 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
             )
     else:
         res = mgr.submit(
-            virsh_system_cmd('net-dumpxml', cfg.network.name),
+            virsh_cmd('net-dumpxml', cfg.network.name),
             sudo=True,
             role='read',
             check=False,
@@ -79,9 +122,8 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
         )
     if res.code != 0 or not (res.stdout or '').strip():
         return bridge, gateway
-    try:
-        root = ET.fromstring(res.stdout)
-    except Exception:
+    root = parse_domain_xml(res.stdout)
+    if root is None:
         return bridge, gateway
     br_node = root.find('./bridge')
     ip_node = root.find('./ip')
@@ -108,9 +150,12 @@ def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
     return bridge, gateway
 
 
-def _nft_script(cfg: AgentVMConfig) -> str:
-    table = cfg.firewall.table
-    br, gw = _effective_bridge_and_gateway(cfg)
+def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
+    table = effective_firewall_table(cfg)
+    if inspect_live:
+        br, gw = _effective_bridge_and_gateway(cfg)
+    else:
+        br, gw = cfg.network.bridge, cfg.network.gateway_ip
     blocks = list(cfg.firewall.block_cidrs) + list(
         cfg.firewall.extra_block_cidrs or []
     )
@@ -178,8 +223,15 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     if not cfg.firewall.enabled:
         log.info('Firewall disabled in config; skipping.')
         return
-    script = _nft_script(cfg)
-    table = cfg.firewall.table
+    require_sudo_allowed(
+        feature='Firewall management (nftables)',
+        hint=(
+            'Disable the managed firewall (firewall.enabled = false) or set '
+            "behavior.privilege_mode to 'as-needed' to allow sudo for it."
+        ),
+    )
+    script = _nft_script(cfg, inspect_live=not dry_run)
+    table = effective_firewall_table(cfg)
     if dry_run:
         log.info('DRYRUN: nft -f - <<EOF\\n{}\\nEOF', script.rstrip())
         return
@@ -208,6 +260,24 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove previous nftables table inet {table} if present',
             )
+            legacy = _legacy_firewall_table(cfg)
+            if legacy:
+                mgr.submit(
+                    ['nft', 'delete', 'table', 'inet', legacy],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary=(
+                        f'Remove pre-upgrade nftables table inet {legacy} '
+                        'if present'
+                    ),
+                    detail=(
+                        'Older aivm versions installed rules under the '
+                        'configured table name directly; a leftover copy '
+                        'would keep filtering alongside the new table.'
+                    ),
+                )
             mgr.submit(
                 ['nft', '-f', '-'],
                 sudo=True,
@@ -221,7 +291,9 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
 
 def firewall_status(cfg: AgentVMConfig) -> str:
-    table = cfg.firewall.table
+    if not sudo_allowed():
+        return 'firewall status needs privileges (unavailable when mode)\n'
+    table = effective_firewall_table(cfg)
     mgr = CommandManager.current()
     with mgr.intent(
         f'Inspect firewall table {table}',
@@ -254,8 +326,12 @@ def read_firewall_tcp_ports(
     # TODO: this function can be a lot cleaner and server other use-cases
     # currently only used in drift detection.
 
-    table = cfg.firewall.table
+    table = effective_firewall_table(cfg)
     bridge = cfg.network.bridge
+
+    if not sudo_allowed():
+        # nft reads require root; report unavailable instead of escalating.
+        return None, 'firewall checks need privileges (privilege_mode = never)'
 
     res = CommandManager.current().run(
         ['nft', '--json', 'list', 'table', 'inet', table],
@@ -273,7 +349,6 @@ def read_firewall_tcp_ports(
     import json
 
     text = res.stdout or ''
-    ports = set()
     data = json.loads(text)
 
     def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
@@ -365,7 +440,7 @@ def read_firewall_tcp_ports(
                 return True
         return False
 
-    ports = set()
+    ports: set[int] = set()
 
     for item in data.get('nftables', []):
         if not _is_json_obj(item):
@@ -417,7 +492,14 @@ def read_firewall_tcp_ports(
 
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
-    table = cfg.firewall.table
+    require_sudo_allowed(
+        feature='Firewall management (nftables)',
+        hint=(
+            "Set behavior.privilege_mode to 'as-needed' to allow sudo for "
+            'firewall operations.'
+        ),
+    )
+    table = effective_firewall_table(cfg)
     if dry_run:
         log.info('DRYRUN: nft delete table inet {}', table)
         return
@@ -440,4 +522,17 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove nftables table inet {table}',
             )
+            legacy = _legacy_firewall_table(cfg)
+            if legacy:
+                mgr.submit(
+                    ['nft', 'delete', 'table', 'inet', legacy],
+                    sudo=True,
+                    role='modify',
+                    check=False,
+                    capture=True,
+                    summary=(
+                        f'Remove pre-upgrade nftables table inet {legacy} '
+                        'if present'
+                    ),
+                )
     log.info('Firewall removed (table=inet {}).', table)

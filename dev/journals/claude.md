@@ -1,3 +1,53 @@
+## 2026-07-17 00:45:00 +0000
+
+Long session: merged the security-hardening branch into the test-reshape branch, then spent the rest of the day shaking real-host bugs out of the merged result on namek, shipped storage adoption (with one serious incident), and worked through an external review. Sixteen commits, `a037b78..edf92a2`.
+
+### The merge
+
+`origin/dev/sudoless` (boundary hardening, config-review streamline, doc pruning) had diverged from local (test-vocabulary reshape that deleted/split `test_vm_helpers.py` and `test_attachment_persistent.py`). Resolution rule: keep the reshaped layout, port the remote's *behavioral* coverage into it, drop formatting churn on deleted files. The interesting conflicts were semantic, not textual: the hardening namespaced nft tables per network (`effective_firewall_table`), renamed the bootstrap seam (`InitCLI.main` → `initialize_config_defaults`), and added a root-owned replay-manifest sync that the reshaped artifact-style tests then had to route.
+
+### The sudo-friction cascade (namek)
+
+Testing on a host *without* passwordless sudo surfaced a chain of bugs, each hiding behind the previous:
+
+1. The sudoless e2e's dependency preflight ran `host doctor --sudo` — the suite that proves the never-sudo guarantee demanded passwordless sudo to start.
+2. `sudoless check` graded the built-in `/var/lib` default instead of the storage VMs actually use, read the firewall flag from `rec.cfg.firewall` (always the default `True`; the persisted value lives on the `[[networks]]` record — `materialize_vm_cfg` is the join), and rendered policy-consistent sudo as ❌. Now mode-aware: under `'never'` sudo-costing items fail; under `'as-needed'` they're friction (⚠️), and the firewall renders 🧱 — a wall, not a fixable warning, and never "disable it" advice (it's the guest's egress containment).
+3. `vm up` demanded root to create `/var/lib/aivm/persistent-host` for VMs with zero persistent attachments. Gate at the chokepoint: `_persistent_host_replay_state_needed` (records exist, or a manifest was previously installed — the second arm keeps detach-to-empty honest).
+4. Two unit tests ran **real sudo** (they drove the real attach flow without faking subprocess): silent root-file creation under `/var/lib/aivm` on passwordless hosts, password-prompt failures elsewhere. Structural fix: an autouse conftest guard wraps real `subprocess.run` and fails any unit test reaching a `sudo` argv (e2e exempt via marker).
+
+### Storage adoption and the incident
+
+The mode-switch story ("recreate or migrate your VM") was unacceptable; shipped `sudoless setup --adopt`: chgrp the existing tree to `root:libvirt` in place, VM down/up around it (libvirt restores recorded disk ownership at shutdown, so the change must land while off). Nothing moves; the libvirt group becomes the single capability boundary.
+
+**The incident:** the first version recursed `chgrp -R`/`chmod -R` through the tree — and attachment export roots (`<base_dir>/<vm>/{persistent,shared}-root/<token>`) are **live bind mounts of real user folders**. On namek it rewrote group/perms/ACLs across 17 attached project and dataset trees. Recovery was clean (metadata only; `chown`/`chmod g-ws`/`setfacl -b` over the `host_path` list from the store), but the failure chain is the lesson:
+
+- My unit tests faked the subprocess boundary, so they asserted the destructive command's *text*, never its behavior.
+- My "verified end-to-end" demo used a tree without binds — verified the happy path, not the deployment environment.
+- During recovery I compounded it: `findmnt -R <dir>` prints *nothing* when the dir isn't itself a mountpoint — a false "no binds" all-clear. `/proc/self/mounts` is the truth source.
+
+Fix: the privileged script reads `/proc/self/mounts` **at execution time** (the approval prompt + sudo password window is minutes long) and prunes every mountpoint from every `find` pass; refuses when the mount table is unreadable or a mountpoint name can't be handed to `find -path` literally; skips symlinks (per-entry chgrp/chmod follow links, unlike `-R`). The regression test replays the incident with a **real bind mount** (`tests/e2e/test_adopt.py`).
+
+### findmnt never worked
+
+The user's next report: every `aivm ssh .` prompted sudo for `mount -o remount,bind,rw` on an already-rw bind. Root cause: the host-bind probe requested `-o SOURCE,ROOT,FSTYPE,OPTIONS` — **`ROOT` is not a findmnt column** (it's `FSROOT`). Real findmnt rejected the whole invocation; every probe ever run answered "not a mountpoint"; the hardening's access check then "repaired" healthy binds each session. This dates to the original 2026-04-01 fix (see that entry — the column list was wrong from day one). The unit fakes scripted `ROOT=""` replies — faithful to a command findmnt cannot answer. Fixed to FSROOT; the probe now warns when rc≠0 arrives *with stderr* (malformed invocation can no longer masquerade as "no mount"); e2e drives the real probe against a real bind under `privilege_mode='never'` where any remount attempt raises.
+
+### Review response (GPT 5.6)
+
+Five findings addressed, scoped per maintainer: adoption canonicalizes+dedupes trees (`resolve()` in Python, `realpath` in-script — lexical config vs canonical mount table was a residual hole in the prune fix) and is fail-safe (unknown VM state aborts before mutation, domain-not-found proceeds, stopped VMs restart in a `finally`, setfacl required up front, traversal verified after); `acl` added to install_deps; legacy ro direct-shares get host-boundary `<readonly/>` enforcement on reconcile (access disagreement = missing mapping; `attach_vm_share`'s already-exists branch replaces the device); the pre-namespacing nft table is deleted on apply/remove (no registry — the only legacy shape is the configured name). Deliberately skipped: the mount-snapshot race across find passes (concurrent attach during interactive adoption; lock not worth it today). ty 0.0.60's `dataclasses.fields` complaint fixed with typeshed's `DataclassInstance`.
+
+### Durable lessons
+
+- **Fakes can be faithful to a broken command.** Twice today (ROOT column, adopt script) the recorder tests passed because they scripted replies to invocations the real tool rejects or behavior the real filesystem doesn't have. Any feature whose substance is one privileged/destructive command needs one test at the real boundary; the e2e files now model this.
+- **Bind mounts live under `base_dir`.** Every recursive operation on VM storage must prune `/proc/self/mounts` entries or it rewrites user projects through the binds. `-xdev` does not help (same-device binds); `findmnt -R` on a non-mountpoint lies by omission.
+- **Probe failure ≠ negative result.** findmnt exits 1 for both "no mount" and "you called me wrong"; conflating them turned a typo into a year of silent misbehavior and a per-session sudo prompt.
+- Interactive `aivm ssh` no longer reports the user's shell exit status as an aivm ERROR; only ssh's own 255 is ours to report.
+
+### Open threads
+
+- Firewall UX decision still open: prompts vs the scoped NOPASSWD sudoers candidate (`docs/planning/candidate_ideas/nft-nopasswd-sudoers.md`).
+- Design note worth writing: move attachment export roots out from under `base_dir` entirely — removes the recursive-op trap class instead of defending each operation.
+- `vm move-storage` (guest-state-preserving relocation) remains ungapped if anyone actually needs relocation rather than adoption.
+
 ## 2026-04-01 21:08:53 +0000
 
 Ported the `ae261eba` shared-root host-bind fix from the old monolithic `vm.py` to `aivm/attachments/shared_root.py`, where that code now lives after extraction. Also completed the final cleanup pass on the `split_cli_vm_refactor` branch: removed all attachment re-exports from `vm.py`, moved `_maybe_install_missing_host_deps` out of `vm.py` and into `cli/_common.py` (breaking the `session.py → cli/vm` import cycle), retargeted all stale `aivm.cli.vm.*` monkeypatch targets in the split test files to their new lookup sites, and removed two leftover `pytest.skip('Seems to freeze')` guards that were inert after earlier patch-target fixes.

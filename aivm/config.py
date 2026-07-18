@@ -6,6 +6,8 @@ into the global config registry format.
 
 from __future__ import annotations
 
+import re
+import socket
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -17,11 +19,54 @@ from .util import expand
 # TODO(design): replace the ad-hoc URL + hash globals here with a network asset
 # dataclass/registry that can describe the primary URL, SHA256, mirrors,
 # torrent magnet, and IPFS CID for a pinned image artifact.
-# Pinned daily image path so URL and hash are coupled to a specific artifact.
-DEFAULT_UBUNTU_NOBLE_IMG_URL = 'https://cloud-images.ubuntu.com/noble/20260225/noble-server-cloudimg-amd64.img'
+# Pin a retained release archive rather than a dated daily-build directory.
+# Ubuntu garbage-collects old daily directories, while release archives remain
+# available and preserve the exact artifact/checksum pairing.
+LEGACY_UBUNTU_NOBLE_IMG_URL = (
+    'https://cloud-images.ubuntu.com/noble/20260225/'
+    'noble-server-cloudimg-amd64.img'
+)
+DEFAULT_UBUNTU_NOBLE_IMG_URL = (
+    'https://cloud-images.ubuntu.com/releases/noble/release-20260225/'
+    'ubuntu-24.04-server-cloudimg-amd64.img'
+)
+DEPRECATED_IMAGE_URL_REPLACEMENTS = {
+    LEGACY_UBUNTU_NOBLE_IMG_URL: DEFAULT_UBUNTU_NOBLE_IMG_URL,
+}
 SUPPORTED_IMAGE_SHA256 = {
     DEFAULT_UBUNTU_NOBLE_IMG_URL: '7aa6d9f5e8a3a55c7445b138d31a73d1187871211b2b7da9da2e1a6cbf169b21',
 }
+
+_DEFAULT_VM_NAME_PREFIX = 'aivm-2404-'
+_MAX_GUEST_HOSTNAME_LEN = 63
+
+
+def default_host_label(hostname: str | None = None) -> str:
+    """Return the host label used to make default VM names local-host specific.
+
+    The source identity is the host's own short node name, not an FQDN that
+    DNS might synthesize later. The returned value is safe for libvirt domain
+    names, SSH host aliases, and Linux guest hostnames.
+    """
+    raw = socket.gethostname() if hostname is None else hostname
+    short = str(raw or '').split('.', 1)[0].strip().lower()
+    label = re.sub(r'[^a-z0-9-]+', '-', short)
+    label = re.sub(r'-+', '-', label).strip('-')
+    return label or 'host'
+
+
+def default_vm_name(hostname: str | None = None) -> str:
+    """Return the default canonical VM / guest-host / SSH alias name.
+
+    Existing explicit config values are not migrated. Missing/implicit names use
+    this factory, so users relying on the old implicit ``aivm-2404`` default now
+    get a host-qualified default such as ``aivm-2404-workstation``.
+    """
+    label = default_host_label(hostname)
+    max_label_len = _MAX_GUEST_HOSTNAME_LEN - len(_DEFAULT_VM_NAME_PREFIX)
+    if max_label_len > 0 and len(label) > max_label_len:
+        label = label[:max_label_len].rstrip('-') or 'host'
+    return f'{_DEFAULT_VM_NAME_PREFIX}{label}'
 
 
 @dataclass
@@ -68,18 +113,28 @@ class ImageConfig:
 
 @dataclass
 class VMConfig:
-    name: str = 'aivm-2404'
+    name: str = field(default_factory=default_vm_name)
     user: str = 'agent'
     cpus: int = 4
     ram_mb: int = 8192
     disk_gb: int = 40
-    allow_password_login: bool = False
+    allow_password_login: bool = True
     password: str = 'agent'
     # IANA timezone name for the guest (e.g. "America/New_York"). Empty
     # means "match the host at cloud-init time"; see
     # aivm.detect.detect_host_timezone. Set explicitly (e.g. "UTC") to
     # pin the guest to a specific timezone regardless of the host's.
     timezone: str = ''
+    # Create the guest user with the host invoking-user's numeric UID/GID
+    # so files shared via virtiofs have matching ownership on both sides.
+    # The host UID is captured at create-time and baked into cloud-init;
+    # changing this on an existing VM requires recreation.
+    match_host_user_ids: bool = True
+    # Maintain a host-side symlink that mirrors the layout of folders
+    # shared into the guest, so guest-side absolute paths resolve to the
+    # same host-side filesystem location. Off by default for backwards
+    # compatibility with existing setups.
+    mirror_shared_home_folders: bool = False
 
 
 @dataclass
@@ -112,15 +167,17 @@ class ToolsConfig:
 
     ``uv`` uses Astral's standalone installer. ``rust`` uses rustup, not
     distro Rust packages or snap. Rust is off by default because it is a
-    larger toolchain; set ``rust = "stable"`` to manage it.
-
-    TODO(tools): add a first-class non-snap VS Code CLI installer here so
-    tunnel workflows can be bootstrapped in the VM without relying on the
-    snap store. Prefer Microsoft's deb/apt repository or a verified tarball.
+    larger toolchain; set ``rust = "stable"`` to manage it. ``code`` installs
+    the VS Code CLI from Microsoft's apt repository (not snap) so
+    ``code tunnel`` workflows can run inside the VM; it is off by default
+    because it is only useful for VS Code Remote Tunnels users. Enable it
+    persistently with ``code = "latest"`` in this section, or one-shot via
+    ``aivm vm provision code``.
     """
 
     uv: str = 'latest'
     rust: str = 'off'
+    code: str = 'off'
     bin_dir: str = '~/.local/bin'
 
 
@@ -137,30 +194,48 @@ class BehaviorConfig:
     yes_sudo: bool = False
     auto_approve_readonly_sudo: bool = True
     verbose: int = 1
-    mirror_shared_home_folders: bool = False
+    # When aivm invokes sudo for privileged host operations:
+    #   'as-needed' - probe what works without sudo (libvirt group membership,
+    #                 user-writable image trees) and escalate only when needed.
+    #   'always'    - use sudo for every privileged-capable operation.
+    # A global no-sudo mode is intentionally not exposed: managed nftables and
+    # new host bind mounts still require root on the supported runtime.
+    # See `aivm host permissions check` for what this host still needs.
+    privilege_mode: str = 'as-needed'
 
 
 @dataclass
 class VirtiofsConfig:
-    """Per-VM knobs that affect how virtiofsd is invoked.
+    """Per-VM virtiofs compatibility knobs.
 
-    These translate into the libvirt domain XML for each ``<filesystem>``
-    device on the VM. They are per-VM because the libvirt XML records them
-    per-device, even when the underlying host capability is shared.
+    ``inode_file_handles`` is kept for config-file compatibility with a
+    short-lived experimental wrapper strategy. Normal managed-libvirt mode
+    intentionally ignores non-empty values for now: AIVM must not silently
+    generate host-side executables/scripts and configure libvirt to run them.
+
+    See ``dev/design/future/virtiofsd-inode-file-handles.md`` before
+    re-enabling any strategy for passing ``--inode-file-handles``.
     """
 
-    # Mode for virtiofsd's --inode-file-handles flag, applied via a small
-    # wrapper script installed under paths.base_dir. Valid values:
-    #
-    #   ''           - disabled; emit no <binary> override, use libvirt default
-    #   'never'      - explicit current libvirt default (per-FD inode caching)
-    #   'prefer'     - file handles where supported, FD fallback per filesystem
-    #   'mandatory'  - file handles required; refuses to start otherwise
-    #
-    # 'prefer' is the safe default and removes the per-inode host-FD cost
-    # that produces guest-side OSError(EMFILE) on large persistent-root
-    # exports. See aivm/vm/virtiofsd_wrapper.py for full rationale.
-    inode_file_handles: str = 'prefer'
+    # Empty means: use libvirt's managed virtiofsd invocation. If an older
+    # config contains ``prefer``/``never``/``mandatory``, current update logic
+    # treats it as disabled and removes old AIVM-managed wrapper paths from
+    # domain XML.
+    inode_file_handles: str = ''
+    # Guest-side virtiofs fd guard (see docs/source/virtiofs.rst and
+    # aivm/fdguard.py). Host virtiofsd pins one O_PATH fd per inode the
+    # guest keeps cached and hits EMFILE at min(RLIMIT_NOFILE, fs.nr_open),
+    # typically 1,048,576. The guard runs inside the guest from a systemd
+    # timer: it keeps updatedb from sweeping virtiofs shares nightly and
+    # flushes guest dentry/inode caches when the fuse inode count crosses
+    # ``fd_guard_threshold``. New VMs get it via cloud-init when enabled;
+    # existing running VMs are reconciled by ``aivm vm update`` (install,
+    # refresh on config/version change, uninstall when disabled), and
+    # ``aivm vm fdguard`` offers direct manual control.
+    fd_guard: bool = True
+    fd_guard_threshold: int = 500_000
+    fd_guard_emergency_threshold: int = 750_000
+    fd_guard_interval_sec: int = 600
 
 
 @dataclass

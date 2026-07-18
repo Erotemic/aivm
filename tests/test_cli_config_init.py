@@ -9,6 +9,9 @@ import pytest
 
 from aivm.cli.config import InitCLI
 from aivm.config import AgentVMConfig
+from tests.helpers import patch_ns, records, returns
+
+INIT_NS = 'aivm.cli.config.init'
 
 
 def _fake_defaults_cfg(tmp_path: Path) -> AgentVMConfig:
@@ -23,12 +26,15 @@ def test_config_init_noninteractive_requires_yes_or_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(False),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
     with pytest.raises(RuntimeError, match='--yes or --defaults'):
         InitCLI.main(
             argv=False, config=str(cfg_path), yes=False, defaults=False
@@ -39,12 +45,15 @@ def test_config_init_noninteractive_defaults_flag_bypasses_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(False),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=True
     )
@@ -62,12 +71,15 @@ def test_config_init_interactive_shows_summary_and_accepts(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: '')
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=False
@@ -75,7 +87,8 @@ def test_config_init_interactive_shows_summary_and_accepts(
     assert rc == 0
     out = capsys.readouterr().out
     assert 'Detected defaults for `aivm config init`' in out
-    assert 'vm.name:' not in out
+    assert 'vm.name' in out
+    assert 'aivm-init-test' in out
     assert 'ssh-keygen -t ed25519' in out
 
 
@@ -119,19 +132,23 @@ def test_config_init_interactive_can_create_dedicated_aivm_key(
         raise AssertionError(f'unexpected command: {cmd}')
 
     answers = iter(['', ''])
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults', fake_defaults_missing_keys
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': fake_defaults_missing_keys,
+            'sys.stdin.isatty': returns(True),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('aivm.cli._common.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('aivm.services.sys.stdin.isatty', lambda: True)
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(
-        'aivm.cli._common.which', lambda cmd: '/usr/bin/ssh-keygen'
+        'aivm.services.which', lambda cmd: '/usr/bin/ssh-keygen'
     )
     monkeypatch.setattr('aivm.commands.subprocess.run', fake_subprocess_run)
     monkeypatch.setattr(
-        'aivm.cli._common.Path.home', staticmethod(lambda: fake_home)
+        'aivm.services.Path.home', staticmethod(lambda: fake_home)
     )
 
     rc = InitCLI.main(
@@ -149,16 +166,16 @@ def test_config_init_defaults_warns_when_ssh_keys_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
-    )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: False)
-    log_calls = []
-    monkeypatch.setattr(
-        'aivm.cli.config.log.warning',
-        lambda *a, **k: log_calls.append((a, k)),
+    log_calls: list[Any] = []
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(False),
+            'log.warning': records(log_calls),
+        },
     )
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=True
@@ -170,16 +187,19 @@ def test_config_init_defaults_warns_when_ssh_keys_missing(
     assert log_calls
 
 
-def test_config_init_prompt_mentions_edit_shortcut(
+def test_config_init_prompt_mentions_editor_and_prompt_shortcuts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
     prompts = []
 
     def fake_input(prompt: str) -> str:
@@ -191,26 +211,31 @@ def test_config_init_prompt_mentions_edit_shortcut(
         argv=False, config=str(cfg_path), yes=False, defaults=False
     )
     assert rc == 0
-    assert any('(e=edit)' in p for p in prompts)
+    assert any('(e=editor, p=prompt-by-prompt)' in p for p in prompts)
 
 
 def test_config_init_interactive_edit_updates_hardware(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+        },
     )
-    monkeypatch.setattr('aivm.cli.config.sys.stdin.isatty', lambda: True)
     answers = iter(
         [
-            'e',  # use edit flow
+            'p',  # use prompt-by-prompt flow
+            '',  # vm.name
             '',  # vm.user
             '2',  # vm.cpus
             '3072',  # vm.ram_mb
             '24',  # vm.disk_gb
+            'n',  # vm.allow_password_login
             '',  # network.name
             '',  # network.subnet_cidr
             '',  # network.gateway_ip
@@ -236,22 +261,183 @@ def test_config_init_logs_resource_warnings_from_shared_checker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg_path = tmp_path / 'config.toml'
-    monkeypatch.setattr('aivm.cli.config._cfg_path', lambda p: cfg_path)
-    monkeypatch.setattr(
-        'aivm.cli.config.auto_defaults',
-        lambda cfg, project_dir: _fake_defaults_cfg(tmp_path),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.config.vm_resource_warning_lines',
-        lambda cfg: ['resource warning test'],
-    )
-    logged = []
-    monkeypatch.setattr(
-        'aivm.cli.config.log.warning',
-        lambda *a, **k: logged.append((a, k)),
+    logged: list[Any] = []
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'vm_resource_warning_lines': returns(['resource warning test']),
+            'log.warning': records(logged),
+        },
     )
     rc = InitCLI.main(
         argv=False, config=str(cfg_path), yes=False, defaults=True
     )
     assert rc == 0
     assert any('resource warning test' in str(args) for args, _ in logged)
+
+
+def test_config_init_summary_shows_password_login_default(
+    tmp_path: Path,
+) -> None:
+    from aivm.cli.config import _render_init_default_summary
+
+    cfg = _fake_defaults_cfg(tmp_path)
+    cfg.vm.allow_password_login = True
+    text = _render_init_default_summary(cfg, tmp_path / 'config.toml')
+    assert 'vm.allow_password_login: true' in text
+    assert 'enables password login on console and SSH' in text
+    assert 'vm.password: (configured)' in text
+
+
+def test_config_init_interactive_edit_updates_password_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+        },
+    )
+    answers = iter([
+        'p',  # prompt-by-prompt values
+        '',  # vm.name
+        '',  # vm.user
+        '',  # vm.cpus
+        '',  # vm.ram_mb
+        '',  # vm.disk_gb
+        'y',  # vm.allow_password_login
+        '',  # network.name
+        '',  # network.subnet_cidr
+        '',  # network.gateway_ip
+        '',  # network.dhcp_start
+        '',  # network.dhcp_end
+        '',  # paths.ssh_identity_file
+        '',  # paths.ssh_pubkey_path
+        'y',  # confirm
+    ])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(
+        'aivm.cli.config.init.getpass.getpass', lambda _: 'debug-pass'
+    )
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+    assert rc == 0
+    text = cfg_path.read_text(encoding='utf-8')
+    assert 'allow_password_login = true' in text
+    assert 'password = "debug-pass"' in text
+
+
+def test_config_init_editor_path_shows_full_table_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+
+    def fake_edit(path: Path, command: list[str]) -> None:
+        assert command == ['fake-editor']
+        text = path.read_text(encoding='utf-8')
+        path.write_text(text.replace('cpus = 4', 'cpus = 3'), encoding='utf-8')
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(['fake-editor']),
+            'edit_path': fake_edit,
+        },
+    )
+    answers = iter(['e', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.count('Detected defaults for `aivm config init`') == 1
+    assert 'Updated values' in out
+    assert 'cpus = 3' in cfg_path.read_text(encoding='utf-8')
+
+
+def test_config_init_editor_unavailable_falls_back_to_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+
+    def fake_prompt_edit(cfg: AgentVMConfig) -> AgentVMConfig:
+        cfg.vm.cpus = 5
+        return cfg
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(None),
+            '_edit_init_defaults_with_prompts': fake_prompt_edit,
+        },
+    )
+    answers = iter(['e', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    assert 'cpus = 5' in cfg_path.read_text(encoding='utf-8')
+
+
+def test_config_init_invalid_editor_document_can_be_reopened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg_path = tmp_path / 'config.toml'
+    calls = 0
+
+    def fake_edit(path: Path, command: list[str]) -> None:
+        nonlocal calls
+        del command
+        calls += 1
+        text = path.read_text(encoding='utf-8')
+        if calls == 1:
+            text = text.replace('cpus = 4', 'cpuz = 3')
+        else:
+            text = text.replace('cpuz = 3', 'cpus = 3')
+        path.write_text(text, encoding='utf-8')
+
+    patch_ns(
+        monkeypatch,
+        INIT_NS,
+        {
+            'cfg_path': returns(cfg_path),
+            'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
+            'sys.stdin.isatty': returns(True),
+            'select_editor_command': returns(['fake-editor']),
+            'edit_path': fake_edit,
+        },
+    )
+    answers = iter(['e', '', 'y'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+
+    rc = InitCLI.main(
+        argv=False, config=str(cfg_path), yes=False, defaults=False
+    )
+
+    assert rc == 0
+    assert calls == 2
+    assert 'cpus = 3' in cfg_path.read_text(encoding='utf-8')

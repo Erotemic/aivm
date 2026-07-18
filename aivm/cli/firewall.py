@@ -4,26 +4,24 @@ from __future__ import annotations
 
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..firewall import apply_firewall, firewall_status, remove_firewall
-from ._common import (
-    _BaseCommand,
-    _resolve_cfg_fallback,
-)
+from ..services import resolve_cfg_fallback
+from ._common import _BaseCommand
 
 
 class FirewallApplyCLI(_BaseCommand):
     """Apply nftables isolation rules for the VM network."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: bool = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         apply_firewall(cfg, dry_run=args.dry_run)
         return 0
 
@@ -34,7 +32,7 @@ class FirewallStatusCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         print(firewall_status(cfg))
         return 0
 
@@ -42,19 +40,19 @@ class FirewallStatusCLI(_BaseCommand):
 class FirewallRemoveCLI(_BaseCommand):
     """Remove nftables rules managed by aivm."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: bool = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         remove_firewall(cfg, dry_run=args.dry_run)
         return 0
 
 
-class FirewallModalCLI(scfg.ModalCLI):
+class FirewallModalCLI(kwconf.ModalCLI):
     """Firewall subcommands."""
 
     apply = FirewallApplyCLI

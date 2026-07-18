@@ -3,37 +3,39 @@
 from __future__ import annotations
 
 import re
-import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from loguru import logger
 
-from ..cli._common import (
-    PreparedSession,
-    _cfg_path,
-    _maybe_install_missing_host_deps,
-    _maybe_offer_create_ssh_identity,
-    _record_vm,
-    _resolve_cfg_for_code,
-)
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..firewall import apply_firewall
-from ..net import ensure_network
-from ..status import (
-    probe_firewall,
-    probe_network,
-    probe_ssh_ready,
-)
-from ..store import (
+from ..config_store import (
+    find_attachment_for_vm,
     find_attachments_for_vm,
     load_store,
     save_store,
     upsert_attachment,
     upsert_network,
     upsert_vm_with_network,
+)
+from ..errors import AIVMError
+from ..firewall import apply_firewall
+from ..net import ensure_network
+from ..privilege import sudo_allowed
+from ..services import (
+    PreparedSession,
+    maybe_install_missing_host_deps,
+    maybe_offer_create_ssh_identity,
+    record_vm,
+    resolve_cfg_for_code,
+)
+from ..status import (
+    probe_firewall,
+    probe_network,
+    probe_ssh_ready,
 )
 from ..util import CmdError
 from ..vm import (
@@ -167,25 +169,33 @@ def _record_attachment(
     guest_dst: str,
     tag: str,
 ) -> Path:
-    # Persist the lexical (unresolved) host path when it differs from the
-    # resolved path so that restore can recreate companion guest symlinks.
+    # The canonical attachment key (host_path) is always the resolved real
+    # path so that re-attaching via a different symlink chain (or via the
+    # canonical path itself) updates the same record. The lexical form the
+    # user typed — if it differs — is recorded as an alias so the guest can
+    # mirror it via a symlink. Aliases accumulate across re-attaches.
     lexical_str = str(host_src.expanduser().absolute())
     resolved_str = str(host_src.resolve())
-    host_lexical_path = lexical_str if lexical_str != resolved_str else ''
-
     reg = load_store(cfg_path)
+    existing = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    aliases: list[str] = []
+    if existing is not None:
+        aliases = list(existing.host_lexical_paths or [])
+    if lexical_str != resolved_str and lexical_str not in aliases:
+        aliases.append(lexical_str)
+
     before = deepcopy(reg)
     upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
     upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
     upsert_attachment(
         reg,
-        host_path=host_src,
+        host_path=resolved_str,
         vm_name=cfg.vm.name,
         mode=mode,
         access=access,
         guest_dst=guest_dst,
         tag=tag,
-        host_lexical_path=host_lexical_path,
+        host_lexical_paths=aliases,
     )
     if reg == before:
         log.debug(
@@ -320,14 +330,15 @@ def _restore_saved_vm_attachments(
                 ex,
             )
 
-    # Build a map from resolved source_dir -> lexical host path so restore can
-    # recreate companion guest symlinks when the original attachment was made
-    # through a host symlink.
+    # Build a map from resolved source_dir -> list of lexical host paths so
+    # restore can recreate companion guest symlinks when the original
+    # attachment was made through one or more host symlinks. Each attachment
+    # may carry several aliases since schema 7.
     _restore_reg = load_store(cfg_path)
-    _lexical_by_source: dict[str, str] = {
-        e.host_path: e.host_lexical_path
+    _lexical_by_source: dict[str, list[str]] = {
+        e.host_path: list(e.host_lexical_paths)
         for e in find_attachments_for_vm(_restore_reg, cfg.vm.name)
-        if e.host_lexical_path
+        if e.host_lexical_paths
     }
     shared_secondary = [
         att
@@ -336,18 +347,9 @@ def _restore_saved_vm_attachments(
     ]
     mappings: list[tuple[str, str]] = []
     if shared_secondary:
-        mappings = vm_share_mappings(cfg, use_sudo=False)
-        needs_privileged_probe = False
-        for att in shared_secondary:
-            aligned = drift_align_attachment_tag_with_mappings(
-                att, Path(att.source_dir), mappings
-            )
-            if not drift_attachment_has_mapping(cfg, aligned, mappings):
-                needs_privileged_probe = True
-                break
-
-        if needs_privileged_probe:
-            mappings = vm_share_mappings(cfg, use_sudo=True)
+        # vm_share_mappings escalates to sudo internally only when the
+        # unprivileged read fails, so one call covers both cases.
+        mappings = vm_share_mappings(cfg, use_sudo=True)
 
     restored = 0
     for att in secondary_attachments:
@@ -355,8 +357,8 @@ def _restore_saved_vm_attachments(
             continue
         if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
             aligned = att
-            _lx = _lexical_by_source.get(aligned.source_dir)
-            _restore_src = Path(_lx) if _lx else Path(aligned.source_dir)
+            _lx = _lexical_by_source.get(aligned.source_dir) or []
+            _restore_src = Path(_lx[0]) if _lx else Path(aligned.source_dir)
             try:
                 _ensure_attachment_available_in_guest(
                     cfg,
@@ -368,6 +370,7 @@ def _restore_saved_vm_attachments(
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
                     mirror_home=mirror_home,
+                    host_lexical_paths=_lx,
                 )
                 _record_attachment(
                     cfg,
@@ -404,8 +407,8 @@ def _restore_saved_vm_attachments(
                 )
             continue
 
-        _lx = _lexical_by_source.get(att.source_dir)
-        _restore_src = Path(_lx) if _lx else Path(att.source_dir)
+        _lx = _lexical_by_source.get(att.source_dir) or []
+        _restore_src = Path(_lx[0]) if _lx else Path(att.source_dir)
         aligned = drift_align_attachment_tag_with_mappings(
             att, Path(att.source_dir), mappings
         )
@@ -416,6 +419,7 @@ def _restore_saved_vm_attachments(
                     aligned.source_dir,
                     aligned.tag,
                     dry_run=False,
+                    read_only=(aligned.access == ATTACHMENT_ACCESS_RO),
                 )
             except Exception as ex:
                 log.warning(
@@ -510,10 +514,10 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
         True if the VM is running, False if not defined/running,
         None if the probe is inconclusive (e.g., permission denied).
     """
-    from ..runtime import virsh_system_cmd
+    from ..runtime import virsh_cmd
 
     res = CommandManager.current().run(
-        virsh_system_cmd('domstate', vm_name),
+        virsh_cmd('domstate', vm_name),
         sudo=False,
         check=False,
         capture=True,
@@ -573,10 +577,18 @@ def _reconcile_attached_vm(
             and policy.ensure_firewall_opt
             and (not cached_ssh_ok)
         ):
-            fw_probe = probe_firewall(cfg, use_sudo=False).ok
-            if fw_probe is None:
+            if not sudo_allowed():
+                log.warning(
+                    'Skipping firewall reconciliation: privilege_mode = '
+                    'never and nftables requires root. Set firewall.enabled '
+                    '= false to silence this warning.'
+                )
+            else:
+                # nft reads need root on almost every host, so probing
+                # without sudo first would just submit a doomed command; go
+                # straight to the read-only sudo probe.
                 fw_probe = probe_firewall(cfg, use_sudo=True).ok
-            need_firewall_apply = fw_probe is not True
+                need_firewall_apply = fw_probe is not True
         if need_firewall_apply:
             apply_firewall(cfg, dry_run=policy.dry_run)
 
@@ -609,7 +621,7 @@ def _reconcile_attached_vm(
 
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
-            _maybe_install_missing_host_deps(
+            maybe_install_missing_host_deps(
                 yes=bool(policy.yes), dry_run=bool(policy.dry_run)
             )
             if attachment.mode in {
@@ -691,7 +703,7 @@ def _reconcile_attached_vm(
                 cfg, use_sudo=False
             )
             if vm_has_shared_mem is False and not policy.recreate_if_needed:
-                raise RuntimeError(
+                raise AIVMError(
                     'Existing VM cannot accept virtiofs attachments because its domain '
                     'definition lacks required shared-memory backing (memfd/shared).\n'
                     f'VM: {cfg.vm.name}\n'
@@ -743,6 +755,9 @@ def _reconcile_attached_vm(
                             virtiofs_mapping[1],
                             dry_run=False,
                             vm_running=True,
+                            read_only=(
+                                attachment.access == ATTACHMENT_ACCESS_RO
+                            ),
                         )
                     has_share = True
                 except Exception as ex:
@@ -756,8 +771,35 @@ def _reconcile_attached_vm(
                             for src, tag in current_maps
                         )
                     else:
-                        found = '  - (no filesystem mappings found)'
-                    raise RuntimeError(
+                        # An unprivileged dumpxml can fail (not in the
+                        # libvirt group) and is indistinguishable from a
+                        # genuinely empty device list here; do not claim
+                        # certainty we do not have.
+                        found = (
+                            '  - none detected (or the unprivileged domain '
+                            'XML read failed; check with `aivm status --sudo`)'
+                        )
+                    next_steps = []
+                    if 'virtiofsd-wrapper-' in str(ex):
+                        # attach-device --config re-validates the whole
+                        # persistent definition, so a legacy AIVM-generated
+                        # virtiofsd wrapper left in the VM XML by an older
+                        # version fails *new* attaches. Drift reconciliation
+                        # removes it; recreating the VM is not needed.
+                        next_steps.append(
+                            '  - The VM definition references a legacy AIVM '
+                            'virtiofsd wrapper script (removed in newer '
+                            'versions). Run `aivm vm update` to strip it '
+                            'from the VM XML, then retry.'
+                        )
+                    next_steps.extend(
+                        [
+                            '  - Re-run with --recreate_if_needed to rebuild the VM definition with the new share.',
+                            '  - Or use a VM already defined with this share mapping.',
+                        ]
+                    )
+                    next_steps_text = '\n'.join(next_steps)
+                    raise AIVMError(
                         'Existing VM does not include requested share mapping, and live attach failed.\n'
                         f'VM: {cfg.vm.name}\n'
                         f'Requested: source={virtiofs_mapping[0]} tag={requested_tag} guest_dst={attachment.guest_dst}\n'
@@ -765,8 +807,7 @@ def _reconcile_attached_vm(
                         f'{found}\n'
                         f'Live attach error: {ex}\n'
                         'Next steps:\n'
-                        '  - Re-run with --recreate_if_needed to rebuild the VM definition with the new share.\n'
-                        '  - Or use a VM already defined with this share mapping.'
+                        f'{next_steps_text}'
                     )
 
         if recreate:
@@ -800,77 +841,67 @@ def _prepare_attached_session(
     ensure_firewall_opt: bool,
     dry_run: bool,
     yes: bool,
+    bootstrap_missing_vm: Callable[[RuntimeError], None] | None = None,
 ) -> PreparedSession:
     """Prepare a ready-to-use VM session rooted at a host folder attachment.
 
-    If no VM context exists, this may bootstrap ``config init`` + ``vm create``
-    (with consent/non-interactive policy checks), then continue with attachment,
-    IP/SSH readiness, and in-guest mount reconciliation.
+    If no VM context exists and ``bootstrap_missing_vm`` is provided, it is
+    invoked (the CLI layer supplies the ``config init`` + ``vm create``
+    consent flow) and config resolution is retried; without a bootstrap
+    callback the resolution error propagates. Then continues with
+    attachment, IP/SSH readiness, and in-guest mount reconciliation.
     """
     if not host_src.exists():
         raise FileNotFoundError(f'Host source path does not exist: {host_src}')
     if not host_src.is_dir():
-        raise RuntimeError(f'Host source path is not a directory: {host_src}')
+        raise AIVMError(f'Host source path is not a directory: {host_src}')
+
+    # Run the sensitive-path guard before we resolve config or potentially
+    # bootstrap a brand-new VM — refusing here avoids creating a VM only to
+    # block on the attachment. Overlap checks run later, once we know which
+    # VM and store we're targeting.
+    from .safety import attachment_safety_preflight
+
+    ok, _report = attachment_safety_preflight(
+        host_src,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
+    )
+    if not ok:
+        raise AIVMError(
+            f'Aborted: declined to attach sensitive path {host_src}.'
+        )
 
     try:
-        cfg, cfg_path = _resolve_cfg_for_code(
+        cfg, cfg_path = resolve_cfg_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
     except RuntimeError as ex:
-        msg = str(ex)
-        if 'No VM definitions found in config store' not in msg:
+        if (
+            'No VM definitions found in config store' not in str(ex)
+            or bootstrap_missing_vm is None
+        ):
             raise
-        prefix = 'No VM definitions found in config store: '
-        missing_store_path = _cfg_path(config_opt)
-        if msg.startswith(prefix):
-            tail = msg[len(prefix) :]
-            # Avoid brittle regex parsing: split at our known guidance suffix.
-            store_str = tail.split('. Run `aivm config init`', 1)[0].strip()
-            if store_str:
-                missing_store_path = Path(store_str).expanduser().resolve()
-        missing_store = load_store(missing_store_path)
-        need_init = missing_store.defaults is None
-        if not yes:
-            if not sys.stdin.isatty():
-                raise RuntimeError(
-                    'No managed VM found for this folder. Re-run with --yes to create one automatically.'
-                ) from ex
-            print('No managed VM found for this folder.')
-            if need_init:
-                prompt = (
-                    'Run `aivm config init` and `aivm vm create` now? [Y/n]: '
-                )
-            else:
-                prompt = 'Run `aivm vm create` now using existing config defaults? [Y/n]: '
-            ans = input(prompt).strip().lower()
-            if ans not in {'', 'y', 'yes'}:
-                raise RuntimeError('Aborted by user.') from ex
-        if need_init:
-            from ..cli.config import InitCLI
-
-            InitCLI.main(
-                argv=False,
-                config=config_opt,
-                yes=bool(yes),
-                defaults=bool(yes),
-                force=False,
-            )
-        from ..cli.vm import VMCreateCLI
-
-        VMCreateCLI.main(
-            argv=False,
-            config=config_opt,
-            vm=vm_opt,
-            yes=bool(yes),
-            dry_run=bool(dry_run),
-            force=False,
-        )
-        cfg, cfg_path = _resolve_cfg_for_code(
+        bootstrap_missing_vm(ex)
+        cfg, cfg_path = resolve_cfg_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
+        )
+
+    existing_store = load_store(cfg_path)
+    ok, _report = attachment_safety_preflight(
+        host_src,
+        existing_attachments=existing_store.attachments,
+        vm_name=cfg.vm.name,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
+    )
+    if not ok:
+        raise AIVMError(
+            f'Aborted: declined to add overlapping attachment {host_src} to VM {cfg.vm.name}.'
         )
 
     if attach_mode_opt or attach_access_opt:
@@ -898,7 +929,7 @@ def _prepare_attached_session(
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip
 
-    if (not dry_run) and _maybe_offer_create_ssh_identity(
+    if (not dry_run) and maybe_offer_create_ssh_identity(
         cfg,
         yes=bool(yes),
         prompt_reason=(
@@ -906,7 +937,7 @@ def _prepare_attached_session(
             'sessions and provision the guest.'
         ),
     ):
-        _record_vm(
+        record_vm(
             cfg,
             cfg_path,
             reason=(
@@ -949,12 +980,15 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = bool(load_store(cfg_path).behavior.mirror_shared_home_folders)
+    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
         ATTACHMENT_MODE_SHARED,
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
+        _reg_for_aliases = load_store(cfg_path)
+        _saved = find_attachment_for_vm(_reg_for_aliases, host_src, cfg.vm.name)
+        _primary_aliases = list(_saved.host_lexical_paths) if _saved else []
         _ensure_attachment_available_in_guest(
             cfg,
             host_src,
@@ -968,6 +1002,7 @@ def _prepare_attached_session(
                 and not reconcile.shared_root_host_side_ready
             ),
             mirror_home=mirror_home,
+            host_lexical_paths=_primary_aliases,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _reconcile_persistent_attachments_in_guest(

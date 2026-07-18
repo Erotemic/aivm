@@ -3,21 +3,42 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Callable
 
 from pytest import MonkeyPatch
 
-from aivm.cli.vm import VMDetachCLI
-from aivm.config import AgentVMConfig
+from aivm.cli.vm_attach import VMDetachCLI
+from aivm.config_store import AttachmentEntry, Store, find_attachment_for_vm
 from aivm.status import ProbeOutcome
-from aivm.store import AttachmentEntry, Store, find_attachment_for_vm
 from aivm.vm.share import AttachmentMode
+from tests.helpers import make_cfg, patch_ns, records, returns
+
+
+def _forbidden(message: str) -> Callable[..., Any]:
+    """Build a stub that fails the test if it is ever called."""
+
+    def _stub(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise AssertionError(message)
+
+    return _stub
+
+
+def _record_save(saved: list[Path]) -> Callable[..., Path]:
+    """Stub for ``save_store`` that records the path it saved to."""
+
+    def _stub(reg: Any, path: Path, **kwargs: Any) -> Path:
+        del reg, kwargs
+        saved.append(path)
+        return path
+
+    return _stub
 
 
 def test_vm_detach_shared_removes_store_and_detaches_mapping(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared'
+    cfg = make_cfg(None, **{'vm.name': 'vm-shared'})
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
@@ -33,24 +54,18 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         )
     )
 
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_cfg_for_code',
-        lambda **kwargs: (cfg, cfg_path),
-    )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
-    monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
-        lambda *a, **k: (ProbeOutcome(True, 'running'), True),
-    )
-    detached: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
-        lambda *a, **k: detached.append((a, k)) or True,
-    )
+    detached: list[Any] = []
     saved: list[Path] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
-        lambda reg, path, **kwargs: saved.append(path) or path,
+    patch_ns(
+        monkeypatch,
+        'aivm.cli.vm_attach',
+        {
+            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'load_store': returns(store),
+            'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
+            'detach_vm_share': records(detached, True),
+            'save_store': _record_save(saved),
+        },
     )
 
     rc = VMDetachCLI.main(
@@ -68,8 +83,7 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
 def test_vm_detach_git_only_updates_store(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-git'
+    cfg = make_cfg(None, **{'vm.name': 'vm-git'})
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'repo'
     host_src.mkdir()
@@ -85,25 +99,19 @@ def test_vm_detach_git_only_updates_store(
         )
     )
 
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_cfg_for_code',
-        lambda **kwargs: (cfg, cfg_path),
-    )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
-    monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
-        lambda *a, **k: (ProbeOutcome(False, 'shut off'), True),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError('detach_vm_share should not be called for git mode')
-        ),
-    )
     saved: list[Path] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
-        lambda reg, path, **kwargs: saved.append(path) or path,
+    patch_ns(
+        monkeypatch,
+        'aivm.cli.vm_attach',
+        {
+            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'load_store': returns(store),
+            'probe_vm_state': returns((ProbeOutcome(False, 'shut off'), True)),
+            'detach_vm_share': _forbidden(
+                'detach_vm_share should not be called for git mode'
+            ),
+            'save_store': _record_save(saved),
+        },
     )
 
     rc = VMDetachCLI.main(
@@ -120,8 +128,7 @@ def test_vm_detach_git_only_updates_store(
 def test_vm_detach_shared_root_unbinds_guest_and_host(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-shared-root'
+    cfg = make_cfg(None, **{'vm.name': 'vm-shared-root'})
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
@@ -137,41 +144,24 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         )
     )
 
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_cfg_for_code',
-        lambda **kwargs: (cfg, cfg_path),
-    )
-    monkeypatch.setattr('aivm.cli.vm.load_store', lambda path: store)
-    monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
-        lambda *a, **k: (ProbeOutcome(True, 'running'), True),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_ip_for_ssh_ops',
-        lambda *a, **k: '10.77.0.42',
-    )
-    guest_detaches: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm._detach_shared_root_guest_bind',
-        lambda *a, **k: guest_detaches.append((a, k)) or None,
-    )
-    host_detaches: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm._detach_shared_root_host_bind',
-        lambda *a, **k: host_detaches.append((a, k)) or None,
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm.detach_vm_share',
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError(
-                'detach_vm_share should not be called for shared-root mode'
-            )
-        ),
-    )
+    guest_detaches: list[Any] = []
+    host_detaches: list[Any] = []
     saved: list[Path] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm.save_store',
-        lambda reg, path, **kwargs: saved.append(path) or path,
+    patch_ns(
+        monkeypatch,
+        'aivm.cli.vm_attach',
+        {
+            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'load_store': returns(store),
+            'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
+            '_resolve_ip_for_ssh_ops': returns('10.77.0.42'),
+            '_detach_shared_root_guest_bind': records(guest_detaches),
+            '_detach_shared_root_host_bind': records(host_detaches),
+            'detach_vm_share': _forbidden(
+                'detach_vm_share should not be called for shared-root mode'
+            ),
+            'save_store': _record_save(saved),
+        },
     )
 
     rc = VMDetachCLI.main(
@@ -186,13 +176,11 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
 
 
 def test_vm_detach_persistent_updates_manifest_without_host_unbind(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    from aivm.cli.vm import VMDetachCLI
-    from aivm.store import AttachmentEntry, Store, save_store
+    from aivm.config_store import save_store
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-detach'
+    cfg = make_cfg(None, **{'vm.name': 'vm-persistent-detach'})
     cfg_path = tmp_path / 'config.toml'
     host_src = tmp_path / 'proj'
     host_src.mkdir()
@@ -209,44 +197,37 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
     )
     save_store(reg, cfg_path)
 
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_cfg_for_code',
-        lambda *a, **k: (cfg, cfg_path),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm.probe_vm_state',
-        lambda *a, **k: (
-            ProbeOutcome(True, 'vm-persistent-detach state=running'),
-            True,
-        ),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm._resolve_ip_for_ssh_ops',
-        lambda *a, **k: '10.0.0.11',
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm._detach_shared_root_host_bind',
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError('persistent detach should not tear down host bind')
-        ),
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm._detach_shared_root_guest_bind',
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError(
+    syncs: list[Any] = []
+    replay_syncs: list[Any] = []
+    replays: list[Any] = []
+    patch_ns(
+        monkeypatch,
+        'aivm.cli.vm_attach',
+        {
+            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'probe_vm_state': returns(
+                (
+                    ProbeOutcome(True, 'vm-persistent-detach state=running'),
+                    True,
+                )
+            ),
+            '_resolve_ip_for_ssh_ops': returns('10.0.0.11'),
+            '_detach_shared_root_host_bind': _forbidden(
+                'persistent detach should not tear down host bind'
+            ),
+            '_detach_shared_root_guest_bind': _forbidden(
                 'persistent detach should use replay reconcile instead'
-            )
-        ),
-    )
-    syncs: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm._sync_persistent_attachment_manifest_on_host',
-        lambda *a, **k: syncs.append((a, k)) or cfg_path,
-    )
-    replays: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.cli.vm._reconcile_persistent_attachments_in_guest',
-        lambda *a, **k: replays.append((a, k)) or None,
+            ),
+            '_sync_persistent_attachment_manifest_on_host': records(
+                syncs, cfg_path
+            ),
+            # The root-owned replay manifest sync escalates for real; the
+            # seam is the subject of test_persistent_host.py.
+            '_sync_persistent_host_replay_manifest': records(
+                replay_syncs, cfg_path
+            ),
+            '_reconcile_persistent_attachments_in_guest': records(replays),
+        },
     )
 
     rc = VMDetachCLI.main(
@@ -258,4 +239,5 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
 
     assert rc == 0
     assert syncs
+    assert replay_syncs
     assert replays

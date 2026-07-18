@@ -18,24 +18,29 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Iterable
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_store import Store, find_attachments_for_vm
 from ..firewall import read_firewall_tcp_ports
-from ..runtime import virsh_system_cmd
-from ..store import Store, find_attachments_for_vm
+from ..privilege import virsh_needs_sudo
+from ..runtime import virsh_cmd
+from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
+    AttachmentAccess,
     AttachmentMode,
     ResolvedAttachment,
     align_attachment_tag_with_mappings,
     vm_share_mappings,
+    vm_share_mappings_detailed,
 )
 
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
 
 
-def _normalize_tcp_ports(values) -> tuple[int, ...]:
+def _normalize_tcp_ports(values: Iterable[Any] | None) -> tuple[int, ...]:
     """
     Normalize configured / observed TCP ports into a sorted deduped tuple[int].
     """
@@ -94,16 +99,10 @@ def firewall_drift_report(cfg: AgentVMConfig, *, use_sudo: bool) -> DriftReport:
     )
 
 
-def _shared_root_host_dir(cfg: AgentVMConfig) -> Path:
-    """Get the shared-root host directory for a VM.
-
-    Note: This is a simple path computation based on config, not a libvirt query.
-    """
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
-
-
-def _persistent_root_host_dir(cfg: AgentVMConfig) -> Path:
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'persistent-root'
+# Canonical host-side export layout lives in .paths; these aliases keep the
+# established module-local names used throughout drift reporting and tests.
+_shared_root_host_dir = shared_root_host_dir
+_persistent_root_host_dir = persistent_root_host_dir
 
 
 @dataclass(frozen=True)
@@ -206,9 +205,9 @@ def read_actual_vm_hardware(
         error_type is one of: 'not_found', 'permission', 'other', or '' on success.
         error_detail contains the raw error message.
     """
-    cmd = virsh_system_cmd('dominfo', cfg.vm.name)
+    cmd = virsh_cmd('dominfo', cfg.vm.name)
     res = CommandManager.current().run(
-        cmd, sudo=use_sudo, check=False, capture=True
+        cmd, sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
     )
     if res.code != 0:
         # Check both stderr and stdout for error messages
@@ -275,8 +274,22 @@ def attachment_has_mapping(
         return any(
             src == expected_src and tag == expected_tag for src, tag in mappings
         )
-    return any(
+    if not any(
         src == att.source_dir and tag == att.tag for src, tag in mappings
+    ):
+        return False
+    # A direct share is satisfied only when the device's host-boundary
+    # access agrees with the record: a pre-<readonly/> ro share is writable
+    # at the device level however the guest mounted it, and must be
+    # replaced, not accepted. The detailed read hits the manager's cached
+    # domain XML, so no extra probe runs.
+    want_ro = att.access == AttachmentAccess.RO
+    detailed = vm_share_mappings_detailed(cfg, use_sudo=virsh_needs_sudo())
+    if not detailed:
+        return True  # XML unreadable here; keep the name-level answer
+    return any(
+        src == att.source_dir and tag == att.tag and ro == want_ro
+        for src, tag, ro in detailed
     )
 
 

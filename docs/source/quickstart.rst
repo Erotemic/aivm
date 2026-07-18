@@ -17,8 +17,9 @@ Behavior:
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what
   the current step is doing before the commands run.
-* For default ``shared-root`` attachments, those steps usually include host
-  bind inspection/repair, VM mapping checks, and guest mount verification.
+* For default ``persistent`` attachments, those steps usually include host
+  bind inspection/repair, persistent-root VM mapping checks, manifest sync, and
+  guest mount verification.
 
 Use this path when you want minimal setup friction.
 
@@ -32,6 +33,9 @@ Path B: Explicit config-store setup
 
 This path is explicit and reproducible. ``aivm config init`` establishes VM
 defaults and SSH identity configuration; ``aivm vm create`` provisions the VM.
+During interactive init, choose the editor path for direct TOML editing or the
+prompt-by-prompt path for a terminal-only walkthrough.  The detected defaults
+table is shown once; later confirmations summarize only values that changed.
 
 After either path
 -----------------
@@ -42,10 +46,38 @@ After either path
    aivm status --sudo
    aivm vm update
 
+Optional: routine operation without sudo
+----------------------------------------
+
+The default posture assumes an administrator: system libvirt plus sudo
+prompts, with no setup ceremony. :doc:`privilege-modes` compares the
+postures side by side.
+
+If you prefer ``aivm`` to never invoke ``sudo``:
+
+.. code-block:: bash
+
+   aivm host permissions check    # report what is missing
+   aivm host permissions setup    # establish routine host access
+
+Normal setup may use sudo to add you to the ``libvirt`` group, then prepares
+a user-owned VM storage directory with ``setfacl`` traversal grants for
+``libvirt-qemu``. It changes nothing in your config -- it prints the one line
+(``defaults.paths.base_dir``) that the storage grant depends on, or writes it
+for you with ``--persist``. Log out and back in (or ``newgrp libvirt``) after
+the group change, then re-run the check.
+
+That host work is all the default ``as-needed`` mode needs: it then stops
+invoking sudo for whatever already works without it. Root is still required for
+managed nftables and for establishing new host bind mounts, so a global
+no-sudo mode is intentionally not exposed.
+
 Notes
 -----
 
 * ``status --sudo`` enables privileged checks (libvirt/network/firewall/image).
+* ``behavior.privilege_mode`` controls escalation: ``as-needed`` (default,
+  sudo only where needed) or ``always`` (classic).
 * ``status --detail`` includes raw diagnostics (virsh/nft/ssh probe outputs).
 * Privileged operations prompt unless ``--yes`` or ``--yes-sudo`` is used.
 * Approvals normally happen once per grouped step, not once per command.
@@ -55,23 +87,29 @@ Notes
   later steps.
 * Full executed commands are always logged; raw commands are also still visible
   at higher verbosity levels.
-* Shared-root setup is designed to avoid changing ownership/perms of your host
-  source tree.
-* ``shared-root`` is the default attachment mode. ``persistent`` is available
-  with ``aivm attach . --mode persistent`` and preserves attachment intent with
-  replay helpers, but both modes still rely on virtiofs.
+* Persistent and shared-root setup are designed to avoid changing ownership/perms
+  of your host source tree.
+* ``persistent`` is the default attachment mode for new folders. It preserves
+  attachment intent with replay helpers. ``shared-root`` remains available with
+  ``aivm attach . --mode shared-root`` for the legacy single-export path, and
+  both modes still rely on virtiofs.
 * Settings sync has been removed for now because it was too flaky. Use explicit
   attachments or manual Git operations until a replacement is designed.
 
 Known virtiofs limitation
 -------------------------
 
-Long-lived VMs with virtiofs-backed attachments can accumulate host-side
-``virtiofsd`` file descriptors after heavy traversal of shared folders. The
-symptom is usually ``Too many open files`` / ``OSError: [Errno 24]`` from
-ordinary filesystem tools even when user limits look high.
+Long-lived VMs with virtiofs-backed attachments accumulate host-side
+``virtiofsd`` file descriptors (one per guest-cached inode) and historically
+hit the daemon's fd ceiling, failing with ``Too many open files`` /
+``OSError: [Errno 24]`` even when user limits look high. The dominant
+trigger was the guest's nightly ``updatedb`` indexing sweep over the shares.
 
-``persistent`` mode mitigates attachment replay and mount churn, but it has not
-solved this underlying virtiofs behavior. Restarting the VM usually clears the
-bad runtime state. Prefer narrow attachments, detach stale folders, and use
+aivm now handles this automatically: new VMs get a guest-side *virtiofs
+guard* (a systemd timer that prunes updatedb and flushes guest
+dentry/inode caches at a watermark, releasing the host descriptors).
+Retrofit existing VMs once with ``aivm vm fdguard --action install`` and
+retire any periodic host-side ``aivm vm flush_caches`` jobs. See
+:doc:`virtiofs` for the full mechanism, tuning knobs, and incident
+runbook. Prefer narrow attachments, detach stale folders, and use
 ``--mode git`` when live writable host sharing is not required.

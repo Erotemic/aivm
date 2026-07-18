@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
 from ..vm import ensure_share_mounted
@@ -83,7 +84,10 @@ def _ensure_guest_symlink(
     )
     cmd = [
         'ssh',
-        *ssh_base_args(ident, strict_host_key_checking='accept-new'),
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+        ),
         f'{cfg.vm.user}@{ip}',
         script,
     ]
@@ -110,28 +114,75 @@ def _apply_guest_derived_symlinks(
     attachment: ResolvedAttachment,
     *,
     mirror_home: bool,
+    extra_lexical_paths: list[str] | tuple[str, ...] = (),
 ) -> None:
     """Create companion and mirror-home symlinks in the guest after attachment.
 
     Three cases are handled:
-    1. Companion symlink: if host_src is a symlink on the host, create a guest
-       symlink at the lexical path pointing to the resolved guest_dst.
+    1. Companion symlinks: for ``host_src`` itself (when its lexical form
+       differs from the resolved guest_dst) and for every additional alias
+       supplied via ``extra_lexical_paths`` (typically the persisted
+       ``host_lexical_paths`` list from the attachment record). Each becomes
+       a guest symlink at the lexical path pointing to the resolved guest_dst.
     2. Mirror-home (lexical): if mirror_home is enabled and the lexical host
        path is under the host home, create a symlink under the guest home at
        the same relative position.
-    3. Mirror-home (resolved): when host_src is a symlink, also apply the
+    3. Mirror-home (resolved): when host_src is symlinked, also apply the
        mirror-home rule independently to the resolved host path, so both the
        lexical and resolved relative paths under the guest home point to guest_dst.
+
+    Stale aliases are detected on a best-effort basis: when a recorded
+    lexical path no longer resolves to the same canonical host_path, a
+    warning is emitted and the symlink is still created at the lexical
+    location. The mount itself stays correct (it lives at the canonical
+    location); the alias may surface unexpected contents on the host if the
+    symlink chain was rewired post-attach.
     """
     guest_dst = attachment.guest_dst
-    lexical = _host_symlink_lexical_path(host_src)
+    canonical_host = str(host_src.resolve()) if host_src else ''
 
-    # 1. Companion symlink at the lexical guest path -> resolved guest_dst.
-    if lexical is not None and lexical != guest_dst:
+    # Build the unique set of lexical aliases to materialize. We start from
+    # any caller-supplied list (the persisted aliases) and fold in the
+    # current host_src's lexical form when it differs from the guest_dst.
+    aliases: list[str] = []
+    seen: set[str] = set()
+
+    def _add_alias(p: str) -> None:
+        if not p or p == guest_dst or p in seen:
+            return
+        seen.add(p)
+        aliases.append(p)
+
+    for alias in extra_lexical_paths or ():
+        _add_alias(str(alias))
+    current_lexical = _host_symlink_lexical_path(host_src)
+    if current_lexical is not None:
+        _add_alias(current_lexical)
+
+    for alias in aliases:
+        # Drift check: warn (but still create) if the recorded lexical alias
+        # no longer resolves to the canonical host path. Mount itself remains
+        # correct; the guest symlink may surface different host contents if
+        # the link chain was rewired since the alias was recorded.
+        if canonical_host:
+            try:
+                alias_resolved = str(Path(alias).resolve())
+            except OSError:
+                alias_resolved = ''
+            if alias_resolved and alias_resolved != canonical_host:
+                log.warning(
+                    'Recorded lexical alias {} no longer resolves to '
+                    'canonical host_path {} (now resolves to {}). Guest '
+                    'symlink will still be created, but content under '
+                    'this alias on the host has drifted.',
+                    alias,
+                    canonical_host,
+                    alias_resolved,
+                )
         _ensure_guest_symlink(
             cfg,
             ip,
-            symlink_path=lexical,
+            symlink_path=alias,
             target_path=guest_dst,
         )
 
@@ -153,8 +204,11 @@ def _apply_guest_derived_symlinks(
 
     # 3. Mirror-home for the resolved host path (only when host_src is a symlink
     #    and the attachment did not use an explicit custom guest_dst).
-    if lexical is not None and is_default_dst:
-        resolved_src = host_src.resolve()
+    if current_lexical is not None and is_default_dst:
+        try:
+            resolved_src = host_src.resolve()
+        except OSError:
+            return
         resolved_mirror = _compute_mirror_home_symlink(
             cfg, resolved_src, guest_dst, is_default_dst=True
         )
@@ -224,6 +278,7 @@ def _ensure_attachment_available_in_guest(
     ensure_shared_root_host_side: bool,
     allow_disruptive_shared_root_rebind: bool = True,
     mirror_home: bool = False,
+    host_lexical_paths: list[str] | tuple[str, ...] = (),
 ) -> None:
     """Make an attachment available at its guest destination for a running VM.
 
@@ -312,6 +367,7 @@ def _ensure_attachment_available_in_guest(
         host_src,
         attachment,
         mirror_home=mirror_home,
+        extra_lexical_paths=host_lexical_paths,
     )
 
 
@@ -323,7 +379,7 @@ def _git_repo_context(host_src: Path) -> tuple[Path, Path]:
         capture=True,
     )
     if probe.code != 0:
-        raise RuntimeError(
+        raise AIVMError(
             f'Git attachment mode requires a Git worktree: {host_src}'
         )
     repo_root = Path((probe.stdout or '').strip()).resolve()

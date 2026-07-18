@@ -2,16 +2,64 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PurePosixPath
 
+from loguru import logger as log
+
 from ..config import AgentVMConfig
-from ..store import find_attachment_for_vm, load_store
+from ..config_store import find_attachment_for_vm, load_store
+from ..errors import AIVMError
 from ..vm.share import (
     AttachmentAccess,
     AttachmentMode,
     ResolvedAttachment,
     _ensure_share_tag_len,
 )
+
+
+def logical_absolute_path(raw: str | Path) -> Path:
+    """Convert a user-supplied path to an absolute path that preserves symlinks.
+
+    The default ``Path('.').absolute()`` uses ``os.getcwd()``, which on Linux
+    returns the kernel-canonical path (symlinks already resolved). For a CLI
+    that promises "the location you type is the location you get", we want
+    the shell's logical view: e.g. ``cd /data/proj`` (where ``/data`` is a
+    symlink) should keep ``/data/proj`` as the typed path even when the
+    kernel sees ``/media/raid/proj``.
+
+    Resolution rules:
+
+    * Absolute inputs are returned via ``expanduser()`` only. No symlink
+      resolution — preserve exactly what the user typed.
+    * Relative inputs are joined with ``$PWD`` *iff* ``Path($PWD).resolve()``
+      equals ``Path(os.getcwd())``. That validation guards against a stale
+      or spoofed ``PWD`` (e.g. set by a parent shell and not refreshed after
+      ``cd``). When the check fails, we fall back to ``Path.absolute()``,
+      accepting the kernel-canonical form rather than risking the wrong dir.
+
+    Note: this returns a lexical path. It is not a substitute for
+    ``Path.resolve()`` when callers genuinely need a canonical path (e.g.
+    a bind-mount source). Use both: the lexical form for what to show the
+    user, and ``resolve()`` for what to mount.
+    """
+    p = Path(str(raw)).expanduser()
+    if p.is_absolute():
+        return p
+    pwd = os.environ.get('PWD')
+    if pwd:
+        try:
+            pwd_path = Path(pwd)
+            if pwd_path.is_absolute() and pwd_path.resolve() == Path(os.getcwd()):
+                return (pwd_path / p).expanduser()
+        except OSError:
+            # PWD points at something we can't stat — fall through.
+            log.debug(
+                'logical_absolute_path: $PWD={} could not be validated; '
+                'falling back to os.getcwd()',
+                pwd,
+            )
+    return p.absolute()
 
 # Attachment mode constants (string aliases for mode values)
 ATTACHMENT_MODE_SHARED = AttachmentMode.SHARED.value
@@ -39,14 +87,17 @@ ATTACHMENT_ACCESS_MODES = {
 def _default_primary_guest_dst(host_src: Path) -> str:
     """Compute the default primary guest destination for an attachment.
 
-    Uses the lexical absolute path normally (expanduser + absolute).
-    If the host source is itself a symlink, uses the resolved real path as the
-    primary destination (so the mount target is the canonical location).
+    The primary guest path is always the canonical resolved host path. If the
+    user typed any path that resolves to a different lexical form (terminal
+    symlink, intermediate symlink, or relative path captured against a
+    symlinked ``$PWD``), the typed lexical paths become *aliases* recorded
+    separately on the attachment and materialized in the guest as symlinks
+    pointing at this canonical guest_dst.
     """
-    lexical = host_src.expanduser().absolute()
-    if lexical.is_symlink():
+    try:
         return str(host_src.resolve())
-    return str(lexical)
+    except OSError:
+        return str(host_src.expanduser().absolute())
 
 
 def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
@@ -57,11 +108,22 @@ def _resolve_guest_dst(host_src: Path, guest_dst_opt: str) -> str:
 
 
 def _host_symlink_lexical_path(host_src: Path) -> str | None:
-    """If host_src (after expanduser/absolute) is a symlink, return its lexical path. Else None."""
+    """Return the lexical (typed) form of ``host_src`` if it differs from the resolved form.
+
+    Differs from the older "is terminal-component a symlink?" check so that
+    intermediate symlinks (e.g. ``/data/.../foo`` where ``/data`` is a
+    symlink) and PWD-captured relative paths through symlinked cwds are both
+    detected. Returns ``None`` when lexical and resolved coincide — there is
+    no alias worth recording.
+    """
     lexical = host_src.expanduser().absolute()
-    if lexical.is_symlink():
-        return str(lexical)
-    return None
+    try:
+        resolved = host_src.resolve()
+    except OSError:
+        return None
+    if str(lexical) == str(resolved):
+        return None
+    return str(lexical)
 
 
 def _compute_mirror_home_symlink(
@@ -71,7 +133,7 @@ def _compute_mirror_home_symlink(
     *,
     is_default_dst: bool,
 ) -> str | None:
-    """Compute the mirror-home symlink path if behavior.mirror_shared_home_folders is enabled.
+    """Compute the mirror-home symlink path if vm.mirror_shared_home_folders is enabled.
 
     Returns the guest symlink path to create (pointing to guest_dst), or None if
     the mirror should not be created.
@@ -120,7 +182,7 @@ def _normalize_attachment_mode(mode: str) -> AttachmentMode:
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_MODES))
-        raise RuntimeError(f'--mode must be one of: {allowed}')
+        raise AIVMError(f'--mode must be one of: {allowed}')
     return AttachmentMode(resolved)
 
 
@@ -141,7 +203,7 @@ def _normalize_attachment_access(access: str) -> AttachmentAccess:
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_ACCESS_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_ACCESS_MODES))
-        raise RuntimeError(f'--access must be one of: {allowed}')
+        raise AIVMError(f'--access must be one of: {allowed}')
     return AttachmentAccess(resolved)
 
 
@@ -164,7 +226,7 @@ def _resolve_attachment(
         saved_mode = _normalize_attachment_mode(att.mode)
         saved_access = _normalize_attachment_access(att.access)
         if mode_opt and mode != saved_mode:
-            raise RuntimeError(
+            raise AIVMError(
                 'Attachment mode mismatch for existing folder attachment.\n'
                 f'VM: {cfg.vm.name}\n'
                 f'Host folder: {host_src}\n'
@@ -176,7 +238,7 @@ def _resolve_attachment(
                 f'  aivm attach {host_src} --mode {mode}'
             )
         if access_opt and access != saved_access:
-            raise RuntimeError(
+            raise AIVMError(
                 'Attachment access mismatch for existing folder attachment.\n'
                 f'VM: {cfg.vm.name}\n'
                 f'Host folder: {host_src}\n'

@@ -12,6 +12,8 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandError, CommandManager
+from .errors import AIVMError
+from .privilege import require_sudo_allowed
 from .util import which
 
 log = logger
@@ -26,11 +28,16 @@ REQUIRED_CMDS = [
     'ip',
     'ssh',
 ]
-OPTIONAL_CMDS = ['nft', 'ssh-keyscan']
+OPTIONAL_CMDS = ['nft', 'ssh-keyscan', 'setfacl']
+
+
+def required_commands() -> list[str]:
+    """Return the required host commands."""
+    return list(REQUIRED_CMDS)
 
 
 def check_commands() -> tuple[list[str], list[str]]:
-    missing = [c for c in REQUIRED_CMDS if which(c) is None]
+    missing = [c for c in required_commands() if which(c) is None]
     missing_opt = [c for c in OPTIONAL_CMDS if which(c) is None]
     return missing, missing_opt
 
@@ -43,8 +50,9 @@ def check_commands_with_sudo() -> tuple[list[str], str | None]:
     )
     if sudo_probe.code != 0:
         return [], (
-            'sudo -n is not available. Configure passwordless sudo for e2e '
-            'or run without --sudo checks.'
+            'non-interactive sudo (sudo -n) is not available. Run `sudo -v` '
+            'to cache credentials and retry, or run `aivm host doctor` '
+            'without --sudo.'
         )
     missing = []
     for cmd in REQUIRED_CMDS:
@@ -108,8 +116,15 @@ def _is_apt_lock_error(ex: Exception) -> bool:
 def install_deps_debian(*, assume_yes: bool = True) -> None:
     # TODO: add alternative ways to install deps for other common systems that
     # can use libvirt.
+    require_sudo_allowed(
+        feature='Host dependency installation (apt-get)',
+        hint=(
+            'Install the packages manually, or run this one command with '
+            "behavior.privilege_mode set to 'as-needed'."
+        ),
+    )
     if not host_is_debian_like():
-        raise RuntimeError(
+        raise AIVMError(
             'Host is not detected as Debian/Ubuntu; install deps manually.'
         )
     pkgs = [
@@ -131,6 +146,9 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
         'openssh-client',
         'iproute2',
         'nftables',
+        # setfacl/getfacl: sudo-free storage prep and storage adoption grant
+        # libvirt-qemu traversal via POSIX ACLs instead of chown/chmod.
+        'acl',
     ]
     del assume_yes
     mgr = CommandManager.current()
@@ -188,7 +206,7 @@ def install_deps_debian(*, assume_yes: bool = True) -> None:
                 )
     except CommandError as ex:
         if _is_apt_lock_error(ex):
-            raise RuntimeError(
+            raise AIVMError(
                 'apt/dpkg appears to be locked by another process. '
                 'Close other package managers or wait for unattended upgrades to finish, then retry.'
             ) from ex

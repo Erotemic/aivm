@@ -9,40 +9,74 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
 from ..commands import CommandManager
+from ..detect import running_under_wsl, systemd_is_pid1
 from ..host import (
     check_commands,
     check_commands_with_sudo,
     host_is_debian_like,
     install_deps_debian,
 )
+from ..services import resolve_cfg_fallback
 from ..vm import fetch_image
-from ._common import (
-    _BaseCommand,
-    _resolve_cfg_fallback,
-)
+from ._common import _BaseCommand
 from .firewall import FirewallModalCLI
+from .host_permissions import HostPermissionsModalCLI
 from .net import NetModalCLI
+
+
+def _print_wsl_diagnostics() -> bool:
+    """Print WSL2-specific prerequisite findings; True when one is fatal.
+
+    WSL hosts hit a distinct set of footguns (no /dev/kvm without nested
+    virtualization, systemd disabled so the system libvirt daemon cannot
+    run). Surfacing them here keeps `aivm host doctor` the one diagnostic
+    entry point. See docs/source/wsl.rst.
+    """
+    if not running_under_wsl():
+        return False
+    print('ℹ️ WSL detected (see the WSL guide in the aivm docs).')
+    problem = False
+    from pathlib import Path
+
+    if not Path('/dev/kvm').exists():
+        problem = True
+        print(
+            '❌ /dev/kvm is missing. WSL1 cannot run KVM at all; on WSL2 '
+            'enable nested virtualization: add `nestedVirtualization=true` '
+            'under `[wsl2]` in `%UserProfile%\\.wslconfig` on Windows, then '
+            '`wsl --shutdown` and reopen.'
+        )
+    if not systemd_is_pid1():
+        problem = True
+        print(
+            '❌ systemd is not PID 1. The system libvirt daemon needs '
+            'systemd: add `[boot]\nsystemd=true` to /etc/wsl.conf, then '
+            '`wsl --shutdown` and reopen.'
+        )
+    return problem
 
 
 class DoctorCLI(_BaseCommand):
     """Check host prerequisites and list missing required tools."""
 
-    sudo: Any = scfg.Value(
+    sudo: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Also verify required commands are available under sudo -n.',
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        wsl_problem = _print_wsl_diagnostics()
         missing, missing_opt = check_commands()
         if missing:
             print('❌ Missing required commands:', ', '.join(missing))
             print('💡 On Debian/Ubuntu you can run: aivm host install_deps')
+            return 2
+        if wsl_problem:
             return 2
         if args.sudo:
             missing_sudo, sudo_err = check_commands_with_sudo()
@@ -91,14 +125,14 @@ class HostInstallDepsCLI(_BaseCommand):
 class ImageFetchCLI(_BaseCommand):
     """Download/cache the configured Ubuntu base image."""
 
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: bool = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, _ = _resolve_cfg_fallback(args.config)
+        cfg, _ = resolve_cfg_fallback(args.config)
         mgr = CommandManager.current()
         with mgr.intent(
             'Fetch base image',
@@ -109,7 +143,7 @@ class ImageFetchCLI(_BaseCommand):
         return 0
 
 
-class HostModalCLI(scfg.ModalCLI):
+class HostModalCLI(kwconf.ModalCLI):
     """Host preparation and host-level operations."""
 
     doctor = DoctorCLI
@@ -117,3 +151,4 @@ class HostModalCLI(scfg.ModalCLI):
     image_fetch = ImageFetchCLI
     net = NetModalCLI
     fw = FirewallModalCLI
+    permissions = HostPermissionsModalCLI

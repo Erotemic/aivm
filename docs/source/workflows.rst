@@ -3,6 +3,11 @@ Workflows
 
 Common daily workflows.
 
+New configs derive the default VM name from the host's own ``$HOSTNAME``. On a
+host named ``workstation``, the canonical VM name, guest hostname, and SSH alias are
+all ``aivm-2404-workstation``. Existing explicit config values are left alone; omitted
+implicit names use the new host-qualified default.
+
 Open project in VM
 ------------------
 
@@ -16,12 +21,13 @@ step title, a short explanation of why that step is happening, semantic command
 summaries, and the exact commands that will run. Privileged host changes prompt
 once for the whole step when approval is required.
 
-For the default ``shared-root`` attachment path, the current implementation
+For the default ``persistent`` attachment path, the current implementation
 usually breaks reconciliation into:
 
-* inspect shared-root host bind state
-* prepare host bind targets
-* inspect/ensure the VM virtiofs mapping
+* inspect persistent host bind state
+* prepare persistent-root bind targets
+* inspect/ensure the VM persistent-root virtiofs mapping
+* sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
 SSH into mapped directory
@@ -39,7 +45,7 @@ Attach folders
 
    aivm attach .
    aivm detach .
-   aivm vm attach --vm aivm-2404 --host_src . --guest_dst /workspace/project
+   aivm vm attach --vm aivm-2404-$HOSTNAME --host_src . --guest_dst /workspace/project
    aivm attach . --mode git
 
 ``aivm code`` / ``aivm ssh`` restore the requested folder and attempt to
@@ -47,15 +53,23 @@ remount the VM's other saved folder attachments after reboot.
 
 Attachment modes:
 
-* ``shared-root`` (default for new attachments): one persistent VM virtiofs
-  mapping and per-folder host/guest bind mounts.
-* ``persistent``: a dedicated ``persistent-root`` virtiofs export plus a persisted
-  attachment manifest and guest systemd replay helper. This keeps host-side
-  staged binds stable and restores guest-visible bind mounts at boot or during
-  reconcile.
+* ``persistent`` (default for new attachments): a dedicated ``persistent-root``
+  virtiofs export plus a persisted attachment manifest and guest systemd replay
+  helper. This keeps host-side staged binds stable and restores guest-visible
+  bind mounts at boot or during reconcile.
+* ``shared-root``: the legacy single-export backend with one VM virtiofs mapping
+  and per-folder host/guest bind mounts. Existing saved ``shared-root``
+  attachments continue to use it; new attachments can request it explicitly
+  with ``--mode shared-root``.
 * ``shared``: direct per-folder virtiofs mapping.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
+
+The ``persistent`` and ``shared-root`` backends stage host bind mounts, so
+establishing a *new* one runs ``mount --bind`` and needs root. Reconciling an
+already-established attachment issues no privileged command at all, and is
+therefore unaffected by ``privilege_mode``. Only ``shared`` never needs a
+bind mount.
 
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
@@ -82,35 +96,42 @@ folders, or split the workload across multiple VMs.
 Major limitation: long-lived virtiofs FD growth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Long-lived ``shared-root`` and ``persistent`` VMs can still run into a
-virtiofs/submount file-descriptor problem. The visible error is often
-``Too many open files`` or ``OSError: [Errno 24]`` from normal traversal tools
-inside the guest or from host tools walking the attached tree.
+Long-lived virtiofs-backed VMs historically hit a file-descriptor failure:
+host-side ``virtiofsd`` keeps one descriptor per guest-cached inode, the
+guest never evicts on its own, and the guest's stock nightly ``updatedb``
+sweep walked every attached inode — so the daemon marched to its fd ceiling
+and normal traversal failed with ``Too many open files`` /
+``OSError: [Errno 24]``.
 
-Current investigation points at host-side ``virtiofsd`` workers retaining many
-path-backed file descriptors across exported token trees after heavy traversal.
-The ``persistent`` backend reduces repeated mount teardown/rebuild churn, but
-it does not remove the shared virtiofs export design and therefore should be
-treated as a mitigation rather than a fix.
+This is now prevented automatically by the guest-side virtiofs guard: new
+VMs install it via cloud-init, and ``aivm vm update`` reconciles existing
+running VMs against the ``virtiofs.fd_guard*`` config (install, refresh
+after config/version changes, or uninstall when disabled). The guard prunes
+``updatedb`` and flushes guest dentry/inode caches when the cached-inode
+watermark is crossed. See :doc:`virtiofs` for the full analysis and tuning.
 
 Operational guidance:
 
+* verify the guard with ``aivm vm fdguard`` (status is the default action)
+  and retire any periodic host-side ``aivm vm flush_caches`` jobs
 * keep attachments narrow and remove stale attachment records when possible
 * prefer ``--mode git`` for repositories that can tolerate explicit Git
   handoff instead of live host sharing
-* restart the VM when the failure appears; this usually resets the hot
-  ``virtiofsd`` state
-* use ``dev/devcheck/debug-harness.sh`` to collect comparable host/guest
-  evidence when debugging the issue
+* ``aivm vm flush_caches`` remains available as a manual recovery command;
+  restart the VM only if flushing is not enough
+* use ``dev/devcheck/debug-harness.sh`` or
+  ``dev/devcheck/virtiofsd_fd_postmortem.py`` to collect host/guest
+  evidence when debugging
 
 Attachment mode rules:
 
-* New folder defaults to ``shared-root`` when ``--mode`` is omitted.
+* New folder defaults to ``persistent`` when ``--mode`` is omitted.
 * Existing folder reuses its saved mode when ``--mode`` is omitted.
 * Changing mode for an existing folder requires explicit detach + reattach.
   Passing a different ``--mode`` directly now returns an error.
-* ``persistent`` is opt-in for now and is the preferred migration target for
-  users who want attachment replay instead of repeated host-side mount churn.
+* ``shared-root`` is still supported explicitly and for existing saved
+  attachments, but ``persistent`` is the default migration target for attachment
+  replay instead of repeated host-side mount churn.
 * The persistent replay helper is installed as part of VM bootstrap, so stopped-VM
   attaches can still replay on the next boot once the persistent-root mapping and
   manifest are in place.
@@ -119,10 +140,10 @@ Attachment mode rules:
 
 * New folder: attaches in ``git`` mode, with default guest path matching the
   exact host path.
-* Previously attached ``shared``/``shared-root`` folder: errors until you detach
-  and reattach in ``git`` mode.
+* Previously attached non-``git`` folder, including ``shared``, ``shared-root``,
+  or ``persistent``: errors until you detach and reattach in ``git`` mode.
 * No explicit mode (``aivm code .``): use saved mode when present, else create a
-  new ``shared-root`` attachment.
+  new ``persistent`` attachment.
 
 .. code-block:: bash
 
@@ -161,13 +182,46 @@ Manage config store
    aivm config show
    aivm config edit
    aivm config discover
+   aivm config lint      # flag unknown/unused keys and sections
+   aivm config format    # rewrite into the canonical split-file layout
+   aivm config paths     # show config, data, and libvirt-related paths
 
 Reconcile VM drift
 ------------------
 
 .. code-block:: bash
 
-   aivm vm update
+   aivm vm edit     # change the saved VM config fragment in $EDITOR
+   aivm vm update   # reconcile the live libvirt domain against saved config
+
+Run without sudo
+----------------
+
+.. code-block:: bash
+
+   aivm host permissions check
+   aivm host permissions setup
+   aivm status            # header shows the active privilege mode
+
+The default ``as-needed`` mode already prefers unprivileged execution and only
+escalates where required, so most hosts need no ceremony: joining the
+``libvirt`` group removes sudo from every ``virsh``/``virt-install`` call, and
+a user-owned ``paths.base_dir`` removes it from image/disk/cloud-init file
+work and from creating the bind-mount export directories. What remains is the
+set of operations with no unprivileged form at all: ``nft``, ``apt-get``,
+``mount --bind``, and ``umount``. ``aivm host permissions setup``
+establishes the reusable host permissions and then reports what still needs
+escalation. It does not
+change your config: ``behavior.privilege_mode`` and ``firewall.enabled`` are
+yours to set. Pass ``--persist`` to have it write the one value the host work
+depends on, ``defaults.paths.base_dir``.
+
+A global no-sudo policy is not exposed because managed nftables and new host
+bind mounts still require root on the supported runtime.
+
+State-changing hypervisor commands keep the same interactive approval prompts
+they had under sudo, so unprivileged operation does not make destructive
+operations promptless.
 
 Workflow logging model
 ----------------------
@@ -191,8 +245,9 @@ Interactive approval semantics:
 
 Normal previews are intentionally readable and may abbreviate long shell blobs,
 but the full exact commands can be shown before approval and are always logged
-when they execute. For ``shared-root`` attachments, host-side preparation is
-designed to avoid mutating ownership or permissions in the user's source tree.
+when they execute. For ``persistent`` and ``shared-root`` attachments, host-side
+preparation is designed to avoid mutating ownership or permissions in the
+user's source tree.
 
 Get command tree
 ----------------
@@ -207,12 +262,5 @@ Get command tree
 Related projects
 ----------------
 
-* `Matchlock <https://github.com/jingkaihe/matchlock>`_: ephemeral microVMs for
-  AI-agent workloads with network allowlisting and host-side secret injection.
-* `JAI <https://github.com/stanford-scs/jai>`_: lightweight Linux jail for AI
-  CLIs with current-directory access and copy-on-write or stricter home
-  handling.
-
-These tools make different tradeoffs than ``aivm``. ``aivm`` emphasizes a
-persistent libvirt/KVM Ubuntu VM with explicit folder attachments and
-VS Code/SSH-oriented local development workflows.
+See :doc:`alternatives` for related tools (Matchlock, JAI) and how their
+tradeoffs compare with ``aivm``'s persistent-VM, attachment-first approach.

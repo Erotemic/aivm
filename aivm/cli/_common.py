@@ -1,34 +1,25 @@
-"""Shared CLI resolution, sudo confirmation, and config-store helpers."""
+"""CLI command base class and per-invocation option resolution.
+
+Application services (config loading, VM resolution, store persistence,
+host-dependency gating) live in :mod:`aivm.services`; this module only
+holds what is genuinely CLI-shaped: the shared option surface and the
+logging/manager activation performed when a command parses.
+"""
 
 from __future__ import annotations
 
 import os
 import sys
 from contextvars import ContextVar
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Self, cast
 
-import scriptconfig as scfg
+import kwconf
 from loguru import logger
 
 from ..commands import CommandManager
-from ..config import AgentVMConfig
-from ..detect import detect_ssh_identity
-from ..host import check_commands, host_is_debian_like, install_deps_debian
-from ..store import (
-    find_attachments,
-    find_vm,
-    load_store,
-    materialize_vm_cfg,
-    save_store,
-    store_path,
-    upsert_network,
-    upsert_vm_with_network,
-)
-from ..util import (
-    which,
-)
+from ..config_store import find_vm, load_store
+from ..errors import PrivilegeModeError
+from ..services import cfg_path
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool, int] | None = None
@@ -40,32 +31,29 @@ _CURRENT_AUTO_APPROVE_READONLY_SUDO: ContextVar[bool] = ContextVar(
 )
 
 
-class _BaseCommand(scfg.DataConfig):
+class _BaseCommand(kwconf.Config):
     """Base options shared by all commands."""
 
     __special_options__ = False
 
-    config: Any = scfg.Value(
+    config: str | None = kwconf.Value(
         None,
         help='Path to global aivm config store (default: ~/.config/aivm/config.toml).',
     )
-    verbose: Any = scfg.Value(
+    verbose: int = kwconf.Value(
         0,
         short_alias=['v'],
         isflag='counter',
         help='Increase verbosity (-v, -vv).',
     )
-    yes: Any = scfg.Value(
+    yes: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Auto-approve interactive confirmations.',
     )
-    yes_sudo: Any = scfg.Value(
+    yes_sudo: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Auto-approve sudo confirmation prompts only.',
     )
-
     @classmethod
     def cli(cls, *args: Any, **kwargs: Any) -> Self:  # type: ignore
         parsed = cast(Self, super().cli(*args, **kwargs))
@@ -74,6 +62,14 @@ class _BaseCommand(scfg.DataConfig):
         cfg_auto_approve_readonly_sudo = (
             _resolve_cfg_auto_approve_readonly_sudo(parsed.config)
         )
+        privilege_mode = _resolve_cfg_privilege_mode(parsed.config)
+        if str(privilege_mode).strip().lower() == 'never':
+            raise PrivilegeModeError(
+                'behavior.privilege_mode = never is not supported in this '
+                'release. Managed nftables and new host bind mounts still '
+                'require escalation, so aivm refuses to advertise a global '
+                'no-sudo guarantee. Use as-needed or always.'
+            )
         effective_yes_sudo = bool(parsed.yes_sudo or parsed.yes or cfg_yes_sudo)
         setattr(parsed, 'yes_sudo', effective_yes_sudo)
         _CURRENT_YES_SUDO.set(effective_yes_sudo)
@@ -85,30 +81,29 @@ class _BaseCommand(scfg.DataConfig):
                 yes=bool(parsed.yes),
                 yes_sudo=bool(effective_yes_sudo),
                 auto_approve_readonly_sudo=bool(cfg_auto_approve_readonly_sudo),
+                privilege_mode=privilege_mode,
             )
         )
         args_verbose = int(parsed.verbose or 0)
         _setup_logging(args_verbose, cfg_verbosity)
         log.trace(
-            'Parsed command {} with config={} verbose={} yes={} yes_sudo={} auto_approve_readonly_sudo={}',
+            'Parsed command {} with config={} verbose={} yes={} yes_sudo={} auto_approve_readonly_sudo={} privilege_mode={}',
             cls.__name__,
             parsed.config,
             args_verbose,
             bool(parsed.yes),
             bool(parsed.yes_sudo),
             bool(cfg_auto_approve_readonly_sudo),
+            privilege_mode,
         )
         return parsed
 
-
-def _cfg_path(p: str | None) -> Path:
-    return Path(p).expanduser().resolve() if p else store_path().resolve()
 
 
 def _resolve_cfg_verbosity(config_opt: str | None) -> int:
     cfg_verbosity = 1
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
             behavior_verbose = int(reg.behavior.verbose or 1)
@@ -128,7 +123,7 @@ def _resolve_cfg_verbosity(config_opt: str | None) -> int:
 def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
     cfg_yes_sudo = False
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
             cfg_yes_sudo = bool(reg.behavior.yes_sudo)
@@ -137,10 +132,27 @@ def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
     return cfg_yes_sudo
 
 
+def _resolve_cfg_privilege_mode(config_opt: str | None) -> str:
+    from ..modes import DEFAULT_PRIVILEGE_MODE, normalize_privilege_mode
+
+    # An unreadable store falls back to the default, but a store that names
+    # an unknown mode must not: normalize_privilege_mode raises, and letting
+    # that escape is the point -- silently choosing a privilege mode for the
+    # user is what we are trying to avoid.
+    try:
+        path = cfg_path(config_opt)
+        if not path.exists():
+            return str(DEFAULT_PRIVILEGE_MODE)
+        reg = load_store(path)
+    except Exception:
+        return str(DEFAULT_PRIVILEGE_MODE)
+    return str(normalize_privilege_mode(reg.behavior.privilege_mode))
+
+
 def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:
     auto_approve_readonly_sudo = True
     try:
-        path = _cfg_path(config_opt)
+        path = cfg_path(config_opt)
         if path.exists():
             reg = load_store(path)
             auto_approve_readonly_sudo = bool(
@@ -181,387 +193,9 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
     )
 
 
-def _hydrate_runtime_defaults(cfg: AgentVMConfig) -> bool:
-    changed = False
-    have_ident = bool((cfg.paths.ssh_identity_file or '').strip())
-    have_pub = bool((cfg.paths.ssh_pubkey_path or '').strip())
-    if have_ident and have_pub:
-        return False
-    ident, pub = detect_ssh_identity()
-    if not have_ident and ident:
-        cfg.paths.ssh_identity_file = ident
-        changed = True
-    if not have_pub and pub:
-        cfg.paths.ssh_pubkey_path = pub
-        changed = True
-    if changed:
-        log.debug(
-            'Hydrated runtime defaults for vm={} ssh_identity_file={} ssh_pubkey_path={}',
-            cfg.vm.name,
-            cfg.paths.ssh_identity_file or '(empty)',
-            cfg.paths.ssh_pubkey_path or '(empty)',
-        )
-    return changed
 
-
-def _default_aivm_identity_paths() -> tuple[Path, Path]:
-    priv = Path.home() / '.ssh' / 'id_aivm_ed25519'
-    return priv, Path(str(priv) + '.pub')
-
-
-def _maybe_offer_create_ssh_identity(
-    cfg: AgentVMConfig,
-    *,
-    yes: bool,
-    prompt_reason: str,
-) -> bool:
-    """Offer to create a dedicated aivm SSH keypair when none is configured."""
-    ident = (cfg.paths.ssh_identity_file or '').strip()
-    pub = (cfg.paths.ssh_pubkey_path or '').strip()
-    ident_path = Path(ident).expanduser() if ident else None
-    pub_path = Path(pub).expanduser() if pub else None
-    ident_ok = ident_path is not None and ident_path.exists()
-    pub_ok = pub_path is not None and pub_path.exists()
-    if ident_ok and pub_ok:
-        return False
-
-    # Do not override a partially configured custom path automatically.
-    if ident or pub:
-        return False
-
-    default_priv, default_pub = _default_aivm_identity_paths()
-    if default_priv.exists() and default_pub.exists():
-        cfg.paths.ssh_identity_file = str(default_priv)
-        cfg.paths.ssh_pubkey_path = str(default_pub)
-        return True
-
-    if which('ssh-keygen') is None:
-        log.warning(
-            'ssh-keygen not found; cannot create dedicated aivm SSH identity.'
-        )
-        return False
-
-    if yes:
-        approved = True
-    else:
-        if not sys.stdin.isatty():
-            return False
-        ans = (
-            input(
-                'No SSH identity/public key was detected for aivm VM access. '
-                f'Create a dedicated keypair now at {default_priv}? [Y/n]: '
-            )
-            .strip()
-            .lower()
-        )
-        approved = ans in {'', 'y', 'yes'}
-    if not approved:
-        return False
-
-    mgr = CommandManager.current()
-    comment = f'aivm@{os.uname().nodename}'
-    with mgr.intent(
-        'Create SSH identity',
-        why='A VM SSH keypair is required for guest access and provisioning.',
-        role='modify',
-    ):
-        with mgr.step(
-            'Create dedicated aivm SSH keypair',
-            why=prompt_reason,
-            approval_scope='aivm-ssh-identity',
-        ):
-            mgr.submit(
-                ['mkdir', '-p', str(default_priv.parent)],
-                sudo=False,
-                role='modify',
-                summary='Create ~/.ssh directory if missing',
-                detail=f'target={default_priv.parent}',
-            )
-            mgr.submit(
-                ['chmod', '700', str(default_priv.parent)],
-                sudo=False,
-                role='modify',
-                summary='Ensure ~/.ssh directory permissions',
-                detail=f'target={default_priv.parent}',
-            )
-            mgr.submit(
-                [
-                    'ssh-keygen',
-                    '-q',
-                    '-t',
-                    'ed25519',
-                    '-f',
-                    str(default_priv),
-                    '-N',
-                    '',
-                    '-C',
-                    comment,
-                ],
-                sudo=False,
-                role='modify',
-                summary='Generate dedicated aivm SSH keypair',
-                detail=f'private={default_priv} public={default_pub}',
-            )
-    cfg.paths.ssh_identity_file = str(default_priv)
-    cfg.paths.ssh_pubkey_path = str(default_pub)
-    log.info(
-        'Configured dedicated aivm SSH identity for vm={} private={} public={}',
-        cfg.vm.name,
-        default_priv,
-        default_pub,
-    )
-    return True
-
-
-def _choose_vm_interactive(options: list[str], *, reason: str) -> str:
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            f'VM selection is ambiguous ({reason}). Re-run with --vm.'
-        )
-    print(f'Multiple VMs match ({reason}). Select one:')
-    for idx, item in enumerate(options, start=1):
-        print(f'  {idx}. {item}')
-    while True:
-        raw = input('Select VM number: ').strip()
-        if not raw.isdigit():
-            print('Please enter a number.')
-            continue
-        choice = int(raw)
-        if 1 <= choice <= len(options):
-            return options[choice - 1]
-        print(f'Please enter a number between 1 and {len(options)}.')
-
-
-def _resolve_vm_name(
-    *,
-    config_opt: str | None,
-    vm_opt: str,
-    host_src: Path | None,
-) -> tuple[str, Path]:
-    """Resolve a VM name using CLI intent precedence.
-
-    Precedence is deliberate:
-    explicit ``--vm`` > folder attachment mapping > active VM > single VM >
-    interactive selection. This keeps one-command workflows predictable while
-    still allowing explicit override.
-    """
-    log.trace(
-        'Resolving VM name config_opt={} vm_opt={} host_src={}',
-        config_opt,
-        vm_opt,
-        host_src,
-    )
-    store_path = _cfg_path(config_opt)
-    reg = load_store(store_path)
-
-    if vm_opt:
-        if find_vm(reg, vm_opt) is None:
-            raise RuntimeError(f'VM not found in config store: {vm_opt}')
-        return vm_opt, store_path
-
-    if host_src is not None:
-        atts = find_attachments(reg, host_src)
-        if atts:
-            attached_vm_names = sorted(
-                {
-                    att.vm_name
-                    for att in atts
-                    if find_vm(reg, att.vm_name) is not None
-                }
-            )
-            if len(attached_vm_names) == 1:
-                return attached_vm_names[0], store_path
-            if attached_vm_names:
-                if reg.active_vm in attached_vm_names:
-                    return reg.active_vm, store_path
-                if not sys.stdin.isatty():
-                    vm_names = ', '.join(attached_vm_names)
-                    raise RuntimeError(
-                        'Host folder is attached to multiple VMs: '
-                        f'{vm_names}. Re-run with --vm.'
-                    )
-                chosen = _choose_vm_interactive(
-                    attached_vm_names,
-                    reason=(
-                        f'folder {host_src} is attached to '
-                        f'{len(attached_vm_names)} VMs'
-                    ),
-                )
-                return chosen, store_path
-
-    if reg.active_vm and find_vm(reg, reg.active_vm) is not None:
-        return reg.active_vm, store_path
-
-    if len(reg.vms) == 1:
-        return reg.vms[0].name, store_path
-
-    if len(reg.vms) > 1:
-        chosen = _choose_vm_interactive(
-            [r.name for r in sorted(reg.vms, key=lambda x: x.name)],
-            reason=f'{len(reg.vms)} configured VMs',
-        )
-        return chosen, store_path
-
-    raise RuntimeError(
-        f'No VM definitions found in config store: {store_path}. '
-        'Run `aivm config init` then `aivm vm create` first.'
-    )
-
-
-def _load_cfg_with_path(
-    config_path: str | None,
-    *,
-    vm_opt: str = '',
-    host_src: Path | None = None,
-    hydrate_runtime_defaults: bool = True,
-    persist_runtime_defaults: bool = True,
-) -> tuple[AgentVMConfig, Path]:
-    log.trace(
-        'Loading cfg with path config_path={} vm_opt={} host_src={}',
-        config_path,
-        vm_opt,
-        host_src,
-    )
-    vm_name, store_path = _resolve_vm_name(
-        config_opt=config_path,
-        vm_opt=vm_opt,
-        host_src=host_src,
-    )
-    reg = load_store(store_path)
-    rec = find_vm(reg, vm_name)
-    if rec is None:
-        raise RuntimeError(f'VM not found in config store: {vm_name}')
-    cfg = materialize_vm_cfg(reg, vm_name)
-    changed = (
-        _hydrate_runtime_defaults(cfg) if hydrate_runtime_defaults else False
-    )
-    if changed and persist_runtime_defaults:
-        upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
-        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-        save_store(
-            reg,
-            store_path,
-            reason=(
-                f'Persist hydrated runtime defaults discovered while loading '
-                f'VM {cfg.vm.name}.'
-            ),
-        )
-    return cfg, store_path
-
-
-def _load_cfg(config_path: str | None, *, vm_opt: str = '') -> AgentVMConfig:
-    cfg, _ = _load_cfg_with_path(
-        config_path,
-        vm_opt=vm_opt,
-        host_src=Path.cwd(),
-    )
-    return cfg
-
-
-def _resolve_cfg_fallback(
-    config_opt: str | None, *, vm_opt: str = ''
-) -> tuple[AgentVMConfig, Path]:
-    return _load_cfg_with_path(
-        config_opt,
-        vm_opt=vm_opt,
-        host_src=Path.cwd(),
-    )
-
-
-def _record_vm(
-    cfg: AgentVMConfig,
-    store_file: Path | None = None,
-    *,
-    reason: str = '',
-) -> Path:
-    target = store_file or store_path()
-    reg = load_store(target)
-    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
-    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-    why = reason.strip() or f'Persist managed VM record for {cfg.vm.name}.'
-    return save_store(reg, target, reason=why)
-
-
-def _resolve_cfg_for_code(
-    *,
-    config_opt: str | None,
-    vm_opt: str,
-    host_src: Path,
-) -> tuple[AgentVMConfig, Path]:
-    """Resolve VM config for folder-oriented flows (``code``/``ssh``/``attach``)."""
-    return _load_cfg_with_path(
-        config_opt,
-        vm_opt=vm_opt,
-        host_src=host_src,
-    )
-
-
-@dataclass
-class PreparedSession:
-    cfg: AgentVMConfig
-    cfg_path: Path
-    host_src: Path
-    attachment_mode: str
-    share_source_dir: str
-    share_tag: str
-    share_guest_dst: str
-    ip: str | None
-    reg_path: Path | None
-    meta_path: Path | None
-
-
-def _maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
-    """Best-effort host dependency gate before VM lifecycle operations.
-
-    We keep this prompt local to workflows that actively create/start/reconcile
-    VMs so users see missing prerequisites at the point of need.
-    """
-    missing, _ = check_commands()
-    if not missing:
-        return
-    missing_txt = ', '.join(missing)
-    print(f'Missing required host dependencies: {missing_txt}')
-    print('Suggested command: aivm host install_deps')
-    if yes:
-        print(
-            '--yes was provided; skipping interactive dependency install prompt.'
-        )
-        return
-    if dry_run:
-        print(
-            'DRYRUN: would prompt to install missing dependencies before VM setup.'
-        )
-        return
-    if not host_is_debian_like():
-        raise RuntimeError(
-            'Host is not detected as Debian/Ubuntu. Install dependencies manually, then retry.'
-        )
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            'Missing required host dependencies in non-interactive mode. '
-            'Run `aivm host install_deps` first.'
-        )
-    ans = (
-        input('Install missing dependencies now with apt? [Y/n]: ')
-        .strip()
-        .lower()
-    )
-    do_install = ans in {'', 'y', 'yes'}
-    if not do_install:
-        raise RuntimeError('Aborted by user.')
-    mgr = CommandManager.current()
-    with mgr.intent(
-        'Prepare host dependencies',
-        why='Install the host packages required before VM lifecycle work can proceed.',
-        role='modify',
-    ):
-        install_deps_debian(assume_yes=True)
-    missing_after, _ = check_commands()
-    if missing_after:
-        raise RuntimeError(
-            'Required dependencies are still missing after install attempt: '
-            + ', '.join(missing_after)
-        )
-
-
-__all__ = [name for name in globals() if not name.startswith('__')]
+__all__ = [
+    '_BaseCommand',
+    '_setup_logging',
+    'log',
+]

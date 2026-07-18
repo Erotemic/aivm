@@ -14,6 +14,7 @@ from aivm.config import (
     PathsConfig,
     VMConfig,
 )
+from aivm.config_store import Store, upsert_attachment
 from aivm.status import (
     ProbeOutcome,
     probe_cwd_shared_with_vm,
@@ -21,7 +22,6 @@ from aivm.status import (
     render_global_status,
     render_status,
 )
-from aivm.store import Store, upsert_attachment
 from aivm.util import CmdResult
 from aivm.vm.drift import saved_vm_drift_report
 
@@ -95,9 +95,8 @@ def test_render_global_status_includes_runtime_environment(
         'aivm.status.probe_runtime_environment',
         lambda: ProbeOutcome(True, 'virtualized guest (kvm)', ''),
     )
-    monkeypatch.setattr('aivm.status.store_path', lambda: 'dummy.toml')
     monkeypatch.setattr('aivm.status.load_store', lambda _: Store())
-    text = render_global_status()
+    text = render_global_status(Path('dummy.toml'))
     assert 'Runtime environment' in text
     assert 'virtualized guest (kvm)' in text
 

@@ -4,39 +4,38 @@ from __future__ import annotations
 
 from typing import Any
 
-import scriptconfig as scfg
+import kwconf
 
-from aivm.store import Store
+from aivm.config_store import Store
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
-from ..net import destroy_network, ensure_network, network_status
-from ..store import (
+from ..config_store import (
     find_network,
     load_store,
     network_users,
     remove_network,
     save_store,
 )
-from ._common import (
-    _BaseCommand,
-    _cfg_path,
-)
+from ..errors import AIVMError
+from ..net import destroy_network, ensure_network, network_status
+from ..services import cfg_path
+from ._common import _BaseCommand
 
 
 class NetCreateCLI(_BaseCommand):
     """Create or recreate the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    recreate: Any = scfg.Value(
-        False, isflag=True, help='Destroy and recreate if it exists.'
+    recreate: bool = kwconf.Flag(
+        False, help='Destroy and recreate if it exists.'
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: bool = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
@@ -56,7 +55,7 @@ class NetCreateCLI(_BaseCommand):
 class NetStatusCLI(_BaseCommand):
     """Print detailed status of the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
@@ -79,32 +78,31 @@ class NetStatusCLI(_BaseCommand):
 class NetDestroyCLI(_BaseCommand):
     """Destroy and undefine the configured libvirt network."""
 
-    network: Any = scfg.Value(
+    network: str = kwconf.Value(
         '',
         position=1,
         help='Optional managed network name (positional).',
     )
-    force: Any = scfg.Value(
+    force: bool = kwconf.Flag(
         False,
-        isflag=True,
         help='Allow destroying network even if referenced by managed VMs.',
     )
-    dry_run: Any = scfg.Value(
-        False, isflag=True, help='Print actions without running.'
+    dry_run: bool = kwconf.Flag(
+        False, help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg_path = _cfg_path(args.config)
-        reg = load_store(cfg_path)
+        store_fpath = cfg_path(args.config)
+        reg = load_store(store_fpath)
         cfg = _resolve_network_cfg(
             args.config, network_opt=args.network, reg=reg
         )
         users = network_users(reg, cfg.network.name)
         if users and not args.force and not args.dry_run:
             names = ', '.join(users)
-            raise RuntimeError(
+            raise AIVMError(
                 f"Network '{cfg.network.name}' is referenced by managed VMs: {names}. "
                 'Detach or destroy those VMs first, or use --force.'
             )
@@ -117,11 +115,11 @@ class NetDestroyCLI(_BaseCommand):
             destroy_network(cfg, dry_run=args.dry_run)
         if not args.dry_run:
             remove_network(reg, cfg.network.name)
-            save_store(reg, _cfg_path(args.config))
+            save_store(reg, cfg_path(args.config))
         return 0
 
 
-class NetModalCLI(scfg.ModalCLI):
+class NetModalCLI(kwconf.ModalCLI):
     """Network subcommands."""
 
     create = NetCreateCLI
@@ -135,7 +133,7 @@ def _resolve_network_cfg(
     network_opt: str = '',
     reg: Store | None = None,
 ) -> AgentVMConfig:
-    reg = reg if reg is not None else load_store(_cfg_path(config_opt))
+    reg = reg if reg is not None else load_store(cfg_path(config_opt))
     net_name = str(network_opt or '').strip()
     if not net_name:
         if reg.active_vm:
@@ -147,12 +145,12 @@ def _resolve_network_cfg(
         if not net_name and len(reg.vms) == 1:
             net_name = reg.vms[0].network_name
     if not net_name:
-        raise RuntimeError(
+        raise AIVMError(
             'Unable to resolve a managed network. Pass a network name explicitly.'
         )
     net = find_network(reg, net_name)
     if net is None:
-        raise RuntimeError(
+        raise AIVMError(
             f'Managed network not found in config store: {net_name}'
         )
     cfg = AgentVMConfig()

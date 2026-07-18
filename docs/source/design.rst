@@ -100,7 +100,7 @@ Reliability Principles
 Idempotency
 ~~~~~~~~~~~
 
-* Lifecycle operations (network create/destroy, VM create/start/destroy,
+* Lifecycle operations (network create/destroy, VM create/start/delete,
   attachment reconcile) should tolerate retries and partially completed prior
   runs.
 * Persistent attachment replay is a mitigation for mount churn and stale
@@ -158,7 +158,7 @@ CLI and Code Architecture
 CLI framework conventions
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* Use ``scriptconfig`` for command structure and argument definitions.
+* Use ``kwconf`` for command structure and argument definitions.
 * Keep command modules thin: parse/dispatch/orchestrate in CLI modules, place
   operational logic in domain modules.
 * Prefer explicit command return codes and stable CLI behavior for scripting.
@@ -169,6 +169,19 @@ Operational command execution
 * Route external command execution through a centralized command manager for
   consistent sudo policy, plan rendering, logging, and error semantics.
 * Keep privilege handling explicit and auditable.
+* Privilege acquisition is a policy, not a property of call sites:
+  ``behavior.privilege_mode`` selects ``as-needed`` (probe unprivileged
+  capability -- libvirt group access, user-writable storage trees -- and
+  escalate only where required) or ``always`` (escalate every
+  privileged-capable operation). ``aivm.privilege`` owns the capability
+  probes and per-family decisions (``virsh_needs_sudo``,
+  ``path_needs_sudo``). A global no-sudo mode is not exposed while managed
+  nftables and new host bind mounts still require root.
+* Because all ``virsh``/``virt-install`` commands can now run unprivileged,
+  they pin ``-c qemu:///system`` explicitly (bare unprivileged ``virsh``
+  would silently target ``qemu:///session``), and state-changing hypervisor
+  commands require interactive approval regardless of whether sudo is used,
+  preserving the consent contract of principle 1.
 * Preserve ``--dry_run`` as a true non-destructive preview path.
 * Automatic/background reconciliation must avoid disruptive host operations
   against existing mounts (for example, forced/lazy unmount of busy targets).
@@ -250,8 +263,9 @@ Design constraints
   the user's source tree; qemu/libvirt-access preparation should be limited to
   aivm-managed internal directories rather than applied recursively through
   bind-mounted exports.
-* New attachment backends should preserve the single shared-root virtiofs
-  export model when they only need different replay / reconcile semantics.
+* New attachment backends should prefer a single VM-level export model, like
+  ``persistent-root`` / ``shared-root``, when they only need different replay /
+  reconcile semantics.
 * New non-virtiofs backends should be considered if they materially reduce the
   long-lived virtiofsd FD-retention risk.
 
@@ -307,28 +321,35 @@ Guidelines:
 * If implementation and this contract diverge, either align implementation or
   update this contract explicitly.
 
+Roadmap
+-------
+
+Major forward-looking efforts are designed in ``dev/design/future/``; see
+``dev/design/future/README.md`` for the index, statuses, and recommended
+sequencing (externally-managed virtiofsd, egress allowlist networking,
+snapshots/ephemeral clones, e2e in CI). A per-user ``qemu:///session``
+runtime was prototyped and removed; see
+``docs/planning/deferred/session-runtime.md``.
+
 Implementation TODO Notes
 -------------------------
 
 To fully realize the integrity/content-addressable principle, current code
 should be evolved in these areas:
 
-* ``aivm/vm/lifecycle.py``:
-  verify pre-existing cached base images before reuse (not only newly
-  downloaded images), and add digest-keyed cache lookup fallback before URL
-  fetch.
+* ``aivm/vm/images.py``:
+  add digest-keyed cache lookup fallback before URL fetch. (Pre-existing
+  cached base images are now revalidated by checksum before reuse; the
+  digest-keyed lookup remains open.)
 * ``aivm/config.py``:
   move image cache identity toward digest-first semantics (``cache_name`` is
   currently name-oriented).
 * ``aivm/status.py``:
   status reporting should eventually reflect both named-path cache and any
   content-addressable fallback resolution.
-* E2E/shared cache helpers in ``tests/test_e2e_nested.py``:
+* E2E/shared cache helpers in ``tests/e2e/_helpers.py``:
   keep local cache path/version conventions aligned with digest-addressable
   behavior once implemented in runtime code.
-* Provisioning defaults:
-  add ``uv`` to baseline provisioning so Python package/workflow setup is
-  consistent out of the box.
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
   limits (see ``dev/design/future/flexible-folder-sharing.md``).
@@ -336,10 +357,6 @@ should be evolved in these areas:
   continue investigating ``virtiofsd`` FD retention/growth on ``shared-root``
   and ``persistent`` exports. ``dev/devcheck/debug-harness.sh`` is the current
   evidence-gathering tool, but the root cause is not solved.
-* Settings sync:
-  the previous ``aivm vm sync_settings`` feature has been removed. Reconsider
-  synchronization later only with an explicit design for reliability,
-  conflict behavior, and user intent.
 
 
 Non-goals

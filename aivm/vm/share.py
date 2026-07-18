@@ -7,6 +7,7 @@ folders are shared into VMs.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shlex
 import tempfile
@@ -15,14 +16,23 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
+from ..errors import AIVMError
+from ..modes import PrivilegeMode
+from ..privilege import virsh_needs_sudo
+from ..runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    virsh_cmd,
+    virsh_domain_missing,
+)
 from ..util import CmdError
-from . import virtiofsd_wrapper
+from ..xmlutil import parse_domain_xml
 
 log = logger
 
@@ -170,18 +180,64 @@ def _dumpxml_text(
     summary: str,
     detail: str = '',
 ) -> str | None:
+    """Return the VM's domain XML, or None when it cannot be read.
+
+    Successful reads are cached on the current :class:`CommandManager` and
+    invalidated whenever any state-changing command executes, so the many
+    XML-derived probes in one flow submit at most one ``virsh dumpxml``.
+
+    When ``use_sudo`` is True the read still tries unprivileged access first
+    and only escalates to sudo when that fails for a reason other than the
+    domain not existing.
+
+    Note: changes made to the domain outside this process during one
+    invocation are not observed until a manager-run mutation bumps the
+    generation.
+    """
     mgr = CommandManager.current()
+    cache: dict[str, tuple[int, str]] = mgr.probe_cache.setdefault(
+        'domain_xml', {}
+    )
+    entry = cache.get(cfg.vm.name)
+    if entry is not None and entry[0] == mgr.mutation_generation:
+        return entry[1]
+    # Closed stdin keeps an unprivileged probe from blocking on a polkit
+    # password prompt outside the manager's approval flow, and LC_ALL=C
+    # keeps the domain-missing stderr heuristic locale-independent.
+    probe_env = {**os.environ, 'LC_ALL': 'C'}
     res = mgr.submit(
-        virsh_system_cmd('dumpxml', cfg.vm.name),
-        sudo=use_sudo,
+        virsh_cmd('dumpxml', cfg.vm.name),
+        sudo=False,
         role='read',
         check=False,
         capture=True,
+        input_text='',
+        env=probe_env,
         summary=summary,
         detail=detail,
     ).result()
+    if (
+        (res.code != 0 or not res.stdout.strip())
+        and use_sudo
+        and mgr.privilege_mode != PrivilegeMode.NEVER
+        # 127 means the virsh executable itself is missing; sudo cannot
+        # conjure it and the retry would only trigger an auth prompt.
+        and res.code != 127
+        and not virsh_domain_missing(res.stderr)
+    ):
+        res = mgr.submit(
+            virsh_cmd('dumpxml', cfg.vm.name),
+            sudo=virsh_needs_sudo(),
+            role='read',
+            check=False,
+            capture=True,
+            env=probe_env,
+            summary=summary,
+            detail=detail,
+        ).result()
     if res.code != 0 or not res.stdout.strip():
         return None
+    cache[cfg.vm.name] = (mgr.mutation_generation, res.stdout)
     return res.stdout
 
 
@@ -195,11 +251,8 @@ def vm_has_virtiofs_shared_memory(
         summary=f'Inspect VM shared-memory backing for {cfg.vm.name}',
         detail='Read domain XML to verify memfd/shared backing for virtiofs.',
     )
-    if not xml_text:
-        return None
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return None
     mb = root.find('.//memoryBacking')
     if mb is None:
@@ -223,11 +276,8 @@ def vm_has_share(
         summary=f'Inspect VM filesystem mappings for {cfg.vm.name}',
         detail='Read domain XML to look for the requested virtiofs source/tag pair.',
     )
-    if not xml_text:
-        return False
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return False
     want_src = str(Path(source_dir).resolve())
     want_tag = tag
@@ -243,23 +293,26 @@ def vm_has_share(
     return False
 
 
-def vm_share_mappings(
+def vm_share_mappings_detailed(
     cfg: AgentVMConfig, *, use_sudo: bool = True
-) -> list[tuple[str, str]]:
-    """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
+) -> list[tuple[str, str, bool]]:
+    """Return virtiofs mappings as (source_dir, target_tag, read_only).
+
+    ``read_only`` reports the ``<readonly/>`` element on the libvirt
+    device -- the host/device boundary enforcement -- not the guest-side
+    mount option. A device lacking it is writable at the host boundary no
+    matter what the guest mounted.
+    """
     xml_text = _dumpxml_text(
         cfg,
         use_sudo=use_sudo,
         summary=f'Inspect VM virtiofs mappings for {cfg.vm.name}',
         detail='Read domain XML to enumerate current virtiofs source/tag mappings.',
     )
-    if not xml_text:
+    root = parse_domain_xml(xml_text)
+    if root is None:
         return []
-    try:
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return []
-    mappings: list[tuple[str, str]] = []
+    mappings: list[tuple[str, str, bool]] = []
     for fs in root.findall('.//devices/filesystem'):
         if not _is_virtiofs_filesystem(fs):
             continue
@@ -268,8 +321,22 @@ def vm_share_mappings(
         src_dir = src.attrib.get('dir', '') if src is not None else ''
         tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir or tgt_dir:
-            mappings.append((src_dir, tgt_dir))
+            mappings.append(
+                (src_dir, tgt_dir, fs.find('readonly') is not None)
+            )
     return mappings
+
+
+def vm_share_mappings(
+    cfg: AgentVMConfig, *, use_sudo: bool = True
+) -> list[tuple[str, str]]:
+    """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
+    return [
+        (src, tag)
+        for src, tag, _ro in vm_share_mappings_detailed(
+            cfg, use_sudo=use_sudo
+        )
+    ]
 
 
 def _resolve_virtiofs_binary_for_attach(
@@ -277,21 +344,13 @@ def _resolve_virtiofs_binary_for_attach(
 ) -> str | None:
     """Resolve the libvirt ``<binary path='...'>`` for new virtiofs attach.
 
-    Reads ``cfg.virtiofs.inode_file_handles``; if set to one of the
-    supported modes, returns the expected wrapper path. Otherwise returns
-    None and no ``<binary>`` element is emitted.
-
-    Does *not* install the wrapper. Installation is owned by ``aivm vm
-    update`` so that the attach hot path stays free of stateful host-side
-    side effects and remains easy to unit-test.
+    Normal managed-libvirt mode deliberately emits no ``<binary>`` override.
+    Older config files may still contain ``virtiofs.inode_file_handles`` from
+    the experimental wrapper strategy, but AIVM no longer translates that into
+    a generated host-side wrapper script.
     """
-    del dry_run  # kept for symmetry with prior signature; no side effects here
-    mode = virtiofsd_wrapper.normalize_mode(
-        getattr(cfg.virtiofs, 'inode_file_handles', '')
-    )
-    if not mode:
-        return None
-    return virtiofsd_wrapper.desired_binary_path(cfg.paths.base_dir, mode)
+    del cfg, dry_run
+    return None
 
 
 def attach_vm_share(
@@ -301,6 +360,7 @@ def attach_vm_share(
     *,
     dry_run: bool = False,
     vm_running: bool | None = None,
+    read_only: bool = False,
 ) -> None:
     """Attach a virtiofs share mapping to an existing VM definition."""
     cfg = cfg.expanded_paths()
@@ -315,19 +375,25 @@ def attach_vm_share(
     if dry_run:
         log.info(
             'DRYRUN: attach virtiofs share source={} tag={} binary={}',
-            source_dir, tag, binary_path or '(libvirt default)',
+            source_dir,
+            tag,
+            binary_path or '(libvirt default)',
         )
         return
     binary_xml = (
-        f"  <binary path='{binary_path}'/>\n" if binary_path else ''
+        f'  <binary path={quoteattr(binary_path)}/>\n' if binary_path else ''
     )
+    source_attr = quoteattr(source_dir)
+    tag_attr = quoteattr(tag)
+    readonly_xml = '  <readonly/>\n' if read_only else ''
     xml = (
         "<filesystem type='mount' accessmode='passthrough'>\n"
         "  <driver type='virtiofs'/>\n"
-        f"{binary_xml}"
-        f"  <source dir='{source_dir}'/>\n"
-        f"  <target dir='{tag}'/>\n"
-        "</filesystem>\n"
+        f'{binary_xml}'
+        f'  <source dir={source_attr}/>\n'
+        f'  <target dir={tag_attr}/>\n'
+        f'{readonly_xml}'
+        '</filesystem>\n'
     )
     with tempfile.NamedTemporaryFile('w', delete=False) as f:
         f.write(xml)
@@ -336,8 +402,8 @@ def attach_vm_share(
     if vm_running is None:
         state = (
             mgr.submit(
-                ['virsh', 'domstate', cfg.vm.name],
-                sudo=True,
+                virsh_cmd('domstate', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
                 capture=True,
@@ -350,9 +416,9 @@ def attach_vm_share(
     else:
         is_running = bool(vm_running)
     attach_cmd = (
-        ['virsh', 'attach-device', cfg.vm.name, tmp, '--live', '--config']
+        virsh_cmd('attach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else ['virsh', 'attach-device', cfg.vm.name, tmp, '--config']
+        else virsh_cmd('attach-device', cfg.vm.name, tmp, '--config')
     )
     attach_summary = (
         f'Attach virtiofs device to running VM {cfg.vm.name}'
@@ -361,7 +427,7 @@ def attach_vm_share(
     )
     res = mgr.submit(
         attach_cmd,
-        sudo=True,
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
@@ -372,31 +438,64 @@ def attach_vm_share(
         return
     msg = ((res.stderr or '') + '\n' + (res.stdout or '')).lower()
     if 'target already exists' in msg:
-        current = vm_share_mappings(cfg, use_sudo=True)
-        if any(src == source_dir and tgt == tag for src, tgt in current):
+        current = vm_share_mappings_detailed(cfg, use_sudo=virsh_needs_sudo())
+        for src, tgt, current_ro in current:
+            if src != source_dir or tgt != tag:
+                continue
+            if current_ro == read_only:
+                log.info(
+                    'Virtiofs mapping already present for vm={} source={} tag={}; treating attach as satisfied.',
+                    cfg.vm.name,
+                    source_dir,
+                    tag,
+                )
+                return
+            # An existing device whose host-boundary access disagrees with
+            # the requested mode (typically a pre-<readonly/> ro share) is
+            # not satisfied: replace it so the enforcement is real.
             log.info(
-                'Virtiofs mapping already present for vm={} source={} tag={}; treating attach as satisfied.',
+                'Virtiofs mapping for vm={} source={} tag={} exists with '
+                'read_only={} but {} is requested; reattaching the device '
+                'to enforce it at the host boundary.',
                 cfg.vm.name,
                 source_dir,
                 tag,
+                current_ro,
+                read_only,
+            )
+            detach_vm_share(cfg, source_dir, tag, read_only=current_ro)
+            attach_vm_share(
+                cfg,
+                source_dir,
+                tag,
+                vm_running=is_running,
+                read_only=read_only,
             )
             return
     raise CmdError(attach_cmd, res)
 
 
 def detach_vm_share(
-    cfg: AgentVMConfig, source_dir: str, tag: str, *, dry_run: bool = False
+    cfg: AgentVMConfig,
+    source_dir: str,
+    tag: str,
+    *,
+    dry_run: bool = False,
+    read_only: bool = False,
 ) -> bool:
     """Detach a virtiofs share mapping from an existing VM definition."""
     cfg = cfg.expanded_paths()
     if not source_dir or not tag:
         return False
     source_dir = str(Path(source_dir).resolve())
+    source_attr = quoteattr(source_dir)
+    tag_attr = quoteattr(tag)
+    readonly_xml = '  <readonly/>\n' if read_only else ''
     xml = f"""<filesystem type='mount' accessmode='passthrough'>
   <driver type='virtiofs'/>
-  <source dir='{source_dir}'/>
-  <target dir='{tag}'/>
-</filesystem>
+  <source dir={source_attr}/>
+  <target dir={tag_attr}/>
+{readonly_xml}</filesystem>
 """
     if dry_run:
         log.info(
@@ -409,8 +508,8 @@ def detach_vm_share(
     mgr = CommandManager.current()
     state = (
         mgr.run(
-            ['virsh', 'domstate', cfg.vm.name],
-            sudo=True,
+            virsh_cmd('domstate', cfg.vm.name),
+            sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
@@ -420,13 +519,13 @@ def detach_vm_share(
     )
     is_running = 'running' in state
     detach_cmd = (
-        ['virsh', 'detach-device', cfg.vm.name, tmp, '--live', '--config']
+        virsh_cmd('detach-device', cfg.vm.name, tmp, '--live', '--config')
         if is_running
-        else ['virsh', 'detach-device', cfg.vm.name, tmp, '--config']
+        else virsh_cmd('detach-device', cfg.vm.name, tmp, '--config')
     )
     res = mgr.run(
         detach_cmd,
-        sudo=True,
+        sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
@@ -523,7 +622,7 @@ def ensure_share_mounted(
         if attempt < max_attempts:
             time.sleep(retry_sleep_s)
             continue
-        raise RuntimeError(
+        raise AIVMError(
             'Failed to mount shared folder inside guest after retries.\n'
             f'VM: {cfg.vm.name}\n'
             f'IP: {ip}\n'

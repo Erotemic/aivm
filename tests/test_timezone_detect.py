@@ -55,10 +55,14 @@ def test_detects_via_etc_timezone(
 
     original_read_text = Path.read_text
 
-    def fake_read_text(self: Path, *args: object, **kwargs: object) -> str:
+    def fake_read_text(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
         if str(self) == '/etc/timezone':
-            return fake.read_text(*args, **kwargs)  # type: ignore[arg-type]
-        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+            return fake.read_text(encoding=encoding, errors=errors)
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, 'read_text', fake_read_text)
     assert detect.detect_host_timezone() == 'America/New_York'
@@ -134,7 +138,7 @@ def test_cloud_init_resolution_explicit_overrides_host(
         called['n'] += 1
         return 'America/New_York'
 
-    monkeypatch.setattr('aivm.vm.lifecycle.detect_host_timezone', fake_detect)
+    monkeypatch.setattr('aivm.vm.cloudinit.detect_host_timezone', fake_detect)
 
     cfg = AgentVMConfig()
     cfg.vm.timezone = 'UTC'
@@ -154,7 +158,7 @@ def test_cloud_init_resolution_empty_falls_back_to_host(
     from aivm.config import AgentVMConfig
 
     monkeypatch.setattr(
-        'aivm.vm.lifecycle.detect_host_timezone',
+        'aivm.vm.cloudinit.detect_host_timezone',
         lambda: 'America/Los_Angeles',
     )
 

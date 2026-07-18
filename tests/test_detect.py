@@ -1,4 +1,4 @@
-"""Tests for test detect."""
+"""Tests for ``aivm.detect`` host probing: routes, subnets, and auto-defaults."""
 
 from __future__ import annotations
 

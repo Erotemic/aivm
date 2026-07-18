@@ -1,132 +1,114 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+requires = [
+  "setuptools>=68",
+  "setuptools>=41.0.1",
+  "wheel",
+]
 
 [project]
 name = "aivm"
-version = "0.4.1"
-description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
+description = """\
+  Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, \
+  optional nftables isolation).\
+  """
 readme = "README.rst"
-requires-python = ">=3.11"
+keywords = [
+  "agents",
+  "kvm",
+  "libvirt",
+  "sandbox",
+  "ssh",
+  "virtiofs",
+  "vm",
+  "vscode",
+]
 license = "Apache-2.0"
-license-files = ["LICENSE"]
-keywords = ["kvm", "libvirt", "vm", "sandbox", "agents", "vscode", "ssh", "virtiofs"]
+license-files = [
+  "LICENSE",
+]
+authors = [ { name = "Jon Crall", email = "erotemic@gmail.com" } ]
+requires-python = ">=3.11"
 classifiers = [
-  "Programming Language :: Python :: 3",
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
   "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Utilities",
+]
+dynamic = [
+  "version",
 ]
 dependencies = [
   "loguru",
-  "scriptconfig>=0.9.1",
+  "rich>=13.7.0",
+  "kwconf>=0.10.0",
   "ubelt>=1.3.6",
 ]
-
-[project.optional-dependencies]
-optional = [
+optional-dependencies.all = [
+  "aivm[docs]",
+  "aivm[optional]",
+  "aivm[tests]",
+]
+optional-dependencies.docs = [
+  "sphinx>=5.0.1",
+  "sphinx-autobuild>=2021.3.14",
+  "sphinx-rtd-theme>=1.0.0",
+]
+optional-dependencies.optional = [
   "pygments>=2.19.2",
 ]
-tests = [
+optional-dependencies.tests = [
   "coverage>=6.1.1",
   "pytest>=6.2.5",
   "pytest-cov>=3.0.0",
   "pytest-timeout>=1.4.2",
   "xdoctest>=1.1.5",
 ]
-docs = [
-  "sphinx>=5.0.1",
-  "sphinx-autobuild>=2021.3.14",
-  "sphinx-rtd-theme>=1.0.0",
-]
-all = [
-  "aivm[optional]",
-  "aivm[tests]",
-  "aivm[docs]",
-]
-
-[project.urls]
-Homepage = "https://github.com/Erotemic/aivm"
-
-[[project.authors]]
-name = "Jon Crall"
-email = "erotemic@gmail.com"
-
-[project.scripts]
-aivm = "aivm.cli:main"
-
-[tool.pytest.ini_options]
-addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
-norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
-filterwarnings = [ "default", "ignore:.*No cfgstr given in Cacher constructor or call.*:Warning", "ignore:.*Define the __nice__ method for.*:Warning", "ignore:.*private pytest class or function.*:Warning",]
-
-[tool.coverage.run]
-branch = true
-
-[tool.coverage.report]
-exclude_lines = [ "pragma: no cover", ".*  # pragma: no cover", ".*  # nocover", "def __repr__", "raise AssertionError", "raise NotImplementedError", "if 0:", "if trace is not None", "verbose = .*", "^ *raise", "^ *pass *$", "if _debug:", "if __name__ == .__main__.:", ".*if six.PY2:",]
-omit = [ "aivm/__main__.py", "*/setup.py",]
+urls.Homepage = "https://github.com/Erotemic/aivm"
+scripts.aivm = "aivm.cli:main"
 
 [tool.setuptools]
 include-package-data = true
-
-[tool.setuptools.package-data]
-"*" = [ "requirements/*.txt",]
-
-[tool.setuptools.packages.find]
-where = [ ".",]
-include = [ "aivm*",]
-
-
-[tool.xcookie]
-tags = [ "github", "erotemic", "purepy",]
-mod_name = "aivm"
-repo_name = "aivm"
-pkg_name = "aivm"
-rel_mod_parent_dpath = "."
-os = [ "linux" ]
-min_python = "3.11"
-url = "https://github.com/Erotemic/aivm"
-author = "Jon Crall"
-author_email = "erotemic@gmail.com"
-description = "Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, optional nftables isolation)."
-license = "Apache 2"
-dev_status = "planning"
-ci_pypy_versions = []
-remote_host = "github.com"
-remote_group = "Erotemic"
-use_setup_py = false
-use_pyproject_requirements = true
-ci_pypi_trusted_publishing = true
-ci_gpg_secret_transport = "direct_ci"
-
-
-[tool.ruff]
-line-length = 80
-target-version = "py311"
-
-[tool.ruff.lint]
-# Enable Flake8 (E, F) and isort (I) rules.
-select = ["E", "F", "I"]
-# Ignore specific rules, for example, E501 (line too long) as it's handled by the formatter.
-ignore = [
-    "E501",  # line too long
-    "E402",  # Module level import not at top of file
+dynamic.readme.file = [
+  "README.rst",
+]
+dynamic.readme.content-type = "text/x-rst"
+dynamic.version.attr = "aivm.__version__"
+package-data."*" = [
+  "requirements/*.txt",
+]
+packages.find.where = [
+  ".",
+]
+packages.find.include = [
+  "aivm*",
 ]
 
-[tool.ruff.format]
-quote-style = "single"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
-docstring-code-format = false
-
-[tool.ty.rules]
-unresolved-import = "ignore"
-unused-ignore-comment = "ignore"
-unused-type-ignore-comment = "ignore"
+[tool.ruff]
+target-version = "py311"
+line-length = 80
+format.indent-style = "space"
+format.quote-style = "single"
+format.line-ending = "auto"
+format.skip-magic-trailing-comma = false
+format.docstring-code-format = false
+lint.select = [
+  "E",
+  "F",
+  "I",
+]
+lint.ignore = [
+  "E402",
+  "E501",
+]
 
 [tool.mypy]
-# Mypy configuration for aivm
-# The ty type checker is the primary type checker; mypy is used for additional checks
 python_version = "3.11"
 warn_return_any = false
 warn_unused_configs = true
@@ -141,5 +123,86 @@ disallow_any_generics = false
 extra_checks = false
 ignore_missing_imports = true
 
-# Suppress specific errors that are framework-related or false positives
-disable_error_code = ["attr-defined", "arg-type", "func-returns-value"]
+[[tool.mypy.overrides]]
+module = "tests.*"
+# Tests intentionally use `lambda *a, **k: calls.append(...)` recorder fakes,
+# which trip func-returns-value; the package itself is checked with it on.
+disable_error_code = [
+  "func-returns-value",
+]
+
+[tool.ty]
+rules.unresolved-import = "ignore"
+rules.unused-ignore-comment = "ignore"
+rules.unused-type-ignore-comment = "ignore"
+
+[tool.pytest]
+ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
+ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
+ini_options.markers = [
+  "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",
+]
+ini_options.filterwarnings = [
+  "default",
+  "ignore:.*No cfgstr given in Cacher constructor or call.*:Warning",
+  "ignore:.*Define the __nice__ method for.*:Warning",
+  "ignore:.*private pytest class or function.*:Warning",
+]
+
+[tool.coverage]
+run.branch = true
+report.exclude_lines = [
+  ".*  # nocover",
+  ".*  # pragma: no cover",
+  ".*if six.PY2:",
+  "^ *pass *$",
+  "^ *raise",
+  "def __repr__",
+  "if __name__ == .__main__.:",
+  "if _debug:",
+  "if 0:",
+  "if trace is not None",
+  "pragma: no cover",
+  "raise AssertionError",
+  "raise NotImplementedError",
+  "verbose = .*",
+]
+report.omit = [
+  "*/setup.py",
+  "aivm/__main__.py",
+]
+
+[tool.xcookie]
+tags = [
+  "github",
+  "erotemic",
+  "purepy",
+]
+mod_name = "aivm"
+repo_name = "aivm"
+pkg_name = "aivm"
+rel_mod_parent_dpath = "."
+os = [
+  "linux",
+]
+min_python = "3.11"
+url = "https://github.com/Erotemic/aivm"
+author = "Jon Crall"
+author_email = "erotemic@gmail.com"
+description = """\
+  Local libvirt/KVM sandbox VM manager for coding agents (Ubuntu 24.04 cloud-image, SSH, optional virtiofs share, \
+  optional nftables isolation).\
+  """
+license = "Apache 2"
+dev_status = "planning"
+ci_pypy_versions = []
+remote_host = "github.com"
+remote_group = "Erotemic"
+use_setup_py = false
+use_pyproject_requirements = true
+ci_pypi_trusted_publishing = true
+ci_gpg_secret_transport = "direct_ci"
+# Deselect e2e tests in CI by marker (they need libvirt/KVM and sudo); keep
+# this in test_command -- not addopts -- so the e2e runner can still name
+# them by path.
+test_command = 'python -m pytest --verbose -p pytester -p no:doctest --xdoctest -m "not e2e" --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests'

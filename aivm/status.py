@@ -7,18 +7,28 @@ rendering so other CLI flows can reuse tri-state outcomes (``True`` /
 
 from __future__ import annotations
 
+import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .config_store import AttachmentEntry, load_store
+from .firewall import effective_firewall_table
 from .host import check_commands
-from .runtime import require_ssh_identity, ssh_base_args, virsh_system_cmd
-from .store import AttachmentEntry, load_store, store_path
+from .modes import PrivilegeMode
+from .privilege import sudo_allowed, virsh_needs_sudo
+from .runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    virsh_cmd,
+    virsh_domain_missing,
+)
 from .util import which
 from .vm import get_ip_cached, vm_share_mappings
 from .vm.drift import saved_vm_drift_report
+from .vm.host_access import _local_stat_answer
 
 
 @dataclass(frozen=True)
@@ -36,9 +46,29 @@ class ProbeOutcome:
     diag: str = ''
 
 
-def status_line(ok: bool | None, label: str, detail: str = '') -> str:
-    """Render a single user-facing status line with consistent icons."""
-    icon = '✅' if ok is True else ('➖' if ok is None else '❌')
+def status_line(
+    ok: bool | None,
+    label: str,
+    detail: str = '',
+    *,
+    warn_only: bool = False,
+    icon: str | None = None,
+) -> str:
+    """Render a single user-facing status line with consistent icons.
+
+    ``warn_only`` renders a failing item as ⚠️ instead of ❌ -- for reports
+    where the item costs something (typically sudo) without violating the
+    user's configured policy.  ``icon`` overrides the icon outright, for
+    items outside the pass/warn/fail spectrum (e.g. 🧱 for a hard limit
+    nothing can remove).
+    """
+    if icon is None:
+        if ok is True:
+            icon = '✅'
+        elif ok is None:
+            icon = '➖'
+        else:
+            icon = '⚠️' if warn_only else '❌'
     suffix = f' - {detail}' if detail else ''
     return f'{icon} {label}{suffix}'
 
@@ -51,6 +81,51 @@ def clip(text: str, *, max_lines: int = 60) -> str:
     keep: list[str] = list(lines[:max_lines])
     keep.append(f'... ({len(lines) - max_lines} more lines)')
     return '\n'.join(keep)
+
+
+@dataclass
+class _StatusChecklist:
+    """Accumulate status lines and the done/total progress tally.
+
+    Wraps the shared output ``lines`` list so a check appends its status
+    line and updates the progress counters in one call, instead of the
+    caller repeating ``total += 1; done += int(ok)`` next to every append.
+    """
+
+    lines: list[str]
+    done: int = 0
+    total: int = 0
+
+    def check(
+        self,
+        ok: bool | None,
+        label: str,
+        detail: str,
+        *,
+        counted: bool | None = None,
+    ) -> None:
+        """Append a status line, counting it toward progress when conclusive.
+
+        By default a check counts toward the denominator when ``ok`` is not
+        ``None`` (the inconclusive/skipped state). Pass ``counted`` to force
+        it on (a check that always counts) or off (a purely informational
+        line that never affects the tally).
+        """
+        should_count = (ok is not None) if counted is None else counted
+        if should_count:
+            self.total += 1
+            self.done += int(bool(ok))
+        self.lines.append(status_line(ok, label, detail))
+
+    def bump(self, ok: bool) -> None:
+        """Count a check toward progress without emitting its own line.
+
+        For the rare case where the counted state and the displayed line
+        are decoupled (the cached-IP check counts on VM-state
+        conclusiveness but prints a separate, more nuanced line).
+        """
+        self.total += 1
+        self.done += int(bool(ok))
 
 
 def probe_cwd_shared_with_vm(
@@ -182,28 +257,37 @@ def probe_runtime_environment() -> ProbeOutcome:
 
 
 def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
-    """Inspect libvirt network state for the configured network name."""
+    """Inspect libvirt network state for the configured network name.
+
+    The raw ``net-info`` output is preserved in ``diag`` so detail rendering
+    can show it without re-running the probe.
+    """
     info = CommandManager.current().run(
-        virsh_system_cmd('net-info', cfg.network.name),
-        sudo=use_sudo,
+        virsh_cmd('net-info', cfg.network.name),
+        sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
         summary=f'Inspect libvirt network {cfg.network.name}',
     )
+    raw = (info.stdout + '\n' + info.stderr).strip()
     if info.code != 0:
         raw_detail = (info.stderr or info.stdout or '').strip()
+        if info.code in {126, 127}:
+            return ProbeOutcome(None, 'virsh unavailable on this host', raw)
         detail = raw_detail.lower()
         if 'permission denied' in detail or 'authentication failed' in detail:
             return ProbeOutcome(
                 None,
                 f'{cfg.network.name} unavailable (run status --sudo for privileged checks)',
+                raw,
             )
         if not use_sudo:
             return ProbeOutcome(
                 None,
                 f'{cfg.network.name} probe inconclusive without sudo ({raw_detail or "unknown error"})',
+                raw,
             )
-        return ProbeOutcome(False, f'{cfg.network.name} not defined')
+        return ProbeOutcome(False, f'{cfg.network.name} not defined', raw)
     active = False
     autostart = False
     for line in (info.stdout or '').splitlines():
@@ -218,15 +302,26 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
         return ProbeOutcome(
             True,
             f'{cfg.network.name} active (autostart={"yes" if autostart else "no"})',
+            raw,
         )
-    return ProbeOutcome(False, f'{cfg.network.name} defined but inactive')
+    return ProbeOutcome(False, f'{cfg.network.name} defined but inactive', raw)
 
 
 def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
-    """Check whether the expected nftables table exists."""
+    """Check whether the expected nftables table exists.
+
+    The raw ``nft list table`` output is preserved in ``diag`` so detail
+    rendering can show it without re-running the probe.
+    """
     if not cfg.firewall.enabled:
         return ProbeOutcome(None, 'disabled in config')
     mgr = CommandManager.current()
+    if mgr.privilege_mode == PrivilegeMode.NEVER:
+        # nft reads require root; there is no unprivileged fallback.
+        return ProbeOutcome(
+            None,
+            'firewall checks need privileges (privilege_mode = never)',
+        )
     if use_sudo and mgr.current_plan() is None:
         with mgr.step(
             'Inspect firewall status',
@@ -234,48 +329,99 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
                 'Check whether the managed nftables table already exists '
                 'before deciding whether firewall repair is needed.'
             ),
-            approval_scope=f'firewall-probe:{cfg.firewall.table}',
+            approval_scope=f'firewall-probe:{effective_firewall_table(cfg)}',
         ):
             res = mgr.submit(
-                ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+                ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
                 sudo=True,
                 role='read',
                 check=False,
                 capture=True,
                 eager=True,
-                summary=f'Inspect nftables table inet {cfg.firewall.table}',
+                summary=f'Inspect nftables table inet {effective_firewall_table(cfg)}',
             ).result()
     else:
         res = mgr.run(
-            ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
             sudo=use_sudo,
             check=False,
             capture=True,
-            summary=f'Inspect nftables table inet {cfg.firewall.table}',
+            summary=f'Inspect nftables table inet {effective_firewall_table(cfg)}',
         )
+    raw = (res.stdout + '\n' + res.stderr).strip()
     if res.code == 0:
-        return ProbeOutcome(True, f'table inet {cfg.firewall.table} present')
+        return ProbeOutcome(
+            True, f'table inet {effective_firewall_table(cfg)} present', raw
+        )
+    if res.code in {126, 127}:
+        return ProbeOutcome(None, 'nft unavailable on this host', raw)
     detail = (res.stderr or res.stdout or '').strip().lower()
     if 'operation not permitted' in detail or 'permission denied' in detail:
         return ProbeOutcome(
-            None, 'requires privileges (run status --sudo for firewall checks)'
+            None,
+            'requires privileges (run status --sudo for firewall checks)',
+            raw,
         )
-    return ProbeOutcome(False, f'table inet {cfg.firewall.table} missing')
+    return ProbeOutcome(
+        False, f'table inet {effective_firewall_table(cfg)} missing', raw
+    )
+
+
+def _command_output_block(cmd: list[str], stdout: str, stderr: str) -> str:
+    """Render one command's output the way detail diagnostics display it."""
+    body = clip((stdout + '\n' + stderr).strip() or '(no output)')
+    return f'`{" ".join(cmd)}`\n```text\n{body}\n```'
 
 
 def probe_vm_state(
     cfg: AgentVMConfig, *, use_sudo: bool
 ) -> tuple[ProbeOutcome, bool | None]:
-    """Return VM run-state probe plus explicit domain-defined flag."""
+    """Return VM run-state probe plus explicit domain-defined flag.
+
+    The probe always tries unprivileged libvirt access first and escalates
+    to sudo only when ``use_sudo`` is True and the unprivileged read failed
+    for a reason other than the domain not existing. Raw dominfo/domstate
+    output is preserved in ``diag`` so detail rendering can show it without
+    re-running the commands.
+    """
     mgr = CommandManager.current()
+    dominfo_cmd = virsh_cmd('dominfo', cfg.vm.name)
+    sudo_used = False
+    # Closed stdin keeps the unprivileged probe from blocking on a polkit
+    # password prompt outside the manager's approval flow, and LC_ALL=C
+    # keeps error/state string matching locale-independent.
+    probe_env = {**os.environ, 'LC_ALL': 'C'}
     dom = mgr.run(
-        virsh_system_cmd('dominfo', cfg.vm.name),
-        sudo=use_sudo,
+        dominfo_cmd,
+        sudo=False,
         check=False,
         capture=True,
+        input_text='',
+        env=probe_env,
         summary=f'Inspect VM definition {cfg.vm.name}',
     )
+    if (
+        dom.code not in {0, 126, 127}
+        and use_sudo
+        and mgr.privilege_mode != PrivilegeMode.NEVER
+        and not virsh_domain_missing(dom.stderr)
+    ):
+        sudo_used = True
+        dom = mgr.run(
+            dominfo_cmd,
+            sudo=True,
+            check=False,
+            capture=True,
+            env=probe_env,
+            summary=f'Inspect VM definition {cfg.vm.name}',
+        )
     if dom.code != 0:
+        diag = _command_output_block(dominfo_cmd, dom.stdout, dom.stderr)
+        if dom.code in {126, 127}:
+            return (
+                ProbeOutcome(None, 'virsh unavailable on this host', diag),
+                None,
+            )
         raw_detail = (dom.stderr or dom.stdout or '').strip()
         detail = raw_detail.lower()
         if 'permission denied' in detail or 'authentication failed' in detail:
@@ -283,27 +429,42 @@ def probe_vm_state(
                 ProbeOutcome(
                     None,
                     f'{cfg.vm.name} unavailable (run status --sudo for privileged checks)',
+                    diag,
                 ),
                 None,
             )
-        if not use_sudo:
+        if not use_sudo and not virsh_domain_missing(dom.stderr):
             return (
                 ProbeOutcome(
                     None,
                     f'{cfg.vm.name} probe inconclusive without sudo ({raw_detail or "unknown error"})',
+                    diag,
                 ),
                 None,
             )
-        return ProbeOutcome(False, f'{cfg.vm.name} not defined'), False
-    state = mgr.run(
-        virsh_system_cmd('domstate', cfg.vm.name),
-        sudo=use_sudo,
+        return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
+    domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
+    state_res = mgr.run(
+        domstate_cmd,
+        sudo=sudo_used,
         check=False,
         capture=True,
+        env=probe_env,
         summary=f'Inspect VM runtime state {cfg.vm.name}',
-    ).stdout.strip()
+    )
+    state = state_res.stdout.strip()
+    diag = '\n'.join(
+        [
+            _command_output_block(dominfo_cmd, dom.stdout, dom.stderr),
+            _command_output_block(
+                domstate_cmd, state_res.stdout, state_res.stderr
+            ),
+        ]
+    )
+    if state_res.code in {126, 127}:
+        return ProbeOutcome(None, 'virsh unavailable on this host', diag), None
     return ProbeOutcome(
-        'running' in state.lower(), f'{cfg.vm.name} state={state}'
+        'running' in state.lower(), f'{cfg.vm.name} state={state}', diag
     ), True
 
 
@@ -400,9 +561,13 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         cmd, sudo=False, check=False, capture=True
     )
     if res.code == 0:
-        return ProbeOutcome(True, 'configured packages/tools appear present', '')
+        return ProbeOutcome(
+            True, 'configured packages/tools appear present', ''
+        )
     diag = (res.stdout + '\n' + res.stderr).strip()
-    return ProbeOutcome(False, 'one or more configured packages/tools missing', diag)
+    return ProbeOutcome(
+        False, 'one or more configured packages/tools missing', diag
+    )
 
 
 def anticipated_status_sudo_commands(
@@ -418,21 +583,21 @@ def anticipated_status_sudo_commands(
         Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / cfg.image.cache_name
     )
     cmds: list[list[str]] = [
-        list(virsh_system_cmd('net-info', cfg.network.name)),
-        ['nft', 'list', 'table', 'inet', cfg.firewall.table],
+        list(virsh_cmd('net-info', cfg.network.name)),
+        ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
         ['test', '-f', str(base_img)],
-        list(virsh_system_cmd('dominfo', cfg.vm.name)),
-        list(virsh_system_cmd('domstate', cfg.vm.name)),
-        list(virsh_system_cmd('dumpxml', cfg.vm.name)),
+        list(virsh_cmd('dominfo', cfg.vm.name)),
+        list(virsh_cmd('domstate', cfg.vm.name)),
+        list(virsh_cmd('dumpxml', cfg.vm.name)),
     ]
     if detail:
         cmds.extend(
             [
-                list(virsh_system_cmd('net-dumpxml', cfg.network.name)),
-                ['bash', '-c', f'ls -lh {base_img} 2>&1'],
-                list(virsh_system_cmd('domiflist', cfg.vm.name)),
-                list(virsh_system_cmd('domifaddr', cfg.vm.name)),
-                list(virsh_system_cmd('net-dhcp-leases', cfg.network.name)),
+                list(virsh_cmd('net-dumpxml', cfg.network.name)),
+                ['ls', '-lh', str(base_img)],
+                list(virsh_cmd('domiflist', cfg.vm.name)),
+                list(virsh_cmd('domifaddr', cfg.vm.name)),
+                list(virsh_cmd('net-dhcp-leases', cfg.network.name)),
             ]
         )
     deduped: list[list[str]] = []
@@ -458,14 +623,17 @@ def render_status(
     ``use_sudo=False`` intentionally favors safe/non-privileged checks and marks
     sudo-only checks as inconclusive instead of failing hard.
     """
-    lines: list[str] = ['🧭 AgentVM Status', f'📄 Config: {path}', '']
-    done = 0
-    total = 0
+    privilege_mode = CommandManager.current().privilege_mode
+    lines: list[str] = [
+        '🧭 AgentVM Status',
+        f'📄 Config: {path}',
+        f'🔐 Privilege mode: {privilege_mode}',
+    ]
+    lines.append('')
+    report = _StatusChecklist(lines)
 
     missing, missing_opt = check_commands()
     host_ok = len(missing) == 0
-    total += 1
-    done += int(host_ok)
     host_detail = (
         'all required commands found'
         if host_ok
@@ -473,48 +641,42 @@ def render_status(
     )
     if missing_opt:
         host_detail += f' (optional missing: {", ".join(missing_opt)})'
-    lines.append(status_line(host_ok, 'Host dependencies', host_detail))
+    report.check(host_ok, 'Host dependencies', host_detail, counted=True)
 
     env = probe_runtime_environment()
-    lines.append(status_line(env.ok, 'Runtime environment', env.detail))
+    report.check(env.ok, 'Runtime environment', env.detail, counted=False)
 
     net = probe_network(cfg, use_sudo=use_sudo)
-    if net.ok is not None:
-        total += 1
-        done += int(net.ok)
-    lines.append(status_line(net.ok, 'Libvirt network', net.detail))
+    report.check(net.ok, 'Libvirt network', net.detail)
 
     fw = probe_firewall(cfg, use_sudo=use_sudo)
-    if fw.ok is not None:
-        total += 1
-        done += int(fw.ok)
-    lines.append(status_line(fw.ok, 'Firewall', fw.detail))
+    report.check(fw.ok, 'Firewall', fw.detail)
 
     base_img = (
         Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / cfg.image.cache_name
     )
     # TODO(design): once digest-addressable image cache fallback exists,
     # surface both named-path and digest-path resolution in status.
-    img_ok = (
-        CommandManager.current()
-        .run(
-            ['test', '-f', str(base_img)],
-            sudo=use_sudo,
-            check=False,
-            capture=True,
-        )
-        .code
-        == 0
-    )
-    if use_sudo:
-        total += 1
-        done += int(img_ok)
-        lines.append(status_line(img_ok, 'Base image cache', str(base_img)))
-    else:
-        lines.append(
-            status_line(
-                None, 'Base image cache', f'skipped without --sudo ({base_img})'
+    # A local stat answers definitively when it can (the image tree is often
+    # root-only, so EACCES means "ask again with sudo", not "missing").
+    img_ok: bool | None = _local_stat_answer(base_img, want_file=True)
+    if img_ok is None and use_sudo:
+        img_ok = (
+            CommandManager.current()
+            .run(
+                ['test', '-f', str(base_img)],
+                sudo=True,
+                check=False,
+                capture=True,
             )
+            .code
+            == 0
+        )
+    if img_ok is not None:
+        report.check(img_ok, 'Base image cache', str(base_img))
+    else:
+        report.check(
+            None, 'Base image cache', f'skipped without --sudo ({base_img})'
         )
 
     vm_out, vm_defined = probe_vm_state(cfg, use_sudo=use_sudo)
@@ -537,21 +699,17 @@ def render_status(
         )
         vm_defined_effective = True
 
-    if vm_display.ok is not None:
-        total += 1
-        done += int(bool(vm_display.ok))
-    lines.append(status_line(vm_display.ok, 'VM state', vm_display.detail))
+    report.check(vm_display.ok, 'VM state', vm_display.detail)
 
     share_mappings: list[tuple[str, str]] = []
     if vm_defined is True:
         share_mappings = vm_share_mappings(cfg, use_sudo=use_sudo)
     if vm_defined is True and share_mappings:
-        lines.append(
-            status_line(
-                True,
-                'VM shared folders',
-                f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
-            )
+        report.check(
+            True,
+            'VM shared folders',
+            f'{len(share_mappings)} mapping(s) configured (use --detail to inspect host paths)',
+            counted=False,
         )
     elif vm_defined_effective is True:
         if vm_defined is None:
@@ -560,25 +718,27 @@ def render_status(
             share_detail = 'none detected'
             if not use_sudo:
                 share_detail = 'none detected or unavailable without --sudo'
-        lines.append(status_line(None, 'VM shared folders', share_detail))
+        report.check(None, 'VM shared folders', share_detail, counted=False)
     elif vm_defined is None:
-        lines.append(
-            status_line(
-                None,
-                'VM shared folders',
-                'unverified without privileged VM checks',
-            )
+        report.check(
+            None,
+            'VM shared folders',
+            'unverified without privileged VM checks',
+            counted=False,
         )
     else:
-        lines.append(status_line(None, 'VM shared folders', 'VM not defined'))
+        report.check(None, 'VM shared folders', 'VM not defined', counted=False)
 
     # TODO: we probably want to clean up the detail that is shown here, but do want more than just
     # the path that is shared. We want what mode it is shared in, which VMs if is shared with, what its access is.
     # It could be the case that it is shared with more than 1 VM in different modes, maybe we only print the first
     # and then that there are more, and show them all if --detail is given.
     cwd_share = probe_cwd_shared_with_vm(cfg, path)
-    lines.append(
-        status_line(cwd_share.ok, 'Current directory shared', cwd_share.detail)
+    report.check(
+        cwd_share.ok,
+        'Current directory shared',
+        cwd_share.detail,
+        counted=False,
     )
 
     # Config drift check: compare saved VM config against actual libvirt state
@@ -590,39 +750,31 @@ def render_status(
                 # TODO: if we don't have sudo or we can only do a partial
                 # check, we should inform the user about that here. (e.g.
                 # firewall drift)
-                lines.append(status_line(True, 'Config drift', 'in sync'))
+                report.check(True, 'Config drift', 'in sync')
             else:
                 # drift.ok is False here (drift detected)
-                lines.append(
-                    status_line(
-                        False,
-                        'Config drift',
-                        f'{len(drift.items)} mismatch(es) detected',
-                    )
+                report.check(
+                    False,
+                    'Config drift',
+                    f'{len(drift.items)} mismatch(es) detected',
                 )
                 if detail:
-                    lines.append('Config Drift Details:')
+                    report.lines.append('Config Drift Details:')
                     for item in drift.items:
-                        lines.append(
+                        report.lines.append(
                             f'  - {item.key}: expected={item.expected}, actual={item.actual}'
                         )
-            # Count this check
-            total += 1
-            done += 1 if drift.ok is True else 0
         else:
             # drift.available is False here (unavailable)
-            lines.append(
-                status_line(None, 'Config drift', drift.diag or 'unavailable')
-            )
+            report.check(None, 'Config drift', drift.diag or 'unavailable')
     else:
-        lines.append(status_line(None, 'Config drift', 'VM not defined'))
+        report.check(None, 'Config drift', 'VM not defined')
 
     ip_ok = bool(ip) and (vm_defined_effective is not False)
     if vm_display.ok is not None:
-        total += 1
-        done += int(ip_ok)
+        report.bump(ip_ok)
     if cached_ip and vm_defined is False:
-        lines.append(
+        report.lines.append(
             status_line(
                 False,
                 'Cached VM IP',
@@ -630,9 +782,9 @@ def render_status(
             )
         )
     elif ip and ssh.ok:
-        lines.append(status_line(True, 'Cached VM IP', ip))
+        report.lines.append(status_line(True, 'Cached VM IP', ip))
     elif ip and vm_defined is None:
-        lines.append(
+        report.lines.append(
             status_line(
                 None,
                 'Cached VM IP',
@@ -640,13 +792,11 @@ def render_status(
             )
         )
     else:
-        lines.append(
+        report.lines.append(
             status_line(bool(ip), 'Cached VM IP', ip or 'no cached IP yet')
         )
 
-    total += 1
-    done += int(bool(ssh.ok))
-    lines.append(status_line(bool(ssh.ok), 'SSH readiness', ssh.detail))
+    report.check(bool(ssh.ok), 'SSH readiness', ssh.detail, counted=True)
 
     if ip and ssh.ok:
         prov = probe_provisioned(cfg, ip)
@@ -658,13 +808,10 @@ def render_status(
             else 'disabled in config',
             '',
         )
-    if prov.ok is not None:
-        total += 1
-        done += int(bool(prov.ok))
-    lines.append(status_line(prov.ok, 'Provisioning', prov.detail))
+    report.check(prov.ok, 'Provisioning', prov.detail)
 
     lines.append('')
-    lines.append(f'📊 Progress: {done}/{total} checks complete')
+    lines.append(f'📊 Progress: {report.done}/{report.total} checks complete')
     if not use_sudo:
         lines.append(
             'ℹ️ Some privileged checks are skipped/limited without --sudo.'
@@ -689,27 +836,19 @@ def render_status(
             lines.append('```')
         lines.append('')
 
+        # The summary probes above already captured their raw command output
+        # in ProbeOutcome.diag, so detail rendering reuses it instead of
+        # re-running the same (often privileged) commands.
         mgr = CommandManager.current()
-        net_info = mgr.run(
-            virsh_system_cmd('net-info', cfg.network.name),
-            sudo=use_sudo,
-            check=False,
-            capture=True,
-        )
         net_xml = mgr.run(
-            virsh_system_cmd('net-dumpxml', cfg.network.name),
-            sudo=use_sudo,
+            virsh_cmd('net-dumpxml', cfg.network.name),
+            sudo=use_sudo and virsh_needs_sudo(),
             check=False,
             capture=True,
         )
         lines.append(f'Network ({cfg.network.name})')
         lines.append('```text')
-        lines.append(
-            clip(
-                (net_info.stdout + '\n' + net_info.stderr).strip()
-                or '(no output)'
-            )
-        )
+        lines.append(clip(net.diag or '(no output)'))
         lines.append('```')
         if net_xml.code == 0 and net_xml.stdout.strip():
             lines.append('```xml')
@@ -717,21 +856,10 @@ def render_status(
             lines.append('```')
         lines.append('')
 
-        lines.append(f'Firewall (inet {cfg.firewall.table})')
+        lines.append(f'Firewall (inet {effective_firewall_table(cfg)})')
         if cfg.firewall.enabled:
-            fw_raw = mgr.run(
-                ['nft', 'list', 'table', 'inet', cfg.firewall.table],
-                sudo=use_sudo,
-                check=False,
-                capture=True,
-            )
             lines.append('```text')
-            lines.append(
-                clip(
-                    (fw_raw.stdout + '\n' + fw_raw.stderr).strip()
-                    or '(no output)'
-                )
-            )
+            lines.append(clip(fw.diag or '(no output)'))
             lines.append('```')
         else:
             lines.append('- disabled in config')
@@ -739,8 +867,8 @@ def render_status(
 
         lines.append('Image')
         img_stat = mgr.run(
-            ['bash', '-c', f'ls -lh {base_img} 2>&1'],
-            sudo=use_sudo,
+            ['ls', '-lh', str(base_img)],
+            sudo=use_sudo and sudo_allowed(),
             check=False,
             capture=True,
         )
@@ -755,23 +883,23 @@ def render_status(
         lines.append('')
 
         lines.append(f'VM ({cfg.vm.name})')
-        for cmd in (
-            virsh_system_cmd('dominfo', cfg.vm.name),
-            virsh_system_cmd('domstate', cfg.vm.name),
-            virsh_system_cmd('domiflist', cfg.vm.name),
-            virsh_system_cmd('domifaddr', cfg.vm.name),
-            virsh_system_cmd('net-dhcp-leases', cfg.network.name),
-        ):
-            vm_raw = mgr.run(cmd, sudo=use_sudo, check=False, capture=True)
-            lines.append(f'`{" ".join(cmd)}`')
-            lines.append('```text')
-            lines.append(
-                clip(
-                    (vm_raw.stdout + '\n' + vm_raw.stderr).strip()
-                    or '(no output)'
-                )
+        if vm_out.diag:
+            lines.append(vm_out.diag)
+        vm_detail_cmds = [
+            virsh_cmd('domiflist', cfg.vm.name),
+            virsh_cmd('domifaddr', cfg.vm.name),
+        ]
+        vm_detail_cmds.append(virsh_cmd('net-dhcp-leases', cfg.network.name))
+        for cmd in vm_detail_cmds:
+            vm_raw = mgr.run(
+                cmd,
+                sudo=use_sudo and virsh_needs_sudo(),
+                check=False,
+                capture=True,
             )
-            lines.append('```')
+            lines.append(
+                _command_output_block(cmd, vm_raw.stdout, vm_raw.stderr)
+            )
         lines.append('Filesystem shares')
         if share_mappings:
             for src, tag in share_mappings:
@@ -835,8 +963,13 @@ def render_status(
     return '\n'.join(lines)
 
 
-def render_global_status() -> str:
-    """Render global status when no single VM context is resolved."""
+def render_global_status(store_cfg_path: Path) -> str:
+    """Render global status when no single VM context is resolved.
+
+    ``store_cfg_path`` is required rather than defaulted: resolving the store
+    here would ignore ``--config`` and describe a file the caller never asked
+    about.
+    """
     lines: list[str] = ['🧭 AIVM Global Status', '']
     missing, missing_opt = check_commands()
     host_ok = len(missing) == 0
@@ -851,9 +984,8 @@ def render_global_status() -> str:
     env = probe_runtime_environment()
     lines.append(status_line(env.ok, 'Runtime environment', env.detail))
 
-    reg_path = store_path()
-    reg = load_store(reg_path)
-    lines.append(status_line(True, 'Config store', str(reg_path)))
+    reg = load_store(store_cfg_path)
+    lines.append(status_line(True, 'Config store', str(store_cfg_path)))
     lines.append('')
     lines.append('📦 Managed Resources')
     lines.append(f'- VMs: {len(reg.vms)}')

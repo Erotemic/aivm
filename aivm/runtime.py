@@ -2,17 +2,40 @@
 
 Keeping these helpers centralized reduces drift in connection defaults and
 libvirt URI usage across CLI and VM lifecycle modules.
+
+aivm targets the privileged system libvirt daemon (``qemu:///system``).
+A per-user ``qemu:///session`` runtime was prototyped and removed; see
+``docs/planning/deferred/session-runtime.md``.
 """
 
 from __future__ import annotations
 
 from .errors import MissingSSHIdentityError
 
-LIBVIRT_URI = 'qemu:///system'
+SYSTEM_LIBVIRT_URI = 'qemu:///system'
+
+#: Backward-compatible alias for :data:`SYSTEM_LIBVIRT_URI`.
+LIBVIRT_URI = SYSTEM_LIBVIRT_URI
 
 
-def virsh_system_cmd(*args: str) -> list[str]:
-    return ['virsh', '-c', LIBVIRT_URI, *args]
+def virsh_cmd(*args: str) -> list[str]:
+    """Build a virsh argv pinned to the system libvirt daemon."""
+    return ['virsh', '-c', SYSTEM_LIBVIRT_URI, *args]
+
+
+def current_libvirt_uri() -> str:
+    """Return the libvirt URI every client command must target."""
+    return SYSTEM_LIBVIRT_URI
+
+
+def virsh_domain_missing(stderr: str) -> bool:
+    """Return True when virsh failed because the domain does not exist.
+
+    Distinguishes "domain not found" from permission/connection failures so
+    callers know that retrying with sudo cannot change the answer.
+    """
+    detail = (stderr or '').lower()
+    return 'failed to get domain' in detail or 'domain not found' in detail
 
 
 def require_ssh_identity(identity: str) -> str:
@@ -31,6 +54,7 @@ def ssh_base_args(
     connect_timeout: int | None = None,
     batch_mode: bool = False,
     user_known_hosts_file: str | None = None,
+    identities_only: bool = True,
 ) -> list[str]:
     args: list[str] = []
     if batch_mode:
@@ -40,5 +64,11 @@ def ssh_base_args(
     args.extend(['-o', f'StrictHostKeyChecking={strict_host_key_checking}'])
     if user_known_hosts_file:
         args.extend(['-o', f'UserKnownHostsFile={user_known_hosts_file}'])
+    if identities_only:
+        # Match the generated ~/.ssh/config entry. Without this, ssh may try
+        # keys from the agent or earlier Host blocks before the configured
+        # IdentityFile, and sshd can disconnect with "Too many authentication
+        # failures" before the aivm key is ever offered.
+        args.extend(['-o', 'IdentitiesOnly=yes'])
     args.extend(['-i', ident])
     return args

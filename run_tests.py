@@ -17,6 +17,10 @@ if __name__ == '__main__':
         '--cov-report',
         'term',
         '--xdoctest',
+        # e2e tests drive real libvirt/KVM hosts and are opt-in; the default
+        # runner deselects them (the e2e shell scripts run them by path).
+        '-m',
+        'not e2e',
         '--cov=' + package_name,
         mod_dpath,
         test_dpath,

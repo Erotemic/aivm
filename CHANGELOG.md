@@ -2,19 +2,85 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.4.1 - Unreleased
+## Version 0.5.0 - Unreleased
+
+### Added
+* Guest-side virtiofs fd guard (`aivm vm fdguard`, on by default via the new
+  `virtiofs.fd_guard`, `virtiofs.fd_guard_threshold`, and
+  `virtiofs.fd_guard_interval_sec` config knobs). Root cause work on the
+  long-lived virtiofs EMFILE failure identified that (a) host `virtiofsd`
+  holds one `O_PATH` fd per guest-cached inode and only releases it on guest
+  inode eviction, and (b) the guest's stock nightly `plocate` updatedb sweep
+  walked every attached inode because Ubuntu's default `PRUNEFS` lacks
+  `virtiofs`, deterministically saturating the ~1M host fd ceiling. The guard
+  is a guest systemd timer that idempotently prunes virtiofs from
+  `/etc/updatedb.conf` and flushes guest dentry/inode caches when the
+  `fuse_inode` slab count crosses a watermark (default 500k), releasing the
+  host-side descriptors before EMFILE. New VMs install it via cloud-init;
+  `aivm vm fdguard --action install` retrofits existing VMs and replaces
+  host-side periodic `aivm vm flush_caches` jobs. See
+  `docs/source/virtiofs.rst`.
+* `aivm vm update` now reconciles the virtiofs fd guard against config like
+  any other drift: while the VM is running and reachable it probes the guest
+  (install state, timer enablement, sha256 of each managed guard file),
+  plans an install/refresh when `virtiofs.fd_guard = true` and the guest is
+  missing/stale (e.g. threshold changed or aivm's embedded guard script was
+  updated), and plans an uninstall when the knob is disabled. Probe failures
+  (VM down, SSH unreachable) become diagnostics notes rather than errors, and
+  guard reconciliation never requires a restart.
+* Privilege-aware operation. A new `behavior.privilege_mode` config knob
+  controls when aivm invokes sudo: `as-needed` or `always`, defaulting to
+  `as-needed`. The default probes what already works without sudo (libvirt
+  group membership for `qemu:///system`, user-writable image trees) and
+  escalates only where required; `always` escalates every privileged-capable
+  operation. Unknown values, including the experimental `never` value, are
+  rejected rather than silently changing the privilege policy. A global
+  no-sudo guarantee is not advertised because managed nftables and new host
+  bind mounts still require root on the supported runtime.
+
+  Enforcement keys on the command actually being run, never on the feature
+  requesting it: a `persistent` attachment needs `mount --bind` only when
+  the bind is missing, so reconciling an established attachment issues no
+  privileged command and is refused in no mode. Likewise the sudo decision
+  for each command is made against the specific path it touches, so on a
+  user-owned `paths.base_dir` the bind-mount export directories are created,
+  inspected, and removed without privileges; establishing a shared-root
+  attachment drops from four privileged commands to one (`mount --bind`).
+
+  State-changing hypervisor commands (`virsh`/`virt-install` with
+  role=modify) keep their interactive approval prompt even when they run
+  without sudo, so libvirt-group access does not silently drop the
+  confirmation contract for destructive operations.
+* `aivm host permissions check` reports host permission readiness (libvirt group, live
+  libvirt access without sudo, user-writable VM storage, libvirt-qemu
+  traversal ACLs, firewall compatibility) and `aivm host permissions setup`
+  establishes the host-side prerequisites, using sudo at most once (libvirt
+  group membership). Setup changes no configuration: establishing a
+  capability and choosing a policy are separate acts, so `privilege_mode`
+  and `firewall.enabled` remain the operator's to set. `--persist` opts in
+  to writing the single value the host work depends on,
+  `defaults.paths.base_dir`.
 
 ### Changed
 * Attaching directories now has mirrors that resolve to exact path matches on the guest and paths relative to root.
-* Added an opt-in `persistent` attachment mode that uses its own `persistent-root` virtiofs export, persists desired guest-visible bind mounts as declarations, and replays them from a guest systemd helper instead of reconstructing every attachment on each `aivm code .` / `aivm ssh .` run.
+* Added a `persistent` attachment mode that uses its own `persistent-root` virtiofs export, persists desired guest-visible bind mounts as declarations, and replays them from a guest systemd helper instead of reconstructing every attachment on each `aivm code .` / `aivm ssh .` run. New folder attachments now default to this mode when `--mode` is omitted.
 * Refreshed README and Sphinx docs to describe the current attachment-first workflow, known long-lived virtiofs file-descriptor growth, and related alternatives (`matchlock`, `jai`).
+* Ported command-line configuration declarations to `kwconf` and annotated CLI schema fields so parsing/documentation can use bool/int/list types and closed-value hints.
+* New implicit VM names are host-qualified by default (for example `aivm-2404-workstation`) and that same canonical name is used for the VM, guest hostname, and generated SSH alias. Existing explicit config values are not migrated.
 
 ### Removed
 * Removed the flaky settings-sync feature for now: `aivm vm sync_settings`, `aivm code --sync_settings`, `--sync_paths`, and the `[sync]` config section are no longer supported.
 
 ### Fixed
-* Attaching directories now uses consistent guest locations between different attach modes 
+* `aivm vm flush_caches` now quotes the guest script into a single remote
+  `sh -c` argument. Previously the remote login shell executed each line
+  independently, so `set -eu` never applied and a failed drop_caches write
+  (e.g. missing guest passwordless sudo) still exited 0 and was reported as
+  success.
+* Attaching directories now uses consistent guest locations between different attach modes
 * Read-only access is now documented and wired through the new persistent attachment replay path.
+* Tightened local annotations in firewall, VM update rendering, and persistent attachment transport helpers so the package is clean for the reported mypy diagnostics.
+* Tightened dynamic test helper annotations so `ty check tests` can type-check replay namespaces, fake subprocess hooks, and legacy boolean tool-spec cases.
 
 
 ## [Version 0.4.0] - Released 2026-03-27

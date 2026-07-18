@@ -10,13 +10,16 @@ import shlex
 import shutil
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-import scriptconfig as scfg
+import kwconf
 import ubelt as ub
 
-from ..store import find_vm, load_store
-from ._common import _BaseCommand, _cfg_path
+from ..config import default_vm_name
+from ..config_store import find_vm, load_store
+from ..errors import AIVMError
+from ..services import cfg_path
+from ._common import _BaseCommand
 
 
 class PlanCLI(_BaseCommand):
@@ -25,8 +28,8 @@ class PlanCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = _cfg_path(args.config)
-        default_path = _cfg_path(None)
+        path = cfg_path(args.config)
+        default_path = cfg_path(None)
         cfg_flag = (
             f' --config {shlex.quote(str(path))}'
             if path != default_path
@@ -80,11 +83,11 @@ class HelpTreeCLI(_BaseCommand):
 class HelpRawCLI(_BaseCommand):
     """Print direct system-tool commands equivalent to common aivm checks."""
 
-    vm: Any = scfg.Value(
+    vm: str = kwconf.Value(
         '',
         help='Optional VM name override.',
     )
-    host_src: Any = scfg.Value(
+    host_src: str = kwconf.Value(
         '.',
         help='Host folder for attachment/share inspection context.',
     )
@@ -147,9 +150,9 @@ class HelpRawCLI(_BaseCommand):
 
 
 class HelpCompletionCLI(_BaseCommand):
-    """Show shell-completion setup for aivm (argcomplete/scriptconfig)."""
+    """Show shell-completion setup for aivm (argcomplete/kwconf)."""
 
-    shell = scfg.Value(
+    shell: Literal['', 'bash', 'zsh', 'fish'] = kwconf.Value(
         '',
         help='Optional shell override: bash, zsh, or fish.',
     )
@@ -177,7 +180,7 @@ class HelpCompletionCLI(_BaseCommand):
         return 0
 
 
-class HelpModalCLI(scfg.ModalCLI):
+class HelpModalCLI(kwconf.ModalCLI):
     """Help and discovery commands."""
 
     plan = PlanCLI
@@ -192,10 +195,10 @@ def _resolve_raw_targets(
     vm_opt: str,
     host_src: Path,
 ) -> tuple[str, str, str]:
-    vm_name = vm_opt or 'aivm-2404'
+    vm_name = vm_opt or default_vm_name()
     net_name = 'aivm-net'
     fw_table = 'aivm_sandbox'
-    reg = load_store(_cfg_path(config_opt))
+    reg = load_store(cfg_path(config_opt))
     rec = None
     if vm_opt:
         rec = find_vm(reg, vm_opt)
@@ -220,7 +223,7 @@ def _resolve_raw_targets(
 
 
 def _iter_modal_members(
-    modal_cls: type[scfg.ModalCLI],
+    modal_cls: type[kwconf.ModalCLI],
 ) -> list[tuple[str, type]]:
     members: list[tuple[str, type]] = []
     for name, val in modal_cls.__dict__.items():
@@ -228,7 +231,7 @@ def _iter_modal_members(
             continue
         if not isinstance(val, type):
             continue
-        if issubclass(val, scfg.ModalCLI) or issubclass(val, scfg.DataConfig):
+        if issubclass(val, kwconf.ModalCLI) or issubclass(val, kwconf.Config):
             members.append((name, val))
     return members
 
@@ -241,13 +244,13 @@ def _short_help_line(cls: type) -> str:
 
 
 def _render_command_tree(
-    modal_cls: type[scfg.ModalCLI], prefix: str = 'aivm'
+    modal_cls: type[kwconf.ModalCLI], prefix: str = 'aivm'
 ) -> str:
     root_help = _short_help_line(modal_cls)
     root_line = f'{prefix} - {root_help}' if root_help else prefix
     lines: list[str] = [root_line]
 
-    def walk(cls: type[scfg.ModalCLI], parent: str, indent: str) -> None:
+    def walk(cls: type[kwconf.ModalCLI], parent: str, indent: str) -> None:
         members = _iter_modal_members(cls)
         for idx, (name, subcls) in enumerate(members):
             last = idx == len(members) - 1
@@ -258,7 +261,7 @@ def _render_command_tree(
                 lines.append(f'{indent}{branch}{path} - {help_line}')
             else:
                 lines.append(f'{indent}{branch}{path}')
-            if issubclass(subcls, scfg.ModalCLI):
+            if issubclass(subcls, kwconf.ModalCLI):
                 walk(subcls, path, indent + ('    ' if last else '│   '))
 
     walk(modal_cls, prefix, '')
@@ -279,7 +282,7 @@ def _resolve_completion_shell(shell_opt: str) -> str:
     }
     resolved = aliases.get(raw, raw)
     if resolved not in {'bash', 'zsh', 'fish'}:
-        raise RuntimeError('--shell must be one of: bash, zsh, fish')
+        raise AIVMError('--shell must be one of: bash, zsh, fish')
     return resolved
 
 

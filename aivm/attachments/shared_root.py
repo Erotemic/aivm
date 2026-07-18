@@ -9,16 +9,15 @@ from pathlib import Path, PurePosixPath
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..errors import AIVMError
+from ..privilege import path_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..vm import attach_vm_share, vm_share_mappings
+from ..vm.paths import shared_root_host_dir as _shared_root_host_dir
 from ..vm.share import SHARED_ROOT_VIRTIOFS_TAG, ResolvedAttachment
 from .resolve import ATTACHMENT_ACCESS_RO, ATTACHMENT_ACCESS_RW
 
 SHARED_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-shared'
-
-
-def _shared_root_host_dir(cfg: AgentVMConfig) -> Path:
-    return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
 
 
 def _shared_root_host_target(cfg: AgentVMConfig, token: str) -> Path:
@@ -34,25 +33,22 @@ def _shared_root_guest_mount_cmd(
     *,
     read_only: bool,
 ) -> list[str]:
+    # The VM-level export must stay writable so rw and ro child binds can
+    # coexist. Read-only policy is enforced on each host bind and guest child
+    # bind, never by remounting the shared root.
+    del read_only
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     mount_cmd = (
-        f'sudo -n mount -t virtiofs -o ro {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
-        f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-        if read_only
-        else f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
+        f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
         f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
     )
-    remount_cmd = (
-        f'sudo -n mount -o remount,ro {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-        if read_only
-        else f'sudo -n mount -o remount,rw {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
-    )
+    remount_cmd = f'sudo -n mount -o remount,rw {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
     remote = (
         'set -euo pipefail; '
         f'sudo -n mkdir -p {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; '
         f'if mountpoint -q {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}; then '
         f'opts="$(findmnt -n -o OPTIONS --target {shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)} 2>/dev/null || true)"; '
-        f'case ",$opts," in *,{"ro" if read_only else "rw"},*) : ;; *) {remount_cmd} ;; esac; '
+        f'case ",$opts," in *,rw,*) : ;; *) {remount_cmd} ;; esac; '
         'else '
         f'{mount_cmd}; '
         'fi'
@@ -75,10 +71,11 @@ def _ensure_shared_root_parent_dir(
     *,
     dry_run: bool,
 ) -> None:
+    target = _shared_root_host_dir(cfg)
     if dry_run:
-        print(
-            f'DRYRUN: would create shared-root parent directory {_shared_root_host_dir(cfg)}'
-        )
+        print(f'DRYRUN: would create shared-root parent directory {target}')
+        return
+    if not _needs_mkdir(target):
         return
     mgr = CommandManager.current()
     with mgr.intent(
@@ -92,11 +89,11 @@ def _ensure_shared_root_parent_dir(
             approval_scope=f'shared-root-parent:{cfg.vm.name}',
         ):
             mgr.submit(
-                ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-                sudo=True,
+                ['mkdir', '-p', str(target)],
+                sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create shared-root parent directory',
-                detail=f'target={_shared_root_host_dir(cfg)}',
+                detail=f'target={target}',
             )
 
 
@@ -138,6 +135,7 @@ class FindmntTargetInfo:
     source: str = ''
     root: str = ''
     fstype: str = ''
+    options: str = ''
     code: int = 1
 
     @property
@@ -175,11 +173,11 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '-P',
                     '-n',
                     '-o',
-                    'SOURCE,ROOT,FSTYPE',
-                    '--target',
+                    'SOURCE,FSROOT,FSTYPE,OPTIONS',
+                    '--mountpoint',
                     str(target),
                 ],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,
@@ -189,10 +187,94 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
     values = _parse_findmnt_pairs(res.stdout or '')
     return FindmntTargetInfo(
         source=values.get('SOURCE', ''),
-        root=values.get('ROOT', ''),
+        root=values.get('FSROOT', ''),
         fstype=values.get('FSTYPE', ''),
+        options=values.get('OPTIONS', ''),
         code=res.code,
     )
+
+
+def _needs_mkdir(path: Path) -> bool:
+    """Return True when ``mkdir -p`` should be submitted for ``path``.
+
+    Answers only *does this directory need creating*. Whether creating it
+    needs sudo is a separate question for :func:`path_needs_sudo`, asked of
+    the specific path: the export roots live under ``paths.base_dir``, which
+    is user-owned on a host prepared by ``aivm host permissions setup``.
+
+    Skip the mkdir only when the directory is confirmed present. An
+    unreadable / unknown state issues it anyway: ``mkdir -p`` on an existing
+    directory is a no-op, so acting is safe where refusing to act is not.
+    """
+    try:
+        return not path.is_dir()
+    except OSError:
+        return True
+
+
+def _target_is_bind_of(source: Path, target: Path) -> bool:
+    """Cheap, unprivileged check that ``target`` is already a bind of ``source``.
+
+    Returns True when ``stat(target)`` and ``stat(source)`` report the same
+    ``(st_dev, st_ino)`` pair. That equality is the exact signature
+    ``mount --bind`` produces: after binding, ``stat(target)`` resolves to the
+    source's underlying inode on the source's filesystem, so the device and
+    inode numbers match. Crucially this works for *same-filesystem* binds —
+    ``os.path.ismount`` does not, because it only compares ``target``'s
+    ``st_dev`` to its parent's and same-fs binds leave that unchanged.
+
+    Without a bind in place, two distinct directories on different paths
+    cannot share an inode, so a False negative is not a concern.
+
+    Stat-only by design; ``findmnt`` SOURCE-quirk forms aren't considered.
+    Callers with non-literal mount metadata to handle must layer a slower
+    sudo-backed probe on top.
+    """
+    try:
+        source_stat = source.stat()
+        target_stat = target.stat()
+    except OSError:
+        return False
+    return (
+        source_stat.st_dev == target_stat.st_dev
+        and source_stat.st_ino == target_stat.st_ino
+    )
+
+
+def _mount_options_include(options: str, desired: str) -> bool:
+    return desired in {part.strip() for part in str(options or '').split(',')}
+
+
+def _ensure_host_bind_access(
+    target: Path,
+    access: str,
+    *,
+    probe: FindmntTargetInfo | None = None,
+) -> None:
+    """Enforce bind-mount access on the host, outside guest control."""
+    desired = (
+        ATTACHMENT_ACCESS_RO
+        if str(access or '').strip() == ATTACHMENT_ACCESS_RO
+        else ATTACHMENT_ACCESS_RW
+    )
+    current = probe or _probe_findmnt_target_source(target)
+    if current.is_mountpoint and _mount_options_include(
+        current.options, desired
+    ):
+        return
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Enforce host bind access mode',
+        why='Apply the attachment read/write policy to the host bind mount so a privileged guest cannot weaken it.',
+        approval_scope=f'shared-root-host-access:{target}:{desired}',
+    ):
+        mgr.submit(
+            ['mount', '-o', f'remount,bind,{desired}', str(target)],
+            sudo=True,
+            role='modify',
+            summary=f'Remount host bind {desired}',
+            detail=f'target={target}',
+        )
 
 
 def _shared_root_host_bind_matches_source(
@@ -255,7 +337,7 @@ def _ensure_shared_root_host_bind(
     source_dir = str(Path(attachment.source_dir).resolve())
     source = Path(source_dir)
     if not source.exists() or not source.is_dir():
-        raise RuntimeError(
+        raise AIVMError(
             f'shared-root source must be an existing directory: {source_dir}'
         )
 
@@ -264,6 +346,14 @@ def _ensure_shared_root_host_bind(
         print(
             f'DRYRUN: would bind-mount {source_dir} -> {target} for shared-root mode'
         )
+        return target
+
+    # Cheap, unprivileged pre-check: if the bind is already correct, return
+    # without touching sudo or running findmnt. Covers the common "already
+    # attached" path that `aivm code .` and repeated `aivm attach .` runs hit.
+    if _target_is_bind_of(source, target):
+        probe = _probe_findmnt_target_source(target)
+        _ensure_host_bind_access(target, attachment.access, probe=probe)
         return target
 
     probe = _probe_findmnt_target_source(target)
@@ -275,53 +365,47 @@ def _ensure_shared_root_host_bind(
         # identity show that the existing bind already exposes the requested
         # source.
         if _shared_root_host_bind_matches_source(source, target, probe):
+            _ensure_host_bind_access(target, attachment.access, probe=probe)
             return target
         if not allow_disruptive_rebind:
-            raise RuntimeError(
+            raise AIVMError(
                 'Refusing to replace existing shared-root host bind mount during automatic restore '
                 f'(target={target}, expected_source={source_dir}, actual_source={probe.source or "unknown"}, '
                 f'actual_root={probe.root or "unknown"}, actual_fstype={probe.fstype or "unknown"}). '
                 'Use an explicit attach/detach command to reconcile this mount.'
             )
 
+    parent_dir = _shared_root_host_dir(cfg)
+    needs_parent = _needs_mkdir(parent_dir)
+    needs_target = _needs_mkdir(target)
+
+    # The repair branch (stale mountpoint) still needs shell-quoted operands
+    # because its umount fallback logic is a single bash script. New code
+    # paths use plain argv lists.
     source_q = shlex.quote(source_dir)
     target_q = shlex.quote(str(target))
-
-    # Final shell-side idempotence guard: if target is already a mountpoint and
-    # stat(source) == stat(target), do not issue another bind mount. This avoids
-    # stacking duplicate identical layers even if a prior probe was stale or a
-    # concurrent path already repaired the target.
-    mount_if_needed_script = (
-        'set -euo pipefail; '
-        f'if mountpoint -q {target_q}; then '
-        f'src_stat="$(stat -Lc %d:%i {source_q} 2>/dev/null || true)"; '
-        f'dst_stat="$(stat -Lc %d:%i {target_q} 2>/dev/null || true)"; '
-        'if [ -n "$src_stat" ] && [ "$src_stat" = "$dst_stat" ]; then '
-        'exit 0; '
-        'fi; '
-        'fi; '
-        f'mount --bind {source_q} {target_q}'
-    )
 
     with mgr.step(
         'Prepare host bind targets',
         why='Ensure the shared-root export directories exist and the VM-specific bind target points at the requested host folder.',
         approval_scope=f'shared-root-host-bind:{cfg.vm.name}:{attachment.tag}',
     ):
-        mgr.submit(
-            ['mkdir', '-p', str(_shared_root_host_dir(cfg))],
-            sudo=True,
-            role='modify',
-            summary='Create shared-root parent directory',
-            detail=f'target={_shared_root_host_dir(cfg)}',
-        )
-        mgr.submit(
-            ['mkdir', '-p', str(target)],
-            sudo=True,
-            role='modify',
-            summary='Create project-specific host bind target',
-            detail=f'target={target}',
-        )
+        if needs_parent:
+            mgr.submit(
+                ['mkdir', '-p', str(parent_dir)],
+                sudo=path_needs_sudo(parent_dir),
+                role='modify',
+                summary='Create shared-root parent directory',
+                detail=f'target={parent_dir}',
+            )
+        if needs_target:
+            mgr.submit(
+                ['mkdir', '-p', str(target)],
+                sudo=path_needs_sudo(target),
+                role='modify',
+                summary='Create project-specific host bind target',
+                detail=f'target={target}',
+            )
 
         if is_mountpoint:
             repair_script = (
@@ -366,14 +450,23 @@ def _ensure_shared_root_host_bind(
                 ),
             )
         else:
+            # We reached this branch only after _target_is_bind_of returned
+            # False AND _probe_findmnt_target_source reported no mountpoint,
+            # so a plain `mount --bind` is correct; no shell-side guard is
+            # needed.
             mgr.submit(
-                ['bash', '-c', mount_if_needed_script],
+                ['mount', '--bind', source_dir, str(target)],
                 sudo=True,
                 role='modify',
                 summary='Bind requested host folder to shared-root target',
                 detail=f'source={source_dir} target={target}',
             )
 
+    # A fresh bind is writable by default. Only read-only policy needs an
+    # immediate host-side remount; existing binds are probed above so a
+    # prior read-only mount can still be deliberately changed back to rw.
+    if attachment.access == ATTACHMENT_ACCESS_RO:
+        _ensure_host_bind_access(target, attachment.access)
     return target
 
 
@@ -389,8 +482,8 @@ def _ensure_shared_root_vm_mapping(
     In shared-root mode all per-folder guest mounts ultimately come from one
     libvirt virtiofs mapping rooted at ``_shared_root_host_dir(cfg)`` and tagged
     with ``SHARED_ROOT_VIRTIOFS_TAG``. This helper checks whether that mapping
-    already exists, first without sudo and then with sudo if needed, and only
-    attaches it when absent.
+    already exists (escalating to sudo only if the unprivileged read fails)
+    and only attaches it when absent.
     """
     del yes
     mgr = CommandManager.current()
@@ -400,14 +493,6 @@ def _ensure_shared_root_vm_mapping(
         'Inspect shared-root VM mapping',
         why='Check whether the current VM definition already includes the shared-root virtiofs device.',
         approval_scope=f'shared-root-vm-inspect:{cfg.vm.name}',
-    ):
-        mappings = vm_share_mappings(cfg, use_sudo=False)
-    if any(src == source and t == tag for src, t in mappings):
-        return
-    with mgr.step(
-        'Inspect shared-root VM mapping with libvirt privileges',
-        why='Some hosts require privileged libvirt access to read the effective filesystem mapping state.',
-        approval_scope=f'shared-root-vm-inspect-sudo:{cfg.vm.name}',
     ):
         mappings = vm_share_mappings(cfg, use_sudo=True)
     if any(src == source and t == tag for src, t in mappings):
@@ -600,7 +685,7 @@ def _ensure_shared_root_guest_bind(
             ),
         ).result()
     if res.code != 0:
-        raise RuntimeError(
+        raise AIVMError(
             'Failed to bind-mount shared-root attachment inside guest. You may need to stop the VM to run detatch\n'
             f'VM: {cfg.vm.name}\n'
             f'Guest source: {source_in_guest}\n'
@@ -629,7 +714,7 @@ def _detach_shared_root_host_bind(
         mounted = (
             mgr.run(
                 ['mountpoint', '-q', str(target)],
-                sudo=True,
+                sudo=path_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,
@@ -641,6 +726,7 @@ def _detach_shared_root_host_bind(
             res = mgr.run(
                 ['umount', str(target)],
                 sudo=True,
+                role='modify',
                 check=False,
                 capture=True,
                 summary=f'Unmount shared-root bind target {target}',
@@ -652,7 +738,7 @@ def _detach_shared_root_host_bind(
                     # already gone by the time we try to unmount it.
                     pass
                 elif 'target is busy' in msg:
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Shared-root host bind target is busy and was not detached. '
                         f'target={target}. '
                         'Refusing automatic lazy-unmount during normal detach because it can '
@@ -662,7 +748,7 @@ def _detach_shared_root_host_bind(
                         'orphaned mount cleanup.'
                     )
                 elif 'transport endpoint is not connected' in msg:
-                    raise RuntimeError(
+                    raise AIVMError(
                         'Shared-root host bind target appears stale and was not detached. '
                         f'target={target}. '
                         'Refusing automatic lazy-unmount during normal detach. '
@@ -677,7 +763,7 @@ def _detach_shared_root_host_bind(
                     )
         mgr.run(
             ['rmdir', str(target)],
-            sudo=True,
+            sudo=path_needs_sudo(target.parent),
             role='modify',
             check=False,
             capture=True,
