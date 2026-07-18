@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -71,6 +72,9 @@ def test_adopt_script_prunes_mounts_and_symlinks(tmp_path: Path) -> None:
     assert '/proc/self/mountinfo' in script
     assert 'followlinks=False' in script
     assert 'path.is_symlink()' in script
+    argv = shlex.split(script)
+    assert argv[:2] == ['python3', '-c']
+    compile(argv[2], '<aivm-adopt-script>', 'exec')
 
 
 def test_adopt_restarts_stopped_vm_after_handoff_failure(

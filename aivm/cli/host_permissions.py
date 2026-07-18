@@ -213,7 +213,7 @@ def _adopt_script(tree: Path) -> str:
             index = 0
             while index < len(text):
                 if (
-                    text[index:index + 1] == '\\'
+                    ord(text[index]) == 92
                     and index + 3 < len(text)
                     and text[index + 1:index + 4].isdigit()
                 ):
