@@ -353,16 +353,33 @@ def _generate_host_key(
         approval_scope=f'vm-credential-key:{entry.id}',
     ):
         if not directory_exists:
-            manager.submit(
-                ['mkdir', '-p', str(directory.parent)],
-                role='modify',
-                summary='Create host credential parent directory',
-            )
+            # Create each managed descendant separately. A pre-existing VM or
+            # credentials directory has already been lstat-validated by
+            # host_credential_dir(); avoiding mkdir -p prevents silently
+            # traversing an intermediate symlink.
+            vm_directory = directory.parent.parent
+            credentials_directory = directory.parent
+            if not os.path.lexists(vm_directory):
+                manager.submit(
+                    ['mkdir', '-m', '700', str(vm_directory)],
+                    role='modify',
+                    summary='Create protected VM data directory',
+                )
+            if not os.path.lexists(credentials_directory):
+                manager.submit(
+                    ['mkdir', '-m', '700', str(credentials_directory)],
+                    role='modify',
+                    summary='Create protected credential parent directory',
+                )
             manager.submit(
                 ['mkdir', '-m', '700', str(directory)],
                 role='modify',
                 summary='Create protected host credential directory',
             )
+        # Recheck the complete descendant chain after creation and immediately
+        # before writing key material. In dry-run mode missing directories are
+        # permitted, while real execution validates what was just created.
+        host_credential_dir(entry.vm_name, entry.id)
         manager.submit(
             [
                 'ssh-keygen',

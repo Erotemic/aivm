@@ -1321,3 +1321,131 @@ def test_abandon_preserves_pending_record_when_host_cleanup_fails(
 
     [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
     assert pending.state == 'abandon-pending'
+
+
+def test_generate_rejects_symlinked_credentials_parent_before_mutation(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = replace(
+        _entry('vm-a'),
+        provider_key_id='',
+        key_fingerprint='',
+        state='pending',
+    )
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    directory.parent.parent.mkdir(parents=True)
+    victim = tmp_path / 'credentials-victim'
+    victim.mkdir()
+    victim.chmod(0o755)
+    directory.parent.symlink_to(victim, target_is_directory=True)
+    before_mode = victim.stat().st_mode & 0o777
+
+    with pytest.raises(AIVMError, match='credential parent.*symlink'):
+        _generate_host_key(entry, manager=CommandManager(yes=True))
+
+    assert (victim.stat().st_mode & 0o777) == before_mode
+    assert list(victim.iterdir()) == []
+
+
+def test_generate_rejects_symlinked_vm_data_directory_before_mutation(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = replace(
+        _entry('vm-a'),
+        provider_key_id='',
+        key_fingerprint='',
+        state='pending',
+    )
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    vm_directory = directory.parent.parent
+    victim = tmp_path / 'vm-victim'
+    victim.mkdir()
+    victim.chmod(0o755)
+    vm_directory.symlink_to(victim, target_is_directory=True)
+    before_mode = victim.stat().st_mode & 0o777
+
+    with pytest.raises(AIVMError, match='VM data directory.*symlink'):
+        _generate_host_key(entry, manager=CommandManager(yes=True))
+
+    assert (victim.stat().st_mode & 0o777) == before_mode
+    assert list(victim.iterdir()) == []
+
+
+@pytest.mark.parametrize('ancestor', ['vm', 'credentials'])
+@pytest.mark.parametrize('operation', ['revoke', 'abandon'])
+def test_credential_cleanup_refuses_symlinked_ancestor(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    ancestor: str,
+    operation: str,
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    store = load_store(path)
+
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    victim = tmp_path / f'{operation}-{ancestor}-victim'
+    victim.mkdir()
+    if ancestor == 'vm':
+        protected = victim / 'credentials' / entry.id
+        protected.mkdir(parents=True)
+        directory.parent.parent.symlink_to(victim, target_is_directory=True)
+        expected = 'VM data directory.*symlink'
+    else:
+        directory.parent.parent.mkdir(parents=True)
+        protected = victim / entry.id
+        protected.mkdir()
+        directory.parent.symlink_to(victim, target_is_directory=True)
+        expected = 'credential parent.*symlink'
+    sentinel = protected / 'sentinel'
+    sentinel.write_text('do not delete\n', encoding='utf-8')
+
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+    if operation == 'revoke':
+        monkeypatch.setattr(
+            'aivm.credentials.service._require_tools', lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            'aivm.credentials.service._find_remote_key', lambda *a, **k: None
+        )
+    with pytest.raises(AIVMError, match=expected):
+        if operation == 'revoke':
+            revoke_repository_credential(
+                cfg,
+                store,
+                path,
+                entry,
+                manager=CommandManager(yes=True),
+            )
+        else:
+            abandon_repository_credential(
+                cfg,
+                store,
+                path,
+                entry,
+                manager=CommandManager(yes=True),
+            )
+
+    assert sentinel.read_text(encoding='utf-8') == 'do not delete\n'
+    [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
+    expected_state = (
+        'revocation-pending' if operation == 'revoke' else 'abandon-pending'
+    )
+    assert pending.state == expected_state
