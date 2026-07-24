@@ -86,24 +86,63 @@ def _attachment_from_dict(
 
 def _credential_from_dict(
     item: dict[str, object], *, vm_name: str
-) -> CredentialEntry | None:
-    credential_id = str(item.get('id', '')).strip()
-    owner = str(item.get('owner', '')).strip()
-    repository = str(item.get('repository', '')).strip()
-    if not credential_id or not owner or not repository:
-        return None
+) -> CredentialEntry:
+    values = {
+        'id': str(item.get('id', '')).strip(),
+        'kind': str(item.get('kind', 'github-deploy-key') or '').strip(),
+        'provider_host': str(item.get('provider_host', 'github.com') or '').strip(),
+        'owner': str(item.get('owner', '')).strip(),
+        'repository': str(item.get('repository', '')).strip(),
+        'access': str(item.get('access', 'read') or '').strip(),
+        'provider_key_id': str(item.get('provider_key_id', '')).strip(),
+        'provider_key_title': str(item.get('provider_key_title', '')).strip(),
+        'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
+        'state': str(item.get('state', 'pending') or '').strip(),
+    }
+    required = (
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    )
+    missing = [name for name in required if not values[name]]
+    if missing:
+        raise ValueError(
+            f'VM {vm_name!r} credential is missing required field(s): '
+            + ', '.join(missing)
+        )
+    if values['kind'] != 'github-deploy-key':
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has unsupported '
+            f'kind {values["kind"]!r}'
+        )
+    if values['access'] not in {'read', 'write'}:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has invalid '
+            f'access {values["access"]!r}'
+        )
+    if values['state'] not in {'pending', 'active', 'revocation-pending'}:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has invalid '
+            f'state {values["state"]!r}'
+        )
     return CredentialEntry(
-        id=credential_id,
+        id=values['id'],
         vm_name=vm_name,
-        kind=str(item.get('kind', 'github-deploy-key') or 'github-deploy-key'),
-        provider_host=str(item.get('provider_host', 'github.com') or 'github.com'),
-        owner=owner,
-        repository=repository,
-        access=str(item.get('access', 'read') or 'read'),
-        provider_key_id=str(item.get('provider_key_id', '')).strip(),
-        provider_key_title=str(item.get('provider_key_title', '')).strip(),
-        key_fingerprint=str(item.get('key_fingerprint', '')).strip(),
-        state=str(item.get('state', 'pending') or 'pending'),
+        kind=values['kind'],
+        provider_host=values['provider_host'],
+        owner=values['owner'],
+        repository=values['repository'],
+        access=values['access'],
+        provider_key_id=values['provider_key_id'],
+        provider_key_title=values['provider_key_title'],
+        key_fingerprint=values['key_fingerprint'],
+        state=values['state'],
     )
 
 
@@ -230,12 +269,31 @@ def parse_store_toml(text: str) -> Store:
             if att is not None:
                 reg.attachments.append(att)
 
+        seen_credential_ids: set[str] = set()
+        seen_credential_scopes: set[tuple[str, str, str]] = set()
         for cred_raw in item.get('credentials', []):
             if not isinstance(cred_raw, dict):
-                continue
+                raise ValueError(
+                    f'VM {name!r} credential entry must be a table/object'
+                )
             cred = _credential_from_dict(cred_raw, vm_name=name)
-            if cred is not None:
-                reg.credentials.append(cred)
+            if cred.id in seen_credential_ids:
+                raise ValueError(
+                    f'VM {name!r} has duplicate credential id {cred.id!r}'
+                )
+            scope = (
+                cred.provider_host.lower(),
+                cred.owner.lower(),
+                cred.repository.lower(),
+            )
+            if scope in seen_credential_scopes:
+                raise ValueError(
+                    f'VM {name!r} has duplicate credential scope '
+                    f'{cred.provider_host}/{cred.owner}/{cred.repository}'
+                )
+            seen_credential_ids.add(cred.id)
+            seen_credential_scopes.add(scope)
+            reg.credentials.append(cred)
 
     for item in raw.get('attachments', []):
         if not isinstance(item, dict):

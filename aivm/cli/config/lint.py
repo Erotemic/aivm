@@ -257,17 +257,68 @@ def _lint_store_text(text: str) -> list[str]:
                 )
             nested_creds = item.get('credentials', [])
             if isinstance(nested_creds, list):
+                seen_cred_ids: set[str] = set()
+                seen_cred_scopes: set[tuple[str, str, str]] = set()
+                required_credential = {
+                    'id',
+                    'kind',
+                    'provider_host',
+                    'owner',
+                    'repository',
+                    'access',
+                    'provider_key_title',
+                    'key_fingerprint',
+                    'state',
+                }
                 for cred_idx, cred in enumerate(nested_creds):
+                    label = f'vms[{idx}].credentials[{cred_idx}]'
                     if not isinstance(cred, dict):
-                        problems.append(
-                            f'vms[{idx}].credentials[{cred_idx}] is not a table/object'
-                        )
+                        problems.append(f'{label} is not a table/object')
                         continue
                     for key in sorted(cred.keys()):
                         if key not in allowed_credential:
+                            problems.append(f'{label} unknown key: {key!r}')
+                    missing = sorted(
+                        key
+                        for key in required_credential
+                        if not str(cred.get(key, '')).strip()
+                    )
+                    if missing:
+                        problems.append(
+                            f'{label} missing required key(s): '
+                            + ', '.join(missing)
+                        )
+                    kind = str(cred.get('kind', '')).strip()
+                    if kind and kind != 'github-deploy-key':
+                        problems.append(f'{label} unsupported kind: {kind!r}')
+                    access = str(cred.get('access', '')).strip()
+                    if access and access not in {'read', 'write'}:
+                        problems.append(f'{label} invalid access: {access!r}')
+                    state = str(cred.get('state', '')).strip()
+                    if state and state not in {
+                        'pending',
+                        'active',
+                        'revocation-pending',
+                    }:
+                        problems.append(f'{label} invalid state: {state!r}')
+                    cred_id = str(cred.get('id', '')).strip()
+                    if cred_id:
+                        if cred_id in seen_cred_ids:
                             problems.append(
-                                f'vms[{idx}].credentials[{cred_idx}] unknown key: {key!r}'
+                                f'{label} duplicate credential id: {cred_id!r}'
                             )
+                        seen_cred_ids.add(cred_id)
+                    scope = tuple(
+                        str(cred.get(key, '')).strip().lower()
+                        for key in ('provider_host', 'owner', 'repository')
+                    )
+                    if all(scope):
+                        if scope in seen_cred_scopes:
+                            problems.append(
+                                f'{label} duplicate credential scope: '
+                                + '/'.join(scope)
+                            )
+                        seen_cred_scopes.add(scope)
             elif nested_creds is not None:
                 problems.append(
                     f'vms[{idx}].credentials should be an array of tables'

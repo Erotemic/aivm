@@ -11,6 +11,8 @@ from ..errors import AIVMError
 from .models import GitRepository
 
 _SCP_RE = re.compile(r'^(?:[^@/\s]+@)?(?P<host>[^:/\s]+):(?P<path>.+)$')
+_HOST_RE = re.compile(r'^[A-Za-z0-9.-]+$')
+_REPO_PART_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
 
 
 def _strip_repo_suffix(path: str) -> str:
@@ -34,6 +36,8 @@ def parse_repository_url(value: str) -> GitRepository:
         repo_path = scp_match.group('path')
     elif '://' in raw:
         parsed = urlparse(raw)
+        if parsed.query or parsed.fragment:
+            raise AIVMError('Repository URLs may not contain a query or fragment.')
         host = parsed.hostname or ''
         repo_path = parsed.path
     else:
@@ -49,6 +53,13 @@ def parse_repository_url(value: str) -> GitRepository:
             'OWNER/REPO, [HOST/]OWNER/REPO, or a Git SSH/HTTPS URL.'
         )
     owner, name = parts
+    if not _HOST_RE.fullmatch(host):
+        raise AIVMError(f'Unsupported repository host syntax: {host!r}')
+    if not _REPO_PART_RE.fullmatch(owner) or not _REPO_PART_RE.fullmatch(name):
+        raise AIVMError(
+            'Repository owner and name may contain only letters, numbers, '
+            "'.', '_', and '-'."
+        )
     return GitRepository(host=host, owner=owner, name=name)
 
 

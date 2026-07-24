@@ -127,6 +127,8 @@ def render_ssh_config(credentials: list[CredentialEntry]) -> str:
                 '    User git',
                 f'    IdentityFile {key_path}',
                 '    IdentitiesOnly yes',
+                '    BatchMode yes',
+                '    StrictHostKeyChecking accept-new',
             ]
         )
     return '\n'.join(lines).rstrip() + '\n'
@@ -138,13 +140,13 @@ def render_git_config(credentials: list[CredentialEntry]) -> str:
         alias = f'aivm-cred-{cred.id}'
         repo_path = f'{cred.owner}/{cred.repository}'
         target = f'git@{alias}:{repo_path}.git'
+        # Git's insteadOf matching is prefix-based, not exact. Restrict
+        # rewrites to canonical ``.git`` URLs so granting ``owner/repo`` does
+        # not hijack an unrelated sibling such as ``owner/repo-extra``.
         source_urls = [
             f'git@{cred.provider_host}:{repo_path}.git',
-            f'git@{cred.provider_host}:{repo_path}',
             f'ssh://git@{cred.provider_host}/{repo_path}.git',
-            f'ssh://git@{cred.provider_host}/{repo_path}',
             f'https://{cred.provider_host}/{repo_path}.git',
-            f'https://{cred.provider_host}/{repo_path}',
         ]
         lower = [url.lower() for url in source_urls]
         source_urls.extend(url for url in lower if url not in source_urls)
@@ -245,7 +247,10 @@ def verify_guest_repository(
     *,
     manager: CommandManager,
 ) -> CommandResult:
-    command = f'git ls-remote {shlex.quote(repo.https_url)} HEAD'
+    command = (
+        'GIT_TERMINAL_PROMPT=0 '
+        f'git ls-remote {shlex.quote(repo.https_url)} HEAD'
+    )
     return _run_guest(
         cfg,
         ip,

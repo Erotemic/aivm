@@ -433,8 +433,11 @@ never copied into the guest.
 
 Each grant has a unique SSH keypair. GitHub scopes the key to the selected
 repository; branch protections and rulesets remain repository settings and are
-not managed by AIVM. A VM cannot be deleted while it still owns active
-credential records, preventing a deploy key from being silently orphaned.
+not managed by AIVM. Managed Git routing recognizes canonical clone URLs ending
+in ``.git`` (the form shown by GitHub); restricting rewrites to that form avoids
+Git's prefix-based URL rewriting from capturing similarly named sibling
+repositories. A VM cannot be deleted while it still owns active credential
+records, preventing a deploy key from being silently orphaned.
 
 Command Groups
 --------------

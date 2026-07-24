@@ -9,6 +9,9 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   backend creates one GitHub deploy key per VM/repository pair, keeps a
   protected host copy, installs the private key in the guest, and supports
   ``add``, ``list``, ``status``, and provider-first ``revoke`` workflows.
+  Revocation now identifies provider keys by the recorded key id and
+  cryptographic fingerprint, malformed credential records fail closed, and
+  guest Git authentication is configured for non-interactive first use.
 
 
 ## Version 0.5.0 - Released 2026-07-18

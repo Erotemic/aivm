@@ -107,6 +107,75 @@ def _require_tools(*names: str) -> None:
         )
 
 
+def _provider_key_fingerprint(key: ProviderDeployKey) -> str:
+    try:
+        return public_key_fingerprint(key.key)
+    except AIVMError as ex:
+        raise AIVMError(
+            f'GitHub deploy key {key.key_id or "<unknown>"} has malformed '
+            'public-key data; refusing to make an identity decision.'
+        ) from ex
+
+
+def _select_remote_key(
+    entry: CredentialEntry,
+    keys: list[ProviderDeployKey],
+) -> ProviderDeployKey | None:
+    """Resolve provider state from immutable recorded identity metadata.
+
+    The host-side public-key file is intentionally not consulted here. It is a
+    mutable cache that may be missing or tampered with. Revocation must identify
+    the provider key from the stored provider id and cryptographic fingerprint.
+    """
+    if not entry.key_fingerprint:
+        raise AIVMError(
+            f'Credential {entry.id} has no recorded key fingerprint; refusing '
+            'to identify or revoke a provider key.'
+        )
+
+    if entry.provider_key_id:
+        by_id = [
+            item for item in keys if item.key_id == entry.provider_key_id
+        ]
+        if len(by_id) > 1:
+            raise AIVMError(
+                'GitHub returned duplicate deploy-key id '
+                f'{entry.provider_key_id!r}.'
+            )
+        if by_id:
+            match = by_id[0]
+            actual = _provider_key_fingerprint(match)
+            if actual != entry.key_fingerprint:
+                raise AIVMError(
+                    f'GitHub key id {entry.provider_key_id} no longer matches '
+                    'the fingerprint recorded by AIVM; refusing to touch it.'
+                )
+            return match
+
+    by_fingerprint = [
+        item
+        for item in keys
+        if _provider_key_fingerprint(item) == entry.key_fingerprint
+    ]
+    if len(by_fingerprint) > 1:
+        raise AIVMError(
+            f'Multiple GitHub deploy keys match credential {entry.id}. '
+            'Refusing to choose one.'
+        )
+    if by_fingerprint:
+        return by_fingerprint[0]
+
+    title_matches = [
+        item for item in keys if item.title == entry.provider_key_title
+    ]
+    if title_matches:
+        raise AIVMError(
+            f'A GitHub deploy key uses title {entry.provider_key_title!r}, but '
+            'its fingerprint does not match AIVM state.'
+        )
+    return None
+
+
 def _find_remote_key(
     entry: CredentialEntry,
     *,
@@ -114,34 +183,7 @@ def _find_remote_key(
 ) -> ProviderDeployKey | None:
     repo = entry_repository(entry)
     keys = github.list_deploy_keys(repo, manager=manager)
-    public_path = host_public_key_path(entry.vm_name, entry.id)
-    if public_path.exists():
-        return github.find_matching_key(
-            keys,
-            public_key=public_path.read_text(encoding='utf-8'),
-            title=entry.provider_key_title,
-        )
-    if entry.provider_key_id:
-        matches = [item for item in keys if item.key_id == entry.provider_key_id]
-        if len(matches) == 1:
-            match = matches[0]
-            if match.title != entry.provider_key_title:
-                raise AIVMError(
-                    f'GitHub key id {entry.provider_key_id} no longer has '
-                    'the title recorded by AIVM; refusing to treat it as the '
-                    'same credential.'
-                )
-            return match
-    title_matches = [
-        item for item in keys if item.title == entry.provider_key_title
-    ]
-    if len(title_matches) == 1:
-        return title_matches[0]
-    if len(title_matches) > 1:
-        raise AIVMError(
-            f'Multiple GitHub deploy keys use title {entry.provider_key_title!r}.'
-        )
-    return None
+    return _select_remote_key(entry, keys)
 
 
 def _generate_host_key(
@@ -151,9 +193,14 @@ def _generate_host_key(
     public_path = host_public_key_path(entry.vm_name, entry.id)
     if private_path.exists() and public_path.exists():
         public_text = public_path.read_text(encoding='utf-8')
-        return replace(
-            entry, key_fingerprint=public_key_fingerprint(public_text)
-        )
+        actual_fingerprint = public_key_fingerprint(public_text)
+        if entry.key_fingerprint and actual_fingerprint != entry.key_fingerprint:
+            raise AIVMError(
+                f'Host public key for credential {entry.id} does not match the '
+                'fingerprint recorded by AIVM. Refusing to adopt changed key '
+                'material; revoke or repair it explicitly.'
+            )
+        return replace(entry, key_fingerprint=actual_fingerprint)
     if private_path.exists() or public_path.exists():
         raise AIVMError(
             f'Credential keypair is incomplete under {private_path.parent}. '
@@ -386,6 +433,12 @@ def revoke_repository_credential(
                 remote.key_id,
             )
         github.delete_deploy_key(repo, remote.key_id, manager=manager)
+        remaining_remote = _find_remote_key(entry, manager=manager)
+        if remaining_remote is not None:
+            raise AIVMError(
+                f'GitHub still reports deploy key {remaining_remote.key_id} '
+                'after deletion; refusing local cleanup.'
+            )
 
     entry = replace(entry, state='revocation-pending')
     upsert_credential(store, entry)
@@ -416,7 +469,10 @@ def revoke_repository_credential(
         remove_credential_id=entry.id,
         manager=manager,
     )
-    shutil.rmtree(host_credential_dir(entry.vm_name, entry.id), ignore_errors=True)
+    try:
+        shutil.rmtree(host_credential_dir(entry.vm_name, entry.id))
+    except FileNotFoundError:
+        pass
     remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
     save_store(
         store,

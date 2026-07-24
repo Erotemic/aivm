@@ -34,6 +34,8 @@ from aivm.credentials.keys import (
 from aivm.credentials.models import GitRepository, ProviderDeployKey
 from aivm.credentials.resolve import parse_repository_url
 from aivm.credentials.service import (
+    _generate_host_key,
+    _select_remote_key,
     grant_repository_credential,
     revoke_repository_credential,
 )
@@ -100,6 +102,23 @@ def test_store_roundtrip_nested_credentials(tmp_path: Path) -> None:
     assert loaded.credentials[0] == _entry('vm-a')
 
 
+def test_store_roundtrip_split_credentials(tmp_path: Path) -> None:
+    from aivm.config_store import save_store_split
+
+    store = Store()
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    upsert_vm(store, cfg)
+    upsert_credential(store, _entry('vm-a'))
+    path = tmp_path / 'config.toml'
+
+    save_store_split(store, path)
+    loaded = load_store(path)
+
+    assert loaded.credentials == [_entry('vm-a')]
+    vm_fragment = tmp_path / 'vms' / 'vm-a.toml'
+    assert '[[vms.credentials]]' in vm_fragment.read_text(encoding='utf-8')
+
+
 def test_config_lint_accepts_nested_credentials(tmp_path: Path) -> None:
     store = Store()
     cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
@@ -112,6 +131,29 @@ def test_config_lint_accepts_nested_credentials(tmp_path: Path) -> None:
     assert _lint_store_text(path.read_text(encoding='utf-8')) == []
 
 
+def test_config_lint_rejects_incomplete_and_invalid_credentials() -> None:
+    text = '''
+    schema_version = 8
+    [[vms]]
+    name = "vm-a"
+    [[vms.credentials]]
+    id = "git-bad"
+    kind = "unknown"
+    provider_host = "github.com"
+    owner = "Kitware"
+    repository = "kwimage"
+    access = "admin"
+    provider_key_title = ""
+    key_fingerprint = ""
+    state = "mystery"
+    '''
+    problems = _lint_store_text(text)
+    assert any('missing required key(s)' in item for item in problems)
+    assert any('unsupported kind' in item for item in problems)
+    assert any('invalid access' in item for item in problems)
+    assert any('invalid state' in item for item in problems)
+
+
 def test_managed_guest_configs_are_repository_specific() -> None:
     entry = _entry()
     ssh_text = render_ssh_config([entry])
@@ -120,13 +162,15 @@ def test_managed_guest_configs_are_repository_specific() -> None:
     assert f'Host aivm-cred-{entry.id}' in ssh_text
     assert 'HostName github.com' in ssh_text
     assert f'credentials/{entry.id}/id_ed25519' in ssh_text
+    assert 'BatchMode yes' in ssh_text
+    assert 'StrictHostKeyChecking accept-new' in ssh_text
     assert (
         f'[url "git@aivm-cred-{entry.id}:Kitware/kwimage.git"]'
         in git_text
     )
     assert 'insteadOf = git@github.com:Kitware/kwimage.git' in git_text
     assert 'insteadOf = https://github.com/Kitware/kwimage.git' in git_text
-    assert 'insteadOf = https://github.com/Kitware/kwimage' in git_text
+    assert 'insteadOf = https://github.com/Kitware/kwimage\n' not in git_text
 
 
 class _GitHubManager:
@@ -187,6 +231,23 @@ def test_github_backend_uses_repo_deploy_key_cli(tmp_path: Path) -> None:
         'delete',
         '17',
     ]
+
+
+def test_github_backend_read_only_omits_allow_write(tmp_path: Path) -> None:
+    public_path = tmp_path / 'id.pub'
+    public_path.write_text(_public_key(), encoding='utf-8')
+    manager = _GitHubManager(public_path.read_text(encoding='utf-8'))
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+
+    github.add_deploy_key(
+        repo,
+        public_key_path=public_path,
+        title='managed-key',
+        write=False,
+        manager=manager,  # type: ignore[arg-type]
+    )
+
+    assert '--allow-write' not in manager.calls[0]
 
 
 def _patch_generated_key(
@@ -298,11 +359,20 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
+    remote_results = iter(
+        [
+            ProviderDeployKey(
+                entry.provider_key_id,
+                _public_key(),
+                entry.provider_key_title,
+                False,
+            ),
+            None,
+        ]
+    )
     monkeypatch.setattr(
         'aivm.credentials.service._find_remote_key',
-        lambda *a, **k: ProviderDeployKey(
-            entry.provider_key_id, _public_key(), entry.provider_key_title, False
-        ),
+        lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.delete_deploy_key',
@@ -355,11 +425,20 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
+    remote_results = iter(
+        [
+            ProviderDeployKey(
+                entry.provider_key_id,
+                _public_key(),
+                entry.provider_key_title,
+                False,
+            ),
+            None,
+        ]
+    )
     monkeypatch.setattr(
         'aivm.credentials.service._find_remote_key',
-        lambda *a, **k: ProviderDeployKey(
-            entry.provider_key_id, _public_key(), entry.provider_key_title, False
-        ),
+        lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.delete_deploy_key',
@@ -472,4 +551,154 @@ def test_vm_delete_cleans_revoked_pending_credentials(
     loaded = load_store(path)
     assert loaded.vms == []
     assert loaded.credentials == []
+
+def test_parse_repository_rejects_config_injection_syntax() -> None:
+    bad = [
+        'owner with space/repo',
+        'owner/repo"bad',
+        'https://github.com/owner/repo.git?unexpected=1',
+        'git@bad host:owner/repo.git',
+    ]
+    for value in bad:
+        with pytest.raises(AIVMError):
+            parse_repository_url(value)
+
+
+def test_git_rewrite_does_not_capture_prefixed_sibling(tmp_path: Path) -> None:
+    import os
+    import subprocess
+
+    config_path = tmp_path / 'gitconfig'
+    config_path.write_text(render_git_config([_entry()]), encoding='utf-8')
+    repo_dir = tmp_path / 'repo'
+    subprocess.run(['git', 'init', '-q', str(repo_dir)], check=True)
+    env = {
+        **os.environ,
+        'GIT_CONFIG_GLOBAL': str(config_path),
+        'GIT_CONFIG_NOSYSTEM': '1',
+    }
+    sibling = 'https://github.com/Kitware/kwimage-extra.git'
+    subprocess.run(
+        ['git', '-C', str(repo_dir), 'remote', 'add', 'origin', sibling],
+        check=True,
+        env=env,
+    )
+    result = subprocess.run(
+        ['git', '-C', str(repo_dir), 'remote', 'get-url', 'origin'],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.stdout.strip() == sibling
+
+
+def test_remote_identity_uses_recorded_fingerprint_not_host_file() -> None:
+    entry = _entry()
+    expected = ProviderDeployKey(
+        entry.provider_key_id,
+        _public_key(),
+        entry.provider_key_title,
+        False,
+    )
+    unrelated = ProviderDeployKey(
+        '99',
+        _public_key('unrelated').replace(
+            base64.b64encode(b'aivm synthetic ed25519 blob').decode('ascii'),
+            base64.b64encode(b'another synthetic key blob').decode('ascii'),
+        ),
+        'other-key',
+        False,
+    )
+    assert _select_remote_key(entry, [unrelated, expected]) == expected
+
+    wrong_id = replace(unrelated, key_id=entry.provider_key_id)
+    with pytest.raises(AIVMError, match='fingerprint recorded by AIVM'):
+        _select_remote_key(entry, [wrong_id])
+
+
+def test_existing_host_key_fingerprint_drift_is_rejected(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = _entry('vm-a')
+    private = host_private_key_path(entry.vm_name, entry.id)
+    public = host_public_key_path(entry.vm_name, entry.id)
+    private.parent.mkdir(parents=True)
+    private.write_text('PRIVATE KEY\n', encoding='utf-8')
+    changed_blob = base64.b64encode(b'changed key material').decode('ascii')
+    public.write_text(f'ssh-ed25519 {changed_blob} changed\n', encoding='utf-8')
+
+    with pytest.raises(AIVMError, match='does not match the fingerprint'):
+        _generate_host_key(entry, manager=CommandManager(yes=True))
+
+
+def test_store_rejects_malformed_credential_instead_of_dropping_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'config.toml'
+    path.write_text(
+        'schema_version = 8\n'
+        '[[vms]]\n'
+        'name = "vm-a"\n'
+        '[[vms.credentials]]\n'
+        'id = "git-deadbeef"\n'
+        'repository = "kwimage"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='missing required field'):
+        load_store(path)
+
+
+def test_store_rejects_duplicate_credential_scope(tmp_path: Path) -> None:
+    store = Store()
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    upsert_vm(store, cfg)
+    first = _entry('vm-a')
+    second = replace(first, id='git-other', provider_key_id='88')
+    store.credentials = [first, second]
+    path = tmp_path / 'config.toml'
+    save_store(store, path)
+    with pytest.raises(ValueError, match='duplicate credential scope'):
+        load_store(path)
+
+
+def test_revoke_refuses_cleanup_when_provider_key_remains(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    store = Store()
+    upsert_vm(store, cfg)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    path = tmp_path / 'config.toml'
+    save_store(store, path)
+    store = load_store(path)
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *names: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    remote = ProviderDeployKey(
+        entry.provider_key_id, _public_key(), entry.provider_key_title, False
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._find_remote_key', lambda *a, **k: remote
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.delete_deploy_key', lambda *a, **k: None
+    )
+
+    with pytest.raises(AIVMError, match='still reports deploy key'):
+        revoke_repository_credential(
+            cfg,
+            store,
+            path,
+            entry,
+            manager=CommandManager(yes=True),
+        )
+
+    [still_active] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert still_active.state == 'active'
 
