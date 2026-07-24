@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import socket
+import stat
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
@@ -16,6 +20,7 @@ from ..config import AgentVMConfig
 from ..config_store import (
     CredentialEntry,
     Store,
+    app_data_path,
     find_credential,
     find_credentials_for_vm,
     remove_credential,
@@ -201,22 +206,128 @@ def _find_remote_key(
     return _select_remote_key(entry, keys)
 
 
+def _require_safe_host_directory(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as ex:
+        raise AIVMError(f'Host credential directory is missing: {path}') from ex
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise AIVMError(
+            f'Host credential directory must be a real directory, not a '
+            f'symlink or other file type: {path}'
+        )
+    if info.st_uid != os.getuid():
+        raise AIVMError(
+            f'Host credential directory is not owned by the current user: {path}'
+        )
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o077:
+        raise AIVMError(
+            f'Host credential directory permissions are too broad: '
+            f'{path} has mode {mode:04o}; expected no group or other access.'
+        )
+
+
+def _require_safe_host_file(
+    path: Path,
+    *,
+    private: bool,
+) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as ex:
+        raise AIVMError(f'Host credential file is missing: {path}') from ex
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise AIVMError(
+            f'Host credential file must be a regular file, not a symlink or '
+            f'other file type: {path}'
+        )
+    if info.st_uid != os.getuid():
+        raise AIVMError(
+            f'Host credential file is not owned by the current user: {path}'
+        )
+    mode = stat.S_IMODE(info.st_mode)
+    if private and mode & 0o077:
+        raise AIVMError(
+            f'Host private key permissions are too broad: {path} has mode '
+            f'{mode:04o}; expected no group or other access.'
+        )
+    if not private and mode & 0o022:
+        raise AIVMError(
+            f'Host public key is writable by group or others: {path} has '
+            f'mode {mode:04o}.'
+        )
+
+
+def _inspect_host_keypair(
+    entry: CredentialEntry,
+    *,
+    manager: CommandManager,
+) -> tuple[str, str]:
+    """Validate host key material and return public text plus fingerprint."""
+    private_path = host_private_key_path(entry.vm_name, entry.id)
+    public_path = host_public_key_path(entry.vm_name, entry.id)
+    _require_safe_host_directory(private_path.parent)
+    _require_safe_host_file(private_path, private=True)
+    _require_safe_host_file(public_path, private=False)
+
+    try:
+        public_text = public_path.read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeError) as ex:
+        raise AIVMError(f'Could not read host public key {public_path}: {ex}') from ex
+    normalized_public = normalized_public_key(public_text)
+    # Validate the public-key payload before comparing it with the key
+    # derived from the private key. Otherwise an arbitrary two-token string
+    # is reported as a keypair mismatch instead of malformed public data.
+    fingerprint = public_key_fingerprint(normalized_public)
+    result = manager.run(
+        ['ssh-keygen', '-y', '-f', str(private_path)],
+        sudo=False,
+        role='read',
+        check=False,
+        capture=True,
+        input_text='',
+        timeout=10,
+        summary=f'Validate host deploy-key pair {entry.id}',
+        detail=f'private={private_path} public={public_path}',
+    )
+    if result.code != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        raise AIVMError(
+            f'Host private key for credential {entry.id} is invalid or '
+            f'unreadable: {detail or "ssh-keygen -y failed"}'
+        )
+    derived_public = normalized_public_key(result.stdout)
+    if derived_public != normalized_public:
+        raise AIVMError(
+            f'Host private and public keys for credential {entry.id} do not '
+            'form a matching keypair.'
+        )
+    if entry.key_fingerprint and fingerprint != entry.key_fingerprint:
+        raise AIVMError(
+            f'Host keypair for credential {entry.id} does not match the '
+            'fingerprint recorded by AIVM.'
+        )
+    return public_text, fingerprint
+
+
 def _generate_host_key(
     entry: CredentialEntry, *, manager: CommandManager
 ) -> CredentialEntry:
     private_path = host_private_key_path(entry.vm_name, entry.id)
     public_path = host_public_key_path(entry.vm_name, entry.id)
-    if private_path.exists() and public_path.exists():
-        public_text = public_path.read_text(encoding='utf-8')
-        actual_fingerprint = public_key_fingerprint(public_text)
-        if entry.key_fingerprint and actual_fingerprint != entry.key_fingerprint:
+    private_exists = os.path.lexists(private_path)
+    public_exists = os.path.lexists(public_path)
+    if private_exists and public_exists:
+        if not entry.key_fingerprint:
             raise AIVMError(
-                f'Host public key for credential {entry.id} does not match the '
-                'fingerprint recorded by AIVM. Refusing to adopt changed key '
-                'material; revoke or repair it explicitly.'
+                f'Untracked host key material already exists for credential '
+                f'{entry.id}. Refusing to reuse a keypair that is not recorded '
+                'in AIVM state.'
             )
+        _, actual_fingerprint = _inspect_host_keypair(entry, manager=manager)
         return replace(entry, key_fingerprint=actual_fingerprint)
-    if private_path.exists() or public_path.exists():
+    if private_exists or public_exists:
         raise AIVMError(
             f'Credential keypair is incomplete under {private_path.parent}. '
             'Remove the partial directory or revoke the pending credential.'
@@ -264,8 +375,9 @@ def _generate_host_key(
             role='modify',
             summary='Set host deploy-key public key permissions',
         )
-    public_text = public_path.read_text(encoding='utf-8')
-    return replace(entry, key_fingerprint=public_key_fingerprint(public_text))
+    generated_entry = replace(entry, key_fingerprint='')
+    _, fingerprint = _inspect_host_keypair(generated_entry, manager=manager)
+    return replace(entry, key_fingerprint=fingerprint)
 
 
 def grant_repository_credential(
@@ -285,6 +397,14 @@ def grant_repository_credential(
         raise AIVMError(
             f'Credential {cred_id} already exists with access={existing.access}. '
             'Revoke it before changing access.'
+        )
+    if existing is not None and existing.state in {
+        'revocation-pending',
+        'abandon-pending',
+    }:
+        raise AIVMError(
+            f'Credential {cred_id} is in state {existing.state!r}. Finish '
+            'revocation or abandonment before granting repository access again.'
         )
     entry = existing or CredentialEntry(
         id=cred_id,
@@ -344,7 +464,7 @@ def grant_repository_credential(
     guest_entries = [
         item
         for item in find_credentials_for_vm(store, cfg.vm.name)
-        if item.state != 'revocation-pending'
+        if item.state not in {'revocation-pending', 'abandon-pending'}
     ]
     reconcile_guest_credentials(
         cfg,
@@ -353,7 +473,9 @@ def grant_repository_credential(
         private_key=(entry.id, private_text),
         manager=manager,
     )
-    verify = verify_guest_repository(cfg, ip, repo, manager=manager)
+    verify = verify_guest_repository(
+        cfg, ip, repo, entry.id, manager=manager
+    )
     if verify.code != 0:
         raise AIVMError(
             'The deploy key was registered and installed, but Git access from '
@@ -378,21 +500,18 @@ def inspect_credential(
     *,
     manager: CommandManager,
 ) -> CredentialStatus:
-    private_path = host_private_key_path(entry.vm_name, entry.id)
-    public_path = host_public_key_path(entry.vm_name, entry.id)
-    host_ok = private_path.exists() and public_path.exists()
+    host_ok = False
     fingerprint_ok = False
     host_detail = ''
     public_text = ''
-    if public_path.exists():
-        try:
-            public_text = public_path.read_text(encoding='utf-8').strip()
-            fingerprint_ok = (
-                public_key_fingerprint(public_text) == entry.key_fingerprint
-            )
-        except (AIVMError, OSError, UnicodeError) as ex:
-            public_text = ''
-            host_detail = str(ex)
+    try:
+        public_text, fingerprint = _inspect_host_keypair(
+            entry, manager=manager
+        )
+        host_ok = True
+        fingerprint_ok = fingerprint == entry.key_fingerprint
+    except AIVMError as ex:
+        host_detail = str(ex)
     remote: ProviderDeployKey | None = None
     remote_error = ''
     try:
@@ -416,7 +535,11 @@ def inspect_credential(
             except AIVMError:
                 guest_key_ok = False
             access_result = verify_guest_repository(
-                cfg, ip, entry_repository(entry), manager=manager
+                cfg,
+                ip,
+                entry_repository(entry),
+                entry.id,
+                manager=manager,
             )
             guest = 'ok' if guest_key_ok and access_result.code == 0 else 'drift'
             guest_detail = (access_result.stderr or '').strip()
@@ -480,7 +603,8 @@ def revoke_repository_credential(
     remaining = [
         item
         for item in find_credentials_for_vm(store, cfg.vm.name)
-        if item.id != entry.id and item.state != 'revocation-pending'
+        if item.id != entry.id
+        and item.state not in {'revocation-pending', 'abandon-pending'}
     ]
     reconcile_guest_credentials(
         cfg,
@@ -500,3 +624,113 @@ def revoke_repository_credential(
         store_path,
         reason=f'Remove revoked repository credential {entry.id}.',
     )
+
+
+def _write_abandon_tombstone(
+    entry: CredentialEntry,
+    *,
+    guest_cleanup_verified: bool,
+    guest_cleanup_error: str,
+) -> Path:
+    root = app_data_path('credential-tombstones')
+    root.mkdir(parents=True, exist_ok=True)
+    root.chmod(0o700)
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime('%Y%m%dT%H%M%S%fZ')
+    path = root / f'{entry.id}-{stamp}.json'
+    payload = {
+        'schema_version': 1,
+        'abandoned_at': now.isoformat(),
+        'provider_revocation_verified': False,
+        'guest_cleanup_verified': guest_cleanup_verified,
+        'guest_cleanup_error': guest_cleanup_error,
+        'credential': {
+            'id': entry.id,
+            'vm_name': entry.vm_name,
+            'kind': entry.kind,
+            'provider_host': entry.provider_host,
+            'owner': entry.owner,
+            'repository': entry.repository,
+            'access': entry.access,
+            'provider_key_id': entry.provider_key_id,
+            'provider_key_title': entry.provider_key_title,
+            'key_fingerprint': entry.key_fingerprint,
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+    path.chmod(0o600)
+    return path
+
+
+def abandon_repository_credential(
+    cfg: AgentVMConfig,
+    store: Store,
+    store_path: Path,
+    entry: CredentialEntry,
+    *,
+    manager: CommandManager,
+) -> Path:
+    """Remove local credential state without claiming provider revocation."""
+    entry = replace(entry, state='abandon-pending')
+    upsert_credential(store, entry)
+    save_store(
+        store,
+        store_path,
+        reason=(
+            f'Record provider-unverified abandonment for credential '
+            f'{entry.id} before local cleanup.'
+        ),
+    )
+
+    guest_cleanup_verified = False
+    guest_cleanup_error = ''
+    try:
+        ip = _resolve_ip_for_ssh_ops(
+            cfg,
+            yes=manager.yes,
+            purpose=(
+                'Remove a provider-unverified repository credential from '
+                'the VM.'
+            ),
+        )
+        remaining = [
+            item
+            for item in find_credentials_for_vm(store, cfg.vm.name)
+            if item.id != entry.id
+            and item.state not in {'revocation-pending', 'abandon-pending'}
+        ]
+        reconcile_guest_credentials(
+            cfg,
+            ip,
+            credentials=remaining,
+            private_key=None,
+            remove_credential_id=entry.id,
+            manager=manager,
+        )
+        guest_cleanup_verified = True
+    except AIVMError as ex:
+        guest_cleanup_error = str(ex)
+        log.warning(
+            'Could not verify guest cleanup while abandoning credential {}: {}',
+            entry.id,
+            guest_cleanup_error,
+        )
+    try:
+        shutil.rmtree(host_credential_dir(entry.vm_name, entry.id))
+    except FileNotFoundError:
+        pass
+    tombstone = _write_abandon_tombstone(
+        entry,
+        guest_cleanup_verified=guest_cleanup_verified,
+        guest_cleanup_error=guest_cleanup_error,
+    )
+    remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
+    save_store(
+        store,
+        store_path,
+        reason=(
+            f'Remove provider-unverified credential {entry.id}; audit '
+            f'tombstone={tombstone}.'
+        ),
+    )
+    return tombstone

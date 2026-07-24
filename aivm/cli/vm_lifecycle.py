@@ -231,14 +231,17 @@ class VMDeleteCLI(_BaseCommand):
             ),
             role='modify',
         ):
+            if not args.dry_run:
+                for item in credentials:
+                    if item.state == 'revocation-pending':
+                        try:
+                            shutil.rmtree(
+                                host_credential_dir(item.vm_name, item.id)
+                            )
+                        except FileNotFoundError:
+                            pass
             destroy_vm(cfg, dry_run=args.dry_run)
         if not args.dry_run:
-            for item in credentials:
-                if item.state == 'revocation-pending':
-                    shutil.rmtree(
-                        host_credential_dir(item.vm_name, item.id),
-                        ignore_errors=True,
-                    )
             remove_vm(reg, cfg.vm.name, remove_attachments=True)
             save_store(
                 reg,

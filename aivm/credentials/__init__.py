@@ -13,6 +13,7 @@ from .models import GitRepository, ProviderDeployKey
 __all__ = [
     'GitRepository',
     'ProviderDeployKey',
+    'abandon_repository_credential',
     'grant_repository_credential',
     'inspect_credential',
     'parse_repository_url',
@@ -28,6 +29,7 @@ def __getattr__(name: str) -> Any:
 
         return getattr(resolve, name)
     if name in {
+        'abandon_repository_credential',
         'grant_repository_credential',
         'inspect_credential',
         'revoke_repository_credential',

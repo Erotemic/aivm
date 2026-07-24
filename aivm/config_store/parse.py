@@ -133,7 +133,12 @@ def _credential_from_dict(
             f'VM {vm_name!r} credential {values["id"]!r} has invalid '
             f'access {values["access"]!r}'
         )
-    if values['state'] not in {'pending', 'active', 'revocation-pending'}:
+    if values['state'] not in {
+        'pending',
+        'active',
+        'revocation-pending',
+        'abandon-pending',
+    }:
         raise ValueError(
             f'VM {vm_name!r} credential {values["id"]!r} has invalid '
             f'state {values["state"]!r}'

@@ -431,6 +431,16 @@ never copied into the guest.
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
    aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
 
+If GitHub can no longer be inspected or administered, an explicit recovery
+command can remove local copies without claiming that provider-side revocation
+was successful::
+
+   aivm vm creds abandon Kitware/kwimage \
+       --vm aivm-2404-workstation --provider_unverified
+
+This writes a non-secret audit tombstone and warns that any copied private key
+may remain usable until the deploy key is removed at the provider.
+
 Each grant has a unique SSH keypair. GitHub scopes the key to the selected
 repository; branch protections and rulesets remain repository settings and are
 not managed by AIVM. Managed Git routing recognizes canonical clone URLs ending
@@ -440,7 +450,11 @@ repositories. If a selected checkout's remote omits the suffix, ``creds add``
 refuses the grant instead of reporting success for a remote it cannot route;
 normalize that remote to its canonical ``.git`` URL first. A VM cannot be
 deleted while it still owns active credential records, preventing a deploy key
-from being silently orphaned.
+from being silently orphaned. Status and retry paths validate both halves of
+the host keypair, ownership, file type, and private-key permissions before the
+key can be reused or copied into a guest. Explicit transport URLs are accepted
+only when Git can prove that they resolve through the credential-specific SSH
+alias before network access is attempted.
 
 Command Groups
 --------------

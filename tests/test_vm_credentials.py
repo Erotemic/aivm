@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
+import os
+import shutil
+import subprocess
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -41,7 +45,9 @@ from aivm.credentials.models import GitRepository, ProviderDeployKey
 from aivm.credentials.resolve import parse_repository_url
 from aivm.credentials.service import (
     _generate_host_key,
+    _inspect_host_keypair,
     _select_remote_key,
+    abandon_repository_credential,
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
@@ -73,6 +79,38 @@ def _entry(vm_name: str = 'test-vm') -> CredentialEntry:
         key_fingerprint=public_key_fingerprint(public),
         state='active',
     )
+
+
+def _write_real_host_keypair(
+    entry: CredentialEntry,
+) -> tuple[CredentialEntry, Path, Path]:
+    if shutil.which('ssh-keygen') is None:
+        pytest.skip('ssh-keygen is required for host key integrity tests')
+    private = host_private_key_path(entry.vm_name, entry.id)
+    public = host_public_key_path(entry.vm_name, entry.id)
+    private.parent.mkdir(parents=True, mode=0o700)
+    private.parent.chmod(0o700)
+    subprocess.run(
+        [
+            'ssh-keygen',
+            '-q',
+            '-t',
+            'ed25519',
+            '-N',
+            '',
+            '-f',
+            str(private),
+            '-C',
+            entry.provider_key_title,
+        ],
+        check=True,
+    )
+    private.chmod(0o600)
+    public.chmod(0o644)
+    fingerprint = public_key_fingerprint(
+        public.read_text(encoding='utf-8')
+    )
+    return replace(entry, key_fingerprint=fingerprint), private, public
 
 
 def test_parse_repository_common_spellings() -> None:
@@ -527,6 +565,7 @@ def test_creds_add_dry_run_and_help_tree(
     tree = capsys.readouterr().out
     assert 'aivm vm creds - Manage scoped credentials installed in a VM.' in tree
     assert 'aivm vm creds add - Grant a VM repository access' in tree
+    assert 'aivm vm creds abandon - Forget an inaccessible provider grant' in tree
 
 
 def test_vm_delete_refuses_to_orphan_credentials(
@@ -657,13 +696,12 @@ def test_existing_host_key_fingerprint_drift_is_rejected(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
-    entry = _entry('vm-a')
-    private = host_private_key_path(entry.vm_name, entry.id)
-    public = host_public_key_path(entry.vm_name, entry.id)
-    private.parent.mkdir(parents=True)
-    private.write_text('PRIVATE KEY\n', encoding='utf-8')
+    entry, _, _ = _write_real_host_keypair(_entry('vm-a'))
     changed_blob = base64.b64encode(b'changed key material').decode('ascii')
-    public.write_text(f'ssh-ed25519 {changed_blob} changed\n', encoding='utf-8')
+    changed_fingerprint = public_key_fingerprint(
+        f'ssh-ed25519 {changed_blob} changed\n'
+    )
+    entry = replace(entry, key_fingerprint=changed_fingerprint)
 
     with pytest.raises(AIVMError, match='does not match the fingerprint'):
         _generate_host_key(entry, manager=CommandManager(yes=True))
@@ -853,21 +891,25 @@ def test_guest_verification_uses_selected_transport_url(
         cfg,
         '10.0.0.5',
         repo,
+        _entry('vm-a').id,
         manager=CommandManager(yes=True),
     )
-    assert scripts == [f'GIT_TERMINAL_PROMPT=0 git ls-remote {original} HEAD']
+    [script] = scripts
+    assert f'git ls-remote --get-url {original}' in script
+    assert (
+        f'git@aivm-cred-{_entry("vm-a").id}:Kitware/kwimage.git'
+        in script
+    )
+    assert f'GIT_TERMINAL_PROMPT=0 git ls-remote {original} HEAD' in script
 
 
 def test_status_reports_malformed_host_public_key(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
-    entry = _entry('vm-a')
-    private = host_private_key_path(entry.vm_name, entry.id)
-    public = host_public_key_path(entry.vm_name, entry.id)
-    private.parent.mkdir(parents=True)
-    private.write_text('PRIVATE KEY\n', encoding='utf-8')
+    entry, _, public = _write_real_host_keypair(_entry('vm-a'))
     public.write_text('not a public key\n', encoding='utf-8')
+    public.chmod(0o644)
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
@@ -884,6 +926,283 @@ def test_status_reports_malformed_host_public_key(
         manager=CommandManager(yes=True),
     )
 
-    assert report['host_ok'] is True
+    assert report['host_ok'] is False
     assert report['fingerprint_ok'] is False
     assert 'Malformed SSH public key' in report['host_detail']
+
+
+@pytest.mark.parametrize(
+    'value, message',
+    [
+        (
+            'https://token@github.com/Kitware/kwimage.git',
+            'may not contain userinfo',
+        ),
+        (
+            'http://github.com/Kitware/kwimage.git',
+            'support only canonical HTTPS and SSH',
+        ),
+        (
+            'git://github.com/Kitware/kwimage.git',
+            'support only canonical HTTPS and SSH',
+        ),
+        (
+            'ssh://alice@github.com/Kitware/kwimage.git',
+            'must use the git user',
+        ),
+        (
+            'alice@github.com:Kitware/kwimage.git',
+            'must use the git user',
+        ),
+        (
+            'HTTPS://github.com/Kitware/kwimage.git',
+            'canonical spelling',
+        ),
+    ],
+)
+def test_repository_transport_rejects_unmanaged_forms(
+    value: str, message: str
+) -> None:
+    with pytest.raises(AIVMError, match=message):
+        parse_repository_url(value)
+
+
+def test_managed_git_rewrite_resolves_expected_alias(tmp_path: Path) -> None:
+    entry = _entry()
+    config_path = tmp_path / 'gitconfig'
+    config_path.write_text(render_git_config([entry]), encoding='utf-8')
+    env = {
+        **os.environ,
+        'GIT_CONFIG_GLOBAL': str(config_path),
+        'GIT_CONFIG_NOSYSTEM': '1',
+    }
+    source = 'https://github.com/Kitware/kwimage.git'
+    result = subprocess.run(
+        ['git', 'ls-remote', '--get-url', source],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.stdout.strip() == (
+        f'git@aivm-cred-{entry.id}:Kitware/kwimage.git'
+    )
+
+
+def test_host_key_inspection_validates_private_key_and_permissions(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry, private, _ = _write_real_host_keypair(_entry('vm-a'))
+
+    _, fingerprint = _inspect_host_keypair(
+        entry, manager=CommandManager(yes=True)
+    )
+    assert fingerprint == entry.key_fingerprint
+
+    private.chmod(0o644)
+    with pytest.raises(AIVMError, match='permissions are too broad'):
+        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+
+
+def test_host_key_inspection_rejects_mismatched_public_key(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry, _, public = _write_real_host_keypair(_entry('vm-a'))
+    other_dir = tmp_path / 'other-key'
+    subprocess.run(
+        [
+            'ssh-keygen',
+            '-q',
+            '-t',
+            'ed25519',
+            '-N',
+            '',
+            '-f',
+            str(other_dir),
+        ],
+        check=True,
+    )
+    public.write_text(
+        Path(str(other_dir) + '.pub').read_text(encoding='utf-8'),
+        encoding='utf-8',
+    )
+    public.chmod(0o644)
+
+    with pytest.raises(AIVMError, match='do not form a matching keypair'):
+        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+
+
+def test_host_key_inspection_rejects_symlinked_private_key(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry, private, _ = _write_real_host_keypair(_entry('vm-a'))
+    moved = private.with_name('moved-private-key')
+    private.rename(moved)
+    private.symlink_to(moved)
+
+    with pytest.raises(AIVMError, match='regular file, not a symlink'):
+        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+
+
+def test_generate_refuses_untracked_existing_keypair(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry, _, _ = _write_real_host_keypair(_entry('vm-a'))
+    untracked = replace(entry, key_fingerprint='')
+
+    with pytest.raises(AIVMError, match='Untracked host key material'):
+        _generate_host_key(untracked, manager=CommandManager(yes=True))
+
+
+def test_abandon_removes_local_state_and_writes_tombstone(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    store = load_store(path)
+    key_dir = host_credential_dir(entry.vm_name, entry.id)
+    key_dir.mkdir(parents=True, mode=0o700)
+    (key_dir / 'id_ed25519').write_text('private', encoding='utf-8')
+    events: list[str] = []
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: events.append('guest-cleanup'),
+    )
+
+    tombstone = abandon_repository_credential(
+        cfg,
+        store,
+        path,
+        entry,
+        manager=CommandManager(yes=True),
+    )
+
+    assert events == ['guest-cleanup']
+    assert not key_dir.exists()
+    assert find_credentials_for_vm(load_store(path), 'vm-a') == []
+    data = json.loads(tombstone.read_text(encoding='utf-8'))
+    assert data['provider_revocation_verified'] is False
+    assert data['guest_cleanup_verified'] is True
+    assert data['credential']['key_fingerprint'] == entry.key_fingerprint
+
+
+def test_abandon_records_unverified_guest_cleanup(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    store = load_store(path)
+    key_dir = host_credential_dir(entry.vm_name, entry.id)
+    key_dir.mkdir(parents=True, mode=0o700)
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: (_ for _ in ()).throw(AIVMError('VM unavailable')),
+    )
+
+    tombstone = abandon_repository_credential(
+        cfg,
+        store,
+        path,
+        entry,
+        manager=CommandManager(yes=True),
+    )
+
+    data = json.loads(tombstone.read_text(encoding='utf-8'))
+    assert data['provider_revocation_verified'] is False
+    assert data['guest_cleanup_verified'] is False
+    assert data['guest_cleanup_error'] == 'VM unavailable'
+    assert find_credentials_for_vm(load_store(path), 'vm-a') == []
+
+
+def test_vm_delete_preserves_record_when_key_cleanup_fails(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = replace(_entry('vm-a'), state='revocation-pending')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    destroyed: list[str] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.shutil.rmtree',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('cannot remove private key')
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.destroy_vm',
+        lambda cfg, **kwargs: destroyed.append(cfg.vm.name),
+    )
+
+    with pytest.raises(PermissionError, match='cannot remove private key'):
+        VMDeleteCLI.main(
+            argv=False,
+            vm='vm-a',
+            config=str(path),
+            yes=True,
+            dry_run=False,
+        )
+
+    assert destroyed == []
+    loaded = load_store(path)
+    assert [item.name for item in loaded.vms] == ['vm-a']
+    assert loaded.credentials == [entry]
+
+
+def test_abandon_preserves_pending_record_when_host_cleanup_fails(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    store = load_store(path)
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.shutil.rmtree',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('cannot remove private key')
+        ),
+    )
+
+    with pytest.raises(PermissionError, match='cannot remove private key'):
+        abandon_repository_credential(
+            cfg,
+            store,
+            path,
+            entry,
+            manager=CommandManager(yes=True),
+        )
+
+    [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert pending.state == 'abandon-pending'

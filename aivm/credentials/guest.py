@@ -283,12 +283,25 @@ def verify_guest_repository(
     cfg: AgentVMConfig,
     ip: str,
     repo: GitRepository,
+    credential_id: str,
     *,
     manager: CommandManager,
 ) -> CommandResult:
+    safe_id = _safe_credential_id(credential_id)
+    source_url = repo.verification_url
+    expected_url = (
+        f'git@aivm-cred-{safe_id}:{repo.owner}/{repo.name}.git'
+    )
+    source_q = shlex.quote(source_url)
+    expected_q = shlex.quote(expected_url)
     command = (
-        'GIT_TERMINAL_PROMPT=0 '
-        f'git ls-remote {shlex.quote(repo.verification_url)} HEAD'
+        'set -eu; '
+        f'resolved="$(git ls-remote --get-url {source_q})"; '
+        f'expected={expected_q}; '
+        'if [ "$resolved" != "$expected" ]; then '
+        'printf "AIVM Git rewrite mismatch: expected %s, got %s\\n" '
+        '"$expected" "$resolved" >&2; exit 78; fi; '
+        f'GIT_TERMINAL_PROMPT=0 git ls-remote {source_q} HEAD'
     )
     return _run_guest(
         cfg,

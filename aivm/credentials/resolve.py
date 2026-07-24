@@ -14,7 +14,9 @@ from .validation import (
     validate_repository_identity,
 )
 
-_SCP_RE = re.compile(r'^(?:[^@/\s]+@)?(?P<host>[^:/\s]+):(?P<path>.+)$')
+_SCP_RE = re.compile(
+    r'^(?P<user>[^@/\s]+)@(?P<host>[^:/\s]+):(?P<path>.+)$'
+)
 
 
 def _strip_repo_suffix(path: str) -> str:
@@ -34,10 +36,17 @@ def parse_repository_url(value: str) -> GitRepository:
     repo_path = raw
     source_url = ''
     scp_match = _SCP_RE.match(raw)
+    transport_kind = ''
     if scp_match is not None and '://' not in raw:
+        if scp_match.group('user') != 'git':
+            raise AIVMError(
+                'SCP-style repository URLs must use the git user so AIVM '
+                'can route them through the managed deploy key.'
+            )
         host = scp_match.group('host')
         repo_path = scp_match.group('path')
         source_url = raw
+        transport_kind = 'scp'
     elif '://' in raw:
         parsed = urlparse(raw)
         if parsed.query or parsed.fragment:
@@ -45,21 +54,35 @@ def parse_repository_url(value: str) -> GitRepository:
         try:
             explicit_port = parsed.port
         except ValueError as ex:
-            raise AIVMError(f'Invalid repository URL port: {raw!r}') from ex
+            raise AIVMError('Invalid repository URL port.') from ex
         if explicit_port is not None:
             raise AIVMError(
                 'Repository URLs with explicit ports are not supported yet; '
                 'AIVM cannot safely infer the corresponding SSH endpoint.'
             )
-        if parsed.scheme.lower() not in {'http', 'https', 'ssh', 'git'}:
+        scheme = parsed.scheme.lower()
+        if scheme not in {'https', 'ssh'}:
             raise AIVMError(
-                f'Unsupported repository URL scheme: {parsed.scheme!r}'
+                'AIVM deploy-key credentials support only canonical HTTPS '
+                'and SSH repository URLs. HTTP and git:// transports cannot '
+                'be proven to use the managed key.'
             )
         if parsed.password is not None:
             raise AIVMError('Repository URLs may not embed a password or token.')
+        if scheme == 'https' and parsed.username is not None:
+            raise AIVMError(
+                'HTTPS repository URLs may not contain userinfo. It can leak '
+                'through command logging and bypass managed-key routing.'
+            )
+        if scheme == 'ssh' and parsed.username != 'git':
+            raise AIVMError(
+                'SSH repository URLs must use the git user so AIVM can route '
+                'them through the managed deploy key.'
+            )
         host = parsed.hostname or ''
         repo_path = parsed.path
         source_url = raw
+        transport_kind = scheme
     else:
         parts = raw.strip('/').split('/')
         if len(parts) == 3 and ('.' in parts[0] or parts[0] == 'localhost'):
@@ -83,12 +106,29 @@ def parse_repository_url(value: str) -> GitRepository:
         repo = validate_repository_identity(host, owner, name)
     except CredentialValidationError as ex:
         raise AIVMError(str(ex)) from ex
-    return GitRepository(
+    normalized = GitRepository(
         host=repo.host,
         owner=repo.owner,
         name=repo.name,
         source_url=source_url,
     )
+    if source_url:
+        expected_by_kind = {
+            'scp': normalized.ssh_url,
+            'ssh': (
+                f'ssh://git@{normalized.host}/'
+                f'{normalized.owner}/{normalized.name}.git'
+            ),
+            'https': normalized.https_url,
+        }
+        expected = expected_by_kind[transport_kind]
+        if source_url != expected:
+            raise AIVMError(
+                'Repository transport URLs must use the canonical spelling '
+                f'{expected!r}. AIVM requires an exact form so Git rewrite '
+                'verification cannot succeed through another transport.'
+            )
+    return normalized
 
 
 def resolve_repository(

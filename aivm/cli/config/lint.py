@@ -311,6 +311,7 @@ def _lint_store_text(text: str) -> list[str]:
                         'pending',
                         'active',
                         'revocation-pending',
+                        'abandon-pending',
                     }:
                         problems.append(f'{label} invalid state: {state!r}')
                     cred_id = str(cred.get('id', '')).strip()

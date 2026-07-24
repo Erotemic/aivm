@@ -17,6 +17,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   injection, status reports malformed host keys without crashing, and explicit
   transport URLs with unsupported ports or a missing ``.git`` suffix are
   rejected rather than silently misconfigured.
+  Explicit repository URLs are now limited to canonical HTTPS or ``git``-user
+  SSH forms, and guest verification proves that Git rewrote the selected URL
+  through the credential-specific SSH alias before contacting the repository.
+  Host status validates the private/public keypair, ownership, file type, and
+  permissions rather than trusting only the public half. Added an explicit
+  provider-unverified ``creds abandon`` recovery path with audit tombstones,
+  and VM deletion now aborts instead of forgetting credentials when private-key
+  cleanup fails.
 
 
 ## Version 0.5.0 - Released 2026-07-18

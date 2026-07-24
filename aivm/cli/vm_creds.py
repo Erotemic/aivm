@@ -12,6 +12,7 @@ from ..config_store import find_credentials_for_vm, load_store
 from ..credentials.keys import credential_id
 from ..credentials.resolve import resolve_repository
 from ..credentials.service import (
+    abandon_repository_credential,
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
@@ -193,7 +194,7 @@ class VMCredsStatusCLI(_BaseCommand):
         print(f'  State:        {entry.state}')
         print(
             '  Host key:     '
-            + ('present' if report['host_ok'] else 'missing or incomplete')
+            + ('healthy' if report['host_ok'] else 'invalid or unavailable')
         )
         print(
             '  Fingerprint:  '
@@ -279,6 +280,92 @@ class VMCredsRevokeCLI(_BaseCommand):
         return 0
 
 
+class VMCredsAbandonCLI(_BaseCommand):
+    """Forget an inaccessible provider grant without claiming revocation."""
+
+    selector: str = kwconf.Value(
+        '',
+        position=1,
+        help='Credential ID or repository selector.',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    remote: str = kwconf.Value(
+        'origin', help='Git remote used for a local repository selector.'
+    )
+    provider_unverified: bool = kwconf.Flag(
+        False,
+        help=(
+            'Required acknowledgement that AIVM cannot prove provider-side '
+            'revocation and the copied key may remain usable.'
+        ),
+    )
+    dry_run: bool = kwconf.Flag(
+        False, help='Print the abandonment without changing anything.'
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if not args.selector:
+            raise AIVMError('Provide a credential ID or repository selector.')
+        if not args.provider_unverified:
+            raise AIVMError(
+                'Abandonment requires --provider_unverified because AIVM '
+                'will not prove that the provider deploy key was revoked.'
+            )
+        cfg, store_path = load_cfg_with_path(
+            args.config,
+            vm_opt=args.vm,
+            host_src=Path.cwd(),
+            persist_runtime_defaults=not bool(args.dry_run),
+        )
+        store = load_store(store_path)
+        repo = None
+        entries = find_credentials_for_vm(store, cfg.vm.name)
+        if not any(entry.id == args.selector for entry in entries):
+            repo = resolve_repository(
+                args.selector,
+                remote=args.remote,
+                manager=CommandManager.current(),
+            )
+        entry = select_credential(
+            store,
+            vm_name=cfg.vm.name,
+            selector=args.selector,
+            repo=repo,
+        )
+        if args.dry_run:
+            print(f'DRYRUN: would abandon credential {entry.id}')
+            print(
+                '  WARNING: provider revocation would remain unverified for '
+                f'{entry.provider_host}/{entry.owner}/{entry.repository}'
+            )
+            print('  Local guest and host copies would be removed.')
+            print('  A non-secret audit tombstone would be retained.')
+            return 0
+        mgr = CommandManager.current()
+        with mgr.intent(
+            f'Abandon provider-unverified credential {entry.id}',
+            why=(
+                'Remove local copies and retain an audit tombstone when the '
+                'provider can no longer be inspected or administered.'
+            ),
+            role='modify',
+        ):
+            tombstone = abandon_repository_credential(
+                cfg,
+                store,
+                store_path,
+                entry,
+                manager=mgr,
+            )
+        print(
+            f'Abandoned credential {entry.id}; provider revocation was not '
+            f'verified. Audit tombstone: {tombstone}'
+        )
+        return 0
+
+
 class VMCredsModalCLI(kwconf.ModalCLI):
     """Manage scoped credentials installed in a VM."""
 
@@ -286,3 +373,4 @@ class VMCredsModalCLI(kwconf.ModalCLI):
     list = VMCredsListCLI
     status = VMCredsStatusCLI
     revoke = VMCredsRevokeCLI
+    abandon = VMCredsAbandonCLI
