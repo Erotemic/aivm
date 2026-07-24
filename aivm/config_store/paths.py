@@ -14,7 +14,9 @@ def _appdir(appname: str, kind: str) -> Path:
 
 def app_data_dir() -> Path:
     """User-writable application data directory for operational artifacts."""
-    return _appdir('aivm', 'data')
+    path = Path(ub.Path.appdir('aivm', type='data'))
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return path
 
 
 def app_data_path(*parts: str) -> Path:

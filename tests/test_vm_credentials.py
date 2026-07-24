@@ -1495,3 +1495,34 @@ def test_generate_rejects_writable_managed_ancestor(
     assert not directory.exists(), (
         f'{ancestor} writable by {writer} redirected credential creation'
     )
+
+
+def test_fresh_app_data_root_is_safe_under_group_writable_umask(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    if shutil.which('ssh-keygen') is None:
+        pytest.skip('ssh-keygen is required for deploy-key generation tests')
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = replace(
+        _entry('vm-a'),
+        provider_key_id='',
+        key_fingerprint='',
+        state='pending',
+    )
+
+    previous_umask = os.umask(0o002)
+    try:
+        generated = _generate_host_key(
+            entry, manager=CommandManager(yes=True)
+        )
+    finally:
+        os.umask(previous_umask)
+
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    root = directory.parent.parent.parent
+    root_mode = root.stat().st_mode & 0o777
+
+    assert root_mode == 0o700
+    assert generated.key_fingerprint.startswith('SHA256:')
+    assert host_private_key_path(entry.vm_name, entry.id).exists()
+    assert host_public_key_path(entry.vm_name, entry.id).exists()
