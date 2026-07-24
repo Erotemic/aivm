@@ -4,10 +4,13 @@ The aivm Module
 
 .. warning::
 
-   This project was written with GPT-5.3 Codex and is still being evaluated
-   for correctness and safety. It is for experimental use only.
-   See the `Security Model <docs/source/security.rst>`_ for the threat model
-   and security posture.
+   This project was written starting with GPT-5.3 Codex, but then with
+     significant updates from later models such as Fable 5 and GPT 5.6.
+   Its development has been human supervised, but not extensively audited for
+     correctness and safety, as such it is only recommended for experimental
+     use.
+   See the `Security Model <docs/source/security.rst>`_ for the threat model and
+     security posture.
 
 
 |Pypi| |PypiDownloads| |ReadTheDocs| |GithubActions| |Codecov|
