@@ -16,10 +16,11 @@ import os
 import shlex
 import subprocess
 import sys
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from sys import version_info
-from typing import Literal, Sequence
+from typing import Iterator, Literal, Sequence
 
 if version_info >= (3, 11):
     from types import TracebackType
@@ -974,6 +975,41 @@ class CommandManager:
             raise AIVMError('Aborted by user.')
         if auth_required:
             self._authenticate_sudo()
+
+    @contextmanager
+    def approved_action(
+        self,
+        *,
+        purpose: str,
+        yes: bool = False,
+    ) -> Iterator[None]:
+        """Approve one compound action before any direct mutation occurs.
+
+        Some operations combine direct Python filesystem changes with later
+        subprocess mutations. This scope obtains approval up front and
+        temporarily suppresses nested command prompts so declining can never
+        happen after the direct portion has already changed state.
+        """
+        already_approved = bool(
+            yes or self.yes or self._approve_all_remaining
+        )
+        if not already_approved:
+            if not sys.stdin.isatty():
+                raise AIVMError(
+                    'This state-changing operation requires confirmation, '
+                    'but stdin is not interactive. Re-run with --yes.'
+                )
+            log.opt(depth=0).info('About to perform a state-changing action:')
+            log.opt(depth=0).info('  {}', purpose)
+            ans = input('Continue? [y/N]: ').strip().lower()
+            if ans not in {'y', 'yes'}:
+                raise AIVMError('Aborted by user.')
+        previous = self._approve_all_remaining
+        self._approve_all_remaining = True
+        try:
+            yield
+        finally:
+            self._approve_all_remaining = previous
 
     def confirm_file_update(
         self,

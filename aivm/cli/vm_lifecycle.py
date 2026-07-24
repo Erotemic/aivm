@@ -224,14 +224,32 @@ class VMDeleteCLI(_BaseCommand):
                 'AIVM will not silently orphan an active deploy key.'
             )
         mgr = CommandManager.current()
-        with mgr.intent(
-            f'Delete VM {cfg.vm.name}',
-            why=(
-                'Remove the managed VM domain while leaving host project directories intact.'
-            ),
-            role='modify',
+        if args.dry_run:
+            with mgr.intent(
+                f'Delete VM {cfg.vm.name}',
+                why=(
+                    'Preview removal of the managed VM domain while leaving '
+                    'host project directories intact.'
+                ),
+                role='modify',
+            ):
+                destroy_vm(cfg, dry_run=True)
+            return 0
+
+        with mgr.approved_action(
+            purpose=(
+                f'Delete VM {cfg.vm.name}, remove revoked credential key '
+                'material, and remove its AIVM configuration record.'
+            )
         ):
-            if not args.dry_run:
+            with mgr.intent(
+                f'Delete VM {cfg.vm.name}',
+                why=(
+                    'Remove the managed VM domain while leaving host project '
+                    'directories intact.'
+                ),
+                role='modify',
+            ):
                 for item in credentials:
                     if item.state == 'revocation-pending':
                         try:
@@ -240,27 +258,26 @@ class VMDeleteCLI(_BaseCommand):
                             )
                         except FileNotFoundError:
                             pass
-            destroy_vm(cfg, dry_run=args.dry_run)
-        if not args.dry_run:
-            remove_vm(reg, cfg.vm.name, remove_attachments=True)
-            save_store(
-                reg,
-                cfg_path,
-                reason=(
-                    f'Remove VM record for {cfg.vm.name} after deleting the '
-                    'managed libvirt domain.'
-                ),
-            )
-            net_name = (cfg.network.name or '').strip()
-            if net_name:
-                net = find_network(reg, net_name)
-                if net is not None and not network_users(reg, net_name):
-                    log.warning(
-                        "Network '{}' now has no VM users and remains defined. "
-                        'Destroy it explicitly if no longer needed: aivm host net destroy {}',
-                        net_name,
-                        net_name,
-                    )
+                destroy_vm(cfg, dry_run=False)
+                remove_vm(reg, cfg.vm.name, remove_attachments=True)
+                save_store(
+                    reg,
+                    cfg_path,
+                    reason=(
+                        f'Remove VM record for {cfg.vm.name} after deleting '
+                        'the managed libvirt domain.'
+                    ),
+                )
+        net_name = (cfg.network.name or '').strip()
+        if net_name:
+            net = find_network(reg, net_name)
+            if net is not None and not network_users(reg, net_name):
+                log.warning(
+                    "Network '{}' now has no VM users and remains defined. "
+                    'Destroy it explicitly if no longer needed: aivm host net destroy {}',
+                    net_name,
+                    net_name,
+                )
         return 0
 
 

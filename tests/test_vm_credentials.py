@@ -593,6 +593,44 @@ def test_vm_delete_refuses_to_orphan_credentials(
         )
 
 
+def test_vm_delete_decline_preserves_revoked_credential_key(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda prompt: 'n')
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = replace(_entry('vm-a'), state='revocation-pending')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    key_dir = host_credential_dir(entry.vm_name, entry.id)
+    key_dir.mkdir(parents=True)
+    key_file = key_dir / 'id_ed25519'
+    key_file.write_text('revoked', encoding='utf-8')
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.destroy_vm',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('destroy must not run after declined approval')
+        ),
+    )
+
+    with pytest.raises(AIVMError, match='Aborted by user'):
+        VMDeleteCLI.main(
+            argv=False,
+            vm='vm-a',
+            config=str(path),
+            yes=False,
+            dry_run=False,
+        )
+
+    assert key_file.read_text(encoding='utf-8') == 'revoked'
+    loaded = load_store(path)
+    assert [item.name for item in loaded.vms] == ['vm-a']
+    assert loaded.credentials == [entry]
+
+
 def test_vm_delete_cleans_revoked_pending_credentials(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -607,21 +645,38 @@ def test_vm_delete_cleans_revoked_pending_credentials(
     key_dir.mkdir(parents=True)
     (key_dir / 'id_ed25519').write_text('revoked', encoding='utf-8')
     destroyed: list[str] = []
+    prompts: list[str] = []
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+
+    def answer(prompt: str) -> str:
+        prompts.append(prompt)
+        return 'y'
+
+    monkeypatch.setattr('builtins.input', answer)
+
+    def fake_destroy(cfg: Any, **kwargs: Any) -> None:
+        CommandManager.current().confirm_file_update(
+            path=tmp_path / 'nested-operation',
+            purpose='Confirm nested deletion work is already approved.',
+        )
+        destroyed.append(cfg.vm.name)
+
     monkeypatch.setattr(
         'aivm.cli.vm_lifecycle.destroy_vm',
-        lambda cfg, **kwargs: destroyed.append(cfg.vm.name),
+        fake_destroy,
     )
 
     rc = VMDeleteCLI.main(
         argv=False,
         vm='vm-a',
         config=str(path),
-        yes=True,
+        yes=False,
         dry_run=False,
     )
 
     assert rc == 0
     assert destroyed == ['vm-a']
+    assert prompts == ['Continue? [y/N]: ']
     assert not key_dir.exists()
     loaded = load_store(path)
     assert loaded.vms == []
@@ -1056,6 +1111,66 @@ def test_generate_refuses_untracked_existing_keypair(
 
     with pytest.raises(AIVMError, match='Untracked host key material'):
         _generate_host_key(untracked, manager=CommandManager(yes=True))
+
+
+def test_grant_refuses_to_replace_missing_recorded_keypair(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    repo = GitRepository(
+        entry.provider_host, entry.owner, entry.repository
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+
+    with pytest.raises(AIVMError, match='recorded credential.*is missing'):
+        grant_repository_credential(
+            cfg,
+            load_store(path),
+            path,
+            repo,
+            write=True,
+            manager=CommandManager(yes=True),
+        )
+
+    loaded = load_store(path)
+    assert loaded.credentials == [entry]
+    assert not host_credential_dir(entry.vm_name, entry.id).exists()
+
+
+def test_generate_rejects_symlinked_credential_directory_before_mutation(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = replace(
+        _entry('vm-a'),
+        provider_key_id='',
+        key_fingerprint='',
+        state='pending',
+    )
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    directory.parent.mkdir(parents=True)
+    victim = tmp_path / 'victim'
+    victim.mkdir()
+    victim.chmod(0o755)
+    directory.symlink_to(victim, target_is_directory=True)
+    before_mode = victim.stat().st_mode & 0o777
+
+    with pytest.raises(AIVMError, match='real directory, not a symlink'):
+        _generate_host_key(entry, manager=CommandManager(yes=True))
+
+    assert (victim.stat().st_mode & 0o777) == before_mode
+    assert list(victim.iterdir()) == []
 
 
 def test_abandon_removes_local_state_and_writes_tombstone(

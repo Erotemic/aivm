@@ -316,6 +316,12 @@ def _generate_host_key(
 ) -> CredentialEntry:
     private_path = host_private_key_path(entry.vm_name, entry.id)
     public_path = host_public_key_path(entry.vm_name, entry.id)
+    directory = private_path.parent
+    directory_exists = os.path.lexists(directory)
+    if directory_exists:
+        # Reject an existing symlink or other unsafe leaf before chmod,
+        # ssh-keygen, or any other operation can follow it.
+        _require_safe_host_directory(directory)
     private_exists = os.path.lexists(private_path)
     public_exists = os.path.lexists(public_path)
     if private_exists and public_exists:
@@ -332,22 +338,31 @@ def _generate_host_key(
             f'Credential keypair is incomplete under {private_path.parent}. '
             'Remove the partial directory or revoke the pending credential.'
         )
-    directory = private_path.parent
+    if entry.key_fingerprint:
+        raise AIVMError(
+            f'Host keypair for recorded credential {entry.id} is missing. '
+            'Refusing to generate a replacement because GitHub may still '
+            'contain the deploy key identified by provider key id '
+            f'{entry.provider_key_id or "(unknown)"} and fingerprint '
+            f'{entry.key_fingerprint}. Revoke or abandon the recorded '
+            'credential before creating a new grant.'
+        )
     with manager.step(
         f'Generate scoped deploy key {entry.id}',
         why='Create a unique SSH keypair for one VM and one repository.',
         approval_scope=f'vm-credential-key:{entry.id}',
     ):
-        manager.submit(
-            ['mkdir', '-p', str(directory)],
-            role='modify',
-            summary='Create host credential directory',
-        )
-        manager.submit(
-            ['chmod', '700', str(directory)],
-            role='modify',
-            summary='Protect host credential directory',
-        )
+        if not directory_exists:
+            manager.submit(
+                ['mkdir', '-p', str(directory.parent)],
+                role='modify',
+                summary='Create host credential parent directory',
+            )
+            manager.submit(
+                ['mkdir', '-m', '700', str(directory)],
+                role='modify',
+                summary='Create protected host credential directory',
+            )
         manager.submit(
             [
                 'ssh-keygen',
