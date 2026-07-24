@@ -38,14 +38,30 @@ class AttachmentEntry:
 
 
 @dataclass
+class CredentialEntry:
+    id: str
+    vm_name: str
+    kind: str = 'github-deploy-key'
+    provider_host: str = 'github.com'
+    owner: str = ''
+    repository: str = ''
+    access: str = 'read'
+    provider_key_id: str = ''
+    provider_key_title: str = ''
+    key_fingerprint: str = ''
+    state: str = 'pending'
+
+
+@dataclass
 class Store:
-    schema_version: int = 7
+    schema_version: int = 8
     active_vm: str = ''
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     defaults: AgentVMConfig | None = None
     networks: list[NetworkEntry] = field(default_factory=list)
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
+    credentials: list[CredentialEntry] = field(default_factory=list)
     # Private optimistic-concurrency metadata populated by load_store().
     # It is deliberately excluded from repr/equality and never serialized.
     _source_path: str = field(default='', repr=False, compare=False)

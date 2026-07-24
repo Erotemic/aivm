@@ -4,13 +4,10 @@ The aivm Module
 
 .. warning::
 
-   This project was written starting with GPT-5.3 Codex, but then with
-     significant updates from later models such as Fable 5 and GPT 5.6.
-   Its development has been human supervised, but not extensively audited for
-     correctness and safety, as such it is only recommended for experimental
-     use.
-   See the `Security Model <docs/source/security.rst>`_ for the threat model and
-     security posture.
+   This project was written with GPT-5.3 Codex and is still being evaluated
+   for correctness and safety. It is for experimental use only.
+   See the `Security Model <docs/source/security.rst>`_ for the threat model
+   and security posture.
 
 
 |Pypi| |PypiDownloads| |ReadTheDocs| |GithubActions| |Codecov|
@@ -411,6 +408,31 @@ Depending on the threat model and workflow, these projects may be a better fit:
 re-entered for local development with VS Code/SSH and explicit folder
 attachments.
 
+VM repository credentials
+-------------------------
+
+AIVM can grant one VM access to one GitHub repository with a dedicated deploy
+key. Read-only is the default; ``--write`` explicitly enables pushes. The
+host's ``gh`` login is used only to register or revoke the public key and is
+never copied into the guest.
+
+.. code-block:: bash
+
+   # Infer the repository from the current checkout and the VM from AIVM context.
+   aivm vm creds add . --write
+
+   # Or name both explicitly.
+   aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --write
+
+   aivm vm creds list --vm aivm-2404-workstation
+   aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
+   aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
+
+Each grant has a unique SSH keypair. GitHub scopes the key to the selected
+repository; branch protections and rulesets remain repository settings and are
+not managed by AIVM. A VM cannot be deleted while it still owns active
+credential records, preventing a deploy key from being silently orphaned.
+
 Command Groups
 --------------
 
@@ -423,6 +445,7 @@ Command Groups
    aivm host net --help
    aivm host fw --help
    aivm vm --help
+   aivm vm creds --help
 
 Safety Notes
 ------------

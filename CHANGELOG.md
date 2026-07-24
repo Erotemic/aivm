@@ -4,6 +4,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.5.1 - Unreleased
 
+### Added
+* Added ``aivm vm creds`` for VM-scoped repository credentials. The initial
+  backend creates one GitHub deploy key per VM/repository pair, keeps a
+  protected host copy, installs the private key in the guest, and supports
+  ``add``, ``list``, ``status``, and provider-first ``revoke`` workflows.
+
 
 ## Version 0.5.0 - Released 2026-07-18
 

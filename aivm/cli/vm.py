@@ -19,6 +19,7 @@ from .vm_attach import (
 from .vm_cache import VMFlushCachesCLI
 from .vm_config import VMEditCLI
 from .vm_connect import VMSSHCLI, VMCodeCLI, VMSshConfigCLI, VMWaitIPCLI
+from .vm_creds import VMCredsModalCLI
 from .vm_guard import VMFdGuardCLI
 from .vm_lifecycle import (
     VMCreateCLI,
@@ -58,6 +59,7 @@ class VMModalCLI(kwconf.ModalCLI):
     code = VMCodeCLI
     flush_caches = VMFlushCachesCLI
     fdguard = VMFdGuardCLI
+    creds = VMCredsModalCLI
 
 
 __all__ = [
@@ -82,4 +84,5 @@ __all__ = [
     'VMUpdateCLI',
     'VMFlushCachesCLI',
     'VMFdGuardCLI',
+    'VMCredsModalCLI',
 ]

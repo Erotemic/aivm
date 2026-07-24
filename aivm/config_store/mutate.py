@@ -6,7 +6,13 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
-from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from .models import (
+    AttachmentEntry,
+    CredentialEntry,
+    NetworkEntry,
+    Store,
+    VMEntry,
+)
 from .parse import _norm_dir
 
 
@@ -76,6 +82,7 @@ def remove_vm(
     reg.vms = [v for v in reg.vms if v.name != vm_name]
     if remove_attachments:
         reg.attachments = [a for a in reg.attachments if a.vm_name != vm_name]
+    reg.credentials = [c for c in reg.credentials if c.vm_name != vm_name]
     if reg.active_vm == vm_name:
         reg.active_vm = reg.vms[0].name if reg.vms else ''
     return True
@@ -156,3 +163,27 @@ def remove_attachment(
         if not (a.host_path == norm and a.vm_name == vm_name)
     ]
     return len(reg.attachments) != orig_n
+
+
+def upsert_credential(reg: Store, credential: CredentialEntry) -> None:
+    existing = [
+        item
+        for item in reg.credentials
+        if item.vm_name == credential.vm_name and item.id == credential.id
+    ]
+    if existing:
+        reg.credentials[reg.credentials.index(existing[0])] = credential
+    else:
+        reg.credentials.append(credential)
+
+
+def remove_credential(
+    reg: Store, *, vm_name: str, credential_id: str
+) -> bool:
+    original = len(reg.credentials)
+    reg.credentials = [
+        item
+        for item in reg.credentials
+        if not (item.vm_name == vm_name and item.id == credential_id)
+    ]
+    return len(reg.credentials) != original

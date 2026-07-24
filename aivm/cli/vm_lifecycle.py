@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,12 +19,15 @@ from ..attachments.session import (
 )
 from ..commands import CommandManager
 from ..config_store import (
+    find_credentials_for_vm,
     find_network,
     load_store,
     network_users,
     remove_vm,
     save_store,
 )
+from ..credentials.keys import host_credential_dir
+from ..errors import AIVMError
 from ..services import (
     cfg_path,
     load_cfg,
@@ -201,6 +205,24 @@ class VMDeleteCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
+        reg = load_store(cfg_path)
+        credentials = find_credentials_for_vm(reg, cfg.vm.name)
+        active_credentials = [
+            item for item in credentials if item.state != 'revocation-pending'
+        ]
+        if active_credentials:
+            lines = '\n'.join(
+                '  - '
+                f'{item.provider_host}/{item.owner}/{item.repository} '
+                f'({item.access}, {item.id})'
+                for item in active_credentials
+            )
+            raise AIVMError(
+                f"VM '{cfg.vm.name}' still owns repository credentials:\n"
+                f'{lines}\n'
+                'Revoke them first with `aivm vm creds revoke ...`. '
+                'AIVM will not silently orphan an active deploy key.'
+            )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Delete VM {cfg.vm.name}',
@@ -211,7 +233,12 @@ class VMDeleteCLI(_BaseCommand):
         ):
             destroy_vm(cfg, dry_run=args.dry_run)
         if not args.dry_run:
-            reg = load_store(cfg_path)
+            for item in credentials:
+                if item.state == 'revocation-pending':
+                    shutil.rmtree(
+                        host_credential_dir(item.vm_name, item.id),
+                        ignore_errors=True,
+                    )
             remove_vm(reg, cfg.vm.name, remove_attachments=True)
             save_store(
                 reg,

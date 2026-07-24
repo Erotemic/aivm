@@ -6,7 +6,13 @@ import tomllib
 from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
-from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from .models import (
+    AttachmentEntry,
+    CredentialEntry,
+    NetworkEntry,
+    Store,
+    VMEntry,
+)
 
 
 def _norm_dir(path: str | Path) -> str:
@@ -75,6 +81,29 @@ def _attachment_from_dict(
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
         host_lexical_paths=_parse_host_lexical_paths(item),
+    )
+
+
+def _credential_from_dict(
+    item: dict[str, object], *, vm_name: str
+) -> CredentialEntry | None:
+    credential_id = str(item.get('id', '')).strip()
+    owner = str(item.get('owner', '')).strip()
+    repository = str(item.get('repository', '')).strip()
+    if not credential_id or not owner or not repository:
+        return None
+    return CredentialEntry(
+        id=credential_id,
+        vm_name=vm_name,
+        kind=str(item.get('kind', 'github-deploy-key') or 'github-deploy-key'),
+        provider_host=str(item.get('provider_host', 'github.com') or 'github.com'),
+        owner=owner,
+        repository=repository,
+        access=str(item.get('access', 'read') or 'read'),
+        provider_key_id=str(item.get('provider_key_id', '')).strip(),
+        provider_key_title=str(item.get('provider_key_title', '')).strip(),
+        key_fingerprint=str(item.get('key_fingerprint', '')).strip(),
+        state=str(item.get('state', 'pending') or 'pending'),
     )
 
 
@@ -201,6 +230,13 @@ def parse_store_toml(text: str) -> Store:
             if att is not None:
                 reg.attachments.append(att)
 
+        for cred_raw in item.get('credentials', []):
+            if not isinstance(cred_raw, dict):
+                continue
+            cred = _credential_from_dict(cred_raw, vm_name=name)
+            if cred is not None:
+                reg.credentials.append(cred)
+
     for item in raw.get('attachments', []):
         if not isinstance(item, dict):
             continue
@@ -218,4 +254,6 @@ def parse_store_toml(text: str) -> Store:
         att.host_lexical_paths for att in reg.attachments
     ):
         reg.schema_version = 7
+    if reg.credentials:
+        reg.schema_version = max(reg.schema_version, 8)
     return reg

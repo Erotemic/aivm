@@ -86,6 +86,7 @@ def _lint_store_text(text: str) -> list[str]:
         'paths',
         'virtiofs',
         'attachments',
+        'credentials',
     }
     section_allowed: dict[str, set[str]] = {
         'vm': _field_names(VMConfig),
@@ -201,6 +202,18 @@ def _lint_store_text(text: str) -> list[str]:
         # configs that haven't been rewritten yet.
         'host_lexical_path',
     }
+    allowed_credential = {
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_id',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    }
     vms = raw.get('vms', [])
     if isinstance(vms, list):
         for idx, item in enumerate(vms):
@@ -241,6 +254,23 @@ def _lint_store_text(text: str) -> list[str]:
             elif nested_atts is not None:
                 problems.append(
                     f'vms[{idx}].attachments should be an array of tables'
+                )
+            nested_creds = item.get('credentials', [])
+            if isinstance(nested_creds, list):
+                for cred_idx, cred in enumerate(nested_creds):
+                    if not isinstance(cred, dict):
+                        problems.append(
+                            f'vms[{idx}].credentials[{cred_idx}] is not a table/object'
+                        )
+                        continue
+                    for key in sorted(cred.keys()):
+                        if key not in allowed_credential:
+                            problems.append(
+                                f'vms[{idx}].credentials[{cred_idx}] unknown key: {key!r}'
+                            )
+            elif nested_creds is not None:
+                problems.append(
+                    f'vms[{idx}].credentials should be an array of tables'
                 )
     elif vms is not None:
         problems.append('top-level key "vms" should be an array of tables')

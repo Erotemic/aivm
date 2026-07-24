@@ -14,12 +14,20 @@ from .io import (
     split_fragment_paths,
     split_source_paths,
 )
-from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from .models import (
+    AttachmentEntry,
+    CredentialEntry,
+    NetworkEntry,
+    Store,
+    VMEntry,
+)
 from .mutate import (
     remove_attachment,
+    remove_credential,
     remove_network,
     remove_vm,
     upsert_attachment,
+    upsert_credential,
     upsert_network,
     upsert_vm,
     upsert_vm_with_network,
@@ -43,6 +51,8 @@ from .resolve import (
     find_attachment_for_vm,
     find_attachments,
     find_attachments_for_vm,
+    find_credential,
+    find_credentials_for_vm,
     find_network,
     find_vm,
     materialize_vm_cfg,
@@ -51,6 +61,7 @@ from .resolve import (
 
 __all__ = [
     'AttachmentEntry',
+    'CredentialEntry',
     'split_source_paths',
     'load_config_document',
     'is_split_layout',
@@ -66,6 +77,8 @@ __all__ = [
     'find_attachment_for_vm',
     'find_attachments',
     'find_attachments_for_vm',
+    'find_credential',
+    'find_credentials_for_vm',
     'find_network',
     'find_vm',
     'load_store',
@@ -74,6 +87,7 @@ __all__ = [
     'parse_store_toml',
     'persistent_host_state_dir',
     'remove_attachment',
+    'remove_credential',
     'remove_network',
     'remove_vm',
     'render_split_fragments',
@@ -88,6 +102,7 @@ __all__ = [
     'save_store',
     'store_path',
     'upsert_attachment',
+    'upsert_credential',
     'upsert_network',
     'upsert_vm',
     'upsert_vm_with_network',

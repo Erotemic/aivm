@@ -507,7 +507,7 @@ def test_match_host_user_ids_round_trips_per_vm(tmp_path: Path) -> None:
     save_store(store, fpath)
 
     loaded = load_store(fpath)
-    assert loaded.schema_version == 7
+    assert loaded.schema_version == 8
     [vm] = loaded.vms
     assert vm.cfg.vm.match_host_user_ids is False
     assert vm.cfg.vm.mirror_shared_home_folders is True

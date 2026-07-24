@@ -7,7 +7,13 @@ from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..errors import AIVMError
-from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from .models import (
+    AttachmentEntry,
+    CredentialEntry,
+    NetworkEntry,
+    Store,
+    VMEntry,
+)
 from .parse import _norm_dir
 
 
@@ -111,3 +117,21 @@ def find_attachment(
         key=lambda att: (att.vm_name, att.guest_dst, att.tag),
     )
     return atts[0] if atts else None
+
+
+def find_credentials_for_vm(
+    reg: Store, vm_name: str
+) -> list[CredentialEntry]:
+    return sorted(
+        (item for item in reg.credentials if item.vm_name == vm_name),
+        key=lambda item: item.id,
+    )
+
+
+def find_credential(
+    reg: Store, *, vm_name: str, credential_id: str
+) -> CredentialEntry | None:
+    for item in reg.credentials:
+        if item.vm_name == vm_name and item.id == credential_id:
+            return item
+    return None
