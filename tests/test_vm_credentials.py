@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,7 +13,7 @@ from pytest import MonkeyPatch
 
 from aivm.cli.config.lint import _lint_store_text
 from aivm.cli.vm_lifecycle import VMDeleteCLI
-from aivm.commands import CommandManager, CommandResult
+from aivm.commands import CommandManager, CommandResult, CommandRole
 from aivm.config_store import (
     CredentialEntry,
     Store,
@@ -183,18 +183,44 @@ def test_managed_guest_configs_are_repository_specific() -> None:
     assert 'insteadOf = https://github.com/Kitware/kwimage\n' not in git_text
 
 
-class _GitHubManager:
+class _GitHubManager(CommandManager):
     def __init__(self, public_key: str) -> None:
+        super().__init__(yes=True)
         self.public_key = public_key
         self.calls: list[list[str]] = []
 
-    def run(self, cmd: list[str], **kwargs: Any) -> SimpleNamespace:
-        del kwargs
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            check,
+            capture,
+            text,
+            input_text,
+            env,
+            timeout,
+            summary,
+            detail,
+        )
         self.calls.append(list(cmd))
         if 'list' in cmd:
             import json
 
-            return SimpleNamespace(
+            return CommandResult(
                 code=0,
                 stdout=json.dumps(
                     [
@@ -208,7 +234,7 @@ class _GitHubManager:
                 ),
                 stderr='',
             )
-        return SimpleNamespace(code=0, stdout='', stderr='')
+        return CommandResult(code=0, stdout='', stderr='')
 
 
 def test_github_backend_uses_repo_deploy_key_cli(tmp_path: Path) -> None:
@@ -222,10 +248,10 @@ def test_github_backend_uses_repo_deploy_key_cli(tmp_path: Path) -> None:
         public_key_path=public_path,
         title='managed-key',
         write=True,
-        manager=manager,  # type: ignore[arg-type]
+        manager=manager,
     )
     github.delete_deploy_key(
-        repo, result.key_id, manager=manager  # type: ignore[arg-type]
+        repo, result.key_id, manager=manager
     )
 
     add = manager.calls[0]
@@ -254,7 +280,7 @@ def test_github_backend_read_only_omits_allow_write(tmp_path: Path) -> None:
         public_key_path=public_path,
         title='managed-key',
         write=False,
-        manager=manager,  # type: ignore[arg-type]
+        manager=manager,
     )
 
     assert '--allow-write' not in manager.calls[0]

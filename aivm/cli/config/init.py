@@ -9,7 +9,7 @@ import tomllib
 from copy import deepcopy
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import kwconf
 from loguru import logger
@@ -281,8 +281,10 @@ def _validate_editor_document(
     defaults_raw = raw.get('defaults')
     if not isinstance(defaults_raw, dict):
         raise ValueError('the edited file must contain [defaults.*] tables')
+    defaults_raw = cast(dict[str, object], defaults_raw)
     unexpected_defaults = sorted(
-        set(defaults_raw) - {'verbosity', *_EDITABLE_SECTIONS}
+        str(key)
+        for key in set(defaults_raw) - {'verbosity', *_EDITABLE_SECTIONS}
     )
     if unexpected_defaults:
         raise ValueError(
@@ -294,8 +296,9 @@ def _validate_editor_document(
             continue
         if not isinstance(body, dict):
             raise ValueError(f'defaults.{section} must be a TOML table')
+        body = cast(dict[str, object], body)
         valid = {field.name for field in fields(getattr(template, section))}
-        unknown = sorted(set(body) - valid)
+        unknown = sorted(str(key) for key in set(body) - valid)
         if unknown:
             raise ValueError(
                 f'unknown defaults.{section} keys: ' + ', '.join(unknown)

@@ -150,7 +150,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'defaults.{sec_name} should be a table/object'
                     )
                     continue
-                for key in sorted(sec.keys()):
+                sec = cast(dict[str, object], sec)
+                for key in sorted(str(key) for key in sec.keys()):
                     if key not in allowed:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
@@ -164,7 +165,7 @@ def _lint_store_text(text: str) -> list[str]:
                 problems.append(f'networks[{idx}] is not a table/object')
                 continue
             item = cast(dict[str, object], item)
-            for key in sorted(item.keys()):
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_network_record:
                     problems.append(
                         f'networks[{idx}] unknown key/section: {key!r}'
@@ -176,7 +177,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'networks[{idx}].network should be a table/object'
                     )
                 else:
-                    for key in sorted(net_sec.keys()):
+                    net_sec = cast(dict[str, object], net_sec)
+                    for key in sorted(str(key) for key in net_sec.keys()):
                         if key not in _field_names(NetworkConfig):
                             problems.append(
                                 f'networks[{idx}].network unknown key: {key!r}'
@@ -188,7 +190,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'networks[{idx}].firewall should be a table/object'
                     )
                 else:
-                    for key in sorted(fw_sec.keys()):
+                    fw_sec = cast(dict[str, object], fw_sec)
+                    for key in sorted(str(key) for key in fw_sec.keys()):
                         if key not in _field_names(FirewallConfig):
                             problems.append(
                                 f'networks[{idx}].firewall unknown key: {key!r}'
@@ -228,7 +231,7 @@ def _lint_store_text(text: str) -> list[str]:
                 problems.append(f'vms[{idx}] is not a table/object')
                 continue
             item = cast(dict[str, object], item)
-            for key in sorted(item.keys()):
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_vm_record:
                     problems.append(f'vms[{idx}] unknown key/section: {key!r}')
             for sec_name, allowed in section_allowed.items():
@@ -240,7 +243,7 @@ def _lint_store_text(text: str) -> list[str]:
                         f'vms[{idx}].{sec_name} should be a table/object'
                     )
                     continue
-                for key in sorted(sec.keys()):
+                for key in sorted(str(key) for key in sec.keys()):
                     if key not in allowed:
                         problems.append(
                             f'vms[{idx}].{sec_name} unknown key: {key!r}'
@@ -253,7 +256,8 @@ def _lint_store_text(text: str) -> list[str]:
                             f'vms[{idx}].attachments[{att_idx}] is not a table/object'
                         )
                         continue
-                    for key in sorted(att.keys()):
+                    att = cast(dict[str, object], att)
+                    for key in sorted(str(key) for key in att.keys()):
                         if key not in allowed_attachment:
                             problems.append(
                                 f'vms[{idx}].attachments[{att_idx}] unknown key: {key!r}'
@@ -282,7 +286,8 @@ def _lint_store_text(text: str) -> list[str]:
                     if not isinstance(cred, dict):
                         problems.append(f'{label} is not a table/object')
                         continue
-                    for key in sorted(cred.keys()):
+                    cred = cast(dict[str, object], cred)
+                    for key in sorted(str(key) for key in cred.keys()):
                         if key not in allowed_credential:
                             problems.append(f'{label} unknown key: {key!r}')
                     missing = sorted(
@@ -363,7 +368,8 @@ def _lint_store_text(text: str) -> list[str]:
             if not isinstance(item, dict):
                 problems.append(f'attachments[{idx}] is not a table/object')
                 continue
-            for key in sorted(item.keys()):
+            item = cast(dict[str, object], item)
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_attachment:
                     problems.append(f'attachments[{idx}] unknown key: {key!r}')
     elif atts is not None:
