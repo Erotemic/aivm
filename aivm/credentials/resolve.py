@@ -9,10 +9,12 @@ from urllib.parse import urlparse
 from ..commands import CommandManager
 from ..errors import AIVMError
 from .models import GitRepository
+from .validation import (
+    CredentialValidationError,
+    validate_repository_identity,
+)
 
 _SCP_RE = re.compile(r'^(?:[^@/\s]+@)?(?P<host>[^:/\s]+):(?P<path>.+)$')
-_HOST_RE = re.compile(r'^[A-Za-z0-9.-]+$')
-_REPO_PART_RE = re.compile(r'^[A-Za-z0-9_.-]+$')
 
 
 def _strip_repo_suffix(path: str) -> str:
@@ -30,22 +32,46 @@ def parse_repository_url(value: str) -> GitRepository:
 
     host = 'github.com'
     repo_path = raw
+    source_url = ''
     scp_match = _SCP_RE.match(raw)
     if scp_match is not None and '://' not in raw:
         host = scp_match.group('host')
         repo_path = scp_match.group('path')
+        source_url = raw
     elif '://' in raw:
         parsed = urlparse(raw)
         if parsed.query or parsed.fragment:
             raise AIVMError('Repository URLs may not contain a query or fragment.')
+        try:
+            explicit_port = parsed.port
+        except ValueError as ex:
+            raise AIVMError(f'Invalid repository URL port: {raw!r}') from ex
+        if explicit_port is not None:
+            raise AIVMError(
+                'Repository URLs with explicit ports are not supported yet; '
+                'AIVM cannot safely infer the corresponding SSH endpoint.'
+            )
+        if parsed.scheme.lower() not in {'http', 'https', 'ssh', 'git'}:
+            raise AIVMError(
+                f'Unsupported repository URL scheme: {parsed.scheme!r}'
+            )
+        if parsed.password is not None:
+            raise AIVMError('Repository URLs may not embed a password or token.')
         host = parsed.hostname or ''
         repo_path = parsed.path
+        source_url = raw
     else:
         parts = raw.strip('/').split('/')
         if len(parts) == 3 and ('.' in parts[0] or parts[0] == 'localhost'):
             host, repo_path = parts[0], '/'.join(parts[1:])
 
-    host = host.strip().lower()
+    if source_url and not repo_path.rstrip('/').endswith('.git'):
+        raise AIVMError(
+            'Repository transport URLs must end in .git so AIVM can install '
+            'an exact repository-scoped Git rewrite without capturing sibling '
+            'repository names. Update the remote URL or use OWNER/REPO.'
+        )
+
     parts = _strip_repo_suffix(repo_path).split('/')
     if not host or len(parts) != 2 or not all(parts):
         raise AIVMError(
@@ -53,14 +79,16 @@ def parse_repository_url(value: str) -> GitRepository:
             'OWNER/REPO, [HOST/]OWNER/REPO, or a Git SSH/HTTPS URL.'
         )
     owner, name = parts
-    if not _HOST_RE.fullmatch(host):
-        raise AIVMError(f'Unsupported repository host syntax: {host!r}')
-    if not _REPO_PART_RE.fullmatch(owner) or not _REPO_PART_RE.fullmatch(name):
-        raise AIVMError(
-            'Repository owner and name may contain only letters, numbers, '
-            "'.', '_', and '-'."
-        )
-    return GitRepository(host=host, owner=owner, name=name)
+    try:
+        repo = validate_repository_identity(host, owner, name)
+    except CredentialValidationError as ex:
+        raise AIVMError(str(ex)) from ex
+    return GitRepository(
+        host=repo.host,
+        owner=repo.owner,
+        name=repo.name,
+        source_url=source_url,
+    )
 
 
 def resolve_repository(

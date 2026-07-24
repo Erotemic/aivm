@@ -6,6 +6,13 @@ import tomllib
 from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..credentials.validation import (
+    CredentialValidationError,
+    validate_credential_identity,
+    validate_key_fingerprint,
+    validate_metadata_text,
+    validate_provider_key_id,
+)
 from .models import (
     AttachmentEntry,
     CredentialEntry,
@@ -131,17 +138,34 @@ def _credential_from_dict(
             f'VM {vm_name!r} credential {values["id"]!r} has invalid '
             f'state {values["state"]!r}'
         )
+    try:
+        repo = validate_credential_identity(
+            vm_name=vm_name,
+            cred_id=values['id'],
+            provider_host=values['provider_host'],
+            owner=values['owner'],
+            repository=values['repository'],
+        )
+        provider_key_id = validate_provider_key_id(values['provider_key_id'])
+        provider_key_title = validate_metadata_text(
+            'provider_key_title', values['provider_key_title']
+        )
+        key_fingerprint = validate_key_fingerprint(values['key_fingerprint'])
+    except CredentialValidationError as ex:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} is invalid: {ex}'
+        ) from ex
     return CredentialEntry(
         id=values['id'],
         vm_name=vm_name,
         kind=values['kind'],
-        provider_host=values['provider_host'],
-        owner=values['owner'],
-        repository=values['repository'],
+        provider_host=repo.host,
+        owner=repo.owner,
+        repository=repo.name,
         access=values['access'],
-        provider_key_id=values['provider_key_id'],
-        provider_key_title=values['provider_key_title'],
-        key_fingerprint=values['key_fingerprint'],
+        provider_key_id=provider_key_id,
+        provider_key_title=provider_key_title,
+        key_fingerprint=key_fingerprint,
         state=values['state'],
     )
 

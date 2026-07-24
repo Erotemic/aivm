@@ -24,8 +24,14 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.credentials import github
-from aivm.credentials.guest import render_git_config, render_ssh_config
+from aivm.credentials.guest import (
+    guest_private_key_relpath,
+    render_git_config,
+    render_ssh_config,
+    verify_guest_repository,
+)
 from aivm.credentials.keys import (
+    credential_id,
     host_credential_dir,
     host_private_key_path,
     host_public_key_path,
@@ -37,6 +43,7 @@ from aivm.credentials.service import (
     _generate_host_key,
     _select_remote_key,
     grant_repository_credential,
+    inspect_credential,
     revoke_repository_credential,
 )
 from aivm.errors import AIVMError
@@ -50,15 +57,19 @@ def _public_key(comment: str = 'test') -> str:
 
 def _entry(vm_name: str = 'test-vm') -> CredentialEntry:
     public = _public_key()
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+    cred_id = credential_id(vm_name, repo.canonical)
     return CredentialEntry(
-        id='git-123456789abc',
+        id=cred_id,
         vm_name=vm_name,
-        provider_host='github.com',
-        owner='Kitware',
-        repository='kwimage',
+        provider_host=repo.host,
+        owner=repo.owner,
+        repository=repo.name,
         access='write',
         provider_key_id='77',
-        provider_key_title='aivm:test:test-vm:Kitware/kwimage:git-123456789abc',
+        provider_key_title=(
+            f'aivm:test:{vm_name}:Kitware/kwimage:{cred_id}'
+        ),
         key_fingerprint=public_key_fingerprint(public),
         state='active',
     )
@@ -72,7 +83,6 @@ def test_parse_repository_common_spellings() -> None:
         'git@github.com:Kitware/kwimage.git',
         'ssh://git@github.com/Kitware/kwimage.git',
         'https://github.com/Kitware/kwimage.git',
-        'https://github.com/Kitware/kwimage',
     ]
     for value in values:
         assert parse_repository_url(value) == expected
@@ -650,16 +660,15 @@ def test_store_rejects_malformed_credential_instead_of_dropping_it(
         load_store(path)
 
 
-def test_store_rejects_duplicate_credential_scope(tmp_path: Path) -> None:
+def test_store_rejects_duplicate_credential_id(tmp_path: Path) -> None:
     store = Store()
     cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
     upsert_vm(store, cfg)
     first = _entry('vm-a')
-    second = replace(first, id='git-other', provider_key_id='88')
-    store.credentials = [first, second]
+    store.credentials = [first, replace(first, provider_key_id='88')]
     path = tmp_path / 'config.toml'
     save_store(store, path)
-    with pytest.raises(ValueError, match='duplicate credential scope'):
+    with pytest.raises(ValueError, match='duplicate credential id'):
         load_store(path)
 
 
@@ -702,3 +711,153 @@ def test_revoke_refuses_cleanup_when_provider_key_remains(
     [still_active] = find_credentials_for_vm(load_store(path), 'vm-a')
     assert still_active.state == 'active'
 
+
+def test_store_rejects_credential_path_escape(tmp_path: Path) -> None:
+    fingerprint = public_key_fingerprint(_public_key())
+    path = tmp_path / 'config.toml'
+    path.write_text(
+        'schema_version = 8\n'
+        '[[vms]]\n'
+        'name = "vm-a"\n'
+        '[[vms.credentials]]\n'
+        'id = "../../../../.ssh"\n'
+        'kind = "github-deploy-key"\n'
+        'provider_host = "github.com"\n'
+        'owner = "Kitware"\n'
+        'repository = "kwimage"\n'
+        'access = "write"\n'
+        'provider_key_id = "77"\n'
+        'provider_key_title = "managed"\n'
+        f'key_fingerprint = "{fingerprint}"\n'
+        'state = "active"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='Invalid credential id'):
+        load_store(path)
+
+
+def test_store_rejects_credential_identity_mismatch(tmp_path: Path) -> None:
+    fingerprint = public_key_fingerprint(_public_key())
+    path = tmp_path / 'config.toml'
+    path.write_text(
+        'schema_version = 8\n'
+        '[[vms]]\n'
+        'name = "vm-a"\n'
+        '[[vms.credentials]]\n'
+        'id = "git-000000000000"\n'
+        'kind = "github-deploy-key"\n'
+        'provider_host = "github.com"\n'
+        'owner = "Kitware"\n'
+        'repository = "kwimage"\n'
+        'access = "write"\n'
+        'provider_key_id = "77"\n'
+        'provider_key_title = "managed"\n'
+        f'key_fingerprint = "{fingerprint}"\n'
+        'state = "active"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='does not match VM'):
+        load_store(path)
+
+
+def test_store_rejects_credential_config_injection(tmp_path: Path) -> None:
+    entry = _entry('vm-a')
+    path = tmp_path / 'config.toml'
+    path.write_text(
+        'schema_version = 8\n'
+        '[[vms]]\n'
+        'name = "vm-a"\n'
+        '[[vms.credentials]]\n'
+        f'id = "{entry.id}"\n'
+        'kind = "github-deploy-key"\n'
+        'provider_host = "github.com"\n'
+        'owner = "Kitware\\nHost injected"\n'
+        'repository = "kwimage"\n'
+        'access = "write"\n'
+        'provider_key_id = "77"\n'
+        'provider_key_title = "managed"\n'
+        f'key_fingerprint = "{entry.key_fingerprint}"\n'
+        'state = "active"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='control characters'):
+        load_store(path)
+
+
+def test_credential_path_helpers_reject_unsafe_ids(tmp_path: Path) -> None:
+    with pytest.raises(AIVMError, match='Invalid credential id'):
+        host_credential_dir('vm-a', '../../../../.ssh')
+    with pytest.raises(AIVMError, match='Invalid credential id'):
+        guest_private_key_relpath('../../../../.ssh')
+
+
+def test_repository_transport_requires_exact_git_suffix() -> None:
+    for value in (
+        'https://github.com/Kitware/kwimage',
+        'git@github.com:Kitware/kwimage',
+    ):
+        with pytest.raises(AIVMError, match='must end in .git'):
+            parse_repository_url(value)
+
+
+def test_repository_custom_ports_are_rejected() -> None:
+    with pytest.raises(AIVMError, match='explicit ports'):
+        parse_repository_url(
+            'ssh://git@ghe.example.com:2222/team/project.git'
+        )
+
+
+def test_guest_verification_uses_selected_transport_url(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    original = 'https://github.com/Kitware/kwimage.git'
+    repo = parse_repository_url(original)
+    scripts: list[str] = []
+
+    def fake_run_guest(*args: Any, **kwargs: Any) -> CommandResult:
+        del args
+        scripts.append(kwargs['script'])
+        return CommandResult(code=0, stdout='', stderr='')
+
+    monkeypatch.setattr(
+        'aivm.credentials.guest._run_guest', fake_run_guest
+    )
+    verify_guest_repository(
+        cfg,
+        '10.0.0.5',
+        repo,
+        manager=CommandManager(yes=True),
+    )
+    assert scripts == [f'GIT_TERMINAL_PROMPT=0 git ls-remote {original} HEAD']
+
+
+def test_status_reports_malformed_host_public_key(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = _entry('vm-a')
+    private = host_private_key_path(entry.vm_name, entry.id)
+    public = host_public_key_path(entry.vm_name, entry.id)
+    private.parent.mkdir(parents=True)
+    private.write_text('PRIVATE KEY\n', encoding='utf-8')
+    public.write_text('not a public key\n', encoding='utf-8')
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._find_remote_key', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.get_ip_cached', lambda *a, **k: None
+    )
+
+    report = inspect_credential(
+        make_cfg(tmp_path, **{'vm.name': 'vm-a'}),
+        entry,
+        manager=CommandManager(yes=True),
+    )
+
+    assert report['host_ok'] is True
+    assert report['fingerprint_ok'] is False
+    assert 'Malformed SSH public key' in report['host_detail']

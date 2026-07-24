@@ -12,6 +12,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   Revocation now identifies provider keys by the recorded key id and
   cryptographic fingerprint, malformed credential records fail closed, and
   guest Git authentication is configured for non-interactive first use.
+  Persisted credential ids are recomputed from their VM/repository scope before
+  any host or guest path is used, configuration fields reject control-character
+  injection, status reports malformed host keys without crashing, and explicit
+  transport URLs with unsupported ports or a missing ``.git`` suffix are
+  rejected rather than silently misconfigured.
 
 
 ## Version 0.5.0 - Released 2026-07-18

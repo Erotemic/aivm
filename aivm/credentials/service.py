@@ -39,6 +39,11 @@ from .keys import (
     public_key_fingerprint,
 )
 from .models import GitRepository, ProviderDeployKey
+from .validation import (
+    CredentialValidationError,
+    validate_credential_identity,
+    validate_metadata_text,
+)
 
 
 class CredentialStatus(TypedDict):
@@ -46,6 +51,7 @@ class CredentialStatus(TypedDict):
 
     host_ok: bool
     fingerprint_ok: bool
+    host_detail: str
     remote: ProviderDeployKey | None
     remote_error: str
     guest: str
@@ -54,15 +60,24 @@ class CredentialStatus(TypedDict):
 
 def credential_title(vm_name: str, repo: GitRepository, cred_id: str) -> str:
     host = socket.gethostname().split('.')[0]
-    return f'aivm:{host}:{vm_name}:{repo.owner}/{repo.name}:{cred_id}'
+    title = f'aivm:{host}:{vm_name}:{repo.owner}/{repo.name}:{cred_id}'
+    try:
+        return validate_metadata_text('provider_key_title', title)
+    except CredentialValidationError as ex:
+        raise AIVMError(str(ex)) from ex
 
 
 def entry_repository(entry: CredentialEntry) -> GitRepository:
-    return GitRepository(
-        host=entry.provider_host,
-        owner=entry.owner,
-        name=entry.repository,
-    )
+    try:
+        return validate_credential_identity(
+            vm_name=entry.vm_name,
+            cred_id=entry.id,
+            provider_host=entry.provider_host,
+            owner=entry.owner,
+            repository=entry.repository,
+        )
+    except CredentialValidationError as ex:
+        raise AIVMError(str(ex)) from ex
 
 
 def _credential_matches_repo(
@@ -367,12 +382,17 @@ def inspect_credential(
     public_path = host_public_key_path(entry.vm_name, entry.id)
     host_ok = private_path.exists() and public_path.exists()
     fingerprint_ok = False
+    host_detail = ''
     public_text = ''
     if public_path.exists():
-        public_text = public_path.read_text(encoding='utf-8').strip()
-        fingerprint_ok = (
-            public_key_fingerprint(public_text) == entry.key_fingerprint
-        )
+        try:
+            public_text = public_path.read_text(encoding='utf-8').strip()
+            fingerprint_ok = (
+                public_key_fingerprint(public_text) == entry.key_fingerprint
+            )
+        except (AIVMError, OSError, UnicodeError) as ex:
+            public_text = ''
+            host_detail = str(ex)
     remote: ProviderDeployKey | None = None
     remote_error = ''
     try:
@@ -406,6 +426,7 @@ def inspect_credential(
     return {
         'host_ok': host_ok,
         'fingerprint_ok': fingerprint_ok,
+        'host_detail': host_detail,
         'remote': remote,
         'remote_error': remote_error,
         'guest': guest,

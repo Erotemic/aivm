@@ -436,8 +436,11 @@ repository; branch protections and rulesets remain repository settings and are
 not managed by AIVM. Managed Git routing recognizes canonical clone URLs ending
 in ``.git`` (the form shown by GitHub); restricting rewrites to that form avoids
 Git's prefix-based URL rewriting from capturing similarly named sibling
-repositories. A VM cannot be deleted while it still owns active credential
-records, preventing a deploy key from being silently orphaned.
+repositories. If a selected checkout's remote omits the suffix, ``creds add``
+refuses the grant instead of reporting success for a remote it cannot route;
+normalize that remote to its canonical ``.git`` URL first. A VM cannot be
+deleted while it still owns active credential records, preventing a deploy key
+from being silently orphaned.
 
 Command Groups
 --------------

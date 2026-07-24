@@ -18,6 +18,13 @@ from ...config import (
     VMConfig,
 )
 from ...config_store import load_config_document
+from ...credentials.validation import (
+    CredentialValidationError,
+    validate_credential_identity,
+    validate_key_fingerprint,
+    validate_metadata_text,
+    validate_provider_key_id,
+)
 from ...services import cfg_path
 from .._common import _BaseCommand
 
@@ -308,9 +315,10 @@ def _lint_store_text(text: str) -> list[str]:
                                 f'{label} duplicate credential id: {cred_id!r}'
                             )
                         seen_cred_ids.add(cred_id)
-                    scope = tuple(
-                        str(cred.get(key, '')).strip().lower()
-                        for key in ('provider_host', 'owner', 'repository')
+                    scope = (
+                        str(cred.get('provider_host', '')).strip().lower(),
+                        str(cred.get('owner', '')).strip().lower(),
+                        str(cred.get('repository', '')).strip().lower(),
                     )
                     if all(scope):
                         if scope in seen_cred_scopes:
@@ -319,6 +327,29 @@ def _lint_store_text(text: str) -> list[str]:
                                 + '/'.join(scope)
                             )
                         seen_cred_scopes.add(scope)
+                    if not missing:
+                        try:
+                            validate_credential_identity(
+                                vm_name=str(item.get('name', '')).strip(),
+                                cred_id=cred_id,
+                                provider_host=str(
+                                    cred.get('provider_host', '')
+                                ),
+                                owner=str(cred.get('owner', '')),
+                                repository=str(cred.get('repository', '')),
+                            )
+                            validate_provider_key_id(
+                                str(cred.get('provider_key_id', ''))
+                            )
+                            validate_metadata_text(
+                                'provider_key_title',
+                                str(cred.get('provider_key_title', '')),
+                            )
+                            validate_key_fingerprint(
+                                str(cred.get('key_fingerprint', ''))
+                            )
+                        except CredentialValidationError as ex:
+                            problems.append(f'{label} invalid credential: {ex}')
             elif nested_creds is not None:
                 problems.append(
                     f'vms[{idx}].credentials should be an array of tables'

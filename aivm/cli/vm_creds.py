@@ -9,14 +9,14 @@ import kwconf
 
 from ..commands import CommandManager
 from ..config_store import find_credentials_for_vm, load_store
-from ..credentials import (
+from ..credentials.keys import credential_id
+from ..credentials.resolve import resolve_repository
+from ..credentials.service import (
     grant_repository_credential,
     inspect_credential,
-    resolve_repository,
     revoke_repository_credential,
     select_credential,
 )
-from ..credentials.keys import credential_id
 from ..errors import AIVMError
 from ..services import load_cfg_with_path
 from ._common import _BaseCommand
@@ -199,6 +199,8 @@ class VMCredsStatusCLI(_BaseCommand):
             '  Fingerprint:  '
             + ('matches' if report['fingerprint_ok'] else 'mismatch')
         )
+        if report['host_detail']:
+            print(f'  Host detail:  {report["host_detail"]}')
         print(f'  GitHub key:   {remote_text}')
         print(f'  Guest:        {report["guest"]}')
         if report['guest_detail']:

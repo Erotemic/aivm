@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -12,6 +12,7 @@ class GitRepository:
     host: str
     owner: str
     name: str
+    source_url: str = field(default='', compare=False, repr=False)
 
     @property
     def canonical(self) -> str:
@@ -34,6 +35,10 @@ class GitRepository:
     @property
     def https_url(self) -> str:
         return f'https://{self.host}/{self.owner}/{self.name}.git'
+
+    @property
+    def verification_url(self) -> str:
+        return self.source_url or self.https_url
 
 
 @dataclass(frozen=True)

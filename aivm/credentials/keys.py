@@ -9,13 +9,13 @@ from pathlib import Path
 
 from ..config_store import app_data_path
 from ..errors import AIVMError
+from .validation import (
+    CredentialValidationError,
+    credential_id,
+    validate_credential_id_format,
+)
 
 _SAFE_PART = re.compile(r'[^A-Za-z0-9_.-]+')
-
-
-def credential_id(vm_name: str, canonical_repo: str) -> str:
-    payload = f'{vm_name}\0{canonical_repo}'.encode('utf-8')
-    return 'git-' + hashlib.sha256(payload).hexdigest()[:12]
 
 
 def _safe_vm_name(vm_name: str) -> str:
@@ -26,7 +26,15 @@ def _safe_vm_name(vm_name: str) -> str:
 
 
 def host_credential_dir(vm_name: str, cred_id: str) -> Path:
-    return app_data_path(_safe_vm_name(vm_name), 'credentials', cred_id)
+    try:
+        safe_id = validate_credential_id_format(cred_id)
+    except CredentialValidationError as ex:
+        raise AIVMError(str(ex)) from ex
+    root = app_data_path(_safe_vm_name(vm_name), 'credentials')
+    path = root / safe_id
+    if path.parent != root:
+        raise AIVMError('Credential path escaped its managed host directory.')
+    return path
 
 
 def host_private_key_path(vm_name: str, cred_id: str) -> Path:
