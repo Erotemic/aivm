@@ -1449,3 +1449,49 @@ def test_credential_cleanup_refuses_symlinked_ancestor(
         'revocation-pending' if operation == 'revoke' else 'abandon-pending'
     )
     assert pending.state == expected_state
+
+
+@pytest.mark.parametrize(
+    ('mode', 'writer'),
+    [
+        (0o770, 'group'),
+        (0o707, 'other users'),
+    ],
+)
+@pytest.mark.parametrize('ancestor', ['root', 'vm', 'credentials'])
+def test_generate_rejects_writable_managed_ancestor(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    mode: int,
+    writer: str,
+    ancestor: str,
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    entry = replace(
+        _entry('vm-a'),
+        provider_key_id='',
+        key_fingerprint='',
+        state='pending',
+    )
+    directory = host_credential_dir(entry.vm_name, entry.id)
+    root = directory.parent.parent.parent
+    vm_directory = directory.parent.parent
+    credentials_directory = directory.parent
+
+    if ancestor == 'root':
+        unsafe = root
+    elif ancestor == 'vm':
+        vm_directory.mkdir(mode=0o700)
+        unsafe = vm_directory
+    else:
+        vm_directory.mkdir(mode=0o700)
+        credentials_directory.mkdir(mode=0o700)
+        unsafe = credentials_directory
+    unsafe.chmod(mode)
+
+    with pytest.raises(AIVMError, match='writable by group or others'):
+        _generate_host_key(entry, manager=CommandManager(yes=True))
+
+    assert not directory.exists(), (
+        f'{ancestor} writable by {writer} redirected credential creation'
+    )

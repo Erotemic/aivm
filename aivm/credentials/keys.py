@@ -48,6 +48,12 @@ def _trusted_app_data_root() -> Path:
             f'AIVM application-data root is not owned by the current user: '
             f'{root}'
         )
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o022:
+        raise AIVMError(
+            f'AIVM application-data root is writable by group or others: '
+            f'{root} has mode {mode:04o}.'
+        )
     return root
 
 
@@ -64,6 +70,12 @@ def _require_managed_directory(path: Path, *, label: str) -> None:
         )
     if info.st_uid != os.getuid():
         raise AIVMError(f'{label} is not owned by the current user: {path}')
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o022:
+        raise AIVMError(
+            f'{label} is writable by group or others: '
+            f'{path} has mode {mode:04o}.'
+        )
 
 
 def host_credential_dir(vm_name: str, cred_id: str) -> Path:

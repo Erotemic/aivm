@@ -39,3 +39,19 @@ same-user process racing path replacement between validation and filesystem
 mutation. Regression tests cover symlinked VM and credential ancestors during
 generation, revocation, and provider-unverified abandonment, and verify that
 external sentinel files remain untouched.
+
+## 2026-07-24 18:50:00 -0400
+
+Extended the credential filesystem trust boundary to reject an AIVM data root,
+VM data directory, or credential-parent directory that is writable by group or
+others. Ownership and symlink checks alone were insufficient on multi-user
+systems: another account with write access to one of those directories could
+replace a descendant after planning but before queued key-generation commands
+executed. Existing `0700` and `0755` directory layouts remain valid; modes with
+`0o022` set now fail closed before key creation or recursive cleanup.
+
+This closes races involving a different local UID within the intended threat
+model. It does not claim descriptor-relative protection against a process
+running as the same UID, which remains explicitly out of scope. Regression
+tests cover both group-writable and world-writable application roots, VM data
+directories, and credential-parent directories.
