@@ -18,19 +18,15 @@ from ..attachments.session import (
 )
 from ..commands import CommandManager
 from ..config_store import (
-    find_credentials_for_vm,
     find_network,
     load_store,
     network_users,
     remove_vm,
     save_store,
 )
+from ..credentials.guards import require_vm_credentials_released
 from ..credentials.keys import remove_host_key
-from ..credentials.schema import (
-    CREDENTIAL_STATE_REVOCATION_PENDING,
-    credential_allows_vm_delete,
-)
-from ..errors import AIVMError
+from ..credentials.schema import CREDENTIAL_STATE_REVOCATION_PENDING
 from ..services import (
     cfg_path,
     load_cfg,
@@ -75,7 +71,10 @@ class VMUpCLI(_BaseCommand):
             role='modify',
         ):
             create_or_start_vm(
-                cfg, dry_run=args.dry_run, recreate=args.recreate
+                cfg,
+                dry_run=args.dry_run,
+                recreate=args.recreate,
+                config_store_path=cfg_path,
             )
         if not args.dry_run and not args.recreate:
             _maybe_warn_hardware_drift(cfg)
@@ -209,25 +208,9 @@ class VMDeleteCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         reg = load_store(cfg_path)
-        credentials = find_credentials_for_vm(reg, cfg.vm.name)
-        active_credentials = [
-            item
-            for item in credentials
-            if not credential_allows_vm_delete(item)
-        ]
-        if active_credentials:
-            lines = '\n'.join(
-                '  - '
-                f'{item.provider_host}/{item.owner}/{item.repository} '
-                f'({item.access}, {item.id})'
-                for item in active_credentials
-            )
-            raise AIVMError(
-                f"VM '{cfg.vm.name}' still owns repository credentials:\n"
-                f'{lines}\n'
-                'Revoke them first with `aivm vm creds revoke ...`. '
-                'AIVM will not silently orphan an active deploy key.'
-            )
+        credentials = require_vm_credentials_released(
+            reg, cfg.vm.name, action='deleted'
+        )
         mgr = CommandManager.current()
         if args.dry_run:
             with mgr.intent(

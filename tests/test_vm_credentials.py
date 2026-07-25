@@ -17,7 +17,7 @@ from pytest import MonkeyPatch
 
 from aivm.cli.config.lint import _lint_store_text
 from aivm.cli.vm_creds import _resolve_credential_selector
-from aivm.cli.vm_lifecycle import VMDeleteCLI
+from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI, VMUpCLI
 from aivm.commands import CommandManager, CommandResult, CommandRole
 from aivm.config_store import (
     CredentialEntry,
@@ -30,6 +30,7 @@ from aivm.config_store import (
 )
 from aivm.credentials import github
 from aivm.credentials.guest import (
+    _ensure_guest_includes,
     guest_private_key_relpath,
     render_git_config,
     render_ssh_config,
@@ -287,6 +288,51 @@ def test_config_lint_rejects_incomplete_and_invalid_credentials() -> None:
     assert any('unsupported kind' in item for item in problems)
     assert any('invalid access' in item for item in problems)
     assert any('invalid state' in item for item in problems)
+
+
+def test_guest_include_rejects_symlinked_ssh_config(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, str] = {}
+
+    def capture_submit(*args: Any, **kwargs: Any) -> None:
+        del args
+        captured['script'] = kwargs['script']
+
+    monkeypatch.setattr(
+        'aivm.credentials.guest._submit_guest', capture_submit
+    )
+    _ensure_guest_includes(
+        make_cfg(tmp_path),
+        '10.0.0.5',
+        manager=CommandManager(yes=True),
+    )
+
+    home = tmp_path / 'home'
+    ssh_dir = home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    target = tmp_path / 'dotfiles' / 'ssh-config'
+    target.parent.mkdir()
+    original = 'Host example\n    User agent\n'
+    target.write_text(original, encoding='utf-8')
+    original_mode = target.stat().st_mode & 0o777
+    config = ssh_dir / 'config'
+    config.symlink_to(target)
+
+    result = subprocess.run(
+        ['/bin/sh', '-c', captured['script']],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'HOME': str(home)},
+    )
+
+    assert result.returncode == 78
+    assert 'refuses to replace symlinked ~/.ssh/config' in result.stderr
+    assert config.is_symlink()
+    assert config.resolve() == target.resolve()
+    assert target.read_text(encoding='utf-8') == original
+    assert target.stat().st_mode & 0o777 == original_mode
 
 
 def test_managed_guest_configs_are_repository_specific() -> None:
@@ -678,6 +724,90 @@ def test_vm_delete_refuses_to_orphan_credentials(
             yes=True,
             dry_run=True,
         )
+
+
+def test_vm_up_recreate_refuses_active_credentials(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create.vm_exists',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('VM probing must not run before credential preflight')
+        ),
+    )
+
+    with pytest.raises(AIVMError, match='cannot be recreated'):
+        VMUpCLI.main(
+            argv=False,
+            config=str(path),
+            recreate=True,
+            dry_run=False,
+            yes=True,
+        )
+
+    assert load_store(path).credentials == [entry]
+
+
+def test_vm_create_force_refuses_active_credentials(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = tmp_path / 'config.toml'
+    store = Store(defaults=cfg)
+    upsert_vm(store, cfg)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    save_store(store, path)
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.maybe_install_missing_host_deps',
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.ensure_network', lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.apply_firewall', lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create_ops._ensure_initial_share_source_for_create',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create.vm_exists',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('VM probing must not run before credential preflight')
+        ),
+    )
+
+    with pytest.raises(AIVMError, match='cannot be recreated'):
+        VMCreateCLI.main(
+            argv=False,
+            config=str(path),
+            vm='vm-a',
+            force=True,
+            dry_run=False,
+            yes=True,
+        )
+
+    loaded = load_store(path)
+    assert loaded.credentials == [entry]
+    assert [item.name for item in loaded.vms] == ['vm-a']
 
 
 def test_vm_delete_decline_preserves_revoked_credential_key(

@@ -540,6 +540,7 @@ def _reconcile_attached_vm(
     attachment: ResolvedAttachment,
     *,
     policy: ReconcilePolicy,
+    config_store_path: Path | None = None,
 ) -> ReconcileResult:
     """Reconcile VM/network/firewall/share state before code/ssh-style sessions.
 
@@ -642,6 +643,7 @@ def _reconcile_attached_vm(
                     cfg,
                     dry_run=policy.dry_run,
                     recreate=False,
+                    config_store_path=config_store_path,
                     share_source_dir=(
                         virtiofs_mapping[0] if virtiofs_mapping else ''
                     ),
@@ -659,6 +661,7 @@ def _reconcile_attached_vm(
                         cfg,
                         dry_run=False,
                         recreate=True,
+                        config_store_path=config_store_path,
                         share_source_dir=(
                             virtiofs_mapping[0] if virtiofs_mapping else ''
                         ),
@@ -815,6 +818,7 @@ def _reconcile_attached_vm(
                 cfg,
                 dry_run=policy.dry_run,
                 recreate=True,
+                config_store_path=config_store_path,
                 share_source_dir=(
                     virtiofs_mapping[0] if virtiofs_mapping else ''
                 ),
@@ -925,6 +929,7 @@ def _prepare_attached_session(
             dry_run=bool(dry_run),
             yes=bool(yes),
         ),
+        config_store_path=cfg_path,
     )
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip
