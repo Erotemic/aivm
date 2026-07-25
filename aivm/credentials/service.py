@@ -365,10 +365,7 @@ def revoke_repository_credential(
         remove_credential_id=entry.id,
         manager=manager,
     )
-    try:
-        shutil.rmtree(keys.host_credential_dir(entry.vm_name, entry.id))
-    except FileNotFoundError:
-        pass
+    keys.remove_host_key(entry.vm_name, entry.id)
     remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
     save_store(
         store,
@@ -466,10 +463,7 @@ def abandon_repository_credential(
             entry.id,
             guest_cleanup_error,
         )
-    try:
-        shutil.rmtree(keys.host_credential_dir(entry.vm_name, entry.id))
-    except FileNotFoundError:
-        pass
+    keys.remove_host_key(entry.vm_name, entry.id)
     tombstone = _write_abandon_tombstone(
         entry,
         guest_cleanup_verified=guest_cleanup_verified,

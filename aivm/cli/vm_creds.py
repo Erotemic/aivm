@@ -17,7 +17,11 @@ from ..config_store import (
 )
 from ..credentials.keys import credential_id
 from ..credentials.resolve import resolve_repository
-from ..credentials.schema import CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
+from ..credentials.schema import (
+    CREDENTIAL_ACCESS_READ,
+    CREDENTIAL_ACCESS_WRITE,
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+)
 from ..credentials.service import (
     abandon_repository_credential,
     grant_repository_credential,
@@ -87,7 +91,7 @@ class VMCredsAddCLI(_BaseCommand):
         repo = resolve_repository(
             args.repository, remote=args.remote, manager=mgr
         )
-        access = 'write' if args.write else 'read'
+        access = CREDENTIAL_ACCESS_WRITE if args.write else CREDENTIAL_ACCESS_READ
         cred_id = credential_id(cfg.vm.name, repo.canonical)
         if args.dry_run:
             print('Repository credential grant')

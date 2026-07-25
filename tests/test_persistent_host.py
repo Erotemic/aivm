@@ -65,7 +65,7 @@ def _redirect_appdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
     monkeypatch.setattr(
         'aivm.config_store.paths._appdir',
-        lambda appname, kind: tmp_path / kind,
+        lambda appname, kind, **kwargs: tmp_path / kind,
     )
 
 
@@ -240,17 +240,19 @@ def test_persistent_host_manifest_path_uses_app_data_dir(
     cfg.vm.name = 'vm-persistent-app-data'
     cfg.paths.base_dir = '/var/lib/libvirt/aivm/aivm-2404'
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, int]] = []
 
-    def fake_appdir(appname: str, kind: str) -> Path:
-        calls.append((appname, kind))
+    def fake_appdir(
+        appname: str, kind: str, *, mode: int = 0o777
+    ) -> Path:
+        calls.append((appname, kind, mode))
         return tmp_path / kind
 
     monkeypatch.setattr('aivm.config_store.paths._appdir', fake_appdir)
 
     path = _persistent_host_manifest_path(cfg)
 
-    assert calls == [('aivm', 'data')]
+    assert calls == [('aivm', 'data', 0o700)]
     assert (
         path
         == tmp_path

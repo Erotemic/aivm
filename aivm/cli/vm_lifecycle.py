@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,7 +25,7 @@ from ..config_store import (
     remove_vm,
     save_store,
 )
-from ..credentials.keys import host_credential_dir
+from ..credentials.keys import remove_host_key
 from ..credentials.schema import (
     CREDENTIAL_STATE_REVOCATION_PENDING,
     credential_allows_vm_delete,
@@ -258,12 +257,7 @@ class VMDeleteCLI(_BaseCommand):
             ):
                 for item in credentials:
                     if item.state == CREDENTIAL_STATE_REVOCATION_PENDING:
-                        try:
-                            shutil.rmtree(
-                                host_credential_dir(item.vm_name, item.id)
-                            )
-                        except FileNotFoundError:
-                            pass
+                        remove_host_key(item.vm_name, item.id)
                 destroy_vm(cfg, dry_run=False)
                 remove_vm(reg, cfg.vm.name, remove_attachments=True)
                 save_store(

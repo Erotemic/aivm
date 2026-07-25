@@ -89,6 +89,26 @@ def _entry(vm_name: str = 'test-vm') -> CredentialEntry:
     )
 
 
+def _make_managed_credential_dirs(
+    directory: Path,
+    *,
+    include_parent: bool = True,
+    include_leaf: bool = True,
+) -> None:
+    """Create protected managed descendants without implicit parent modes."""
+
+    def secure_mkdir(path: Path) -> None:
+        path.mkdir(mode=0o700, exist_ok=True)
+        path.chmod(0o700)
+
+    vm_directory = directory.parent.parent
+    secure_mkdir(vm_directory)
+    if include_parent:
+        secure_mkdir(directory.parent)
+    if include_leaf:
+        secure_mkdir(directory)
+
+
 def test_credential_state_predicates() -> None:
     entry = _entry()
     assert credential_is_guest_usable(
@@ -156,8 +176,7 @@ def _write_real_host_keypair(
         pytest.skip('ssh-keygen is required for host key integrity tests')
     private = host_private_key_path(entry.vm_name, entry.id)
     public = host_public_key_path(entry.vm_name, entry.id)
-    private.parent.mkdir(parents=True, mode=0o700)
-    private.parent.chmod(0o700)
+    _make_managed_credential_dirs(private.parent)
     subprocess.run(
         [
             'ssh-keygen',
@@ -404,7 +423,7 @@ def _patch_generated_key(
         events.append('generate')
         private_path = host_private_key_path(entry.vm_name, entry.id)
         public_path = host_public_key_path(entry.vm_name, entry.id)
-        private_path.parent.mkdir(parents=True, exist_ok=True)
+        _make_managed_credential_dirs(private_path.parent)
         private_path.write_text('PRIVATE KEY\n', encoding='utf-8')
         public = _public_key(entry.provider_key_title)
         public_path.write_text(public, encoding='utf-8')
@@ -491,7 +510,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
     # Create the host copies without changing the stored entry.
     private = host_private_key_path(entry.vm_name, entry.id)
     public = host_public_key_path(entry.vm_name, entry.id)
-    private.parent.mkdir(parents=True, exist_ok=True)
+    _make_managed_credential_dirs(private.parent)
     private.write_text('PRIVATE KEY\n', encoding='utf-8')
     public.write_text(_public_key(), encoding='utf-8')
 
@@ -557,7 +576,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
     _patch_generated_key(monkeypatch, tmp_path, events)
     private = host_private_key_path(entry.vm_name, entry.id)
     public = host_public_key_path(entry.vm_name, entry.id)
-    private.parent.mkdir(parents=True, exist_ok=True)
+    _make_managed_credential_dirs(private.parent)
     private.write_text('PRIVATE KEY\n', encoding='utf-8')
     public.write_text(_public_key(), encoding='utf-8')
 
@@ -674,7 +693,7 @@ def test_vm_delete_decline_preserves_revoked_credential_key(
     upsert_credential(store, entry)
     save_store(store, path)
     key_dir = host_credential_dir(entry.vm_name, entry.id)
-    key_dir.mkdir(parents=True)
+    _make_managed_credential_dirs(key_dir)
     key_file = key_dir / 'id_ed25519'
     key_file.write_text('revoked', encoding='utf-8')
     monkeypatch.setattr(
@@ -710,7 +729,7 @@ def test_vm_delete_cleans_revoked_pending_credentials(
     upsert_credential(store, entry)
     save_store(store, path)
     key_dir = host_credential_dir(entry.vm_name, entry.id)
-    key_dir.mkdir(parents=True)
+    _make_managed_credential_dirs(key_dir)
     (key_dir / 'id_ed25519').write_text('revoked', encoding='utf-8')
     destroyed: list[str] = []
     prompts: list[str] = []
@@ -1227,7 +1246,7 @@ def test_generate_rejects_symlinked_credential_directory_before_mutation(
         state='pending',
     )
     directory = host_credential_dir(entry.vm_name, entry.id)
-    directory.parent.mkdir(parents=True)
+    _make_managed_credential_dirs(directory, include_leaf=False)
     victim = tmp_path / 'victim'
     victim.mkdir()
     victim.chmod(0o755)
@@ -1253,7 +1272,7 @@ def test_abandon_removes_local_state_and_writes_tombstone(
     save_store(store, path)
     store = load_store(path)
     key_dir = host_credential_dir(entry.vm_name, entry.id)
-    key_dir.mkdir(parents=True, mode=0o700)
+    _make_managed_credential_dirs(key_dir)
     (key_dir / 'id_ed25519').write_text('private', encoding='utf-8')
     events: list[str] = []
     monkeypatch.setattr(
@@ -1294,7 +1313,7 @@ def test_abandon_records_unverified_guest_cleanup(
     save_store(store, path)
     store = load_store(path)
     key_dir = host_credential_dir(entry.vm_name, entry.id)
-    key_dir.mkdir(parents=True, mode=0o700)
+    _make_managed_credential_dirs(key_dir)
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',
         lambda *a, **k: (_ for _ in ()).throw(AIVMError('VM unavailable')),
@@ -1327,7 +1346,7 @@ def test_vm_delete_preserves_record_when_key_cleanup_fails(
     save_store(store, path)
     destroyed: list[str] = []
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.shutil.rmtree',
+        'aivm.credentials.keys.shutil.rmtree',
         lambda *a, **k: (_ for _ in ()).throw(
             PermissionError('cannot remove private key')
         ),
@@ -1372,7 +1391,7 @@ def test_abandon_preserves_pending_record_when_host_cleanup_fails(
         lambda *a, **k: None,
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.shutil.rmtree',
+        'aivm.credentials.keys.shutil.rmtree',
         lambda *a, **k: (_ for _ in ()).throw(
             PermissionError('cannot remove private key')
         ),
@@ -1402,7 +1421,11 @@ def test_generate_rejects_symlinked_credentials_parent_before_mutation(
         state='pending',
     )
     directory = host_credential_dir(entry.vm_name, entry.id)
-    directory.parent.parent.mkdir(parents=True)
+    _make_managed_credential_dirs(
+        directory,
+        include_parent=False,
+        include_leaf=False,
+    )
     victim = tmp_path / 'credentials-victim'
     victim.mkdir()
     victim.chmod(0o755)
@@ -1467,7 +1490,11 @@ def test_credential_cleanup_refuses_symlinked_ancestor(
         directory.parent.parent.symlink_to(victim, target_is_directory=True)
         expected = 'VM data directory.*symlink'
     else:
-        directory.parent.parent.mkdir(parents=True)
+        _make_managed_credential_dirs(
+            directory,
+            include_parent=False,
+            include_leaf=False,
+        )
         protected = victim / entry.id
         protected.mkdir()
         directory.parent.symlink_to(victim, target_is_directory=True)

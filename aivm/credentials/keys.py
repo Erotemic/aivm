@@ -6,6 +6,7 @@ import base64
 import hashlib
 import os
 import re
+import shutil
 import stat
 from dataclasses import replace
 from pathlib import Path
@@ -112,6 +113,14 @@ def host_private_key_path(vm_name: str, cred_id: str) -> Path:
 
 def host_public_key_path(vm_name: str, cred_id: str) -> Path:
     return host_credential_dir(vm_name, cred_id) / 'id_ed25519.pub'
+
+
+def remove_host_key(vm_name: str, cred_id: str) -> None:
+    """Remove one validated host credential directory if it exists."""
+    try:
+        shutil.rmtree(host_credential_dir(vm_name, cred_id))
+    except FileNotFoundError:
+        pass
 
 
 def normalized_public_key(text: str) -> str:
