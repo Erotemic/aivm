@@ -4,8 +4,20 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import cast
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..credentials.schema import (
+    CREDENTIAL_ACCESS_READ,
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    CREDENTIAL_STATE_PENDING,
+    VALID_CREDENTIAL_ACCESS,
+    VALID_CREDENTIAL_KINDS,
+    VALID_CREDENTIAL_STATES,
+    CredentialAccess,
+    CredentialKind,
+    CredentialState,
+)
 from ..credentials.validation import (
     CredentialValidationError,
     validate_credential_identity,
@@ -96,15 +108,17 @@ def _credential_from_dict(
 ) -> CredentialEntry:
     values = {
         'id': str(item.get('id', '')).strip(),
-        'kind': str(item.get('kind', 'github-deploy-key') or '').strip(),
+        'kind': str(
+            item.get('kind', CREDENTIAL_KIND_GITHUB_DEPLOY_KEY) or ''
+        ).strip(),
         'provider_host': str(item.get('provider_host', 'github.com') or '').strip(),
         'owner': str(item.get('owner', '')).strip(),
         'repository': str(item.get('repository', '')).strip(),
-        'access': str(item.get('access', 'read') or '').strip(),
+        'access': str(item.get('access', CREDENTIAL_ACCESS_READ) or '').strip(),
         'provider_key_id': str(item.get('provider_key_id', '')).strip(),
         'provider_key_title': str(item.get('provider_key_title', '')).strip(),
         'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
-        'state': str(item.get('state', 'pending') or '').strip(),
+        'state': str(item.get('state', CREDENTIAL_STATE_PENDING) or '').strip(),
     }
     required = (
         'id',
@@ -123,22 +137,17 @@ def _credential_from_dict(
             f'VM {vm_name!r} credential is missing required field(s): '
             + ', '.join(missing)
         )
-    if values['kind'] != 'github-deploy-key':
+    if values['kind'] not in VALID_CREDENTIAL_KINDS:
         raise ValueError(
             f'VM {vm_name!r} credential {values["id"]!r} has unsupported '
             f'kind {values["kind"]!r}'
         )
-    if values['access'] not in {'read', 'write'}:
+    if values['access'] not in VALID_CREDENTIAL_ACCESS:
         raise ValueError(
             f'VM {vm_name!r} credential {values["id"]!r} has invalid '
             f'access {values["access"]!r}'
         )
-    if values['state'] not in {
-        'pending',
-        'active',
-        'revocation-pending',
-        'abandon-pending',
-    }:
+    if values['state'] not in VALID_CREDENTIAL_STATES:
         raise ValueError(
             f'VM {vm_name!r} credential {values["id"]!r} has invalid '
             f'state {values["state"]!r}'
@@ -163,15 +172,15 @@ def _credential_from_dict(
     return CredentialEntry(
         id=values['id'],
         vm_name=vm_name,
-        kind=values['kind'],
+        kind=cast(CredentialKind, values['kind']),
         provider_host=repo.host,
         owner=repo.owner,
         repository=repo.name,
-        access=values['access'],
+        access=cast(CredentialAccess, values['access']),
         provider_key_id=provider_key_id,
         provider_key_title=provider_key_title,
         key_fingerprint=key_fingerprint,
-        state=values['state'],
+        state=cast(CredentialState, values['state']),
     )
 
 

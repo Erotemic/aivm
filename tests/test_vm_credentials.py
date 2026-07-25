@@ -16,6 +16,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.cli.config.lint import _lint_store_text
+from aivm.cli.vm_creds import _resolve_credential_selector
 from aivm.cli.vm_lifecycle import VMDeleteCLI
 from aivm.commands import CommandManager, CommandResult, CommandRole
 from aivm.config_store import (
@@ -36,17 +37,24 @@ from aivm.credentials.guest import (
 )
 from aivm.credentials.keys import (
     credential_id,
+    generate_host_key,
     host_credential_dir,
     host_private_key_path,
     host_public_key_path,
+    inspect_host_keypair,
     public_key_fingerprint,
 )
 from aivm.credentials.models import GitRepository, ProviderDeployKey
 from aivm.credentials.resolve import parse_repository_url
+from aivm.credentials.schema import (
+    CREDENTIAL_STATE_ABANDON_PENDING,
+    CREDENTIAL_STATE_ACTIVE,
+    CREDENTIAL_STATE_PENDING,
+    CREDENTIAL_STATE_REVOCATION_PENDING,
+    credential_allows_vm_delete,
+    credential_is_guest_usable,
+)
 from aivm.credentials.service import (
-    _generate_host_key,
-    _inspect_host_keypair,
-    _select_remote_key,
     abandon_repository_credential,
     grant_repository_credential,
     inspect_credential,
@@ -79,6 +87,66 @@ def _entry(vm_name: str = 'test-vm') -> CredentialEntry:
         key_fingerprint=public_key_fingerprint(public),
         state='active',
     )
+
+
+def test_credential_state_predicates() -> None:
+    entry = _entry()
+    assert credential_is_guest_usable(
+        replace(entry, state=CREDENTIAL_STATE_PENDING)
+    )
+    assert credential_is_guest_usable(
+        replace(entry, state=CREDENTIAL_STATE_ACTIVE)
+    )
+    revoked = replace(entry, state=CREDENTIAL_STATE_REVOCATION_PENDING)
+    abandoned = replace(entry, state=CREDENTIAL_STATE_ABANDON_PENDING)
+    assert not credential_is_guest_usable(revoked)
+    assert not credential_is_guest_usable(abandoned)
+    assert credential_allows_vm_delete(revoked)
+    assert not credential_allows_vm_delete(abandoned)
+
+
+def test_resolve_credential_selector_prefers_exact_id(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    entry = _entry('vm-a')
+    store = Store(credentials=[entry])
+
+    def fail_resolve(*args: Any, **kwargs: Any) -> GitRepository:
+        raise AssertionError('exact credential ids must not resolve as URLs')
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_creds.resolve_repository', fail_resolve
+    )
+    result = _resolve_credential_selector(
+        store,
+        vm_name=entry.vm_name,
+        selector=entry.id,
+        remote='origin',
+        manager=CommandManager(yes=True),
+    )
+    assert result is entry
+
+
+def test_resolve_credential_selector_accepts_repository(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    entry = _entry('vm-a')
+    store = Store(credentials=[entry])
+    repo = GitRepository(
+        entry.provider_host, entry.owner, entry.repository
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_creds.resolve_repository',
+        lambda *args, **kwargs: repo,
+    )
+    result = _resolve_credential_selector(
+        store,
+        vm_name=entry.vm_name,
+        selector='Kitware/kwimage',
+        remote='origin',
+        manager=CommandManager(yes=True),
+    )
+    assert result is entry
 
 
 def _write_real_host_keypair(
@@ -345,7 +413,7 @@ def _patch_generated_key(
         )
 
     monkeypatch.setattr(
-        'aivm.credentials.service._generate_host_key', fake_generate
+        'aivm.credentials.keys.generate_host_key', fake_generate
     )
 
 
@@ -365,7 +433,7 @@ def test_grant_service_persists_active_credential(
         lambda *a, **k: events.append('auth'),
     )
     monkeypatch.setattr(
-        'aivm.credentials.service._find_remote_key', lambda *a, **k: None
+        'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.add_deploy_key',
@@ -445,7 +513,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
         ]
     )
     monkeypatch.setattr(
-        'aivm.credentials.service._find_remote_key',
+        'aivm.credentials.github.find_recorded_provider_key',
         lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
@@ -511,7 +579,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
         ]
     )
     monkeypatch.setattr(
-        'aivm.credentials.service._find_remote_key',
+        'aivm.credentials.github.find_recorded_provider_key',
         lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
@@ -740,11 +808,11 @@ def test_remote_identity_uses_recorded_fingerprint_not_host_file() -> None:
         'other-key',
         False,
     )
-    assert _select_remote_key(entry, [unrelated, expected]) == expected
+    assert github.select_recorded_provider_key(entry, [unrelated, expected]) == expected
 
     wrong_id = replace(unrelated, key_id=entry.provider_key_id)
     with pytest.raises(AIVMError, match='fingerprint recorded by AIVM'):
-        _select_remote_key(entry, [wrong_id])
+        github.select_recorded_provider_key(entry, [wrong_id])
 
 
 def test_existing_host_key_fingerprint_drift_is_rejected(
@@ -759,7 +827,7 @@ def test_existing_host_key_fingerprint_drift_is_rejected(
     entry = replace(entry, key_fingerprint=changed_fingerprint)
 
     with pytest.raises(AIVMError, match='does not match the fingerprint'):
-        _generate_host_key(entry, manager=CommandManager(yes=True))
+        generate_host_key(entry, manager=CommandManager(yes=True))
 
 
 def test_store_rejects_malformed_credential_instead_of_dropping_it(
@@ -812,7 +880,7 @@ def test_revoke_refuses_cleanup_when_provider_key_remains(
         entry.provider_key_id, _public_key(), entry.provider_key_title, False
     )
     monkeypatch.setattr(
-        'aivm.credentials.service._find_remote_key', lambda *a, **k: remote
+        'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: remote
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.delete_deploy_key', lambda *a, **k: None
@@ -969,7 +1037,7 @@ def test_status_reports_malformed_host_public_key(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service._find_remote_key', lambda *a, **k: None
+        'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.get_ip_cached', lambda *a, **k: None
@@ -1050,14 +1118,14 @@ def test_host_key_inspection_validates_private_key_and_permissions(
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
     entry, private, _ = _write_real_host_keypair(_entry('vm-a'))
 
-    _, fingerprint = _inspect_host_keypair(
+    _, fingerprint = inspect_host_keypair(
         entry, manager=CommandManager(yes=True)
     )
     assert fingerprint == entry.key_fingerprint
 
     private.chmod(0o644)
     with pytest.raises(AIVMError, match='permissions are too broad'):
-        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+        inspect_host_keypair(entry, manager=CommandManager(yes=True))
 
 
 def test_host_key_inspection_rejects_mismatched_public_key(
@@ -1086,7 +1154,7 @@ def test_host_key_inspection_rejects_mismatched_public_key(
     public.chmod(0o644)
 
     with pytest.raises(AIVMError, match='do not form a matching keypair'):
-        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+        inspect_host_keypair(entry, manager=CommandManager(yes=True))
 
 
 def test_host_key_inspection_rejects_symlinked_private_key(
@@ -1099,7 +1167,7 @@ def test_host_key_inspection_rejects_symlinked_private_key(
     private.symlink_to(moved)
 
     with pytest.raises(AIVMError, match='regular file, not a symlink'):
-        _inspect_host_keypair(entry, manager=CommandManager(yes=True))
+        inspect_host_keypair(entry, manager=CommandManager(yes=True))
 
 
 def test_generate_refuses_untracked_existing_keypair(
@@ -1110,7 +1178,7 @@ def test_generate_refuses_untracked_existing_keypair(
     untracked = replace(entry, key_fingerprint='')
 
     with pytest.raises(AIVMError, match='Untracked host key material'):
-        _generate_host_key(untracked, manager=CommandManager(yes=True))
+        generate_host_key(untracked, manager=CommandManager(yes=True))
 
 
 def test_grant_refuses_to_replace_missing_recorded_keypair(
@@ -1167,7 +1235,7 @@ def test_generate_rejects_symlinked_credential_directory_before_mutation(
     before_mode = victim.stat().st_mode & 0o777
 
     with pytest.raises(AIVMError, match='real directory, not a symlink'):
-        _generate_host_key(entry, manager=CommandManager(yes=True))
+        generate_host_key(entry, manager=CommandManager(yes=True))
 
     assert (victim.stat().st_mode & 0o777) == before_mode
     assert list(victim.iterdir()) == []
@@ -1342,7 +1410,7 @@ def test_generate_rejects_symlinked_credentials_parent_before_mutation(
     before_mode = victim.stat().st_mode & 0o777
 
     with pytest.raises(AIVMError, match='credential parent.*symlink'):
-        _generate_host_key(entry, manager=CommandManager(yes=True))
+        generate_host_key(entry, manager=CommandManager(yes=True))
 
     assert (victim.stat().st_mode & 0o777) == before_mode
     assert list(victim.iterdir()) == []
@@ -1367,7 +1435,7 @@ def test_generate_rejects_symlinked_vm_data_directory_before_mutation(
     before_mode = victim.stat().st_mode & 0o777
 
     with pytest.raises(AIVMError, match='VM data directory.*symlink'):
-        _generate_host_key(entry, manager=CommandManager(yes=True))
+        generate_host_key(entry, manager=CommandManager(yes=True))
 
     assert (victim.stat().st_mode & 0o777) == before_mode
     assert list(victim.iterdir()) == []
@@ -1423,7 +1491,7 @@ def test_credential_cleanup_refuses_symlinked_ancestor(
             'aivm.credentials.service.github.check_auth', lambda *a, **k: None
         )
         monkeypatch.setattr(
-            'aivm.credentials.service._find_remote_key', lambda *a, **k: None
+            'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None
         )
     with pytest.raises(AIVMError, match=expected):
         if operation == 'revoke':
@@ -1490,7 +1558,7 @@ def test_generate_rejects_writable_managed_ancestor(
     unsafe.chmod(mode)
 
     with pytest.raises(AIVMError, match='writable by group or others'):
-        _generate_host_key(entry, manager=CommandManager(yes=True))
+        generate_host_key(entry, manager=CommandManager(yes=True))
 
     assert not directory.exists(), (
         f'{ancestor} writable by {writer} redirected credential creation'
@@ -1512,7 +1580,7 @@ def test_fresh_app_data_root_is_safe_under_group_writable_umask(
 
     previous_umask = os.umask(0o002)
     try:
-        generated = _generate_host_key(
+        generated = generate_host_key(
             entry, manager=CommandManager(yes=True)
         )
     finally:

@@ -27,6 +27,10 @@ from ..config_store import (
     save_store,
 )
 from ..credentials.keys import host_credential_dir
+from ..credentials.schema import (
+    CREDENTIAL_STATE_REVOCATION_PENDING,
+    credential_allows_vm_delete,
+)
 from ..errors import AIVMError
 from ..services import (
     cfg_path,
@@ -208,7 +212,9 @@ class VMDeleteCLI(_BaseCommand):
         reg = load_store(cfg_path)
         credentials = find_credentials_for_vm(reg, cfg.vm.name)
         active_credentials = [
-            item for item in credentials if item.state != 'revocation-pending'
+            item
+            for item in credentials
+            if not credential_allows_vm_delete(item)
         ]
         if active_credentials:
             lines = '\n'.join(
@@ -251,7 +257,7 @@ class VMDeleteCLI(_BaseCommand):
                 role='modify',
             ):
                 for item in credentials:
-                    if item.state == 'revocation-pending':
+                    if item.state == CREDENTIAL_STATE_REVOCATION_PENDING:
                         try:
                             shutil.rmtree(
                                 host_credential_dir(item.vm_name, item.id)

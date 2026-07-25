@@ -18,6 +18,11 @@ from ...config import (
     VMConfig,
 )
 from ...config_store import load_config_document
+from ...credentials.schema import (
+    VALID_CREDENTIAL_ACCESS,
+    VALID_CREDENTIAL_KINDS,
+    VALID_CREDENTIAL_STATES,
+)
 from ...credentials.validation import (
     CredentialValidationError,
     validate_credential_identity,
@@ -301,18 +306,13 @@ def _lint_store_text(text: str) -> list[str]:
                             + ', '.join(missing)
                         )
                     kind = str(cred.get('kind', '')).strip()
-                    if kind and kind != 'github-deploy-key':
+                    if kind and kind not in VALID_CREDENTIAL_KINDS:
                         problems.append(f'{label} unsupported kind: {kind!r}')
                     access = str(cred.get('access', '')).strip()
-                    if access and access not in {'read', 'write'}:
+                    if access and access not in VALID_CREDENTIAL_ACCESS:
                         problems.append(f'{label} invalid access: {access!r}')
                     state = str(cred.get('state', '')).strip()
-                    if state and state not in {
-                        'pending',
-                        'active',
-                        'revocation-pending',
-                        'abandon-pending',
-                    }:
+                    if state and state not in VALID_CREDENTIAL_STATES:
                         problems.append(f'{label} invalid state: {state!r}')
                     cred_id = str(cred.get('id', '')).strip()
                     if cred_id:

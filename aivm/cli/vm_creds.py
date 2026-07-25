@@ -8,9 +8,16 @@ from typing import Any
 import kwconf
 
 from ..commands import CommandManager
-from ..config_store import find_credentials_for_vm, load_store
+from ..config_store import (
+    CredentialEntry,
+    Store,
+    find_credential,
+    find_credentials_for_vm,
+    load_store,
+)
 from ..credentials.keys import credential_id
 from ..credentials.resolve import resolve_repository
+from ..credentials.schema import CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
 from ..credentials.service import (
     abandon_repository_credential,
     grant_repository_credential,
@@ -21,6 +28,31 @@ from ..credentials.service import (
 from ..errors import AIVMError
 from ..services import load_cfg_with_path
 from ._common import _BaseCommand
+
+
+def _resolve_credential_selector(
+    store: Store,
+    *,
+    vm_name: str,
+    selector: str,
+    remote: str,
+    manager: CommandManager,
+) -> CredentialEntry:
+    """Resolve either a credential id or a repository-shaped selector."""
+    exact = find_credential(
+        store,
+        vm_name=vm_name,
+        credential_id=selector,
+    )
+    if exact is not None:
+        return exact
+    repo = resolve_repository(selector, remote=remote, manager=manager)
+    return select_credential(
+        store,
+        vm_name=vm_name,
+        selector=selector,
+        repo=repo,
+    )
 
 
 class VMCredsAddCLI(_BaseCommand):
@@ -62,7 +94,7 @@ class VMCredsAddCLI(_BaseCommand):
             print(f'  VM:          {cfg.vm.name}')
             print(f'  Repository:  {repo.display}')
             print(f'  Access:      {access}')
-            print(f'  Type:        github-deploy-key')
+            print(f'  Type:        {CREDENTIAL_KIND_GITHUB_DEPLOY_KEY}')
             print(f'  Credential:  {cred_id}')
             print('  Branches:    not managed by AIVM')
             print('DRYRUN: no key, GitHub setting, guest file, or config was changed.')
@@ -149,21 +181,12 @@ class VMCredsStatusCLI(_BaseCommand):
             persist_runtime_defaults=False,
         )
         store = load_store(store_path)
-        repo = None
-        if not any(
-            entry.id == args.selector
-            for entry in find_credentials_for_vm(store, cfg.vm.name)
-        ):
-            repo = resolve_repository(
-                args.selector,
-                remote=args.remote,
-                manager=CommandManager.current(),
-            )
-        entry = select_credential(
+        entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
-            repo=repo,
+            remote=args.remote,
+            manager=CommandManager.current(),
         )
         with CommandManager.current().intent(
             f'Inspect credential {entry.id}',
@@ -238,19 +261,12 @@ class VMCredsRevokeCLI(_BaseCommand):
             persist_runtime_defaults=not bool(args.dry_run),
         )
         store = load_store(store_path)
-        repo = None
-        entries = find_credentials_for_vm(store, cfg.vm.name)
-        if not any(entry.id == args.selector for entry in entries):
-            repo = resolve_repository(
-                args.selector,
-                remote=args.remote,
-                manager=CommandManager.current(),
-            )
-        entry = select_credential(
+        entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
-            repo=repo,
+            remote=args.remote,
+            manager=CommandManager.current(),
         )
         if args.dry_run:
             print(f'DRYRUN: would revoke credential {entry.id}')
@@ -320,19 +336,12 @@ class VMCredsAbandonCLI(_BaseCommand):
             persist_runtime_defaults=not bool(args.dry_run),
         )
         store = load_store(store_path)
-        repo = None
-        entries = find_credentials_for_vm(store, cfg.vm.name)
-        if not any(entry.id == args.selector for entry in entries):
-            repo = resolve_repository(
-                args.selector,
-                remote=args.remote,
-                manager=CommandManager.current(),
-            )
-        entry = select_credential(
+        entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
-            repo=repo,
+            remote=args.remote,
+            manager=CommandManager.current(),
         )
         if args.dry_run:
             print(f'DRYRUN: would abandon credential {entry.id}')

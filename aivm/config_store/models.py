@@ -10,6 +10,14 @@ from ..config import (
     FirewallConfig,
     NetworkConfig,
 )
+from ..credentials.schema import (
+    CREDENTIAL_ACCESS_READ,
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    CREDENTIAL_STATE_PENDING,
+    CredentialAccess,
+    CredentialKind,
+    CredentialState,
+)
 
 
 @dataclass
@@ -41,15 +49,15 @@ class AttachmentEntry:
 class CredentialEntry:
     id: str
     vm_name: str
-    kind: str = 'github-deploy-key'
+    kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
     provider_host: str = 'github.com'
     owner: str = ''
     repository: str = ''
-    access: str = 'read'
+    access: CredentialAccess = CREDENTIAL_ACCESS_READ
     provider_key_id: str = ''
     provider_key_title: str = ''
     key_fingerprint: str = ''
-    state: str = 'pending'
+    state: CredentialState = CREDENTIAL_STATE_PENDING
 
 
 @dataclass
