@@ -18,7 +18,7 @@ from pytest import MonkeyPatch
 from aivm.cli.config.lint import _lint_store_text
 from aivm.cli.vm_creds import _resolve_credential_selector
 from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI, VMUpCLI
-from aivm.commands import CommandManager, CommandResult, CommandRole
+from aivm.commands import CommandError, CommandManager, CommandResult, CommandRole
 from aivm.config_store import (
     CredentialEntry,
     Store,
@@ -32,6 +32,7 @@ from aivm.credentials import github
 from aivm.credentials.guest import (
     _ensure_guest_includes,
     guest_private_key_relpath,
+    reconcile_guest_credentials,
     render_git_config,
     render_ssh_config,
     verify_guest_repository,
@@ -335,6 +336,80 @@ def test_guest_include_rejects_symlinked_ssh_config(
     assert target.stat().st_mode & 0o777 == original_mode
 
 
+def test_guest_include_accepts_symlink_with_exact_include(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, str] = {}
+
+    def capture_submit(*args: Any, **kwargs: Any) -> None:
+        del args
+        captured['script'] = kwargs['script']
+
+    monkeypatch.setattr(
+        'aivm.credentials.guest._submit_guest', capture_submit
+    )
+    _ensure_guest_includes(
+        make_cfg(tmp_path),
+        '10.0.0.5',
+        manager=CommandManager(yes=True),
+    )
+
+    home = tmp_path / 'home'
+    ssh_dir = home / '.ssh'
+    ssh_dir.mkdir(parents=True)
+    target = tmp_path / 'dotfiles' / 'ssh-config'
+    target.parent.mkdir()
+    original = (
+        'Include ~/.ssh/aivm.d/*.conf\n'
+        'Host example\n'
+        '    User agent\n'
+    )
+    target.write_text(original, encoding='utf-8')
+    original_mode = target.stat().st_mode & 0o777
+    config = ssh_dir / 'config'
+    config.symlink_to(target)
+
+    result = subprocess.run(
+        ['/bin/sh', '-c', captured['script']],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, 'HOME': str(home)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert config.is_symlink()
+    assert config.resolve() == target.resolve()
+    assert target.read_text(encoding='utf-8') == original
+    assert target.stat().st_mode & 0o777 == original_mode
+
+
+def test_guest_include_preflight_precedes_key_install(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(
+        'aivm.credentials.guest._ensure_guest_includes',
+        lambda *a, **k: events.append('include-preflight'),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.guest._install_guest_file',
+        lambda *a, **k: events.append(f'install:{k["label"]}'),
+    )
+
+    entry = _entry()
+    reconcile_guest_credentials(
+        make_cfg(tmp_path),
+        '10.0.0.5',
+        credentials=[entry],
+        private_key=(entry.id, 'PRIVATE KEY\n'),
+        manager=CommandManager(yes=True),
+    )
+
+    assert events[0] == 'include-preflight'
+    assert events[1].startswith('install:private deploy key')
+
+
 def test_managed_guest_configs_are_repository_specific() -> None:
     entry = _entry()
     ssh_text = render_ssh_config([entry])
@@ -355,9 +430,22 @@ def test_managed_guest_configs_are_repository_specific() -> None:
 
 
 class _GitHubManager(CommandManager):
-    def __init__(self, public_key: str) -> None:
+    def __init__(
+        self,
+        public_key: str,
+        *,
+        pages: list[list[dict[str, object]]] | None = None,
+        exact: dict[str, object] | None = None,
+        exact_missing: bool = False,
+        exact_error: str = '',
+    ) -> None:
         super().__init__(yes=True)
         self.public_key = public_key
+        self.pages = pages
+        self.exact = exact
+        self.exact_missing = exact_missing
+        self.exact_error = exact_error
+        self.deleted = False
         self.calls: list[list[str]] = []
 
     def run(
@@ -388,23 +476,42 @@ class _GitHubManager(CommandManager):
             detail,
         )
         self.calls.append(list(cmd))
-        if 'list' in cmd:
+        if list(cmd[:2]) == ['gh', 'api']:
             import json
 
-            return CommandResult(
-                code=0,
-                stdout=json.dumps(
+            if '--paginate' in cmd:
+                pages = self.pages or [
                     [
                         {
                             'id': 17,
                             'key': self.public_key,
-                            'readOnly': False,
+                            'read_only': False,
                             'title': 'managed-key',
                         }
                     ]
-                ),
-                stderr='',
+                ]
+                return CommandResult(
+                    code=0, stdout=json.dumps(pages), stderr=''
+                )
+            if self.exact_error:
+                return CommandResult(
+                    code=1, stdout='', stderr=self.exact_error
+                )
+            if self.exact_missing or self.deleted:
+                return CommandResult(
+                    code=1, stdout='', stderr='gh: Not Found (HTTP 404)'
+                )
+            exact = self.exact or {
+                'id': 17,
+                'key': self.public_key,
+                'read_only': False,
+                'title': 'managed-key',
+            }
+            return CommandResult(
+                code=0, stdout=json.dumps(exact), stderr=''
             )
+        if list(cmd[:4]) == ['gh', 'repo', 'deploy-key', 'delete']:
+            self.deleted = True
         return CommandResult(code=0, stdout='', stderr='')
 
 
@@ -431,6 +538,11 @@ def test_github_backend_uses_repo_deploy_key_cli(tmp_path: Path) -> None:
     assert ['--repo', 'Kitware/kwimage'] == add[
         add.index('--repo') : add.index('--repo') + 2
     ]
+    discovery = manager.calls[1]
+    assert discovery[:5] == [
+        'gh', 'api', '--hostname', 'github.com', '--paginate'
+    ]
+    assert '--slurp' in discovery
     assert manager.calls[-1][:5] == [
         'gh',
         'repo',
@@ -455,6 +567,99 @@ def test_github_backend_read_only_omits_allow_write(tmp_path: Path) -> None:
     )
 
     assert '--allow-write' not in manager.calls[0]
+
+
+def test_recorded_provider_key_uses_exact_id_endpoint() -> None:
+    entry = _entry()
+    exact = {
+        'id': int(entry.provider_key_id),
+        'key': _public_key(),
+        'read_only': False,
+        'title': entry.provider_key_title,
+    }
+    manager = _GitHubManager(_public_key(), exact=exact)
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    result = github.find_recorded_provider_key(
+        repo, entry, manager=manager
+    )
+
+    assert result is not None
+    assert result.key_id == entry.provider_key_id
+    assert manager.calls == [
+        [
+            'gh',
+            'api',
+            '--hostname',
+            'github.com',
+            f'repos/Kitware/kwimage/keys/{entry.provider_key_id}',
+        ]
+    ]
+
+
+def test_recorded_provider_key_exact_404_does_not_fallback() -> None:
+    entry = _entry()
+    manager = _GitHubManager(_public_key(), exact_missing=True)
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    assert (
+        github.find_recorded_provider_key(repo, entry, manager=manager) is None
+    )
+    assert len(manager.calls) == 1
+    assert '--paginate' not in manager.calls[0]
+
+
+def test_recorded_provider_key_non_404_failure_is_not_absence() -> None:
+    entry = _entry()
+    manager = _GitHubManager(
+        _public_key(), exact_error='gh: connection failed'
+    )
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    with pytest.raises(CommandError, match='connection failed'):
+        github.find_recorded_provider_key(repo, entry, manager=manager)
+
+
+def test_recorded_provider_key_without_id_uses_all_pages() -> None:
+    entry = replace(_entry(), provider_key_id='')
+    unrelated: list[dict[str, object]] = []
+    for index in range(100):
+        blob = base64.b64encode(f'unrelated-{index}'.encode()).decode()
+        unrelated.append(
+            {
+                'id': index + 1,
+                'key': f'ssh-ed25519 {blob} unrelated-{index}\n',
+                'read_only': True,
+                'title': f'unrelated-{index}',
+            }
+        )
+    target: dict[str, object] = {
+        'id': 101,
+        'key': _public_key(),
+        'read_only': False,
+        'title': entry.provider_key_title,
+    }
+    manager = _GitHubManager(
+        _public_key(), pages=[unrelated, [target]]
+    )
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    result = github.find_recorded_provider_key(
+        repo, entry, manager=manager
+    )
+
+    assert result is not None
+    assert result.key_id == '101'
+    [call] = manager.calls
+    assert call[:5] == [
+        'gh',
+        'api',
+        '--hostname',
+        'github.com',
+        '--paginate',
+    ]
+    assert '--slurp' in call
+    assert call[-1] == 'repos/Kitware/kwimage/keys?per_page=100'
 
 
 def _patch_generated_key(
@@ -603,6 +808,63 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
     )
 
     assert events[:2] == ['provider-delete', 'guest-cleanup']
+    assert find_credentials_for_vm(load_store(path), 'vm-a') == []
+    assert not private.parent.exists()
+
+
+def test_revoke_uses_exact_provider_id_lookup(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    store = Store()
+    upsert_vm(store, cfg)
+    entry = _entry('vm-a')
+    upsert_credential(store, entry)
+    path = tmp_path / 'config.toml'
+    save_store(store, path)
+    store = load_store(path)
+
+    private = host_private_key_path(entry.vm_name, entry.id)
+    public = host_public_key_path(entry.vm_name, entry.id)
+    _make_managed_credential_dirs(private.parent)
+    private.write_text('PRIVATE KEY\n', encoding='utf-8')
+    public.write_text(_public_key(), encoding='utf-8')
+
+    exact = {
+        'id': int(entry.provider_key_id),
+        'key': _public_key(),
+        'read_only': False,
+        'title': entry.provider_key_title,
+    }
+    manager = _GitHubManager(_public_key(), exact=exact)
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *names: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+
+    revoke_repository_credential(
+        cfg, store, path, entry, manager=manager
+    )
+
+    api_calls = [call for call in manager.calls if call[:2] == ['gh', 'api']]
+    assert len(api_calls) == 2
+    assert all('--paginate' not in call for call in api_calls)
+    assert all(
+        call[-1].endswith(f'/keys/{entry.provider_key_id}')
+        for call in api_calls
+    )
+    assert any(
+        call[:5]
+        == ['gh', 'repo', 'deploy-key', 'delete', entry.provider_key_id]
+        for call in manager.calls
+    )
     assert find_credentials_for_vm(load_store(path), 'vm-a') == []
     assert not private.parent.exists()
 

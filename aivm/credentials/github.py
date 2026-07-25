@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from typing import cast
 
-from ..commands import CommandManager
+from ..commands import CommandError, CommandManager, CommandResult
 from ..config_store.models import CredentialEntry
 from ..errors import AIVMError
 from .keys import normalized_public_key, public_key_fingerprint
@@ -27,44 +29,98 @@ def check_auth(repo: GitRepository, *, manager: CommandManager) -> None:
     )
 
 
+def _deploy_keys_endpoint(repo: GitRepository) -> str:
+    return f'repos/{repo.owner}/{repo.name}/keys'
+
+
+def _parse_deploy_key(raw: object) -> ProviderDeployKey:
+    if not isinstance(raw, dict):
+        raise AIVMError('GitHub returned an unexpected deploy-key response.')
+    item = cast(dict[str, object], raw)
+    read_only = item.get('read_only', item.get('readOnly', True))
+    return ProviderDeployKey(
+        key_id=str(item.get('id', '')).strip(),
+        key=str(item.get('key', '')).strip(),
+        title=str(item.get('title', '')).strip(),
+        read_only=bool(read_only),
+    )
+
+
+def _decode_json(result: CommandResult, *, label: str) -> object:
+    try:
+        return json.loads(result.stdout or 'null')
+    except json.JSONDecodeError as ex:
+        raise AIVMError(f'gh returned invalid JSON while {label}.') from ex
+
+
+def _is_not_found(result: CommandResult) -> bool:
+    detail = f'{result.stderr}\n{result.stdout}'
+    return bool(re.search(r'\bHTTP\s+404\b', detail, re.IGNORECASE))
+
+
 def list_deploy_keys(
     repo: GitRepository, *, manager: CommandManager
 ) -> list[ProviderDeployKey]:
+    """List every deploy key using GitHub REST pagination."""
     result = manager.run(
         [
             'gh',
-            'repo',
-            'deploy-key',
-            'list',
-            *_repo_args(repo),
-            '--json',
-            'id,key,readOnly,title',
+            'api',
+            '--hostname',
+            repo.host,
+            '--paginate',
+            '--slurp',
+            f'{_deploy_keys_endpoint(repo)}?per_page=100',
         ],
         sudo=False,
         role='read',
         check=True,
         capture=True,
-        summary=f'List deploy keys for {repo.display}',
+        summary=f'List all deploy keys for {repo.display}',
     )
-    try:
-        raw = json.loads(result.stdout or '[]')
-    except json.JSONDecodeError as ex:
-        raise AIVMError('gh returned invalid deploy-key JSON.') from ex
+    raw = _decode_json(result, label='listing deploy keys')
     if not isinstance(raw, list):
-        raise AIVMError('gh returned an unexpected deploy-key response.')
-    keys: list[ProviderDeployKey] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        keys.append(
-            ProviderDeployKey(
-                key_id=str(item.get('id', '')).strip(),
-                key=str(item.get('key', '')).strip(),
-                title=str(item.get('title', '')).strip(),
-                read_only=bool(item.get('readOnly', True)),
-            )
-        )
-    return keys
+        raise AIVMError('gh returned an unexpected paginated deploy-key response.')
+
+    # ``gh api --paginate --slurp`` returns one array per response page. Accept
+    # a flat array as well so recorded command fixtures can remain simple.
+    items: list[object]
+    if all(isinstance(page, list) for page in raw):
+        pages = cast(list[list[object]], raw)
+        items = [item for page in pages for item in page]
+    elif all(isinstance(item, dict) for item in raw):
+        items = cast(list[object], raw)
+    else:
+        raise AIVMError('gh returned malformed paginated deploy-key data.')
+    return [_parse_deploy_key(item) for item in items]
+
+
+def get_deploy_key(
+    repo: GitRepository, key_id: str, *, manager: CommandManager
+) -> ProviderDeployKey | None:
+    """Fetch one recorded deploy key directly by provider id."""
+    cmd = [
+        'gh',
+        'api',
+        '--hostname',
+        repo.host,
+        f'{_deploy_keys_endpoint(repo)}/{key_id}',
+    ]
+    result = manager.run(
+        cmd,
+        sudo=False,
+        role='read',
+        check=False,
+        capture=True,
+        summary=f'Inspect deploy key {key_id} for {repo.display}',
+    )
+    if result.code != 0:
+        if _is_not_found(result):
+            return None
+        raise CommandError(cmd, result)
+    return _parse_deploy_key(
+        _decode_json(result, label=f'inspecting deploy key {key_id}')
+    )
 
 
 def find_added_key_by_public_key(
@@ -127,15 +183,16 @@ def select_recorded_provider_key(
                 'GitHub returned duplicate deploy-key id '
                 f'{entry.provider_key_id!r}.'
             )
-        if by_id:
-            match = by_id[0]
-            actual = _provider_key_fingerprint(match)
-            if actual != entry.key_fingerprint:
-                raise AIVMError(
-                    f'GitHub key id {entry.provider_key_id} no longer matches '
-                    'the fingerprint recorded by AIVM; refusing to touch it.'
-                )
-            return match
+        if not by_id:
+            return None
+        match = by_id[0]
+        actual = _provider_key_fingerprint(match)
+        if actual != entry.key_fingerprint:
+            raise AIVMError(
+                f'GitHub key id {entry.provider_key_id} no longer matches '
+                'the fingerprint recorded by AIVM; refusing to touch it.'
+            )
+        return match
 
     by_fingerprint = [
         item
@@ -168,6 +225,13 @@ def find_recorded_provider_key(
     manager: CommandManager,
 ) -> ProviderDeployKey | None:
     """Inspect the provider using the immutable identity recorded by AIVM."""
+    if entry.provider_key_id:
+        exact = get_deploy_key(
+            repo, entry.provider_key_id, manager=manager
+        )
+        if exact is None:
+            return None
+        return select_recorded_provider_key(entry, [exact])
     keys = list_deploy_keys(repo, manager=manager)
     return select_recorded_provider_key(entry, keys)
 

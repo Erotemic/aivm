@@ -202,19 +202,22 @@ def _ensure_guest_includes(
         'mkdir -p "$HOME/.ssh/aivm.d" "$HOME/.config/aivm"; '
         'ssh_config="$HOME/.ssh/config"; '
         'if [ -L "$ssh_config" ]; then '
+        f'if ! grep -Fqx {ssh_include_q} "$ssh_config" 2>/dev/null; then '
         'printf "%s\\n" '
-        '"AIVM refuses to replace symlinked ~/.ssh/config; add the managed include manually or replace the symlink." >&2; '
+        '"AIVM refuses to replace symlinked ~/.ssh/config; add the exact managed include to its target or replace the symlink." >&2; '
         'exit 78; fi; '
-        'if [ -e "$ssh_config" ] && [ ! -f "$ssh_config" ]; then '
+        'elif [ -e "$ssh_config" ] && [ ! -f "$ssh_config" ]; then '
         'printf "%s\\n" '
         '"AIVM requires ~/.ssh/config to be a regular file." >&2; '
-        'exit 78; fi; '
+        'exit 78; '
+        'else '
         'touch "$ssh_config"; chmod 600 "$ssh_config"; '
         f'if ! grep -Fqx {ssh_include_q} "$ssh_config"; then '
         'tmp="$(mktemp)"; '
         f'printf "%s\\n" {ssh_include_q} > "$tmp"; '
         'cat "$ssh_config" >> "$tmp"; '
         'mv "$tmp" "$ssh_config"; chmod 600 "$ssh_config"; fi; '
+        'fi; '
         'if ! git config --global --get-all include.path 2>/dev/null '
         f'| grep -Fqx {git_include_q}; then '
         f'git config --global --add include.path {git_include_q}; fi'
@@ -244,6 +247,10 @@ def reconcile_guest_credentials(
         why='Install scoped keys and regenerate AIVM-managed Git/SSH config.',
         approval_scope=f'vm-credentials:{cfg.vm.name}',
     ):
+        # Refuse an incompatible SSH config before installing private key
+        # material. Symlinked configs are accepted only when their referent
+        # already contains the exact managed include.
+        _ensure_guest_includes(cfg, ip, manager=manager)
         if private_key is not None:
             cred_id, key_text = private_key
             _install_guest_file(
@@ -273,7 +280,6 @@ def reconcile_guest_credentials(
             manager=manager,
             label='managed Git credential config',
         )
-        _ensure_guest_includes(cfg, ip, manager=manager)
         if remove_credential_id:
             rel_q = shlex.quote(
                 guest_credential_dir_relpath(remove_credential_id)
