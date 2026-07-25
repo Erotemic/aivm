@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
-from ..privilege import path_needs_sudo
+from ..privilege import path_needs_sudo, path_read_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..vm import attach_vm_share, vm_share_mappings
 from ..vm.paths import shared_root_host_dir as _shared_root_host_dir
@@ -177,7 +177,12 @@ def _probe_findmnt_target_source(target: Path) -> FindmntTargetInfo:
                     '--mountpoint',
                     str(target),
                 ],
-                sudo=path_needs_sudo(target),
+                # findmnt reads /proc/self/mountinfo and only has to resolve
+                # the target path, so gate on traversability. Gating on
+                # writability would escalate every `ro` attachment's probe
+                # for good -- and this probe exists precisely to decide
+                # whether a privileged repair is needed at all.
+                sudo=path_read_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,
@@ -714,7 +719,7 @@ def _detach_shared_root_host_bind(
         mounted = (
             mgr.run(
                 ['mountpoint', '-q', str(target)],
-                sudo=path_needs_sudo(target),
+                sudo=path_read_needs_sudo(target),
                 role='read',
                 check=False,
                 capture=True,

@@ -24,9 +24,14 @@ feature requesting it. The helpers here answer the per-family question
   virt-install). Unprivileged access to ``qemu:///system`` works when the
   user is in the ``libvirt`` group (polkit rule shipped by
   libvirt-daemon-system).
-* :func:`path_needs_sudo` -- host filesystem operations under the VM
-  image/state tree. Unprivileged when the target (or its nearest existing
-  ancestor) is writable by the current user.
+* :func:`path_needs_sudo` -- host filesystem operations that *modify* the
+  VM image/state tree. Unprivileged when the target (or its nearest
+  existing ancestor) is writable by the current user.
+* :func:`path_read_needs_sudo` -- host filesystem operations that only
+  *inspect* a path (``findmnt``, ``mountpoint``). Writability is the wrong
+  question for these: a read-only bind target is unwritable yet perfectly
+  inspectable, and gating reads on write access escalates commands that
+  would have succeeded unprivileged.
 * :func:`file_write_needs_sudo` -- in-place writes to an existing file
   (for example ``qemu-img resize``). Judged by the file's own mode rather
   than its parent directory.
@@ -75,8 +80,10 @@ __all__ = [
     'virsh_needs_sudo',
     'sudo_allowed',
     'path_needs_sudo',
+    'path_read_needs_sudo',
     'file_write_needs_sudo',
     'require_sudo_allowed',
+    'user_can_read_path',
     'user_can_write_path',
     'user_owns_path',
     'user_can_write_file',
@@ -213,14 +220,58 @@ def user_can_write_path(path: Path | str) -> bool:
     return os.access(anchor, os.W_OK | os.X_OK)
 
 
+def user_can_read_path(path: Path | str) -> bool:
+    """Return True when the user can inspect ``path`` unprivileged.
+
+    Inspection needs the path *resolvable*, not writable. A directory must
+    be traversable; an existing file must be readable and sit in a
+    traversable parent; a missing target needs a traversable nearest
+    existing ancestor.
+
+    Kept distinct from :func:`user_can_write_path` because the two answers
+    diverge exactly where it matters: a bind target mounted ``ro`` (or any
+    root-owned directory with the usual ``0755``) fails ``W_OK`` while
+    ``findmnt`` and ``mountpoint`` read it happily as an ordinary user.
+    """
+    target = Path(path)
+    anchor = nearest_existing_ancestor(target)
+    if anchor is None:
+        return False
+    st = _stat_or_none(anchor)
+    if st is None:
+        return False
+    if stat_mod.S_ISDIR(st.st_mode):
+        return os.access(anchor, os.X_OK)
+    # A non-directory anchor is the target itself (reading it needs R_OK) or
+    # a file standing where an ancestor directory was expected, in which
+    # case nothing below it is reachable at all.
+    if anchor != target:
+        return False
+    return os.access(anchor, os.R_OK) and os.access(anchor.parent, os.X_OK)
+
+
 def path_needs_sudo(path: Path | str) -> bool:
-    """Return whether filesystem operations on ``path`` should use sudo."""
+    """Return whether filesystem operations on ``path`` should use sudo.
+
+    For state-changing operations. Read-only probes want
+    :func:`path_read_needs_sudo`.
+    """
     mode = current_privilege_mode()
     if mode == PrivilegeMode.ALWAYS:
         return True
     if mode == PrivilegeMode.NEVER:
         return False
     return not user_can_write_path(path)
+
+
+def path_read_needs_sudo(path: Path | str) -> bool:
+    """Return whether *inspecting* ``path`` should use sudo."""
+    mode = current_privilege_mode()
+    if mode == PrivilegeMode.ALWAYS:
+        return True
+    if mode == PrivilegeMode.NEVER:
+        return False
+    return not user_can_read_path(path)
 
 
 def user_can_write_file(path: Path | str) -> bool:

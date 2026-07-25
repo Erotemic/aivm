@@ -568,6 +568,53 @@ def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
     ), rec.calls
 
 
+def test_shared_root_host_bind_probes_a_read_only_target_without_sudo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An ``ro`` bind target is unwritable but still probeable unprivileged.
+
+    An ``access = ro`` attachment gets its host target remounted
+    ``bind,ro``, after which ``os.access(W_OK)`` fails for good. Judging the
+    read-only ``findmnt`` by writability escalated it on every single run --
+    a password prompt bought by the very probe whose job is to decide
+    whether privileged repair is needed. ``0555`` reproduces the permission
+    shape of a ``ro`` bind without needing a real mount.
+    """
+    if os.geteuid() == 0:
+        pytest.skip('root can write through any mode bits')
+
+    cfg, source_dir, attachment = _shared_root_attachment(
+        tmp_path, name='vm-ro-target', access=AttachmentAccess.RO
+    )
+    target = (
+        Path(cfg.paths.base_dir)
+        / cfg.vm.name
+        / 'shared-root'
+        / 'hostcode-source'
+    )
+    target.mkdir(parents=True)
+    target.chmod(0o555)
+
+    activate_manager(monkeypatch, yes_sudo=True, yes=True)
+    rec = command_recorder(
+        monkeypatch,
+        {'findmnt -P -n': FakeProc(1)},
+        default=FakeProc(0),
+    )
+    try:
+        _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
+    finally:
+        target.chmod(0o755)
+
+    findmnt_calls = [p for p in rec.calls if 'findmnt' in p]
+    assert findmnt_calls, rec.calls
+    assert not any(p[:1] == ['sudo'] for p in findmnt_calls), rec.calls
+    # The bind itself has no unprivileged form and still escalates.
+    assert any(
+        p[:1] == ['sudo'] and 'mount' in p and '--bind' in p for p in rec.calls
+    ), rec.calls
+
+
 def test_shared_root_host_bind_escalates_mkdir_when_base_dir_needs_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -611,9 +658,10 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     activate_manager(monkeypatch, yes_sudo=False)
     monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
     # The findmnt probe only escalates when the bind target is unreadable
-    # without privileges, which is what a root-owned storage tree means.
+    # without privileges -- a root-owned storage tree with no traversal for
+    # the invoking user.
     monkeypatch.setattr(
-        'aivm.attachments.shared_root.path_needs_sudo', lambda p: True
+        'aivm.attachments.shared_root.path_read_needs_sudo', lambda p: True
     )
     messages = _capture_command_logs(monkeypatch)
     prompts: list[str] = []
