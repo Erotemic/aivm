@@ -53,6 +53,33 @@ def _decode_json(result: CommandResult, *, label: str) -> object:
         raise AIVMError(f'gh returned invalid JSON while {label}.') from ex
 
 
+def _decode_json_stream(result: CommandResult, *, label: str) -> list[object]:
+    """Decode the consecutive JSON documents emitted by ``gh --paginate``.
+
+    Older GitHub CLI releases, including Ubuntu 24.04's packaged version, do
+    not provide ``gh api --slurp``. Without that flag, each response page is
+    written as another complete JSON document. ``raw_decode`` lets us consume
+    that stream without depending on line-oriented formatting.
+    """
+    text = result.stdout or ''
+    decoder = json.JSONDecoder()
+    values: list[object] = []
+    offset = 0
+    while offset < len(text):
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if offset >= len(text):
+            break
+        try:
+            value, offset = decoder.raw_decode(text, offset)
+        except json.JSONDecodeError as ex:
+            raise AIVMError(f'gh returned invalid JSON while {label}.') from ex
+        values.append(value)
+    if not values:
+        raise AIVMError(f'gh returned no JSON while {label}.')
+    return values
+
+
 def _is_not_found(result: CommandResult) -> bool:
     detail = f'{result.stderr}\n{result.stdout}'
     return bool(re.search(r'\bHTTP\s+404\b', detail, re.IGNORECASE))
@@ -61,7 +88,7 @@ def _is_not_found(result: CommandResult) -> bool:
 def list_deploy_keys(
     repo: GitRepository, *, manager: CommandManager
 ) -> list[ProviderDeployKey]:
-    """List every deploy key using GitHub REST pagination."""
+    """List every deploy key using version-compatible REST pagination."""
     result = manager.run(
         [
             'gh',
@@ -69,7 +96,6 @@ def list_deploy_keys(
             '--hostname',
             repo.host,
             '--paginate',
-            '--slurp',
             f'{_deploy_keys_endpoint(repo)}?per_page=100',
         ],
         sudo=False,
@@ -78,20 +104,14 @@ def list_deploy_keys(
         capture=True,
         summary=f'List all deploy keys for {repo.display}',
     )
-    raw = _decode_json(result, label='listing deploy keys')
-    if not isinstance(raw, list):
-        raise AIVMError('gh returned an unexpected paginated deploy-key response.')
-
-    # ``gh api --paginate --slurp`` returns one array per response page. Accept
-    # a flat array as well so recorded command fixtures can remain simple.
-    items: list[object]
-    if all(isinstance(page, list) for page in raw):
-        pages = cast(list[list[object]], raw)
-        items = [item for page in pages for item in page]
-    elif all(isinstance(item, dict) for item in raw):
-        items = cast(list[object], raw)
-    else:
-        raise AIVMError('gh returned malformed paginated deploy-key data.')
+    pages = _decode_json_stream(result, label='listing deploy keys')
+    items: list[object] = []
+    for page in pages:
+        if not isinstance(page, list):
+            raise AIVMError(
+                'gh returned an unexpected paginated deploy-key response.'
+            )
+        items.extend(cast(list[object], page))
     return [_parse_deploy_key(item) for item in items]
 
 
@@ -183,16 +203,15 @@ def select_recorded_provider_key(
                 'GitHub returned duplicate deploy-key id '
                 f'{entry.provider_key_id!r}.'
             )
-        if not by_id:
-            return None
-        match = by_id[0]
-        actual = _provider_key_fingerprint(match)
-        if actual != entry.key_fingerprint:
-            raise AIVMError(
-                f'GitHub key id {entry.provider_key_id} no longer matches '
-                'the fingerprint recorded by AIVM; refusing to touch it.'
-            )
-        return match
+        if by_id:
+            match = by_id[0]
+            actual = _provider_key_fingerprint(match)
+            if actual != entry.key_fingerprint:
+                raise AIVMError(
+                    f'GitHub key id {entry.provider_key_id} no longer matches '
+                    'the fingerprint recorded by AIVM; refusing to touch it.'
+                )
+            return match
 
     by_fingerprint = [
         item
@@ -229,9 +248,11 @@ def find_recorded_provider_key(
         exact = get_deploy_key(
             repo, entry.provider_key_id, manager=manager
         )
-        if exact is None:
-            return None
-        return select_recorded_provider_key(entry, [exact])
+        if exact is not None:
+            return select_recorded_provider_key(entry, [exact])
+        # GitHub deliberately uses 404 for some authorization failures on
+        # private resources. Corroborate an exact-key 404 with a successful,
+        # fully paginated collection read before concluding provider absence.
     keys = list_deploy_keys(repo, manager=manager)
     return select_recorded_provider_key(entry, keys)
 

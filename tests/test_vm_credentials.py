@@ -438,6 +438,7 @@ class _GitHubManager(CommandManager):
         exact: dict[str, object] | None = None,
         exact_missing: bool = False,
         exact_error: str = '',
+        list_error: str = '',
     ) -> None:
         super().__init__(yes=True)
         self.public_key = public_key
@@ -445,6 +446,7 @@ class _GitHubManager(CommandManager):
         self.exact = exact
         self.exact_missing = exact_missing
         self.exact_error = exact_error
+        self.list_error = list_error
         self.deleted = False
         self.calls: list[list[str]] = []
 
@@ -466,7 +468,6 @@ class _GitHubManager(CommandManager):
         del (
             sudo,
             role,
-            check,
             capture,
             text,
             input_text,
@@ -480,18 +481,30 @@ class _GitHubManager(CommandManager):
             import json
 
             if '--paginate' in cmd:
-                pages = self.pages or [
-                    [
-                        {
-                            'id': 17,
-                            'key': self.public_key,
-                            'read_only': False,
-                            'title': 'managed-key',
-                        }
+                if self.list_error:
+                    result = CommandResult(
+                        code=1, stdout='', stderr=self.list_error
+                    )
+                    if check:
+                        raise CommandError(list(cmd), result)
+                    return result
+                if self.deleted:
+                    pages = [[]]
+                else:
+                    pages = self.pages or [
+                        [
+                            {
+                                'id': 17,
+                                'key': self.public_key,
+                                'read_only': False,
+                                'title': 'managed-key',
+                            }
+                        ]
                     ]
-                ]
                 return CommandResult(
-                    code=0, stdout=json.dumps(pages), stderr=''
+                    code=0,
+                    stdout='\n'.join(json.dumps(page) for page in pages),
+                    stderr='',
                 )
             if self.exact_error:
                 return CommandResult(
@@ -542,7 +555,7 @@ def test_github_backend_uses_repo_deploy_key_cli(tmp_path: Path) -> None:
     assert discovery[:5] == [
         'gh', 'api', '--hostname', 'github.com', '--paginate'
     ]
-    assert '--slurp' in discovery
+    assert '--slurp' not in discovery
     assert manager.calls[-1][:5] == [
         'gh',
         'repo',
@@ -597,16 +610,72 @@ def test_recorded_provider_key_uses_exact_id_endpoint() -> None:
     ]
 
 
-def test_recorded_provider_key_exact_404_does_not_fallback() -> None:
+def test_recorded_provider_key_exact_404_requires_collection_confirmation() -> None:
     entry = _entry()
-    manager = _GitHubManager(_public_key(), exact_missing=True)
+    manager = _GitHubManager(
+        _public_key(), exact_missing=True, pages=[[]]
+    )
     repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
 
     assert (
         github.find_recorded_provider_key(repo, entry, manager=manager) is None
     )
-    assert len(manager.calls) == 1
+    assert len(manager.calls) == 2
     assert '--paginate' not in manager.calls[0]
+    assert '--paginate' in manager.calls[1]
+
+
+def test_recorded_provider_key_exact_404_finds_key_in_collection() -> None:
+    entry = _entry()
+    target = {
+        'id': int(entry.provider_key_id),
+        'key': _public_key(),
+        'read_only': False,
+        'title': entry.provider_key_title,
+    }
+    manager = _GitHubManager(
+        _public_key(), exact_missing=True, pages=[[target]]
+    )
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    result = github.find_recorded_provider_key(repo, entry, manager=manager)
+
+    assert result is not None
+    assert result.key_id == entry.provider_key_id
+    assert len(manager.calls) == 2
+    assert '--paginate' in manager.calls[1]
+
+
+def test_recorded_provider_key_exact_404_detects_id_drift() -> None:
+    entry = _entry()
+    target = {
+        'id': 999,
+        'key': _public_key(),
+        'read_only': False,
+        'title': entry.provider_key_title,
+    }
+    manager = _GitHubManager(
+        _public_key(), exact_missing=True, pages=[[target]]
+    )
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    result = github.find_recorded_provider_key(repo, entry, manager=manager)
+
+    assert result is not None
+    assert result.key_id == '999'
+
+
+def test_recorded_provider_key_exact_404_collection_failure_is_not_absence() -> None:
+    entry = _entry()
+    manager = _GitHubManager(
+        _public_key(),
+        exact_missing=True,
+        list_error='gh: authentication required (HTTP 404)',
+    )
+    repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
+
+    with pytest.raises(CommandError, match='authentication required'):
+        github.find_recorded_provider_key(repo, entry, manager=manager)
 
 
 def test_recorded_provider_key_non_404_failure_is_not_absence() -> None:
@@ -658,7 +727,7 @@ def test_recorded_provider_key_without_id_uses_all_pages() -> None:
         'github.com',
         '--paginate',
     ]
-    assert '--slurp' in call
+    assert '--slurp' not in call
     assert call[-1] == 'repos/Kitware/kwimage/keys?per_page=100'
 
 
@@ -854,12 +923,17 @@ def test_revoke_uses_exact_provider_id_lookup(
     )
 
     api_calls = [call for call in manager.calls if call[:2] == ['gh', 'api']]
-    assert len(api_calls) == 2
-    assert all('--paginate' not in call for call in api_calls)
+    assert len(api_calls) == 3
+    exact_calls = [call for call in api_calls if '--paginate' not in call]
+    assert len(exact_calls) == 2
     assert all(
         call[-1].endswith(f'/keys/{entry.provider_key_id}')
-        for call in api_calls
+        for call in exact_calls
     )
+    [collection_call] = [
+        call for call in api_calls if '--paginate' in call
+    ]
+    assert '--slurp' not in collection_call
     assert any(
         call[:5]
         == ['gh', 'repo', 'deploy-key', 'delete', entry.provider_key_id]
