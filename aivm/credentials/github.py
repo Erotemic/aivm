@@ -54,33 +54,11 @@ def _provider_failure_reason(text: str, status: str) -> str:
     return f'{detail} (HTTP {status})'
 
 
-def _repository_is_visible(
-    repo: GitRepository, *, manager: CommandManager
-) -> bool:
-    """Whether this gh identity can see the repository at all."""
-    result = manager.run(
-        [
-            'gh',
-            'api',
-            '--hostname',
-            repo.host,
-            f'repos/{repo.owner}/{repo.name}',
-        ],
-        sudo=False,
-        role='read',
-        check=False,
-        capture=True,
-        summary=f'Check repository visibility for {repo.display}',
-    )
-    return result.code == 0
-
-
 def _classify_provider_failure(
     ex: CommandError,
     *,
     action: str,
     repo: GitRepository,
-    manager: CommandManager,
     permission_only: bool = False,
 ) -> AIVMError | None:
     """Turn a failed ``gh`` command into a typed, actionable provider error.
@@ -104,26 +82,19 @@ def _classify_provider_failure(
         )
     if status == '404':
         # On a private repository GitHub answers 404 rather than 403 so a
-        # response cannot confirm that the repository exists. That makes the
-        # status alone ambiguous between "no such repository" and "not an
-        # admin of it", so ask whether this identity can see the repository at
-        # all and report whichever it actually is.
-        if _repository_is_visible(repo, manager=manager):
-            return ProviderPermissionError(
-                f'GitHub refused to {action} for {repo.display}: {detail}. '
-                'The repository is visible to this account, so this is a '
-                'permission failure reported as 404: deploy-key endpoints '
-                'require admin permission on the repository, and GitHub '
-                'answers 404 instead of 403 on private repositories rather '
-                'than reveal what exists.'
-            )
-        return AIVMError(
-            f'GitHub could not find {repo.display} while trying to {action}: '
-            f'{detail}. The repository is not visible to the account gh is '
-            'signed in as. Check the name and owner (`gh repo view '
-            f'{repo.owner}/{repo.name}`), confirm you are signed in as the '
-            'right account (`gh auth status`), and for a SAML organization '
-            'authorize the credential for that organization.'
+        # response never confirms what exists, which leaves the status
+        # ambiguous between "not an admin" and "no such repository". Report
+        # both rather than probing: an extra probe cannot be worth the risk of
+        # leaving another failed command behind, and the caller hands the key
+        # over either way.
+        return ProviderPermissionError(
+            f'GitHub refused to {action} for {repo.display}: {detail}. '
+            'Deploy-key endpoints require admin permission on the repository, '
+            'and GitHub answers 404 instead of 403 on private repositories '
+            'rather than reveal what exists. So either this account is not an '
+            f'admin of {repo.display}, or it cannot see that repository at '
+            f'all -- check `gh repo view {repo.owner}/{repo.name}`, '
+            '`gh auth status`, and SAML authorization for the organization.'
         )
     if permission_only:
         return None
@@ -235,7 +206,6 @@ def list_deploy_keys(
             ex,
             action='read deploy keys',
             repo=repo,
-            manager=manager,
             permission_only=True,
         )
         if failure is None:
@@ -426,7 +396,7 @@ def add_deploy_key(
         )
     except CommandError as ex:
         failure = _classify_provider_failure(
-            ex, action='create a deploy key', repo=repo, manager=manager
+            ex, action='create a deploy key', repo=repo
         )
         if failure is None:
             raise
