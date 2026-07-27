@@ -16,7 +16,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.cli.config.lint import _lint_store_text
-from aivm.cli.vm_creds import _resolve_credential_selector
+from aivm.cli.vm_creds import VMCredsAddCLI, _resolve_credential_selector
 from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI, VMUpCLI
 from aivm.commands import (
     CommandError,
@@ -59,6 +59,7 @@ from aivm.credentials.schema import (
     CREDENTIAL_STATE_REVOCATION_PENDING,
     credential_allows_vm_delete,
     credential_is_guest_usable,
+    normalize_credential_access,
 )
 from aivm.credentials.service import (
     abandon_repository_credential,
@@ -809,7 +810,7 @@ def test_grant_service_persists_active_credential(
         store,
         path,
         GitRepository('github.com', 'Kitware', 'kwimage'),
-        write=True,
+        access='write',
         manager=CommandManager(yes=True),
     )
 
@@ -1022,7 +1023,8 @@ def test_creds_add_dry_run_and_help_tree(
             'creds',
             'add',
             'Kitware/kwimage',
-            '--write',
+            '--access',
+            'write',
             '--dry_run',
             '--yes',
             '--config',
@@ -1041,6 +1043,65 @@ def test_creds_add_dry_run_and_help_tree(
     assert 'aivm vm creds - Manage scoped credentials installed in a VM.' in tree
     assert 'aivm vm creds add - Grant a VM repository access' in tree
     assert 'aivm vm creds abandon - Forget an inaccessible provider grant' in tree
+
+
+@pytest.mark.parametrize(
+    'requested, expected',
+    [
+        pytest.param('read', 'read', id='read'),
+        pytest.param('write', 'write', id='write'),
+        pytest.param('ro', 'read', id='ro-alias'),
+        pytest.param('RW', 'write', id='rw-alias-uppercase'),
+        pytest.param('read-only', 'read', id='read-only-alias'),
+    ],
+)
+def test_normalize_credential_access_accepts_known_spellings(
+    requested: str, expected: str
+) -> None:
+    assert normalize_credential_access(requested) == expected
+
+
+@pytest.mark.parametrize('requested', ['', 'admin', 'w', 'none'])
+def test_normalize_credential_access_rejects_unknown_values(
+    requested: str,
+) -> None:
+    with pytest.raises(AIVMError, match='Unsupported credential access'):
+        normalize_credential_access(requested)
+
+
+def test_creds_add_defaults_to_read_access(
+    cfg_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Omitting --access must never widen a grant to push rights."""
+    rc = run_cli(
+        [
+            'vm',
+            'creds',
+            'add',
+            'Kitware/kwimage',
+            '--dry_run',
+            '--yes',
+            '--config',
+            str(cfg_path),
+        ]
+    )
+
+    assert rc == 0
+    assert 'Access:      read' in capsys.readouterr().out
+
+
+def test_creds_add_rejects_unknown_access_value(cfg_path: Path) -> None:
+    # kwconf only warns when a programmatic call leaves the declared Literal,
+    # so the grant path itself has to refuse the value.
+    with pytest.raises(AIVMError, match='Unsupported credential access'):
+        VMCredsAddCLI.main(
+            argv=False,
+            repository='Kitware/kwimage',
+            access='admin',
+            dry_run=True,
+            yes=True,
+            config=str(cfg_path),
+        )
 
 
 def test_vm_delete_refuses_to_orphan_credentials(
@@ -1698,7 +1759,7 @@ def test_grant_refuses_to_replace_missing_recorded_keypair(
             load_store(path),
             path,
             repo,
-            write=True,
+            access='write',
             manager=CommandManager(yes=True),
         )
 

@@ -422,9 +422,12 @@ VM repository credentials
 -------------------------
 
 AIVM can grant one VM access to one GitHub repository with a dedicated deploy
-key. Read-only is the default; ``--write`` explicitly enables pushes. The
-host's ``gh`` login is used only to register or revoke the public key and is
-never copied into the guest.
+key. ``--access`` selects ``read`` (the default) or ``write``; only ``write``
+enables pushes. A credential's access is fixed once granted -- GitHub cannot
+change a deploy key's access in place -- so switching requires
+``creds revoke`` followed by a new ``creds add``. The host's ``gh`` login is
+used only to register or revoke the public key and is never copied into the
+guest.
 
 .. code-block:: bash
 
@@ -436,11 +439,13 @@ never copied into the guest.
    aivm vm creds setup --check
    aivm vm creds setup Kitware/kwimage --check
 
-   # Infer the repository from the current checkout and the VM from AIVM context.
-   aivm vm creds add . --write
+   # Infer the repository from the current checkout and the VM from AIVM
+   # context. Without --access this grants read-only access.
+   aivm vm creds add .
+   aivm vm creds add . --access write
 
    # Or name both explicitly.
-   aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --write
+   aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --access write
 
    aivm vm creds list --vm aivm-2404-workstation
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation

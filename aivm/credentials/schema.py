@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal, Protocol
 
+from ..errors import AIVMError
+
 CredentialKind = Literal['github-deploy-key']
 CredentialAccess = Literal['read', 'write']
 CredentialState = Literal[
@@ -43,6 +45,38 @@ CREDENTIAL_CLEANUP_STATES: frozenset[str] = frozenset(
         CREDENTIAL_STATE_ABANDON_PENDING,
     }
 )
+
+
+_CREDENTIAL_ACCESS_ALIASES: dict[str, CredentialAccess] = {
+    'ro': CREDENTIAL_ACCESS_READ,
+    'readonly': CREDENTIAL_ACCESS_READ,
+    'read-only': CREDENTIAL_ACCESS_READ,
+    'read_only': CREDENTIAL_ACCESS_READ,
+    'rw': CREDENTIAL_ACCESS_WRITE,
+    'readwrite': CREDENTIAL_ACCESS_WRITE,
+    'read-write': CREDENTIAL_ACCESS_WRITE,
+    'read_write': CREDENTIAL_ACCESS_WRITE,
+}
+
+
+def normalize_credential_access(value: object) -> CredentialAccess:
+    """Normalize a requested access level, rejecting anything unrecognized.
+
+    ``kwconf`` only warns when a programmatic call passes a value outside the
+    declared ``Literal``, so this is the gate that keeps an unrecognized
+    access level from reaching the provider as a silent grant.
+    """
+    raw = str(value or '').strip().lower()
+    resolved = _CREDENTIAL_ACCESS_ALIASES.get(raw, raw)
+    if resolved not in VALID_CREDENTIAL_ACCESS:
+        allowed = ', '.join(sorted(VALID_CREDENTIAL_ACCESS))
+        raise AIVMError(
+            f'Unsupported credential access {str(value)!r}; '
+            f'--access must be one of: {allowed}'
+        )
+    return CREDENTIAL_ACCESS_WRITE if resolved == 'write' else (
+        CREDENTIAL_ACCESS_READ
+    )
 
 
 class _HasCredentialState(Protocol):

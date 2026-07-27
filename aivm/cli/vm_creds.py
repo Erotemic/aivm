@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import kwconf
 
@@ -17,9 +17,8 @@ from ..config_store import (
 )
 from ..credentials.resolve import resolve_repository
 from ..credentials.schema import (
-    CREDENTIAL_ACCESS_READ,
-    CREDENTIAL_ACCESS_WRITE,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    normalize_credential_access,
 )
 from ..credentials.service import (
     abandon_repository_credential,
@@ -82,8 +81,13 @@ class VMCredsAddCLI(_BaseCommand):
     remote: str = kwconf.Value(
         'origin', help='Git remote used when resolving a local checkout.'
     )
-    write: bool = kwconf.Flag(
-        False, help='Allow pushes. The default credential is read-only.'
+    access: Literal['read', 'write'] = kwconf.Value(
+        'read',
+        help=(
+            'Credential access: read or write (default: read). write allows '
+            'pushes; changing the access of an existing credential requires '
+            'revoking it first.'
+        ),
     )
     dry_run: bool = kwconf.Flag(
         False, help='Print the grant without creating or installing a key.'
@@ -102,7 +106,7 @@ class VMCredsAddCLI(_BaseCommand):
         repo = resolve_repository(
             args.repository, remote=args.remote, manager=mgr
         )
-        access = CREDENTIAL_ACCESS_WRITE if args.write else CREDENTIAL_ACCESS_READ
+        access = normalize_credential_access(args.access)
         cred_id = credential_id(cfg.vm.name, repo.canonical)
         if args.dry_run:
             print('Repository credential grant')
@@ -130,7 +134,7 @@ class VMCredsAddCLI(_BaseCommand):
                 store,
                 store_path,
                 repo,
-                write=bool(args.write),
+                access=access,
                 manager=mgr,
             )
         print(

@@ -34,14 +34,15 @@ from .guest import (
 )
 from .models import GitRepository, ProviderDeployKey
 from .schema import (
-    CREDENTIAL_ACCESS_READ,
     CREDENTIAL_ACCESS_WRITE,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
     CREDENTIAL_STATE_ABANDON_PENDING,
     CREDENTIAL_STATE_ACTIVE,
     CREDENTIAL_STATE_PENDING,
     CREDENTIAL_STATE_REVOCATION_PENDING,
+    CredentialAccess,
     credential_is_guest_usable,
+    normalize_credential_access,
 )
 from .setup import require_credential_tools
 from .validation import (
@@ -130,11 +131,14 @@ def grant_repository_credential(
     store_path: Path,
     repo: GitRepository,
     *,
-    write: bool,
+    access: CredentialAccess,
     manager: CommandManager,
 ) -> CredentialEntry:
     _require_tools('gh', 'ssh', 'ssh-keygen')
-    access = CREDENTIAL_ACCESS_WRITE if write else CREDENTIAL_ACCESS_READ
+    # Normalize here too: this is the programmatic entry point, and the CLI
+    # Literal is not a hard gate when a caller passes data= directly.
+    access = normalize_credential_access(access)
+    write = access == CREDENTIAL_ACCESS_WRITE
     cred_id = credential_id(cfg.vm.name, repo.canonical)
     existing = find_credential(store, vm_name=cfg.vm.name, credential_id=cred_id)
     if existing is not None and existing.access != access:
