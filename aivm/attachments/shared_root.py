@@ -7,7 +7,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from ..commands import CommandManager
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import path_needs_sudo, path_read_needs_sudo
@@ -445,7 +445,13 @@ def _ensure_shared_root_host_bind(
                 f'mount --bind {source_q} {target_q}'
             )
             mgr.submit(
-                ['bash', '-c', repair_script],
+                [
+                    'bash',
+                    '-c',
+                    Elided(
+                        repair_script, 'stale bind-target repair shell script'
+                    ),
+                ],
                 sudo=True,
                 role='modify',
                 summary='Replace stale host bind target with requested source',

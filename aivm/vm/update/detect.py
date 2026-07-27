@@ -94,153 +94,161 @@ def _vm_update_drift(
     del yes
     notes: list[str] = []
     mgr = CommandManager.current()
-    dominfo = mgr.run(
-        virsh_cmd('dominfo', cfg.vm.name),
-        sudo=False,
-        check=False,
-        capture=True,
-        summary=f'Inspect VM definition {cfg.vm.name} for update planning',
-    )
-    if dominfo.code != 0:
+    with mgr.intent(
+        'Plan VM update',
+        why=(
+            'Read live libvirt, disk, and guest state so the update is '
+            'planned against what the host actually has.'
+        ),
+        role='read',
+    ):
         dominfo = mgr.run(
             virsh_cmd('dominfo', cfg.vm.name),
-            sudo=virsh_needs_sudo(),
+            sudo=False,
             check=False,
             capture=True,
-            summary=f'Inspect VM definition {cfg.vm.name} with sudo for update planning',
+            summary=f'Inspect VM definition {cfg.vm.name} for update planning',
         )
-    if dominfo.code != 0:
-        raise AIVMError(
-            f"VM '{cfg.vm.name}' is not defined (or inaccessible via sudo)."
+        if dominfo.code != 0:
+            dominfo = mgr.run(
+                virsh_cmd('dominfo', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
+                check=False,
+                capture=True,
+                summary=f'Inspect VM definition {cfg.vm.name} with sudo for update planning',
+            )
+        if dominfo.code != 0:
+            raise AIVMError(
+                f"VM '{cfg.vm.name}' is not defined (or inaccessible via sudo)."
+            )
+
+        cur_cpus, cur_mem_mib = _parse_dominfo_hardware(dominfo.stdout)
+        cpus = (
+            (cur_cpus, int(cfg.vm.cpus))
+            if cur_cpus is not None and cur_cpus != int(cfg.vm.cpus)
+            else None
+        )
+        ram_mb = (
+            (cur_mem_mib, int(cfg.vm.ram_mb))
+            if cur_mem_mib is not None and cur_mem_mib != int(cfg.vm.ram_mb)
+            else None
         )
 
-    cur_cpus, cur_mem_mib = _parse_dominfo_hardware(dominfo.stdout)
-    cpus = (
-        (cur_cpus, int(cfg.vm.cpus))
-        if cur_cpus is not None and cur_cpus != int(cfg.vm.cpus)
-        else None
-    )
-    ram_mb = (
-        (cur_mem_mib, int(cfg.vm.ram_mb))
-        if cur_mem_mib is not None and cur_mem_mib != int(cfg.vm.ram_mb)
-        else None
-    )
-
-    state_res = mgr.run(
-        virsh_cmd('domstate', cfg.vm.name),
-        sudo=False,
-        check=False,
-        capture=True,
-    )
-    if state_res.code != 0:
         state_res = mgr.run(
             virsh_cmd('domstate', cfg.vm.name),
-            sudo=virsh_needs_sudo(),
+            sudo=False,
             check=False,
             capture=True,
         )
-    vm_running = (
-        state_res.code == 0
-        and 'running' in (state_res.stdout or '').strip().lower()
-    )
-
-    sudo_confirmed = False
-
-    disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=False)
-    if (
-        any('Could not read domain XML' in note for note in disk_notes)
-        and not sudo_confirmed
-    ):
-        sudo_confirmed = True
-        disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=virsh_needs_sudo())
-    notes.extend(disk_notes)
-    cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
-        disk_path, use_sudo=False
-    )
-    if cur_disk is None:
-        sudo_confirmed = True
-        # qemu-img reads the image file directly; libvirt-group access
-        # (virsh_needs_sudo) is irrelevant here, so escalate outright and
-        # let _qemu_img_virtual_size_bytes gate on sudo_allowed().
-        cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
-            disk_path, use_sudo=True
+        if state_res.code != 0:
+            state_res = mgr.run(
+                virsh_cmd('domstate', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
+                check=False,
+                capture=True,
+            )
+        vm_running = (
+            state_res.code == 0
+            and 'running' in (state_res.stdout or '').strip().lower()
         )
-    if cur_disk is None:
+
+        sudo_confirmed = False
+
+        disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=False)
         if (
-            qemu_img_err
-            and 'failed to get shared "write" lock' in qemu_img_err.lower()
+            any('Could not read domain XML' in note for note in disk_notes)
+            and not sudo_confirmed
         ):
-            notes.append(
-                'qemu-img could not inspect disk while VM was running (shared write lock); falling back to virsh domblkinfo.'
-            )
-        domblk = _virsh_domblk_capacity_bytes(
-            cfg, str(disk_path), use_sudo=bool(sudo_confirmed)
-        )
-        if domblk is None and not sudo_confirmed:
             sudo_confirmed = True
-            domblk = _virsh_domblk_capacity_bytes(
-                cfg, str(disk_path), use_sudo=virsh_needs_sudo()
+            disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=virsh_needs_sudo())
+        notes.extend(disk_notes)
+        cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
+            disk_path, use_sudo=False
+        )
+        if cur_disk is None:
+            sudo_confirmed = True
+            # qemu-img reads the image file directly; libvirt-group access
+            # (virsh_needs_sudo) is irrelevant here, so escalate outright and
+            # let _qemu_img_virtual_size_bytes gate on sudo_allowed().
+            cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
+                disk_path, use_sudo=True
             )
-        cur_disk = domblk
-    desired_disk = int(cfg.vm.disk_gb) * (1024**3)
-    disk_bytes = (
-        (cur_disk, desired_disk)
-        if cur_disk is not None and cur_disk != desired_disk
-        else None
-    )
-    if cur_disk is None:
-        notes.append(f'Could not determine disk size from {disk_path}.')
+        if cur_disk is None:
+            if (
+                qemu_img_err
+                and 'failed to get shared "write" lock' in qemu_img_err.lower()
+            ):
+                notes.append(
+                    'qemu-img could not inspect disk while VM was running (shared write lock); falling back to virsh domblkinfo.'
+                )
+            domblk = _virsh_domblk_capacity_bytes(
+                cfg, str(disk_path), use_sudo=bool(sudo_confirmed)
+            )
+            if domblk is None and not sudo_confirmed:
+                sudo_confirmed = True
+                domblk = _virsh_domblk_capacity_bytes(
+                    cfg, str(disk_path), use_sudo=virsh_needs_sudo()
+                )
+            cur_disk = domblk
+        desired_disk = int(cfg.vm.disk_gb) * (1024**3)
+        disk_bytes = (
+            (cur_disk, desired_disk)
+            if cur_disk is not None and cur_disk != desired_disk
+            else None
+        )
+        if cur_disk is None:
+            notes.append(f'Could not determine disk size from {disk_path}.')
 
-    xml = mgr.run(
-        virsh_cmd('dumpxml', cfg.vm.name),
-        sudo=False,
-        check=False,
-        capture=True,
-        summary=f'Inspect VM XML for {cfg.vm.name} network details',
-    )
-    if xml.code != 0:
-        sudo_confirmed = True
         xml = mgr.run(
             virsh_cmd('dumpxml', cfg.vm.name),
-            sudo=virsh_needs_sudo(),
+            sudo=False,
             check=False,
             capture=True,
-            summary=f'Inspect VM XML for {cfg.vm.name} network details with sudo',
+            summary=f'Inspect VM XML for {cfg.vm.name} network details',
         )
-    if xml.code == 0:
-        live_network = _parse_vm_network_from_dumpxml(xml.stdout)
-        want_network = (cfg.network.name or '').strip()
-        if live_network and want_network and live_network != want_network:
+        if xml.code != 0:
+            sudo_confirmed = True
+            xml = mgr.run(
+                virsh_cmd('dumpxml', cfg.vm.name),
+                sudo=virsh_needs_sudo(),
+                check=False,
+                capture=True,
+                summary=f'Inspect VM XML for {cfg.vm.name} network details with sudo',
+            )
+        if xml.code == 0:
+            live_network = _parse_vm_network_from_dumpxml(xml.stdout)
+            want_network = (cfg.network.name or '').strip()
+            if live_network and want_network and live_network != want_network:
+                notes.append(
+                    f'Network drift detected (live={live_network}, config={want_network}); auto-update is not implemented for network rebinding.'
+                )
+
+        virtiofsd_mode, virtiofs_binary = _virtiofs_binary_drift(
+            cfg, xml.stdout if xml.code == 0 else ''
+        )
+        requested_inode_mode = str(
+            getattr(cfg.virtiofs, 'inode_file_handles', '') or ''
+        ).strip()
+        if requested_inode_mode:
             notes.append(
-                f'Network drift detected (live={live_network}, config={want_network}); auto-update is not implemented for network rebinding.'
+                'virtiofs.inode_file_handles is currently ignored in managed-libvirt mode; '
+                'AIVM no longer installs generated host-side virtiofsd wrappers. '
+                'Existing AIVM wrapper paths will be removed from domain XML.'
             )
 
-    virtiofsd_mode, virtiofs_binary = _virtiofs_binary_drift(
-        cfg, xml.stdout if xml.code == 0 else ''
-    )
-    requested_inode_mode = str(
-        getattr(cfg.virtiofs, 'inode_file_handles', '') or ''
-    ).strip()
-    if requested_inode_mode:
-        notes.append(
-            'virtiofs.inode_file_handles is currently ignored in managed-libvirt mode; '
-            'AIVM no longer installs generated host-side virtiofsd wrappers. '
-            'Existing AIVM wrapper paths will be removed from domain XML.'
+        fd_guard, fd_guard_notes = _fdguard_drift(cfg, vm_running=vm_running)
+        notes.extend(fd_guard_notes)
+
+        return (
+            VMUpdateDrift(
+                cpus=cpus,
+                ram_mb=ram_mb,
+                disk_bytes=disk_bytes,
+                disk_path=str(disk_path),
+                virtiofs_binary=virtiofs_binary,
+                virtiofsd_mode=virtiofsd_mode,
+                fd_guard=fd_guard,
+                notes=tuple(notes),
+            ),
+            vm_running,
         )
-
-    fd_guard, fd_guard_notes = _fdguard_drift(cfg, vm_running=vm_running)
-    notes.extend(fd_guard_notes)
-
-    return (
-        VMUpdateDrift(
-            cpus=cpus,
-            ram_mb=ram_mb,
-            disk_bytes=disk_bytes,
-            disk_path=str(disk_path),
-            virtiofs_binary=virtiofs_binary,
-            virtiofsd_mode=virtiofsd_mode,
-            fd_guard=fd_guard,
-            notes=tuple(notes),
-        ),
-        vm_running,
-    )

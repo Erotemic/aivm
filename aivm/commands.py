@@ -90,6 +90,38 @@ def shell_join(cmd: Sequence[str]) -> str:
     return ' '.join(shlex.quote(str(c)) for c in cmd)
 
 
+#: Length past which an *unmarked* argument is not printed in full. Crossing it
+#: says only that the argument is too long to show: never what it contains.
+#: Payloads worth naming are marked :class:`Elided` at the call site instead.
+PREVIEW_ARG_MAX_LEN = 400
+
+
+class Elided(str):
+    """A command argument shown in previews as a label instead of its value.
+
+    Execution is unaffected. This is a ``str`` subclass, so :func:`shell_join`
+    and :mod:`subprocess` see the real payload; only preview rendering
+    consults the label::
+
+        Elided(script, 'virtiofs guard installer: script, conf, service, timer')
+
+    Hiding is declared here, at the call site that knows what the payload is.
+    The renderer never infers from an argument's shape or position what it
+    holds, because a guess that reads as fact ("<remote command omitted>")
+    teaches the user something the log does not actually know.
+
+    Attributes:
+        label: Short description rendered in place of the value.
+    """
+
+    label: str
+
+    def __new__(cls, value: str, label: str) -> 'Elided':
+        obj = super().__new__(cls, value)
+        obj.label = label
+        return obj
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Immutable result of one executed command.
@@ -857,7 +889,9 @@ class CommandManager:
         # keep it type strict though. Don't do this one yet. Need to think
         # about it more.
         spec = CommandSpec(
-            cmd=tuple(str(c) for c in cmd),
+            # Coerce tokens to str, but never through Elided: str() would drop
+            # the label and silently restore the payload to previews.
+            cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
             sudo=bool(sudo),
             role=role,
             check=bool(check),
@@ -1527,37 +1561,36 @@ class CommandManager:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         return shell_join(cmd)
 
-    def _preview_command(self, spec: CommandSpec, *, max_len: int = 160) -> str:
-        """Return a shortened command preview suitable for logs.
+    def _preview_command(self, spec: CommandSpec) -> str:
+        """Return a command preview suitable for logs.
 
-        Long shell snippets and remote command tails are abbreviated to keep
-        previews readable while still revealing the overall command shape.
+        Arguments render verbatim, so the line stays the command the user
+        would have typed. Two things are not printed in full: an argument the
+        call site marked :class:`Elided`, which renders as its label, and an
+        unmarked argument past :data:`PREVIEW_ARG_MAX_LEN`, which says only
+        that it is too long and asks to be marked.
+
+        Nothing here infers what a payload is. An unmarked payload therefore
+        reads as an unhelpful log line rather than a tidy one, which is the
+        point: it names work still to do, the way an ungrouped command does.
         """
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         display_parts: list[str] = []
-        for idx, part in enumerate(cmd):
+        for part in cmd:
+            if isinstance(part, Elided):
+                display_parts.append(f'<{part.label}>')
+                continue
             text = str(part)
-            prev = str(cmd[idx - 1]) if idx > 0 else ''
-            prev2 = str(cmd[idx - 2]) if idx > 1 else ''
-            if len(text) > 80:
-                if prev == '-c' and prev2 in {'bash', 'sh'}:
-                    text = '<shell script omitted>'
-                elif idx == len(cmd) - 1 and 'ssh' in {
-                    str(cmd[0]),
-                    str(cmd[1]) if len(cmd) > 1 else '',
-                }:
-                    text = '<remote command omitted>'
-                else:
-                    text = text[:57] + '...'
+            if len(text) > PREVIEW_ARG_MAX_LEN:
+                display_parts.append(
+                    f'<unmarked {len(text)}-character argument, too long to '
+                    'show; mark it Elided(value, label) to name it>'
+                )
+                continue
             display_parts.append(shlex.quote(text))
-        preview_cmd = ' '.join(display_parts)
-        if len(preview_cmd) <= max_len:
-            return preview_cmd
-        if max_len <= 3:
-            return preview_cmd[:max_len]
-        return preview_cmd[: max_len - 3] + '...'
+        return ' '.join(display_parts)
 
     def _execute_one(
         self,
@@ -1582,7 +1615,11 @@ class CommandManager:
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
 
-        run_line = shell_join(cmd)
+        # Render what the user could have typed, minus payloads the call site
+        # marked. The literal line stays reachable at DEBUG in this same run,
+        # so following a log never requires re-running the command to read it.
+        run_line = self._preview_command(spec)
+        raw_line = shell_join(cmd)
 
         # Keep mutating or privileged work visible at INFO while leaving
         # unprivileged plumbing at DEBUG unless a plan preview already framed it.
@@ -1598,6 +1635,8 @@ class CommandManager:
             local_log.info('RUN: {}', run_line)
         else:
             emit('RUN: {}', run_line)
+        if raw_line != run_line:
+            local_log.debug('  raw command: {}', raw_line)
 
         try:
             proc = subprocess.run(

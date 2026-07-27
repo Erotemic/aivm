@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandError, CommandManager
+from aivm.commands import CommandError, CommandManager, Elided
 from aivm.errors import (
     AIVMError,
     ApprovalUnavailableError,
@@ -15,7 +15,7 @@ from aivm.errors import (
     SudoRequiredError,
     UserDeclinedError,
 )
-from tests.helpers import FakeProc, patch_command_runtime
+from tests.helpers import FakeProc, capture_logs, patch_command_runtime
 
 
 def test_sudo_command_added_after_plan_approval_requires_confirmation(
@@ -566,3 +566,87 @@ def test_noninteractive_approval_is_unavailable_not_declined(
 
     with pytest.raises(ApprovalUnavailableError):
         mgr.run(['virsh', 'resume', 'vm'], sudo=True, role='modify')
+
+
+def test_marked_payload_logs_its_label_and_still_executes_in_full(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A declared payload is named in the log but sent whole to the process.
+
+    The label is what makes the line readable; the value is what makes the
+    command work. Eliding one must never elide the other.
+    """
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    script = 'set -eu\n' + ('payload' * 200)
+    mgr.run(
+        ['ssh', 'agent@10.0.0.2', Elided(script, 'guest bootstrap script')],
+        sudo=False,
+        role='read',
+    )
+
+    run_lines = [m for m in messages if m.startswith('RUN')]
+    assert run_lines == ['RUN: ssh agent@10.0.0.2 <guest bootstrap script>']
+    assert executed == [['ssh', 'agent@10.0.0.2', script]]
+
+
+def test_unmarked_long_payload_admits_it_is_unmarked(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Length may say a value is unprintable; it may not say what the value is.
+
+    Guessing from shape ("<remote command omitted>") states as fact something
+    the renderer cannot know. Saying the argument is merely unmarked keeps the
+    log honest and names the work that would fix it.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    script = 'payload' * 200
+    mgr.run(['ssh', 'agent@10.0.0.2', script], sudo=False, role='read')
+
+    run_line = next(m for m in messages if m.startswith('RUN'))
+    assert 'unmarked' in run_line
+    assert 'Elided(value, label)' in run_line
+    assert 'payloadpayload' not in run_line
+    assert 'omitted' not in run_line
+
+
+def test_ordinary_command_is_logged_verbatim(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Anything short enough to read prints in full, so it stays copy-pasteable.
+
+    Teaching the equivalent libvirt invocation is the point of the log; a
+    truncated command teaches nothing.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    cmd = [
+        'virsh',
+        '-c',
+        'qemu:///system',
+        'setvcpus',
+        'aivm-2404',
+        '30',
+        '--maximum',
+        '--config',
+    ]
+    mgr.run(cmd, sudo=False, role='read')
+
+    assert 'RUN: ' + ' '.join(cmd) in messages

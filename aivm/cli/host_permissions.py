@@ -27,7 +27,7 @@ from typing import Any
 
 import kwconf
 
-from ..commands import CommandManager
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
@@ -336,7 +336,15 @@ def _adopt_one_tree(
             approval_scope=f'host-permissions-adopt:{tree}',
         ):
             mgr.submit(
-                ['bash', '-c', _adopt_script(tree)],
+                [
+                    'bash',
+                    '-c',
+                    Elided(
+                        _adopt_script(tree),
+                        f'python program adopting {tree} into the '
+                        f'{LIBVIRT_GROUP} group',
+                    ),
+                ],
                 sudo=True,
                 role='modify',
                 check=True,

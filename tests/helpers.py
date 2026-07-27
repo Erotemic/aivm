@@ -161,6 +161,15 @@ class FakeLog:
     def error(self, fmt: str = '', *args: Any, **kw: Any) -> None:
         self._log('error', fmt, *args)
 
+    def opt(self, **kw: Any) -> 'FakeLog':
+        """Mirror loguru's ``opt`` chaining.
+
+        Call sites use it only to fix up caller depth, which does not affect
+        the recorded message.
+        """
+        del kw
+        return self
+
 
 def capture_logs(
     monkeypatch: MonkeyPatch,

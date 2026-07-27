@@ -9,7 +9,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..commands import CommandManager
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..detect import detect_host_timezone
 from ..errors import AIVMError, MissingSSHIdentityError
@@ -368,7 +368,14 @@ def _write_cloud_init(
                 summary='Create cloud-init artifact directory',
             )
             mgr.submit(
-                ['bash', '-c', f"cat > {user_data} <<'EOF'\n{cloud}\nEOF"],
+                [
+                    'bash',
+                    '-c',
+                    Elided(
+                        f"cat > {user_data} <<'EOF'\n{cloud}\nEOF",
+                        f'heredoc writing cloud-init user-data to {user_data}',
+                    ),
+                ],
                 sudo=use_sudo,
                 role='modify',
                 check=True,

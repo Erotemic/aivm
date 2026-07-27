@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import shlex
 
-from ...commands import CommandManager
+from ...commands import CommandManager, Elided
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...fdguard import (
@@ -31,8 +31,15 @@ from ..connectivity import get_ip_cached
 from .models import FdGuardDrift, VMUpdateDrift
 
 
-def _guest_ssh_cmd(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
-    """Build the SSH command that runs ``script`` as one quoted sh -c arg."""
+def _guest_ssh_cmd(
+    cfg: AgentVMConfig, ip: str, script: str, *, label: str
+) -> list[str]:
+    """Build the SSH command that runs ``script`` as one quoted sh -c arg.
+
+    ``label`` names the remote script for previews. These scripts embed
+    base64 file payloads and run to several kilobytes on one line, which is
+    unreadable in a log, so the caller says what the script does instead.
+    """
     ident = require_ssh_identity(cfg.paths.ssh_identity_file)
     return [
         'ssh',
@@ -43,7 +50,7 @@ def _guest_ssh_cmd(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
             batch_mode=True,
         ),
         f'{cfg.vm.user}@{ip}',
-        f'sh -c {shlex.quote(script)}',
+        Elided(f'sh -c {shlex.quote(script)}', label),
     ]
 
 
@@ -69,7 +76,12 @@ def _fdguard_drift(
             'was not verified.',
         )
     res = CommandManager.current().run(
-        _guest_ssh_cmd(cfg, ip, fdguard_probe_script()),
+        _guest_ssh_cmd(
+            cfg,
+            ip,
+            fdguard_probe_script(),
+            label='virtiofs guard probe script',
+        ),
         sudo=False,
         check=False,
         capture=True,
@@ -188,7 +200,15 @@ def _apply_fdguard_drift(
             f'use `aivm vm fdguard --action {fd.action}` directly.'
         )
     CommandManager.current().run(
-        _guest_ssh_cmd(cfg, ip, script),
+        _guest_ssh_cmd(
+            cfg,
+            ip,
+            script,
+            label=(
+                f'virtiofs guard {fd.action} script: guard binary, config, '
+                'systemd service and timer'
+            ),
+        ),
         sudo=False,
         check=True,
         capture=True,

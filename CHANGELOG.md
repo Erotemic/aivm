@@ -73,6 +73,26 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   authenticates against nothing until the provider holds its public half. See
   the policy note in `aivm/credentials/__init__.py`.
 
+### Changed
+* Command previews no longer guess which arguments to hide. A call site that
+  passes a large payload marks it `Elided(value, label)` and the log prints
+  that label; everything else prints verbatim, so the line stays the command
+  the user could have typed. The previous rules inferred from an argument's
+  shape and position -- `bash -c` tails became `<shell script omitted>`, ssh
+  tails `<remote command omitted>` -- which stated as fact something the
+  renderer could not know, and silently truncated any other long argument at
+  57 characters. An unmarked argument past `PREVIEW_ARG_MAX_LEN` now says only
+  that it is too long and asks to be marked, naming the work rather than
+  hiding it. Marked so far: the fdguard guest scripts, the shared-root bind
+  repair script, the libvirt group adoption program, and cloud-init user-data.
+* `RUN:` lines render through the same preview, with the literal command kept
+  at `DEBUG` in the same run. `aivm vm update` previously emitted several
+  kilobytes of base64 on one line when installing the virtiofs fd guard.
+* `aivm vm update` groups its planning probes under one read intent. The
+  `dominfo`, `domstate`, `dumpxml`, `domblkinfo`, and `qemu-img` probes were
+  ungrouped, so each was classified as a state change and prompted separately
+  under a header that called a read-only probe a hypervisor mutation.
+
 ### Fixed
 * Reading a failed command handle no longer executes an unrelated queued
   command. A raise skipped the bookkeeping that resolves the handle, so it
