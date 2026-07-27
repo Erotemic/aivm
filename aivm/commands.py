@@ -1639,7 +1639,11 @@ class CommandManager:
         return self._render_preview(spec)[0]
 
     def _announce_omissions(
-        self, omissions: Sequence[str], *, _stacklevel: int = 1
+        self,
+        omissions: Sequence[str],
+        *,
+        quiet: bool = False,
+        _stacklevel: int = 1,
     ) -> None:
         """Say plainly that the line above was not the whole command.
 
@@ -1650,14 +1654,22 @@ class CommandManager:
         The extra frame for this helper is added to ``_stacklevel`` so the
         notice is attributed to the call site that ran the command, next to
         the line it is talking about.
+
+        ``quiet`` follows the command's own visibility. A notice that says
+        "the command above" must never outlive the command above: an
+        unprivileged read is held for ``--verbose 2``, so its omission notice
+        is too, or the log shows a complaint about a line that is not there.
         """
         local_log = log.opt(depth=_stacklevel + 1)
         for description in omissions:
-            emit = (
-                local_log.warning
-                if description.startswith('UNMARKED')
-                else local_log.info
-            )
+            if quiet:
+                emit = local_log.debug
+            else:
+                emit = (
+                    local_log.warning
+                    if description.startswith('UNMARKED')
+                    else local_log.info
+                )
             emit(
                 '  ^^ OMITTED FROM THE COMMAND ABOVE: {}. Re-run with -vv to '
                 'log the literal command.',
@@ -1721,7 +1733,9 @@ class CommandManager:
             emit('RUN [{}/{}]: {}', current, total, run_line)
         else:
             emit('RUN: {}', run_line)
-        self._announce_omissions(omissions, _stacklevel=_stacklevel)
+        self._announce_omissions(
+            omissions, quiet=quiet, _stacklevel=_stacklevel
+        )
         if raw_line != run_line:
             local_log.debug('  raw command: {}', raw_line)
 

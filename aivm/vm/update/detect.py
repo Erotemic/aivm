@@ -55,10 +55,12 @@ def _qemu_img_virtual_size_bytes(
     path: Path, *, use_sudo: bool
 ) -> tuple[int | None, str]:
     res = CommandManager.current().run(
-        ['qemu-img', 'info', '--output=json', str(path)], role='read',
+        ['qemu-img', 'info', '--output=json', str(path)],
+        role='read',
         sudo=use_sudo and sudo_allowed(),
         check=False,
         capture=True,
+        summary=f'Read the virtual size of disk image {path.name}',
     )
     if res.code != 0:
         err = (res.stderr or res.stdout or '').strip()

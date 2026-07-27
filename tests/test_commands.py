@@ -824,3 +824,30 @@ def test_handing_the_terminal_to_the_user_is_not_a_write(
         capture=False,
     )
     assert len(prompts) == 1
+
+
+def test_an_omission_notice_never_outlives_its_command(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """"OMITTED FROM THE COMMAND ABOVE" is a lie if the command is not above.
+
+    An unprivileged read is held for --verbose 2, so its omission notice has
+    to be held too, or the default log complains about a line it never shows.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    info = capture_logs(monkeypatch, 'aivm.commands.log', levels=('info',))
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    probe = ['ssh', 'vm', Elided('payload' * 200, 'guest probe script')]
+    mgr.run(probe, sudo=False, role='read')
+
+    assert [m for m in info if m.startswith('RUN')] == []
+    assert [m for m in info if 'OMITTED' in m] == []
+
+    # a visible command still announces loudly
+    visible = capture_logs(monkeypatch, 'aivm.commands.log', levels=('info',))
+    mgr2 = CommandManager(yes=True)
+    CommandManager.activate(mgr2)
+    mgr2.run(probe, sudo=False, role='modify')
+    assert [m for m in visible if 'OMITTED' in m]

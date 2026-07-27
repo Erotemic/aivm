@@ -83,6 +83,7 @@ def _fdguard_drift(
             label='virtiofs guard probe script',
         ),
         sudo=False,
+        role='read',
         check=False,
         capture=True,
         timeout=30,
