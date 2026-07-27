@@ -1354,12 +1354,13 @@ class CommandManager:
         for idx, item in enumerate(plan.commands, start=1):
             summary = item.spec.summary or shell_join(item.spec.cmd)
             role = self._effective_role(item.spec)
-            preview_cmd = self._preview_command(item.spec)
+            preview_cmd, omissions = self._render_preview(item.spec)
             local_log.info('  {}. {}', idx, summary)
             command_label = (
                 'command (read-only)' if role == 'read' else 'command'
             )
             local_log.info('     {}: {}', command_label, preview_cmd)
+            self._announce_omissions(omissions, _stacklevel=_stacklevel)
             if item.spec.detail:
                 local_log.debug('     detail: {}', item.spec.detail)
             raw_cmd = self._raw_command(item.spec)
@@ -1561,8 +1562,8 @@ class CommandManager:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         return shell_join(cmd)
 
-    def _preview_command(self, spec: CommandSpec) -> str:
-        """Return a command preview suitable for logs.
+    def _render_preview(self, spec: CommandSpec) -> tuple[str, list[str]]:
+        """Return ``(preview, omissions)`` for ``spec``.
 
         Arguments render verbatim, so the line stays the command the user
         would have typed. Two things are not printed in full: an argument the
@@ -1573,24 +1574,63 @@ class CommandManager:
         Nothing here infers what a payload is. An unmarked payload therefore
         reads as an unhelpful log line rather than a tidy one, which is the
         point: it names work still to do, the way an ungrouped command does.
+
+        ``omissions`` describes anything left out, so the caller can say so
+        out loud. A quietly shortened command is worse than a long one: the
+        reader has no way to tell a faithful line from an abridged one.
         """
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         display_parts: list[str] = []
+        omissions: list[str] = []
         for part in cmd:
             if isinstance(part, Elided):
-                display_parts.append(f'<{part.label}>')
+                display_parts.append(f'<<OMITTED {part.label}>>')
+                omissions.append(
+                    f'{part.label} ({len(part)} characters)'
+                )
                 continue
             text = str(part)
             if len(text) > PREVIEW_ARG_MAX_LEN:
-                display_parts.append(
-                    f'<unmarked {len(text)}-character argument, too long to '
-                    'show; mark it Elided(value, label) to name it>'
+                display_parts.append('<<OMITTED unmarked argument>>')
+                omissions.append(
+                    f'UNMARKED argument ({len(text)} characters). Mark it '
+                    'Elided(value, label) at the call site to name it'
                 )
                 continue
             display_parts.append(shlex.quote(text))
-        return ' '.join(display_parts)
+        return ' '.join(display_parts), omissions
+
+    def _preview_command(self, spec: CommandSpec) -> str:
+        """Return only the rendered preview line for ``spec``."""
+        return self._render_preview(spec)[0]
+
+    def _announce_omissions(
+        self, omissions: Sequence[str], *, _stacklevel: int = 1
+    ) -> None:
+        """Say plainly that the line above was not the whole command.
+
+        An unmarked payload is logged as a warning because it is a gap in the
+        code, not a deliberate choice; a marked one is expected and stays at
+        info. Both name how to recover the literal text.
+
+        The extra frame for this helper is added to ``_stacklevel`` so the
+        notice is attributed to the call site that ran the command, next to
+        the line it is talking about.
+        """
+        local_log = log.opt(depth=_stacklevel + 1)
+        for description in omissions:
+            emit = (
+                local_log.warning
+                if description.startswith('UNMARKED')
+                else local_log.info
+            )
+            emit(
+                '  ^^ OMITTED FROM THE COMMAND ABOVE: {}. Re-run with -vv to '
+                'log the literal command.',
+                description,
+            )
 
     def _execute_one(
         self,
@@ -1603,7 +1643,8 @@ class CommandManager:
         """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=_stacklevel)
         self._reject_sudo_if_forbidden(spec.cmd, needs_sudo=spec.sudo)
-        if self._effective_role(spec) == 'modify':
+        role = self._effective_role(spec)
+        if role == 'modify':
             # Bump before running so probe caches are invalidated even if
             # the mutation fails partway through.
             self.mutation_generation += 1
@@ -1618,23 +1659,26 @@ class CommandManager:
         # Render what the user could have typed, minus payloads the call site
         # marked. The literal line stays reachable at DEBUG in this same run,
         # so following a log never requires re-running the command to read it.
-        run_line = self._preview_command(spec)
+        run_line, omissions = self._render_preview(spec)
         raw_line = shell_join(cmd)
 
-        # Keep mutating or privileged work visible at INFO while leaving
-        # unprivileged plumbing at DEBUG unless a plan preview already framed it.
-        if spec.sudo:
-            emit = local_log.info
-        else:
-            emit = local_log.debug
-
+        # Visibility follows what a command does, not whether it needed sudo.
+        # Anything that changes state is announced; a read is kept for -vv.
+        # Keying on privilege showed one read (qemu-img, which needs sudo) and
+        # hid seven identical ones, so the log answered "was this privileged"
+        # when the reader was asking "what did it do".
+        #
+        # Quiet is therefore declared, never inferred: a command is only
+        # demoted when a call site says role='read' or runs inside a read
+        # intent. An unclassified command defaults to 'modify' and stays loud,
+        # so an unaudited path is heard rather than silently skipped.
+        emit = local_log.debug if role == 'read' else local_log.info
         if within_plan and ordinal is not None:
             current, total = ordinal
             emit('RUN [{}/{}]: {}', current, total, run_line)
-        elif spec.check:
-            local_log.info('RUN: {}', run_line)
         else:
             emit('RUN: {}', run_line)
+        self._announce_omissions(omissions, _stacklevel=_stacklevel)
         if raw_line != run_line:
             local_log.debug('  raw command: {}', raw_line)
 

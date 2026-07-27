@@ -97,6 +97,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * `RUN:` lines render through the same preview, with the literal command kept
   at `DEBUG` in the same run. `aivm vm update` previously emitted several
   kilobytes of base64 on one line when installing the virtiofs fd guard.
+  Anything left out of a line is now announced beneath it rather than only
+  marked inline, at `WARNING` when the payload is unmarked, since a quietly
+  shortened command is indistinguishable from a faithful one.
+* Command log visibility follows what a command does rather than whether it
+  needed sudo: state-changing commands are always announced, reads are kept
+  for `--verbose 2`. Keying on privilege showed one read (`qemu-img info`,
+  which needs sudo) while hiding the seven identical unprivileged reads beside
+  it. Quiet is now declared rather than inferred -- a command is demoted only
+  where a call site says `role='read'` or runs inside a read intent, and an
+  unclassified command defaults to `modify` and stays loud.
 * `aivm vm update` groups its planning probes under one read intent. The
   `dominfo`, `domstate`, `dumpxml`, `domblkinfo`, and `qemu-img` probes were
   ungrouped, so each was classified as a state change and prompted separately

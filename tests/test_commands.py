@@ -584,7 +584,9 @@ def test_marked_payload_logs_its_label_and_still_executes_in_full(
         return FakeProc(0, 'ok', '')
 
     patch_command_runtime(monkeypatch, fake_run)
-    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
     mgr = CommandManager()
     CommandManager.activate(mgr)
 
@@ -596,8 +598,14 @@ def test_marked_payload_logs_its_label_and_still_executes_in_full(
     )
 
     run_lines = [m for m in messages if m.startswith('RUN')]
-    assert run_lines == ['RUN: ssh agent@10.0.0.2 <guest bootstrap script>']
+    assert run_lines == [
+        'RUN: ssh agent@10.0.0.2 <<OMITTED guest bootstrap script>>'
+    ]
     assert executed == [['ssh', 'agent@10.0.0.2', script]]
+    # the shortening is announced rather than left for the reader to notice
+    announcement = next(m for m in messages if 'OMITTED FROM' in m)
+    assert 'guest bootstrap script' in announcement
+    assert f'{len(script)} characters' in announcement
 
 
 def test_unmarked_long_payload_admits_it_is_unmarked(
@@ -610,7 +618,9 @@ def test_unmarked_long_payload_admits_it_is_unmarked(
     log honest and names the work that would fix it.
     """
     patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
-    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
     mgr = CommandManager()
     CommandManager.activate(mgr)
 
@@ -618,10 +628,15 @@ def test_unmarked_long_payload_admits_it_is_unmarked(
     mgr.run(['ssh', 'agent@10.0.0.2', script], sudo=False, role='read')
 
     run_line = next(m for m in messages if m.startswith('RUN'))
-    assert 'unmarked' in run_line
-    assert 'Elided(value, label)' in run_line
+    assert run_line == 'RUN: ssh agent@10.0.0.2 <<OMITTED unmarked argument>>'
     assert 'payloadpayload' not in run_line
-    assert 'omitted' not in run_line
+    # never asserts what the payload is, the way the old shape rules did
+    assert 'remote command' not in run_line
+    assert 'shell script' not in run_line
+    # an unmarked payload is a gap in the code, so it is a warning naming the fix
+    announcement = next(m for m in messages if 'OMITTED FROM' in m)
+    assert 'UNMARKED' in announcement
+    assert 'Elided(value, label)' in announcement
 
 
 def test_ordinary_command_is_logged_verbatim(
@@ -633,7 +648,9 @@ def test_ordinary_command_is_logged_verbatim(
     truncated command teaches nothing.
     """
     patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
-    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
     mgr = CommandManager()
     CommandManager.activate(mgr)
 
@@ -650,3 +667,55 @@ def test_ordinary_command_is_logged_verbatim(
     mgr.run(cmd, sudo=False, role='read')
 
     assert 'RUN: ' + ' '.join(cmd) in messages
+
+
+def test_visibility_follows_role_not_privilege(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A read is quiet and a change is loud, whether or not sudo was involved.
+
+    Keying on privilege showed a sudo read (qemu-img info) while hiding the
+    identical unprivileged reads beside it, so the log answered "was this
+    privileged" when the reader was asking "what did it do".
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    info = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    mgr.run(['virsh', 'dominfo', 'vm'], sudo=False, role='read')
+    mgr.run(['qemu-img', 'info', '/disk.qcow2'], sudo=True, role='read')
+    mgr.run(['virsh', 'setvcpus', 'vm', '8'], sudo=False, role='modify')
+
+    shown = [m for m in info if m.startswith('RUN')]
+    assert shown == ['RUN: virsh setvcpus vm 8']
+
+
+def test_reads_are_recoverable_at_debug(monkeypatch: MonkeyPatch) -> None:
+    """Quiet must mean deferred, not discarded: -vv still shows every read."""
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    verbose = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    mgr.run(['virsh', 'dominfo', 'vm'], sudo=False, role='read')
+
+    assert 'RUN: virsh dominfo vm' in verbose
+
+
+def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
+    """Silence is opt-in. A command that declares nothing is not hidden.
+
+    Role defaults to 'modify', so forgetting to classify a probe costs noise
+    rather than costing the reader the record of what ran.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    info = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+
+    mgr.run(['some-tool', '--do-a-thing'], sudo=False)
+
+    assert 'RUN: some-tool --do-a-thing' in info
