@@ -74,6 +74,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* A command that changes state now requires confirmation because it is a
+  write, not because it needs sudo or happens to be a `virsh` command. The
+  previous rule guarded `virsh undefine --remove-all-storage` only by the
+  coincidence that it shares a binary with `setvcpus`, while an unprivileged
+  command doing the same damage by another route was never guarded, and
+  `role='modify'` gated nothing anywhere. `CommandSpec` gains an `ownership`
+  field defaulting to `user`; `ownership='tool'` is a per-call-site exemption
+  for aivm's own regenerable bookkeeping, so forgetting to mark a bookkeeping
+  write costs a prompt rather than costing the user their consent. 53 call
+  sites were classified against `docs/planning/command-approval-audit.md`.
 * An unknown VM or network name now suggests the likely intended name and
   lists what the store actually defines, instead of only reporting the miss.
   `aivm config edit aivm-2404` on a host whose store has no such VM said only

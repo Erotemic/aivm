@@ -334,7 +334,7 @@ def read_firewall_tcp_ports(
         return None, 'firewall checks need privileges (privilege_mode = never)'
 
     res = CommandManager.current().run(
-        ['nft', '--json', 'list', 'table', 'inet', table],
+        ['nft', '--json', 'list', 'table', 'inet', table], role='read',
         sudo=use_sudo,
         check=False,
         capture=True,

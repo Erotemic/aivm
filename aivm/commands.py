@@ -73,6 +73,12 @@ log = logger
 
 CommandRole = Literal['read', 'modify']
 
+#: Whose state a write touches. ``user`` is anything the user would recognize
+#: as theirs, including the guest; ``tool`` is aivm's own regenerable
+#: bookkeeping. See "Command visibility and approval" in docs/source/design.rst
+#: for the bar ``tool`` has to clear.
+CommandOwnership = Literal['user', 'tool']
+
 
 def shell_join(cmd: Sequence[str]) -> str:
     """Render a command sequence as a shell-escaped string.
@@ -202,6 +208,9 @@ class CommandSpec:
         sudo: If True, execute through ``sudo`` when needed.
         role: Optional explicit command role. When omitted, the role is
             inferred from the surrounding intent context.
+        ownership: Whose state a write touches. Defaults to ``user``, which
+            confirms; ``tool`` is the declared exemption for aivm's own
+            regenerable bookkeeping.
         check: If True, raise :class:`CommandError` on non-zero exit.
         capture: If True, capture stdout and stderr.
         text: If True, run the subprocess in text mode.
@@ -215,6 +224,7 @@ class CommandSpec:
     cmd: Sequence[str]
     sudo: bool = False
     role: CommandRole | None = None
+    ownership: CommandOwnership = 'user'
     check: bool = True
     capture: bool = True
     text: bool = True
@@ -849,6 +859,7 @@ class CommandManager:
         *,
         sudo: bool = False,
         role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -894,6 +905,7 @@ class CommandManager:
             cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
             sudo=bool(sudo),
             role=role,
+            ownership=ownership,
             check=bool(check),
             capture=bool(capture),
             text=bool(text),
@@ -929,6 +941,7 @@ class CommandManager:
         *,
         sudo: bool = False,
         role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -943,6 +956,7 @@ class CommandManager:
             cmd,
             sudo=sudo,
             role=role,
+            ownership=ownership,
             check=check,
             capture=capture,
             text=text,
@@ -1236,29 +1250,35 @@ class CommandManager:
         if ans not in {'y', 'yes'}:
             raise UserDeclinedError('Aborted by user.')
 
-    def _is_system_libvirt_mutation(self, spec: CommandSpec) -> bool:
-        """Return True for state-changing hypervisor commands.
+    def _is_confirmable_write(self, spec: CommandSpec) -> bool:
+        """Return True for a state change the user has to consent to.
 
-        With libvirt group membership these run without sudo, but they keep
-        the approval contract of the sudo era: destroying a VM must not
-        become promptless just because escalation is no longer needed.
+        The write itself is the guard. This deliberately does not consult the
+        command name: gating on ``virsh`` guarded ``undefine
+        --remove-all-storage`` only by the coincidence that it shares a binary
+        with ``setvcpus``, while an unprivileged command doing the same damage
+        by another route was never guarded at all.
+
+        ``ownership='tool'`` is the one exemption, and a call site has to
+        declare it. See docs/source/design.rst for the bar it must clear.
         """
         if self._effective_role(spec) != 'modify':
             return False
-        head = str(spec.cmd[0]) if spec.cmd else ''
-        return head in {'virsh', 'virt-install'}
+        return spec.ownership != 'tool'
 
     def _command_needs_approval(self, spec: CommandSpec) -> bool:
         """Return True when ``spec`` must be confirmed before executing.
 
-        Approval applies to sudo commands and to unprivileged state-changing
-        libvirt commands; ``yes``/``yes_sudo`` and the read-only sudo
-        auto-approve policy suppress prompts exactly as before.
+        Two independent triggers: the command changes state, or it escalates
+        on the host. They overlap deliberately, so a write that also needs
+        sudo is caught even if its effect was mis-declared -- but the user is
+        asked exactly once, because approval is a property of the command
+        rather than a toll per matching rule.
         """
         if os.geteuid() == 0:
             return False
         privileged = spec.sudo
-        if not privileged and not self._is_system_libvirt_mutation(spec):
+        if not privileged and not self._is_confirmable_write(spec):
             return False
         if self.yes or self.yes_sudo or self._approve_all_remaining:
             return False
@@ -1428,7 +1448,7 @@ class CommandManager:
         """Prompt for a state-changing hypervisor command that needs no sudo."""
         local_log = log.opt(depth=0)
         local_log.info(
-            'About to run state-changing hypervisor operations (no sudo needed):'
+            'About to run state-changing operations (no sudo needed):'
         )
         local_log.info('  {}', purpose)
         if preview_cmds:
@@ -1472,7 +1492,7 @@ class CommandManager:
                 and idx >= plan.approved_command_count
                 and (
                     item.spec.sudo
-                    or self._is_system_libvirt_mutation(item.spec)
+                    or self._is_confirmable_write(item.spec)
                 )
             ):
                 # This command was appended after the step cleared approval
@@ -1649,7 +1669,7 @@ class CommandManager:
             # the mutation fails partway through.
             self.mutation_generation += 1
         if not within_plan and (
-            spec.sudo or self._is_system_libvirt_mutation(spec)
+            spec.sudo or self._is_confirmable_write(spec)
         ):
             self._confirm_loose_command(spec, _stacklevel=_stacklevel + 1)
         # Whether privilege is actually spent, not merely offered: under

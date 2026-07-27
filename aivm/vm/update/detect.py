@@ -32,7 +32,7 @@ def _resolve_vm_disk_path(
         / f'{cfg.vm.name}.qcow2'
     )
     res = CommandManager.current().run(
-        virsh_cmd('dumpxml', cfg.vm.name),
+        virsh_cmd('dumpxml', cfg.vm.name), role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -55,7 +55,7 @@ def _qemu_img_virtual_size_bytes(
     path: Path, *, use_sudo: bool
 ) -> tuple[int | None, str]:
     res = CommandManager.current().run(
-        ['qemu-img', 'info', '--output=json', str(path)],
+        ['qemu-img', 'info', '--output=json', str(path)], role='read',
         sudo=use_sudo and sudo_allowed(),
         check=False,
         capture=True,
@@ -70,7 +70,7 @@ def _virsh_domblk_capacity_bytes(
     cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
 ) -> int | None:
     res = CommandManager.current().run(
-        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target),
+        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target), role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,

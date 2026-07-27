@@ -134,14 +134,15 @@ def test_mutation_generation_bumps_only_for_modify_commands(
     assert mgr.mutation_generation == start + 1
 
 
-def test_unprivileged_libvirt_mutation_keeps_approval_contract(
+def test_a_write_is_confirmed_whatever_binary_runs_it(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """State-changing virsh commands prompt even when sudo is not needed.
+    """The write is the guard, not the command family or the privilege.
 
-    With libvirt group membership, destructive hypervisor operations run
-    without sudo in as-needed/never modes; they must not silently lose the
-    confirmation prompt they had in the sudo era.
+    Gating on ``virsh`` guarded ``undefine --remove-all-storage`` only by the
+    coincidence that it shares a binary with ``setvcpus``, while an
+    unprivileged command doing the same damage by another route was never
+    guarded at all.
     """
 
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
@@ -151,7 +152,8 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
     prompts = patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(privilege_mode='never')
     CommandManager.activate(mgr)
-    # Unprivileged reads stay promptless.
+
+    # unprivileged reads stay promptless
     mgr.run(
         ['virsh', '-c', 'qemu:///system', 'dominfo', 'vm'],
         sudo=False,
@@ -159,17 +161,56 @@ def test_unprivileged_libvirt_mutation_keeps_approval_contract(
         check=False,
     )
     assert prompts == []
-    # Unprivileged hypervisor mutations prompt.
+
+    # an unprivileged hypervisor mutation is confirmed
     mgr.run(
         ['virsh', '-c', 'qemu:///system', 'destroy', 'vm'],
         sudo=False,
         role='modify',
         summary='Destroy VM vm',
     )
-    assert prompts == ['Continue? [y]es/[a]ll/[N]o: ']
-    # Non-libvirt unprivileged mutations (guest ssh, file ops) stay
-    # promptless as before.
-    mgr.run(['mkdir', '-p', '/tmp/x'], sudo=False, role='modify', check=False)
+    assert len(prompts) == 1
+
+    # so is an unprivileged write that is not virsh at all, which the old
+    # command-family rule let through
+    mgr.run(
+        ['ssh', 'vm', 'rm -rf /home/agent/work'],
+        sudo=False,
+        role='modify',
+        summary='Remove guest work tree',
+    )
+    assert len(prompts) == 2
+
+
+def test_declared_tool_bookkeeping_is_exempt(monkeypatch: MonkeyPatch) -> None:
+    """aivm's own regenerable state does not ask permission to exist.
+
+    The exemption is declared per call site, so forgetting it costs a prompt
+    rather than costing the user their consent.
+    """
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        return FakeProc(0, 'ok', '')
+
+    prompts = patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(privilege_mode='never')
+    CommandManager.activate(mgr)
+
+    mgr.run(
+        ['mkdir', '-p', '/var/lib/libvirt/aivm/vm/images'],
+        sudo=False,
+        role='modify',
+        ownership='tool',
+    )
+    assert prompts == []
+
+    # the same command without the declaration is a user write
+    mgr.run(
+        ['mkdir', '-p', '/home/joncrall/code/thing'],
+        sudo=False,
+        role='modify',
+    )
     assert len(prompts) == 1
 
 

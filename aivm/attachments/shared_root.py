@@ -89,7 +89,7 @@ def _ensure_shared_root_parent_dir(
             approval_scope=f'shared-root-parent:{cfg.vm.name}',
         ):
             mgr.submit(
-                ['mkdir', '-p', str(target)],
+                ['mkdir', '-p', str(target)], ownership='tool',
                 sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create shared-root parent directory',
@@ -397,7 +397,7 @@ def _ensure_shared_root_host_bind(
     ):
         if needs_parent:
             mgr.submit(
-                ['mkdir', '-p', str(parent_dir)],
+                ['mkdir', '-p', str(parent_dir)], ownership='tool',
                 sudo=path_needs_sudo(parent_dir),
                 role='modify',
                 summary='Create shared-root parent directory',
@@ -405,7 +405,7 @@ def _ensure_shared_root_host_bind(
             )
         if needs_target:
             mgr.submit(
-                ['mkdir', '-p', str(target)],
+                ['mkdir', '-p', str(target)], ownership='tool',
                 sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create project-specific host bind target',

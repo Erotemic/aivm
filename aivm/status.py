@@ -177,7 +177,7 @@ def probe_runtime_environment() -> ProbeOutcome:
     mgr = CommandManager.current()
     if which('systemd-detect-virt'):
         det = mgr.run(
-            ['systemd-detect-virt'], sudo=False, check=False, capture=True
+            ['systemd-detect-virt'], role='read', sudo=False, check=False, capture=True
         )
         raw = (det.stdout or det.stderr).strip()
         if raw:
@@ -263,7 +263,7 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     can show it without re-running the probe.
     """
     info = CommandManager.current().run(
-        virsh_cmd('net-info', cfg.network.name),
+        virsh_cmd('net-info', cfg.network.name), role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -342,7 +342,7 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             ).result()
     else:
         res = mgr.run(
-            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
+            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)], role='read',
             sudo=use_sudo,
             check=False,
             capture=True,
@@ -392,7 +392,7 @@ def probe_vm_state(
     # keeps error/state string matching locale-independent.
     probe_env = {**os.environ, 'LC_ALL': 'C'}
     dom = mgr.run(
-        dominfo_cmd,
+        dominfo_cmd, role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -408,7 +408,7 @@ def probe_vm_state(
     ):
         sudo_used = True
         dom = mgr.run(
-            dominfo_cmd,
+            dominfo_cmd, role='read',
             sudo=True,
             check=False,
             capture=True,
@@ -445,7 +445,7 @@ def probe_vm_state(
         return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
     domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
     state_res = mgr.run(
-        domstate_cmd,
+        domstate_cmd, role='read',
         sudo=sudo_used,
         check=False,
         capture=True,
@@ -487,7 +487,7 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         'true',
     ]
     res = CommandManager.current().run(
-        cmd, sudo=False, check=False, capture=True, timeout=5
+        cmd, role='read', sudo=False, check=False, capture=True, timeout=5
     )
     detail = 'ready' if res.code == 0 else 'not ready'
     diag = (res.stdout + '\n' + res.stderr).strip()
@@ -558,7 +558,7 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
         remote,
     ]
     res = CommandManager.current().run(
-        cmd, sudo=False, check=False, capture=True
+        cmd, role='read', sudo=False, check=False, capture=True
     )
     if res.code == 0:
         return ProbeOutcome(
@@ -664,7 +664,7 @@ def render_status(
         img_ok = (
             CommandManager.current()
             .run(
-                ['test', '-f', str(base_img)],
+                ['test', '-f', str(base_img)], role='read',
                 sudo=True,
                 check=False,
                 capture=True,
@@ -841,7 +841,7 @@ def render_status(
         # re-running the same (often privileged) commands.
         mgr = CommandManager.current()
         net_xml = mgr.run(
-            virsh_cmd('net-dumpxml', cfg.network.name),
+            virsh_cmd('net-dumpxml', cfg.network.name), role='read',
             sudo=use_sudo and virsh_needs_sudo(),
             check=False,
             capture=True,
@@ -867,7 +867,7 @@ def render_status(
 
         lines.append('Image')
         img_stat = mgr.run(
-            ['ls', '-lh', str(base_img)],
+            ['ls', '-lh', str(base_img)], role='read',
             sudo=use_sudo and sudo_allowed(),
             check=False,
             capture=True,
@@ -892,7 +892,7 @@ def render_status(
         vm_detail_cmds.append(virsh_cmd('net-dhcp-leases', cfg.network.name))
         for cmd in vm_detail_cmds:
             vm_raw = mgr.run(
-                cmd,
+                cmd, role='read',
                 sudo=use_sudo and virsh_needs_sudo(),
                 check=False,
                 capture=True,

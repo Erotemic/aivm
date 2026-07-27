@@ -334,18 +334,18 @@ def generate_host_key(
             credentials_directory = directory.parent
             if not os.path.lexists(vm_directory):
                 manager.submit(
-                    ['mkdir', '-m', '700', str(vm_directory)],
+                    ['mkdir', '-m', '700', str(vm_directory)], ownership='tool',
                     role='modify',
                     summary='Create protected VM data directory',
                 )
             if not os.path.lexists(credentials_directory):
                 manager.submit(
-                    ['mkdir', '-m', '700', str(credentials_directory)],
+                    ['mkdir', '-m', '700', str(credentials_directory)], ownership='tool',
                     role='modify',
                     summary='Create protected credential parent directory',
                 )
             manager.submit(
-                ['mkdir', '-m', '700', str(directory)],
+                ['mkdir', '-m', '700', str(directory)], ownership='tool',
                 role='modify',
                 summary='Create protected host credential directory',
             )

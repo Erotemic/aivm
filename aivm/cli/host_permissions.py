@@ -784,7 +784,7 @@ class HostPermissionsSetupCLI(_BaseCommand):
                     approval_scope=f'host-permissions-setup-storage:{base_dir}',
                 ):
                     mgr.submit(
-                        ['mkdir', '-p', str(base_dir)],
+                        ['mkdir', '-p', str(base_dir)], ownership='tool',
                         sudo=False,
                         role='modify',
                         check=True,

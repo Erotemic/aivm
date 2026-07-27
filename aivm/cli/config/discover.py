@@ -39,7 +39,7 @@ class ConfigDiscoverCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
         names_res = mgr.run(
-            virsh_cmd('list', '--all', '--name'),
+            virsh_cmd('list', '--all', '--name'), role='read',
             sudo=False,
             check=False,
             capture=True,
@@ -48,7 +48,7 @@ class ConfigDiscoverCLI(_BaseCommand):
         if names_res.code != 0 and mgr.privilege_mode != PrivilegeMode.NEVER:
             used_sudo = True
             names_res = mgr.run(
-                virsh_cmd('list', '--all', '--name'),
+                virsh_cmd('list', '--all', '--name'), role='read',
                 sudo=True,
                 check=True,
                 capture=True,
@@ -112,7 +112,7 @@ def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
         'shares': [],
     }
     dominfo = mgr.run(
-        virsh_cmd('dominfo', vm_name),
+        virsh_cmd('dominfo', vm_name), role='read',
         sudo=use_sudo,
         check=False,
         capture=True,
@@ -135,7 +135,7 @@ def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
                     kib = int(m.group(1))
                     info['memory_mib'] = str(kib // 1024)
     xml = mgr.run(
-        virsh_cmd('dumpxml', vm_name),
+        virsh_cmd('dumpxml', vm_name), role='read',
         sudo=use_sudo,
         check=False,
         capture=True,

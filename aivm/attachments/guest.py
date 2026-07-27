@@ -373,7 +373,7 @@ def _ensure_attachment_available_in_guest(
 
 def _git_repo_context(host_src: Path) -> tuple[Path, Path]:
     probe = CommandManager.current().run(
-        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'],
+        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'], role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -408,7 +408,6 @@ def _upsert_host_git_remote(
     *,
     remote_name: str,
     remote_url: str,
-    yes: bool,
 ) -> tuple[Path, bool]:
     """Ensure a host Git remote exists with the requested URL.
 
@@ -426,7 +425,7 @@ def _upsert_host_git_remote(
             'rev-parse',
             '--path-format=absolute',
             '--git-common-dir',
-        ],
+        ], role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -440,7 +439,7 @@ def _upsert_host_git_remote(
         )
     git_cfg = Path((git_dir_probe.stdout or '').strip()) / 'config'
     probe = mgr.run(
-        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name],
+        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name], role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -475,12 +474,19 @@ def _upsert_host_git_remote(
             remote_name,
             remote_url,
         ]
-    mgr.confirm_file_update(
-        yes=bool(yes),
-        path=git_cfg,
-        purpose=purpose,
+    # The command carries the consent: `git remote` writes the user's repo
+    # config, so the write guard already confirms it. Calling
+    # confirm_file_update here as well would ask twice for one action. The
+    # path and reason move into the preview so nothing is lost by having one
+    # prompt instead of two.
+    mgr.run(
+        cmd,
+        sudo=False,
+        check=True,
+        capture=True,
+        summary=purpose,
+        detail=f'writes {git_cfg}',
     )
-    mgr.run(cmd, sudo=False, check=True, capture=True)
     return git_cfg, True
 
 
@@ -540,7 +546,6 @@ def _ensure_git_clone_attachment(
         repo_root,
         remote_name=remote_name,
         remote_url=remote_url,
-        yes=yes,
     )
     if dry_run:
         return repo_root, ssh_cfg.as_posix(), git_cfg.as_posix()

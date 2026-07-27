@@ -527,7 +527,7 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
     from ..runtime import virsh_cmd
 
     res = CommandManager.current().run(
-        virsh_cmd('domstate', vm_name),
+        virsh_cmd('domstate', vm_name), role='read',
         sudo=False,
         check=False,
         capture=True,

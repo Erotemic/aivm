@@ -142,7 +142,16 @@ def test_config_init_interactive_can_create_dedicated_aivm_key(
         },
     )
     monkeypatch.setattr('aivm.services.sys.stdin.isatty', lambda: True)
-    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    # generating a key writes into the user's ~/.ssh, so the command manager
+    # now confirms it; the scripted answers cover the init questions only
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: True)
+
+    def _answer(prompt: str) -> str:
+        if prompt.startswith(('Continue?', 'Approve this step?')):
+            return 'y'
+        return next(answers)
+
+    monkeypatch.setattr('builtins.input', _answer)
     monkeypatch.setattr(
         'aivm.services.which', lambda cmd: '/usr/bin/ssh-keygen'
     )

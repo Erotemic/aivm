@@ -442,6 +442,23 @@ safe. Do not "simplify" either trigger away on the grounds that the other
 already covers a case: covering the same case twice is the design, and
 collapsing them to one prompt is what keeps that free.
 
+One write, one guard
+^^^^^^^^^^^^^^^^^^^^
+
+If a write goes through a command, **the command carries the consent**.
+``confirm_file_update`` exists only for writes that never reach the manager,
+such as editing ``~/.ssh/config`` with ``Path.write_text``. Calling both for
+one action asks the user twice, which the single-prompt rule above forbids.
+
+When a higher-level confirmation is replaced by the command guard, move its
+path and reason into the command's ``summary`` / ``detail`` so the prompt still
+names the file being changed. Nothing is lost by having one prompt instead of
+two except the duplication.
+
+``confirm_file_update``'s remaining callers are therefore a marker for the
+direct-filesystem-write gap: when those writes are routed through the manager,
+it has no callers left and can go.
+
 The exemption is narrow and is declared per call site
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

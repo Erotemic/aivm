@@ -27,13 +27,21 @@ def test_shell_join_quotes() -> None:
 
 def test_manager_run_success_and_failure(monkeypatch: MonkeyPatch) -> None:
     mgr = activate_manager(monkeypatch, yes_sudo=False)
-    ok = mgr.run(['bash', '-c', 'printf ok'], check=True, capture=True)
+    # these probe exit-status handling and change nothing, so they declare
+    # read and stay out of the write-approval path
+    ok = mgr.run(
+        ['bash', '-c', 'printf ok'], role='read', check=True, capture=True
+    )
     assert ok.code == 0
     assert ok.stdout == 'ok'
-    bad = mgr.run(['bash', '-c', 'exit 7'], check=False, capture=True)
+    bad = mgr.run(
+        ['bash', '-c', 'exit 7'], role='read', check=False, capture=True
+    )
     assert bad.code == 7
     with pytest.raises(CmdError):
-        mgr.run(['bash', '-c', 'exit 9'], check=True, capture=True)
+        mgr.run(
+            ['bash', '-c', 'exit 9'], role='read', check=True, capture=True
+        )
 
 
 def test_nested_intent_breadcrumb_rendering(monkeypatch: MonkeyPatch) -> None:

@@ -360,7 +360,7 @@ def _write_cloud_init(
             approval_scope=f'cloud-init:{cfg.vm.name}',
         ):
             mgr.submit(
-                ['mkdir', '-p', str(ci_dir)],
+                ['mkdir', '-p', str(ci_dir)], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
@@ -375,7 +375,7 @@ def _write_cloud_init(
                         f"cat > {user_data} <<'EOF'\n{cloud}\nEOF",
                         f'heredoc writing cloud-init user-data to {user_data}',
                     ),
-                ],
+                ], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
@@ -383,7 +383,7 @@ def _write_cloud_init(
                 summary='Write cloud-init user-data',
             )
             mgr.submit(
-                ['bash', '-c', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"],
+                ['bash', '-c', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
@@ -395,7 +395,7 @@ def _write_cloud_init(
                     'bash',
                     '-c',
                     f"cat > {network_config} <<'EOF'\n{netcfg}\nEOF",
-                ],
+                ], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
@@ -408,7 +408,7 @@ def _write_cloud_init(
             # cloud-localds truncates the target in place; unlinking first
             # only needs directory write, which use_sudo already reflects.
             mgr.submit(
-                ['rm', '-f', str(seed_iso)],
+                ['rm', '-f', str(seed_iso)], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
@@ -424,7 +424,7 @@ def _write_cloud_init(
                     str(seed_iso),
                     str(user_data),
                     str(meta_data),
-                ],
+                ], ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=True,
