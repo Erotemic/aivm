@@ -44,6 +44,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   discards the pending credential and its host keypair. Failures with an
   unresolved outcome (5xx, timeouts) still keep that state so the key can be
   found and revoked.
+* A 404 from the deploy-key endpoints is disambiguated instead of surfacing
+  raw. GitHub answers 404 rather than 403 on private repositories so a
+  response cannot confirm what exists, which makes the status ambiguous
+  between "not an admin" and "no such repository". AIVM now probes whether the
+  repository is visible to the signed-in account and reports whichever it is:
+  the admin-assisted path for a permission failure, or a message naming the
+  repository, account, and SAML authorization to check.
 * A permission denial (403) is handled separately from an outright refusal.
   Deploy-key endpoints need admin permission on the repository, which write
   access does not confer, so the pending credential and its keypair are kept

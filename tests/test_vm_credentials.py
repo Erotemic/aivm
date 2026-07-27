@@ -673,6 +673,12 @@ def test_recorded_provider_key_exact_404_detects_id_drift() -> None:
 
 
 def test_recorded_provider_key_exact_404_collection_failure_is_not_absence() -> None:
+    """A collection read that failed must raise, never read as "no key".
+
+    The failure is reported as a typed error naming what gh actually said,
+    but the invariant under test is that it propagates instead of letting the
+    caller conclude the provider holds no matching key.
+    """
     entry = _entry()
     manager = _GitHubManager(
         _public_key(),
@@ -681,7 +687,7 @@ def test_recorded_provider_key_exact_404_collection_failure_is_not_absence() -> 
     )
     repo = GitRepository(entry.provider_host, entry.owner, entry.repository)
 
-    with pytest.raises(CommandError, match='authentication required'):
+    with pytest.raises(AIVMError, match='authentication required'):
         github.find_recorded_provider_key(repo, entry, manager=manager)
 
 
@@ -984,6 +990,126 @@ def test_permission_denial_keeps_the_grant_and_prints_the_public_key(
     assert pending.key_fingerprint
     assert host_private_key_path('vm-a', cred_id).exists()
     assert host_public_key_path('vm-a', cred_id).exists()
+
+
+class _NotFoundGitHubManager(CommandManager):
+    """Answer the deploy-key endpoints with 404, as GitHub does for non-admins.
+
+    ``repository_visible`` decides what the disambiguating repository probe
+    reports, which is the only thing separating "not an admin of a private
+    repository" from "no such repository".
+    """
+
+    def __init__(self, *, repository_visible: bool) -> None:
+        super().__init__(yes=True)
+        self.repository_visible = repository_visible
+        self.calls: list[list[str]] = []
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            capture,
+            text,
+            input_text,
+            env,
+            timeout,
+            summary,
+            detail,
+        )
+        self.calls.append(list(cmd))
+        not_found = CommandResult(
+            code=1,
+            stdout='{"message":"Not Found","status":"404"}',
+            stderr='gh: Not Found (HTTP 404)',
+        )
+        if list(cmd[:2]) == ['gh', 'api'] and cmd[-1].endswith('/keys'):
+            if check:
+                raise CommandError(list(cmd), not_found)
+            return not_found
+        if list(cmd[:2]) == ['gh', 'api'] and '?per_page=' in cmd[-1]:
+            if check:
+                raise CommandError(list(cmd), not_found)
+            return not_found
+        if list(cmd[:2]) == ['gh', 'api']:
+            # The repository visibility probe.
+            if self.repository_visible:
+                return CommandResult(0, '{"full_name":"Kitware/kwimage"}', '')
+            return not_found
+        return CommandResult(code=0, stdout='', stderr='')
+
+
+def _grant_against_not_found(
+    monkeypatch: MonkeyPatch, tmp_path: Path, *, repository_visible: bool
+) -> Path:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    _patch_generated_key(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    grant_repository_credential(
+        cfg,
+        load_store(path),
+        path,
+        GitRepository('github.com', 'Kitware', 'kwimage'),
+        access='write',
+        manager=_NotFoundGitHubManager(repository_visible=repository_visible),
+    )
+    return path
+
+
+def test_visible_repository_404_is_reported_as_a_permission_failure(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """GitHub answers 404, not 403, when a non-admin reads a private repo."""
+    with pytest.raises(AIVMError) as excinfo:
+        _grant_against_not_found(monkeypatch, tmp_path, repository_visible=True)
+
+    message = str(excinfo.value)
+    assert 'admin permission' in message
+    assert 'ssh-ed25519' in message, 'the public key an admin needs is missing'
+    # State is kept so an admin can finish the grant.
+    [pending] = find_credentials_for_vm(
+        load_store(tmp_path / 'config.toml'), 'vm-a'
+    )
+    assert pending.state == 'pending'
+
+
+def test_invisible_repository_404_names_the_repository_problem(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    with pytest.raises(AIVMError) as excinfo:
+        _grant_against_not_found(
+            monkeypatch, tmp_path, repository_visible=False
+        )
+
+    message = str(excinfo.value)
+    assert 'not visible to the account' in message
+    assert 'gh auth status' in message
+    assert 'admin permission' not in message
+    # A failed read still proves nothing about the provider, so the pending
+    # record survives rather than being discarded.
+    assert find_credentials_for_vm(
+        load_store(tmp_path / 'config.toml'), 'vm-a'
+    )
 
 
 def test_admin_added_key_is_adopted_on_the_next_run(

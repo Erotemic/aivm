@@ -475,9 +475,12 @@ exist, so setup warns instead -- decline the upload if the login offers it.
 
 Managing deploy keys requires **admin** permission on the repository; write
 access is not enough, so a contributor who can push may still be unable to add
-a key. When GitHub denies deploy-key administration, AIVM keeps the pending
-credential and prints the public key it generated, so a repository admin can
-add that key out of band. Rerunning ``aivm vm creds add`` then adopts it by
+a key. On a private repository GitHub reports that denial as ``404 Not Found``
+rather than ``403`` so responses do not reveal what exists, so AIVM checks
+whether the repository is visible to the signed-in account before deciding
+whether a 404 means "not an admin" or "no such repository". When GitHub denies
+deploy-key administration, AIVM keeps the pending credential and prints the
+public key it generated, so a repository admin can add that key out of band. Rerunning ``aivm vm creds add`` then adopts it by
 fingerprint and finishes the grant. Note that adoption reads the repository's
 deploy keys, which needs the same admin permission -- if that is denied too,
 an admin has to run the grant. ``aivm vm creds abandon`` discards the pending
