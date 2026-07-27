@@ -57,6 +57,19 @@ OVERRIDES = {
     ('aivm/vm/disk.py', 50): ('user', 'qemu-img create makes the VM disk; not a read, not regenerable'),
     ('aivm/vm/disk.py', 35): ('user', 'removes the VM disk; destroys guest data'),
     ('aivm/vm/update/detect.py', 57): ('read', 'qemu-img info inspects only'),
+    # confirmed reads
+    ('aivm/attachments/guest.py', 375): ('read', 'git rev-parse --show-toplevel'),
+    ('aivm/attachments/guest.py', 421): ('read', 'git rev-parse --path-format'),
+    ('aivm/attachments/guest.py', 442): ('read', 'git remote get-url'),
+    ('aivm/cli/config/discover.py', 41): ('read', 'virsh list --all --name'),
+    ('aivm/cli/config/discover.py', 50): ('read', 'virsh list --all --name'),
+    ('aivm/cli/config/discover.py', 114): ('read', 'virsh dominfo'),
+    ('aivm/cli/config/discover.py', 137): ('read', 'virsh dumpxml'),
+    ('aivm/vm/drift.py', 209): ('read', 'reads actual VM hardware'),
+    ('aivm/vm/host_access.py', 271): ('read', 'getent group lookup'),
+    # image fetch, same flow as the refetchable rm calls
+    ('aivm/vm/images.py', 294): ('tool', 'downloads the base image into the cache'),
+    ('aivm/vm/images.py', 311): ('tool', 'moves the verified download into the cache'),
     # cloud-init: written into an aivm dir, but installed into the VM later
     ('aivm/vm/cloudinit.py', 362): ('tool', 'ci_dir under base_dir; regenerated from config'),
     ('aivm/vm/cloudinit.py', 370): ('tool', 'user-data rendered entirely from cfg'),

@@ -51,9 +51,9 @@ have and stays at `INFO` when it should drop to `--verbose 2`.
 
 | Basis | Sites | Trust |
 |---|---|---|
-| reviewed (decided by the maintainer) | 28 | settled |
+| reviewed (decided by the maintainer) | 39 | settled |
 | rule (positive match) | 19 | skim |
-| unsure (**?**) | 11 | review |
+| unsure (**?**) | 0 | review |
 | default (fell through to `user`) | 86 | review for completeness |
 
 Of the 190 total command submissions in `aivm/`, 46
@@ -155,9 +155,9 @@ rather than hand-maintaining this file.
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
 | 94 | `_ensure_guest_symlink` | `cmd` | — | False | no | **user** | default | no read or bookkeeping rule matched |
-| 375 | `_git_repo_context` | `['git', '-C', str(host_src), 'rev-parse', '--show-toplevel']` | — | False | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 421 | `_upsert_host_git_remote` | `[ 'git', '-C', str(repo_root), 'rev-parse', '--path-format=...` | — | False | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 442 | `_upsert_host_git_remote` | `['git', '-C', str(repo_root), 'remote', 'get-url', remote_n...` | — | False | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
+| 375 | `_git_repo_context` | `['git', '-C', str(host_src), 'rev-parse', '--show-toplevel']` | — | False | no | **read** | reviewed | git rev-parse --show-toplevel |
+| 421 | `_upsert_host_git_remote` | `[ 'git', '-C', str(repo_root), 'rev-parse', '--path-format=...` | — | False | no | **read** | reviewed | git rev-parse --path-format |
+| 442 | `_upsert_host_git_remote` | `['git', '-C', str(repo_root), 'remote', 'get-url', remote_n...` | — | False | no | **read** | reviewed | git remote get-url |
 | 483 | `_upsert_host_git_remote` | `cmd` | — | False | no | **user** | default | no read or bookkeeping rule matched |
 | 505 | `_ensure_guest_git_repo` | `[ 'ssh', *ssh_base_args(ident, strict_host_key_checking='ac...` | — | False | no | **user** | default | no read or bookkeeping rule matched |
 
@@ -215,10 +215,10 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 41 | `main` | `virsh_cmd('list', '--all', '--name')` | — | False | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 50 | `main` | `virsh_cmd('list', '--all', '--name')` | — | True | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 114 | `_discover_vm_info` | `virsh_cmd('dominfo', vm_name)` | — | use_sudo | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 137 | `_discover_vm_info` | `virsh_cmd('dumpxml', vm_name)` | — | use_sudo | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
+| 41 | `main` | `virsh_cmd('list', '--all', '--name')` | — | False | no | **read** | reviewed | virsh list --all --name |
+| 50 | `main` | `virsh_cmd('list', '--all', '--name')` | — | True | no | **read** | reviewed | virsh list --all --name |
+| 114 | `_discover_vm_info` | `virsh_cmd('dominfo', vm_name)` | — | use_sudo | no | **read** | reviewed | virsh dominfo |
+| 137 | `_discover_vm_info` | `virsh_cmd('dumpxml', vm_name)` | — | use_sudo | no | **read** | reviewed | virsh dumpxml |
 
 ### `aivm/cli/config/editor.py`
 
@@ -403,7 +403,7 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 209 | `read_actual_vm_hardware` | `cmd` | — | use_sudo and virsh_needs_sudo() | no | **read** **?** | unsure | unchecked call in an inspection helper |
+| 209 | `read_actual_vm_hardware` | `cmd` | — | use_sudo and virsh_needs_sudo() | no | **read** | reviewed | reads actual VM hardware |
 
 ### `aivm/vm/host_access.py`
 
@@ -414,7 +414,7 @@ rather than hand-maintaining this file.
 | 145 | `_submit_qemu_dir_prepare` | `['chmod', mode, str(path)]` | modify | True | no | **user** | default | no read or bookkeeping rule matched |
 | 191 | `_ensure_qemu_access_unprivileged` | `['mkdir', '-p', str(d)]` | modify | False | yes | **tool** | reviewed | qemu-access dir under base_dir |
 | 232 | `_ensure_qemu_access_unprivileged` | `['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(d)]` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
-| 271 | `_ensure_qemu_access` | `['getent', 'group', 'libvirt-qemu']` | — | — | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
+| 271 | `_ensure_qemu_access` | `['getent', 'group', 'libvirt-qemu']` | — | — | no | **read** | reviewed | getent group lookup |
 
 ### `aivm/vm/images.py`
 
@@ -424,8 +424,8 @@ rather than hand-maintaining this file.
 | 141 | `_verify_image_sha256` | `['rm', '-f', str(image_path)]` | modify | path_needs_sudo(image_path) | no | **tool** | reviewed | removes a checksum-failed cached image; refetchable |
 | 263 | `fetch_image` | `['mkdir', '-p', str(p['img_dir'])]` | modify | use_sudo | yes | **tool** | reviewed | image cache dir under base_dir |
 | 272 | `fetch_image` | `['rm', '-f', str(tmp_img)]` | modify | use_sudo | yes | **tool** | reviewed | removes the download temp file |
-| 294 | `fetch_image` | `transfer_cmd` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
-| 311 | `fetch_image` | `['mv', '-f', str(tmp_img), str(base_img)]` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
+| 294 | `fetch_image` | `transfer_cmd` | modify | use_sudo | yes | **tool** | reviewed | downloads the base image into the cache |
+| 311 | `fetch_image` | `['mv', '-f', str(tmp_img), str(base_img)]` | modify | use_sudo | yes | **tool** | reviewed | moves the verified download into the cache |
 | 348 | `fetch_image` | `['rm', '-f', str(base_img)]` | modify | use_sudo | yes | **tool** | reviewed | removes a stale cached base image; refetchable |
 
 ### `aivm/vm/provision.py`
