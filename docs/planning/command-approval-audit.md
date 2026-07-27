@@ -35,23 +35,26 @@ have and stays at `INFO` when it should drop to `--verbose 2`.
   ownership exemption. No prompt.
 - **user** — a write to state the user owns, including the guest. Prompts.
   These need no marking; `user` is the default.
+- **scrutiny** — unresolved. Written into an aivm-owned directory, but the
+  content leaves that directory and becomes guest state. See open questions.
 
 ## Totals
 
 | Disposition | Sites |
 |---|---|
-| read (misclassified today) | 33 |
-| tool (exempt, must be declared) | 23 |
-| user (prompts) | 88 |
+| read (misclassified today) | 29 |
+| tool (exempt, must be declared) | 18 |
+| user (prompts) | 91 |
 | **total affected** | **144** |
 
 ### Basis
 
 | Basis | Sites | Trust |
 |---|---|---|
-| rule (positive match) | 21 | skim |
-| unsure (**?**) | 35 | review |
-| default (fell through to `user`) | 88 | review for completeness |
+| reviewed (decided by the maintainer) | 28 | settled |
+| rule (positive match) | 19 | skim |
+| unsure (**?**) | 11 | review |
+| default (fell through to `user`) | 86 | review for completeness |
 
 Of the 190 total command submissions in `aivm/`, 46
 already declare `role='read'` and are unaffected.
@@ -67,6 +70,31 @@ already declare `role='read'` and are unaffected.
    overturned rule and is rewritten.
 5. Each **read** row below declares `role='read'`; each **tool** row declares
    the exemption. **user** rows change nothing.
+
+## Open questions
+
+**cloud-init artifacts (6 sites in `aivm/vm/cloudinit.py`).**
+These write into an aivm-owned directory, which reads as bookkeeping, but the
+files are the guest's identity: user-data, meta-data, network-config, and the
+seed ISO built from them and installed into the VM. The bookkeeping test is
+"regenerable from the user's config, and the user would not miss it". The first
+half holds -- they are generated from the config. The second does not obviously
+hold, because the artifact does not stay in the aivm directory; it becomes the
+guest.
+
+Three ways to settle it:
+
+1. **tool** -- the write is to an aivm path and the content is fully derived
+   from config the user already approved by running `aivm vm create`. The
+   install into the VM is a separate action that can carry its own prompt.
+2. **user** -- the artifact seeds guest identity, credentials, and network, so
+   it is not bookkeeping regardless of where the bytes land.
+3. **Split** -- the `mkdir` is `tool`, the content writes are `user`. This
+   matches the mkdir rule already decided and keeps the exemption on the part
+   that really is bookkeeping.
+
+Option 3 looks most consistent with the rules already settled, but the call is
+yours; the rows are marked **scrutiny** until then.
 
 ## Findings this audit surfaced
 
@@ -87,7 +115,7 @@ also ungrouped, so this table and the "not grouped into an explicit step"
 warning are the same work seen from two directions. Wrapping a call site in
 `mgr.step(...)` with `role='read'` settles both.
 
-**The exemption stayed narrow.** Only 23 of 144
+**The exemption stayed narrow.** Only 18 of 144
 affected sites look like genuine aivm-owned bookkeeping, which is a good sign
 for the policy's bar: most writes really are to the user's host or the guest.
 
@@ -119,9 +147,9 @@ rather than hand-maintaining this file.
 |---|---|---|---|---|---|---|---|---|
 | 75 | `_install_persistent_host_bind_replay` | `['systemctl', 'daemon-reload']` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
 | 82 | `_install_persistent_host_bind_replay` | `['systemctl', 'enable', service_name]` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
-| 154 | `_ensure_persistent_root_parent_dir` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 218 | `_ensure_persistent_root_host_bind` | `['mkdir', '-p', str(parent)]` | modify | path_needs_sudo(parent) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 226 | `_ensure_persistent_root_host_bind` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 154 | `_ensure_persistent_root_parent_dir` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** | reviewed | persistent-root export dir under base_dir |
+| 218 | `_ensure_persistent_root_host_bind` | `['mkdir', '-p', str(parent)]` | modify | path_needs_sudo(parent) | yes | **tool** | reviewed | bind staging parent under base_dir |
+| 226 | `_ensure_persistent_root_host_bind` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** | reviewed | bind staging target under base_dir |
 | 233 | `_ensure_persistent_root_host_bind` | `['mount', '--bind', str(source), str(target)]` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
 
 ### `aivm/attachments/persistent/manifest.py`
@@ -135,8 +163,8 @@ rather than hand-maintaining this file.
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
 | 88 | `_install_host_text_if_changed` | `install_dir_cmd` | modify | host_sudo | yes | **user** | default | no read or bookkeeping rule matched |
-| 98 | `_install_host_text_if_changed` | `['rm', '-f', '--', str(target)]` | modify | host_sudo | yes | **user** | default | no read or bookkeeping rule matched |
-| 106 | `_install_host_text_if_changed` | `['mkdir', '-p', str(target.parent)]` | modify | host_sudo | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 98 | `_install_host_text_if_changed` | `['rm', '-f', '--', str(target)]` | modify | host_sudo | yes | **user** | reviewed | removes an installed host system file |
+| 106 | `_install_host_text_if_changed` | `['mkdir', '-p', str(target.parent)]` | modify | host_sudo | yes | **user** | reviewed | installs under host system config, not aivm-owned |
 | 119 | `_install_host_text_if_changed` | `install_cmd` | modify | host_sudo | yes | **user** | default | no read or bookkeeping rule matched |
 | 278 | `_run_guest_ssh_script_with_retry` | `cmd` | role | False | no | **user** | default | no read or bookkeeping rule matched |
 | 331 | `_run_rsync_with_retry` | `cmd` | modify | False | no | **user** | default | no read or bookkeeping rule matched |
@@ -151,10 +179,10 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 91 | `_ensure_shared_root_parent_dir` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 91 | `_ensure_shared_root_parent_dir` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** | reviewed | shared-root export parent under base_dir |
 | 276 | `_ensure_host_bind_access` | `['mount', '-o', f'remount,bind,{desired}', str(target)]` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
-| 399 | `_ensure_shared_root_host_bind` | `['mkdir', '-p', str(parent_dir)]` | modify | path_needs_sudo(parent_dir) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 407 | `_ensure_shared_root_host_bind` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 399 | `_ensure_shared_root_host_bind` | `['mkdir', '-p', str(parent_dir)]` | modify | path_needs_sudo(parent_dir) | yes | **tool** | reviewed | shared-root bind parent under base_dir |
+| 407 | `_ensure_shared_root_host_bind` | `['mkdir', '-p', str(target)]` | modify | path_needs_sudo(target) | yes | **tool** | reviewed | shared-root bind target under base_dir |
 | 447 | `_ensure_shared_root_host_bind` | `[ 'bash', '-c', Elided( repair_script, 'stale bind-target r...` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
 | 468 | `_ensure_shared_root_host_bind` | `['mount', '--bind', source_dir, str(target)]` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
 | 671 | `_ensure_shared_root_guest_bind` | `mount_cmd` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
@@ -184,7 +212,7 @@ rather than hand-maintaining this file.
 |---|---|---|---|---|---|---|---|---|
 | 338 | `_adopt_one_tree` | `[ 'bash', '-c', Elided( _adopt_script(tree), f'python progr...` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
 | 727 | `main` | `['usermod', '-aG', LIBVIRT_GROUP, user]` | modify | True | yes | **user** | default | no read or bookkeeping rule matched |
-| 786 | `main` | `['mkdir', '-p', str(base_dir)]` | modify | False | yes | **tool** | rule | creates an aivm-owned directory |
+| 786 | `main` | `['mkdir', '-p', str(base_dir)]` | modify | False | yes | **tool** | reviewed | creates base_dir itself |
 | 795 | `main` | `['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)]` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
 | 807 | `main` | `['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(b)]` | modify | False | no | **user** | default | no read or bookkeeping rule matched |
 
@@ -225,9 +253,9 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 336 | `generate_host_key` | `['mkdir', '-m', '700', str(vm_directory)]` | modify | — | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 342 | `generate_host_key` | `['mkdir', '-m', '700', str(credentials_directory)]` | modify | — | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 347 | `generate_host_key` | `['mkdir', '-m', '700', str(directory)]` | modify | — | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 336 | `generate_host_key` | `['mkdir', '-m', '700', str(vm_directory)]` | modify | — | yes | **tool** | reviewed | aivm credential dir; the mkdir only |
+| 342 | `generate_host_key` | `['mkdir', '-m', '700', str(credentials_directory)]` | modify | — | yes | **tool** | reviewed | aivm credential dir; the mkdir only |
+| 347 | `generate_host_key` | `['mkdir', '-m', '700', str(directory)]` | modify | — | yes | **tool** | reviewed | aivm credential dir; the mkdir only |
 | 356 | `generate_host_key` | `[ 'ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(...` | modify | — | yes | **user** | default | no read or bookkeeping rule matched |
 | 373 | `generate_host_key` | `['chmod', '600', str(private_path)]` | modify | — | yes | **user** | default | no read or bookkeeping rule matched |
 | 378 | `generate_host_key` | `['chmod', '644', str(public_path)]` | modify | — | yes | **user** | default | no read or bookkeeping rule matched |
@@ -285,7 +313,7 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 156 | `maybe_offer_create_ssh_identity` | `['mkdir', '-p', str(default_priv.parent)]` | modify | False | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 156 | `maybe_offer_create_ssh_identity` | `['mkdir', '-p', str(default_priv.parent)]` | modify | False | yes | **user** | reviewed | creates the user's ~/.ssh; not aivm-owned |
 | 163 | `maybe_offer_create_ssh_identity` | `['chmod', '700', str(default_priv.parent)]` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
 | 170 | `maybe_offer_create_ssh_identity` | `[ 'ssh-keygen', '-q', '-t', 'ed25519', '-f', str(default_pr...` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
 
@@ -310,12 +338,12 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 362 | `_write_cloud_init` | `['mkdir', '-p', str(ci_dir)]` | modify | use_sudo | yes | **tool** | rule | creates an aivm-owned directory |
-| 370 | `_write_cloud_init` | `[ 'bash', '-c', Elided( f"cat > {user_data} <<'EOF'\n{cloud...` | modify | use_sudo | yes | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 385 | `_write_cloud_init` | `['bash', '-c', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"]` | modify | use_sudo | yes | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 393 | `_write_cloud_init` | `[ 'bash', '-c', f"cat > {network_config} <<'EOF'\n{netcfg}\...` | modify | use_sudo | yes | **read** **?** | unsure | read-only verb; enclosing function unclear |
-| 410 | `_write_cloud_init` | `['rm', '-f', str(seed_iso)]` | modify | use_sudo | yes | **tool** **?** | unsure | generated cloud-init, derived from config |
-| 418 | `_write_cloud_init` | `[ 'cloud-localds', '-v', '-N', str(network_config), str(see...` | modify | use_sudo | yes | **tool** **?** | unsure | generated cloud-init, derived from config |
+| 362 | `_write_cloud_init` | `['mkdir', '-p', str(ci_dir)]` | modify | use_sudo | yes | **scrutiny** | reviewed | aivm-owned dir, but seeds guest identity -- see open question |
+| 370 | `_write_cloud_init` | `[ 'bash', '-c', Elided( f"cat > {user_data} <<'EOF'\n{cloud...` | modify | use_sudo | yes | **scrutiny** | reviewed | user-data becomes guest config -- see open question |
+| 385 | `_write_cloud_init` | `['bash', '-c', f"cat > {meta_data} <<'EOF'\n{meta}\nEOF"]` | modify | use_sudo | yes | **scrutiny** | reviewed | meta-data becomes guest config -- see open question |
+| 393 | `_write_cloud_init` | `[ 'bash', '-c', f"cat > {network_config} <<'EOF'\n{netcfg}\...` | modify | use_sudo | yes | **scrutiny** | reviewed | network-config becomes guest config -- see open question |
+| 410 | `_write_cloud_init` | `['rm', '-f', str(seed_iso)]` | modify | use_sudo | yes | **scrutiny** | reviewed | removes the seed ISO -- see open question |
+| 418 | `_write_cloud_init` | `[ 'cloud-localds', '-v', '-N', str(network_config), str(see...` | modify | use_sudo | yes | **scrutiny** | reviewed | builds the seed ISO installed into the VM -- see open question |
 
 ### `aivm/vm/connectivity.py`
 
@@ -336,8 +364,8 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 35 | `_ensure_disk` | `['rm', '-f', str(vm_disk)]` | — | use_sudo | no | **user** | default | no read or bookkeeping rule matched |
-| 50 | `_ensure_disk` | `[ 'qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b',...` | — | use_sudo | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
+| 35 | `_ensure_disk` | `['rm', '-f', str(vm_disk)]` | — | use_sudo | no | **user** | reviewed | removes the VM disk; destroys guest data |
+| 50 | `_ensure_disk` | `[ 'qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2', '-b',...` | — | use_sudo | no | **user** | reviewed | qemu-img create makes the VM disk; not a read, not regenerable |
 
 ### `aivm/vm/domain.py`
 
@@ -361,10 +389,10 @@ rather than hand-maintaining this file.
 
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
-| 129 | `_submit_qemu_dir_prepare` | `['mkdir', '-p', str(path)]` | modify | True | no | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 129 | `_submit_qemu_dir_prepare` | `['mkdir', '-p', str(path)]` | modify | True | no | **tool** | reviewed | qemu-access dir under base_dir |
 | 137 | `_submit_qemu_dir_prepare` | `['chown', *(['-R'] if recursive else []), f'root:{group}', ...` | modify | True | no | **user** | default | no read or bookkeeping rule matched |
 | 145 | `_submit_qemu_dir_prepare` | `['chmod', mode, str(path)]` | modify | True | no | **user** | default | no read or bookkeeping rule matched |
-| 191 | `_ensure_qemu_access_unprivileged` | `['mkdir', '-p', str(d)]` | modify | False | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
+| 191 | `_ensure_qemu_access_unprivileged` | `['mkdir', '-p', str(d)]` | modify | False | yes | **tool** | reviewed | qemu-access dir under base_dir |
 | 232 | `_ensure_qemu_access_unprivileged` | `['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(d)]` | modify | False | yes | **user** | default | no read or bookkeeping rule matched |
 | 271 | `_ensure_qemu_access` | `['getent', 'group', 'libvirt-qemu']` | — | — | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
 
@@ -373,12 +401,12 @@ rather than hand-maintaining this file.
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
 | 83 | `_resolve_expected_image_sha256` | `['sha256sum', str(file_path)]` | — | — | no | **read** | rule | read-only verb in an inspection helper |
-| 141 | `_verify_image_sha256` | `['rm', '-f', str(image_path)]` | modify | path_needs_sudo(image_path) | no | **tool** **?** | unsure | base-image cache; regenerable by redownload |
-| 263 | `fetch_image` | `['mkdir', '-p', str(p['img_dir'])]` | modify | use_sudo | yes | **tool** **?** | unsure | directory creation; confirm the target is aivm-owned |
-| 272 | `fetch_image` | `['rm', '-f', str(tmp_img)]` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
+| 141 | `_verify_image_sha256` | `['rm', '-f', str(image_path)]` | modify | path_needs_sudo(image_path) | no | **tool** | reviewed | removes a checksum-failed cached image; refetchable |
+| 263 | `fetch_image` | `['mkdir', '-p', str(p['img_dir'])]` | modify | use_sudo | yes | **tool** | reviewed | image cache dir under base_dir |
+| 272 | `fetch_image` | `['rm', '-f', str(tmp_img)]` | modify | use_sudo | yes | **tool** | reviewed | removes the download temp file |
 | 294 | `fetch_image` | `transfer_cmd` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
 | 311 | `fetch_image` | `['mv', '-f', str(tmp_img), str(base_img)]` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
-| 348 | `fetch_image` | `['rm', '-f', str(base_img)]` | modify | use_sudo | yes | **tool** **?** | unsure | base-image cache; regenerable by redownload |
+| 348 | `fetch_image` | `['rm', '-f', str(base_img)]` | modify | use_sudo | yes | **tool** | reviewed | removes a stale cached base image; refetchable |
 
 ### `aivm/vm/provision.py`
 
@@ -409,7 +437,7 @@ rather than hand-maintaining this file.
 | Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |
 |---|---|---|---|---|---|---|---|---|
 | 34 | `_resolve_vm_disk_path` | `virsh_cmd('dumpxml', cfg.vm.name)` | — | use_sudo and virsh_needs_sudo() | no | **read** | rule | read-only verb in an inspection helper |
-| 57 | `_qemu_img_virtual_size_bytes` | `['qemu-img', 'info', '--output=json', str(path)]` | — | use_sudo and sudo_allowed() | no | **read** **?** | unsure | read-only verb; enclosing function unclear |
+| 57 | `_qemu_img_virtual_size_bytes` | `['qemu-img', 'info', '--output=json', str(path)]` | — | use_sudo and sudo_allowed() | no | **read** | reviewed | qemu-img info inspects only |
 | 72 | `_virsh_domblk_capacity_bytes` | `virsh_cmd('domblkinfo', cfg.vm.name, path_or_target)` | — | use_sudo and virsh_needs_sudo() | no | **read** | rule | read-only verb in an inspection helper |
 
 ### `aivm/vm/update/fdguard.py`

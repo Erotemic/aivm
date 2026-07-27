@@ -14,7 +14,7 @@ OUT = Path('/home/joncrall/code/aivm/docs/planning/command-approval-audit.md')
 READ_VERBS = (
     'dominfo', 'domstate', 'dumpxml', 'domblkinfo', 'domiflist', 'domifaddr',
     'net-info', 'net-dumpxml', 'net-dhcp-leases', "'list'", 'list --name',
-    'qemu-img', 'findmnt', 'stat', 'command -v', 'sha256sum', 'mountpoint',
+    'qemu-img info', 'findmnt', 'stat', 'command -v', 'sha256sum', 'mountpoint',
     'getent', 'id -u', 'systemctl is-', 'nft list', 'test -', 'true',
     'lsblk', 'df ', 'readlink', 'which', 'ip -j', 'ip addr', 'ss -',
     # git read-only subcommands
@@ -28,8 +28,51 @@ TOOL_HINTS = (
 )
 
 
+# Reviewed decisions, authoritative over the heuristics below. Keyed by
+# (file, line). Basis is reported as "reviewed".
+OVERRIDES = {
+    # mkdir: a write, except into a directory aivm owns
+    ('aivm/attachments/persistent/host_bind.py', 154): ('tool', 'persistent-root export dir under base_dir'),
+    ('aivm/attachments/persistent/host_bind.py', 218): ('tool', 'bind staging parent under base_dir'),
+    ('aivm/attachments/persistent/host_bind.py', 226): ('tool', 'bind staging target under base_dir'),
+    ('aivm/attachments/shared_root.py', 91): ('tool', 'shared-root export parent under base_dir'),
+    ('aivm/attachments/shared_root.py', 399): ('tool', 'shared-root bind parent under base_dir'),
+    ('aivm/attachments/shared_root.py', 407): ('tool', 'shared-root bind target under base_dir'),
+    ('aivm/cli/host_permissions.py', 786): ('tool', 'creates base_dir itself'),
+    ('aivm/vm/host_access.py', 129): ('tool', 'qemu-access dir under base_dir'),
+    ('aivm/vm/host_access.py', 191): ('tool', 'qemu-access dir under base_dir'),
+    ('aivm/vm/images.py', 263): ('tool', 'image cache dir under base_dir'),
+    ('aivm/credentials/keys.py', 336): ('tool', 'aivm credential dir; the mkdir only'),
+    ('aivm/credentials/keys.py', 342): ('tool', 'aivm credential dir; the mkdir only'),
+    ('aivm/credentials/keys.py', 347): ('tool', 'aivm credential dir; the mkdir only'),
+    # mkdir into directories the user owns
+    ('aivm/services.py', 156): ('user', "creates the user's ~/.ssh; not aivm-owned"),
+    ('aivm/attachments/persistent/transport.py', 106): ('user', 'installs under host system config, not aivm-owned'),
+    ('aivm/attachments/persistent/transport.py', 98): ('user', 'removes an installed host system file'),
+    # image fetch cleanup: regenerable by redownload
+    ('aivm/vm/images.py', 141): ('tool', 'removes a checksum-failed cached image; refetchable'),
+    ('aivm/vm/images.py', 272): ('tool', 'removes the download temp file'),
+    ('aivm/vm/images.py', 348): ('tool', 'removes a stale cached base image; refetchable'),
+    # disk lifecycle is not bookkeeping
+    ('aivm/vm/disk.py', 50): ('user', 'qemu-img create makes the VM disk; not a read, not regenerable'),
+    ('aivm/vm/disk.py', 35): ('user', 'removes the VM disk; destroys guest data'),
+    ('aivm/vm/update/detect.py', 57): ('read', 'qemu-img info inspects only'),
+    # cloud-init: written into an aivm dir, but installed into the VM later
+    ('aivm/vm/cloudinit.py', 362): ('scrutiny', 'aivm-owned dir, but seeds guest identity -- see open question'),
+    ('aivm/vm/cloudinit.py', 370): ('scrutiny', 'user-data becomes guest config -- see open question'),
+    ('aivm/vm/cloudinit.py', 385): ('scrutiny', 'meta-data becomes guest config -- see open question'),
+    ('aivm/vm/cloudinit.py', 393): ('scrutiny', 'network-config becomes guest config -- see open question'),
+    ('aivm/vm/cloudinit.py', 410): ('scrutiny', 'removes the seed ISO -- see open question'),
+    ('aivm/vm/cloudinit.py', 418): ('scrutiny', 'builds the seed ISO installed into the VM -- see open question'),
+}
+
+
 def classify(row):
-    """Return (disposition, why, confident)."""
+    """Return (disposition, why, basis)."""
+    key = (row['file'], row['line'])
+    if key in OVERRIDES:
+        disp, why = OVERRIDES[key]
+        return disp, why, 'reviewed'
     cmd = row['cmd']
     fn = row['func']
     fil = row['file']
@@ -92,7 +135,8 @@ for fil in sorted(by_file):
         bases[basis] += 1
         if basis != 'rule':
             uncertain += 1
-        mark = {'rule': '', 'unsure': ' **?**', 'default': ''}[basis]
+        mark = {'rule': '', 'unsure': ' **?**', 'default': '',
+                'reviewed': ''}[basis]
         cmd = r['cmd'].replace('|', '\\|')
         if len(cmd) > 62:
             cmd = cmd[:59] + '...'
@@ -142,6 +186,8 @@ have and stays at `INFO` when it should drop to `--verbose 2`.
   ownership exemption. No prompt.
 - **user** — a write to state the user owns, including the guest. Prompts.
   These need no marking; `user` is the default.
+- **scrutiny** — unresolved. Written into an aivm-owned directory, but the
+  content leaves that directory and becomes guest state. See open questions.
 
 ## Totals
 
@@ -156,6 +202,7 @@ have and stays at `INFO` when it should drop to `--verbose 2`.
 
 | Basis | Sites | Trust |
 |---|---|---|
+| reviewed (decided by the maintainer) | {bases['reviewed']} | settled |
 | rule (positive match) | {bases['rule']} | skim |
 | unsure (**?**) | {bases['unsure']} | review |
 | default (fell through to `user`) | {bases['default']} | review for completeness |
@@ -174,6 +221,31 @@ already declare `role='read'` and are unaffected.
    overturned rule and is rewritten.
 5. Each **read** row below declares `role='read'`; each **tool** row declares
    the exemption. **user** rows change nothing.
+
+## Open questions
+
+**cloud-init artifacts ({counts['scrutiny']} sites in `aivm/vm/cloudinit.py`).**
+These write into an aivm-owned directory, which reads as bookkeeping, but the
+files are the guest's identity: user-data, meta-data, network-config, and the
+seed ISO built from them and installed into the VM. The bookkeeping test is
+"regenerable from the user's config, and the user would not miss it". The first
+half holds -- they are generated from the config. The second does not obviously
+hold, because the artifact does not stay in the aivm directory; it becomes the
+guest.
+
+Three ways to settle it:
+
+1. **tool** -- the write is to an aivm path and the content is fully derived
+   from config the user already approved by running `aivm vm create`. The
+   install into the VM is a separate action that can carry its own prompt.
+2. **user** -- the artifact seeds guest identity, credentials, and network, so
+   it is not bookkeeping regardless of where the bytes land.
+3. **Split** -- the `mkdir` is `tool`, the content writes are `user`. This
+   matches the mkdir rule already decided and keeps the exemption on the part
+   that really is bookkeeping.
+
+Option 3 looks most consistent with the rules already settled, but the call is
+yours; the rows are marked **scrutiny** until then.
 
 ## Findings this audit surfaced
 
