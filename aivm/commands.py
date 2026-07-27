@@ -1652,8 +1652,12 @@ class CommandManager:
             spec.sudo or self._is_system_libvirt_mutation(spec)
         ):
             self._confirm_loose_command(spec, _stacklevel=_stacklevel + 1)
+        # Whether privilege is actually spent, not merely offered: under
+        # privilege_mode='as-needed' a caller passes sudo=True speculatively,
+        # and as root no escalation happens at all.
+        escalated = spec.sudo and os.geteuid() != 0
         cmd = list(spec.cmd)
-        if spec.sudo and os.geteuid() != 0:
+        if escalated:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
 
         # Render what the user could have typed, minus payloads the call site
@@ -1662,17 +1666,24 @@ class CommandManager:
         run_line, omissions = self._render_preview(spec)
         raw_line = shell_join(cmd)
 
-        # Visibility follows what a command does, not whether it needed sudo.
-        # Anything that changes state is announced; a read is kept for -vv.
-        # Keying on privilege showed one read (qemu-img, which needs sudo) and
-        # hid seven identical ones, so the log answered "was this privileged"
-        # when the reader was asking "what did it do".
+        # POLICY (see CLAUDE.md, "`sudo` on the command line is always called
+        # out"): the user is made aware of anything with the potential to
+        # perform an unbounded privileged sudo op, even if we know what the
+        # program being called is. Merely invoking sudo on the command line is
+        # strong enough of a thing that it needs to be called out. Do not
+        # reduce this to role alone -- a privileged read still prints, because
+        # what is announced is the escalation, not the read.
         #
-        # Quiet is therefore declared, never inferred: a command is only
-        # demoted when a call site says role='read' or runs inside a read
-        # intent. An unclassified command defaults to 'modify' and stays loud,
-        # so an unaudited path is heard rather than silently skipped.
-        emit = local_log.debug if role == 'read' else local_log.info
+        # State changes are announced for the separate reason that they
+        # altered the host. What is left for -vv is the remainder: a read that
+        # escalates nothing, which is plumbing.
+        #
+        # Quiet is therefore declared, never inferred: a command is demoted
+        # only where a call site says role='read' or runs inside a read intent
+        # *and* no sudo was applied. An unclassified command defaults to
+        # 'modify' and stays loud, so an unaudited path is heard, not skipped.
+        quiet = role == 'read' and not escalated
+        emit = local_log.debug if quiet else local_log.info
         if within_plan and ordinal is not None:
             current, total = ordinal
             emit('RUN [{}/{}]: {}', current, total, run_line)

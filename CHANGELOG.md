@@ -100,13 +100,18 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   Anything left out of a line is now announced beneath it rather than only
   marked inline, at `WARNING` when the payload is unmarked, since a quietly
   shortened command is indistinguishable from a faithful one.
-* Command log visibility follows what a command does rather than whether it
-  needed sudo: state-changing commands are always announced, reads are kept
-  for `--verbose 2`. Keying on privilege showed one read (`qemu-img info`,
-  which needs sudo) while hiding the seven identical unprivileged reads beside
-  it. Quiet is now declared rather than inferred -- a command is demoted only
-  where a call site says `role='read'` or runs inside a read intent, and an
-  unclassified command defaults to `modify` and stays loud.
+* Command log visibility now announces every command that changed state or
+  actually escalated, and holds only unprivileged reads for `--verbose 2`.
+  Previously a state-changing command was visible only when it happened to
+  pass `check=True`, while seven read-only libvirt probes were hidden purely
+  because they needed no sudo -- including the `virsh dominfo` that reports
+  what a VM actually has. Escalation is always called out even for a read,
+  because merely invoking `sudo` on the command line has the potential to
+  perform an unbounded privileged operation whatever the program is; see the
+  policy note in `CLAUDE.md` and :doc:`privilege-modes`. Quiet is declared
+  rather than inferred: a command is demoted only where a call site says
+  `role='read'` or runs inside a read intent *and* no `sudo` prefix was
+  applied, and an unclassified command defaults to `modify` and stays loud.
 * `aivm vm update` groups its planning probes under one read intent. The
   `dominfo`, `domstate`, `dumpxml`, `domblkinfo`, and `qemu-img` probes were
   ungrouped, so each was classified as a state change and prompted separately

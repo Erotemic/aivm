@@ -669,14 +669,15 @@ def test_ordinary_command_is_logged_verbatim(
     assert 'RUN: ' + ' '.join(cmd) in messages
 
 
-def test_visibility_follows_role_not_privilege(
+def test_only_an_unprivileged_read_is_held_back(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """A read is quiet and a change is loud, whether or not sudo was involved.
+    """Changing state or spending privilege is announced; a plain read is not.
 
-    Keying on privilege showed a sudo read (qemu-img info) while hiding the
-    identical unprivileged reads beside it, so the log answered "was this
-    privileged" when the reader was asking "what did it do".
+    A sudo read stays visible because the user may have been asked for a
+    password to run it, and a prompt whose command never appears is worse
+    than noise. Only a read that neither changes anything nor crosses a
+    privilege boundary is deferred to -vv.
     """
     patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
     info = capture_logs(monkeypatch, 'aivm.commands.log')
@@ -688,7 +689,10 @@ def test_visibility_follows_role_not_privilege(
     mgr.run(['virsh', 'setvcpus', 'vm', '8'], sudo=False, role='modify')
 
     shown = [m for m in info if m.startswith('RUN')]
-    assert shown == ['RUN: virsh setvcpus vm 8']
+    assert shown == [
+        'RUN: sudo qemu-img info /disk.qcow2',
+        'RUN: virsh setvcpus vm 8',
+    ]
 
 
 def test_reads_are_recoverable_at_debug(monkeypatch: MonkeyPatch) -> None:
@@ -719,3 +723,31 @@ def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
     mgr.run(['some-tool', '--do-a-thing'], sudo=False)
 
     assert 'RUN: some-tool --do-a-thing' in info
+
+
+def test_a_read_that_escalates_nothing_stays_quiet_as_root(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """sudo=True is an offer, not an event: as root nothing is escalated.
+
+    Callers pass sudo=True speculatively under privilege_mode='as-needed'.
+    Visibility tracks the privilege actually spent, so the same read that is
+    announced for an unprivileged user is plumbing when already root.
+    """
+    patch_command_runtime(
+        monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''), euid=0
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+    probe = ['qemu-img', 'info', '/disk.qcow2']
+
+    # capture_logs replaces the module logger, so each level is a separate run
+    info = capture_logs(monkeypatch, 'aivm.commands.log', levels=('info',))
+    mgr.run(probe, sudo=True, role='read')
+    assert [m for m in info if m.startswith('RUN')] == []
+
+    verbose = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('debug',)
+    )
+    mgr.run(probe, sudo=True, role='read')
+    assert 'RUN: qemu-img info /disk.qcow2' in verbose
