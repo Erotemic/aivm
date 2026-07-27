@@ -280,6 +280,24 @@ collapsed into one:
 ``--yes`` / ``--yes-sudo`` answer the second question only. No flag, mode, or
 setting suppresses the first.
 
+Secrets are kept out of arguments, not out of logs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Verbosity is not a security boundary. ``--verbose 2`` prints the literal
+command for anything abbreviated at ``INFO``, so a value that is an argument
+is a value that gets logged, and no amount of preview shortening changes that.
+
+The boundary is therefore placed earlier: **a secret is never a command
+argument.** A private deploy key reaches the guest through ``input_text`` on
+stdin, consumed by a remote ``cat`` (``aivm/credentials/guest.py``), and
+provider tokens are read from the environment into direct API calls. Neither
+appears in ``spec.cmd``, so neither can be logged, digested, or previewed at
+any verbosity.
+
+The rule for new code follows: if a value must not appear in a log, it must not
+be an argument. Redacting the preview is not an alternative, because the raw
+line still holds it.
+
 What "sudo" means here
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -354,11 +372,11 @@ Ownership
 Inspectability
   Whether the log can render the command in full, or a payload is too large to
   print and is omitted (see the ``Elided`` marker in ``aivm/commands.py``).
-  An omitted payload may also carry ``digest=True``, which prints the head of
-  a SHA-256 so a reader can tell which content ran. That is opt-in: these
-  payloads are rendered from config, so a digest over secret-bearing content
-  confirms a guess rather than identifying a payload, and it identifies but
-  never verifies -- eight hex characters is 32 bits.
+  An omitted payload also carries the head of a SHA-256, so a reader can tell
+  which content ran; two scripts of equal length are otherwise
+  indistinguishable. It identifies and never verifies -- eight hex characters
+  is 32 bits, so nothing may use it to decide two payloads match and skip a
+  real check.
   This axis governs what the log and the approval prompt can *show*. It is no
   longer an approval trigger in its own right, because a write that cannot be
   printed is already confirmable for being a write.

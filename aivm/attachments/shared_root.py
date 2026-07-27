@@ -451,7 +451,6 @@ def _ensure_shared_root_host_bind(
                     Elided(
                         repair_script,
                         'stale bind-target repair shell script',
-                        digest=True,
                     ),
                 ],
                 sudo=True,

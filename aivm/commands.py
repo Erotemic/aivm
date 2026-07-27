@@ -117,14 +117,20 @@ class Elided(str):
     holds, because a guess that reads as fact ("<remote command omitted>")
     teaches the user something the log does not actually know.
 
-    ``digest=True`` adds the head of a SHA-256 of the value, which pins which
-    content ran far better than the character count alone. It is opt-in
-    because these payloads are generated from config: anyone holding the log
-    and the source can regenerate candidates and check which one matches, so a
-    digest over secret-bearing content -- cloud-init user-data embeds
-    ``vm.password`` -- is a confirmation oracle rather than an identifier. The
-    call site that knows enough to label a payload is the one that knows
-    whether it carries a secret.
+    The preview also carries the head of a SHA-256 of the value, which pins
+    which content ran far better than a character count: two scripts of equal
+    length are otherwise indistinguishable in a log.
+
+    Digesting is unconditional, and safe because of an invariant that holds
+    elsewhere: **secrets are never passed on a command line.** A private
+    deploy key reaches the guest through ``input_text`` on stdin, and provider
+    tokens are read from the environment, so no secret appears in ``spec.cmd``
+    to be digested. Anything that does appear there is already printed in full
+    by the ``raw command`` line at ``--verbose 2``, so withholding 32 bits of
+    its hash would protect nothing -- verbosity is not a security boundary.
+
+    The consequence for new code is the invariant, not the digest: if a value
+    must not be logged, it must not be an argument. Put it in ``input_text``.
 
     The digest identifies; it never verifies. Eight hex characters is 32 bits
     and trivially collidable, so nothing may use it to decide two payloads are
@@ -132,7 +138,7 @@ class Elided(str):
 
     Attributes:
         label: Short description rendered in place of the value.
-        digest_hex: Leading SHA-256 hex characters, or '' when not requested.
+        digest_hex: Leading SHA-256 hex characters of the value.
     """
 
     label: str
@@ -141,15 +147,11 @@ class Elided(str):
     #: Enough to tell runs apart in a log; nowhere near enough to trust.
     DIGEST_CHARS = 8
 
-    def __new__(
-        cls, value: str, label: str, *, digest: bool = False
-    ) -> 'Elided':
+    def __new__(cls, value: str, label: str) -> 'Elided':
         obj = super().__new__(cls, value)
         obj.label = label
-        obj.digest_hex = ''
-        if digest:
-            full = hashlib.sha256(value.encode('utf-8')).hexdigest()
-            obj.digest_hex = full[: cls.DIGEST_CHARS]
+        full = hashlib.sha256(value.encode('utf-8')).hexdigest()
+        obj.digest_hex = full[: cls.DIGEST_CHARS]
         return obj
 
 
@@ -1644,10 +1646,10 @@ class CommandManager:
         for part in cmd:
             if isinstance(part, Elided):
                 display_parts.append(f'<<OMITTED {part.label}>>')
-                marks = f'{len(part)} characters'
-                if part.digest_hex:
-                    marks += f', sha256:{part.digest_hex}'
-                omissions.append(f'{part.label} ({marks})')
+                omissions.append(
+                    f'{part.label} ({len(part)} characters, '
+                    f'sha256:{part.digest_hex})'
+                )
                 continue
             text = str(part)
             if len(text) > PREVIEW_ARG_MAX_LEN:

@@ -372,10 +372,6 @@ def _write_cloud_init(
                     'bash',
                     '-c',
                     Elided(
-                        # deliberately no digest: user-data embeds
-                        # vm.password, and the document is rendered from
-                        # config, so a digest would confirm a guessed
-                        # password rather than identify the payload
                         f"cat > {user_data} <<'EOF'\n{cloud}\nEOF",
                         f'heredoc writing cloud-init user-data to {user_data}',
                     ),

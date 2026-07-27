@@ -869,12 +869,12 @@ def test_a_digest_pins_which_payload_ran(monkeypatch: MonkeyPatch) -> None:
     first = 'a' * 936
     second = 'b' * 936
     mgr.run(
-        ['ssh', 'vm', Elided(first, 'guest script', digest=True)],
+        ['ssh', 'vm', Elided(first, 'guest script')],
         sudo=False,
         role='modify',
     )
     mgr.run(
-        ['ssh', 'vm', Elided(second, 'guest script', digest=True)],
+        ['ssh', 'vm', Elided(second, 'guest script')],
         sudo=False,
         role='modify',
     )
@@ -887,27 +887,36 @@ def test_a_digest_pins_which_payload_ran(monkeypatch: MonkeyPatch) -> None:
     assert notices[0] != notices[1]
 
 
-def test_a_payload_without_a_digest_says_only_its_length(
+def test_secrets_are_kept_off_the_command_line_not_out_of_the_log(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Opt-in, so a secret-bearing payload cannot acquire a digest by default.
+    """Digesting is unconditional because no secret is ever an argument.
 
-    cloud-init user-data embeds vm.password and is rendered from config, so a
-    digest would confirm a guessed password rather than identify a payload.
+    A private key reaches the guest through input_text on stdin, so it never
+    reaches spec.cmd and cannot be logged or digested. Anything that is an
+    argument is already printed in full by `raw command` at --verbose 2, so
+    withholding its hash would protect nothing.
     """
-    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    seen: list[str | None] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        seen.append(kwargs.get('input'))
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
     messages = capture_logs(
         monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
     )
     mgr = CommandManager(yes=True)
     CommandManager.activate(mgr)
 
+    secret = 'PRIVATE-KEY-MATERIAL'
     mgr.run(
-        ['bash', '-c', Elided('secret' * 200, 'generated document')],
+        ['ssh', 'vm', Elided('set -eu; cat > "$tmp"' * 40, 'install a key')],
         sudo=False,
         role='modify',
+        input_text=secret,
     )
 
-    notice = next(m for m in messages if 'OMITTED FROM' in m)
-    assert '1200 characters' in notice
-    assert 'sha256:' not in notice
+    assert seen == [secret]
+    assert not any(secret in m for m in messages)
