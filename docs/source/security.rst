@@ -92,6 +92,49 @@ References:
 * libvirt network filtering concepts (optional): `libvirt NWFilter`_
 
 
+Guest credentials are not secrets; provider credentials are
+-----------------------------------------------------------
+
+Two kinds of credential pass through ``aivm``, and only one of them is
+protected. The distinction is deliberate and follows from the threat model
+above rather than from convenience.
+
+**The guest password is not a secret, by design.** ``vm.password`` is stored in
+plaintext in the config store, rendered into cloud-init ``user-data``, and
+therefore printed by the ``raw command`` line at ``--verbose 2``. This is
+accepted. Guest root is already inside the untrusted boundary: agents running
+in the VM are expected to have unrestricted root there, which is what makes the
+VM a usable sandbox. A credential that grants what its holder already possesses
+protects nothing, so treating it as a secret would add ceremony without moving
+the boundary.
+
+Keeping the password declarative in the config store is also the point of the
+config store: one file states what the VM is, and the VM is reconciled toward
+it. Removing the password from that file to protect it would trade a real
+usability property for no security gain.
+
+The consequence to be aware of is narrow: a ``--verbose 2`` log, or the
+cloud-init directory under ``base_dir``, discloses the guest password to anyone
+who can read it. On a shared host, or if such a log is attached to a bug
+report, treat the guest as compromised -- which, per the model above, it was
+always assumed to be.
+
+**Provider credentials are secrets and are handled as such.** A repository
+deploy key or a provider token grants access to resources *outside* the trust
+boundary, where the "already has it" argument does not apply. These never
+appear in a command argument: private keys reach the guest through
+``input_text`` on stdin, consumed by a remote ``cat``, and tokens are read from
+the environment into direct API calls. Neither can be logged, previewed, or
+digested at any verbosity. See "Secrets are kept out of arguments, not out of
+logs" in :doc:`design`.
+
+**Future work.** If the guest password ever needs to be a real secret -- a
+multi-tenant host, or a guest that stops being disposable -- the fix is not to
+redact logs, which cannot work while the value is a command argument. It is to
+keep it out of ``user-data`` and inject it by the same route provider
+credentials already take.
+
+
 What “explicitly shared folders” really means (shared-folder pivot risk)
 ------------------------------------------------------------------------
 

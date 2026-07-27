@@ -298,6 +298,14 @@ The rule for new code follows: if a value must not appear in a log, it must not
 be an argument. Redacting the preview is not an alternative, because the raw
 line still holds it.
 
+One value is deliberately outside this rule. ``vm.password`` is plaintext in
+the config store and rendered into cloud-init ``user-data``, so ``--verbose 2``
+prints it. That is accepted rather than overlooked: guest root sits inside the
+untrusted boundary and the VM's occupants are expected to hold it already. See
+"Guest credentials are not secrets; provider credentials are" in
+:doc:`security` for the reasoning and for what would have to change if the
+guest ever stopped being disposable.
+
 What "sudo" means here
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -727,6 +735,12 @@ should be evolved in these areas:
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
   limits (see ``dev/design/future/flexible-folder-sharing.md``).
+* Guest password handling:
+  ``vm.password`` is plaintext in the config store and in generated cloud-init
+  ``user-data``, and is therefore visible at ``--verbose 2``. Accepted while
+  the guest is a disposable sandbox whose agents hold root anyway; revisit if
+  ``aivm`` targets multi-tenant hosts or long-lived guests. The fix is to
+  inject it off the command line, not to redact logs.
 * Long-lived virtiofs FD growth:
   continue investigating ``virtiofsd`` FD retention/growth on ``shared-root``
   and ``persistent`` exports. ``dev/devcheck/debug-harness.sh`` is the current
