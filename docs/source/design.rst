@@ -312,6 +312,17 @@ Only a read that escalates no host privilege is held back for ``--verbose 2``.
 Nothing is ever discarded: raising verbosity reveals every command, plus the
 literal text of any payload the log abbreviated.
 
+The exhaustive statement of this policy is
+``dev/design/programatic/command_policy.py``. The tables below are the
+human-readable summary; that file is the authority, because it encodes the
+rules as predicates and then forces the **entire** predicate cross-product, so
+every exception is visible as a row rather than implied by prose. Running it
+with no arguments prints the full report; ``command_policy.py csv --table=...``
+emits any single table for machine reading.
+
+Change the policy there first. The prose here is a view of it, not a second
+source of truth.
+
 Classification axes
 ^^^^^^^^^^^^^^^^^^^
 
