@@ -343,6 +343,7 @@ def _adopt_one_tree(
                         _adopt_script(tree),
                         f'python program adopting {tree} into the '
                         f'{LIBVIRT_GROUP} group',
+                        digest=True,
                     ),
                 ],
                 sudo=True,

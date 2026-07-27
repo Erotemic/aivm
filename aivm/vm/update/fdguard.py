@@ -50,7 +50,7 @@ def _guest_ssh_cmd(
             batch_mode=True,
         ),
         f'{cfg.vm.user}@{ip}',
-        Elided(f'sh -c {shlex.quote(script)}', label),
+        Elided(f'sh -c {shlex.quote(script)}', label, digest=True),
     ]
 
 

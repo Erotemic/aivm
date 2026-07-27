@@ -851,3 +851,63 @@ def test_an_omission_notice_never_outlives_its_command(
     CommandManager.activate(mgr2)
     mgr2.run(probe, sudo=False, role='modify')
     assert [m for m in visible if 'OMITTED' in m]
+
+
+def test_a_digest_pins_which_payload_ran(monkeypatch: MonkeyPatch) -> None:
+    """The character count barely identifies a payload; the digest does.
+
+    Two scripts of identical length are indistinguishable in the log without
+    it, which is the case that matters when asking "did this change".
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+
+    first = 'a' * 936
+    second = 'b' * 936
+    mgr.run(
+        ['ssh', 'vm', Elided(first, 'guest script', digest=True)],
+        sudo=False,
+        role='modify',
+    )
+    mgr.run(
+        ['ssh', 'vm', Elided(second, 'guest script', digest=True)],
+        sudo=False,
+        role='modify',
+    )
+
+    notices = [m for m in messages if 'OMITTED FROM' in m]
+    assert len(notices) == 2
+    assert '936 characters' in notices[0]
+    assert 'sha256:' in notices[0]
+    # same label, same length, different content: only the digest separates them
+    assert notices[0] != notices[1]
+
+
+def test_a_payload_without_a_digest_says_only_its_length(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Opt-in, so a secret-bearing payload cannot acquire a digest by default.
+
+    cloud-init user-data embeds vm.password and is rendered from config, so a
+    digest would confirm a guessed password rather than identify a payload.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+
+    mgr.run(
+        ['bash', '-c', Elided('secret' * 200, 'generated document')],
+        sudo=False,
+        role='modify',
+    )
+
+    notice = next(m for m in messages if 'OMITTED FROM' in m)
+    assert '1200 characters' in notice
+    assert 'sha256:' not in notice

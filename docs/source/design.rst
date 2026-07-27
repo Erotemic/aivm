@@ -354,6 +354,11 @@ Ownership
 Inspectability
   Whether the log can render the command in full, or a payload is too large to
   print and is omitted (see the ``Elided`` marker in ``aivm/commands.py``).
+  An omitted payload may also carry ``digest=True``, which prints the head of
+  a SHA-256 so a reader can tell which content ran. That is opt-in: these
+  payloads are rendered from config, so a digest over secret-bearing content
+  confirms a guess rather than identifying a payload, and it identifies but
+  never verifies -- eight hex characters is 32 bits.
   This axis governs what the log and the approval prompt can *show*. It is no
   longer an approval trigger in its own right, because a write that cannot be
   printed is already confirmable for being a write.
