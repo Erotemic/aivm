@@ -427,15 +427,20 @@ Inspectability does not appear either. A payload too large to print is
 confirmable for being a write; being unreadable raises the stakes of the prompt
 but is not what triggers it.
 
-The triggers overlap on purpose, and the overlap is a backstop rather than
-redundancy. A write that also needs host sudo is caught twice: once for being a
-write, once for escalating. So on a host without ``libvirt`` group membership,
-``virsh destroy`` still prompts even if its effect were mis-declared as a read,
-because the sudo path catches it. Classification mistakes are expected -- they
-are judgments made per call site -- and the axes are arranged so that the
-common ones fail safe. Do not "simplify" either trigger away on the grounds
-that the other already covers a case; covering the same case twice is the
-design.
+**Overlapping triggers are one prompt, never two.** A command that both writes
+and escalates has two independent *reasons* to be confirmable, and the user is
+asked exactly once. Approval is a property of the command, not a toll collected
+per matching rule, so a second matching trigger must never produce a second
+prompt for the same command.
+
+The overlap is a backstop rather than redundancy. On a host without ``libvirt``
+group membership, ``virsh destroy`` needs sudo, so it still prompts even if its
+effect were mis-declared as a read -- the escalation path catches what the
+write rule missed. Classification is a judgment made per call site and will
+sometimes be wrong, so the axes are arranged for the common mistakes to fail
+safe. Do not "simplify" either trigger away on the grounds that the other
+already covers a case: covering the same case twice is the design, and
+collapsing them to one prompt is what keeps that free.
 
 The exemption is narrow and is declared per call site
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
