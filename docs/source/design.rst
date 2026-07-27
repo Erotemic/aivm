@@ -340,18 +340,23 @@ Authority
   root-equivalent ``libvirt`` group membership whether or not sudo was needed).
 
 Ownership
-  Whose state a write touches: ``tool`` -- state ``aivm`` created and manages
-  for itself, such as export roots, caches, and generated cloud-init -- or
-  ``user`` -- anything else, including the user's source tree, host system
-  configuration, and the guest.
+  Whose state a write touches. ``user`` covers the user's source tree, host
+  system configuration, and the guest -- anything the user would recognize as
+  theirs. ``tool`` is reserved for ``aivm``'s own bookkeeping: intermediate
+  state it creates, owns, and can regenerate from the user's config, such as
+  creating an export root before writing a generated artifact into it.
+
+  ``tool`` is an **exemption that a call site declares**, never something the
+  manager infers. An unmarked write is ``user``, and prompts. The test is not
+  "did aivm create this path" but "is this state regenerable bookkeeping the
+  user never authored and would not miss".
 
 Inspectability
   Whether the log can render the command in full, or a payload is too large to
   print and is omitted (see the ``Elided`` marker in ``aivm/commands.py``).
-
-Ownership is a real axis rather than a footnote on authority. An unprivileged
-write to a directory ``aivm`` created for itself is implied by invoking the
-command at all; the same write into the user's tree or the guest is not.
+  This axis governs what the log and the approval prompt can *show*. It is no
+  longer an approval trigger in its own right, because a write that cannot be
+  printed is already confirmable for being a write.
 
 Policy table: visibility
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -383,71 +388,75 @@ changes this table.
 Policy table: approval
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Rows are evaluated in order; the first match decides. ``--yes`` /
-``--yes-sudo`` waive every prompt below, and nothing else does.
+**A write is the guard.** Changing state is what requires consent, and neither
+privilege nor command family is what makes it so. Rows are evaluated in order;
+the first match decides. ``--yes`` / ``--yes-sudo`` waive every prompt below,
+and nothing else does.
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 24 16 20 16
+   :widths: 16 26 22 36
 
    * - Effect
-     - Authority
      - Ownership
-     - Inspectability
      - Confirm
+     - Why
    * - read
-     - none
      - --
-     - --
+     - no, except a read using host sudo, which auto-approves under
+       ``auto_approve_readonly_sudo`` and otherwise prompts
+     - nothing is being changed
+   * - write
+     - ``tool`` (declared)
      - no
-   * - read
-     - host sudo
-     - --
-     - --
-     - by policy [#robypolicy]_
+     - regenerable bookkeeping the user never authored
    * - write
-     - host sudo
-     - any
-     - any
+     - ``user`` (default)
      - yes
-   * - write
-     - hypervisor control
-     - any
-     - any
-     - yes
-   * - write
-     - none
-     - tool
-     - any
-     - no
-   * - write
-     - none
-     - user
-     - payload omitted
-     - yes
-   * - write
-     - none
-     - user
-     - fully logged
-     - **unsettled** [#unsettled]_
+     - it changes something the user owns
 
-.. [#robypolicy] Auto-approves under ``auto_approve_readonly_sudo``, else
-   prompts. Visible either way.
-.. [#unsettled] Today these run without a prompt: an unprivileged, fully
-   printable write into the user's tree or the guest matches no approval
-   trigger. Whether that is correct is an open question this table exists to
-   expose rather than hide. Resolving it decides, for example, whether
-   ``ssh vm 'mkdir -p ...'`` should prompt.
+Authority does not appear in this table, and that is deliberate. Host sudo
+already implies a write in every case that matters, and hypervisor control is
+subsumed: ``virsh destroy`` is confirmable because it destroys a VM, not because
+it is spelled ``virsh``. Gating on the command family guarded
+``undefine --remove-all-storage`` only by the coincidence that it shares a
+binary with ``setvcpus``, while an unprivileged non-``virsh`` command doing the
+same damage was never guarded at all.
 
-Rationale for the non-obvious rows. A write with ``hypervisor control``
-confirms even unprivileged, because ``libvirt`` group membership is
-root-equivalent, so the authority is spent whether or not sudo appeared. A
-write to ``tool`` ownership does not confirm, because it is already implied by
-invoking the command, and prompting for it is the approval fatigue principle 1
-exists to avoid. A ``user`` write with an omitted payload confirms on
-inspectability rather than privilege: approval is the only moment at which the
-user could read what is about to run, which is precisely what an unreadable
-23KB installer script otherwise denies them.
+Inspectability does not appear either. A payload too large to print is
+confirmable for being a write; being unreadable raises the stakes of the prompt
+but is not what triggers it.
+
+The triggers overlap on purpose, and the overlap is a backstop rather than
+redundancy. A write that also needs host sudo is caught twice: once for being a
+write, once for escalating. So on a host without ``libvirt`` group membership,
+``virsh destroy`` still prompts even if its effect were mis-declared as a read,
+because the sudo path catches it. Classification mistakes are expected -- they
+are judgments made per call site -- and the axes are arranged so that the
+common ones fail safe. Do not "simplify" either trigger away on the grounds
+that the other already covers a case; covering the same case twice is the
+design.
+
+The exemption is narrow and is declared per call site
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Prompting on every write would be the approval fatigue principle 1 warns about,
+so ``tool`` ownership exempts a write. It is deliberately hard to qualify for:
+
+* the state is **regenerable** from the user's config;
+* the user never authored it and would not miss it;
+* it exists as bookkeeping for work the user already asked for.
+
+Creating an export root before writing a generated artifact into it qualifies.
+Writing into the user's source tree, editing ``~/.ssh/config``, or installing
+into the guest does not, however routine it feels.
+
+The exemption must be **marked at the call site**, and an unmarked write
+defaults to ``user`` and prompts. This is the same rule already applied to
+elision and to log visibility: the safe behavior is the default, and the quiet
+behavior is something code has to say out loud. Forgetting to mark a
+bookkeeping write costs a prompt; forgetting to mark a real write would have
+cost the user their consent, so the default falls the other way.
 
 Worked examples
 ^^^^^^^^^^^^^^^
@@ -478,7 +487,7 @@ Each row is classified on the four axes, then read off the tables above.
      - --
      - fully logged
      - ``INFO``
-     - by policy
+     - by policy [#robypolicy]_
    * - ``qemu-img info`` as root
      - read
      - none [#root]_
@@ -510,7 +519,7 @@ Each row is classified on the four axes, then read off the tables above.
    * - ``mkdir -p`` on an export root
      - write
      - none
-     - tool
+     - tool (declared)
      - fully logged
      - ``INFO``
      - no
@@ -527,8 +536,10 @@ Each row is classified on the four axes, then read off the tables above.
      - user
      - fully logged
      - ``INFO``
-     - unsettled [#unsettled]_
+     - yes
 
+.. [#robypolicy] A read that spends host sudo auto-approves under
+   ``auto_approve_readonly_sudo`` and prompts otherwise. Visible either way.
 .. [#root] Already root, so no ``sudo`` token reaches the command line. There
    is no escalation to call out.
 .. [#guest] The ``sudo -n`` runs in the guest and is not host sudo, so the row
