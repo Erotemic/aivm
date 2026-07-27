@@ -229,6 +229,7 @@ def _lint_store_text(text: str) -> list[str]:
         'provider_key_title',
         'key_fingerprint',
         'state',
+        'provider_managed',
     }
     vms = raw.get('vms', [])
     if isinstance(vms, list):

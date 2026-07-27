@@ -58,6 +58,12 @@ class CredentialEntry:
     provider_key_title: str = ''
     key_fingerprint: str = ''
     state: CredentialState = CREDENTIAL_STATE_PENDING
+    # False when AIVM installed and verified this credential but never
+    # administered it at the provider, because the account it uses is not an
+    # admin of the repository. Such a key was added by a human out of band, so
+    # AIVM has no provider key id and cannot revoke it -- see
+    # `aivm vm creds abandon`.
+    provider_managed: bool = True
 
 
 @dataclass

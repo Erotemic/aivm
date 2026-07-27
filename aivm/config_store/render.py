@@ -54,6 +54,10 @@ def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
         'state',
     ):
         lines.append(f'{key} = "{_toml_escape(str(getattr(cred, key)))}"')
+    # Emitted only when false so ordinary credentials -- and the stores that
+    # hold them -- render exactly as they did before this field existed.
+    if not cred.provider_managed:
+        lines.append('provider_managed = false')
 
 
 def _emit_defaults(lines: list[str], reg: Store) -> None:

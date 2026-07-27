@@ -168,32 +168,101 @@ def _discard_unstarted_grant(
     return True
 
 
-def _admin_assisted_grant_error(
+def _install_and_activate(
+    cfg: AgentVMConfig,
+    store: Store,
+    store_path: Path,
     entry: CredentialEntry,
     repo: GitRepository,
-    ex: github.ProviderPermissionError,
-) -> AIVMError:
-    """Explain how a repository admin can complete a grant AIVM cannot.
+    *,
+    manager: CommandManager,
+) -> CredentialEntry:
+    """Install the private key in the VM and activate it once Git works.
 
-    The keypair already exists on the host, and
-    :func:`github.select_recorded_provider_key` adopts a provider key that
-    matches the recorded fingerprint. So an admin adding this exact public key
-    is enough to let the next `creds add` finish the grant.
+    Guest verification is what actually proves a credential functions: it
+    resolves the rewritten URL and reaches the repository over SSH. That check
+    is identical whether AIVM created the deploy key itself or a repository
+    admin added it, which is what lets a provider-unmanaged grant finish here.
+    """
+    ip = _resolve_ip_for_ssh_ops(
+        cfg,
+        yes=manager.yes,
+        purpose='Install the repository-scoped private key in the VM.',
+    )
+    private_text = keys.host_private_key_path(entry.vm_name, entry.id).read_text(
+        encoding='utf-8'
+    )
+    guest_entries = [
+        item
+        for item in find_credentials_for_vm(store, cfg.vm.name)
+        if credential_is_guest_usable(item)
+    ]
+    reconcile_guest_credentials(
+        cfg,
+        ip,
+        credentials=guest_entries,
+        private_key=(entry.id, private_text),
+        manager=manager,
+    )
+    verify = verify_guest_repository(cfg, ip, repo, entry.id, manager=manager)
+    if verify.code != 0:
+        detail = (verify.stderr or verify.stdout).strip()
+        if entry.provider_managed:
+            raise AIVMError(
+                'The deploy key was registered and installed, but Git access '
+                f'from the VM failed: {detail}'
+            )
+        # Expected while nobody has registered the public key yet: the guest
+        # copy authenticates nothing until GitHub accepts it. Leave the
+        # credential installed and pending rather than failing the command.
+        log.info(
+            'Credential {} is installed but not usable yet; {} has not '
+            'accepted the public key.',
+            entry.id,
+            repo.display,
+        )
+        return entry
+    entry = replace(entry, state=CREDENTIAL_STATE_ACTIVE)
+    upsert_credential(store, entry)
+    save_store(
+        store,
+        store_path,
+        reason=(
+            f'Activate repository credential {entry.id} after guest '
+            'verification.'
+        ),
+    )
+    return entry
+
+
+def describe_unregistered_credential(
+    entry: CredentialEntry, repo: GitRepository
+) -> str:
+    """Explain the handoff for a credential AIVM could not register.
+
+    Everything AIVM can do is already done: the keypair exists, the private
+    half is in the VM, and Git is configured to use it. Only the public half
+    is missing from GitHub, and only an administrator can put it there.
     """
     public_path = keys.host_public_key_path(entry.vm_name, entry.id)
     try:
         public_text = public_path.read_text(encoding='utf-8').strip()
     except OSError:
         public_text = ''
+    access = 'write' if entry.access == CREDENTIAL_ACCESS_WRITE else 'read-only'
 
     lines = [
-        str(ex),
         '',
-        f'AIVM kept credential {entry.id} pending, so a repository admin can '
-        'add the public key it already generated. Ask an admin to add this '
-        f'deploy key to {repo.display} with '
-        f'{"write" if entry.access == CREDENTIAL_ACCESS_WRITE else "read-only"}'
-        ' access:',
+        f'ACTION NEEDED: AIVM could not register this deploy key with '
+        f'{repo.host}.',
+        '',
+        f'  Credential:  {entry.id} (installed in VM {entry.vm_name}, not '
+        'active yet)',
+        f'  Repository:  {repo.display}',
+        f'  Access:      {access}',
+        '',
+        f'Send this public key to an administrator of {repo.display} and ask '
+        f'them to add it as a deploy key with {access} access:',
         '',
     ]
     if public_text:
@@ -203,14 +272,16 @@ def _admin_assisted_grant_error(
             f'  (also stored at {public_path})',
             f'  suggested title: {entry.provider_key_title}',
             '',
-            'Then rerun `aivm vm creds add` to adopt it. Adoption also reads '
-            "the repository's deploy keys, which needs the same admin "
-            'permission, so if that is denied too the grant must be run by an '
-            'admin. Use `aivm vm creds abandon` to discard the pending '
-            'credential instead.',
+            'Nothing else needs to be run. The private half is already in the '
+            'VM and Git is configured to use it, so access begins working as '
+            'soon as GitHub accepts the public half. Until then the installed '
+            'key authenticates nothing.',
+            '',
+            f'Check with: aivm vm creds status {entry.id}',
+            f'Undo with:  aivm vm creds abandon {entry.id}',
         ]
     )
-    return AIVMError('\n'.join(lines))
+    return '\n'.join(lines)
 
 
 def grant_repository_credential(
@@ -276,9 +347,28 @@ def grant_repository_credential(
                 manager=manager,
             )
     except github.ProviderPermissionError as ex:
-        # Keep the pending credential: an admin can add the public key AIVM
-        # already generated, and the next run adopts it by fingerprint.
-        raise _admin_assisted_grant_error(entry, repo, ex) from ex
+        # Hand the grant off to a human instead of failing. The keypair is
+        # already made and the guest copy is inert until GitHub accepts the
+        # public half, so installing it now costs nothing and means the
+        # credential simply starts working when an admin adds the key.
+        log.warning(
+            'Could not register the deploy key for {} with GitHub: {}',
+            repo.display,
+            ex,
+        )
+        entry = replace(entry, provider_managed=False, provider_key_id='')
+        upsert_credential(store, entry)
+        save_store(
+            store,
+            store_path,
+            reason=(
+                f'Record credential {entry.id} as provider-unmanaged: AIVM '
+                'may not administer deploy keys for this repository.'
+            ),
+        )
+        return _install_and_activate(
+            cfg, store, store_path, entry, repo, manager=manager
+        )
     except github.ProviderRejectedError as ex:
         if not _discard_unstarted_grant(store, store_path, entry):
             raise
@@ -295,6 +385,9 @@ def grant_repository_credential(
         entry,
         provider_key_id=remote.key_id,
         state=CREDENTIAL_STATE_PENDING,
+        # Reaching here means the provider side is administrable after all,
+        # so a credential left unmanaged by an earlier run is adopted now.
+        provider_managed=True,
     )
     upsert_credential(store, entry)
     save_store(
@@ -303,45 +396,9 @@ def grant_repository_credential(
         reason=f'Record GitHub deploy-key id for credential {entry.id}.',
     )
 
-    ip = _resolve_ip_for_ssh_ops(
-        cfg,
-        yes=manager.yes,
-        purpose='Install the repository-scoped private key in the VM.',
+    return _install_and_activate(
+        cfg, store, store_path, entry, repo, manager=manager
     )
-    private_text = keys.host_private_key_path(entry.vm_name, entry.id).read_text(
-        encoding='utf-8'
-    )
-    guest_entries = [
-        item
-        for item in find_credentials_for_vm(store, cfg.vm.name)
-        if credential_is_guest_usable(item)
-    ]
-    reconcile_guest_credentials(
-        cfg,
-        ip,
-        credentials=guest_entries,
-        private_key=(entry.id, private_text),
-        manager=manager,
-    )
-    verify = verify_guest_repository(
-        cfg, ip, repo, entry.id, manager=manager
-    )
-    if verify.code != 0:
-        raise AIVMError(
-            'The deploy key was registered and installed, but Git access from '
-            f'the VM failed: {(verify.stderr or verify.stdout).strip()}'
-        )
-    entry = replace(entry, state=CREDENTIAL_STATE_ACTIVE)
-    upsert_credential(store, entry)
-    save_store(
-        store,
-        store_path,
-        reason=(
-            f'Activate repository credential {entry.id} after guest '
-            'verification.'
-        ),
-    )
-    return entry
 
 
 def inspect_credential(
@@ -416,6 +473,16 @@ def revoke_repository_credential(
     *,
     manager: CommandManager,
 ) -> None:
+    if not entry.provider_managed:
+        raise AIVMError(
+            f'AIVM never registered credential {entry.id} with '
+            f'{entry.provider_host}, so it cannot revoke it and will not '
+            'claim to have done so. Ask an administrator of '
+            f'{entry.provider_host}/{entry.owner}/{entry.repository} to delete '
+            f'the deploy key with fingerprint {entry.key_fingerprint}, then '
+            f'run `aivm vm creds abandon {entry.id}` to remove the local and '
+            'guest copies.'
+        )
     _require_tools('gh', manager=manager)
     repo = entry_repository(entry)
     github.check_auth(repo, manager=manager)

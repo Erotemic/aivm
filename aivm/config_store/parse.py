@@ -181,6 +181,9 @@ def _credential_from_dict(
         provider_key_title=provider_key_title,
         key_fingerprint=key_fingerprint,
         state=cast(CredentialState, values['state']),
+        # Absent in stores written before provider-unmanaged credentials
+        # existed, and every credential recorded then was AIVM-administered.
+        provider_managed=bool(item.get('provider_managed', True)),
     )
 
 

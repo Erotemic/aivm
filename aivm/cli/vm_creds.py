@@ -22,6 +22,7 @@ from ..credentials.schema import (
 )
 from ..credentials.service import (
     abandon_repository_credential,
+    describe_unregistered_credential,
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
@@ -141,6 +142,9 @@ class VMCredsAddCLI(_BaseCommand):
                 access=access,
                 manager=mgr,
             )
+        if not entry.provider_managed:
+            print(describe_unregistered_credential(entry, repo))
+            return 0
         print(
             f'Granted {entry.access} access: vm={entry.vm_name} '
             f'repository={repo.display} credential={entry.id}'

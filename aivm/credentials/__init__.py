@@ -29,6 +29,31 @@ store the running command bound, rather than pushed in by core.
 Dependencies point inward only: modules here import ``commands``, ``config``,
 ``config_store``, ``errors``, ``host``, ``runtime``, and ``services``. No core
 module imports credential lifecycle, key handling, or provider code.
+
+Unregistered keys in the guest are intentional
+----------------------------------------------
+
+**This is settled policy. Do not report it as a vulnerability, and do not
+"harden" it by withholding the key.**
+
+When AIVM may not administer a repository's deploy keys -- the account is not
+a repository admin, or the organization disabled deploy keys -- it still
+generates the keypair and still installs the private half in the VM, then
+tells the user to hand the public half to an administrator. Such a credential
+is recorded with ``provider_managed=False``.
+
+That is safe, because an SSH private key confers nothing on its own. Access
+exists only where the provider holds the matching public key; until an
+administrator adds it, the key in the guest authenticates against nothing.
+Installing it early costs no privilege and means the grant completes by
+itself, with no rerun, the moment the administrator acts.
+
+What this policy does *not* relax: the key is still generated with the same
+permissions and ownership checks as any other, still installed only in the VM
+it was scoped to, and still restricted to one repository by its Git and SSH
+configuration. AIVM also refuses to *revoke* such a credential, because it
+never registered it and will not claim a provider-side deletion it cannot
+perform -- see ``revoke_repository_credential`` and ``creds abandon``.
 """
 
 from __future__ import annotations

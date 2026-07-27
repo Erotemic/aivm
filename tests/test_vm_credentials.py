@@ -63,6 +63,7 @@ from aivm.credentials.schema import (
 )
 from aivm.credentials.service import (
     abandon_repository_credential,
+    describe_unregistered_credential,
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
@@ -948,48 +949,87 @@ def test_refused_deploy_key_discards_the_pending_grant(
         ),
     ],
 )
-def test_permission_denial_keeps_the_grant_and_prints_the_public_key(
+def test_permission_denial_hands_the_grant_off_instead_of_failing(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
     failing_command: list[str],
     stderr: str,
 ) -> None:
-    """An admin can finish what this identity may not start."""
+    """AIVM does everything it can, then asks a human for the one step it cannot.
+
+    The installed private key is inert until GitHub accepts its public half,
+    so installing it before registration costs no access and lets the grant
+    complete by itself once an admin acts.
+    """
     cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
     path = write_store(tmp_path / 'config.toml', cfg)
     store = load_store(path)
     _patch_generated_key(monkeypatch, tmp_path, [])
+    installed: list[tuple[str, str]] = []
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: installed.append(k['private_key']),
+    )
+    # Nobody has registered the public key yet, so Git access legitimately
+    # fails. That must not fail the command.
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(255, '', 'Permission denied (publickey)'),
+    )
     repo = GitRepository('github.com', 'Kitware', 'kwimage')
 
-    with pytest.raises(AIVMError) as excinfo:
-        grant_repository_credential(
-            cfg,
-            store,
-            path,
-            repo,
-            access='write',
-            manager=_RefusingGitHubManager(stderr, failing_command),
-        )
+    entry = grant_repository_credential(
+        cfg,
+        store,
+        path,
+        repo,
+        access='write',
+        manager=_RefusingGitHubManager(stderr, failing_command),
+    )
 
-    message = str(excinfo.value)
-    assert 'admin permission' in message
-    assert 'ssh-ed25519' in message, 'the public key an admin needs is missing'
-    assert 'write' in message
+    assert entry.provider_managed is False
+    assert entry.provider_key_id == ''
+    assert entry.state == 'pending', 'unverified access must not read as active'
+    assert installed and installed[0][0] == entry.id, 'key never reached the VM'
 
-    # The pending grant and its key material survive so the admin's addition
-    # can be adopted by fingerprint on the next run.
+    # The handoff names the key an admin has to add.
+    notice = describe_unregistered_credential(entry, repo)
+    assert 'ssh-ed25519' in notice, 'the public key an admin needs is missing'
+    assert 'write' in notice
+    assert 'Nothing else needs to be run' in notice
+
     cred_id = credential_id('vm-a', repo.canonical)
-    [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
-    assert pending.state == 'pending'
-    assert pending.key_fingerprint
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert recorded.provider_managed is False
     assert host_private_key_path('vm-a', cred_id).exists()
-    assert host_public_key_path('vm-a', cred_id).exists()
+
+
+def test_unregistered_credential_cannot_be_revoked(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """AIVM will not claim a provider deletion it never had the rights to make."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    entry = replace(_entry('vm-a'), provider_managed=False, provider_key_id='')
+
+    with pytest.raises(AIVMError, match='never registered'):
+        revoke_repository_credential(
+            cfg,
+            load_store(path),
+            path,
+            entry,
+            manager=CommandManager(yes=True),
+        )
 
 
 class _NotFoundGitHubManager(CommandManager):
@@ -1055,7 +1095,7 @@ class _NotFoundGitHubManager(CommandManager):
 
 def _grant_against_not_found(
     monkeypatch: MonkeyPatch, tmp_path: Path, *, repository_visible: bool
-) -> Path:
+) -> tuple[Path, CredentialEntry | None]:
     cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
     path = write_store(tmp_path / 'config.toml', cfg)
     _patch_generated_key(monkeypatch, tmp_path, [])
@@ -1065,7 +1105,19 @@ def _grant_against_not_found(
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
     )
-    grant_repository_credential(
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(255, '', 'Permission denied (publickey)'),
+    )
+    entry = grant_repository_credential(
         cfg,
         load_store(path),
         path,
@@ -1073,29 +1125,31 @@ def _grant_against_not_found(
         access='write',
         manager=_NotFoundGitHubManager(repository_visible=repository_visible),
     )
-    return path
+    return path, entry
 
 
-def test_visible_repository_404_is_reported_as_a_permission_failure(
+def test_visible_repository_404_is_treated_as_a_permission_failure(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     """GitHub answers 404, not 403, when a non-admin reads a private repo."""
-    with pytest.raises(AIVMError) as excinfo:
-        _grant_against_not_found(monkeypatch, tmp_path, repository_visible=True)
-
-    message = str(excinfo.value)
-    assert 'admin permission' in message
-    assert 'ssh-ed25519' in message, 'the public key an admin needs is missing'
-    # State is kept so an admin can finish the grant.
-    [pending] = find_credentials_for_vm(
-        load_store(tmp_path / 'config.toml'), 'vm-a'
+    path, entry = _grant_against_not_found(
+        monkeypatch, tmp_path, repository_visible=True
     )
-    assert pending.state == 'pending'
+
+    assert entry is not None
+    assert entry.provider_managed is False
+    notice = describe_unregistered_credential(
+        entry, GitRepository('github.com', 'Kitware', 'kwimage')
+    )
+    assert 'ssh-ed25519' in notice
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert recorded.state == 'pending'
 
 
 def test_invisible_repository_404_names_the_repository_problem(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A repository nobody can see is a different problem, and says so."""
     with pytest.raises(AIVMError) as excinfo:
         _grant_against_not_found(
             monkeypatch, tmp_path, repository_visible=False
@@ -1140,18 +1194,18 @@ def test_admin_added_key_is_adopted_on_the_next_run(
     )
     repo = GitRepository('github.com', 'Kitware', 'kwimage')
 
-    # The grant is denied, leaving a pending credential and its keypair.
-    with pytest.raises(AIVMError, match='admin permission'):
-        grant_repository_credential(
-            cfg,
-            store,
-            path,
-            repo,
-            access='write',
-            manager=_RefusingGitHubManager(
-                'gh: Must have admin rights to Repository. (HTTP 403)'
-            ),
-        )
+    # The first grant cannot register the key, so it hands off unmanaged.
+    handed_off = grant_repository_credential(
+        cfg,
+        store,
+        path,
+        repo,
+        access='write',
+        manager=_RefusingGitHubManager(
+            'gh: Must have admin rights to Repository. (HTTP 403)'
+        ),
+    )
+    assert handed_off.provider_managed is False
     cred_id = credential_id('vm-a', repo.canonical)
     admin_added = host_public_key_path('vm-a', cred_id).read_text(
         encoding='utf-8'
@@ -1180,6 +1234,9 @@ def test_admin_added_key_is_adopted_on_the_next_run(
 
     assert entry.provider_key_id == '91'
     assert entry.state == 'active'
+    # Once the provider side is readable, AIVM manages the credential again
+    # and revocation becomes possible.
+    assert entry.provider_managed is True
 
 
 def test_unresolved_provider_failure_keeps_state_for_recovery(
