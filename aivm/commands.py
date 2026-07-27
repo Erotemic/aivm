@@ -211,6 +211,9 @@ class CommandSpec:
         ownership: Whose state a write touches. Defaults to ``user``, which
             confirms; ``tool`` is the declared exemption for aivm's own
             regenerable bookkeeping.
+        user_driven: True when the command hands the terminal to the user --
+            an editor, a shell, an IDE. Any change is authored by them, in
+            front of them, so there is nothing left to confirm.
         check: If True, raise :class:`CommandError` on non-zero exit.
         capture: If True, capture stdout and stderr.
         text: If True, run the subprocess in text mode.
@@ -225,6 +228,7 @@ class CommandSpec:
     sudo: bool = False
     role: CommandRole | None = None
     ownership: CommandOwnership = 'user'
+    user_driven: bool = False
     check: bool = True
     capture: bool = True
     text: bool = True
@@ -860,6 +864,7 @@ class CommandManager:
         sudo: bool = False,
         role: CommandRole | None = None,
         ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -906,6 +911,7 @@ class CommandManager:
             sudo=bool(sudo),
             role=role,
             ownership=ownership,
+            user_driven=bool(user_driven),
             check=bool(check),
             capture=bool(capture),
             text=bool(text),
@@ -942,6 +948,7 @@ class CommandManager:
         sudo: bool = False,
         role: CommandRole | None = None,
         ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -957,6 +964,7 @@ class CommandManager:
             sudo=sudo,
             role=role,
             ownership=ownership,
+            user_driven=bool(user_driven),
             check=check,
             capture=capture,
             text=text,
@@ -1259,10 +1267,14 @@ class CommandManager:
         with ``setvcpus``, while an unprivileged command doing the same damage
         by another route was never guarded at all.
 
-        ``ownership='tool'`` is the one exemption, and a call site has to
-        declare it. See docs/source/design.rst for the bar it must clear.
+        Two exemptions, both declared by the call site and never inferred:
+        ``ownership='tool'`` for aivm's own regenerable bookkeeping, and
+        ``user_driven`` for commands that hand the terminal to the user. See
+        docs/source/design.rst for the bar each must clear.
         """
         if self._effective_role(spec) != 'modify':
+            return False
+        if spec.user_driven:
             return False
         return spec.ownership != 'tool'
 

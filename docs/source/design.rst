@@ -407,6 +407,10 @@ and nothing else does.
        ``auto_approve_readonly_sudo`` and otherwise prompts
      - nothing is being changed
    * - write
+     - ``user_driven`` (declared)
+     - no
+     - the user is at the keyboard making the change themselves
+   * - write
      - ``tool`` (declared)
      - no
      - regenerable bookkeeping the user never authored
@@ -441,6 +445,25 @@ sometimes be wrong, so the axes are arranged for the common mistakes to fail
 safe. Do not "simplify" either trigger away on the grounds that the other
 already covers a case: covering the same case twice is the design, and
 collapsing them to one prompt is what keeps that free.
+
+Handing the terminal to the user is not aivm writing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``aivm config edit`` launches an editor. ``aivm ssh`` opens a shell.
+``aivm code`` starts an IDE against the guest. These change things, but aivm is
+not the one changing them: control passes to the user, who authors any change
+themselves and watches it happen. There is no consent left to collect, and
+asking for it means prompting someone to confirm the command they just typed.
+
+Such call sites declare ``user_driven=True``. The bar is that the command hands
+the terminal over and aivm performs no write of its own -- not merely that the
+command is interactive, and not that the user invoked the CLI, which is true of
+everything.
+
+Like every other exemption here it is declared, never inferred. These commands
+all pass ``capture=False``, which would make a tempting heuristic and would be
+wrong for the same reason every other shape heuristic was: it describes how the
+command is wired, not what it does.
 
 One write, one guard
 ^^^^^^^^^^^^^^^^^^^^

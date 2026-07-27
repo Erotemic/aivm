@@ -792,3 +792,35 @@ def test_a_read_that_escalates_nothing_stays_quiet_as_root(
     )
     mgr.run(probe, sudo=True, role='read')
     assert 'RUN: qemu-img info /disk.qcow2' in verbose
+
+
+def test_handing_the_terminal_to_the_user_is_not_a_write(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """An editor or shell needs no consent: the user is the one typing.
+
+    Prompting here asks someone to confirm the command they just invoked.
+    """
+    prompts = patch_command_runtime(
+        monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', '')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    mgr.run(
+        ['vim', '/home/joncrall/.config/aivm/config.toml'],
+        sudo=False,
+        role='modify',
+        user_driven=True,
+        capture=False,
+    )
+    assert prompts == []
+
+    # the exemption is declared, never inferred from capture=False
+    mgr.run(
+        ['vim', '/home/joncrall/.config/aivm/config.toml'],
+        sudo=False,
+        role='modify',
+        capture=False,
+    )
+    assert len(prompts) == 1
