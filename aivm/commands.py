@@ -1285,14 +1285,19 @@ class CommandManager:
                     and self.sudo_authentication_required()
                 ):
                     self._authenticate_sudo()
-            res = self._execute_one(
-                item.spec,
-                ordinal=(idx + 1, len(plan.commands)),
-                within_plan=True,
-                _stacklevel=_stacklevel + 1,
-            )
+            try:
+                res = self._execute_one(
+                    item.spec,
+                    ordinal=(idx + 1, len(plan.commands)),
+                    within_plan=True,
+                    _stacklevel=_stacklevel + 1,
+                )
+            finally:
+                # Mark attempted even when it raised, so a caller that handles
+                # the failure does not leave the command queued for a later
+                # flush to silently re-run.
+                plan.executed_upto = idx
             item.handle._set_result(res)
-            plan.executed_upto = idx
             if (
                 through_command_id is not None
                 and item.command_id >= through_command_id
@@ -1307,12 +1312,15 @@ class CommandManager:
     ) -> None:
         """Execute pending loose commands in FIFO order."""
         while self._loose_commands:
-            item = self._loose_commands[0]
+            # Remove before executing. A command that raises has still been
+            # attempted, and leaving it queued makes the next flush -- from
+            # some unrelated later command -- re-run it and re-raise its
+            # failure there, where nothing can explain it.
+            item = self._loose_commands.pop(0)
             res = self._execute_one(
                 item.spec, within_plan=False, _stacklevel=_stacklevel + 1
             )
             item.handle._set_result(res)
-            self._loose_commands.pop(0)
             if (
                 through_command_id is not None
                 and item.command_id >= through_command_id
