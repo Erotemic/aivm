@@ -150,6 +150,12 @@ An unrecognized value is an error, not a silent fallback. A global
 no-sudo mode is not exposed because managed nftables and new host bind mounts
 still require root on the supported runtime.
 
+Credential directory mode checks default to ``warn`` so trusted and personal
+workstations are not blocked by inherited ``0775`` directories. Set
+``behavior.credential_directory_permission_policy`` to ``error`` for strict
+enforcement or ``ignore`` to suppress these mode warnings. Ownership, symlink,
+file-type, and key-file permission failures remain errors in every mode.
+
 Run ``aivm host permissions check`` to inspect the permissions used by
 routine VM operations, and ``aivm host permissions setup`` to establish the
 host-side prerequisites. Normal setup may use sudo to add you to the
@@ -215,6 +221,7 @@ receive the new host-qualified default.
    yes_sudo = false
    auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
    privilege_mode = "as-needed"       # "never" | "as-needed" | "always"
+   credential_directory_permission_policy = "warn"  # "warn" | "error" | "ignore"
 
 Common Workflows
 ----------------
@@ -421,6 +428,14 @@ never copied into the guest.
 
 .. code-block:: bash
 
+   # Install/check host tools and authenticate GitHub CLI.
+   aivm vm creds setup
+
+   # Diagnostic-only readiness checks. Naming a repository also verifies
+   # deploy-key administration for that repository.
+   aivm vm creds setup --check
+   aivm vm creds setup Kitware/kwimage --check
+
    # Infer the repository from the current checkout and the VM from AIVM context.
    aivm vm creds add . --write
 
@@ -430,6 +445,12 @@ never copied into the guest.
    aivm vm creds list --vm aivm-2404-workstation
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
    aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
+
+On Debian/Ubuntu, ``creds setup`` installs a missing GitHub CLI or OpenSSH
+client with apt, then starts ``gh auth login`` when necessary. The browser
+login skips uploading the user's ordinary SSH key because AIVM creates
+repository-scoped deploy keys separately. ``--dry_run`` previews those actions
+without changing the host.
 
 If GitHub can no longer be inspected or administered, an explicit recovery
 command can remove local copies without claiming that provider-side revocation
@@ -455,6 +476,16 @@ the host keypair, ownership, file type, and private-key permissions before the
 key can be reused or copied into a guest. Explicit transport URLs are accepted
 only when Git can prove that they resolve through the credential-specific SSH
 alias before network access is attempted.
+
+Credential directories and key files must remain owned by the current user,
+must be real directories and regular files rather than symlinks, and private
+key files must stay inaccessible to group or other users. Those checks always
+fail closed. Only the *directory mode* findings follow
+``behavior.credential_directory_permission_policy``, so a group-writable AIVM
+data root, VM directory, credential parent, or credential leaf is reported as a
+warning rather than blocking credential creation; tighten it with
+``chmod 700 ~/.local/share/aivm`` when the broader permissions are not
+intentional.
 
 Command Groups
 --------------

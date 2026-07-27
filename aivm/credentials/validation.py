@@ -47,19 +47,11 @@ def validate_repository_identity(
     repository: str,
 ) -> GitRepository:
     """Validate repository components used in SSH and Git configuration."""
-    host = str(provider_host or '').strip().lower()
+    host = validate_provider_host(provider_host)
     owner_text = str(owner or '').strip()
     repo_text = str(repository or '').strip()
-    for field, value in (
-        ('provider_host', host),
-        ('owner', owner_text),
-        ('repository', repo_text),
-    ):
+    for field, value in (('owner', owner_text), ('repository', repo_text)):
         _reject_control_characters(field, value)
-    if not host or not _HOST_RE.fullmatch(host):
-        raise CredentialValidationError(
-            f'Unsupported repository host syntax: {provider_host!r}'
-        )
     if not _REPO_PART_RE.fullmatch(owner_text):
         raise CredentialValidationError(
             f'Unsupported repository owner syntax: {owner!r}'
@@ -69,6 +61,17 @@ def validate_repository_identity(
             f'Unsupported repository name syntax: {repository!r}'
         )
     return GitRepository(host=host, owner=owner_text, name=repo_text)
+
+
+def validate_provider_host(provider_host: str) -> str:
+    """Validate a GitHub hostname before passing it to host commands."""
+    host = str(provider_host or '').strip().lower()
+    _reject_control_characters('provider_host', host)
+    if not host or not _HOST_RE.fullmatch(host):
+        raise CredentialValidationError(
+            f'Unsupported repository host syntax: {provider_host!r}'
+        )
+    return host
 
 
 def validate_credential_identity(

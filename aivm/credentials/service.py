@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import socket
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -44,8 +43,10 @@ from .schema import (
     CREDENTIAL_STATE_REVOCATION_PENDING,
     credential_is_guest_usable,
 )
+from .setup import require_credential_tools
 from .validation import (
     CredentialValidationError,
+    credential_id,
     validate_credential_identity,
     validate_metadata_text,
 )
@@ -119,12 +120,8 @@ def select_credential(
 
 
 def _require_tools(*names: str) -> None:
-    missing = [name for name in names if shutil.which(name) is None]
-    if missing:
-        raise AIVMError(
-            'Missing host command(s) required for VM credentials: '
-            + ', '.join(missing)
-        )
+    """Host-tool gate for credential operations; tests patch this seam."""
+    require_credential_tools(*names)
 
 
 def grant_repository_credential(
@@ -138,7 +135,7 @@ def grant_repository_credential(
 ) -> CredentialEntry:
     _require_tools('gh', 'ssh', 'ssh-keygen')
     access = CREDENTIAL_ACCESS_WRITE if write else CREDENTIAL_ACCESS_READ
-    cred_id = keys.credential_id(cfg.vm.name, repo.canonical)
+    cred_id = credential_id(cfg.vm.name, repo.canonical)
     existing = find_credential(store, vm_name=cfg.vm.name, credential_id=cred_id)
     if existing is not None and existing.access != access:
         raise AIVMError(

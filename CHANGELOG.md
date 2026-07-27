@@ -25,6 +25,18 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   provider-unverified ``creds abandon`` recovery path with audit tombstones,
   and VM deletion now aborts instead of forgetting credentials when private-key
   cleanup fails.
+* Added ``aivm vm creds setup`` and ``setup --check`` to install missing
+  GitHub CLI/OpenSSH prerequisites on Debian/Ubuntu, authenticate ``gh``
+  without uploading a user SSH key, and optionally verify deploy-key
+  administration for a repository.
+
+### Changed
+* Credential storage directory mode concerns now follow
+  ``behavior.credential_directory_permission_policy``: ``warn`` by default,
+  ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM
+  application-data root, VM data directory, credential parent, and credential
+  leaf directory. Ownership, symlink, file-type, and key-file permission
+  checks remain strict failures in every policy mode.
 
 
 ## Version 0.5.0 - Released 2026-07-18

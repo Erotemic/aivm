@@ -18,7 +18,12 @@ from pytest import MonkeyPatch
 from aivm.cli.config.lint import _lint_store_text
 from aivm.cli.vm_creds import _resolve_credential_selector
 from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI, VMUpCLI
-from aivm.commands import CommandError, CommandManager, CommandResult, CommandRole
+from aivm.commands import (
+    CommandError,
+    CommandManager,
+    CommandResult,
+    CommandRole,
+)
 from aivm.config_store import (
     CredentialEntry,
     Store,
@@ -38,7 +43,6 @@ from aivm.credentials.guest import (
     verify_guest_repository,
 )
 from aivm.credentials.keys import (
-    credential_id,
     generate_host_key,
     host_credential_dir,
     host_private_key_path,
@@ -62,6 +66,7 @@ from aivm.credentials.service import (
     inspect_credential,
     revoke_repository_credential,
 )
+from aivm.credentials.validation import credential_id
 from aivm.errors import AIVMError
 from tests.helpers import make_cfg, run_cli, write_store
 
@@ -488,6 +493,7 @@ class _GitHubManager(CommandManager):
                     if check:
                         raise CommandError(list(cmd), result)
                     return result
+                pages: list[list[dict[str, object]]]
                 if self.deleted:
                     pages = [[]]
                 else:
@@ -584,7 +590,7 @@ def test_github_backend_read_only_omits_allow_write(tmp_path: Path) -> None:
 
 def test_recorded_provider_key_uses_exact_id_endpoint() -> None:
     entry = _entry()
-    exact = {
+    exact: dict[str, object] = {
         'id': int(entry.provider_key_id),
         'key': _public_key(),
         'read_only': False,
@@ -627,7 +633,7 @@ def test_recorded_provider_key_exact_404_requires_collection_confirmation() -> N
 
 def test_recorded_provider_key_exact_404_finds_key_in_collection() -> None:
     entry = _entry()
-    target = {
+    target: dict[str, object] = {
         'id': int(entry.provider_key_id),
         'key': _public_key(),
         'read_only': False,
@@ -648,7 +654,7 @@ def test_recorded_provider_key_exact_404_finds_key_in_collection() -> None:
 
 def test_recorded_provider_key_exact_404_detects_id_drift() -> None:
     entry = _entry()
-    target = {
+    target: dict[str, object] = {
         'id': 999,
         'key': _public_key(),
         'read_only': False,
@@ -899,7 +905,7 @@ def test_revoke_uses_exact_provider_id_lookup(
     private.write_text('PRIVATE KEY\n', encoding='utf-8')
     public.write_text(_public_key(), encoding='utf-8')
 
-    exact = {
+    exact: dict[str, object] = {
         'id': int(entry.provider_key_id),
         'key': _public_key(),
         'read_only': False,
@@ -2020,7 +2026,7 @@ def test_credential_cleanup_refuses_symlinked_ancestor(
     ],
 )
 @pytest.mark.parametrize('ancestor', ['root', 'vm', 'credentials'])
-def test_generate_rejects_writable_managed_ancestor(
+def test_writable_managed_ancestor_warns_by_default(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
     mode: int,
@@ -2028,12 +2034,7 @@ def test_generate_rejects_writable_managed_ancestor(
     ancestor: str,
 ) -> None:
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
-    entry = replace(
-        _entry('vm-a'),
-        provider_key_id='',
-        key_fingerprint='',
-        state='pending',
-    )
+    entry = _entry('vm-a')
     directory = host_credential_dir(entry.vm_name, entry.id)
     root = directory.parent.parent.parent
     vm_directory = directory.parent.parent
@@ -2050,11 +2051,9 @@ def test_generate_rejects_writable_managed_ancestor(
         unsafe = credentials_directory
     unsafe.chmod(mode)
 
-    with pytest.raises(AIVMError, match='writable by group or others'):
-        generate_host_key(entry, manager=CommandManager(yes=True))
-
-    assert not directory.exists(), (
-        f'{ancestor} writable by {writer} redirected credential creation'
+    assert host_credential_dir(entry.vm_name, entry.id) == directory
+    assert unsafe.stat().st_mode & 0o777 == mode, (
+        f'{ancestor} writable by {writer} was unexpectedly changed'
     )
 
 

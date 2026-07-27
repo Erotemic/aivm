@@ -8,8 +8,11 @@ import os
 import re
 import shutil
 import stat
+from contextvars import ContextVar, Token
 from dataclasses import replace
 from pathlib import Path
+
+from loguru import logger as log
 
 from ..commands import CommandManager
 from ..config_store.models import CredentialEntry
@@ -17,11 +20,66 @@ from ..config_store.paths import app_data_dir
 from ..errors import AIVMError
 from .validation import (
     CredentialValidationError,
-    credential_id,
     validate_credential_id_format,
 )
 
 _SAFE_PART = re.compile(r'[^A-Za-z0-9_.-]+')
+_CREDENTIAL_DIRECTORY_PERMISSION_POLICIES = ('warn', 'error', 'ignore')
+_CREDENTIAL_DIRECTORY_PERMISSION_POLICY: ContextVar[str] = ContextVar(
+    'aivm_credential_directory_permission_policy', default='warn'
+)
+_WARNED_DIRECTORY_PERMISSIONS: set[tuple[str, str, int]] = set()
+
+
+def normalize_credential_directory_permission_policy(value: object) -> str:
+    raw = str(value or '').strip().lower() or 'warn'
+    if raw not in _CREDENTIAL_DIRECTORY_PERMISSION_POLICIES:
+        raise AIVMError(
+            'Unknown behavior.credential_directory_permission_policy '
+            f'{str(value)!r}. Valid values: '
+            + ', '.join(_CREDENTIAL_DIRECTORY_PERMISSION_POLICIES)
+        )
+    return raw
+
+
+def set_credential_directory_permission_policy(value: object) -> Token[str]:
+    return _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.set(
+        normalize_credential_directory_permission_policy(value)
+    )
+
+
+def reset_credential_directory_permission_policy(token: Token[str]) -> None:
+    _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.reset(token)
+
+
+def _handle_directory_permission_issue(
+    path: Path,
+    *,
+    label: str,
+    mode: int,
+    expected: str,
+) -> None:
+    policy = _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.get()
+    if policy == 'ignore':
+        return
+    message = (
+        f'{label} permissions are broader than recommended: {path} has mode '
+        f'{mode:04o}; recommended {expected}.'
+    )
+    if policy == 'error':
+        raise AIVMError(message)
+    warning_key = (label, str(path), mode)
+    if warning_key in _WARNED_DIRECTORY_PERMISSIONS:
+        return
+    _WARNED_DIRECTORY_PERMISSIONS.add(warning_key)
+    log.warning(
+        '{} Continuing because '
+        'behavior.credential_directory_permission_policy="warn". '
+        'Use `chmod 700 {}` to tighten this directory, set the policy to '
+        '`error` for strict enforcement, or `ignore` to suppress this warning.',
+        message,
+        path,
+    )
 
 
 def _safe_vm_name(vm_name: str) -> str:
@@ -54,9 +112,11 @@ def _trusted_app_data_root() -> Path:
         )
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o022:
-        raise AIVMError(
-            f'AIVM application-data root is writable by group or others: '
-            f'{root} has mode {mode:04o}.'
+        _handle_directory_permission_issue(
+            root,
+            label='AIVM application-data root',
+            mode=mode,
+            expected='0700',
         )
     return root
 
@@ -76,9 +136,11 @@ def _require_managed_directory(path: Path, *, label: str) -> None:
         raise AIVMError(f'{label} is not owned by the current user: {path}')
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o022:
-        raise AIVMError(
-            f'{label} is writable by group or others: '
-            f'{path} has mode {mode:04o}.'
+        _handle_directory_permission_issue(
+            path,
+            label=label,
+            mode=mode,
+            expected='no group or other write access',
         )
 
 
@@ -156,9 +218,11 @@ def _require_safe_host_directory(path: Path) -> None:
         )
     mode = stat.S_IMODE(info.st_mode)
     if mode & 0o077:
-        raise AIVMError(
-            f'Host credential directory permissions are too broad: '
-            f'{path} has mode {mode:04o}; expected no group or other access.'
+        _handle_directory_permission_issue(
+            path,
+            label='Host credential directory',
+            mode=mode,
+            expected='0700',
         )
 
 

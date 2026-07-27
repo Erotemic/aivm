@@ -15,7 +15,6 @@ from ..config_store import (
     find_credentials_for_vm,
     load_store,
 )
-from ..credentials.keys import credential_id
 from ..credentials.resolve import resolve_repository
 from ..credentials.schema import (
     CREDENTIAL_ACCESS_READ,
@@ -28,6 +27,18 @@ from ..credentials.service import (
     inspect_credential,
     revoke_repository_credential,
     select_credential,
+)
+from ..credentials.setup import (
+    CREDENTIAL_TOOLS,
+    CredentialSetupReport,
+    authenticate_github,
+    inspect_credential_setup,
+    install_missing_credential_tools,
+)
+from ..credentials.validation import (
+    CredentialValidationError,
+    credential_id,
+    validate_provider_host,
 )
 from ..errors import AIVMError
 from ..services import load_cfg_with_path
@@ -126,6 +137,144 @@ class VMCredsAddCLI(_BaseCommand):
             f'Granted {entry.access} access: vm={entry.vm_name} '
             f'repository={repo.display} credential={entry.id}'
         )
+        return 0
+
+
+def _print_setup_report(report: CredentialSetupReport) -> None:
+    """Render host credential readiness without exposing command internals."""
+    print('GitHub credential setup')
+    print(f'  GitHub host:       {report.hostname}')
+    for name in CREDENTIAL_TOOLS:
+        path = report.tool_paths.get(name)
+        print(f'  {name:<18} {"ready" if path else "missing"}')
+    auth = 'ready' if report.auth_ok else 'not ready'
+    print(f'  Authentication:    {auth}')
+    if report.auth_detail and not report.auth_ok:
+        print(f'  Auth detail:       {report.auth_detail}')
+    if report.repository is not None:
+        if report.repository_ok is True:
+            repo_state = 'ready'
+        elif report.repository_ok is False:
+            repo_state = 'not ready'
+        else:
+            repo_state = 'not checked'
+        print(f'  Repository:        {report.repository.display}')
+        print(f'  Repository admin:  {repo_state}')
+        if report.repository_detail and report.repository_ok is not True:
+            print(f'  Repository detail: {report.repository_detail}')
+
+
+class VMCredsSetupCLI(_BaseCommand):
+    """Prepare host tools and GitHub login for repository credentials."""
+
+    repository: str = kwconf.Value(
+        '',
+        position=1,
+        help=(
+            'Optional local checkout, OWNER/REPO, or Git URL whose deploy-key '
+            'administration should also be checked.'
+        ),
+    )
+    hostname: str = kwconf.Value(
+        'github.com',
+        help='GitHub or GitHub Enterprise hostname when no repository is given.',
+    )
+    remote: str = kwconf.Value(
+        'origin', help='Git remote used when resolving a local checkout.'
+    )
+    check: bool = kwconf.Flag(
+        False, help='Only check readiness; do not install tools or authenticate.'
+    )
+    dry_run: bool = kwconf.Flag(
+        False, help='Print the setup actions without changing the host.'
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if args.check and args.dry_run:
+            raise AIVMError('Use either --check or --dry_run, not both.')
+        mgr = CommandManager.current()
+        repo = None
+        try:
+            hostname = validate_provider_host(args.hostname or 'github.com')
+        except CredentialValidationError as ex:
+            raise AIVMError(str(ex)) from ex
+        if args.repository:
+            repo = resolve_repository(
+                args.repository, remote=args.remote, manager=mgr
+            )
+            hostname = repo.host
+
+        report = inspect_credential_setup(
+            hostname=hostname,
+            repository=repo,
+            manager=mgr,
+        )
+        _print_setup_report(report)
+        if args.check:
+            if not report.ready:
+                print('  Remedy:            aivm vm creds setup')
+            return 0 if report.ready else 2
+
+        if args.dry_run:
+            if report.missing_tools:
+                print(
+                    'DRYRUN: would install missing host command(s): '
+                    + ', '.join(report.missing_tools)
+                )
+            if not report.auth_ok:
+                print(f'DRYRUN: would authenticate gh for {hostname}.')
+            if repo is not None:
+                print(
+                    'DRYRUN: would verify deploy-key administration for '
+                    f'{repo.display}.'
+                )
+            if report.ready:
+                print('DRYRUN: no setup changes are needed.')
+            return 0
+
+        if report.ready:
+            print('Host credential prerequisites are ready; no changes needed.')
+            return 0
+        if (
+            not report.missing_tools
+            and report.auth_ok
+            and report.repository_ok is False
+        ):
+            print('  Remedy:            grant repository administration access.')
+            return 2
+
+        if report.missing_tools:
+            install_missing_credential_tools(
+                report.missing_tools,
+                manager=mgr,
+            )
+        refreshed = inspect_credential_setup(
+            hostname=hostname,
+            repository=None,
+            manager=mgr,
+        )
+        if refreshed.missing_tools:
+            raise AIVMError(
+                'Credential tool installation completed, but command(s) are '
+                'still unavailable: '
+                + ', '.join(refreshed.missing_tools)
+            )
+        if not refreshed.auth_ok:
+            authenticate_github(hostname, manager=mgr)
+
+        final = inspect_credential_setup(
+            hostname=hostname,
+            repository=repo,
+            manager=mgr,
+        )
+        print()
+        _print_setup_report(final)
+        if not final.ready:
+            print('  Remedy:            resolve the item above and rerun setup.')
+            return 2
+        print('Host credential prerequisites are ready.')
         return 0
 
 
@@ -382,6 +531,7 @@ class VMCredsAbandonCLI(_BaseCommand):
 class VMCredsModalCLI(kwconf.ModalCLI):
     """Manage scoped credentials installed in a VM."""
 
+    setup = VMCredsSetupCLI
     add = VMCredsAddCLI
     list = VMCredsListCLI
     status = VMCredsStatusCLI

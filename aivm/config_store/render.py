@@ -117,6 +117,11 @@ def render_store_toml(
     _emit_toml_kv(
         lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'as-needed')
     )
+    _emit_toml_kv(
+        lines,
+        'credential_directory_permission_policy',
+        str(reg.behavior.credential_directory_permission_policy or 'warn'),
+    )
     lines.append('')
 
     _emit_defaults(lines, reg)
