@@ -74,6 +74,15 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* An unknown VM or network name now suggests the likely intended name and
+  lists what the store actually defines, instead of only reporting the miss.
+  `aivm config edit aivm-2404` on a host whose store has no such VM said only
+  `VM not found in config: aivm-2404`, which cannot distinguish a typo from a
+  VM that lives on a different machine. Suggestions use containment before
+  edit distance, so a name that is a prefix of a longer one is caught while a
+  uniformly-named store does not manufacture a confident wrong guess. The
+  lookups are centralized in `require_vm` / `require_network`, so all seven
+  raise sites report identically.
 * Command previews no longer guess which arguments to hide. A call site that
   passes a large payload marks it `Elided(value, label)` and the log prints
   that label; everything else prints verbatim, so the line stays the command

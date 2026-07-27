@@ -14,6 +14,7 @@ from ...config_store import (
     load_config_document,
     materialize_vm_cfg,
     persistent_host_state_dir,
+    require_vm,
     split_fragment_paths,
 )
 from ...errors import AIVMError
@@ -181,8 +182,7 @@ def _print_config_paths(
     if target == 'vm':
         if not vm_name:
             raise AIVMError('No VM specified and active_vm is unset.')
-        if find_vm(loaded.store, vm_name) is None:
-            raise AIVMError(f'VM not found in config: {vm_name}')
+        require_vm(loaded.store, vm_name)
         _print_path(
             f'vm:{vm_name}',
             _vm_config_source(root, loaded, vm_name),
@@ -226,7 +226,7 @@ def _print_libvirt_paths(
             continue
         if find_vm(loaded.store, name) is None:
             if target == 'vm':
-                raise AIVMError(f'VM not found in config: {name}')
+                require_vm(loaded.store, name)
             continue
         cfgs.append(materialize_vm_cfg(loaded.store, name).expanded_paths())
 

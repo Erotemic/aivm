@@ -57,6 +57,9 @@ from .resolve import (
     find_vm,
     materialize_vm_cfg,
     network_users,
+    require_network,
+    require_vm,
+    unknown_name_message,
 )
 
 __all__ = [
@@ -83,6 +86,9 @@ __all__ = [
     'find_vm',
     'load_store',
     'materialize_vm_cfg',
+    'require_network',
+    'require_vm',
+    'unknown_name_message',
     'network_users',
     'parse_store_toml',
     'persistent_host_state_dir',

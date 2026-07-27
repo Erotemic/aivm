@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import difflib
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
@@ -31,6 +33,108 @@ def find_network(reg: Store, network_name: str) -> NetworkEntry | None:
     return None
 
 
+#: Beyond this many known names, list a sample rather than the whole store.
+_MAX_LISTED_NAMES = 10
+
+#: Suggestions offered before falling back to listing everything.
+_MAX_SUGGESTIONS = 3
+
+
+def _near_misses(name: str, known: Sequence[str]) -> list[str]:
+    """Return plausible intended names for ``name``, best first.
+
+    Edit distance alone is not enough in either direction. A name that is a
+    prefix of a longer one -- ``aivm-2404`` against ``aivm-2404-workstation``
+    -- scores only about 0.6 because of the length gap, while unrelated short
+    names in a uniformly-named store can clear that same bar on shared
+    punctuation. Containment is checked first for the former, and the ratio
+    cutoff is set high enough to exclude the latter.
+    """
+    lowered = name.lower()
+    contained = [
+        candidate
+        for candidate in known
+        if lowered and (lowered in candidate.lower() or candidate.lower() in lowered)
+    ]
+    close = difflib.get_close_matches(
+        name, known, n=_MAX_SUGGESTIONS, cutoff=0.75
+    )
+    ordered = contained + [c for c in close if c not in contained]
+    return ordered[:_MAX_SUGGESTIONS]
+
+
+def unknown_name_message(
+    kind: str, name: str, available: Sequence[str], *, empty_hint: str = ''
+) -> str:
+    """Build a 'no such thing, here is what exists' message.
+
+    A bare "not found" leaves the user to guess whether they typo'd the name,
+    are on a host whose store never had it, or are looking at the wrong config
+    file entirely. Naming the near miss answers the first, and listing what is
+    actually defined answers the other two.
+
+    Args:
+        kind: Singular noun for the thing, e.g. ``'VM'``.
+        name: The name that was not found.
+        available: Names that do exist, in any order.
+        empty_hint: Advice appended when nothing at all is defined.
+
+    Returns:
+        A single-line message ending in a period.
+    """
+    known = sorted(available)
+    parts = [f'{kind} not found in config store: {name!r}.']
+    if not known:
+        parts.append(f'No {kind}s are defined in this config store.')
+        if empty_hint:
+            parts.append(empty_hint)
+        return ' '.join(parts)
+    suggestions = _near_misses(name, known)
+    if suggestions:
+        quoted = [repr(match) for match in suggestions]
+        if len(quoted) == 1:
+            phrase = quoted[0]
+        else:
+            phrase = f'{", ".join(quoted[:-1])} or {quoted[-1]}'
+        parts.append(f'Did you mean {phrase}?')
+    shown = known[:_MAX_LISTED_NAMES]
+    listed = ', '.join(shown)
+    if len(known) > len(shown):
+        listed += f' (+{len(known) - len(shown)} more)'
+    parts.append(f'Known {kind}s: {listed}.')
+    return ' '.join(parts)
+
+
+def require_vm(reg: Store, vm_name: str) -> VMEntry:
+    """Return the named VM entry, or raise naming what the store does have."""
+    rec = find_vm(reg, vm_name)
+    if rec is None:
+        raise AIVMError(
+            unknown_name_message(
+                'VM',
+                vm_name,
+                [entry.name for entry in reg.vms],
+                empty_hint='Run `aivm config init` to define one.',
+            )
+        )
+    return rec
+
+
+def require_network(reg: Store, network_name: str) -> NetworkEntry:
+    """Return the named network entry, or raise naming the known networks."""
+    rec = find_network(reg, network_name)
+    if rec is None:
+        raise AIVMError(
+            unknown_name_message(
+                'managed network',
+                network_name,
+                [entry.name for entry in reg.networks],
+                empty_hint='Run `aivm config init` to define one.',
+            )
+        )
+    return rec
+
+
 def network_users(reg: Store, network_name: str) -> list[str]:
     return sorted(v.name for v in reg.vms if v.network_name == network_name)
 
@@ -42,9 +146,7 @@ def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
     live in ``[[networks]]``. This join step avoids stale duplicated network
     settings in VM entries and centralizes network edits.
     """
-    vm = find_vm(reg, vm_name)
-    if vm is None:
-        raise AIVMError(f'VM not found in config store: {vm_name}')
+    vm = require_vm(reg, vm_name)
     net = find_network(reg, vm.network_name)
     if net is None:
         raise AIVMError(

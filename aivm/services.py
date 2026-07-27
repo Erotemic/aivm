@@ -26,6 +26,7 @@ from .config_store import (
     find_vm,
     load_store,
     materialize_vm_cfg,
+    require_vm,
     save_store,
     store_path,
     upsert_network,
@@ -241,8 +242,7 @@ def resolve_vm_name(
     reg = load_store(store_path)
 
     if vm_opt:
-        if find_vm(reg, vm_opt) is None:
-            raise AIVMError(f'VM not found in config store: {vm_opt}')
+        require_vm(reg, vm_opt)
         return vm_opt, store_path
 
     if host_src is not None:
@@ -314,9 +314,7 @@ def load_cfg_with_path(
         host_src=host_src,
     )
     reg = load_store(store_path)
-    rec = find_vm(reg, vm_name)
-    if rec is None:
-        raise AIVMError(f'VM not found in config store: {vm_name}')
+    require_vm(reg, vm_name)
     cfg = materialize_vm_cfg(reg, vm_name)
     changed = (
         hydrate_ssh_identity_defaults(cfg)
