@@ -34,8 +34,8 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * `aivm vm creds add` now takes `--access read|write` (default `read`) instead
   of the `--write` flag, matching the `--access` option already used by
   `vm attach` and `vm code` and the `read`/`write` values already reported by
-  `creds list` and `creds status`. `--write` is gone rather than deprecated
-  because it was never released.
+  `creds list` and `creds status`. `ro` and `rw` are accepted as aliases.
+  `--write` is gone rather than deprecated because it was never released.
 * Credential storage directory mode concerns now follow
   ``behavior.credential_directory_permission_policy``: ``warn`` by default,
   ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM

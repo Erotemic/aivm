@@ -1090,6 +1090,44 @@ def test_creds_add_defaults_to_read_access(
     assert 'Access:      read' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    'spelling, expected',
+    [
+        pytest.param('read', 'read', id='read'),
+        pytest.param('ro', 'read', id='ro'),
+        pytest.param('write', 'write', id='write'),
+        pytest.param('rw', 'write', id='rw'),
+    ],
+)
+def test_creds_add_accepts_access_spellings_on_the_command_line(
+    cfg_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    spelling: str,
+    expected: str,
+) -> None:
+    """argparse builds its choices from the annotation, so assert on argv.
+
+    A normalizer alias that is missing from the declared Literal is rejected
+    before the normalizer ever runs.
+    """
+    rc = run_cli(
+        [
+            'vm',
+            'creds',
+            'add',
+            'Kitware/kwimage',
+            f'--access={spelling}',
+            '--dry_run',
+            '--yes',
+            '--config',
+            str(cfg_path),
+        ]
+    )
+
+    assert rc == 0
+    assert f'Access:      {expected}' in capsys.readouterr().out
+
+
 def test_creds_add_rejects_unknown_access_value(cfg_path: Path) -> None:
     # kwconf only warns when a programmatic call leaves the declared Literal,
     # so the grant path itself has to refuse the value.

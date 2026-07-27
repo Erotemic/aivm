@@ -422,12 +422,13 @@ VM repository credentials
 -------------------------
 
 AIVM can grant one VM access to one GitHub repository with a dedicated deploy
-key. ``--access`` selects ``read`` (the default) or ``write``; only ``write``
-enables pushes. A credential's access is fixed once granted -- GitHub cannot
-change a deploy key's access in place -- so switching requires
-``creds revoke`` followed by a new ``creds add``. The host's ``gh`` login is
-used only to register or revoke the public key and is never copied into the
-guest.
+key. ``--access`` selects ``read`` (the default) or ``write``; ``ro`` and
+``rw`` are accepted as aliases. ``write`` means read *and* write, because a
+GitHub deploy key has no write-only mode. A credential's access is fixed once
+granted -- GitHub cannot change a deploy key's access in place -- so switching
+requires ``creds revoke`` followed by a new ``creds add``. The host's ``gh``
+login is used only to register or revoke the public key and is never copied
+into the guest.
 
 .. code-block:: bash
 

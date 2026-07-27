@@ -81,11 +81,15 @@ class VMCredsAddCLI(_BaseCommand):
     remote: str = kwconf.Value(
         'origin', help='Git remote used when resolving a local checkout.'
     )
-    access: Literal['read', 'write'] = kwconf.Value(
+    # argparse builds its choice list from this annotation and rejects
+    # anything outside it before normalize_credential_access() runs, so the
+    # accepted spellings have to be declared here, not only in the normalizer.
+    access: Literal['read', 'ro', 'write', 'rw'] = kwconf.Value(
         'read',
         help=(
-            'Credential access: read or write (default: read). write allows '
-            'pushes; changing the access of an existing credential requires '
+            'Credential access: read (ro) or write (rw); default read. '
+            'write means read+write -- a GitHub deploy key has no write-only '
+            'mode. Changing the access of an existing credential requires '
             'revoking it first.'
         ),
     )
