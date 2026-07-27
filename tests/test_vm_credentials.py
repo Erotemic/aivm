@@ -745,6 +745,19 @@ def test_recorded_provider_key_without_id_uses_all_pages() -> None:
     assert call[-1] == 'repos/Kitware/kwimage/keys?per_page=100'
 
 
+def _patch_provider_reachable(monkeypatch: MonkeyPatch) -> None:
+    """Pretend provider automation is usable.
+
+    The test host has no ``gh``, and registration is optional, so without this
+    every grant would take the manual-handoff path and the tests that mean to
+    exercise real provider responses would quietly stop doing so.
+    """
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.automation_unavailable_reason',
+        lambda *a, **k: '',
+    )
+
+
 def _patch_generated_key(
     monkeypatch: MonkeyPatch, tmp_path: Path, events: list[str]
 ) -> None:
@@ -778,6 +791,7 @@ def test_grant_service_persists_active_credential(
     store = load_store(path)
     events: list[str] = []
     _patch_generated_key(monkeypatch, tmp_path, events)
+    _patch_provider_reachable(monkeypatch)
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
@@ -825,7 +839,10 @@ def test_grant_service_persists_active_credential(
     assert entry.provider_key_id == '44'
     loaded = load_store(path)
     assert find_credentials_for_vm(loaded, 'vm-a') == [entry]
-    assert events == ['auth', 'generate', 'provider-add', 'guest-install']
+    # No separate auth step: signing in is part of asking whether provider
+    # automation is available at all, which is optional and happens after the
+    # key exists.
+    assert events == ['generate', 'provider-add', 'guest-install']
 
 
 class _RefusingGitHubManager(CommandManager):
@@ -884,6 +901,7 @@ def _grant_against_refusing_provider(
     path = write_store(tmp_path / 'config.toml', cfg)
     store = load_store(path)
     _patch_generated_key(monkeypatch, tmp_path, [])
+    _patch_provider_reachable(monkeypatch)
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
@@ -965,6 +983,7 @@ def test_permission_denial_hands_the_grant_off_instead_of_failing(
     path = write_store(tmp_path / 'config.toml', cfg)
     store = load_store(path)
     _patch_generated_key(monkeypatch, tmp_path, [])
+    _patch_provider_reachable(monkeypatch)
     installed: list[tuple[str, str]] = []
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
@@ -1036,6 +1055,59 @@ def test_creds_list_marks_unregistered_credentials(
     assert rc == 0
     assert '(unregistered)' in out
     assert 'an admin must' in out
+
+
+def test_grant_works_on_a_host_with_no_github_cli(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """gh automates registration; it is not required to hold a credential.
+
+    Nothing about generating a scoped keypair, installing it in the VM, or
+    configuring Git needs a provider tool, so a host without gh still gets a
+    working credential once someone adds the public key.
+    """
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    _patch_generated_key(monkeypatch, tmp_path, [])
+    # No gh on this host at all.
+    monkeypatch.setattr(
+        'aivm.credentials.github.shutil.which', lambda name: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.setup.shutil.which',
+        lambda name: None if name == 'gh' else f'/usr/bin/{name}',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    installed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: installed.append(k['private_key']),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(255, '', 'Permission denied (publickey)'),
+    )
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+
+    entry = grant_repository_credential(
+        cfg,
+        load_store(path),
+        path,
+        repo,
+        access='write',
+        # Any gh call would fail on this manager, proving none is made.
+        manager=_RefusingGitHubManager('unused', ('gh',)),
+    )
+
+    assert entry.provider_managed is False
+    assert installed, 'the key never reached the VM'
+    notice = describe_unregistered_credential(entry, repo)
+    assert 'ssh-ed25519' in notice
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert recorded.provider_managed is False
 
 
 def test_unregistered_credential_cannot_be_revoked(
@@ -1123,6 +1195,7 @@ def _grant_against_not_found(
     cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
     path = write_store(tmp_path / 'config.toml', cfg)
     _patch_generated_key(monkeypatch, tmp_path, [])
+    _patch_provider_reachable(monkeypatch)
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
@@ -1201,6 +1274,7 @@ def test_admin_added_key_is_adopted_on_the_next_run(
     path = write_store(tmp_path / 'config.toml', cfg)
     store = load_store(path)
     _patch_generated_key(monkeypatch, tmp_path, [])
+    _patch_provider_reachable(monkeypatch)
     monkeypatch.setattr(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
@@ -1299,6 +1373,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
     store = load_store(path)
     events: list[str] = []
     _patch_generated_key(monkeypatch, tmp_path, events)
+    _patch_provider_reachable(monkeypatch)
     # Create the host copies without changing the stored entry.
     private = host_private_key_path(entry.vm_name, entry.id)
     public = host_public_key_path(entry.vm_name, entry.id)
@@ -1428,6 +1503,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
     store = load_store(path)
     events: list[str] = []
     _patch_generated_key(monkeypatch, tmp_path, events)
+    _patch_provider_reachable(monkeypatch)
     private = host_private_key_path(entry.vm_name, entry.id)
     public = host_public_key_path(entry.vm_name, entry.id)
     _make_managed_credential_dirs(private.parent)

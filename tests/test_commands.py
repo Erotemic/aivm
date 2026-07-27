@@ -6,7 +6,7 @@ from typing import Any
 
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
+from aivm.commands import CommandError, CommandManager
 from tests.helpers import FakeProc, patch_command_runtime
 
 
@@ -226,3 +226,64 @@ def test_real_sudo_is_forbidden_in_unit_tests() -> None:
 
     with pytest.raises(AssertionError, match='real sudo command'):
         subprocess.run(['sudo', '-n', 'true'])
+
+
+def test_failed_command_is_not_re_run_by_a_later_flush(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A command that raised must never be attempted again.
+
+    A caught CommandError left the command queued, so the next flush -- from
+    an unrelated later command -- re-ran it and re-raised its failure there.
+    That surfaced as a totally different operation reporting an error it never
+    issued, which is close to untraceable from a log.
+    """
+    attempts: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        attempts.append(list(cmd))
+        if cmd[0] == 'failing':
+            return FakeProc(1, '', 'boom')
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(yes=True)
+
+    try:
+        mgr.run(['failing', 'thing'], role='read', check=True, capture=True)
+    except CommandError:
+        pass
+
+    result = mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
+
+    assert result.code == 0
+    assert attempts == [['failing', 'thing'], ['unrelated', 'thing']], (
+        'the failed command was re-run by the later flush'
+    )
+
+
+def test_failed_command_in_a_plan_is_not_re_run_by_a_later_flush(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Same invariant inside a step, where a cursor tracked progress instead."""
+    attempts: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        attempts.append(list(cmd))
+        if cmd[0] == 'failing':
+            return FakeProc(1, '', 'boom')
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(yes=True)
+
+    with mgr.step('Do a thing', why='exercise the plan queue'):
+        try:
+            mgr.run(['failing', 'thing'], role='read', check=True, capture=True)
+        except CommandError:
+            pass
+        mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
+
+    assert attempts == [['failing', 'thing'], ['unrelated', 'thing']]

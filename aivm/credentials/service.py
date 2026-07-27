@@ -293,7 +293,11 @@ def grant_repository_credential(
     access: CredentialAccess,
     manager: CommandManager,
 ) -> CredentialEntry:
-    _require_tools('gh', 'ssh', 'ssh-keygen', manager=manager)
+    # Only the tools that actually make a credential are required. Provider
+    # automation is optional and its absence becomes a handoff below, so a
+    # host without gh -- or with a gh that cannot manage deploy keys -- can
+    # still grant a VM access to a repository.
+    _require_tools('ssh', 'ssh-keygen', manager=manager)
     # Normalize here too: this is the programmatic entry point, and the CLI
     # Literal is not a hard gate when a caller passes data= directly.
     access = normalize_credential_access(access)
@@ -321,7 +325,6 @@ def grant_repository_credential(
         provider_key_title=credential_title(cfg.vm.name, repo, cred_id),
         state=CREDENTIAL_STATE_PENDING,
     )
-    github.check_auth(repo, manager=manager)
     entry = keys.generate_host_key(entry, manager=manager)
     upsert_credential(store, entry)
     store.schema_version = max(store.schema_version, 8)
@@ -335,9 +338,18 @@ def grant_repository_credential(
     )
 
     remote: ProviderDeployKey | None = None
-    unregistered_reason = ''
+    # Ask whether registration can be automated at all before trying it. A
+    # host with no gh, an unusable gh, or no login is not an error here: the
+    # credential exists and only needs a human to publish its public half.
+    unregistered_reason = github.automation_unavailable_reason(
+        repo, manager=manager
+    )
+
     try:
-        remote = github.find_recorded_provider_key(repo, entry, manager=manager)
+        if not unregistered_reason:
+            remote = github.find_recorded_provider_key(
+                repo, entry, manager=manager
+            )
     except AIVMError as ex:
         # Reading the provider failed, so nothing was created and the key AIVM
         # just generated is inert. Whatever the cause -- not an admin, SSO,

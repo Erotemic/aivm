@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -104,6 +105,40 @@ def _classify_provider_failure(
         'organization; ask an administrator to enable them, then rerun '
         '`aivm vm creds add`.'
     )
+
+
+def automation_unavailable_reason(
+    repo: GitRepository, *, manager: CommandManager
+) -> str:
+    """Return why this host cannot register deploy keys, or '' when it can.
+
+    Registering a key with the provider is a convenience, not a requirement:
+    AIVM can always generate a scoped keypair, install it in the guest, and
+    hand the public half to a human. So an absent, outdated, or signed-out
+    ``gh`` is a reason to fall back to that handoff -- never an error, and
+    never a reason to refuse to create the credential at all.
+    """
+    if shutil.which('gh') is None:
+        return (
+            'The GitHub CLI (gh) is not installed on this host, so AIVM '
+            'cannot register the deploy key for you. Install it with '
+            '`aivm vm creds setup` to automate this next time.'
+        )
+    # Imported here because setup imports this module for its readiness
+    # report, so the dependency cannot also run the other way at import time.
+    from .setup import MINIMUM_GH_VERSION, gh_version, too_old_gh_message
+
+    version = gh_version(manager=manager)
+    if version is None or version < MINIMUM_GH_VERSION:
+        return too_old_gh_message(version)
+    try:
+        check_auth(repo, manager=manager)
+    except AIVMError as ex:
+        return (
+            f'The GitHub CLI is not authenticated for {repo.host}: {ex} '
+            'Run `aivm vm creds setup` to sign in and automate this next time.'
+        )
+    return ''
 
 
 def _repo_args(repo: GitRepository) -> list[str]:

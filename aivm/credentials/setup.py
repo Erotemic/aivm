@@ -54,7 +54,7 @@ def gh_version(*, manager: CommandManager) -> tuple[int, int, int] | None:
     )
 
 
-def _too_old_message(version: tuple[int, int, int] | None) -> str:
+def too_old_gh_message(version: tuple[int, int, int] | None) -> str:
     return (
         f'GitHub CLI {format_gh_version(version)} cannot manage deploy keys; '
         f'`gh repo deploy-key` requires {format_gh_version(MINIMUM_GH_VERSION)} '
@@ -68,7 +68,7 @@ def require_supported_gh(*, manager: CommandManager) -> None:
     """Refuse credential work when gh cannot manage deploy keys."""
     version = gh_version(manager=manager)
     if version is None or version < MINIMUM_GH_VERSION:
-        raise AIVMError(_too_old_message(version))
+        raise AIVMError(too_old_gh_message(version))
 
 
 @dataclass(frozen=True)
@@ -172,7 +172,7 @@ def inspect_credential_setup(
             hostname=hostname,
             tool_paths=tool_paths,
             auth_ok=False,
-            auth_detail=_too_old_message(version),
+            auth_detail=too_old_gh_message(version),
             gh_version=version,
             repository=repository,
             repository_ok=None,
