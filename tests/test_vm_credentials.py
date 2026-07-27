@@ -821,6 +821,122 @@ def test_grant_service_persists_active_credential(
     assert events == ['auth', 'generate', 'provider-add', 'guest-install']
 
 
+class _RefusingGitHubManager(CommandManager):
+    """Fail the deploy-key create with one real ``gh`` error payload."""
+
+    def __init__(self, stderr: str) -> None:
+        super().__init__(yes=True)
+        self.stderr = stderr
+
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            check,
+            capture,
+            text,
+            input_text,
+            env,
+            timeout,
+            summary,
+            detail,
+        )
+        if list(cmd[:4]) == ['gh', 'repo', 'deploy-key', 'add']:
+            raise CommandError(
+                list(cmd), CommandResult(code=1, stdout='', stderr=self.stderr)
+            )
+        return CommandResult(code=0, stdout='', stderr='')
+
+
+def _grant_against_refusing_provider(
+    monkeypatch: MonkeyPatch, tmp_path: Path, stderr: str
+) -> tuple[Path, CredentialEntry]:
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    _patch_generated_key(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *names: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.github.find_recorded_provider_key',
+        lambda *a, **k: None,
+    )
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+    entry = _entry('vm-a')
+    grant_repository_credential(
+        cfg,
+        store,
+        path,
+        repo,
+        access='write',
+        manager=_RefusingGitHubManager(stderr),
+    )
+    return path, entry
+
+
+def test_refused_deploy_key_discards_the_pending_grant(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 4xx means GitHub created nothing, so nothing local may survive."""
+    stderr = (
+        'HTTP 422: Validation Failed '
+        '(https://api.github.com/repos/Kitware/kwimage/keys)\n'
+        'Deploy keys are disabled for this repository'
+    )
+
+    with pytest.raises(github.ProviderRejectedError) as excinfo:
+        _grant_against_refusing_provider(monkeypatch, tmp_path, stderr)
+
+    message = str(excinfo.value)
+    assert 'Deploy keys are disabled for this repository' in message
+    assert 'No AIVM credential state was kept' in message
+    assert 'gh repo deploy-key add' not in message
+    cred_id = credential_id(
+        'vm-a', GitRepository('github.com', 'Kitware', 'kwimage').canonical
+    )
+    store_path = tmp_path / 'config.toml'
+    assert find_credentials_for_vm(load_store(store_path), 'vm-a') == []
+    assert not host_credential_dir('vm-a', cred_id).exists()
+
+
+def test_unresolved_provider_failure_keeps_state_for_recovery(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 5xx may mean the key exists, so the record must survive to revoke it."""
+    stderr = 'HTTP 503: Service Unavailable (https://api.github.com/repos)'
+
+    with pytest.raises(CommandError):
+        _grant_against_refusing_provider(monkeypatch, tmp_path, stderr)
+
+    cred_id = credential_id(
+        'vm-a', GitRepository('github.com', 'Kitware', 'kwimage').canonical
+    )
+    [pending] = find_credentials_for_vm(
+        load_store(tmp_path / 'config.toml'), 'vm-a'
+    )
+    assert pending.state == 'pending'
+    assert pending.key_fingerprint
+    assert host_private_key_path('vm-a', cred_id).exists()
+
+
 def test_revoke_invalidates_provider_before_guest_cleanup(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

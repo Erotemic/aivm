@@ -13,6 +13,37 @@ from ..errors import AIVMError
 from .keys import normalized_public_key, public_key_fingerprint
 from .models import GitRepository, ProviderDeployKey
 
+_HTTP_STATUS_RE = re.compile(r'\bHTTP (\d{3})\b')
+
+
+class ProviderRejectedError(AIVMError):
+    """Raised when GitHub validated a request and refused it outright.
+
+    A 4xx response means the provider reached a decision and changed nothing:
+    the deploy key was not created. That is materially different from a
+    timeout or a 5xx, where the provider may have acted and AIVM must keep
+    local state so the key can still be found and revoked. Only this error
+    lets a caller discard state recorded in anticipation of the call.
+    """
+
+
+def _provider_rejection(ex: CommandError) -> ProviderRejectedError | None:
+    """Classify a failed ``gh`` command as a definitive provider refusal."""
+    text = (ex.result.stderr or ex.result.stdout or '').strip()
+    match = _HTTP_STATUS_RE.search(text)
+    if match is None or not 400 <= int(match.group(1)) < 500:
+        return None
+    # gh prints the status line first and GitHub's human-readable reason
+    # after it. Keep the reason; the raw URL and argv add nothing here.
+    reason = ' '.join(
+        line.strip()
+        for line in text.splitlines()[1:]
+        if line.strip()
+    )
+    return ProviderRejectedError(
+        f'{reason or text} (HTTP {match.group(1)})'
+    )
+
 
 def _repo_args(repo: GitRepository) -> list[str]:
     return ['--repo', repo.gh_repo_arg]
@@ -277,15 +308,26 @@ def add_deploy_key(
     ]
     if write:
         cmd.append('--allow-write')
-    manager.run(
-        cmd,
-        sudo=False,
-        role='modify',
-        check=True,
-        capture=True,
-        summary=f'Add deploy key to {repo.display}',
-        detail='access=write' if write else 'access=read',
-    )
+    try:
+        manager.run(
+            cmd,
+            sudo=False,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Add deploy key to {repo.display}',
+            detail='access=write' if write else 'access=read',
+        )
+    except CommandError as ex:
+        rejection = _provider_rejection(ex)
+        if rejection is None:
+            raise
+        raise ProviderRejectedError(
+            f'GitHub refused to create a deploy key for {repo.display}: '
+            f'{rejection}. No key was created. Deploy keys can be disabled '
+            'per repository or across an organization; ask an administrator '
+            'to enable them, then rerun `aivm vm creds add`.'
+        ) from ex
     public_key = public_key_path.read_text(encoding='utf-8')
     match = find_added_key_by_public_key(
         list_deploy_keys(repo, manager=manager),

@@ -125,6 +125,42 @@ def _require_tools(*names: str) -> None:
     require_credential_tools(*names)
 
 
+def _discard_unstarted_grant(
+    store: Store,
+    store_path: Path,
+    entry: CredentialEntry,
+) -> bool:
+    """Drop local state for a grant the provider refused outright.
+
+    This is deliberately narrow. AIVM records a pending credential *before*
+    calling the provider so a key that does get created can never be
+    orphaned, and that invariant must survive here: only a record that has no
+    provider key id and never left ``pending`` is discarded, and only after
+    the provider has said it created nothing. Guest installation happens
+    later in the grant, so such a record owns exactly two artifacts -- the
+    host keypair and the store row.
+
+    Returns whether local state was discarded.
+    """
+    if entry.state != CREDENTIAL_STATE_PENDING or entry.provider_key_id:
+        return False
+    keys.remove_host_key(entry.vm_name, entry.id)
+    remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
+    save_store(
+        store,
+        store_path,
+        reason=(
+            f'Discard credential {entry.id}: the provider refused to create '
+            'its deploy key and created nothing.'
+        ),
+    )
+    log.info(
+        'Discarded pending credential {} because GitHub created no key.',
+        entry.id,
+    )
+    return True
+
+
 def grant_repository_credential(
     cfg: AgentVMConfig,
     store: Store,
@@ -177,13 +213,22 @@ def grant_repository_credential(
 
     remote = github.find_recorded_provider_key(repo, entry, manager=manager)
     if remote is None:
-        remote = github.add_deploy_key(
-            repo,
-            public_key_path=keys.host_public_key_path(entry.vm_name, entry.id),
-            title=entry.provider_key_title,
-            write=write,
-            manager=manager,
-        )
+        try:
+            remote = github.add_deploy_key(
+                repo,
+                public_key_path=keys.host_public_key_path(
+                    entry.vm_name, entry.id
+                ),
+                title=entry.provider_key_title,
+                write=write,
+                manager=manager,
+            )
+        except github.ProviderRejectedError as ex:
+            if not _discard_unstarted_grant(store, store_path, entry):
+                raise
+            raise github.ProviderRejectedError(
+                f'{ex} No AIVM credential state was kept for this attempt.'
+            ) from ex
     expected_read_only = not write
     if remote.read_only != expected_read_only:
         raise AIVMError(
