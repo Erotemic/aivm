@@ -16,6 +16,7 @@ from ..config_store import (
     load_store,
 )
 from ..credentials import providers
+from ..credentials.gitlab import host_token_envvar
 from ..credentials.resolve import resolve_repository
 from ..credentials.schema import normalize_credential_access
 from ..credentials.service import (
@@ -230,6 +231,18 @@ def _print_gitlab_setup_report(report: GitLabCredentialSetupReport) -> None:
             print(f'  Repository detail: {report.repository_detail}')
 
 
+def _gitlab_token_hint(hostname: str) -> str:
+    """Name the token variables that actually apply to this host.
+
+    A GitLab token only works on the server that issued it, so telling
+    everyone to ``set GITLAB_TOKEN`` is wrong advice for a second instance.
+    """
+    scoped = host_token_envvar(hostname)
+    if scoped == 'GITLAB_TOKEN':
+        return 'GITLAB_TOKEN'
+    return f'{scoped} (or GITLAB_TOKEN)'
+
+
 def _run_gitlab_setup(
     *,
     args: Any,
@@ -246,8 +259,8 @@ def _run_gitlab_setup(
     if args.check:
         if not report.ready:
             print(
-                '  Remedy:            set GITLAB_TOKEN and run '
-                '`aivm vm creds setup --provider gitlab`'
+                f'  Remedy:            set {_gitlab_token_hint(hostname)} and '
+                'run `aivm vm creds setup --provider gitlab`'
             )
         return 0 if report.ready else 2
 
@@ -259,7 +272,8 @@ def _run_gitlab_setup(
             )
         if not report.auth_ok:
             print(
-                'DRYRUN: would require a valid GITLAB_TOKEN on the AIVM host.'
+                'DRYRUN: would require a valid '
+                f'{_gitlab_token_hint(hostname)} on the AIVM host.'
             )
         if repo is not None:
             print(
@@ -291,8 +305,9 @@ def _run_gitlab_setup(
     if not final.ready:
         if not final.auth_ok:
             print(
-                '  Remedy:            export GITLAB_TOKEN=<api-token>; '
-                'for a custom API endpoint also set GITLAB_API_URL.'
+                '  Remedy:            export '
+                f'{host_token_envvar(hostname)}=<api-token>; for a custom API '
+                'endpoint also set GITLAB_API_URL (https only).'
             )
         else:
             print(

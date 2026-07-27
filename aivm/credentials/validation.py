@@ -59,6 +59,14 @@ def validate_repository_identity(
         raise CredentialValidationError(
             f'Unsupported repository owner syntax: {owner!r}'
         )
+    if len(owner_parts) > 1 and host == 'github.com':
+        # Nested namespaces exist on GitLab, not GitHub. Accepting one here
+        # would record a credential naming a repository that cannot exist,
+        # and `github.com/a/b/c` would silently become owner `a/b`.
+        raise CredentialValidationError(
+            f'github.com has no nested namespaces, so {owner_text!r} is not a '
+            'repository owner. Use OWNER/REPO, or name the GitLab host.'
+        )
     if not _REPO_PART_RE.fullmatch(repo_text):
         raise CredentialValidationError(
             f'Unsupported repository name syntax: {repository!r}'

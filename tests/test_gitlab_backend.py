@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from email.message import Message
+from http.client import HTTPMessage
 from io import BytesIO
 from pathlib import Path
+from types import TracebackType
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
@@ -19,6 +21,7 @@ from aivm.credentials.gitlab import (
     GitLabTransportError,
     _SameOriginRedirectHandler,
     default_api_url,
+    host_token_envvar,
     token_from_env,
 )
 
@@ -43,7 +46,12 @@ class FakeResponse:
     def __enter__(self) -> 'FakeResponse':
         return self
 
-    def __exit__(self, *args: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
         return None
 
 
@@ -70,8 +78,9 @@ def _backend(opener: FakeOpener) -> GitLabDeployKeyBackend:
 
 
 def _request_json(request: Request) -> dict[str, object]:
-    assert request.data is not None
-    return json.loads(request.data.decode())
+    body = request.data
+    assert isinstance(body, bytes)
+    return json.loads(body.decode())
 
 
 def test_default_api_url() -> None:
@@ -267,10 +276,42 @@ def test_auth_and_transport_errors_are_distinct() -> None:
 
 def test_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('CUSTOM_GITLAB_TOKEN', 'token-value')
-    assert token_from_env('CUSTOM_GITLAB_TOKEN') == 'token-value'
+    assert token_from_env(envvar='CUSTOM_GITLAB_TOKEN') == 'token-value'
     monkeypatch.delenv('CUSTOM_GITLAB_TOKEN')
     with pytest.raises(GitLabAuthenticationError, match='CUSTOM_GITLAB_TOKEN'):
-        token_from_env('CUSTOM_GITLAB_TOKEN')
+        token_from_env(envvar='CUSTOM_GITLAB_TOKEN')
+
+
+def test_host_scoped_token_wins_over_the_generic_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gitlab.com token must not be handed to a self-managed instance.
+
+    Tokens are per-instance, so someone using two GitLab servers needs a way
+    to say which token belongs to which host; without one, naming a host is
+    enough to send it a credential minted for somewhere else.
+    """
+    monkeypatch.setenv('GITLAB_TOKEN', 'dot-com-token')
+    monkeypatch.setenv('GITLAB_TOKEN_GITLAB_EXAMPLE_COM', 'self-managed-token')
+
+    assert host_token_envvar('gitlab.example.com') == (
+        'GITLAB_TOKEN_GITLAB_EXAMPLE_COM'
+    )
+    assert token_from_env('gitlab.example.com') == 'self-managed-token'
+    # The generic variable still serves any host that has no scoped token.
+    assert token_from_env('gitlab.com') == 'dot-com-token'
+
+
+def test_missing_token_names_both_accepted_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv('GITLAB_TOKEN', raising=False)
+    monkeypatch.delenv('GITLAB_TOKEN_GITLAB_EXAMPLE_COM', raising=False)
+    with pytest.raises(GitLabAuthenticationError) as exc_info:
+        token_from_env('gitlab.example.com')
+    message = str(exc_info.value)
+    assert 'GITLAB_TOKEN_GITLAB_EXAMPLE_COM' in message
+    assert 'GITLAB_TOKEN' in message
 
 
 def test_redirect_handler_rejects_cross_origin() -> None:
@@ -285,6 +326,6 @@ def test_redirect_handler_rejects_cross_origin() -> None:
             BytesIO(),
             302,
             'Found',
-            Message(),
+            HTTPMessage(),
             'https://attacker.example/steal',
         )

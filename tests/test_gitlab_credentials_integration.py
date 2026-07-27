@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import replace
 from pathlib import Path
+
 import pytest
 
 from aivm.cli.vm_creds import VMCredsAddCLI, VMCredsSetupCLI
@@ -155,6 +156,53 @@ def test_auto_provider_uses_setup_hostname() -> None:
             GitRepository('gitlab.com', 'group', 'project'),
             'github',
         )
+
+
+@pytest.mark.parametrize(
+    ('host', 'expected'),
+    [
+        pytest.param('gitlab.com', 'gitlab', id='canonical'),
+        pytest.param('gitlab.kitware.com', 'gitlab', id='self_managed'),
+        pytest.param('gitlab.example.co.uk', 'gitlab', id='multi_label_domain'),
+        pytest.param('github.com', 'github', id='canonical_github'),
+        pytest.param('ghe.corp.example', 'github', id='enterprise_github'),
+        pytest.param('notgitlab.example.com', 'github', id='not_a_gitlab_label'),
+    ],
+)
+def test_auto_provider_recognizes_self_managed_gitlab(
+    host: str, expected: str
+) -> None:
+    """The forge decides the API, the required tools, and the stored kind.
+
+    Defaulting every non-gitlab.com host to GitHub recorded a
+    ``github-deploy-key`` for a GitLab project, gated it on ``gh``, and named
+    the wrong forge in the administrator handoff.
+    """
+    repo = GitRepository(host, 'group', 'project')
+    assert providers.resolve_provider(repo) == expected
+
+
+def test_github_rejects_a_nested_namespace() -> None:
+    """GitHub has no subgroups, so a nested path is a different repository.
+
+    ``github.com/a/b/c`` used to parse as owner ``a/b``, recording a
+    credential for a repository that cannot exist.
+    """
+    with pytest.raises(AIVMError, match='no nested namespaces'):
+        parse_repository_url('github.com/a/b/c')
+
+
+def test_gitlab_api_token_is_never_sent_over_plaintext_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The token rides in a header on every call, so the transport matters."""
+    monkeypatch.setenv('GITLAB_API_URL', 'http://gitlab.example.com/api/v4')
+    with pytest.raises(AIVMError, match='over http'):
+        providers._gitlab_api_url('gitlab.example.com')
+
+    # Loopback stays usable for a local server or a forwarded port.
+    monkeypatch.setenv('GITLAB_API_URL', 'http://localhost/api/v4')
+    assert providers._gitlab_api_url('localhost') == 'http://localhost/api/v4'
 
 
 def test_nested_gitlab_repository_renders_guest_routes() -> None:

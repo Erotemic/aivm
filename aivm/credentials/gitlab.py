@@ -8,9 +8,10 @@ import socket
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from email.message import Message
+from http.client import HTTPMessage
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Protocol, cast
+from typing import IO, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -102,10 +103,10 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
     def redirect_request(
         self,
         req: Request,
-        fp: object,
+        fp: IO[bytes],
         code: int,
         msg: str,
-        headers: Message,
+        headers: HTTPMessage,
         newurl: str,
     ) -> Request | None:
         parsed = urlparse(newurl)
@@ -116,7 +117,7 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
                 code,
                 'Refusing a cross-origin GitLab API redirect',
                 headers,
-                cast(Any, fp),
+                fp,
             )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -129,14 +130,40 @@ def default_api_url(host: str) -> str:
     return f'https://{clean}/api/v4'
 
 
-def token_from_env(envvar: str = _DEFAULT_TOKEN_ENV) -> str:
-    """Read a GitLab API token without ever rendering it in an error."""
-    token = os.environ.get(envvar, '').strip()
-    if not token:
-        raise GitLabAuthenticationError(
-            f'GitLab API token is missing. Set {envvar} on the AIVM host.'
-        )
-    return token
+def host_token_envvar(host: str, *, envvar: str = _DEFAULT_TOKEN_ENV) -> str:
+    """Return the host-scoped spelling of a token variable.
+
+    ``gitlab.example.com`` becomes ``GITLAB_TOKEN_GITLAB_EXAMPLE_COM``.
+    """
+    suffix = ''.join(
+        char if char.isalnum() else '_' for char in str(host or '')
+    ).upper()
+    return f'{envvar}_{suffix}' if suffix else envvar
+
+
+def token_from_env(
+    host: str = '',
+    *,
+    envvar: str = _DEFAULT_TOKEN_ENV,
+) -> str:
+    """Read a GitLab API token without ever rendering it in an error.
+
+    A host-scoped variable wins over the generic one. Tokens are per-instance
+    -- a gitlab.com token is meaningless to a self-managed server and handing
+    it over leaks it -- so anyone dealing with more than one instance needs a
+    way to say which token belongs to which host.
+    """
+    scoped = host_token_envvar(host, envvar=envvar) if host else ''
+    for name in (scoped, envvar):
+        if not name:
+            continue
+        token = os.environ.get(name, '').strip()
+        if token:
+            return token
+    wanted = f'{scoped} or {envvar}' if scoped and scoped != envvar else envvar
+    raise GitLabAuthenticationError(
+        f'GitLab API token is missing. Set {wanted} on the AIVM host.'
+    )
 
 
 def _project_selector(project: GitLabProject | str | int) -> str:
@@ -263,7 +290,7 @@ class GitLabDeployKeyBackend:
     ) -> 'GitLabDeployKeyBackend':
         return cls(
             api_url=api_url or default_api_url(host),
-            token=token_from_env(envvar),
+            token=token_from_env(host, envvar=envvar),
             timeout=timeout,
             opener=opener,
         )

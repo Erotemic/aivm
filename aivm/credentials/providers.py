@@ -11,6 +11,7 @@ from ..commands import CommandManager
 from ..config_store.models import CredentialEntry
 from ..errors import AIVMError
 from . import github
+from .errors import ProviderRejectedError
 from .gitlab import (
     GitLabDeployKeyBackend,
     GitLabProviderRejectedError,
@@ -32,10 +33,6 @@ VALID_CREDENTIAL_PROVIDERS: frozenset[str] = frozenset(
 )
 
 
-class ProviderRejectedError(AIVMError):
-    """A forge definitively refused a request without creating a key."""
-
-
 def normalize_provider(value: object) -> CredentialProvider:
     raw = str(value or 'auto').strip().lower()
     if raw not in VALID_CREDENTIAL_PROVIDERS:
@@ -47,13 +44,27 @@ def normalize_provider(value: object) -> CredentialProvider:
     return cast(CredentialProvider, raw)
 
 
+def _host_looks_like_gitlab(host: str) -> bool:
+    """Recognize the conventional hostname of a self-managed GitLab.
+
+    Guessing wrong is not cosmetic: the provider decides which API is called,
+    which tools are required, and which ``kind`` is written into the config
+    store for the life of the credential. A self-managed instance almost
+    always answers on ``gitlab.<domain>``, and defaulting those to GitHub
+    recorded a ``github-deploy-key`` for a GitLab project, then reported the
+    handoff under the wrong forge name. ``--provider`` still overrides this.
+    """
+    labels = host.lower().split('.')
+    return len(labels) > 1 and labels[0] == 'gitlab'
+
+
 def resolve_provider(
     repo: GitRepository | None,
     requested: object = 'auto',
     *,
     hostname: str = '',
 ) -> ResolvedCredentialProvider:
-    """Resolve an explicit provider or infer the public forge from its host."""
+    """Resolve an explicit provider or infer the forge from its host."""
     provider = normalize_provider(requested)
     host = repo.host if repo is not None else hostname
     if provider != 'auto':
@@ -65,8 +76,8 @@ def resolve_provider(
             raise AIVMError(
                 'gitlab.com cannot be managed with the GitHub provider.'
             )
-        return cast(ResolvedCredentialProvider, provider)
-    if host.lower() == 'gitlab.com':
+        return provider
+    if _host_looks_like_gitlab(host):
         return 'gitlab'
     return 'github'
 
@@ -110,7 +121,31 @@ def _gitlab_api_url(host: str) -> str:
             'GITLAB_API_URL must use the same hostname as the repository. '
             f'Repository host: {host}; API URL: {api_url}'
         )
+    require_encrypted_api_url(api_url)
     return api_url
+
+
+def require_encrypted_api_url(api_url: str) -> None:
+    """Refuse to send an API token over an unencrypted transport.
+
+    The token travels in a ``PRIVATE-TOKEN`` request header on every call, so
+    plaintext HTTP hands a long-lived credential to anything on the path.
+    ``default_api_url`` always builds an ``https`` URL; only an explicit
+    ``GITLAB_API_URL`` can downgrade it. Loopback is exempt so a local test
+    server or an SSH-forwarded port still works.
+    """
+    parsed = urlparse(api_url)
+    if parsed.scheme.lower() == 'https':
+        return
+    hostname = (parsed.hostname or '').lower()
+    if hostname in {'localhost', '127.0.0.1', '::1'}:
+        return
+    scheme = parsed.scheme.lower() or 'an unrecognized scheme'
+    raise AIVMError(
+        f'Refusing to send a GitLab API token to {hostname or api_url} over '
+        f'{scheme}: the token is sent as a request header on every call. Set '
+        'GITLAB_API_URL to an https endpoint.'
+    )
 
 
 def gitlab_backend_for_host(host: str) -> GitLabDeployKeyBackend:

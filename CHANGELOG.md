@@ -74,6 +74,28 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Fixed
+* Self-managed GitLab hosts are recognized without `--provider`. A host named
+  `gitlab.<domain>` was resolved to GitHub, which stored a
+  `github-deploy-key` for a GitLab project, gated it on `gh`, and named the
+  wrong forge in the administrator handoff. The provider decides which API is
+  called and is recorded permanently in the credential's `kind`, so guessing
+  it is not cosmetic. `--provider` still overrides the inference.
+* A nested namespace is rejected on `github.com` rather than silently
+  reinterpreted. GitHub has no subgroups, so `github.com/a/b/c` parsed as
+  owner `a/b` and recorded a credential naming a repository that cannot exist.
+* The GitLab API token is no longer sent over an unencrypted transport. It
+  rides in a `PRIVATE-TOKEN` request header on every call, and an explicit
+  `GITLAB_API_URL` could downgrade the endpoint to plaintext HTTP. Non-loopback
+  endpoints must now be `https`.
+* A GitLab token is only valid on the server that issued it, so a host-scoped
+  `GITLAB_TOKEN_<HOST>` now takes precedence over the generic `GITLAB_TOKEN`.
+  Without one, naming a host was enough to send it a token minted elsewhere.
+  The generic variable still serves any host with no scoped token, and setup
+  names whichever variables actually apply to the host being checked.
+* `ProviderRejectedError` and `ProviderPermissionError` moved to
+  `credentials/errors.py`. The GitLab dispatcher had defined a second class of
+  the same name, so `except ProviderRejectedError` caught different things
+  depending on which module the caller imported.
 * A command that raised was never removed from its queue, so the next flush --
   triggered by an unrelated later command -- re-ran it and re-raised its
   failure there. Any caller that caught a `CommandError` was exposed; it

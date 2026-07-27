@@ -493,6 +493,18 @@ self-managed instance whose API is not at ``https://HOST/api/v4``, also set
 token and project API readiness, but a failed readiness check does not prevent
 ``creds add`` from generating an administrator handoff.
 
+A GitLab token is only valid on the server that issued it, so a host-scoped
+``GITLAB_TOKEN_<HOST>`` -- for example ``GITLAB_TOKEN_GITLAB_EXAMPLE_COM`` --
+takes precedence over the generic variable. Use it when you deal with more
+than one instance; otherwise naming a host is enough to send it a token minted
+somewhere else. The token travels in a request header on every call, so AIVM
+refuses a non-loopback ``GITLAB_API_URL`` that is not ``https``.
+
+Hosts named ``gitlab.<domain>`` are treated as GitLab without ``--provider``,
+since the provider decides which API is called and is recorded permanently in
+the credential's ``kind``. Any other self-managed hostname needs
+``--provider gitlab``.
+
 Managing deploy keys requires **admin** permission on the repository; write
 access is not enough, so a contributor who can push may still be unable to add
 a key. On a private repository GitHub reports that denial as ``404 Not Found``
