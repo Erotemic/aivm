@@ -452,11 +452,26 @@ into the guest.
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
    aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
 
-On Debian/Ubuntu, ``creds setup`` installs a missing GitHub CLI or OpenSSH
-client with apt, then starts ``gh auth login`` when necessary. The browser
-login skips uploading the user's ordinary SSH key because AIVM creates
-repository-scoped deploy keys separately. ``--dry_run`` previews those actions
-without changing the host.
+``creds setup`` installs a missing GitHub CLI or OpenSSH client using the
+host's package backend (apt, dnf, zypper, pacman, or apk), then starts
+``gh auth login`` when necessary. ``--dry_run`` previews those actions without
+changing the host.
+
+The GitHub CLI must be **2.5.0 or newer**, which is when ``gh repo deploy-key``
+was added; without it no deploy key can be created. Several distributions ship
+much older builds -- Ubuntu 22.04 packages gh 2.4.0 -- so on apt, dnf, and
+zypper hosts AIVM installs gh from GitHub's own repository following the
+`official instructions
+<https://github.com/cli/cli/blob/trunk/docs/install_linux.md>`_. That adds a
+third-party package repository to the host, so it appears in the approval
+prompt like any other privileged step. Arch and Alpine track upstream closely
+enough that their own packages are used. ``creds setup --check`` reports the
+installed version and refuses hosts whose gh is too old.
+
+Where gh is 2.48.0 or newer, the browser login passes ``--skip-ssh-key`` so it
+never offers to upload the user's ordinary SSH key; AIVM creates
+repository-scoped deploy keys separately. On older builds that flag does not
+exist, so setup warns instead -- decline the upload if the login offers it.
 
 If GitHub can no longer be inspected or administered, an explicit recovery
 command can remove local copies without claiming that provider-side revocation

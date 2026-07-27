@@ -44,7 +44,7 @@ from .schema import (
     credential_is_guest_usable,
     normalize_credential_access,
 )
-from .setup import require_credential_tools
+from .setup import require_credential_tools, require_supported_gh
 from .validation import (
     CredentialValidationError,
     credential_id,
@@ -120,9 +120,16 @@ def select_credential(
     )
 
 
-def _require_tools(*names: str) -> None:
-    """Host-tool gate for credential operations; tests patch this seam."""
+def _require_tools(*names: str, manager: CommandManager) -> None:
+    """Host-tool gate for credential operations; tests patch this seam.
+
+    Presence is not enough for gh: a version predating `gh repo deploy-key`
+    would fail later with an opaque "unknown command", so the capability is
+    checked here rather than at the point of use.
+    """
     require_credential_tools(*names)
+    if 'gh' in names:
+        require_supported_gh(manager=manager)
 
 
 def _discard_unstarted_grant(
@@ -170,7 +177,7 @@ def grant_repository_credential(
     access: CredentialAccess,
     manager: CommandManager,
 ) -> CredentialEntry:
-    _require_tools('gh', 'ssh', 'ssh-keygen')
+    _require_tools('gh', 'ssh', 'ssh-keygen', manager=manager)
     # Normalize here too: this is the programmatic entry point, and the CLI
     # Literal is not a hard gate when a caller passes data= directly.
     access = normalize_credential_access(access)
@@ -360,7 +367,7 @@ def revoke_repository_credential(
     *,
     manager: CommandManager,
 ) -> None:
-    _require_tools('gh')
+    _require_tools('gh', manager=manager)
     repo = entry_repository(entry)
     github.check_auth(repo, manager=manager)
     remote = github.find_recorded_provider_key(repo, entry, manager=manager)

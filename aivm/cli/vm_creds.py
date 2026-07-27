@@ -155,6 +155,8 @@ def _print_setup_report(report: CredentialSetupReport) -> None:
     for name in CREDENTIAL_TOOLS:
         path = report.tool_paths.get(name)
         print(f'  {name:<18} {"ready" if path else "missing"}')
+    if report.tool_paths.get('gh'):
+        print(f'  gh version:        {report.gh_detail}')
     auth = 'ready' if report.auth_ok else 'not ready'
     print(f'  Authentication:    {auth}')
     if report.auth_detail and not report.auth_ok:
@@ -231,6 +233,11 @@ class VMCredsSetupCLI(_BaseCommand):
                     'DRYRUN: would install missing host command(s): '
                     + ', '.join(report.missing_tools)
                 )
+            if report.tool_paths.get('gh') and not report.gh_supported:
+                print(
+                    'DRYRUN: would replace the installed GitHub CLI '
+                    f'({report.gh_detail}) from its official repository.'
+                )
             if not report.auth_ok:
                 print(f'DRYRUN: would authenticate gh for {hostname}.')
             if repo is not None:
@@ -253,9 +260,13 @@ class VMCredsSetupCLI(_BaseCommand):
             print('  Remedy:            grant repository administration access.')
             return 2
 
-        if report.missing_tools:
+        needs_gh_upgrade = bool(
+            report.tool_paths.get('gh') and not report.gh_supported
+        )
+        if report.missing_tools or needs_gh_upgrade:
             install_missing_credential_tools(
                 report.missing_tools,
+                upgrade_gh=needs_gh_upgrade,
                 manager=mgr,
             )
         refreshed = inspect_credential_setup(
@@ -269,8 +280,12 @@ class VMCredsSetupCLI(_BaseCommand):
                 'still unavailable: '
                 + ', '.join(refreshed.missing_tools)
             )
+        if not refreshed.gh_supported:
+            raise AIVMError(refreshed.auth_detail)
         if not refreshed.auth_ok:
-            authenticate_github(hostname, manager=mgr)
+            authenticate_github(
+                hostname, manager=mgr, version=refreshed.gh_version
+            )
 
         final = inspect_credential_setup(
             hostname=hostname,

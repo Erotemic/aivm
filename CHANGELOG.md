@@ -26,9 +26,17 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   and VM deletion now aborts instead of forgetting credentials when private-key
   cleanup fails.
 * Added ``aivm vm creds setup`` and ``setup --check`` to install missing
-  GitHub CLI/OpenSSH prerequisites on Debian/Ubuntu, authenticate ``gh``
-  without uploading a user SSH key, and optionally verify deploy-key
-  administration for a repository.
+  GitHub CLI/OpenSSH prerequisites, authenticate ``gh`` without uploading a
+  user SSH key, and optionally verify deploy-key administration for a
+  repository. Installs use the host's package backend (apt, dnf5, dnf,
+  zypper, pacman, or apk), selected in the new `credentials/gh_install.py`.
+* The GitHub CLI is now version-checked. `gh repo deploy-key` requires gh
+  2.5.0, and distributions ship much older builds (Ubuntu 22.04 packages
+  2.4.0), so `creds setup` reports the installed version, refuses a host whose
+  gh cannot manage deploy keys, and installs or replaces gh from GitHub's own
+  repository per the official instructions. `--skip-ssh-key` is passed only to
+  gh 2.48.0+, which is where that flag was added; older builds get a warning
+  instead of a failed login.
 
 * A deploy-key creation that GitHub refuses outright (any 4xx, such as the
   422 raised when deploy keys are disabled for a repository or organization)

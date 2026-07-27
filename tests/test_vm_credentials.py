@@ -772,7 +772,7 @@ def test_grant_service_persists_active_credential(
     events: list[str] = []
     _patch_generated_key(monkeypatch, tmp_path, events)
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth',
@@ -870,7 +870,7 @@ def _grant_against_refusing_provider(
     store = load_store(path)
     _patch_generated_key(monkeypatch, tmp_path, [])
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
@@ -958,7 +958,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
     public.write_text(_public_key(), encoding='utf-8')
 
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
@@ -1030,7 +1030,7 @@ def test_revoke_uses_exact_provider_id_lookup(
     }
     manager = _GitHubManager(_public_key(), exact=exact)
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',
@@ -1086,7 +1086,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
     public.write_text(_public_key(), encoding='utf-8')
 
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
@@ -1577,7 +1577,7 @@ def test_revoke_refuses_cleanup_when_provider_key_remains(
     save_store(store, path)
     store = load_store(path)
     monkeypatch.setattr(
-        'aivm.credentials.service._require_tools', lambda *names: None
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service.github.check_auth', lambda *a, **k: None
