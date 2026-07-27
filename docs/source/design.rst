@@ -54,10 +54,16 @@ Reconciliation model
 Safety and Trust Boundaries
 ---------------------------
 
-1. Explicit consent for privileged host changes
+1. Visibility and consent are separate guarantees
 
-   Privileged operations must be visible and confirmable unless the user has
-   explicitly opted into automatic approval (``--yes`` / ``--yes-sudo``).
+   *Visible* and *confirmable* are two axes, and the automatic-approval flags
+   apply to only one of them. ``--yes`` / ``--yes-sudo`` waive **confirmation**.
+   They never waive **visibility**.
+
+   Every write, on the host or in the guest, is logged at ``INFO`` regardless of
+   sudo status, and so is every command that invokes sudo on the host even when
+   it only reads. Nothing a run changed may be absent from that run's default
+   output. See :ref:`command-visibility-and-approval` for the case table.
 
 2. No silent trust broadening
 
@@ -181,7 +187,9 @@ Operational command execution
   they pin ``-c qemu:///system`` explicitly (bare unprivileged ``virsh``
   would silently target ``qemu:///session``), and state-changing hypervisor
   commands require interactive approval regardless of whether sudo is used,
-  preserving the consent contract of principle 1.
+  preserving the consent contract of principle 1. Hypervisor control is one of
+  three things that require approval; see
+  :ref:`command-visibility-and-approval` for the full case table.
 * Preserve ``--dry_run`` as a true non-destructive preview path.
 * Automatic/background reconciliation must avoid disruptive host operations
   against existing mounts (for example, forced/lazy unmount of busy targets).
@@ -253,6 +261,282 @@ Plan and approval semantics
     reprompts
 * Once a plan is approved, legacy per-command sudo prompting must not fire for
   commands inside that approved plan.
+
+.. _command-visibility-and-approval:
+
+Command visibility and approval
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two independent questions are asked of every command, and they must not be
+collapsed into one:
+
+**Is it visible?**
+  Does the command appear at ``INFO``, the default verbosity, or only under
+  ``--verbose 2``?
+
+**Is it confirmable?**
+  Must the user interactively approve it before it runs?
+
+``--yes`` / ``--yes-sudo`` answer the second question only. No flag, mode, or
+setting suppresses the first.
+
+What "sudo" means here
+^^^^^^^^^^^^^^^^^^^^^^
+
+Throughout this policy, **sudo means sudo on the host**: a ``sudo`` token that
+this process places on a command line it executes, escalating the privilege of
+the user running ``aivm``.
+
+A ``sudo`` appearing *inside* a payload sent to the guest -- for example
+``ssh agent@vm 'sudo -n install ...'`` -- is **not** host sudo and does not make
+the command a privileged host operation. Guest root is not a meaningful
+boundary: the guest credentials are known to the tool, so escalating inside the
+VM costs nothing and proves nothing. Such a command is still a **write**, and is
+classified by its effect, never by the presence of that inner token.
+
+The visibility axis
+^^^^^^^^^^^^^^^^^^^
+
+A command is visible at ``INFO`` if **either**:
+
+* it writes -- changes state on the host or in the guest; or
+* it invokes sudo on the host, even if it only reads.
+
+The second clause is deliberate and is not redundant with the first. The user is
+made aware of anything with the potential to perform an unbounded privileged
+sudo op, even if we know what the program being called is. Merely invoking sudo
+on the command line is strong enough of a thing that it needs to be called out.
+Do not reduce this rule to effect alone.
+
+Only a read that escalates no host privilege is held back for ``--verbose 2``.
+Nothing is ever discarded: raising verbosity reveals every command, plus the
+literal text of any payload the log abbreviated.
+
+Classification axes
+^^^^^^^^^^^^^^^^^^^
+
+Four properties decide both tables. They are independent questions and must be
+answered separately; collapsing any two of them is how a case goes unclassified.
+
+Effect
+  ``read`` or ``write``. A command writes if it changes state anywhere, on the
+  host or inside the guest.
+
+Authority
+  What the command spends: ``none``, ``host sudo`` (a ``sudo`` token this
+  process places on a command line), or ``hypervisor control`` (a
+  state-changing ``virsh`` / ``virt-install`` command, which spends
+  root-equivalent ``libvirt`` group membership whether or not sudo was needed).
+
+Ownership
+  Whose state a write touches: ``tool`` -- state ``aivm`` created and manages
+  for itself, such as export roots, caches, and generated cloud-init -- or
+  ``user`` -- anything else, including the user's source tree, host system
+  configuration, and the guest.
+
+Inspectability
+  Whether the log can render the command in full, or a payload is too large to
+  print and is omitted (see the ``Elided`` marker in ``aivm/commands.py``).
+
+Ownership is a real axis rather than a footnote on authority. An unprivileged
+write to a directory ``aivm`` created for itself is implied by invoking the
+command at all; the same write into the user's tree or the guest is not.
+
+Policy table: visibility
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Rows are evaluated in order; the first match decides. No flag or setting
+changes this table.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 22 18 30
+
+   * - Effect
+     - Host sudo
+     - Level
+     - Why
+   * - write (host or guest)
+     - any
+     - ``INFO``
+     - the run changed something; the record of it is not optional
+   * - read
+     - yes
+     - ``INFO``
+     - escalation is called out on its own merits, not for what it read
+   * - read
+     - no
+     - ``--verbose 2``
+     - changes nothing and crosses no boundary; plumbing
+
+Policy table: approval
+^^^^^^^^^^^^^^^^^^^^^^
+
+Rows are evaluated in order; the first match decides. ``--yes`` /
+``--yes-sudo`` waive every prompt below, and nothing else does.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 24 16 20 16
+
+   * - Effect
+     - Authority
+     - Ownership
+     - Inspectability
+     - Confirm
+   * - read
+     - none
+     - --
+     - --
+     - no
+   * - read
+     - host sudo
+     - --
+     - --
+     - by policy [#robypolicy]_
+   * - write
+     - host sudo
+     - any
+     - any
+     - yes
+   * - write
+     - hypervisor control
+     - any
+     - any
+     - yes
+   * - write
+     - none
+     - tool
+     - any
+     - no
+   * - write
+     - none
+     - user
+     - payload omitted
+     - yes
+   * - write
+     - none
+     - user
+     - fully logged
+     - **unsettled** [#unsettled]_
+
+.. [#robypolicy] Auto-approves under ``auto_approve_readonly_sudo``, else
+   prompts. Visible either way.
+.. [#unsettled] Today these run without a prompt: an unprivileged, fully
+   printable write into the user's tree or the guest matches no approval
+   trigger. Whether that is correct is an open question this table exists to
+   expose rather than hide. Resolving it decides, for example, whether
+   ``ssh vm 'mkdir -p ...'`` should prompt.
+
+Rationale for the non-obvious rows. A write with ``hypervisor control``
+confirms even unprivileged, because ``libvirt`` group membership is
+root-equivalent, so the authority is spent whether or not sudo appeared. A
+write to ``tool`` ownership does not confirm, because it is already implied by
+invoking the command, and prompting for it is the approval fatigue principle 1
+exists to avoid. A ``user`` write with an omitted payload confirms on
+inspectability rather than privilege: approval is the only moment at which the
+user could read what is about to run, which is precisely what an unreadable
+23KB installer script otherwise denies them.
+
+Worked examples
+^^^^^^^^^^^^^^^
+
+Each row is classified on the four axes, then read off the tables above.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 10 18 12 16 10 10
+
+   * - Command
+     - Effect
+     - Authority
+     - Ownership
+     - Inspectability
+     - Visible
+     - Confirm
+   * - ``virsh dominfo``
+     - read
+     - none
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``sudo qemu-img info``
+     - read
+     - host sudo
+     - --
+     - fully logged
+     - ``INFO``
+     - by policy
+   * - ``qemu-img info`` as root
+     - read
+     - none [#root]_
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``ssh vm true``
+     - read
+     - none
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``virsh setvcpus``
+     - write
+     - hypervisor control
+     - user
+     - fully logged
+     - ``INFO``
+     - yes
+   * - ``sudo nft ...``
+     - write
+     - host sudo
+     - user
+     - fully logged
+     - ``INFO``
+     - yes
+   * - ``mkdir -p`` on an export root
+     - write
+     - none
+     - tool
+     - fully logged
+     - ``INFO``
+     - no
+   * - ``ssh vm 'sudo -n install ...'``
+     - write
+     - none [#guest]_
+     - user
+     - payload omitted
+     - ``INFO``
+     - yes
+   * - ``ssh vm 'mkdir -p ...'``
+     - write
+     - none
+     - user
+     - fully logged
+     - ``INFO``
+     - unsettled [#unsettled]_
+
+.. [#root] Already root, so no ``sudo`` token reaches the command line. There
+   is no escalation to call out.
+.. [#guest] The ``sudo -n`` runs in the guest and is not host sudo, so the row
+   is decided by the write and by the payload being unprintable, never by that
+   token.
+
+Loose commands are a defect, not a mode
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A command submitted outside ``mgr.step(...)`` is queued loose and gets a
+reduced prompt that cannot show its full text. This is not a second supported
+approval path; it is a call site that was never wrapped. ``submit`` already
+appends to the open plan when there is one, so wrapping a call site is
+sufficient to give it the full ``y`` / ``a`` / ``s`` semantics above.
+
+The "not grouped into an explicit step" warning enumerates the remaining work.
+The target state is that ``_confirm_loose_command`` has no callers and the
+reduced prompt is deleted, rather than that it grows features to match the plan
+prompt.
 
 Design constraints
 ~~~~~~~~~~~~~~~~~~
