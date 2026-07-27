@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,28 @@ from .util import which
 
 def cfg_path(p: str | None) -> Path:
     return Path(p).expanduser().resolve() if p else store_path().resolve()
+
+
+_CURRENT_CONFIG_OPTION: ContextVar[str | None] = ContextVar(
+    'aivm_current_config_option', default=None
+)
+
+
+def bind_active_config_option(value: str | None) -> None:
+    """Record the ``--config`` value this invocation parsed.
+
+    Optional features resolve their own settings from the store lazily rather
+    than having the CLI push each one into them; this is how they find the
+    same store the command is using. Keeping the direction of that dependency
+    inward means the CLI's shared option surface stays free of any one
+    feature's configuration.
+    """
+    _CURRENT_CONFIG_OPTION.set(str(value) if value else None)
+
+
+def active_cfg_path() -> Path:
+    """Return the config-store path bound by the running command."""
+    return cfg_path(_CURRENT_CONFIG_OPTION.get())
 
 
 def hydrate_ssh_identity_defaults(cfg: AgentVMConfig) -> bool:

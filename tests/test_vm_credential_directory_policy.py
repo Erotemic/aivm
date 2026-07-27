@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.cli._common import _resolve_cfg_credential_directory_permission_policy
 from aivm.cli.config.lint import _lint_store_text
 from aivm.config_store import Store, parse_store_toml, render_store_toml
-from aivm.credentials.keys import (
-    host_credential_dir,
+from aivm.credentials.keys import host_credential_dir
+from aivm.credentials.policy import (
+    credential_directory_permission_policy,
     normalize_credential_directory_permission_policy,
     reset_credential_directory_permission_policy,
     set_credential_directory_permission_policy,
 )
 from aivm.errors import AIVMError
+from aivm.services import bind_active_config_option
+
+
+@pytest.fixture(autouse=True)
+def _unbind_active_config() -> Iterator[None]:
+    """Keep a store bound here from leaking into other test modules."""
+    yield
+    bind_active_config_option(None)
 
 
 def test_credential_directory_permission_policy_values() -> None:
@@ -47,28 +56,26 @@ def _write_policy_store(tmp_path: Path, policy: str) -> Path:
     return path
 
 
-def test_command_options_read_the_policy_from_the_store(tmp_path: Path) -> None:
-    path = _write_policy_store(tmp_path, 'ignore')
+def test_policy_is_read_from_the_store_the_command_bound(tmp_path: Path) -> None:
+    # Core pushes nothing: it publishes which store is active and the
+    # credential feature resolves its own setting from it.
+    bind_active_config_option(str(_write_policy_store(tmp_path, 'ignore')))
 
-    resolved = _resolve_cfg_credential_directory_permission_policy(str(path))
-
-    assert resolved == 'ignore'
+    assert credential_directory_permission_policy() == 'ignore'
 
 
 def test_missing_store_falls_back_to_warn(tmp_path: Path) -> None:
-    absent = tmp_path / 'missing.toml'
+    bind_active_config_option(str(tmp_path / 'missing.toml'))
 
-    resolved = _resolve_cfg_credential_directory_permission_policy(str(absent))
-
-    assert resolved == 'warn'
+    assert credential_directory_permission_policy() == 'warn'
 
 
 def test_unknown_policy_in_store_is_an_error(tmp_path: Path) -> None:
     # A typo must not silently pick an enforcement level for the user.
-    path = _write_policy_store(tmp_path, 'sometimes')
+    bind_active_config_option(str(_write_policy_store(tmp_path, 'sometimes')))
 
     with pytest.raises(AIVMError, match='Unknown behavior'):
-        _resolve_cfg_credential_directory_permission_policy(str(path))
+        credential_directory_permission_policy()
 
 
 @pytest.mark.parametrize('policy', ['warn', 'ignore'])

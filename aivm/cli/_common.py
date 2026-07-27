@@ -18,12 +18,8 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config_store import find_vm, load_store
-from ..credentials.keys import (
-    normalize_credential_directory_permission_policy,
-    set_credential_directory_permission_policy,
-)
 from ..errors import PrivilegeModeError
-from ..services import cfg_path
+from ..services import bind_active_config_option, cfg_path
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool, int] | None = None
@@ -67,9 +63,6 @@ class _BaseCommand(kwconf.Config):
             _resolve_cfg_auto_approve_readonly_sudo(parsed.config)
         )
         privilege_mode = _resolve_cfg_privilege_mode(parsed.config)
-        credential_directory_permission_policy = (
-            _resolve_cfg_credential_directory_permission_policy(parsed.config)
-        )
         if str(privilege_mode).strip().lower() == 'never':
             raise PrivilegeModeError(
                 'behavior.privilege_mode = never is not supported in this '
@@ -83,9 +76,9 @@ class _BaseCommand(kwconf.Config):
         _CURRENT_AUTO_APPROVE_READONLY_SUDO.set(
             bool(cfg_auto_approve_readonly_sudo)
         )
-        set_credential_directory_permission_policy(
-            credential_directory_permission_policy
-        )
+        # Optional features resolve their own settings from this store; the
+        # shared option surface stays free of any single feature's config.
+        bind_active_config_option(parsed.config)
         CommandManager.activate(
             CommandManager(
                 yes=bool(parsed.yes),
@@ -171,24 +164,6 @@ def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:
     except Exception:
         auto_approve_readonly_sudo = True
     return auto_approve_readonly_sudo
-
-
-def _resolve_cfg_credential_directory_permission_policy(
-    config_opt: str | None,
-) -> str:
-    # As with privilege_mode, an unreadable store falls back to the default
-    # while a store naming an unknown policy must raise instead of silently
-    # relaxing (or tightening) credential directory enforcement.
-    try:
-        path = cfg_path(config_opt)
-        if not path.exists():
-            return 'warn'
-        reg = load_store(path)
-    except Exception:
-        return 'warn'
-    return normalize_credential_directory_permission_policy(
-        reg.behavior.credential_directory_permission_policy
-    )
 
 
 def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:

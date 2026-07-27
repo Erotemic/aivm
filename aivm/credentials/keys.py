@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import stat
-from contextvars import ContextVar, Token
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,38 +17,14 @@ from ..commands import CommandManager
 from ..config_store.models import CredentialEntry
 from ..config_store.paths import app_data_dir
 from ..errors import AIVMError
+from .policy import credential_directory_permission_policy
 from .validation import (
     CredentialValidationError,
     validate_credential_id_format,
 )
 
 _SAFE_PART = re.compile(r'[^A-Za-z0-9_.-]+')
-_CREDENTIAL_DIRECTORY_PERMISSION_POLICIES = ('warn', 'error', 'ignore')
-_CREDENTIAL_DIRECTORY_PERMISSION_POLICY: ContextVar[str] = ContextVar(
-    'aivm_credential_directory_permission_policy', default='warn'
-)
 _WARNED_DIRECTORY_PERMISSIONS: set[tuple[str, str, int]] = set()
-
-
-def normalize_credential_directory_permission_policy(value: object) -> str:
-    raw = str(value or '').strip().lower() or 'warn'
-    if raw not in _CREDENTIAL_DIRECTORY_PERMISSION_POLICIES:
-        raise AIVMError(
-            'Unknown behavior.credential_directory_permission_policy '
-            f'{str(value)!r}. Valid values: '
-            + ', '.join(_CREDENTIAL_DIRECTORY_PERMISSION_POLICIES)
-        )
-    return raw
-
-
-def set_credential_directory_permission_policy(value: object) -> Token[str]:
-    return _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.set(
-        normalize_credential_directory_permission_policy(value)
-    )
-
-
-def reset_credential_directory_permission_policy(token: Token[str]) -> None:
-    _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.reset(token)
 
 
 def _handle_directory_permission_issue(
@@ -59,7 +34,7 @@ def _handle_directory_permission_issue(
     mode: int,
     expected: str,
 ) -> None:
-    policy = _CREDENTIAL_DIRECTORY_PERMISSION_POLICY.get()
+    policy = credential_directory_permission_policy()
     if policy == 'ignore':
         return
     message = (

@@ -30,7 +30,20 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   without uploading a user SSH key, and optionally verify deploy-key
   administration for a repository.
 
+* A deploy-key creation that GitHub refuses outright (any 4xx, such as the
+  422 raised when deploy keys are disabled for a repository or organization)
+  now reports GitHub's reason and the remedy instead of the raw `gh` command,
+  and discards the pending credential and its host keypair. Failures with an
+  unresolved outcome (5xx, timeouts) still keep that state so the key can be
+  found and revoked.
+
 ### Changed
+* The credential feature no longer sits on the shared CLI option path.
+  `cli._common` has no credential imports; it publishes which config store is
+  active and `credentials.policy` resolves its own setting from it. VM
+  lifecycle code reaches the feature only through `credentials.guards`. The
+  audit boundary is documented in `aivm/credentials/__init__.py` and enforced
+  by `tests/test_credentials_boundary.py`.
 * `aivm vm creds add` now takes `--access read|write` (default `read`) instead
   of the `--write` flag, matching the `--access` option already used by
   `vm attach` and `vm code` and the `read`/`write` values already reported by

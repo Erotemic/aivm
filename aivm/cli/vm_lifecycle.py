@@ -24,9 +24,10 @@ from ..config_store import (
     remove_vm,
     save_store,
 )
-from ..credentials.guards import require_vm_credentials_released
-from ..credentials.keys import remove_host_key
-from ..credentials.schema import CREDENTIAL_STATE_REVOCATION_PENDING
+from ..credentials.guards import (
+    discard_released_credential_material,
+    require_vm_credentials_released,
+)
 from ..services import (
     cfg_path,
     load_cfg,
@@ -238,9 +239,7 @@ class VMDeleteCLI(_BaseCommand):
                 ),
                 role='modify',
             ):
-                for item in credentials:
-                    if item.state == CREDENTIAL_STATE_REVOCATION_PENDING:
-                        remove_host_key(item.vm_name, item.id)
+                discard_released_credential_material(credentials)
                 destroy_vm(cfg, dry_run=False)
                 remove_vm(reg, cfg.vm.name, remove_attachments=True)
                 save_store(
