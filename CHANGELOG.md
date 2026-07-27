@@ -38,12 +38,19 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   gh 2.48.0+, which is where that flag was added; older builds get a warning
   instead of a failed login.
 
-* A deploy-key creation that GitHub refuses outright (any 4xx, such as the
-  422 raised when deploy keys are disabled for a repository or organization)
-  now reports GitHub's reason and the remedy instead of the raw `gh` command,
-  and discards the pending credential and its host keypair. Failures with an
+* A deploy-key creation that GitHub refuses outright (a 4xx such as the 422
+  raised when deploy keys are disabled for a repository or organization) now
+  reports GitHub's reason and the remedy instead of the raw `gh` command, and
+  discards the pending credential and its host keypair. Failures with an
   unresolved outcome (5xx, timeouts) still keep that state so the key can be
   found and revoked.
+* A permission denial (403) is handled separately from an outright refusal.
+  Deploy-key endpoints need admin permission on the repository, which write
+  access does not confer, so the pending credential and its keypair are kept
+  and the generated public key is printed for a repository admin to add. A
+  later `creds add` adopts the admin-added key by fingerprint and completes
+  the grant. The denial is recognized whether it lands on creating a deploy
+  key or on reading the repository's existing ones.
 
 ### Changed
 * The credential feature no longer sits on the shared CLI option path.

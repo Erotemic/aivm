@@ -27,21 +27,66 @@ class ProviderRejectedError(AIVMError):
     """
 
 
-def _provider_rejection(ex: CommandError) -> ProviderRejectedError | None:
-    """Classify a failed ``gh`` command as a definitive provider refusal."""
+class ProviderPermissionError(AIVMError):
+    """Raised when the authenticated identity may not administer deploy keys.
+
+    Deliberately *not* a subclass of :class:`ProviderRejectedError`. Nothing
+    was created either way, but this one is fixable out of band: deploy-key
+    endpoints need admin permission on the repository, which write access does
+    not confer, so an admin can add the public key AIVM already generated. The
+    pending credential and its keypair must therefore survive, and a sibling
+    type means a caller that only handles rejection cannot discard them by
+    accident.
+    """
+
+
+def _provider_failure_reason(text: str, status: str) -> str:
+    """Extract GitHub's human-readable reason from a gh error payload."""
+    # gh writes either "HTTP 422: Validation Failed (url)" followed by the
+    # reason, or a single "gh: <reason> (HTTP 403)" line. Keep the reason; the
+    # URL and argv add nothing a reader can act on.
+    reason = ' '.join(
+        line.strip() for line in text.splitlines()[1:] if line.strip()
+    )
+    detail = reason or text
+    if f'HTTP {status}' in detail:
+        return detail
+    return f'{detail} (HTTP {status})'
+
+
+def _classify_provider_failure(
+    ex: CommandError,
+    *,
+    action: str,
+    repo: GitRepository,
+    permission_only: bool = False,
+) -> AIVMError | None:
+    """Turn a failed ``gh`` command into a typed, actionable provider error.
+
+    ``permission_only`` is for read operations. A failed read establishes
+    nothing about provider state, so it must never be reported as a refusal
+    that lets a caller discard local state -- only 403, which says something
+    about the caller rather than about the repository, is recognized there.
+    """
     text = (ex.result.stderr or ex.result.stdout or '').strip()
     match = _HTTP_STATUS_RE.search(text)
     if match is None or not 400 <= int(match.group(1)) < 500:
         return None
-    # gh prints the status line first and GitHub's human-readable reason
-    # after it. Keep the reason; the raw URL and argv add nothing here.
-    reason = ' '.join(
-        line.strip()
-        for line in text.splitlines()[1:]
-        if line.strip()
-    )
+    status = match.group(1)
+    detail = _provider_failure_reason(text, status)
+    if status == '403':
+        return ProviderPermissionError(
+            f'GitHub refused to {action} for {repo.display}: {detail}. '
+            'Deploy-key endpoints require admin permission on the '
+            'repository; write access is not enough.'
+        )
+    if permission_only:
+        return None
     return ProviderRejectedError(
-        f'{reason or text} (HTTP {match.group(1)})'
+        f'GitHub refused to {action} for {repo.display}: {detail}. No key was '
+        'created. Deploy keys can be disabled per repository or across an '
+        'organization; ask an administrator to enable them, then rerun '
+        '`aivm vm creds add`.'
     )
 
 
@@ -120,21 +165,36 @@ def list_deploy_keys(
     repo: GitRepository, *, manager: CommandManager
 ) -> list[ProviderDeployKey]:
     """List every deploy key using version-compatible REST pagination."""
-    result = manager.run(
-        [
-            'gh',
-            'api',
-            '--hostname',
-            repo.host,
-            '--paginate',
-            f'{_deploy_keys_endpoint(repo)}?per_page=100',
-        ],
-        sudo=False,
-        role='read',
-        check=True,
-        capture=True,
-        summary=f'List all deploy keys for {repo.display}',
-    )
+    try:
+        result = manager.run(
+            [
+                'gh',
+                'api',
+                '--hostname',
+                repo.host,
+                '--paginate',
+                f'{_deploy_keys_endpoint(repo)}?per_page=100',
+            ],
+            sudo=False,
+            role='read',
+            check=True,
+            capture=True,
+            summary=f'List all deploy keys for {repo.display}',
+        )
+    except CommandError as ex:
+        # Reading deploy keys needs admin too, so a non-admin identity fails
+        # here rather than at creation. Only a 403 is reinterpreted: any other
+        # failed read stays a raw CommandError, because a read that did not
+        # complete proves nothing about what exists at the provider.
+        failure = _classify_provider_failure(
+            ex,
+            action='read deploy keys',
+            repo=repo,
+            permission_only=True,
+        )
+        if failure is None:
+            raise
+        raise failure from ex
     pages = _decode_json_stream(result, label='listing deploy keys')
     items: list[object] = []
     for page in pages:
@@ -319,15 +379,12 @@ def add_deploy_key(
             detail='access=write' if write else 'access=read',
         )
     except CommandError as ex:
-        rejection = _provider_rejection(ex)
-        if rejection is None:
+        failure = _classify_provider_failure(
+            ex, action='create a deploy key', repo=repo
+        )
+        if failure is None:
             raise
-        raise ProviderRejectedError(
-            f'GitHub refused to create a deploy key for {repo.display}: '
-            f'{rejection}. No key was created. Deploy keys can be disabled '
-            'per repository or across an organization; ask an administrator '
-            'to enable them, then rerun `aivm vm creds add`.'
-        ) from ex
+        raise failure from ex
     public_key = public_key_path.read_text(encoding='utf-8')
     match = find_added_key_by_public_key(
         list_deploy_keys(repo, manager=manager),

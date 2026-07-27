@@ -168,6 +168,51 @@ def _discard_unstarted_grant(
     return True
 
 
+def _admin_assisted_grant_error(
+    entry: CredentialEntry,
+    repo: GitRepository,
+    ex: github.ProviderPermissionError,
+) -> AIVMError:
+    """Explain how a repository admin can complete a grant AIVM cannot.
+
+    The keypair already exists on the host, and
+    :func:`github.select_recorded_provider_key` adopts a provider key that
+    matches the recorded fingerprint. So an admin adding this exact public key
+    is enough to let the next `creds add` finish the grant.
+    """
+    public_path = keys.host_public_key_path(entry.vm_name, entry.id)
+    try:
+        public_text = public_path.read_text(encoding='utf-8').strip()
+    except OSError:
+        public_text = ''
+
+    lines = [
+        str(ex),
+        '',
+        f'AIVM kept credential {entry.id} pending, so a repository admin can '
+        'add the public key it already generated. Ask an admin to add this '
+        f'deploy key to {repo.display} with '
+        f'{"write" if entry.access == CREDENTIAL_ACCESS_WRITE else "read-only"}'
+        ' access:',
+        '',
+    ]
+    if public_text:
+        lines.extend([f'  {public_text}', ''])
+    lines.extend(
+        [
+            f'  (also stored at {public_path})',
+            f'  suggested title: {entry.provider_key_title}',
+            '',
+            'Then rerun `aivm vm creds add` to adopt it. Adoption also reads '
+            "the repository's deploy keys, which needs the same admin "
+            'permission, so if that is denied too the grant must be run by an '
+            'admin. Use `aivm vm creds abandon` to discard the pending '
+            'credential instead.',
+        ]
+    )
+    return AIVMError('\n'.join(lines))
+
+
 def grant_repository_credential(
     cfg: AgentVMConfig,
     store: Store,
@@ -218,9 +263,9 @@ def grant_repository_credential(
         ),
     )
 
-    remote = github.find_recorded_provider_key(repo, entry, manager=manager)
-    if remote is None:
-        try:
+    try:
+        remote = github.find_recorded_provider_key(repo, entry, manager=manager)
+        if remote is None:
             remote = github.add_deploy_key(
                 repo,
                 public_key_path=keys.host_public_key_path(
@@ -230,12 +275,16 @@ def grant_repository_credential(
                 write=write,
                 manager=manager,
             )
-        except github.ProviderRejectedError as ex:
-            if not _discard_unstarted_grant(store, store_path, entry):
-                raise
-            raise github.ProviderRejectedError(
-                f'{ex} No AIVM credential state was kept for this attempt.'
-            ) from ex
+    except github.ProviderPermissionError as ex:
+        # Keep the pending credential: an admin can add the public key AIVM
+        # already generated, and the next run adopts it by fingerprint.
+        raise _admin_assisted_grant_error(entry, repo, ex) from ex
+    except github.ProviderRejectedError as ex:
+        if not _discard_unstarted_grant(store, store_path, entry):
+            raise
+        raise github.ProviderRejectedError(
+            f'{ex} No AIVM credential state was kept for this attempt.'
+        ) from ex
     expected_read_only = not write
     if remote.read_only != expected_read_only:
         raise AIVMError(

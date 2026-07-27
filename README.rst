@@ -473,6 +473,16 @@ never offers to upload the user's ordinary SSH key; AIVM creates
 repository-scoped deploy keys separately. On older builds that flag does not
 exist, so setup warns instead -- decline the upload if the login offers it.
 
+Managing deploy keys requires **admin** permission on the repository; write
+access is not enough, so a contributor who can push may still be unable to add
+a key. When GitHub denies deploy-key administration, AIVM keeps the pending
+credential and prints the public key it generated, so a repository admin can
+add that key out of band. Rerunning ``aivm vm creds add`` then adopts it by
+fingerprint and finishes the grant. Note that adoption reads the repository's
+deploy keys, which needs the same admin permission -- if that is denied too,
+an admin has to run the grant. ``aivm vm creds abandon`` discards the pending
+credential instead.
+
 If GitHub can no longer be inspected or administered, an explicit recovery
 command can remove local copies without claiming that provider-side revocation
 was successful::

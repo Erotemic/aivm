@@ -822,11 +822,16 @@ def test_grant_service_persists_active_credential(
 
 
 class _RefusingGitHubManager(CommandManager):
-    """Fail the deploy-key create with one real ``gh`` error payload."""
+    """Fail one gh command with a real error payload; succeed at the rest."""
 
-    def __init__(self, stderr: str) -> None:
+    def __init__(
+        self,
+        stderr: str,
+        failing_command: Sequence[str] = ('gh', 'repo', 'deploy-key', 'add'),
+    ) -> None:
         super().__init__(yes=True)
         self.stderr = stderr
+        self.failing_command = list(failing_command)
 
     def run(
         self,
@@ -855,10 +860,13 @@ class _RefusingGitHubManager(CommandManager):
             summary,
             detail,
         )
-        if list(cmd[:4]) == ['gh', 'repo', 'deploy-key', 'add']:
+        if list(cmd[: len(self.failing_command)]) == self.failing_command:
             raise CommandError(
                 list(cmd), CommandResult(code=1, stdout='', stderr=self.stderr)
             )
+        if list(cmd[:2]) == ['gh', 'api']:
+            # A well-formed empty page: the repository has no deploy keys.
+            return CommandResult(code=0, stdout='[]', stderr='')
         return CommandResult(code=0, stdout='', stderr='')
 
 
@@ -915,6 +923,137 @@ def test_refused_deploy_key_discards_the_pending_grant(
     store_path = tmp_path / 'config.toml'
     assert find_credentials_for_vm(load_store(store_path), 'vm-a') == []
     assert not host_credential_dir('vm-a', cred_id).exists()
+
+
+@pytest.mark.parametrize(
+    'failing_command, stderr',
+    [
+        pytest.param(
+            ['gh', 'repo', 'deploy-key', 'add'],
+            'gh: Must have admin rights to Repository. (HTTP 403)',
+            id='denied-on-create',
+        ),
+        # A non-admin cannot read deploy keys either, so the denial can land
+        # one step earlier, before creation is ever attempted.
+        pytest.param(
+            ['gh', 'api'],
+            'gh: Must have admin rights to Repository. (HTTP 403)',
+            id='denied-on-read',
+        ),
+    ],
+)
+def test_permission_denial_keeps_the_grant_and_prints_the_public_key(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    failing_command: list[str],
+    stderr: str,
+) -> None:
+    """An admin can finish what this identity may not start."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    _patch_generated_key(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+
+    with pytest.raises(AIVMError) as excinfo:
+        grant_repository_credential(
+            cfg,
+            store,
+            path,
+            repo,
+            access='write',
+            manager=_RefusingGitHubManager(stderr, failing_command),
+        )
+
+    message = str(excinfo.value)
+    assert 'admin permission' in message
+    assert 'ssh-ed25519' in message, 'the public key an admin needs is missing'
+    assert 'write' in message
+
+    # The pending grant and its key material survive so the admin's addition
+    # can be adopted by fingerprint on the next run.
+    cred_id = credential_id('vm-a', repo.canonical)
+    [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert pending.state == 'pending'
+    assert pending.key_fingerprint
+    assert host_private_key_path('vm-a', cred_id).exists()
+    assert host_public_key_path('vm-a', cred_id).exists()
+
+
+def test_admin_added_key_is_adopted_on_the_next_run(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """After an admin adds the key, a rerun finds it by fingerprint."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    store = load_store(path)
+    _patch_generated_key(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(0, 'ok', ''),
+    )
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+
+    # The grant is denied, leaving a pending credential and its keypair.
+    with pytest.raises(AIVMError, match='admin permission'):
+        grant_repository_credential(
+            cfg,
+            store,
+            path,
+            repo,
+            access='write',
+            manager=_RefusingGitHubManager(
+                'gh: Must have admin rights to Repository. (HTTP 403)'
+            ),
+        )
+    cred_id = credential_id('vm-a', repo.canonical)
+    admin_added = host_public_key_path('vm-a', cred_id).read_text(
+        encoding='utf-8'
+    )
+
+    # An admin adds exactly that public key; AIVM never created it itself.
+    monkeypatch.setattr(
+        'aivm.credentials.github.list_deploy_keys',
+        lambda *a, **k: [
+            ProviderDeployKey('91', admin_added, 'added-by-admin', False)
+        ],
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.github.add_deploy_key',
+        lambda *a, **k: pytest.fail('must adopt the existing key, not add one'),
+    )
+
+    entry = grant_repository_credential(
+        cfg,
+        load_store(path),
+        path,
+        repo,
+        access='write',
+        manager=CommandManager(yes=True),
+    )
+
+    assert entry.provider_key_id == '91'
+    assert entry.state == 'active'
 
 
 def test_unresolved_provider_failure_keeps_state_for_recovery(
