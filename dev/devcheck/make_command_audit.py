@@ -58,12 +58,12 @@ OVERRIDES = {
     ('aivm/vm/disk.py', 35): ('user', 'removes the VM disk; destroys guest data'),
     ('aivm/vm/update/detect.py', 57): ('read', 'qemu-img info inspects only'),
     # cloud-init: written into an aivm dir, but installed into the VM later
-    ('aivm/vm/cloudinit.py', 362): ('scrutiny', 'aivm-owned dir, but seeds guest identity -- see open question'),
-    ('aivm/vm/cloudinit.py', 370): ('scrutiny', 'user-data becomes guest config -- see open question'),
-    ('aivm/vm/cloudinit.py', 385): ('scrutiny', 'meta-data becomes guest config -- see open question'),
-    ('aivm/vm/cloudinit.py', 393): ('scrutiny', 'network-config becomes guest config -- see open question'),
-    ('aivm/vm/cloudinit.py', 410): ('scrutiny', 'removes the seed ISO -- see open question'),
-    ('aivm/vm/cloudinit.py', 418): ('scrutiny', 'builds the seed ISO installed into the VM -- see open question'),
+    ('aivm/vm/cloudinit.py', 362): ('tool', 'ci_dir under base_dir; regenerated from config'),
+    ('aivm/vm/cloudinit.py', 370): ('tool', 'user-data rendered entirely from cfg'),
+    ('aivm/vm/cloudinit.py', 385): ('tool', 'meta-data rendered entirely from cfg'),
+    ('aivm/vm/cloudinit.py', 393): ('tool', 'network-config rendered entirely from cfg'),
+    ('aivm/vm/cloudinit.py', 410): ('tool', 'removes the seed ISO before rebuilding it'),
+    ('aivm/vm/cloudinit.py', 418): ('tool', 'rebuilds the seed ISO from the files above'),
 }
 
 
@@ -222,30 +222,50 @@ already declare `role='read'` and are unaffected.
 5. Each **read** row below declares `role='read'`; each **tool** row declares
    the exemption. **user** rows change nothing.
 
-## Open questions
+## Resolved: cloud-init is `tool`
 
-**cloud-init artifacts ({counts['scrutiny']} sites in `aivm/vm/cloudinit.py`).**
-These write into an aivm-owned directory, which reads as bookkeeping, but the
-files are the guest's identity: user-data, meta-data, network-config, and the
-seed ISO built from them and installed into the VM. The bookkeeping test is
-"regenerable from the user's config, and the user would not miss it". The first
-half holds -- they are generated from the config. The second does not obviously
-hold, because the artifact does not stay in the aivm directory; it becomes the
-guest.
+All six sites meet the bookkeeping bar. `ci_dir` is `base_dir / 'cloud-init'`,
+an aivm-owned path. The content is rendered entirely from ``cfg`` by
+``_render_user_data_text`` and friends -- password, SSH authorization, network
+and timezone all come from config the user already wrote. Nobody hand-edits
+``user-data``; deleting the directory and re-running produces identical output.
 
-Three ways to settle it:
+The earlier worry -- "the artifact becomes the guest" -- does not survive
+inspection, because writing the file is not what reaches the guest. At create
+time the seed is consumed by ``virt-install``, itself a guarded write. The
+artifacts sit inert until something boots a VM with them.
 
-1. **tool** -- the write is to an aivm path and the content is fully derived
-   from config the user already approved by running `aivm vm create`. The
-   install into the VM is a separate action that can carry its own prompt.
-2. **user** -- the artifact seeds guest identity, credentials, and network, so
-   it is not bookkeeping regardless of where the bytes land.
-3. **Split** -- the `mkdir` is `tool`, the content writes are `user`. This
-   matches the mkdir rule already decided and keeps the exemption on the part
-   that really is bookkeeping.
+### But the act that reaches the guest is not in this table
 
-Option 3 looks most consistent with the rules already settled, but the call is
-yours; the rows are marked **scrutiny** until then.
+``refresh_cloud_init_seed_for_next_boot`` (`aivm/vm/cloudinit.py:70`, called
+from `aivm/cli/vm_attach.py:403`) rewrites cloud-init for an **existing** VM and
+bumps a NoCloud instance-id so the next boot replays the payload. That bump is
+what changes guest state, and it is a bare ``token_path.write_text(...)`` at
+`aivm/vm/cloudinit.py:105`, with a ``Path.mkdir`` beside it at line 89.
+
+Neither goes through ``CommandManager``. They are not logged as commands, carry
+no role or ownership, and cannot be prompted. The consequential half of the
+cloud-init flow is invisible to this policy -- which is why the six audited
+commands looked more dangerous than they are, and the real one was not on the
+list at all.
+
+## Open question: writes that never reach CommandManager
+
+The policy governs commands. Direct filesystem mutation from Python bypasses it
+completely, and there are **38** such call sites across `aivm/` --
+``write_text``, ``write_bytes``, ``mkdir``, ``shutil.copy/move/rmtree``,
+``os.replace``, ``unlink`` -- concentrated in `config_store/io.py` (14),
+`fdguard.py` (4), and `attachments/persistent/transport.py` (4).
+
+Most are legitimately aivm's own state, and `config_store/io.py` writing the
+config store is the tool's whole job. But the instance-id bump shows the
+category is not uniformly safe, and nothing currently distinguishes them.
+
+Deciding this is separate from the table below and probably wants its own pass.
+The options are roughly: route consequential filesystem writes through the
+manager so they inherit visibility and approval; or define a narrow rule for
+which direct writes are permissible and audit against it the way this table
+audits commands.
 
 ## Findings this audit surfaced
 
