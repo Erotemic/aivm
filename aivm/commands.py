@@ -251,6 +251,39 @@ class PlannedCommand:
     command_id: int
     spec: CommandSpec
     handle: CommandHandle
+    # Set immediately before execution, so it means *attempted*, not
+    # *succeeded*. A command that raised has still been attempted, and this is
+    # the single invariant that keeps a later flush from re-running it: queue
+    # position and cursors cannot express that, because a raise skips whatever
+    # bookkeeping follows the call.
+    attempted: bool = False
+
+
+@dataclass
+class Attempt:
+    """Outcome of a :meth:`CommandManager.attempt` block.
+
+    Attributes:
+        title: What was being attempted.
+        error: The handled exception, or None when the block succeeded.
+    """
+
+    title: str
+    error: BaseException | None = None
+
+    @property
+    def failed(self) -> bool:
+        """Whether the attempt failed in a way the caller expected."""
+        return self.error is not None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    @property
+    def reason(self) -> str:
+        """The failure, phrased for a user, or '' when it succeeded."""
+        return str(self.error) if self.error is not None else ''
 
 
 @dataclass
@@ -512,6 +545,56 @@ class CommandManager:
         """
         return IntentScope(self, title, why=why, role=role, visible=visible)
 
+    @contextmanager
+    def attempt(
+        self,
+        title: str,
+        *,
+        why: str = '',
+        catch: type[BaseException] | tuple[type[BaseException], ...] = (
+            CommandError
+        ),
+    ) -> Iterator['Attempt']:
+        """Run commands whose failure is an expected, handled outcome.
+
+        Callers that can recover from a failure otherwise write their own
+        ``try``/``except`` around manager calls, which states *how* they are
+        coping rather than *what* they are doing, and leaves the manager
+        believing an error is still live. This declares the intent instead:
+        the block may fail, the failure is handled here, and execution
+        continues with whatever the caller does next.
+
+        The block's outcome is reported on the yielded :class:`Attempt`
+        instead of propagating::
+
+            with mgr.attempt('Register the deploy key') as registering:
+                remote = provider.add_key(...)
+            if registering.failed:
+                hand_off_to_a_human(registering.reason)
+
+        Logging says so too, so an ERROR line inside a handled attempt does
+        not read as a fatal error to whoever is watching.
+
+        Args:
+            title: What is being attempted, in user-facing words.
+            why: Optional longer explanation.
+            catch: Exception types treated as an outcome rather than an
+                error. Anything else propagates normally.
+        """
+        record = Attempt(title=title)
+        log.debug('Attempting: {}{}', title, f' ({why})' if why else '')
+        try:
+            yield record
+        except catch as ex:  # type: ignore[misc]
+            record.error = ex
+            log.info(
+                'Attempt failed but is handled by the caller: {}: {}',
+                title,
+                ex,
+            )
+        else:
+            log.debug('Attempt succeeded: {}', title)
+
     def step(
         self,
         title: str,
@@ -765,7 +848,7 @@ class CommandManager:
         if self.plan_stack:
             self._flush_plan(self.plan_stack[-1], _stacklevel=_stacklevel + 1)
             return
-        if self._loose_commands:
+        if self._has_pending_loose():
             self._flush_loose_commands(_stacklevel=_stacklevel + 1)
 
     def flush_through(self, command_id: int, *, _stacklevel: int = 1) -> None:
@@ -788,7 +871,7 @@ class CommandManager:
                     _stacklevel=_stacklevel + 1,
                 )
                 return
-        if self._loose_commands:
+        if self._has_pending_loose():
             self._flush_loose_commands(
                 through_command_id=command_id, _stacklevel=_stacklevel + 1
             )
@@ -1252,9 +1335,18 @@ class CommandManager:
         through_command_id: int | None = None,
         _stacklevel: int = 1,
     ) -> None:
-        """Execute pending commands in ``plan`` in submission order."""
-        for idx in range(plan.executed_upto + 1, len(plan.commands)):
+        """Execute pending commands in ``plan`` in submission order.
+
+        Iterates by index rather than over a snapshot because a command may be
+        appended mid-flush (a sudo escalation fallback does exactly that), and
+        skips anything already attempted rather than tracking a cursor.
+        """
+        idx = -1
+        while idx + 1 < len(plan.commands):
+            idx += 1
             item = plan.commands[idx]
+            if item.attempted:
+                continue
             if (
                 plan.approved
                 and idx >= plan.approved_command_count
@@ -1285,24 +1377,33 @@ class CommandManager:
                     and self.sudo_authentication_required()
                 ):
                     self._authenticate_sudo()
-            try:
-                res = self._execute_one(
-                    item.spec,
-                    ordinal=(idx + 1, len(plan.commands)),
-                    within_plan=True,
-                    _stacklevel=_stacklevel + 1,
-                )
-            finally:
-                # Mark attempted even when it raised, so a caller that handles
-                # the failure does not leave the command queued for a later
-                # flush to silently re-run.
-                plan.executed_upto = idx
+            item.attempted = True
+            res = self._execute_one(
+                item.spec,
+                ordinal=(idx + 1, len(plan.commands)),
+                within_plan=True,
+                _stacklevel=_stacklevel + 1,
+            )
             item.handle._set_result(res)
+            plan.executed_upto = idx
             if (
                 through_command_id is not None
                 and item.command_id >= through_command_id
             ):
                 break
+
+    def _next_unattempted_loose(self) -> PlannedCommand | None:
+        """Return the oldest loose command that has not been attempted."""
+        for item in self._loose_commands:
+            if not item.attempted:
+                return item
+        # Nothing left to do, so the queue can be released. Attempted items are
+        # kept until here only so a partial flush can find its place again.
+        self._loose_commands.clear()
+        return None
+
+    def _has_pending_loose(self) -> bool:
+        return any(not item.attempted for item in self._loose_commands)
 
     def _flush_loose_commands(
         self,
@@ -1311,12 +1412,11 @@ class CommandManager:
         _stacklevel: int = 1,
     ) -> None:
         """Execute pending loose commands in FIFO order."""
-        while self._loose_commands:
-            # Remove before executing. A command that raises has still been
-            # attempted, and leaving it queued makes the next flush -- from
-            # some unrelated later command -- re-run it and re-raise its
-            # failure there, where nothing can explain it.
-            item = self._loose_commands.pop(0)
+        while True:
+            item = self._next_unattempted_loose()
+            if item is None:
+                return
+            item.attempted = True
             res = self._execute_one(
                 item.spec, within_plan=False, _stacklevel=_stacklevel + 1
             )

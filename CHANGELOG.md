@@ -66,7 +66,26 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   authenticates against nothing until the provider holds its public half. See
   the policy note in `aivm/credentials/__init__.py`.
 
+### Fixed
+* A command that raised was never removed from its queue, so the next flush --
+  triggered by an unrelated later command -- re-ran it and re-raised its
+  failure there. Any caller that caught a `CommandError` was exposed; it
+  surfaced as `aivm vm creds add` dying inside an SSH probe that reported a
+  `gh` error it never issued. Both queues now mark a command attempted before
+  executing it.
+
+### Added
+* `CommandManager.attempt(...)` for steps whose failure is an expected
+  outcome. The block reports its result on an `Attempt` (`.failed`,
+  `.reason`) instead of raising, so callers declare that a step may fail
+  rather than wrapping manager calls in `try`/`except`, and the log says a
+  failure was handled instead of showing what looks like a fatal error.
+
 ### Changed
+* `aivm vm creds add` no longer requires the GitHub CLI. Registering a deploy
+  key is automation, not a prerequisite: only `ssh` and `ssh-keygen` are
+  required, and a missing, outdated, or signed-out `gh` routes into the same
+  handoff used when the provider refuses.
 * The credential feature no longer sits on the shared CLI option path.
   `cli._common` has no credential imports; it publishes which config store is
   active and `credentials.policy` resolves its own setting from it. VM

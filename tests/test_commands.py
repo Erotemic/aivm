@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from pytest import MonkeyPatch
 
 from aivm.commands import CommandError, CommandManager
@@ -285,5 +286,72 @@ def test_failed_command_in_a_plan_is_not_re_run_by_a_later_flush(
         except CommandError:
             pass
         mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
+
+    assert attempts == [['failing', 'thing'], ['unrelated', 'thing']]
+
+
+def test_attempt_reports_a_handled_failure_instead_of_raising(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Declaring that a step may fail replaces try/except in callers."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        return FakeProc(1, '', 'nope')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(yes=True)
+
+    with mgr.attempt('Register the thing') as attempt:
+        mgr.run(['failing', 'thing'], role='read', check=True, capture=True)
+
+    assert attempt.failed
+    assert not attempt.ok
+    assert 'nope' in attempt.reason
+
+
+def test_attempt_reports_success(monkeypatch: MonkeyPatch) -> None:
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    mgr = CommandManager(yes=True)
+
+    with mgr.attempt('Register the thing') as attempt:
+        result = mgr.run(['fine', 'thing'], role='read', check=True, capture=True)
+
+    assert attempt.ok
+    assert attempt.reason == ''
+    assert result.stdout == 'ok'
+
+
+def test_attempt_does_not_swallow_unexpected_errors(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Only the declared failure is an outcome; everything else is a bug."""
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    mgr = CommandManager(yes=True)
+
+    with pytest.raises(ZeroDivisionError):
+        with mgr.attempt('Register the thing'):
+            1 / 0
+
+
+def test_attempt_leaves_no_command_for_a_later_flush_to_re_run(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The whole point: a handled failure must not resurface elsewhere."""
+    attempts: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        attempts.append(list(cmd))
+        return FakeProc(1, '', 'nope') if cmd[0] == 'failing' else FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(yes=True)
+
+    with mgr.attempt('Register the thing') as attempt:
+        mgr.run(['failing', 'thing'], role='read', check=True, capture=True)
+    assert attempt.failed
+
+    mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
 
     assert attempts == [['failing', 'thing'], ['unrelated', 'thing']]

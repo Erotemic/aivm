@@ -345,41 +345,46 @@ def grant_repository_credential(
         repo, manager=manager
     )
 
-    try:
-        if not unregistered_reason:
+    if not unregistered_reason:
+        # Reading the provider may fail without meaning the grant failed:
+        # nothing has been created yet, so the key AIVM generated is inert and
+        # a human can still publish it. Declare that, rather than catching it.
+        with manager.attempt(
+            f'Look up an existing deploy key on {repo.host}',
+            why='A failed lookup still leaves the key ready to hand over.',
+            catch=AIVMError,
+        ) as lookup:
             remote = github.find_recorded_provider_key(
                 repo, entry, manager=manager
             )
-    except AIVMError as ex:
-        # Reading the provider failed, so nothing was created and the key AIVM
-        # just generated is inert. Whatever the cause -- not an admin, SSO,
-        # an unreadable repository -- the useful move is the same: hand the
-        # public key to a human. Never let a failed *read* leave the user
-        # without the key, which is the only thing that can unblock them.
-        unregistered_reason = str(ex)
+        unregistered_reason = lookup.reason
 
     if not unregistered_reason and remote is None:
-        try:
-            remote = github.add_deploy_key(
-                repo,
-                public_key_path=keys.host_public_key_path(
-                    entry.vm_name, entry.id
-                ),
-                title=entry.provider_key_title,
-                write=write,
-                manager=manager,
-            )
-        except github.ProviderPermissionError as ex:
-            unregistered_reason = str(ex)
-        except github.ProviderRejectedError as ex:
-            # The provider refused outright and created nothing, and no
-            # administrator can add this key until that policy changes, so
-            # there is nothing to hand off.
-            if not _discard_unstarted_grant(store, store_path, entry):
-                raise
-            raise github.ProviderRejectedError(
-                f'{ex} No AIVM credential state was kept for this attempt.'
-            ) from ex
+        with manager.attempt(
+            f'Register the deploy key with {repo.host}',
+            why='A refusal here is handed to an administrator instead.',
+            catch=github.ProviderPermissionError,
+        ) as registration:
+            try:
+                remote = github.add_deploy_key(
+                    repo,
+                    public_key_path=keys.host_public_key_path(
+                        entry.vm_name, entry.id
+                    ),
+                    title=entry.provider_key_title,
+                    write=write,
+                    manager=manager,
+                )
+            except github.ProviderRejectedError as ex:
+                # Not a handoff: the provider refused outright and created
+                # nothing, and no administrator can add this key until that
+                # policy changes, so there is nothing to hand over.
+                if not _discard_unstarted_grant(store, store_path, entry):
+                    raise
+                raise github.ProviderRejectedError(
+                    f'{ex} No AIVM credential state was kept for this attempt.'
+                ) from ex
+        unregistered_reason = registration.reason
 
     if unregistered_reason:
         # The keypair is already made and the guest copy authenticates against
