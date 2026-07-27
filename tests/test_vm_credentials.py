@@ -1014,6 +1014,30 @@ def test_permission_denial_hands_the_grant_off_instead_of_failing(
     assert host_private_key_path('vm-a', cred_id).exists()
 
 
+def test_creds_list_marks_unregistered_credentials(
+    cfg_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A credential nobody registered must not read as a working grant."""
+    store = load_store(cfg_path)
+    upsert_credential(
+        store,
+        replace(
+            _entry('test-vm'),
+            state='pending',
+            provider_managed=False,
+            provider_key_id='',
+        ),
+    )
+    save_store(store, cfg_path, reason='test fixture')
+
+    rc = run_cli(['vm', 'creds', 'list', '--yes', '--config', str(cfg_path)])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert '(unregistered)' in out
+    assert 'an admin must' in out
+
+
 def test_unregistered_credential_cannot_be_revoked(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1146,24 +1170,27 @@ def test_visible_repository_404_is_treated_as_a_permission_failure(
     assert recorded.state == 'pending'
 
 
-def test_invisible_repository_404_names_the_repository_problem(
+def test_invisible_repository_404_still_hands_over_the_key(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A repository nobody can see is a different problem, and says so."""
-    with pytest.raises(AIVMError) as excinfo:
-        _grant_against_not_found(
-            monkeypatch, tmp_path, repository_visible=False
-        )
+    """A failed read must never leave the user without the key.
 
-    message = str(excinfo.value)
-    assert 'not visible to the account' in message
-    assert 'gh auth status' in message
-    assert 'admin permission' not in message
-    # A failed read still proves nothing about the provider, so the pending
-    # record survives rather than being discarded.
-    assert find_credentials_for_vm(
-        load_store(tmp_path / 'config.toml'), 'vm-a'
+    Nothing was created, so the generated key is inert and handing it over is
+    always safe -- and it is the only thing that can unblock the user,
+    whatever the read failed for.
+    """
+    path, entry = _grant_against_not_found(
+        monkeypatch, tmp_path, repository_visible=False
     )
+
+    assert entry is not None
+    assert entry.provider_managed is False
+    notice = describe_unregistered_credential(
+        entry, GitRepository('github.com', 'Kitware', 'kwimage')
+    )
+    assert 'ssh-ed25519' in notice, 'the public key an admin needs is missing'
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert recorded.provider_managed is False
 
 
 def test_admin_added_key_is_adopted_on_the_next_run(

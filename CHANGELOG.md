@@ -51,13 +51,20 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   repository is visible to the signed-in account and reports whichever it is:
   the admin-assisted path for a permission failure, or a message naming the
   repository, account, and SAML authorization to check.
-* A permission denial (403) is handled separately from an outright refusal.
-  Deploy-key endpoints need admin permission on the repository, which write
-  access does not confer, so the pending credential and its keypair are kept
-  and the generated public key is printed for a repository admin to add. A
-  later `creds add` adopts the admin-added key by fingerprint and completes
-  the grant. The denial is recognized whether it lands on creating a deploy
-  key or on reading the repository's existing ones.
+* A permission denial is handled separately from an outright refusal, and
+  becomes a handoff rather than a failure. Deploy-key endpoints need admin
+  permission on the repository, which write access does not confer, so AIVM
+  generates the keypair, installs the private half in the VM, configures Git,
+  and prints the public half for an administrator to add. Nothing else needs
+  to run: access begins working as soon as GitHub accepts the key. The denial
+  is recognized whether it lands on creating a deploy key or on reading the
+  repository's existing ones. Such credentials record
+  `provider_managed = false`, are shown as `unregistered` by `creds list`,
+  reprint the key to send from `creds status`, and refuse `creds revoke` --
+  AIVM never registered the key and will not claim a deletion it cannot
+  perform. Installing an unregistered key is safe and deliberate: it
+  authenticates against nothing until the provider holds its public half. See
+  the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
 * The credential feature no longer sits on the shared CLI option path.

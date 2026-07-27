@@ -478,13 +478,23 @@ access is not enough, so a contributor who can push may still be unable to add
 a key. On a private repository GitHub reports that denial as ``404 Not Found``
 rather than ``403`` so responses do not reveal what exists, so AIVM checks
 whether the repository is visible to the signed-in account before deciding
-whether a 404 means "not an admin" or "no such repository". When GitHub denies
-deploy-key administration, AIVM keeps the pending credential and prints the
-public key it generated, so a repository admin can add that key out of band. Rerunning ``aivm vm creds add`` then adopts it by
-fingerprint and finishes the grant. Note that adoption reads the repository's
-deploy keys, which needs the same admin permission -- if that is denied too,
-an admin has to run the grant. ``aivm vm creds abandon`` discards the pending
-credential instead.
+whether a 404 means "not an admin" or "no such repository".
+
+When AIVM may not register the key, it does everything else and hands off the
+one step it cannot take: the keypair is generated, the private half is
+installed in the VM, Git is configured to use it, and the public half is
+printed for a repository admin to add. Nothing further needs to be run --
+access begins working as soon as GitHub accepts the public key. Such a
+credential is listed as ``unregistered``; ``aivm vm creds status <id>``
+reprints the key to send an admin, and ``aivm vm creds abandon <id>`` discards
+it.
+
+Installing the key before it is registered is deliberate and safe: an SSH
+private key confers nothing on its own, so the copy in the VM authenticates
+against nothing until the provider holds its public half. AIVM will not
+``revoke`` such a credential, because it never registered the key and will not
+claim a provider-side deletion it cannot perform; an admin deletes the key and
+``creds abandon`` removes the local and guest copies.
 
 If GitHub can no longer be inspected or administered, an explicit recovery
 command can remove local copies without claiming that provider-side revocation

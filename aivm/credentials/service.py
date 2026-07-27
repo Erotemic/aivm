@@ -334,9 +334,20 @@ def grant_repository_credential(
         ),
     )
 
+    remote: ProviderDeployKey | None = None
+    unregistered_reason = ''
     try:
         remote = github.find_recorded_provider_key(repo, entry, manager=manager)
-        if remote is None:
+    except AIVMError as ex:
+        # Reading the provider failed, so nothing was created and the key AIVM
+        # just generated is inert. Whatever the cause -- not an admin, SSO,
+        # an unreadable repository -- the useful move is the same: hand the
+        # public key to a human. Never let a failed *read* leave the user
+        # without the key, which is the only thing that can unblock them.
+        unregistered_reason = str(ex)
+
+    if not unregistered_reason and remote is None:
+        try:
             remote = github.add_deploy_key(
                 repo,
                 public_key_path=keys.host_public_key_path(
@@ -346,15 +357,27 @@ def grant_repository_credential(
                 write=write,
                 manager=manager,
             )
-    except github.ProviderPermissionError as ex:
-        # Hand the grant off to a human instead of failing. The keypair is
-        # already made and the guest copy is inert until GitHub accepts the
-        # public half, so installing it now costs nothing and means the
-        # credential simply starts working when an admin adds the key.
+        except github.ProviderPermissionError as ex:
+            unregistered_reason = str(ex)
+        except github.ProviderRejectedError as ex:
+            # The provider refused outright and created nothing, and no
+            # administrator can add this key until that policy changes, so
+            # there is nothing to hand off.
+            if not _discard_unstarted_grant(store, store_path, entry):
+                raise
+            raise github.ProviderRejectedError(
+                f'{ex} No AIVM credential state was kept for this attempt.'
+            ) from ex
+
+    if unregistered_reason:
+        # The keypair is already made and the guest copy authenticates against
+        # nothing until GitHub accepts the public half, so installing it now
+        # costs no access and means the credential starts working the moment
+        # an admin adds the key.
         log.warning(
             'Could not register the deploy key for {} with GitHub: {}',
             repo.display,
-            ex,
+            unregistered_reason,
         )
         entry = replace(entry, provider_managed=False, provider_key_id='')
         upsert_credential(store, entry)
@@ -363,18 +386,13 @@ def grant_repository_credential(
             store_path,
             reason=(
                 f'Record credential {entry.id} as provider-unmanaged: AIVM '
-                'may not administer deploy keys for this repository.'
+                'could not administer deploy keys for this repository.'
             ),
         )
         return _install_and_activate(
             cfg, store, store_path, entry, repo, manager=manager
         )
-    except github.ProviderRejectedError as ex:
-        if not _discard_unstarted_grant(store, store_path, entry):
-            raise
-        raise github.ProviderRejectedError(
-            f'{ex} No AIVM credential state was kept for this attempt.'
-        ) from ex
+    assert remote is not None
     expected_read_only = not write
     if remote.read_only != expected_read_only:
         raise AIVMError(

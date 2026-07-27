@@ -23,6 +23,7 @@ from ..credentials.schema import (
 from ..credentials.service import (
     abandon_repository_credential,
     describe_unregistered_credential,
+    entry_repository,
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
@@ -325,13 +326,24 @@ class VMCredsListCLI(_BaseCommand):
             print('  (none)')
             return 0
         print('  ID                ACCESS  STATE                 SCOPE')
+        unregistered = False
         for entry in entries:
             scope = (
                 f'{entry.provider_host}/{entry.owner}/{entry.repository}'
             )
+            state = str(entry.state)
+            if not entry.provider_managed:
+                state = f'{state} (unregistered)'
+                unregistered = True
             print(
                 f'  {entry.id:<17} {entry.access:<7} '
-                f'{entry.state:<21} {scope}'
+                f'{state:<21} {scope}'
+            )
+        if unregistered:
+            print(
+                '\n  unregistered: AIVM could not add the deploy key; an '
+                'admin must. Run `aivm vm creds status <id>` for the key to '
+                'send them.'
             )
         return 0
 
@@ -395,6 +407,15 @@ class VMCredsStatusCLI(_BaseCommand):
         )
         print(f'  Access:       {entry.access}')
         print(f'  State:        {entry.state}')
+        if not entry.provider_managed:
+            print(
+                '  Registered:   no -- AIVM could not administer this '
+                'repository'
+            )
+            print(
+                '                an admin must add the public key; it grants '
+                'nothing until then'
+            )
         print(
             '  Host key:     '
             + ('healthy' if report['host_ok'] else 'invalid or unavailable')
@@ -410,6 +431,10 @@ class VMCredsStatusCLI(_BaseCommand):
         if report['guest_detail']:
             print(f'  Guest detail: {report["guest_detail"]}')
         print('  Branch rules: not managed by AIVM')
+        if not entry.provider_managed:
+            # Reprint the handoff so the key is recoverable after the original
+            # `creds add` output has scrolled away.
+            print(describe_unregistered_credential(entry, entry_repository(entry)))
         return 0
 
 
