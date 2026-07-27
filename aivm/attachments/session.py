@@ -21,7 +21,7 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from ..firewall import apply_firewall, effective_firewall_table
 from ..net import ensure_network
 from ..privilege import sudo_allowed
@@ -323,6 +323,10 @@ def _restore_saved_vm_attachments(
                 dry_run=False,
                 continue_on_error=True,
             )
+        # A declined prompt is the user answering the question, not a step
+        # that went wrong. Best-effort recovery must not continue past it.
+        except CommandControlError:
+            raise
         except Exception as ex:
             log.warning(
                 'persistent-restore: VM {} replay failed during restore: {}',
@@ -382,6 +386,8 @@ def _restore_saved_vm_attachments(
                     tag=aligned.tag,
                 )
                 restored += 1
+            except CommandControlError:
+                raise
             except Exception as ex:
                 if (
                     isinstance(ex, RuntimeError)
@@ -421,6 +427,8 @@ def _restore_saved_vm_attachments(
                     dry_run=False,
                     read_only=(aligned.access == ATTACHMENT_ACCESS_RO),
                 )
+            except CommandControlError:
+                raise
             except Exception as ex:
                 log.warning(
                     'Could not restore saved attachment for VM {}: source={} guest_dst={} tag={} err={}',
@@ -471,6 +479,8 @@ def _restore_saved_vm_attachments(
                 tag=aligned.tag,
             )
             restored += 1
+        except CommandControlError:
+            raise
         except Exception as ex:
             log.warning(
                 'Could not remount saved attachment inside guest for VM {}: source={} guest_dst={} tag={} err={}',
@@ -681,6 +691,8 @@ def _reconcile_attached_vm(
                     ),
                     share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
                 )
+            except CommandControlError:
+                raise
             except Exception as ex:
                 missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
                 if not policy.dry_run and missing_virtiofs_dir is not None:
@@ -795,6 +807,8 @@ def _reconcile_attached_vm(
                             ),
                         )
                     has_share = True
+                except CommandControlError:
+                    raise
                 except Exception as ex:
                     current_maps = mappings or vm_share_mappings(
                         cfg, use_sudo=False

@@ -13,7 +13,22 @@ from __future__ import annotations
 from ..errors import AIVMError
 
 
-class ProviderRejectedError(AIVMError):
+class ProviderAutomationError(AIVMError):
+    """Base for a forge declining to do AIVM's work for it.
+
+    Every subclass describes the *provider* being uncooperative: no token, no
+    admin rights, organization policy, an outage, an ambiguous response. AIVM
+    has a very high bar for letting any of that stop a user, so these are the
+    failures :meth:`~aivm.commands.CommandManager.attempt` is allowed to
+    convert into an administrator handoff.
+
+    They are deliberately unrelated to
+    :class:`~aivm.errors.CommandControlError`, which says the *user* declined
+    or could not be asked. Catching this base can never swallow that.
+    """
+
+
+class ProviderRejectedError(ProviderAutomationError):
     """Raised when a forge validated a request and refused it outright.
 
     A 4xx response means the provider reached a decision and changed nothing:
@@ -24,7 +39,7 @@ class ProviderRejectedError(AIVMError):
     """
 
 
-class ProviderPermissionError(AIVMError):
+class ProviderPermissionError(ProviderAutomationError):
     """Raised when the authenticated identity may not administer deploy keys.
 
     Deliberately *not* a subclass of :class:`ProviderRejectedError`. Nothing

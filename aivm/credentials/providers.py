@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from ..commands import CommandManager
 from ..config_store.models import CredentialEntry
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from . import github
 from .errors import ProviderRejectedError
 from .gitlab import (
@@ -181,6 +181,8 @@ def automation_unavailable_reason(
         return github.automation_unavailable_reason(repo, manager=manager)
     try:
         gitlab_backend(repo).check_auth()
+    except CommandControlError:
+        raise
     except AIVMError as ex:
         return (
             f'GitLab API automation is unavailable for {repo.host}: {ex} '

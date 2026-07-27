@@ -12,7 +12,7 @@ from typing import TypedDict
 from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
-from ..commands import CommandManager
+from ..commands import CommandError, CommandManager
 from ..config import AgentVMConfig
 from ..config_store import (
     CredentialEntry,
@@ -24,9 +24,10 @@ from ..config_store import (
     save_store,
     upsert_credential,
 )
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from ..vm.connectivity import get_ip_cached
 from . import keys, providers
+from .errors import ProviderAutomationError
 from .guest import (
     read_guest_public_key,
     reconcile_guest_credentials,
@@ -52,6 +53,14 @@ from .validation import (
     validate_credential_identity,
     validate_metadata_text,
 )
+
+# Provider automation is a convenience, so a forge being uncooperative --
+# unauthenticated, unauthorized, policy-bound, down, or ambiguous -- must not
+# stop AIVM from preparing a credential and handing the public key to an
+# administrator. This names exactly those failures. It deliberately excludes
+# AIVMError: that would also cover CommandControlError, turning "the user said
+# no" into "the provider was unhelpful" and installing a key nobody approved.
+_RECOVERABLE_PROVIDER_FAILURE = (ProviderAutomationError, CommandError)
 
 
 class CredentialStatus(TypedDict):
@@ -252,6 +261,57 @@ def describe_unregistered_credential(
     return '\n'.join(lines)
 
 
+def _record_unpublished_credential(
+    store: Store,
+    store_path: Path,
+    entry: CredentialEntry,
+    repo: GitRepository,
+    *,
+    kind: CredentialKind,
+    reason: str,
+) -> CredentialEntry:
+    """Record that this run could not administer the provider's deploy key.
+
+    A recorded ``provider_key_id`` is evidence that a key really was published
+    once, and it is the only handle ``revoke`` has for deleting it. This run
+    failing to reach the provider says nothing about whether that key still
+    exists, so the id survives: clearing it would strand a live deploy key
+    that AIVM would then refuse to revoke, having convinced itself it never
+    registered one. Only a verified deletion, or definitive evidence that the
+    remote object is gone, may clear it.
+    """
+    label = providers.provider_label(kind)
+    log.warning(
+        'Could not administer the deploy key for {} at {}: {}',
+        repo.display,
+        label,
+        reason,
+    )
+    if entry.provider_key_id:
+        log.warning(
+            'Credential {} keeps its recorded {} deploy-key id {} and stays '
+            'provider-managed: this run could not inspect the provider, which '
+            'is not evidence that the key was removed. Run `aivm vm creds '
+            'status {}` once access is restored.',
+            entry.id,
+            label,
+            entry.provider_key_id,
+            entry.id,
+        )
+        return entry
+    entry = replace(entry, provider_managed=False, provider_key_id='')
+    upsert_credential(store, entry)
+    save_store(
+        store,
+        store_path,
+        reason=(
+            f'Record credential {entry.id} as provider-unmanaged: AIVM '
+            'could not publish or administer its deploy key automatically.'
+        ),
+    )
+    return entry
+
+
 def grant_repository_credential(
     cfg: AgentVMConfig,
     store: Store,
@@ -318,7 +378,7 @@ def grant_repository_credential(
         with manager.attempt(
             f'Look up an existing deploy key on {repo.host}',
             why='A failed lookup still leaves the key ready to hand over.',
-            catch=AIVMError,
+            catch=_RECOVERABLE_PROVIDER_FAILURE,
         ) as lookup:
             remote = providers.find_recorded_provider_key(
                 kind, repo, entry, manager=manager
@@ -332,7 +392,7 @@ def grant_repository_credential(
                 'Provider publication is best effort; refusal or bureaucracy '
                 'falls back to an administrator handoff.'
             ),
-            catch=AIVMError,
+            catch=_RECOVERABLE_PROVIDER_FAILURE,
         ) as publication:
             remote = providers.add_deploy_key(
                 kind,
@@ -345,22 +405,13 @@ def grant_repository_credential(
         unregistered_reason = publication.reason
 
     if unregistered_reason:
-        label = providers.provider_label(kind)
-        log.warning(
-            'Could not publish the deploy key for {} to {}: {}',
-            repo.display,
-            label,
-            unregistered_reason,
-        )
-        entry = replace(entry, provider_managed=False, provider_key_id='')
-        upsert_credential(store, entry)
-        save_store(
+        entry = _record_unpublished_credential(
             store,
             store_path,
-            reason=(
-                f'Record credential {entry.id} as provider-unmanaged: AIVM '
-                'could not publish or administer its deploy key automatically.'
-            ),
+            entry,
+            repo,
+            kind=kind,
+            reason=unregistered_reason,
         )
         return _install_and_activate(
             cfg, store, store_path, entry, repo, manager=manager
@@ -411,6 +462,8 @@ def inspect_credential(
         )
         host_ok = True
         fingerprint_ok = fingerprint == entry.key_fingerprint
+    except CommandControlError:
+        raise
     except AIVMError as ex:
         host_detail = str(ex)
     remote: ProviderDeployKey | None = None
@@ -421,6 +474,10 @@ def inspect_credential(
         remote = providers.find_recorded_provider_key(
             entry.kind, repo, entry, manager=manager
         )
+    except CommandControlError:
+        # Status is a report, not a recovery: an unreachable provider is a
+        # line in the output, but a declined prompt is the user's answer.
+        raise
     except Exception as ex:
         remote_error = str(ex)
     guest = 'unchecked'
@@ -626,6 +683,11 @@ def abandon_repository_credential(
             manager=manager,
         )
         guest_cleanup_verified = True
+    except CommandControlError:
+        # Abandon deletes the host key and the store record next. Doing that
+        # after the user declined the guest cleanup would strand the private
+        # key in the VM with nothing left recording that it is there.
+        raise
     except AIVMError as ex:
         guest_cleanup_error = str(ex)
         log.warning(

@@ -16,14 +16,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from ..errors import AIVMError
+from .errors import ProviderAutomationError
 from .models import ProviderDeployKey
 
 _DEFAULT_TOKEN_ENV = 'GITLAB_TOKEN'
 _DEFAULT_TIMEOUT = 30.0
 
 
-class GitLabError(AIVMError):
+class GitLabError(ProviderAutomationError):
     """Base class for GitLab provider failures."""
 
 

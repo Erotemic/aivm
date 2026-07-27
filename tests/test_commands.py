@@ -8,6 +8,13 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.commands import CommandError, CommandManager
+from aivm.errors import (
+    AIVMError,
+    ApprovalUnavailableError,
+    CommandNotExecutedError,
+    SudoRequiredError,
+    UserDeclinedError,
+)
 from tests.helpers import FakeProc, patch_command_runtime
 
 
@@ -355,3 +362,207 @@ def test_attempt_leaves_no_command_for_a_later_flush_to_re_run(
     mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
 
     assert attempts == [['failing', 'thing'], ['unrelated', 'thing']]
+
+
+def _recording_runner(
+    monkeypatch: MonkeyPatch,
+) -> list[list[str]]:
+    """Fake runner where any 'failing' command fails and others succeed."""
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        if cmd[0] == 'failing':
+            return FakeProc(1, '', 'boom')
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    return executed
+
+
+def test_rereading_a_failed_loose_handle_runs_nothing_and_reraises(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Reading a result must never be a way to *cause* work.
+
+    A failed handle stayed pending, so asking for its result again flushed the
+    queue and executed whatever unrelated command was waiting there -- a
+    state-changing one, in the case that motivated this.
+    """
+    executed = _recording_runner(monkeypatch)
+    mgr = CommandManager(yes=True)
+
+    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    with pytest.raises(CommandError) as first:
+        handle.result()
+
+    mgr.submit(['unrelated', 'MUTATION'], role='modify', check=True, capture=True)
+
+    with pytest.raises(CommandError) as second:
+        handle.result()
+
+    assert second.value is first.value, 'the original failure must be re-raised'
+    assert executed == [['failing', 'thing']], (
+        're-reading a failed handle executed a queued mutation'
+    )
+    assert handle.done()
+
+
+def test_rereading_a_failed_plan_handle_runs_nothing_and_reraises(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Same invariant inside a step, which tracked progress with a cursor."""
+    executed = _recording_runner(monkeypatch)
+    mgr = CommandManager(yes=True)
+
+    with mgr.step('Do a thing', why='exercise the plan queue'):
+        handle = mgr.submit(
+            ['failing', 'thing'], role='read', check=True, capture=True
+        )
+        with pytest.raises(CommandError) as first:
+            handle.result()
+        mgr.submit(
+            ['unrelated', 'MUTATION'], role='modify', check=True, capture=True
+        )
+        with pytest.raises(CommandError) as second:
+            handle.result()
+        assert second.value is first.value
+        assert executed == [['failing', 'thing']]
+
+
+def test_rereading_a_failed_handle_with_an_empty_queue_reraises(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """With nothing else queued this reported an unknown handle id instead.
+
+    The original CommandError was lost outright, so the caller learned neither
+    what failed nor why.
+    """
+    _recording_runner(monkeypatch)
+    mgr = CommandManager(yes=True)
+
+    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    with pytest.raises(CommandError) as first:
+        handle.result()
+    with pytest.raises(CommandError) as second:
+        handle.result()
+
+    assert second.value is first.value
+
+
+def test_aborted_plan_leaves_every_handle_terminal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A handle must not outlive its plan still pending.
+
+    Otherwise awaiting one reopens a step the manager already abandoned.
+    """
+    executed = _recording_runner(monkeypatch)
+    mgr = CommandManager(yes=True)
+
+    pending: list[Any] = []
+    with pytest.raises(RuntimeError, match='caller gave up'):
+        with mgr.step('Abandoned step'):
+            pending.append(
+                mgr.submit(['never', 'ran'], role='modify', summary='first')
+            )
+            pending.append(
+                mgr.submit(['also', 'never'], role='modify', summary='second')
+            )
+            raise RuntimeError('caller gave up')
+
+    assert executed == []
+    for handle in pending:
+        assert handle.done(), 'an unexecuted handle stayed pending'
+        with pytest.raises(CommandNotExecutedError, match='aborted'):
+            handle.result()
+    assert executed == [], 'reading an abandoned handle executed something'
+
+
+def test_every_terminal_handle_replays_instead_of_executing(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Repeated reads of any terminal handle must execute nothing."""
+    executed = _recording_runner(monkeypatch)
+    mgr = CommandManager(yes=True)
+
+    good = mgr.submit(['fine', 'thing'], role='read', check=True, capture=True)
+    assert good.result().stdout == 'ok'
+    bad = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    with pytest.raises(CommandError):
+        bad.result()
+
+    aborted: list[Any] = []
+    with pytest.raises(RuntimeError):
+        with mgr.step('Abandoned'):
+            aborted.append(mgr.submit(['never', 'ran'], role='modify'))
+            raise RuntimeError('stop')
+
+    baseline = list(executed)
+    for _ in range(3):
+        assert good.result().stdout == 'ok'
+        with pytest.raises(CommandError):
+            bad.result()
+        with pytest.raises(CommandNotExecutedError):
+            aborted[0].result()
+    assert executed == baseline
+
+
+def test_attempt_cannot_swallow_a_control_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Defense in depth: a broad `catch` must not absorb a refusal.
+
+    `catch=AIVMError` is broad enough to cover an approval refusal by
+    accident, and did -- turning "the user said no" into "the provider was
+    unhelpful" and continuing with later mutations.
+    """
+    patch_command_runtime(monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''))
+    mgr = CommandManager(yes=True)
+
+    for control in (
+        UserDeclinedError('Aborted by user.'),
+        ApprovalUnavailableError('stdin is not interactive'),
+        CommandNotExecutedError('never ran'),
+        SudoRequiredError('sudo is forbidden'),
+    ):
+        with pytest.raises(type(control)):
+            with mgr.attempt('Best effort', catch=AIVMError):
+                raise control
+
+    # An ordinary domain failure is still an outcome, not an error.
+    with mgr.attempt('Best effort', catch=AIVMError) as attempt:
+        raise AIVMError('the provider was unhelpful')
+    assert attempt.failed
+
+
+def test_declining_a_prompt_raises_a_control_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The refusal must be typed, or nothing downstream can recognize it."""
+    prompts = patch_command_runtime(
+        monkeypatch, lambda cmd, **kw: FakeProc(0, 'ok', ''), answer='n'
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    with pytest.raises(UserDeclinedError):
+        mgr.run(['virsh', 'resume', 'vm'], sudo=True, role='modify')
+    assert prompts
+
+
+def test_noninteractive_approval_is_unavailable_not_declined(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Silence is not consent: absence of an answer stops the operation."""
+    patch_command_runtime(
+        monkeypatch,
+        lambda cmd, **kw: FakeProc(0, 'ok', ''),
+        isatty=False,
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    with pytest.raises(ApprovalUnavailableError):
+        mgr.run(['virsh', 'resume', 'vm'], sudo=True, role='modify')

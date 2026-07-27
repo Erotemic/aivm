@@ -29,7 +29,14 @@ else:
 
 from loguru import logger
 
-from .errors import AIVMError, SudoRequiredError
+from .errors import (
+    AIVMError,
+    ApprovalUnavailableError,
+    CommandControlError,
+    CommandNotExecutedError,
+    SudoRequiredError,
+    UserDeclinedError,
+)
 from .modes import (
     DEFAULT_PRIVILEGE_MODE,
     PrivilegeMode,
@@ -96,6 +103,17 @@ class CommandResult:
     code: int
     stdout: str
     stderr: str
+
+
+CommandState = Literal['pending', 'succeeded', 'failed', 'not-executed']
+
+
+class CommandManagerInvariantError(CommandControlError):
+    """Raised when the manager cannot say what happened to a command.
+
+    Not knowing whether a command ran is never a recoverable outcome: the
+    only safe response is to stop rather than guess or re-execute.
+    """
 
 
 class CommandError(AIVMError):
@@ -191,28 +209,72 @@ class CommandHandle:
     manager: 'CommandManager'
     command_id: int
     _result: CommandResult | None = None
-    _executed: bool = False
+    _state: CommandState = 'pending'
+    _error: BaseException | None = None
 
     def done(self) -> bool:
-        """Return True if this command has already been executed."""
-        return self._executed
+        """Return True once this command has reached a terminal state.
+
+        Terminal means resolved, not successful: a command that failed or was
+        never executed is as finished as one that succeeded.
+        """
+        return self._state != 'pending'
 
     def result(self, *, _stacklevel: int = 1) -> CommandResult:
         """Return the command result, executing through this handle if needed.
 
-        If the command has not run yet, this method asks the manager to
-        flush execution through this handle's command id before returning
-        the cached result.
+        Only a pending handle triggers execution. Once a handle is terminal it
+        answers from stored state forever: a success replays its result, a
+        failure re-raises its exception, and a command that never ran raises
+        :class:`CommandNotExecutedError`.
+
+        Reading a result must never be a way to *cause* work. Before handles
+        owned their outcome, a failed one stayed pending, so re-reading it
+        flushed the queue again and ran whatever unrelated command happened to
+        be waiting there -- including state-changing ones.
 
         Returns:
             The normalized command result.
+
+        Raises:
+            CommandError: If the command ran and failed. The original
+                exception object is re-raised, not a reconstruction.
+            CommandNotExecutedError: If the command never ran.
         """
-        if not self._executed:
+        if self._state == 'pending':
             self.manager.flush_through(
                 self.command_id, _stacklevel=_stacklevel + 1
             )
-        assert self._result is not None
-        return self._result
+        if self._state == 'succeeded':
+            assert self._result is not None
+            return self._result
+        if self._error is not None:
+            raise self._error
+        raise CommandManagerInvariantError(
+            f'Command {self.command_id} is still pending after the flush that '
+            'was supposed to resolve it. Refusing to flush again, because '
+            'that would execute unrelated queued work.'
+        )
+
+    def _set_result(self, result: CommandResult) -> None:
+        """Record a successful execution on this handle."""
+        self._result = result
+        self._state = 'succeeded'
+
+    def _set_failure(self, error: BaseException) -> None:
+        """Record that execution was attempted and raised.
+
+        Stores :class:`BaseException` deliberately. A ``KeyboardInterrupt``
+        mid-command must leave the handle terminal like any other outcome; it
+        is re-raised untouched rather than translated into a domain failure.
+        """
+        self._error = error
+        self._state = 'failed'
+
+    def _set_not_executed(self, reason: str) -> None:
+        """Record that this command will never run."""
+        self._error = CommandNotExecutedError(reason)
+        self._state = 'not-executed'
 
     @property
     def stdout(self) -> str:
@@ -233,11 +295,6 @@ class CommandHandle:
     def code(self) -> int:
         """Alias for :attr:`returncode`."""
         return self.result().code
-
-    def _set_result(self, result: CommandResult) -> None:
-        """Record the result of execution on this handle."""
-        self._result = result
-        self._executed = True
 
 
 @dataclass
@@ -580,11 +637,22 @@ class CommandManager:
             why: Optional longer explanation.
             catch: Exception types treated as an outcome rather than an
                 error. Anything else propagates normally.
+                :class:`~aivm.errors.CommandControlError` is never caught
+                here, whatever this says.
         """
         record = Attempt(title=title)
         log.debug('Attempting: {}{}', title, f' ({why})' if why else '')
         try:
             yield record
+        except CommandControlError:
+            # Defense in depth against a broad `catch`. A control error is a
+            # decision about whether work may happen at all -- the user
+            # declined, approval could not be requested, policy forbade it --
+            # and recovering from one continues past the user rather than past
+            # a failure. A caller cannot opt into swallowing that, by
+            # oversight or otherwise; `catch=AIVMError` is broad enough to
+            # cover these by accident, and did.
+            raise
         except catch as ex:  # type: ignore[misc]
             record.error = ex
             log.info(
@@ -710,8 +778,19 @@ class CommandManager:
                 return
 
     def abort_plan(self, plan: CommandPlan) -> None:
-        """Mark ``plan`` as closed without executing its commands."""
+        """Mark ``plan`` as closed without executing its commands.
+
+        Every command that never ran is resolved here rather than left
+        pending. A handle that outlives its plan must still answer for itself:
+        awaiting one cannot be allowed to reopen a step the manager abandoned.
+        """
         # TODO: probably a good public method, let the underlying scope handle it.
+        for item in plan.commands:
+            if not item.attempted and not item.handle.done():
+                item.handle._set_not_executed(
+                    f'Step {plan.title!r} was aborted before this command ran: '
+                    f'{self._preview_command(item.spec)}'
+                )
         plan.closed = True
 
     def finish_plan(self, plan: CommandPlan, *, _stacklevel: int = 1) -> None:
@@ -862,6 +941,9 @@ class CommandManager:
             command_id: Identifier of the last command that must be run.
         """
         # TODO: does this need to be public?
+        # Only ever flush a queue that actually holds the requested command.
+        # Substituting "whatever else is pending" is how re-reading a resolved
+        # handle used to execute an unrelated command.
         for plan in reversed(self.plan_stack):
             if any(item.command_id == command_id for item in plan.commands):
                 self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
@@ -871,12 +953,15 @@ class CommandManager:
                     _stacklevel=_stacklevel + 1,
                 )
                 return
-        if self._has_pending_loose():
+        if any(item.command_id == command_id for item in self._loose_commands):
             self._flush_loose_commands(
                 through_command_id=command_id, _stacklevel=_stacklevel + 1
             )
             return
-        raise RuntimeError(f'Unknown command handle id: {command_id}')
+        raise CommandManagerInvariantError(
+            f'No queue holds command {command_id}, so the manager cannot say '
+            'whether it ran. Refusing to execute anything else.'
+        )
 
     def _normalize_role(self, role: str | None) -> CommandRole:
         """Normalize a role string to ``'read'`` or ``'modify'``."""
@@ -1040,7 +1125,7 @@ class CommandManager:
                 self._authenticate_sudo()
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -1055,7 +1140,7 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
         if auth_required:
             self._authenticate_sudo()
 
@@ -1078,7 +1163,7 @@ class CommandManager:
         )
         if not already_approved:
             if not sys.stdin.isatty():
-                raise AIVMError(
+                raise ApprovalUnavailableError(
                     'This state-changing operation requires confirmation, '
                     'but stdin is not interactive. Re-run with --yes.'
                 )
@@ -1086,7 +1171,7 @@ class CommandManager:
             log.opt(depth=0).info('  {}', purpose)
             ans = input('Continue? [y/N]: ').strip().lower()
             if ans not in {'y', 'yes'}:
-                raise AIVMError('Aborted by user.')
+                raise UserDeclinedError('Aborted by user.')
         previous = self._approve_all_remaining
         self._approve_all_remaining = True
         try:
@@ -1105,7 +1190,7 @@ class CommandManager:
         if yes or self.yes or self._approve_all_remaining:
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'External host file updates require confirmation, but stdin is not interactive. '
                 'Re-run with --yes.'
             )
@@ -1115,7 +1200,7 @@ class CommandManager:
         local_log.info('  {}', purpose)
         ans = input('Continue? [y/N]: ').strip().lower()
         if ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
     def _is_system_libvirt_mutation(self, spec: CommandSpec) -> bool:
         """Return True for state-changing hypervisor commands.
@@ -1192,7 +1277,7 @@ class CommandManager:
             plan.approved_command_count = len(plan.commands)
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -1216,7 +1301,7 @@ class CommandManager:
                 plan.approved = True
                 plan.approved_command_count = len(plan.commands)
                 return
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
     def _render_plan_preview(
         self, plan: CommandPlan, *, _stacklevel: int = 1
@@ -1318,7 +1403,7 @@ class CommandManager:
                     '    {}. {}', idx, shell_join([str(p) for p in cmd])
                 )
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'State-changing operations require confirmation, but stdin '
                 'is not interactive. Re-run with --yes.'
             )
@@ -1326,7 +1411,7 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
     def _flush_plan(
         self,
@@ -1378,12 +1463,16 @@ class CommandManager:
                 ):
                     self._authenticate_sudo()
             item.attempted = True
-            res = self._execute_one(
-                item.spec,
-                ordinal=(idx + 1, len(plan.commands)),
-                within_plan=True,
-                _stacklevel=_stacklevel + 1,
-            )
+            try:
+                res = self._execute_one(
+                    item.spec,
+                    ordinal=(idx + 1, len(plan.commands)),
+                    within_plan=True,
+                    _stacklevel=_stacklevel + 1,
+                )
+            except BaseException as ex:
+                item.handle._set_failure(ex)
+                raise
             item.handle._set_result(res)
             plan.executed_upto = idx
             if (
@@ -1417,9 +1506,13 @@ class CommandManager:
             if item is None:
                 return
             item.attempted = True
-            res = self._execute_one(
-                item.spec, within_plan=False, _stacklevel=_stacklevel + 1
-            )
+            try:
+                res = self._execute_one(
+                    item.spec, within_plan=False, _stacklevel=_stacklevel + 1
+                )
+            except BaseException as ex:
+                item.handle._set_failure(ex)
+                raise
             item.handle._set_result(res)
             if (
                 through_command_id is not None

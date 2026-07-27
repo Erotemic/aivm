@@ -10,7 +10,7 @@ from typing import cast
 
 from ..commands import CommandError, CommandManager, CommandResult
 from ..config_store.models import CredentialEntry
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from .errors import ProviderPermissionError, ProviderRejectedError
 from .keys import normalized_public_key, public_key_fingerprint
 from .models import GitRepository, ProviderDeployKey
@@ -121,6 +121,10 @@ def automation_unavailable_reason(
         return too_old_gh_message(version)
     try:
         check_auth(repo, manager=manager)
+    except CommandControlError:
+        # "gh is not signed in" is a reason to hand the key to a human;
+        # "the user declined" is a reason to stop.
+        raise
     except AIVMError as ex:
         return (
             f'The GitHub CLI is not authenticated for {repo.host}: {ex} '

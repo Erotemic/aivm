@@ -33,7 +33,15 @@ from aivm.config_store import (
     upsert_credential,
     upsert_vm,
 )
-from aivm.credentials import github
+from aivm.credentials import github, providers
+from aivm.credentials.errors import (
+    ProviderPermissionError,
+    ProviderRejectedError,
+)
+from aivm.credentials.gitlab import (
+    GitLabAuthenticationError,
+    GitLabTransportError,
+)
 from aivm.credentials.guest import (
     _ensure_guest_includes,
     guest_private_key_relpath,
@@ -53,10 +61,13 @@ from aivm.credentials.keys import (
 from aivm.credentials.models import GitRepository, ProviderDeployKey
 from aivm.credentials.resolve import parse_repository_url
 from aivm.credentials.schema import (
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
     CREDENTIAL_STATE_ABANDON_PENDING,
     CREDENTIAL_STATE_ACTIVE,
     CREDENTIAL_STATE_PENDING,
     CREDENTIAL_STATE_REVOCATION_PENDING,
+    CredentialKind,
     credential_allows_vm_delete,
     credential_is_guest_usable,
     normalize_credential_access,
@@ -69,7 +80,7 @@ from aivm.credentials.service import (
     revoke_repository_credential,
 )
 from aivm.credentials.validation import credential_id
-from aivm.errors import AIVMError
+from aivm.errors import AIVMError, ApprovalUnavailableError, UserDeclinedError
 from tests.helpers import make_cfg, run_cli, write_store
 
 
@@ -2729,3 +2740,256 @@ def test_fresh_app_data_root_is_safe_under_group_writable_umask(
     assert generated.key_fingerprint.startswith('SHA256:')
     assert host_private_key_path(entry.vm_name, entry.id).exists()
     assert host_public_key_path(entry.vm_name, entry.id).exists()
+
+
+def _nonblocking_grant_env(
+    monkeypatch: MonkeyPatch, tmp_path: Path, events: list[str]
+) -> None:
+    """Everything a grant needs except the provider decision under test."""
+    _patch_generated_key(monkeypatch, tmp_path, events)
+    monkeypatch.setattr(
+        'aivm.credentials.service._require_tools', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: events.append('guest-install'),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(0, 'ok', ''),
+    )
+    monkeypatch.setattr(
+        providers, 'automation_unavailable_reason', lambda *a, **k: ''
+    )
+    monkeypatch.setattr(
+        providers, 'find_recorded_provider_key', lambda *a, **k: None
+    )
+
+
+@pytest.mark.parametrize(
+    ('kind', 'host'),
+    [
+        pytest.param(
+            CREDENTIAL_KIND_GITHUB_DEPLOY_KEY, 'github.com', id='github'
+        ),
+        pytest.param(
+            CREDENTIAL_KIND_GITLAB_DEPLOY_KEY, 'gitlab.com', id='gitlab'
+        ),
+    ],
+)
+def test_declining_publication_stops_before_the_key_reaches_the_vm(
+    monkeypatch: MonkeyPatch, tmp_path: Path, kind: CredentialKind, host: str
+) -> None:
+    """A refusal is the user's answer, not the provider being unhelpful.
+
+    Publication used to run under `attempt(catch=AIVMError)`, and an approval
+    refusal raises `AIVMError`. Saying no therefore installed the private key
+    in the VM anyway and printed a handoff telling the user to give the public
+    key to an administrator -- the opposite of what they asked for.
+    """
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    events: list[str] = []
+    _nonblocking_grant_env(monkeypatch, tmp_path, events)
+
+    def declined(*a: object, **k: object) -> None:
+        raise UserDeclinedError('Aborted by user.')
+
+    monkeypatch.setattr(providers, 'add_deploy_key', declined)
+
+    with pytest.raises(UserDeclinedError):
+        grant_repository_credential(
+            cfg,
+            load_store(path),
+            path,
+            GitRepository(host, 'Kitware', 'kwimage'),
+            access='write',
+            kind=kind,
+            manager=CommandManager(yes=True),
+        )
+
+    assert 'guest-install' not in events, (
+        'the private key was installed after the user declined'
+    )
+
+
+def test_unavailable_approval_stops_before_the_key_reaches_the_vm(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nobody to ask is not the same as being told yes."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    events: list[str] = []
+    _nonblocking_grant_env(monkeypatch, tmp_path, events)
+
+    def unavailable(*a: object, **k: object) -> None:
+        raise ApprovalUnavailableError('stdin is not interactive')
+
+    monkeypatch.setattr(providers, 'add_deploy_key', unavailable)
+
+    with pytest.raises(ApprovalUnavailableError):
+        grant_repository_credential(
+            cfg,
+            load_store(path),
+            path,
+            GitRepository('gitlab.com', 'Kitware', 'kwimage'),
+            access='write',
+            kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+            manager=CommandManager(yes=True),
+        )
+
+    assert 'guest-install' not in events
+
+
+@pytest.mark.parametrize(
+    'failure',
+    [
+        pytest.param(
+            ProviderPermissionError('not an admin'), id='permission'
+        ),
+        pytest.param(
+            GitLabAuthenticationError('token is missing'), id='authentication'
+        ),
+        pytest.param(
+            GitLabTransportError('request did not complete'), id='transport'
+        ),
+        pytest.param(
+            ProviderRejectedError('deploy keys are disabled'), id='rejected'
+        ),
+    ],
+)
+def test_provider_bureaucracy_still_produces_a_handoff(
+    monkeypatch: MonkeyPatch, tmp_path: Path, failure: Exception
+) -> None:
+    """The nonblocking policy survives the narrowed catch.
+
+    Narrowing `attempt(catch=...)` to keep refusals out must not also start
+    blocking on the failures it exists to absorb.
+    """
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    events: list[str] = []
+    _nonblocking_grant_env(monkeypatch, tmp_path, events)
+
+    def refuses(*a: object, **k: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(providers, 'add_deploy_key', refuses)
+    repo = GitRepository('gitlab.com', 'Kitware', 'kwimage')
+
+    entry = grant_repository_credential(
+        cfg,
+        load_store(path),
+        path,
+        repo,
+        access='write',
+        kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+        manager=CommandManager(yes=True),
+    )
+
+    assert entry.provider_managed is False
+    assert 'guest-install' in events
+    assert 'ssh-ed25519' in describe_unregistered_credential(entry, repo)
+
+
+def test_transient_provider_failure_keeps_a_known_deploy_key_revocable(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A run that cannot see the provider is not evidence the key is gone.
+
+    Clearing the recorded id stranded a live deploy key: `revoke` then refused
+    to touch it, on the grounds that AIVM had never registered one.
+    """
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    events: list[str] = []
+    _nonblocking_grant_env(monkeypatch, tmp_path, events)
+    monkeypatch.setattr(
+        providers,
+        'add_deploy_key',
+        lambda *a, **k: ProviderDeployKey('12', _public_key(), 'title', False),
+    )
+    repo = GitRepository('gitlab.com', 'Kitware', 'kwimage')
+
+    first = grant_repository_credential(
+        cfg, load_store(path), path, repo,
+        access='write',
+        kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+        manager=CommandManager(yes=True),
+    )
+    assert first.provider_key_id == '12'
+
+    # The token expires. Nothing about the remote key changed.
+    monkeypatch.setattr(
+        providers,
+        'automation_unavailable_reason',
+        lambda *a, **k: 'GitLab API token is missing.',
+    )
+    second = grant_repository_credential(
+        cfg, load_store(path), path, repo,
+        access='write',
+        kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+        manager=CommandManager(yes=True),
+    )
+
+    assert second.provider_key_id == '12', 'the only handle for revoke was erased'
+    assert second.provider_managed is True
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    assert recorded.provider_key_id == '12'
+    assert recorded.provider_managed is True
+
+
+def test_revoke_still_works_after_a_transient_provider_failure(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """The point of preserving the id: the key stays deletable."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-a'})
+    path = write_store(tmp_path / 'config.toml', cfg)
+    events: list[str] = []
+    _nonblocking_grant_env(monkeypatch, tmp_path, events)
+    remote = ProviderDeployKey('12', _public_key(), 'title', False)
+    monkeypatch.setattr(providers, 'add_deploy_key', lambda *a, **k: remote)
+    repo = GitRepository('gitlab.com', 'Kitware', 'kwimage')
+
+    grant_repository_credential(
+        cfg, load_store(path), path, repo,
+        access='write',
+        kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+        manager=CommandManager(yes=True),
+    )
+    monkeypatch.setattr(
+        providers,
+        'automation_unavailable_reason',
+        lambda *a, **k: 'GitLab API token is missing.',
+    )
+    grant_repository_credential(
+        cfg, load_store(path), path, repo,
+        access='write',
+        kind=CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+        manager=CommandManager(yes=True),
+    )
+
+    # Access is restored; revocation must be able to target key 12.
+    deleted: list[str] = []
+    found: list[ProviderDeployKey | None] = [remote, None]
+    monkeypatch.setattr(providers, 'check_auth', lambda *a, **k: None)
+    monkeypatch.setattr(
+        providers, 'find_recorded_provider_key', lambda *a, **k: found.pop(0)
+    )
+    monkeypatch.setattr(
+        providers,
+        'delete_deploy_key',
+        lambda kind, repo, key_id, **k: deleted.append(key_id),
+    )
+    [recorded] = find_credentials_for_vm(load_store(path), 'vm-a')
+    revoke_repository_credential(
+        cfg, load_store(path), path, recorded,
+        manager=CommandManager(yes=True),
+    )
+
+    assert deleted == ['12'], 'revoke could not target the recorded key'
+    assert find_credentials_for_vm(load_store(path), 'vm-a') == []

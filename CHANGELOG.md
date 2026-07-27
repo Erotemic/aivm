@@ -74,6 +74,34 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Fixed
+* Reading a failed command handle no longer executes an unrelated queued
+  command. A raise skipped the bookkeeping that resolves the handle, so it
+  stayed pending; asking for its result again flushed the queue and ran
+  whatever was waiting there -- including state-changing commands -- before
+  dying on an assertion that discarded the original failure. Handles now own
+  a terminal outcome (`succeeded` / `failed` / `not-executed`) and answer from
+  it: a success replays, a failure re-raises the original exception, and a
+  command abandoned with its plan raises `CommandNotExecutedError`. Reading a
+  resolved handle executes nothing, and `flush_through` refuses to substitute
+  some other pending command for the one it was asked about.
+* An explicit approval refusal is no longer swallowed as provider bureaucracy.
+  Declining "publish this deploy key" raised a bare `AIVMError`, which the
+  credential flow's `attempt(catch=AIVMError)` treated as the provider being
+  uncooperative -- so saying no still generated the keypair, installed the
+  private half in the VM, and printed a handoff telling the user to give the
+  public half to an administrator. Refusals now raise typed
+  `CommandControlError` subclasses (`UserDeclinedError`,
+  `ApprovalUnavailableError`, `CommandNotExecutedError`, and `SudoRequiredError`),
+  which `attempt()` re-raises whatever `catch` says, and which broad handlers
+  around command-manager calls re-raise explicitly. Provider bureaucracy still
+  produces the handoff; a non-interactive run with no `--yes` now stops rather
+  than inferring approval from silence.
+* A run that could not reach the provider no longer erases the evidence needed
+  to revoke a live deploy key. Re-running `creds add` after a token expired
+  cleared `provider_key_id` and set `provider_managed = false`, after which
+  `creds revoke` permanently refused to delete a key that still existed. A
+  recorded key id now survives transient authentication, permission, policy,
+  or transport failures; only a verified deletion clears it.
 * Self-managed GitLab hosts are recognized without `--provider`. A host named
   `gitlab.<domain>` was resolved to GitHub, which stored a
   `github-deploy-key` for a GitLab project, gated it on `gh`, and named the
