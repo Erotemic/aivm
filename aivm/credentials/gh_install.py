@@ -94,12 +94,16 @@ def detect_backend() -> str:
     return ''
 
 
-def _unsupported(tools: tuple[str, ...]) -> AIVMError:
+def _unsupported(tools: tuple[str, ...], *, include_gh: bool) -> AIVMError:
+    manual = 'Install them manually'
+    if include_gh:
+        manual += f' (see {GH_INSTALL_DOCS} for the GitHub CLI)'
     return AIVMError(
         'AIVM does not know how to install '
         + ', '.join(tools)
-        + ' on this host: no supported package backend was detected. Install '
-        f'them manually (see {GH_INSTALL_DOCS} for the GitHub CLI) and rerun '
+        + ' on this host: no supported package backend was detected. '
+        + manual
+        + ' and rerun '
         '`aivm vm creds setup`.'
     )
 
@@ -303,7 +307,7 @@ def plan_tool_install(
     """
     backend = detect_backend()
     if not backend:
-        raise _unsupported(tools)
+        raise _unsupported(tools, include_gh=include_gh)
 
     steps: list[InstallStep] = []
     openssh_needed = bool({'ssh', 'ssh-keygen'} & set(tools))

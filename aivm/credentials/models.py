@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class GitRepository:
-    """Normalized GitHub-compatible repository identity."""
+    """Normalized repository identity for a supported Git forge."""
 
     host: str
     owner: str
@@ -21,6 +21,10 @@ class GitRepository:
     @property
     def display(self) -> str:
         return f'{self.host}/{self.owner}/{self.name}'
+
+    @property
+    def path(self) -> str:
+        return f'{self.owner}/{self.name}'
 
     @property
     def gh_repo_arg(self) -> str:

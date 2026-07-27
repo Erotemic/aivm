@@ -37,13 +37,21 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   repository per the official instructions. `--skip-ssh-key` is passed only to
   gh 2.48.0+, which is where that flag was added; older builds get a warning
   instead of a failed login.
+* Added GitLab project deploy keys as a second repository-credential provider.
+  GitLab.com is inferred from canonical repository URLs, self-managed GitLab
+  can be selected with ``--provider gitlab``, nested group namespaces are
+  preserved, and direct v4 REST calls manage read-only or read-write deploy
+  keys using a host-only ``GITLAB_TOKEN``. The guest still receives only its
+  repository-scoped SSH private key; ``glab`` is not required.
 
-* A deploy-key creation that GitHub refuses outright (a 4xx such as the 422
-  raised when deploy keys are disabled for a repository or organization) now
-  reports GitHub's reason and the remedy instead of the raw `gh` command, and
-  discards the pending credential and its host keypair. Failures with an
-  unresolved outcome (5xx, timeouts) still keep that state so the key can be
-  found and revoked.
+* Provider publication is now best effort for both GitHub and GitLab. Missing
+  clients, logins, or tokens; insufficient repository permission;
+  organization approval requirements; provider refusals; and uncertain
+  transport outcomes no longer block ``creds add``. AIVM keeps the generated
+  keypair, installs the private half in the VM, records the credential as
+  provider-unmanaged, and prints the public half for an administrator to add.
+  Local key-generation, ownership, and guest-installation failures remain
+  errors.
 * A 404 from the deploy-key endpoints is disambiguated instead of surfacing
   raw. GitHub answers 404 rather than 403 on private repositories so a
   response cannot confirm what exists, which makes the status ambiguous
@@ -51,8 +59,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   repository is visible to the signed-in account and reports whichever it is:
   the admin-assisted path for a permission failure, or a message naming the
   repository, account, and SAML authorization to check.
-* A permission denial is handled separately from an outright refusal, and
-  becomes a handoff rather than a failure. Deploy-key endpoints need admin
+* Provider administration failures become a handoff rather than a failure. Deploy-key endpoints need admin
   permission on the repository, which write access does not confer, so AIVM
   generates the keypair, installs the private half in the VM, configures Git,
   and prints the public half for an administrator to add. Nothing else needs

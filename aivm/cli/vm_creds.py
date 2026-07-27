@@ -15,11 +15,9 @@ from ..config_store import (
     find_credentials_for_vm,
     load_store,
 )
+from ..credentials import providers
 from ..credentials.resolve import resolve_repository
-from ..credentials.schema import (
-    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
-    normalize_credential_access,
-)
+from ..credentials.schema import normalize_credential_access
 from ..credentials.service import (
     abandon_repository_credential,
     describe_unregistered_credential,
@@ -31,9 +29,12 @@ from ..credentials.service import (
 )
 from ..credentials.setup import (
     CREDENTIAL_TOOLS,
+    GITLAB_CREDENTIAL_TOOLS,
     CredentialSetupReport,
+    GitLabCredentialSetupReport,
     authenticate_github,
     inspect_credential_setup,
+    inspect_gitlab_credential_setup,
     install_missing_credential_tools,
 )
 from ..credentials.validation import (
@@ -72,7 +73,7 @@ def _resolve_credential_selector(
 
 
 class VMCredsAddCLI(_BaseCommand):
-    """Grant a VM repository access with a scoped GitHub deploy key."""
+    """Grant a VM repository access with a scoped forge deploy key."""
 
     repository: str = kwconf.Value(
         '.',
@@ -83,6 +84,13 @@ class VMCredsAddCLI(_BaseCommand):
     remote: str = kwconf.Value(
         'origin', help='Git remote used when resolving a local checkout.'
     )
+    provider: Literal['auto', 'github', 'gitlab'] = kwconf.Value(
+        'auto',
+        help=(
+            'Deploy-key provider. auto selects GitLab for gitlab.com and '
+            'GitHub otherwise; specify gitlab for a self-managed GitLab host.'
+        ),
+    )
     # argparse builds its choice list from this annotation and rejects
     # anything outside it before normalize_credential_access() runs, so the
     # accepted spellings have to be declared here, not only in the normalizer.
@@ -90,7 +98,7 @@ class VMCredsAddCLI(_BaseCommand):
         'read',
         help=(
             'Credential access: read (ro) or write (rw); default read. '
-            'write means read+write -- a GitHub deploy key has no write-only '
+            'write means read+write -- deploy keys have no write-only '
             'mode. Changing the access of an existing credential requires '
             'revoking it first.'
         ),
@@ -109,9 +117,20 @@ class VMCredsAddCLI(_BaseCommand):
             persist_runtime_defaults=not bool(args.dry_run),
         )
         mgr = CommandManager.current()
-        repo = resolve_repository(
-            args.repository, remote=args.remote, manager=mgr
+        requested_provider = providers.normalize_provider(args.provider)
+        default_host = (
+            'gitlab.com' if requested_provider == 'gitlab' else 'github.com'
         )
+        repo = resolve_repository(
+            args.repository,
+            remote=args.remote,
+            default_host=default_host,
+            manager=mgr,
+        )
+        resolved_provider = providers.resolve_provider(
+            repo, requested_provider
+        )
+        kind = providers.kind_for_provider(resolved_provider)
         access = normalize_credential_access(args.access)
         cred_id = credential_id(cfg.vm.name, repo.canonical)
         if args.dry_run:
@@ -119,10 +138,14 @@ class VMCredsAddCLI(_BaseCommand):
             print(f'  VM:          {cfg.vm.name}')
             print(f'  Repository:  {repo.display}')
             print(f'  Access:      {access}')
-            print(f'  Type:        {CREDENTIAL_KIND_GITHUB_DEPLOY_KEY}')
+            print(f'  Provider:    {resolved_provider}')
+            print(f'  Type:        {kind}')
             print(f'  Credential:  {cred_id}')
             print('  Branches:    not managed by AIVM')
-            print('DRYRUN: no key, GitHub setting, guest file, or config was changed.')
+            print(
+                'DRYRUN: no key, provider setting, guest file, or config '
+                'was changed.'
+            )
             return 0
 
         store = load_store(store_path)
@@ -130,7 +153,8 @@ class VMCredsAddCLI(_BaseCommand):
             f'Grant {cfg.vm.name} access to {repo.display}',
             why=(
                 'Create a repository-scoped deploy key on the host, register '
-                'its public key with GitHub, and install its private key in '
+                'its public key with the repository provider, and install its '
+                'private key in '
                 'the selected VM.'
             ),
             role='modify',
@@ -141,6 +165,7 @@ class VMCredsAddCLI(_BaseCommand):
                 store_path,
                 repo,
                 access=access,
+                kind=kind,
                 manager=mgr,
             )
         if not entry.provider_managed:
@@ -154,7 +179,7 @@ class VMCredsAddCLI(_BaseCommand):
 
 
 def _print_setup_report(report: CredentialSetupReport) -> None:
-    """Render host credential readiness without exposing command internals."""
+    """Render GitHub host readiness without exposing command internals."""
     print('GitHub credential setup')
     print(f'  GitHub host:       {report.hostname}')
     for name in CREDENTIAL_TOOLS:
@@ -179,20 +204,130 @@ def _print_setup_report(report: CredentialSetupReport) -> None:
             print(f'  Repository detail: {report.repository_detail}')
 
 
+def _print_gitlab_setup_report(report: GitLabCredentialSetupReport) -> None:
+    """Render GitLab host readiness without exposing the API token."""
+    print('GitLab credential setup')
+    print(f'  GitLab host:       {report.hostname}')
+    for name in GITLAB_CREDENTIAL_TOOLS:
+        path = report.tool_paths.get(name)
+        print(f'  {name:<18} {"ready" if path else "missing"}')
+    auth = 'ready' if report.auth_ok else 'not ready'
+    print(f'  Authentication:    {auth}')
+    if report.identity:
+        print(f'  Identity:          {report.identity}')
+    if report.auth_detail and not report.auth_ok:
+        print(f'  Auth detail:       {report.auth_detail}')
+    if report.repository is not None:
+        if report.repository_ok is True:
+            repo_state = 'ready'
+        elif report.repository_ok is False:
+            repo_state = 'not ready'
+        else:
+            repo_state = 'not checked'
+        print(f'  Repository:        {report.repository.display}')
+        print(f'  Deploy-key API:    {repo_state}')
+        if report.repository_detail and report.repository_ok is not True:
+            print(f'  Repository detail: {report.repository_detail}')
+
+
+def _run_gitlab_setup(
+    *,
+    args: Any,
+    hostname: str,
+    repo: Any,
+    manager: CommandManager,
+) -> int:
+    report = inspect_gitlab_credential_setup(
+        hostname=hostname,
+        repository=repo,
+        manager=manager,
+    )
+    _print_gitlab_setup_report(report)
+    if args.check:
+        if not report.ready:
+            print(
+                '  Remedy:            set GITLAB_TOKEN and run '
+                '`aivm vm creds setup --provider gitlab`'
+            )
+        return 0 if report.ready else 2
+
+    if args.dry_run:
+        if report.missing_tools:
+            print(
+                'DRYRUN: would install missing host command(s): '
+                + ', '.join(report.missing_tools)
+            )
+        if not report.auth_ok:
+            print(
+                'DRYRUN: would require a valid GITLAB_TOKEN on the AIVM host.'
+            )
+        if repo is not None:
+            print(
+                'DRYRUN: would verify deploy-key API access for '
+                f'{repo.display}.'
+            )
+        if report.ready:
+            print('DRYRUN: no setup changes are needed.')
+        return 0
+
+    if report.ready:
+        print('Host credential prerequisites are ready; no changes needed.')
+        return 0
+
+    if report.missing_tools:
+        install_missing_credential_tools(
+            report.missing_tools,
+            provider_label='GitLab',
+            manager=manager,
+        )
+
+    final = inspect_gitlab_credential_setup(
+        hostname=hostname,
+        repository=repo,
+        manager=manager,
+    )
+    print()
+    _print_gitlab_setup_report(final)
+    if not final.ready:
+        if not final.auth_ok:
+            print(
+                '  Remedy:            export GITLAB_TOKEN=<api-token>; '
+                'for a custom API endpoint also set GITLAB_API_URL.'
+            )
+        else:
+            print(
+                '  Remedy:            grant the token owner sufficient project '
+                'access and rerun setup.'
+            )
+        return 2
+    print('Host credential prerequisites are ready.')
+    return 0
+
+
 class VMCredsSetupCLI(_BaseCommand):
-    """Prepare host tools and GitHub login for repository credentials."""
+    """Prepare host tools and forge authentication for repository credentials."""
 
     repository: str = kwconf.Value(
         '',
         position=1,
         help=(
-            'Optional local checkout, OWNER/REPO, or Git URL whose deploy-key '
-            'administration should also be checked.'
+            'Optional local checkout, repository path, or Git URL whose '
+            'deploy-key administration should also be checked.'
         ),
     )
     hostname: str = kwconf.Value(
         'github.com',
-        help='GitHub or GitHub Enterprise hostname when no repository is given.',
+        help=(
+            'Forge hostname when no repository is given. With '
+            '--provider=gitlab, the unchanged default becomes gitlab.com.'
+        ),
+    )
+    provider: Literal['auto', 'github', 'gitlab'] = kwconf.Value(
+        'auto',
+        help=(
+            'Credential provider. auto selects GitLab for gitlab.com and '
+            'GitHub otherwise.'
+        ),
     )
     remote: str = kwconf.Value(
         'origin', help='Git remote used when resolving a local checkout.'
@@ -211,15 +346,39 @@ class VMCredsSetupCLI(_BaseCommand):
             raise AIVMError('Use either --check or --dry_run, not both.')
         mgr = CommandManager.current()
         repo = None
-        try:
-            hostname = validate_provider_host(args.hostname or 'github.com')
-        except CredentialValidationError as ex:
-            raise AIVMError(str(ex)) from ex
+        requested_provider = providers.normalize_provider(args.provider)
+        default_host = (
+            'gitlab.com' if requested_provider == 'gitlab' else 'github.com'
+        )
         if args.repository:
             repo = resolve_repository(
-                args.repository, remote=args.remote, manager=mgr
+                args.repository,
+                remote=args.remote,
+                default_host=default_host,
+                manager=mgr,
             )
-            hostname = repo.host
+        raw_hostname = args.hostname or 'github.com'
+        if repo is not None:
+            raw_hostname = repo.host
+        elif requested_provider == 'gitlab' and raw_hostname == 'github.com':
+            raw_hostname = 'gitlab.com'
+        try:
+            hostname = validate_provider_host(raw_hostname)
+        except CredentialValidationError as ex:
+            raise AIVMError(str(ex)) from ex
+        resolved_provider = providers.resolve_provider(
+            repo,
+            requested_provider,
+            hostname=hostname,
+        )
+
+        if resolved_provider == 'gitlab':
+            return _run_gitlab_setup(
+                args=args,
+                hostname=hostname,
+                repo=repo,
+                manager=mgr,
+            )
 
         report = inspect_credential_setup(
             hostname=hostname,
@@ -383,7 +542,7 @@ class VMCredsStatusCLI(_BaseCommand):
         with CommandManager.current().intent(
             f'Inspect credential {entry.id}',
             why=(
-                'Compare AIVM state with the host key, GitHub deploy key, '
+                'Compare AIVM state with the host key, provider deploy key, '
                 'and guest installation.'
             ),
             role='read',
@@ -426,7 +585,8 @@ class VMCredsStatusCLI(_BaseCommand):
         )
         if report['host_detail']:
             print(f'  Host detail:  {report["host_detail"]}')
-        print(f'  GitHub key:   {remote_text}')
+        label = providers.provider_label(entry.kind)
+        print(f'  {label + " key:":<15}{remote_text}')
         print(f'  Guest:        {report["guest"]}')
         if report['guest_detail']:
             print(f'  Guest detail: {report["guest_detail"]}')
@@ -479,13 +639,13 @@ class VMCredsRevokeCLI(_BaseCommand):
                 '  Scope: '
                 f'{entry.provider_host}/{entry.owner}/{entry.repository}'
             )
-            print('  Order: GitHub deploy key, guest copy, host copy, config record')
+            print('  Order: provider deploy key, guest copy, host copy, config record')
             return 0
         mgr = CommandManager.current()
         with mgr.intent(
             f'Revoke credential {entry.id}',
             why=(
-                'Invalidate the repository permission at GitHub before '
+                'Invalidate the repository permission at the provider before '
                 'removing copies of the private key.'
             ),
             role='modify',

@@ -6,7 +6,7 @@ from typing import Literal, Protocol
 
 from ..errors import AIVMError
 
-CredentialKind = Literal['github-deploy-key']
+CredentialKind = Literal['github-deploy-key', 'gitlab-deploy-key']
 CredentialAccess = Literal['read', 'write']
 CredentialState = Literal[
     'pending',
@@ -16,6 +16,7 @@ CredentialState = Literal[
 ]
 
 CREDENTIAL_KIND_GITHUB_DEPLOY_KEY: CredentialKind = 'github-deploy-key'
+CREDENTIAL_KIND_GITLAB_DEPLOY_KEY: CredentialKind = 'gitlab-deploy-key'
 
 CREDENTIAL_ACCESS_READ: CredentialAccess = 'read'
 CREDENTIAL_ACCESS_WRITE: CredentialAccess = 'write'
@@ -26,7 +27,10 @@ CREDENTIAL_STATE_REVOCATION_PENDING: CredentialState = 'revocation-pending'
 CREDENTIAL_STATE_ABANDON_PENDING: CredentialState = 'abandon-pending'
 
 VALID_CREDENTIAL_KINDS: frozenset[str] = frozenset(
-    {CREDENTIAL_KIND_GITHUB_DEPLOY_KEY}
+    {
+        CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+        CREDENTIAL_KIND_GITLAB_DEPLOY_KEY,
+    }
 )
 VALID_CREDENTIAL_ACCESS: frozenset[str] = frozenset(
     {CREDENTIAL_ACCESS_READ, CREDENTIAL_ACCESS_WRITE}

@@ -52,7 +52,10 @@ def validate_repository_identity(
     repo_text = str(repository or '').strip()
     for field, value in (('owner', owner_text), ('repository', repo_text)):
         _reject_control_characters(field, value)
-    if not _REPO_PART_RE.fullmatch(owner_text):
+    owner_parts = owner_text.split('/')
+    if not owner_parts or not all(
+        _REPO_PART_RE.fullmatch(part) for part in owner_parts
+    ):
         raise CredentialValidationError(
             f'Unsupported repository owner syntax: {owner!r}'
         )
@@ -64,7 +67,7 @@ def validate_repository_identity(
 
 
 def validate_provider_host(provider_host: str) -> str:
-    """Validate a GitHub hostname before passing it to host commands."""
+    """Validate a forge hostname before passing it to commands or APIs."""
     host = str(provider_host or '').strip().lower()
     _reject_control_characters('provider_host', host)
     if not host or not _HOST_RE.fullmatch(host):
@@ -102,11 +105,11 @@ def validate_metadata_text(field: str, value: str) -> str:
 
 
 def validate_provider_key_id(value: str) -> str:
-    """Validate an optional GitHub deploy-key identifier."""
+    """Validate an optional provider deploy-key identifier."""
     text = validate_metadata_text('provider_key_id', value)
     if text and not text.isdigit():
         raise CredentialValidationError(
-            f'Invalid GitHub deploy-key id {text!r}; expected decimal digits.'
+            f'Invalid provider deploy-key id {text!r}; expected decimal digits.'
         )
     return text
 

@@ -753,7 +753,7 @@ def _patch_provider_reachable(monkeypatch: MonkeyPatch) -> None:
     exercise real provider responses would quietly stop doing so.
     """
     monkeypatch.setattr(
-        'aivm.credentials.service.github.automation_unavailable_reason',
+        'aivm.credentials.service.providers.automation_unavailable_reason',
         lambda *a, **k: '',
     )
 
@@ -796,14 +796,14 @@ def test_grant_service_persists_active_credential(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth',
+        'aivm.credentials.service.providers.check_auth',
         lambda *a, **k: events.append('auth'),
     )
     monkeypatch.setattr(
         'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.add_deploy_key',
+        'aivm.credentials.service.providers.add_deploy_key',
         lambda *a, **k: events.append('provider-add')
         or ProviderDeployKey('44', _public_key(), 'title', False),
     )
@@ -906,15 +906,23 @@ def _grant_against_refusing_provider(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
         'aivm.credentials.github.find_recorded_provider_key',
         lambda *a, **k: None,
     )
+    monkeypatch.setattr(
+        'aivm.credentials.service._resolve_ip_for_ssh_ops',
+        lambda *a, **k: '10.0.0.5',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.reconcile_guest_credentials',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.service.verify_guest_repository',
+        lambda *a, **k: CommandResult(255, '', 'Permission denied (publickey)'),
+    )
     repo = GitRepository('github.com', 'Kitware', 'kwimage')
-    entry = _entry('vm-a')
-    grant_repository_credential(
+    entry = grant_repository_credential(
         cfg,
         store,
         path,
@@ -925,29 +933,26 @@ def _grant_against_refusing_provider(
     return path, entry
 
 
-def test_refused_deploy_key_discards_the_pending_grant(
+def test_refused_deploy_key_becomes_admin_handoff(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A 4xx means GitHub created nothing, so nothing local may survive."""
+    """Provider policy must not block local credential creation."""
     stderr = (
         'HTTP 422: Validation Failed '
         '(https://api.github.com/repos/Kitware/kwimage/keys)\n'
         'Deploy keys are disabled for this repository'
     )
 
-    with pytest.raises(github.ProviderRejectedError) as excinfo:
-        _grant_against_refusing_provider(monkeypatch, tmp_path, stderr)
-
-    message = str(excinfo.value)
-    assert 'Deploy keys are disabled for this repository' in message
-    assert 'No AIVM credential state was kept' in message
-    assert 'gh repo deploy-key add' not in message
-    cred_id = credential_id(
-        'vm-a', GitRepository('github.com', 'Kitware', 'kwimage').canonical
+    store_path, entry = _grant_against_refusing_provider(
+        monkeypatch, tmp_path, stderr
     )
-    store_path = tmp_path / 'config.toml'
-    assert find_credentials_for_vm(load_store(store_path), 'vm-a') == []
-    assert not host_credential_dir('vm-a', cred_id).exists()
+
+    assert entry.provider_managed is False
+    assert entry.provider_key_id == ''
+    assert entry.state == 'pending'
+    [persisted] = find_credentials_for_vm(load_store(store_path), 'vm-a')
+    assert persisted == entry
+    assert host_credential_dir('vm-a', entry.id).exists()
 
 
 @pytest.mark.parametrize(
@@ -989,7 +994,7 @@ def test_permission_denial_hands_the_grant_off_instead_of_failing(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',
@@ -1200,7 +1205,7 @@ def _grant_against_not_found(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',
@@ -1279,7 +1284,7 @@ def test_admin_added_key_is_adopted_on_the_next_run(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',
@@ -1320,7 +1325,7 @@ def test_admin_added_key_is_adopted_on_the_next_run(
         ],
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.add_deploy_key',
+        'aivm.credentials.service.providers.add_deploy_key',
         lambda *a, **k: pytest.fail('must adopt the existing key, not add one'),
     )
 
@@ -1340,24 +1345,22 @@ def test_admin_added_key_is_adopted_on_the_next_run(
     assert entry.provider_managed is True
 
 
-def test_unresolved_provider_failure_keeps_state_for_recovery(
+def test_unresolved_provider_failure_becomes_admin_handoff(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A 5xx may mean the key exists, so the record must survive to revoke it."""
+    """An uncertain API outcome must not block the local grant."""
     stderr = 'HTTP 503: Service Unavailable (https://api.github.com/repos)'
 
-    with pytest.raises(CommandError):
-        _grant_against_refusing_provider(monkeypatch, tmp_path, stderr)
+    store_path, entry = _grant_against_refusing_provider(
+        monkeypatch, tmp_path, stderr
+    )
 
-    cred_id = credential_id(
-        'vm-a', GitRepository('github.com', 'Kitware', 'kwimage').canonical
-    )
-    [pending] = find_credentials_for_vm(
-        load_store(tmp_path / 'config.toml'), 'vm-a'
-    )
+    [pending] = find_credentials_for_vm(load_store(store_path), 'vm-a')
+    assert pending == entry
     assert pending.state == 'pending'
+    assert pending.provider_managed is False
     assert pending.key_fingerprint
-    assert host_private_key_path('vm-a', cred_id).exists()
+    assert host_private_key_path('vm-a', entry.id).exists()
 
 
 def test_revoke_invalidates_provider_before_guest_cleanup(
@@ -1385,7 +1388,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     remote_results = iter(
         [
@@ -1403,7 +1406,7 @@ def test_revoke_invalidates_provider_before_guest_cleanup(
         lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.delete_deploy_key',
+        'aivm.credentials.service.providers.delete_deploy_key',
         lambda *a, **k: events.append('provider-delete'),
     )
     monkeypatch.setattr(
@@ -1514,7 +1517,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     remote_results = iter(
         [
@@ -1532,7 +1535,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
         lambda *a, **k: next(remote_results),
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.delete_deploy_key',
+        'aivm.credentials.service.providers.delete_deploy_key',
         lambda *a, **k: events.append('provider-delete'),
     )
     monkeypatch.setattr(
@@ -2005,7 +2008,7 @@ def test_revoke_refuses_cleanup_when_provider_key_remains(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     remote = ProviderDeployKey(
         entry.provider_key_id, _public_key(), entry.provider_key_title, False
@@ -2014,7 +2017,7 @@ def test_revoke_refuses_cleanup_when_provider_key_remains(
         'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: remote
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.delete_deploy_key', lambda *a, **k: None
+        'aivm.credentials.service.providers.delete_deploy_key', lambda *a, **k: None
     )
 
     with pytest.raises(AIVMError, match='still reports deploy key'):
@@ -2165,7 +2168,7 @@ def test_status_reports_malformed_host_public_key(
     public.write_text('not a public key\n', encoding='utf-8')
     public.chmod(0o644)
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
     monkeypatch.setattr(
         'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None
@@ -2329,7 +2332,7 @@ def test_grant_refuses_to_replace_missing_recorded_keypair(
         'aivm.credentials.service._require_tools', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+        'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
     )
 
     with pytest.raises(AIVMError, match='recorded credential.*is missing'):
@@ -2627,7 +2630,7 @@ def test_credential_cleanup_refuses_symlinked_ancestor(
             'aivm.credentials.service._require_tools', lambda *a, **k: None
         )
         monkeypatch.setattr(
-            'aivm.credentials.service.github.check_auth', lambda *a, **k: None
+            'aivm.credentials.service.providers.check_auth', lambda *a, **k: None
         )
         monkeypatch.setattr(
             'aivm.credentials.github.find_recorded_provider_key', lambda *a, **k: None

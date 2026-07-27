@@ -26,7 +26,7 @@ from ..config_store import (
 )
 from ..errors import AIVMError
 from ..vm.connectivity import get_ip_cached
-from . import github, keys
+from . import keys, providers
 from .guest import (
     read_guest_public_key,
     reconcile_guest_credentials,
@@ -41,6 +41,7 @@ from .schema import (
     CREDENTIAL_STATE_PENDING,
     CREDENTIAL_STATE_REVOCATION_PENDING,
     CredentialAccess,
+    CredentialKind,
     credential_is_guest_usable,
     normalize_credential_access,
 )
@@ -132,42 +133,6 @@ def _require_tools(*names: str, manager: CommandManager) -> None:
         require_supported_gh(manager=manager)
 
 
-def _discard_unstarted_grant(
-    store: Store,
-    store_path: Path,
-    entry: CredentialEntry,
-) -> bool:
-    """Drop local state for a grant the provider refused outright.
-
-    This is deliberately narrow. AIVM records a pending credential *before*
-    calling the provider so a key that does get created can never be
-    orphaned, and that invariant must survive here: only a record that has no
-    provider key id and never left ``pending`` is discarded, and only after
-    the provider has said it created nothing. Guest installation happens
-    later in the grant, so such a record owns exactly two artifacts -- the
-    host keypair and the store row.
-
-    Returns whether local state was discarded.
-    """
-    if entry.state != CREDENTIAL_STATE_PENDING or entry.provider_key_id:
-        return False
-    keys.remove_host_key(entry.vm_name, entry.id)
-    remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
-    save_store(
-        store,
-        store_path,
-        reason=(
-            f'Discard credential {entry.id}: the provider refused to create '
-            'its deploy key and created nothing.'
-        ),
-    )
-    log.info(
-        'Discarded pending credential {} because GitHub created no key.',
-        entry.id,
-    )
-    return True
-
-
 def _install_and_activate(
     cfg: AgentVMConfig,
     store: Store,
@@ -213,7 +178,7 @@ def _install_and_activate(
                 f'from the VM failed: {detail}'
             )
         # Expected while nobody has registered the public key yet: the guest
-        # copy authenticates nothing until GitHub accepts it. Leave the
+        # copy authenticates nothing until the provider accepts it. Leave the
         # credential installed and pending rather than failing the command.
         log.info(
             'Credential {} is installed but not usable yet; {} has not '
@@ -238,11 +203,12 @@ def _install_and_activate(
 def describe_unregistered_credential(
     entry: CredentialEntry, repo: GitRepository
 ) -> str:
-    """Explain the handoff for a credential AIVM could not register.
+    """Explain the handoff for a credential AIVM could not publish.
 
-    Everything AIVM can do is already done: the keypair exists, the private
-    half is in the VM, and Git is configured to use it. Only the public half
-    is missing from GitHub, and only an administrator can put it there.
+    Everything AIVM can do locally is already done: the keypair exists, the
+    private half is in the VM, and Git is configured to use it. Only the public
+    half still needs to be accepted by the repository provider, which may
+    require an administrator or an out-of-band approval process.
     """
     public_path = keys.host_public_key_path(entry.vm_name, entry.id)
     try:
@@ -250,12 +216,14 @@ def describe_unregistered_credential(
     except OSError:
         public_text = ''
     access = 'write' if entry.access == CREDENTIAL_ACCESS_WRITE else 'read-only'
+    provider = providers.provider_label(entry.kind)
 
     lines = [
         '',
-        f'ACTION NEEDED: AIVM could not register this deploy key with '
-        f'{repo.host}.',
+        f'ACTION NEEDED: AIVM could not publish this deploy key to '
+        f'{repo.host} automatically.',
         '',
+        f'  Provider:    {provider}',
         f'  Credential:  {entry.id} (installed in VM {entry.vm_name}, not '
         'active yet)',
         f'  Repository:  {repo.display}',
@@ -274,8 +242,8 @@ def describe_unregistered_credential(
             '',
             'Nothing else needs to be run. The private half is already in the '
             'VM and Git is configured to use it, so access begins working as '
-            'soon as GitHub accepts the public half. Until then the installed '
-            'key authenticates nothing.',
+            'soon as the provider accepts the public half. Until then the '
+            'installed key authenticates nothing.',
             '',
             f'Check with: aivm vm creds status {entry.id}',
             f'Undo with:  aivm vm creds abandon {entry.id}',
@@ -291,15 +259,14 @@ def grant_repository_credential(
     repo: GitRepository,
     *,
     access: CredentialAccess,
+    kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
     manager: CommandManager,
 ) -> CredentialEntry:
-    # Only the tools that actually make a credential are required. Provider
-    # automation is optional and its absence becomes a handoff below, so a
-    # host without gh -- or with a gh that cannot manage deploy keys -- can
-    # still grant a VM access to a repository.
+    # Only the tools that create and install the SSH credential are mandatory.
+    # Provider publication is a convenience: missing clients, missing tokens,
+    # insufficient permissions, organization policy, and provider-side refusal
+    # all become an administrator handoff instead of blocking local progress.
     _require_tools('ssh', 'ssh-keygen', manager=manager)
-    # Normalize here too: this is the programmatic entry point, and the CLI
-    # Literal is not a hard gate when a caller passes data= directly.
     access = normalize_credential_access(access)
     write = access == CREDENTIAL_ACCESS_WRITE
     cred_id = credential_id(cfg.vm.name, repo.canonical)
@@ -309,6 +276,11 @@ def grant_repository_credential(
             f'Credential {cred_id} already exists with access={existing.access}. '
             'Revoke it before changing access.'
         )
+    if existing is not None and existing.kind != kind:
+        raise AIVMError(
+            f'Credential {cred_id} already exists with kind={existing.kind}. '
+            'Revoke it before changing providers.'
+        )
     if existing is not None and not credential_is_guest_usable(existing):
         raise AIVMError(
             f'Credential {cred_id} is in state {existing.state!r}. Finish '
@@ -317,7 +289,7 @@ def grant_repository_credential(
     entry = existing or CredentialEntry(
         id=cred_id,
         vm_name=cfg.vm.name,
-        kind=CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+        kind=kind,
         provider_host=repo.host,
         owner=repo.owner,
         repository=repo.name,
@@ -338,62 +310,46 @@ def grant_repository_credential(
     )
 
     remote: ProviderDeployKey | None = None
-    # Ask whether registration can be automated at all before trying it. A
-    # host with no gh, an unusable gh, or no login is not an error here: the
-    # credential exists and only needs a human to publish its public half.
-    unregistered_reason = github.automation_unavailable_reason(
-        repo, manager=manager
+    unregistered_reason = providers.automation_unavailable_reason(
+        kind, repo, manager=manager
     )
 
     if not unregistered_reason:
-        # Reading the provider may fail without meaning the grant failed:
-        # nothing has been created yet, so the key AIVM generated is inert and
-        # a human can still publish it. Declare that, rather than catching it.
         with manager.attempt(
             f'Look up an existing deploy key on {repo.host}',
             why='A failed lookup still leaves the key ready to hand over.',
             catch=AIVMError,
         ) as lookup:
-            remote = github.find_recorded_provider_key(
-                repo, entry, manager=manager
+            remote = providers.find_recorded_provider_key(
+                kind, repo, entry, manager=manager
             )
         unregistered_reason = lookup.reason
 
     if not unregistered_reason and remote is None:
         with manager.attempt(
-            f'Register the deploy key with {repo.host}',
-            why='A refusal here is handed to an administrator instead.',
-            catch=github.ProviderPermissionError,
-        ) as registration:
-            try:
-                remote = github.add_deploy_key(
-                    repo,
-                    public_key_path=keys.host_public_key_path(
-                        entry.vm_name, entry.id
-                    ),
-                    title=entry.provider_key_title,
-                    write=write,
-                    manager=manager,
-                )
-            except github.ProviderRejectedError as ex:
-                # Not a handoff: the provider refused outright and created
-                # nothing, and no administrator can add this key until that
-                # policy changes, so there is nothing to hand over.
-                if not _discard_unstarted_grant(store, store_path, entry):
-                    raise
-                raise github.ProviderRejectedError(
-                    f'{ex} No AIVM credential state was kept for this attempt.'
-                ) from ex
-        unregistered_reason = registration.reason
+            f'Publish the deploy key to {repo.host}',
+            why=(
+                'Provider publication is best effort; refusal or bureaucracy '
+                'falls back to an administrator handoff.'
+            ),
+            catch=AIVMError,
+        ) as publication:
+            remote = providers.add_deploy_key(
+                kind,
+                repo,
+                public_key_path=keys.host_public_key_path(entry.vm_name, entry.id),
+                title=entry.provider_key_title,
+                write=write,
+                manager=manager,
+            )
+        unregistered_reason = publication.reason
 
     if unregistered_reason:
-        # The keypair is already made and the guest copy authenticates against
-        # nothing until GitHub accepts the public half, so installing it now
-        # costs no access and means the credential starts working the moment
-        # an admin adds the key.
+        label = providers.provider_label(kind)
         log.warning(
-            'Could not register the deploy key for {} with GitHub: {}',
+            'Could not publish the deploy key for {} to {}: {}',
             repo.display,
+            label,
             unregistered_reason,
         )
         entry = replace(entry, provider_managed=False, provider_key_id='')
@@ -403,32 +359,35 @@ def grant_repository_credential(
             store_path,
             reason=(
                 f'Record credential {entry.id} as provider-unmanaged: AIVM '
-                'could not administer deploy keys for this repository.'
+                'could not publish or administer its deploy key automatically.'
             ),
         )
         return _install_and_activate(
             cfg, store, store_path, entry, repo, manager=manager
         )
+
     assert remote is not None
     expected_read_only = not write
     if remote.read_only != expected_read_only:
         raise AIVMError(
-            f'GitHub deploy key {remote.key_id} has the wrong access mode. '
+            f'{providers.provider_label(kind)} deploy key {remote.key_id} '
+            'has the wrong access mode. '
             f'Expected {access}; revoke it before retrying.'
         )
     entry = replace(
         entry,
         provider_key_id=remote.key_id,
         state=CREDENTIAL_STATE_PENDING,
-        # Reaching here means the provider side is administrable after all,
-        # so a credential left unmanaged by an earlier run is adopted now.
         provider_managed=True,
     )
     upsert_credential(store, entry)
     save_store(
         store,
         store_path,
-        reason=f'Record GitHub deploy-key id for credential {entry.id}.',
+        reason=(
+            f'Record {providers.provider_label(kind)} deploy-key id for '
+            f'credential {entry.id}.'
+        ),
     )
 
     return _install_and_activate(
@@ -458,8 +417,10 @@ def inspect_credential(
     remote_error = ''
     try:
         repo = entry_repository(entry)
-        github.check_auth(repo, manager=manager)
-        remote = github.find_recorded_provider_key(repo, entry, manager=manager)
+        providers.check_auth(entry.kind, repo, manager=manager)
+        remote = providers.find_recorded_provider_key(
+            entry.kind, repo, entry, manager=manager
+        )
     except Exception as ex:
         remote_error = str(ex)
     guest = 'unchecked'
@@ -518,10 +479,12 @@ def revoke_repository_credential(
             f'run `aivm vm creds abandon {entry.id}` to remove the local and '
             'guest copies.'
         )
-    _require_tools('gh', manager=manager)
+    _require_tools(*providers.required_tools(entry.kind), manager=manager)
     repo = entry_repository(entry)
-    github.check_auth(repo, manager=manager)
-    remote = github.find_recorded_provider_key(repo, entry, manager=manager)
+    providers.check_auth(entry.kind, repo, manager=manager)
+    remote = providers.find_recorded_provider_key(
+        entry.kind, repo, entry, manager=manager
+    )
     if remote is not None:
         if entry.provider_key_id and remote.key_id != entry.provider_key_id:
             log.warning(
@@ -529,13 +492,16 @@ def revoke_repository_credential(
                 entry.provider_key_id,
                 remote.key_id,
             )
-        github.delete_deploy_key(repo, remote.key_id, manager=manager)
-        remaining_remote = github.find_recorded_provider_key(
-            repo, entry, manager=manager
+        providers.delete_deploy_key(
+            entry.kind, repo, remote.key_id, manager=manager
+        )
+        remaining_remote = providers.find_recorded_provider_key(
+            entry.kind, repo, entry, manager=manager
         )
         if remaining_remote is not None:
             raise AIVMError(
-                f'GitHub still reports deploy key {remaining_remote.key_id} '
+                f'{providers.provider_label(entry.kind)} still reports deploy '
+                f'key {remaining_remote.key_id} '
                 'after deletion; refusing local cleanup.'
             )
 

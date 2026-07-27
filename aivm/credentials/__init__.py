@@ -36,9 +36,11 @@ Unregistered keys in the guest are intentional
 **This is settled policy. Do not report it as a vulnerability, and do not
 "harden" it by withholding the key.**
 
-When AIVM may not administer a repository's deploy keys -- the account is not
-a repository admin, or the organization disabled deploy keys -- it still
-generates the keypair and still installs the private half in the VM, then
+Provider publication is best effort. When AIVM cannot administer a
+repository's deploy keys -- because a client, login, or token is missing; the
+account is not an administrator; the organization requires approval; the
+provider refuses the API request; or the request outcome cannot be confirmed --
+it still generates the keypair and installs the private half in the VM, then
 tells the user to hand the public half to an administrator. Such a credential
 is recorded with ``provider_managed=False``.
 

@@ -10,11 +10,12 @@ from loguru import logger as log
 
 from ..commands import CommandError, CommandManager, CommandResult
 from ..errors import AIVMError
-from . import gh_install, github
+from . import gh_install, github, providers
 from .gh_install import GH_INSTALL_DOCS
 from .models import GitRepository
 
 CREDENTIAL_TOOLS = ('gh', 'ssh', 'ssh-keygen')
+GITLAB_CREDENTIAL_TOOLS = ('ssh', 'ssh-keygen')
 
 # `gh repo deploy-key` -- the command this whole feature is built on -- was
 # added in GitHub CLI 2.5.0. An older gh can authenticate and read the API but
@@ -130,6 +131,33 @@ class CredentialSetupReport:
         )
 
 
+@dataclass(frozen=True)
+class GitLabCredentialSetupReport:
+    """Observed host readiness for GitLab deploy-key management."""
+
+    hostname: str
+    tool_paths: dict[str, str | None]
+    auth_ok: bool
+    auth_detail: str
+    identity: str = ''
+    repository: GitRepository | None = None
+    repository_ok: bool | None = None
+    repository_detail: str = ''
+
+    @property
+    def missing_tools(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name in GITLAB_CREDENTIAL_TOOLS
+            if not self.tool_paths.get(name)
+        )
+
+    @property
+    def ready(self) -> bool:
+        repository_ready = self.repository is None or self.repository_ok is True
+        return not self.missing_tools and self.auth_ok and repository_ready
+
+
 def _auth_status(
     hostname: str, *, manager: CommandManager
 ) -> CommandResult:
@@ -214,6 +242,67 @@ def inspect_credential_setup(
     )
 
 
+def inspect_gitlab_credential_setup(
+    *,
+    hostname: str,
+    repository: GitRepository | None,
+    manager: CommandManager,
+) -> GitLabCredentialSetupReport:
+    """Inspect OpenSSH, GitLab token authentication, and project access."""
+    del manager  # REST calls do not execute host commands.
+    tool_paths = {
+        name: shutil.which(name) for name in GITLAB_CREDENTIAL_TOOLS
+    }
+    if any(not path for path in tool_paths.values()):
+        return GitLabCredentialSetupReport(
+            hostname=hostname,
+            tool_paths=tool_paths,
+            auth_ok=False,
+            auth_detail='Authentication was not checked until tools are ready.',
+            repository=repository,
+            repository_ok=None,
+            repository_detail='Not checked because host tools are unavailable.',
+        )
+
+    try:
+        backend = providers.gitlab_backend_for_host(hostname)
+        identity = backend.check_auth()
+    except AIVMError as ex:
+        return GitLabCredentialSetupReport(
+            hostname=hostname,
+            tool_paths=tool_paths,
+            auth_ok=False,
+            auth_detail=str(ex),
+            repository=repository,
+            repository_ok=None,
+            repository_detail='Not checked because authentication is unavailable.',
+        )
+
+    repository_ok: bool | None = None
+    repository_detail = ''
+    if repository is not None:
+        try:
+            project = backend.resolve_project(repository.path)
+            backend.list_deploy_keys(project)
+        except AIVMError as ex:
+            repository_ok = False
+            repository_detail = str(ex)
+        else:
+            repository_ok = True
+            repository_detail = 'Deploy-key API access is available.'
+
+    return GitLabCredentialSetupReport(
+        hostname=hostname,
+        tool_paths=tool_paths,
+        auth_ok=True,
+        auth_detail='Authenticated.',
+        identity=identity.username,
+        repository=repository,
+        repository_ok=repository_ok,
+        repository_detail=repository_detail,
+    )
+
+
 def require_credential_tools(*names: str) -> None:
     """Require host tools with an actionable setup command in the error."""
     missing = [name for name in names if shutil.which(name) is None]
@@ -229,6 +318,7 @@ def install_missing_credential_tools(
     missing: tuple[str, ...],
     *,
     upgrade_gh: bool = False,
+    provider_label: str = 'GitHub',
     manager: CommandManager,
 ) -> None:
     """Install missing credential tools using the host's package backend.
@@ -244,10 +334,12 @@ def install_missing_credential_tools(
     plan = gh_install.plan_tool_install(
         missing, include_gh=include_gh, manager=manager
     )
-    why = (
-        'VM repository credentials use GitHub CLI for deploy-key '
-        'administration and OpenSSH for scoped key generation.'
-    )
+    why = 'VM repository credentials use OpenSSH for scoped key generation.'
+    if include_gh:
+        why = (
+            'VM repository credentials use GitHub CLI for deploy-key '
+            'administration and OpenSSH for scoped key generation.'
+        )
     if include_gh and plan.backend in {'apt', 'dnf5', 'dnf', 'zypper'}:
         why += (
             ' Installing from GitHub\'s own package repository, because '
@@ -273,11 +365,11 @@ def install_missing_credential_tools(
                     detail=step.detail,
                 )
     except CommandError as ex:
+        docs = f' (see {GH_INSTALL_DOCS} for the GitHub CLI)' if include_gh else ''
         raise AIVMError(
             'Could not install host credential tools with the '
-            f'{plan.backend} backend. Install them manually (see '
-            f'{GH_INSTALL_DOCS} for the GitHub CLI), then rerun '
-            '`aivm vm creds setup`.'
+            f'{plan.backend} backend. Install them manually{docs}, then rerun '
+            f'`aivm vm creds setup --provider {provider_label.lower()}`.'
         ) from ex
 
 

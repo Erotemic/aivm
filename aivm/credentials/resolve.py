@@ -26,13 +26,17 @@ def _strip_repo_suffix(path: str) -> str:
     return clean.strip('/')
 
 
-def parse_repository_url(value: str) -> GitRepository:
-    """Parse common GitHub/GHES repository spellings."""
+def parse_repository_url(
+    value: str,
+    *,
+    default_host: str = 'github.com',
+) -> GitRepository:
+    """Parse canonical GitHub, GitLab, and self-hosted repository spellings."""
     raw = str(value or '').strip()
     if not raw:
         raise AIVMError('Repository selector is empty.')
 
-    host = 'github.com'
+    host = default_host
     repo_path = raw
     source_url = ''
     scp_match = _SCP_RE.match(raw)
@@ -85,8 +89,14 @@ def parse_repository_url(value: str) -> GitRepository:
         transport_kind = scheme
     else:
         parts = raw.strip('/').split('/')
-        if len(parts) == 3 and ('.' in parts[0] or parts[0] == 'localhost'):
+        if len(parts) >= 3 and ('.' in parts[0] or parts[0] == 'localhost'):
             host, repo_path = parts[0], '/'.join(parts[1:])
+        elif len(parts) > 2 and default_host == 'github.com':
+            raise AIVMError(
+                'A nested repository namespace is ambiguous without a forge. '
+                'Use HOST/NAMESPACE/REPO, a canonical Git URL, or pass '
+                '`--provider gitlab`.'
+            )
 
     if source_url and not repo_path.rstrip('/').endswith('.git'):
         raise AIVMError(
@@ -96,12 +106,12 @@ def parse_repository_url(value: str) -> GitRepository:
         )
 
     parts = _strip_repo_suffix(repo_path).split('/')
-    if not host or len(parts) != 2 or not all(parts):
+    if not host or len(parts) < 2 or not all(parts):
         raise AIVMError(
             'Could not resolve repository. Expected a local checkout, '
-            'OWNER/REPO, [HOST/]OWNER/REPO, or a Git SSH/HTTPS URL.'
+            'OWNER/REPO, HOST/NAMESPACE/REPO, or a Git SSH/HTTPS URL.'
         )
-    owner, name = parts
+    owner, name = '/'.join(parts[:-1]), parts[-1]
     try:
         repo = validate_repository_identity(host, owner, name)
     except CredentialValidationError as ex:
@@ -135,6 +145,7 @@ def resolve_repository(
     selector: str | Path,
     *,
     remote: str = 'origin',
+    default_host: str = 'github.com',
     manager: CommandManager | None = None,
 ) -> GitRepository:
     """Resolve a local checkout or explicit repository selector."""
@@ -142,7 +153,7 @@ def resolve_repository(
     path = Path(text).expanduser()
     is_local = text == '.' or path.exists()
     if not is_local:
-        return parse_repository_url(text)
+        return parse_repository_url(text, default_host=default_host)
 
     checkout = path if path.is_dir() else path.parent
     mgr = manager or CommandManager.current()
@@ -161,4 +172,4 @@ def resolve_repository(
             f'Could not read Git remote {remote!r} from {checkout}: '
             f'{detail or "git remote get-url failed"}'
         )
-    return parse_repository_url(result.stdout.strip())
+    return parse_repository_url(result.stdout.strip(), default_host=default_host)

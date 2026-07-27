@@ -421,14 +421,14 @@ attachments.
 VM repository credentials
 -------------------------
 
-AIVM can grant one VM access to one GitHub repository with a dedicated deploy
-key. ``--access`` selects ``read`` (the default) or ``write``; ``ro`` and
-``rw`` are accepted as aliases. ``write`` means read *and* write, because a
-GitHub deploy key has no write-only mode. A credential's access is fixed once
-granted -- GitHub cannot change a deploy key's access in place -- so switching
-requires ``creds revoke`` followed by a new ``creds add``. The host's ``gh``
-login is used only to register or revoke the public key and is never copied
-into the guest.
+AIVM can grant one VM access to one GitHub or GitLab repository with a
+dedicated deploy key. ``--access`` selects ``read`` (the default) or ``write``;
+``ro`` and ``rw`` are accepted as aliases. ``write`` means read *and* write,
+because deploy keys have no write-only mode. A credential's access is fixed
+once granted, so switching requires ``creds revoke`` followed by a new
+``creds add``. Provider-management credentials remain on the host and are
+never copied into the guest; the VM receives only its repository-scoped SSH
+private key.
 
 .. code-block:: bash
 
@@ -447,6 +447,19 @@ into the guest.
 
    # Or name both explicitly.
    aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --access write
+
+   # GitLab.com is inferred from its canonical URL. A host-only GITLAB_TOKEN
+   # enables automatic publication, but it is optional: without one AIVM
+   # prints the public key for a project administrator to add.
+   export GITLAB_TOKEN='glpat-...'
+   aivm vm creds add \
+       git@gitlab.com:group/subgroup/project.git \
+       --vm aivm-2404-workstation --access write
+
+   # Self-managed GitLab is selected explicitly.
+   aivm vm creds add \
+       git@gitlab.example.com:group/project.git \
+       --provider gitlab --access write
 
    aivm vm creds list --vm aivm-2404-workstation
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
@@ -473,6 +486,13 @@ never offers to upload the user's ordinary SSH key; AIVM creates
 repository-scoped deploy keys separately. On older builds that flag does not
 exist, so setup warns instead -- decline the upload if the login offers it.
 
+GitLab uses direct v4 REST calls and does not require ``glab``. Set
+``GITLAB_TOKEN`` on the AIVM host to automate publication and revocation; for a
+self-managed instance whose API is not at ``https://HOST/api/v4``, also set
+``GITLAB_API_URL``. ``aivm vm creds setup --provider gitlab --check`` reports
+token and project API readiness, but a failed readiness check does not prevent
+``creds add`` from generating an administrator handoff.
+
 Managing deploy keys requires **admin** permission on the repository; write
 access is not enough, so a contributor who can push may still be unable to add
 a key. On a private repository GitHub reports that denial as ``404 Not Found``
@@ -480,14 +500,16 @@ rather than ``403`` so responses do not reveal what exists, so AIVM checks
 whether the repository is visible to the signed-in account before deciding
 whether a 404 means "not an admin" or "no such repository".
 
-When AIVM may not register the key, it does everything else and hands off the
-one step it cannot take: the keypair is generated, the private half is
-installed in the VM, Git is configured to use it, and the public half is
-printed for a repository admin to add. Nothing further needs to be run --
-access begins working as soon as GitHub accepts the public key. Such a
-credential is listed as ``unregistered``; ``aivm vm creds status <id>``
-reprints the key to send an admin, and ``aivm vm creds abandon <id>`` discards
-it.
+Provider publication is best effort rather than a prerequisite. If AIVM lacks
+a suitable client, login, token, repository permission, or organization
+approval -- or the provider refuses the automated request -- AIVM still does
+everything local and hands off the one bureaucratic step it cannot take: the
+keypair is generated, the private half is installed in the VM, Git is
+configured to use it, and the public half is printed for a repository admin to
+add. Nothing further needs to be run; access begins working as soon as the
+provider accepts the public key. Such a credential is listed as
+``unregistered``; ``aivm vm creds status <id>`` reprints the key to send an
+admin, and ``aivm vm creds abandon <id>`` discards it.
 
 Installing the key before it is registered is deliberate and safe: an SSH
 private key confers nothing on its own, so the copy in the VM authenticates
@@ -496,7 +518,7 @@ against nothing until the provider holds its public half. AIVM will not
 claim a provider-side deletion it cannot perform; an admin deletes the key and
 ``creds abandon`` removes the local and guest copies.
 
-If GitHub can no longer be inspected or administered, an explicit recovery
+If the repository provider can no longer be inspected or administered, an explicit recovery
 command can remove local copies without claiming that provider-side revocation
 was successful::
 
@@ -506,7 +528,7 @@ was successful::
 This writes a non-secret audit tombstone and warns that any copied private key
 may remain usable until the deploy key is removed at the provider.
 
-Each grant has a unique SSH keypair. GitHub scopes the key to the selected
+Each grant has a unique SSH keypair. The provider scopes the key to the selected
 repository; branch protections and rulesets remain repository settings and are
 not managed by AIVM. Managed Git routing recognizes canonical clone URLs ending
 in ``.git`` (the form shown by GitHub); restricting rewrites to that form avoids
