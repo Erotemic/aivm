@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
@@ -69,7 +70,7 @@ def _write_machine_and_profile(tmp_path: Path) -> tuple[str, Path]:
 
 
 def test_vm_access_list_uses_machine_principals(
-    tmp_path: Path, capsys: object
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     vm_name, store_path = _write_machine_and_profile(tmp_path)
 
@@ -86,7 +87,7 @@ def test_vm_access_list_uses_machine_principals(
     )
 
     assert rc == 0
-    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    output = capsys.readouterr().out
     assert 'alice -> alice-agent' in output
     assert 'state=active' in output
     assert str(store_path) in output
@@ -95,7 +96,7 @@ def test_vm_access_list_uses_machine_principals(
 def test_vm_access_reconcile_dry_run_derives_current_principal(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
-    capsys: object,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     vm_name, store_path = _write_machine_and_profile(tmp_path)
     monkeypatch.setattr(
@@ -120,6 +121,6 @@ def test_vm_access_reconcile_dry_run_derives_current_principal(
     )
 
     assert rc == 0
-    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    output = capsys.readouterr().out
     assert 'Would enroll edward.wang as edward-wang-agent' in output
     assert 'state=pending' in output

@@ -26,11 +26,11 @@ from aivm.enrollment import (
 )
 from aivm.machine_store import ensure_machine_store_layout, machine_store_layout
 from aivm.profile_store import UserProfileStore, save_user_profile
-from aivm.scoped_store import resolve_store_scope, save_scope_store
+from aivm.scoped_store import StoreScope, resolve_store_scope, save_scope_store
 from tests.helpers import FakeProc, activate_manager, command_recorder
 
 
-def _machine_with_profile(tmp_path: Path) -> tuple[AgentVMConfig, object]:
+def _machine_with_profile(tmp_path: Path) -> tuple[AgentVMConfig, StoreScope]:
     scope = resolve_store_scope(None)
     assert scope.is_machine
     cfg = AgentVMConfig()

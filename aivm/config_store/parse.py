@@ -223,10 +223,19 @@ def _principal_from_dict(
             f'VM {vm_name!r} principal {values["id"]!r} has invalid '
             f'state {state!r}; expected one of: {allowed}'
         )
+    host_uid_raw = item.get('host_uid', -1)
+    host_gid_raw = item.get('host_gid', -1)
+    if not isinstance(host_uid_raw, (int, str)) or not isinstance(
+        host_gid_raw, (int, str)
+    ):
+        raise ValueError(
+            f'VM {vm_name!r} principal {values["id"]!r} has non-integer '
+            'host_uid/host_gid'
+        )
     try:
-        host_uid = int(item.get('host_uid', -1))
-        host_gid = int(item.get('host_gid', -1))
-    except (TypeError, ValueError) as ex:
+        host_uid = int(host_uid_raw)
+        host_gid = int(host_gid_raw)
+    except ValueError as ex:
         raise ValueError(
             f'VM {vm_name!r} principal {values["id"]!r} has non-integer '
             'host_uid/host_gid'

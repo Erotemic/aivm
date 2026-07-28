@@ -160,3 +160,22 @@ account-management details and forced-command quoting; that belongs in the
 final real-system run. The next code stage should connect exact managed-machine
 discovery in `config init` to this reconciliation service without allowing a
 joining user to rewrite machine configuration.
+
+## 2026-07-28 14:16:25 -0400
+
+Followed up on the stage-5 enrollment tranche after the branch's `ty` and
+`mypy` checks exposed type-only defects that the runtime tests did not catch.
+The parser now narrows raw principal UID/GID values before integer conversion,
+and the new tests use concrete pytest fixture, store-scope, guest-system, and
+chown callback types rather than broad `object` or heterogeneous dictionary
+inference. These are intentionally small corrections with no runtime or schema
+behavior change.
+
+The focused enrollment/store tests passed, and the complete non-E2E suite
+passed as a non-root user (874 passed, 8 skipped). I could not execute `ty` or
+`mypy` in the artifact environment because neither checker is installed and
+the package mirror returned HTTP 503, so the final checker confirmation remains
+for the development machine. I am confident the patch addresses each reported
+diagnostic directly, but future feature tranches should include both type
+checkers in the regular local validation loop rather than relying on unit tests
+alone.
