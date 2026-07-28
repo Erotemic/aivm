@@ -15,6 +15,7 @@ from .connectivity import get_ip_cached
 
 log = logger
 
+
 def _vm_defined(name: str) -> bool:
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
@@ -45,6 +46,12 @@ def _vm_defined(name: str) -> bool:
             summary=f'Inspect VM definition {name}',
         )
     return res.code == 0
+
+
+def domain_is_defined(name: str) -> bool:
+    """Return whether the system libvirt connection defines ``name``."""
+    return _vm_defined(name)
+
 
 def _destroy_and_undefine_vm(name: str) -> None:
     mgr = CommandManager.current()

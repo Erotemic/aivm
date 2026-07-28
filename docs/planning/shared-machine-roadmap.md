@@ -234,9 +234,41 @@ The fifth 0.6.0 tranche implements work package 3 while leaving automatic
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The exact protocol and compatibility boundary are recorded in
-[`guest-enrollment-control.md`](guest-enrollment-control.md). The next tranche
-is work package 4: make `aivm config init` initialize a later user's profile and
-invoke this enrollment channel when it finds an exact managed machine match.
+[`guest-enrollment-control.md`](guest-enrollment-control.md).
+
+### Stage 6 execution checklist: natural create-or-join initialization
+
+The sixth 0.6.0 tranche completes work package 4 by connecting exact managed
+machine discovery to the restricted enrollment service:
+
+- [x] Load the machine store before detecting or reviewing creator defaults.
+- [x] Derive the hostname-qualified onboarding key exactly once through
+  `default_vm_name()`.
+- [x] Branch `config init` into new creator initialization, exact managed join,
+  and unmanaged-domain collision refusal.
+- [x] Keep legacy explicit/per-user stores on their released initialization
+  behavior.
+- [x] Build a joining user's profile from the managed record without writing
+  CPU, RAM, disk, image, network, firewall, provisioning, tools, virtiofs, or
+  attachment state.
+- [x] Detect or create a personal AIVM SSH identity before enrollment.
+- [x] Reuse an active principal when its public key still matches, and reconcile
+  missing, pending, errored, or key-rotated principals through the bootstrap
+  channel.
+- [x] Set `active_vm` only after successful activation or an explicitly saved
+  pending enrollment.
+- [x] Make `--yes` and `--defaults` auto-join exact managed records while
+  refusing unmanaged-domain adoption even with `--yes` or `--force`.
+- [x] Keep failed personal-key verification from selecting the machine or
+  reporting a successful join.
+- [x] Cover active repeat, stopped-VM pending state, verification failure,
+  collision refusal, non-interactive confirmation, and no-machine-rewrite
+  behavior in synthetic tests.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The decision table and recovery behavior are recorded in
+[`config-init-create-or-join.md`](config-init-create-or-join.md). The next
+tranche is work package 5: global attachment ownership and replay.
 
 ## Work package 1: Separate models without moving storage
 

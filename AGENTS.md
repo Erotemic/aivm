@@ -11,9 +11,11 @@ Guidance for contributors (human or AI agents) working in this repository.
     migrated.
   - Fresh implicit 0.6 installations use the machine-global store under
     `/var/lib/aivm` plus a private XDG user profile.
-  - Managed VMs persist host-to-guest principals. Later users are enrolled only
-    through the forced `aivm-guestctl` bootstrap channel; never reintroduce
-    shadow machine stores or use the bootstrap key for interactive access.
+  - Managed VMs persist host-to-guest principals. `aivm config init` joins a
+    later user only when the hostname-qualified name exactly matches a managed
+    record, then enrolls through the forced `aivm-guestctl` bootstrap channel.
+    Never reintroduce shadow machine stores, silently adopt an unmanaged
+    same-name domain, or use the bootstrap key for interactive access.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

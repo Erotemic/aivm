@@ -12,7 +12,8 @@ Path A: One-command project entry (recommended)
 
 Behavior:
 
-* Uses global config store at ``~/.config/aivm/config.toml``.
+* Uses the shared machine store under ``/var/lib/aivm`` and the caller's
+  private XDG profile.
 * If VM context is missing, ``aivm`` can bootstrap required config/VM steps.
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what
@@ -31,11 +32,23 @@ Path B: Explicit config-store setup
    aivm config init
    aivm vm create
 
-This path is explicit and reproducible. ``aivm config init`` establishes VM
-defaults and SSH identity configuration; ``aivm vm create`` provisions the VM.
-During interactive init, choose the editor path for direct TOML editing or the
-prompt-by-prompt path for a terminal-only walkthrough.  The detected defaults
-table is shown once; later confirmations summarize only values that changed.
+For the first host user, this path is explicit and reproducible:
+``aivm config init`` establishes machine defaults and the private SSH profile,
+and ``aivm vm create`` provisions the VM. During interactive creator init,
+choose the editor path for direct TOML editing or the prompt-by-prompt path for
+a terminal-only walkthrough.
+
+A later host user runs only:
+
+.. code-block:: bash
+
+   aivm config init
+
+If the hostname-qualified name exactly matches a managed VM, AIVM creates that
+user's profile and enrolls a separate guest account through the restricted
+bootstrap channel. It never rewrites the VM definition during a join and never
+silently adopts an unmanaged same-name libvirt domain. A stopped VM may leave a
+recoverable pending principal; retry with ``aivm vm access reconcile``.
 
 After either path
 -----------------

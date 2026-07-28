@@ -179,3 +179,31 @@ for the development machine. I am confident the patch addresses each reported
 diagnostic directly, but future feature tranches should include both type
 checkers in the regular local validation loop rather than relying on unit tests
 alone.
+
+## 2026-07-28 14:53:14 -0400
+
+Connected `aivm config init` to the persisted-principal enrollment path. The
+main design choice was to make the hostname-qualified VM name a strict
+onboarding key rather than a heuristic ownership claim. The command now loads
+the machine store before doing resource or network detection: an exact managed
+record enters a profile-only join flow, an absent record/domain initializes
+creator defaults, and an unmanaged same-name domain stops for explicit review.
+Even `--yes` and `--force` cannot cross that boundary.
+
+The join sequence deliberately saves the caller's SSH/profile data before
+transport but does not select the VM until enrollment is active or explicitly
+pending. A stopped VM therefore leaves a recoverable principal and a concrete
+`vm access reconcile` next action, while a helper or personal-key verification
+failure leaves `active_vm` unchanged. Repeated init by an active principal
+compares the recorded public key and skips the bootstrap channel entirely.
+Synthetic tests assert that machine defaults, network entries, and VM records
+remain unchanged during Bob's join; only Bob's profile and principal are added.
+
+The complete non-e2e suite passed as a non-root user (880 passed, 8 skipped). I
+again deferred the expensive real-system E2E suite. The most important remaining
+risk is real guest behavior when `config init` performs enrollment against a
+stopped, slow, or partially cloud-initialized VM; the state machine is designed
+to make those failures recoverable, but the final system run must confirm the
+operator experience. The next architectural task is global attachment ownership
+and complete replay, where the same principal boundary must prevent one user's
+local path aliases from mutating another user's declarations accidentally.

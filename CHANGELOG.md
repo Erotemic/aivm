@@ -5,6 +5,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* `aivm config init` now creates or joins naturally in shared-machine mode. It
+  uses the hostname-qualified VM name as the onboarding key, initializes
+  creator defaults only when no managed machine exists, and enrolls a later
+  host user through the restricted bootstrap channel when an exact managed
+  record exists. Active joins are idempotent, stopped VMs retain a recoverable
+  pending principal, failed personal-key verification is not reported as
+  success, and unmanaged same-name libvirt domains are never adopted silently.
 * Added the restricted shared-machine enrollment channel. New machine-store
   VMs receive a machine-owned bootstrap SSH key and a forced, non-interactive
   `aivm-guestctl` account that can only create or repair one guest principal

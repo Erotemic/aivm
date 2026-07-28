@@ -49,6 +49,12 @@ def _initialize_machine_defaults(
 ) -> AgentVMConfig:
     cfg = _creator_defaults(tmp_path)
     monkeypatch.setattr(
+        'aivm.cli.config.init.default_vm_name', lambda: cfg.vm.name
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.domain_is_defined', lambda name: False
+    )
+    monkeypatch.setattr(
         'aivm.cli.config.init.auto_defaults',
         lambda *args, **kwargs: cfg,
     )

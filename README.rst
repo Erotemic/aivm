@@ -104,9 +104,9 @@ offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
    aivm status
    aivm status --sudo   # optional deeper privileged checks
 
-``aivm code .`` auto-selects/bootstraps VM context from the global config store
-(``~/.config/aivm/config.toml``), attaches the current folder if needed, and
-opens VS Code.
+``aivm code .`` auto-selects/bootstraps VM context from the shared machine
+store (normally ``/var/lib/aivm``) plus the caller's private XDG profile,
+attaches the current folder if needed, and opens VS Code.
 
 During setup and reconcile flows, subprocess logging is now organized around
 user-meaningful steps instead of isolated commands. ``aivm`` shows the current
@@ -114,14 +114,18 @@ step, why it exists, a semantic summary for each planned command, and the exact
 command line that will run before it executes the step. Full raw commands still
 appear at higher verbosity.
 
-If you prefer an explicit flow, ``aivm config init`` is required before
-``aivm vm create``.
+If you prefer an explicit flow, the first user runs ``aivm config init`` and
+``aivm vm create``. A later user on the same host runs ``aivm config init``;
+when the hostname-qualified VM exactly matches a managed machine, AIVM creates
+the user's private profile and enrolls a separate guest principal without
+rewriting machine settings.
 
-Interactive ``aivm config init`` shows the detected defaults once, then lets
+Interactive creator initialization shows the detected defaults once, then lets
 you accept them, edit the generated TOML in ``$EDITOR``/``$VISUAL`` (falling
-back to ``nano`` or ``micro``), or use a prompt-by-prompt editor.  Subsequent
-confirmation steps show only changed values instead of repeating the full
-defaults table.
+back to ``nano`` or ``micro``), or use a prompt-by-prompt editor. A managed
+join instead names the existing machine and proposed guest account. Unmanaged
+same-name libvirt domains always require explicit ``aivm config discover``
+review, including under ``--yes``.
 
 See also:
 
@@ -387,8 +391,13 @@ Config-store lifecycle (explicit flow)
 
 .. code-block:: bash
 
+   # First host user
    aivm config init
    aivm vm create
+
+   # Later host user: initialize profile and join the exact managed VM
+   aivm config init
+
    aivm vm update
    aivm vm edit
    aivm config discover
