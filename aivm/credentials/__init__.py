@@ -1,4 +1,4 @@
-"""VM-scoped, host-managed credentials.
+"""Principal-scoped, host-managed VM credentials.
 
 The lifecycle functions are imported lazily so config-store parsing can use the
 credential validation helpers without creating a config-store/service cycle.

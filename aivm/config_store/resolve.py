@@ -361,18 +361,45 @@ def find_attachment(
 
 
 def find_credentials_for_vm(
-    reg: Store, vm_name: str
+    reg: Store,
+    vm_name: str,
+    *,
+    principal_id: str | None = None,
 ) -> list[CredentialEntry]:
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
     return sorted(
-        (item for item in reg.credentials if item.vm_name == vm_name),
-        key=lambda item: item.id,
+        (
+            item
+            for item in reg.credentials
+            if item.vm_name == vm_name
+            and (principal is None or item.principal_id == principal)
+        ),
+        key=lambda item: (item.principal_id, item.id),
     )
 
 
 def find_credential(
-    reg: Store, *, vm_name: str, credential_id: str
+    reg: Store,
+    *,
+    vm_name: str,
+    credential_id: str,
+    principal_id: str | None = None,
 ) -> CredentialEntry | None:
-    for item in reg.credentials:
-        if item.vm_name == vm_name and item.id == credential_id:
-            return item
-    return None
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
+    matches = [
+        item
+        for item in reg.credentials
+        if item.vm_name == vm_name
+        and item.id == credential_id
+        and (principal is None or item.principal_id == principal)
+    ]
+    if len(matches) > 1:
+        raise AIVMError(
+            f'Multiple credential records for VM {vm_name!r} use id '
+            f'{credential_id!r}; select an owner principal explicitly.'
+        )
+    return matches[0] if matches else None

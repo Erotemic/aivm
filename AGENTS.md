@@ -20,6 +20,11 @@ Guidance for contributors (human or AI agents) working in this repository.
     records must carry the selected principal, ordinary path resolution and
     session restoration must remain caller-scoped, and another owner's record
     requires an explicit administrative override to mutate or detach.
+  - Machine-store repository credentials are principal-owned. Metadata may be
+    shown machine-wide, but private host keys, provider authentication,
+    guest-home installation, revocation, and abandonment must execute only as
+    the owning host principal. Never treat trusted-host administration as
+    permission to borrow another user's secrets.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

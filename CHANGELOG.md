@@ -5,6 +5,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* Added principal-scoped machine-store repository credentials. Credential
+  records now carry `principal_id`, stable IDs include the principal scope,
+  and machine writes reject unattributed or dangling owners. Ordinary
+  add/list/status/revoke/abandon operations select only the current principal;
+  `--all_principals` exposes non-secret machine-wide metadata without probing
+  another user's host key, provider login, or guest home. Guest reconciliation
+  regenerates Git/SSH routing from only the selected principal's credentials,
+  while disabled principals retain provider IDs and fingerprints needed for
+  later revocation. Legacy stores retain their released unattributed IDs until
+  explicit migration.
 * Added principal-owned machine-wide attachments. New machine-store records
   carry `owner_principal_id`; path resolution and session restoration default
   to the current principal, while list/status expose the complete inventory.

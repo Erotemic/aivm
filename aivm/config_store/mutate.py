@@ -189,22 +189,37 @@ def upsert_credential(reg: Store, credential: CredentialEntry) -> None:
     existing = [
         item
         for item in reg.credentials
-        if item.vm_name == credential.vm_name and item.id == credential.id
+        if item.vm_name == credential.vm_name
+        and item.id == credential.id
+        and item.principal_id == credential.principal_id
     ]
     if existing:
         reg.credentials[reg.credentials.index(existing[0])] = credential
     else:
         reg.credentials.append(credential)
+    if credential.principal_id:
+        reg.schema_version = max(reg.schema_version, 11)
 
 
 def remove_credential(
-    reg: Store, *, vm_name: str, credential_id: str
+    reg: Store,
+    *,
+    vm_name: str,
+    credential_id: str,
+    principal_id: str | None = None,
 ) -> bool:
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
     original = len(reg.credentials)
     reg.credentials = [
         item
         for item in reg.credentials
-        if not (item.vm_name == vm_name and item.id == credential_id)
+        if not (
+            item.vm_name == vm_name
+            and item.id == credential_id
+            and (principal is None or item.principal_id == principal)
+        )
     ]
     return len(reg.credentials) != original
 

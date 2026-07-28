@@ -45,8 +45,12 @@ def _emit_attachment(
 
 
 def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
+    lines.append(f'id = "{_toml_escape(cred.id)}"')
+    if cred.principal_id:
+        lines.append(
+            f'principal_id = "{_toml_escape(cred.principal_id)}"'
+        )
     for key in (
-        'id',
         'kind',
         'provider_host',
         'owner',

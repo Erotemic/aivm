@@ -253,3 +253,32 @@ however, each reported error arose from branch or loop-variable inference and is
 addressed directly without casts or ignores. I am confident this is a narrow
 correction, with the main residual risk being another checker-specific inference
 collision elsewhere in the new stage-7 code.
+
+
+## 2026-07-28 15:58:36 -0400
+
+Completed the principal-scoped credential tranche. The important distinction
+was between machine-wide metadata authority and user-owned secret authority:
+the shared store needs a complete inventory for lifecycle guards and auditing,
+but that does not make one host user's deploy-key private material or provider
+login available to another. Credential IDs now include the persisted principal,
+ordinary selection is caller-scoped, and the explicit all-principals view stops
+at non-secret metadata rather than trying to emulate the owner.
+
+Guest reconciliation exposed the same boundary from the other side. Rebuilding
+one principal's SSH and Git configuration from the VM-global credential list
+would accidentally install another user's key routing into the wrong guest
+home, so the service now filters the inventory before every install or revoke
+reconciliation. I also chose to reject principal deletion while provider
+records remain. A disabled principal may be inconvenient, but retaining its
+provider key ID and fingerprint is safer than silently discarding the only
+revocation evidence.
+
+The focused credential suite passed with independent Alice/Bob records for the
+same repository, owner-only guest reconciliation, metadata-only foreign status,
+and disabled-principal preservation. The complete non-E2E suite is the final
+validation target; the expensive real-system provider/guest run remains
+intentionally deferred. The next architectural risk is migration: old
+unattributed credential IDs and existing key directories must be assigned to
+the creator without regenerating provider keys or losing provider-management
+state.

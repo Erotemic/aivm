@@ -263,6 +263,7 @@ def _lint_store_text(text: str) -> list[str]:
     }
     allowed_credential = {
         'id',
+        'principal_id',
         'kind',
         'provider_host',
         'owner',
@@ -319,7 +320,7 @@ def _lint_store_text(text: str) -> list[str]:
             nested_creds = item.get('credentials', [])
             if isinstance(nested_creds, list):
                 seen_cred_ids: set[str] = set()
-                seen_cred_scopes: set[tuple[str, str, str]] = set()
+                seen_cred_scopes: set[tuple[str, str, str, str]] = set()
                 required_credential = {
                     'id',
                     'kind',
@@ -331,6 +332,8 @@ def _lint_store_text(text: str) -> list[str]:
                     'key_fingerprint',
                     'state',
                 }
+                if str(raw.get('store_kind', 'legacy')).strip() == 'machine':
+                    required_credential.add('principal_id')
                 for cred_idx, cred in enumerate(nested_creds):
                     label = f'vms[{idx}].credentials[{cred_idx}]'
                     if not isinstance(cred, dict):
@@ -367,15 +370,16 @@ def _lint_store_text(text: str) -> list[str]:
                             )
                         seen_cred_ids.add(cred_id)
                     scope = (
+                        str(cred.get('principal_id', '')).strip(),
                         str(cred.get('provider_host', '')).strip().lower(),
                         str(cred.get('owner', '')).strip().lower(),
                         str(cred.get('repository', '')).strip().lower(),
                     )
-                    if all(scope):
+                    if all(scope[1:]):
                         if scope in seen_cred_scopes:
                             problems.append(
                                 f'{label} duplicate credential scope: '
-                                + '/'.join(scope)
+                                + ':'.join((scope[0] or 'legacy', '/'.join(scope[1:])))
                             )
                         seen_cred_scopes.add(scope)
                     if not missing:
@@ -388,6 +392,7 @@ def _lint_store_text(text: str) -> list[str]:
                                 ),
                                 owner=str(cred.get('owner', '')),
                                 repository=str(cred.get('repository', '')),
+                                principal_id=str(cred.get('principal_id', '')),
                             )
                             validate_provider_key_id(
                                 str(cred.get('provider_key_id', ''))

@@ -539,6 +539,38 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
                 'Cannot write machine config with attachment records that '
                 f'reference unknown principals: {details}'
             )
+        unattributed_credentials = sorted(
+            {
+                (cred.vm_name, cred.id)
+                for cred in reg.credentials
+                if not cred.principal_id
+            }
+        )
+        if unattributed_credentials:
+            details = ', '.join(
+                f'{vm}:{cred_id}'
+                for vm, cred_id in unattributed_credentials
+            )
+            raise ValueError(
+                'Cannot write machine config with credential records that '
+                f'are missing principal_id: {details}'
+            )
+        dangling_credential_principals = sorted(
+            {
+                (cred.vm_name, cred.principal_id)
+                for cred in reg.credentials
+                if (cred.vm_name, cred.principal_id) not in principal_keys
+            }
+        )
+        if dangling_credential_principals:
+            details = ', '.join(
+                f'{vm}:{principal}'
+                for vm, principal in dangling_credential_principals
+            )
+            raise ValueError(
+                'Cannot write machine config with credential records that '
+                f'reference unknown principals: {details}'
+            )
 
 
 def render_split_fragments(reg: Store) -> dict[str, str]:

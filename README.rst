@@ -456,6 +456,15 @@ once granted, so switching requires ``creds revoke`` followed by a new
 never copied into the guest; the VM receives only its repository-scoped SSH
 private key.
 
+On a shared machine, credentials are owned by the selected VM principal rather
+than by the VM as a whole. Alice and Bob may therefore grant the same VM access
+to the same repository using independent deploy keys and provider accounts.
+Ordinary commands see only the caller's records. ``creds list
+--all_principals`` and ``creds status --all_principals`` expose machine-wide
+non-secret metadata, but they never read another user's host key, provider
+authentication, or guest home. Revoke and abandon must be run by the owning
+host user.
+
 .. code-block:: bash
 
    # Install/check host tools and authenticate GitHub CLI.
@@ -487,8 +496,15 @@ private key.
        git@gitlab.example.com:group/project.git \
        --provider gitlab --access write
 
+   # Current principal's records and full machine metadata.
    aivm vm creds list --vm aivm-2404-workstation
+   aivm vm creds list --vm aivm-2404-workstation --all_principals
+
    aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
+   aivm vm creds status <credential-id> \
+       --vm aivm-2404-workstation --all_principals
+
+   # Secret-bearing changes must run as the owning host user.
    aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
 
 ``creds setup`` installs a missing GitHub CLI or OpenSSH client using the

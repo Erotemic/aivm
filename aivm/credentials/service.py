@@ -1,4 +1,4 @@
-"""Credential lifecycle orchestration for VM-scoped repository access."""
+"""Credential lifecycle orchestration for principal-owned repository access."""
 
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ from ..config_store import (
     find_credential,
     find_credentials_for_vm,
     remove_credential,
-    save_store,
     upsert_credential,
 )
 from ..errors import AIVMError, CommandControlError
+from ..scoped_store import resolve_store_scope, save_scope_store
 from ..vm.connectivity import get_ip_cached
 from . import keys, providers
 from .errors import ProviderAutomationError
@@ -34,6 +34,10 @@ from .guest import (
     verify_guest_repository,
 )
 from .models import GitRepository, ProviderDeployKey
+from .ownership import (
+    require_credential_owner,
+    validate_credential_principal,
+)
 from .schema import (
     CREDENTIAL_ACCESS_WRITE,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
@@ -61,6 +65,14 @@ from .validation import (
 # AIVMError: that would also cover CommandControlError, turning "the user said
 # no" into "the provider was unhelpful" and installing a key nobody approved.
 _RECOVERABLE_PROVIDER_FAILURE = (ProviderAutomationError, CommandError)
+
+
+def _save_credential_store(
+    store: Store, store_path: Path, *, reason: str
+) -> None:
+    """Persist credential metadata through the selected store scope."""
+    scope = resolve_store_scope(str(store_path))
+    save_scope_store(scope, store, reason=reason)
 
 
 class CredentialStatus(TypedDict):
@@ -92,6 +104,7 @@ def entry_repository(entry: CredentialEntry) -> GitRepository:
             provider_host=entry.provider_host,
             owner=entry.owner,
             repository=entry.repository,
+            principal_id=entry.principal_id,
         )
     except CredentialValidationError as ex:
         raise AIVMError(str(ex)) from ex
@@ -113,18 +126,35 @@ def select_credential(
     vm_name: str,
     selector: str,
     repo: GitRepository | None = None,
+    principal_id: str | None = None,
 ) -> CredentialEntry:
-    exact = find_credential(store, vm_name=vm_name, credential_id=selector)
+    exact = find_credential(
+        store,
+        vm_name=vm_name,
+        credential_id=selector,
+        principal_id=principal_id,
+    )
     if exact is not None:
         return exact
     if repo is not None:
         matches = [
             item
-            for item in find_credentials_for_vm(store, vm_name)
+            for item in find_credentials_for_vm(
+                store, vm_name, principal_id=principal_id
+            )
             if _credential_matches_repo(item, repo)
         ]
         if len(matches) == 1:
             return matches[0]
+        if len(matches) > 1:
+            owners = ', '.join(
+                sorted(item.principal_id or 'legacy' for item in matches)
+            )
+            raise AIVMError(
+                f'Multiple principal credentials match {repo.display!r} on '
+                f'VM {vm_name!r}: {owners}. Use an exact credential id or '
+                'the owning host login.'
+            )
     raise AIVMError(
         f'Credential not found for VM {vm_name!r}: {selector!r}'
     )
@@ -149,6 +179,7 @@ def _install_and_activate(
     entry: CredentialEntry,
     repo: GitRepository,
     *,
+    principal_id: str,
     manager: CommandManager,
 ) -> CredentialEntry:
     """Install the private key in the VM and activate it once Git works.
@@ -168,7 +199,9 @@ def _install_and_activate(
     )
     guest_entries = [
         item
-        for item in find_credentials_for_vm(store, cfg.vm.name)
+        for item in find_credentials_for_vm(
+            store, cfg.vm.name, principal_id=principal_id
+        )
         if credential_is_guest_usable(item)
     ]
     reconcile_guest_credentials(
@@ -198,7 +231,7 @@ def _install_and_activate(
         return entry
     entry = replace(entry, state=CREDENTIAL_STATE_ACTIVE)
     upsert_credential(store, entry)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -301,7 +334,7 @@ def _record_unpublished_credential(
         return entry
     entry = replace(entry, provider_managed=False, provider_key_id='')
     upsert_credential(store, entry)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -320,6 +353,7 @@ def grant_repository_credential(
     *,
     access: CredentialAccess,
     kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    principal_id: str = '',
     manager: CommandManager,
 ) -> CredentialEntry:
     # Only the tools that create and install the SSH credential are mandatory.
@@ -329,8 +363,14 @@ def grant_repository_credential(
     _require_tools('ssh', 'ssh-keygen', manager=manager)
     access = normalize_credential_access(access)
     write = access == CREDENTIAL_ACCESS_WRITE
-    cred_id = credential_id(cfg.vm.name, repo.canonical)
-    existing = find_credential(store, vm_name=cfg.vm.name, credential_id=cred_id)
+    principal = str(principal_id or '').strip()
+    cred_id = credential_id(cfg.vm.name, repo.canonical, principal)
+    existing = find_credential(
+        store,
+        vm_name=cfg.vm.name,
+        credential_id=cred_id,
+        principal_id=principal,
+    )
     if existing is not None and existing.access != access:
         raise AIVMError(
             f'Credential {cred_id} already exists with access={existing.access}. '
@@ -349,6 +389,7 @@ def grant_repository_credential(
     entry = existing or CredentialEntry(
         id=cred_id,
         vm_name=cfg.vm.name,
+        principal_id=principal,
         kind=kind,
         provider_host=repo.host,
         owner=repo.owner,
@@ -357,10 +398,11 @@ def grant_repository_credential(
         provider_key_title=credential_title(cfg.vm.name, repo, cred_id),
         state=CREDENTIAL_STATE_PENDING,
     )
+    validate_credential_principal(store, entry)
     entry = keys.generate_host_key(entry, manager=manager)
     upsert_credential(store, entry)
     store.schema_version = max(store.schema_version, 8)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -414,7 +456,13 @@ def grant_repository_credential(
             reason=unregistered_reason,
         )
         return _install_and_activate(
-            cfg, store, store_path, entry, repo, manager=manager
+            cfg,
+            store,
+            store_path,
+            entry,
+            repo,
+            principal_id=principal,
+            manager=manager,
         )
 
     assert remote is not None
@@ -432,7 +480,7 @@ def grant_repository_credential(
         provider_managed=True,
     )
     upsert_credential(store, entry)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -442,7 +490,13 @@ def grant_repository_credential(
     )
 
     return _install_and_activate(
-        cfg, store, store_path, entry, repo, manager=manager
+        cfg,
+        store,
+        store_path,
+        entry,
+        repo,
+        principal_id=principal,
+        manager=manager,
     )
 
 
@@ -450,8 +504,16 @@ def inspect_credential(
     cfg: AgentVMConfig,
     entry: CredentialEntry,
     *,
+    store: Store | None = None,
+    current_principal_id: str = '',
     manager: CommandManager,
 ) -> CredentialStatus:
+    if store is not None:
+        require_credential_owner(
+            store,
+            entry,
+            current_principal_id=current_principal_id,
+        )
     host_ok = False
     fingerprint_ok = False
     host_detail = ''
@@ -524,8 +586,14 @@ def revoke_repository_credential(
     store_path: Path,
     entry: CredentialEntry,
     *,
+    current_principal_id: str = '',
     manager: CommandManager,
 ) -> None:
+    require_credential_owner(
+        store,
+        entry,
+        current_principal_id=current_principal_id,
+    )
     if not entry.provider_managed:
         raise AIVMError(
             f'AIVM never registered credential {entry.id} with '
@@ -564,7 +632,7 @@ def revoke_repository_credential(
 
     entry = replace(entry, state=CREDENTIAL_STATE_REVOCATION_PENDING)
     upsert_credential(store, entry)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -580,7 +648,11 @@ def revoke_repository_credential(
     )
     remaining = [
         item
-        for item in find_credentials_for_vm(store, cfg.vm.name)
+        for item in find_credentials_for_vm(
+            store,
+            cfg.vm.name,
+            principal_id=entry.principal_id,
+        )
         if item.id != entry.id
         and credential_is_guest_usable(item)
     ]
@@ -593,8 +665,13 @@ def revoke_repository_credential(
         manager=manager,
     )
     keys.remove_host_key(entry.vm_name, entry.id)
-    remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
-    save_store(
+    remove_credential(
+        store,
+        vm_name=entry.vm_name,
+        credential_id=entry.id,
+        principal_id=entry.principal_id,
+    )
+    _save_credential_store(
         store,
         store_path,
         reason=f'Remove revoked repository credential {entry.id}.',
@@ -622,6 +699,7 @@ def _write_abandon_tombstone(
         'credential': {
             'id': entry.id,
             'vm_name': entry.vm_name,
+            'principal_id': entry.principal_id,
             'kind': entry.kind,
             'provider_host': entry.provider_host,
             'owner': entry.owner,
@@ -643,12 +721,18 @@ def abandon_repository_credential(
     store_path: Path,
     entry: CredentialEntry,
     *,
+    current_principal_id: str = '',
     manager: CommandManager,
 ) -> Path:
     """Remove local credential state without claiming provider revocation."""
+    require_credential_owner(
+        store,
+        entry,
+        current_principal_id=current_principal_id,
+    )
     entry = replace(entry, state=CREDENTIAL_STATE_ABANDON_PENDING)
     upsert_credential(store, entry)
-    save_store(
+    _save_credential_store(
         store,
         store_path,
         reason=(
@@ -670,7 +754,11 @@ def abandon_repository_credential(
         )
         remaining = [
             item
-            for item in find_credentials_for_vm(store, cfg.vm.name)
+            for item in find_credentials_for_vm(
+                store,
+                cfg.vm.name,
+                principal_id=entry.principal_id,
+            )
             if item.id != entry.id
             and credential_is_guest_usable(item)
         ]
@@ -701,8 +789,13 @@ def abandon_repository_credential(
         guest_cleanup_verified=guest_cleanup_verified,
         guest_cleanup_error=guest_cleanup_error,
     )
-    remove_credential(store, vm_name=entry.vm_name, credential_id=entry.id)
-    save_store(
+    remove_credential(
+        store,
+        vm_name=entry.vm_name,
+        credential_id=entry.id,
+        principal_id=entry.principal_id,
+    )
+    _save_credential_store(
         store,
         store_path,
         reason=(

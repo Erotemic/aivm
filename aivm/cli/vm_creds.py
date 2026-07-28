@@ -1,4 +1,4 @@
-"""VM-scoped credential commands."""
+"""Principal-scoped repository credential commands."""
 
 from __future__ import annotations
 
@@ -8,15 +8,16 @@ from typing import Any, Literal
 import kwconf
 
 from ..commands import CommandManager
+from ..config_scopes import ResolvedVMContext
 from ..config_store import (
     CredentialEntry,
     Store,
     find_credential,
     find_credentials_for_vm,
-    load_store,
 )
 from ..credentials import providers
 from ..credentials.gitlab import host_token_envvar
+from ..credentials.ownership import credential_principal_label
 from ..credentials.resolve import resolve_repository
 from ..credentials.schema import normalize_credential_access
 from ..credentials.service import (
@@ -44,8 +45,28 @@ from ..credentials.validation import (
     validate_provider_host,
 )
 from ..errors import AIVMError
-from ..services import load_cfg_with_path
+from ..scoped_store import load_scope_store, resolve_store_scope
+from ..services import load_vm_context_with_path
 from ._common import _BaseCommand
+
+
+def _load_credential_context(
+    config_opt: str | None,
+    *,
+    vm_opt: str,
+    persist_runtime_defaults: bool,
+) -> tuple[ResolvedVMContext, Store, Path, str]:
+    """Load the caller context plus the matching physical credential store."""
+    context, store_path = load_vm_context_with_path(
+        config_opt,
+        vm_opt=vm_opt,
+        host_src=Path.cwd(),
+        persist_runtime_defaults=persist_runtime_defaults,
+    )
+    scope = resolve_store_scope(str(store_path))
+    store = load_scope_store(scope)
+    principal_id = context.principal.id if scope.is_machine else ''
+    return context, store, store_path, principal_id
 
 
 def _resolve_credential_selector(
@@ -55,12 +76,14 @@ def _resolve_credential_selector(
     selector: str,
     remote: str,
     manager: CommandManager,
+    principal_id: str | None = None,
 ) -> CredentialEntry:
-    """Resolve either a credential id or a repository-shaped selector."""
+    """Resolve an id or repository selector within one principal scope."""
     exact = find_credential(
         store,
         vm_name=vm_name,
         credential_id=selector,
+        principal_id=principal_id,
     )
     if exact is not None:
         return exact
@@ -70,11 +93,12 @@ def _resolve_credential_selector(
         vm_name=vm_name,
         selector=selector,
         repo=repo,
+        principal_id=principal_id,
     )
 
 
 class VMCredsAddCLI(_BaseCommand):
-    """Grant a VM repository access with a scoped forge deploy key."""
+    """Grant a VM repository access for the current principal."""
 
     repository: str = kwconf.Value(
         '.',
@@ -111,12 +135,12 @@ class VMCredsAddCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, store_path = load_cfg_with_path(
+        context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            host_src=Path.cwd(),
             persist_runtime_defaults=not bool(args.dry_run),
         )
+        cfg = context.legacy_cfg
         mgr = CommandManager.current()
         requested_provider = providers.normalize_provider(args.provider)
         default_host = (
@@ -133,10 +157,11 @@ class VMCredsAddCLI(_BaseCommand):
         )
         kind = providers.kind_for_provider(resolved_provider)
         access = normalize_credential_access(args.access)
-        cred_id = credential_id(cfg.vm.name, repo.canonical)
+        cred_id = credential_id(cfg.vm.name, repo.canonical, principal_id)
         if args.dry_run:
             print('Repository credential grant')
             print(f'  VM:          {cfg.vm.name}')
+            print(f'  Principal:   {principal_id or "legacy"}')
             print(f'  Repository:  {repo.display}')
             print(f'  Access:      {access}')
             print(f'  Provider:    {resolved_provider}')
@@ -149,14 +174,12 @@ class VMCredsAddCLI(_BaseCommand):
             )
             return 0
 
-        store = load_store(store_path)
         with mgr.intent(
             f'Grant {cfg.vm.name} access to {repo.display}',
             why=(
-                'Create a repository-scoped deploy key on the host, register '
-                'its public key with the repository provider, and install its '
-                'private key in '
-                'the selected VM.'
+                'Create a principal-owned deploy key on the host, register '
+                'its public half, and install the private half only in the '
+                "selected principal's guest home."
             ),
             role='modify',
         ):
@@ -167,6 +190,7 @@ class VMCredsAddCLI(_BaseCommand):
                 repo,
                 access=access,
                 kind=kind,
+                principal_id=principal_id,
                 manager=mgr,
             )
         if not entry.provider_managed:
@@ -174,6 +198,7 @@ class VMCredsAddCLI(_BaseCommand):
             return 0
         print(
             f'Granted {entry.access} access: vm={entry.vm_name} '
+            f'principal={entry.principal_id or "legacy"} '
             f'repository={repo.display} credential={entry.id}'
         )
         return 0
@@ -481,49 +506,63 @@ class VMCredsSetupCLI(_BaseCommand):
 
 
 class VMCredsListCLI(_BaseCommand):
-    """List repository credentials owned by a VM."""
+    """List repository credentials visible to the current principal."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
+    all_principals: bool = kwconf.Flag(
+        False,
+        help=(
+            'Show machine-wide credential metadata for every principal. '
+            'Private key material remains accessible only to its owner.'
+        ),
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        cfg, store_path = load_cfg_with_path(
+        context, store, _store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            host_src=Path.cwd(),
             persist_runtime_defaults=False,
         )
-        entries = find_credentials_for_vm(load_store(store_path), cfg.vm.name)
-        print(f'Credentials for VM {cfg.vm.name}')
+        cfg = context.legacy_cfg
+        selected_principal = None if args.all_principals else principal_id
+        entries = find_credentials_for_vm(
+            store, cfg.vm.name, principal_id=selected_principal
+        )
+        view = 'machine-wide metadata' if args.all_principals else (
+            principal_id or 'legacy'
+        )
+        print(f'Credentials for VM {cfg.vm.name} ({view})')
         if not entries:
             print('  (none)')
             return 0
-        print('  ID                ACCESS  STATE                 SCOPE')
+        print('  ID                OWNER                         ACCESS  STATE                 SCOPE')
         unregistered = False
         for entry in entries:
-            scope = (
+            scope_text = (
                 f'{entry.provider_host}/{entry.owner}/{entry.repository}'
             )
             state = str(entry.state)
             if not entry.provider_managed:
                 state = f'{state} (unregistered)'
                 unregistered = True
+            owner = credential_principal_label(store, entry.principal_id)
             print(
-                f'  {entry.id:<17} {entry.access:<7} '
-                f'{state:<21} {scope}'
+                f'  {entry.id:<17} {owner:<29.29} {entry.access:<7} '
+                f'{state:<21} {scope_text}'
             )
         if unregistered:
             print(
                 '\n  unregistered: AIVM could not add the deploy key; an '
-                'admin must. Run `aivm vm creds status <id>` for the key to '
-                'send them.'
+                'admin must. Run `aivm vm creds status <id>` as the owning '
+                'host user for the public-key handoff.'
             )
         return 0
 
 
 class VMCredsStatusCLI(_BaseCommand):
-    """Inspect one VM repository credential and detect remote or guest drift."""
+    """Inspect one principal credential or machine-wide metadata."""
 
     selector: str = kwconf.Value(
         '',
@@ -534,36 +573,70 @@ class VMCredsStatusCLI(_BaseCommand):
     remote: str = kwconf.Value(
         'origin', help='Git remote used for a local repository selector.'
     )
+    all_principals: bool = kwconf.Flag(
+        False,
+        help=(
+            'Allow selecting any principal record. Records owned by another '
+            'host user are shown as metadata only.'
+        ),
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         if not args.selector:
             raise AIVMError('Provide a credential ID or repository selector.')
-        cfg, store_path = load_cfg_with_path(
+        context, store, _store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            host_src=Path.cwd(),
             persist_runtime_defaults=False,
         )
-        store = load_store(store_path)
+        cfg = context.legacy_cfg
+        selector_principal = None if args.all_principals else principal_id
         entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
+            principal_id=selector_principal,
         )
+        owner_label = credential_principal_label(store, entry.principal_id)
+        foreign = bool(
+            entry.principal_id and entry.principal_id != principal_id
+        )
+        if foreign:
+            print(f'Credential {entry.id}')
+            print(f'  VM:           {entry.vm_name}')
+            print(f'  Principal:    {owner_label}')
+            print(
+                f'  Scope:        {entry.provider_host}/{entry.owner}/'
+                f'{entry.repository}'
+            )
+            print(f'  Access:       {entry.access}')
+            print(f'  State:        {entry.state}')
+            print(f'  Fingerprint:  {entry.key_fingerprint}')
+            print(f'  Provider ID:  {entry.provider_key_id or "(unrecorded)"}')
+            print(
+                '  Observation:  metadata only; host key, provider auth, and '
+                'guest-home checks require the owning host user.'
+            )
+            return 0
+
         with CommandManager.current().intent(
             f'Inspect credential {entry.id}',
             why=(
-                'Compare AIVM state with the host key, provider deploy key, '
-                'and guest installation.'
+                "Compare the owning principal's host key, provider deploy "
+                'key, and guest installation.'
             ),
             role='read',
         ):
             report = inspect_credential(
-                cfg, entry, manager=CommandManager.current()
+                cfg,
+                entry,
+                store=store,
+                current_principal_id=principal_id,
+                manager=CommandManager.current(),
             )
         remote_key = report['remote']
         remote_text = 'missing'
@@ -576,6 +649,7 @@ class VMCredsStatusCLI(_BaseCommand):
             remote_text = f'unavailable: {report["remote_error"]}'
         print(f'Credential {entry.id}')
         print(f'  VM:           {entry.vm_name}')
+        print(f'  Principal:    {owner_label}')
         print(
             f'  Scope:        {entry.provider_host}/{entry.owner}/{entry.repository}'
         )
@@ -607,19 +681,19 @@ class VMCredsStatusCLI(_BaseCommand):
             print(f'  Guest detail: {report["guest_detail"]}')
         print('  Branch rules: not managed by AIVM')
         if not entry.provider_managed:
-            # Reprint the handoff so the key is recoverable after the original
-            # `creds add` output has scrolled away.
-            print(describe_unregistered_credential(entry, entry_repository(entry)))
+            print(
+                describe_unregistered_credential(
+                    entry, entry_repository(entry)
+                )
+            )
         return 0
 
 
 class VMCredsRevokeCLI(_BaseCommand):
-    """Revoke a deploy key, then remove its host and guest copies."""
+    """Revoke one credential owned by the current VM principal."""
 
     selector: str = kwconf.Value(
-        '',
-        position=1,
-        help='Credential ID or repository selector.',
+        '', position=1, help='Credential ID or repository selector.'
     )
     vm: str = kwconf.Value('', help='Optional VM name override.')
     remote: str = kwconf.Value(
@@ -634,34 +708,38 @@ class VMCredsRevokeCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         if not args.selector:
             raise AIVMError('Provide a credential ID or repository selector.')
-        cfg, store_path = load_cfg_with_path(
+        context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            host_src=Path.cwd(),
             persist_runtime_defaults=not bool(args.dry_run),
         )
-        store = load_store(store_path)
+        cfg = context.legacy_cfg
         entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
+            principal_id=principal_id,
         )
         if args.dry_run:
             print(f'DRYRUN: would revoke credential {entry.id}')
+            print(f'  Principal: {principal_id or "legacy"}')
             print(
                 '  Scope: '
                 f'{entry.provider_host}/{entry.owner}/{entry.repository}'
             )
-            print('  Order: provider deploy key, guest copy, host copy, config record')
+            print(
+                '  Order: provider deploy key, guest copy, host copy, '
+                'config record'
+            )
             return 0
         mgr = CommandManager.current()
         with mgr.intent(
             f'Revoke credential {entry.id}',
             why=(
-                'Invalidate the repository permission at the provider before '
-                'removing copies of the private key.'
+                'Invalidate the repository permission using the owning host '
+                "principal's provider authentication before removing copies."
             ),
             role='modify',
         ):
@@ -670,6 +748,7 @@ class VMCredsRevokeCLI(_BaseCommand):
                 store,
                 store_path,
                 entry,
+                current_principal_id=principal_id,
                 manager=mgr,
             )
         print(f'Revoked credential {entry.id}.')
@@ -677,12 +756,10 @@ class VMCredsRevokeCLI(_BaseCommand):
 
 
 class VMCredsAbandonCLI(_BaseCommand):
-    """Forget an inaccessible provider grant without claiming revocation."""
+    """Forget an inaccessible provider grant owned by this principal."""
 
     selector: str = kwconf.Value(
-        '',
-        position=1,
-        help='Credential ID or repository selector.',
+        '', position=1, help='Credential ID or repository selector.'
     )
     vm: str = kwconf.Value('', help='Optional VM name override.')
     remote: str = kwconf.Value(
@@ -709,22 +786,23 @@ class VMCredsAbandonCLI(_BaseCommand):
                 'Abandonment requires --provider_unverified because AIVM '
                 'will not prove that the provider deploy key was revoked.'
             )
-        cfg, store_path = load_cfg_with_path(
+        context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            host_src=Path.cwd(),
             persist_runtime_defaults=not bool(args.dry_run),
         )
-        store = load_store(store_path)
+        cfg = context.legacy_cfg
         entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
+            principal_id=principal_id,
         )
         if args.dry_run:
             print(f'DRYRUN: would abandon credential {entry.id}')
+            print(f'  Principal: {principal_id or "legacy"}')
             print(
                 '  WARNING: provider revocation would remain unverified for '
                 f'{entry.provider_host}/{entry.owner}/{entry.repository}'
@@ -736,8 +814,8 @@ class VMCredsAbandonCLI(_BaseCommand):
         with mgr.intent(
             f'Abandon provider-unverified credential {entry.id}',
             why=(
-                'Remove local copies and retain an audit tombstone when the '
-                'provider can no longer be inspected or administered.'
+                "Remove the owning principal's local copies and retain an "
+                'audit tombstone when the provider cannot be administered.'
             ),
             role='modify',
         ):
@@ -746,6 +824,7 @@ class VMCredsAbandonCLI(_BaseCommand):
                 store,
                 store_path,
                 entry,
+                current_principal_id=principal_id,
                 manager=mgr,
             )
         print(

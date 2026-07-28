@@ -300,8 +300,42 @@ while preserving legacy single-user attachment semantics:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The exact ownership, visibility, override, and replay rules are recorded in
-[`global-attachment-ownership.md`](global-attachment-ownership.md). The next
-tranche is work package 6: principal-scoped credential metadata and operations.
+[`global-attachment-ownership.md`](global-attachment-ownership.md).
+
+### Stage 8 execution checklist: principal-scoped credentials
+
+The eighth 0.6.0 tranche completes work package 6 for fresh machine stores
+without moving legacy credential key material:
+
+- [x] Add `principal_id` to credential records and include it in stable
+  credential IDs.
+- [x] Advance principal-owned credential stores to schema version 11 while
+  preserving the released legacy credential ID calculation.
+- [x] Reject machine-store credentials with missing, dangling, or cross-VM
+  principal references.
+- [x] Keep host private/public key paths in the owning user's application-data
+  tree rather than the machine store.
+- [x] Install guest keys and regenerate SSH/Git routing from only the selected
+  principal's usable credentials.
+- [x] Make add, list, status, revoke, and abandon default to the current
+  principal.
+- [x] Add `--all_principals` list/status views for machine-wide non-secret
+  metadata.
+- [x] Refuse secret-bearing inspection, repair, revoke, or abandon through
+  another principal's host login or provider authentication context.
+- [x] Preserve provider key IDs, fingerprints, and lifecycle state when a
+  principal is disabled.
+- [x] Reject principal removal while owned provider credential records remain,
+  so revocation metadata cannot disappear silently.
+- [x] Prove Alice and Bob can independently credential the same repository and
+  ordinary selection never crosses owners.
+- [x] Keep legacy credentials unattributed and byte-compatible until the
+  explicit migration stage assigns them to the creator principal.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The ownership and operational contract is recorded in
+[`principal-scoped-credentials.md`](principal-scoped-credentials.md). The next
+tranche is work package 7: explicit migration of released installations.
 
 ## Work package 1: Separate models without moving storage
 

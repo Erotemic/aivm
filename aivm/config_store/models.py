@@ -53,6 +53,7 @@ class AttachmentEntry:
 class CredentialEntry:
     id: str
     vm_name: str
+    principal_id: str = ''
     kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
     provider_host: str = 'github.com'
     owner: str = ''

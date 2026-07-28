@@ -114,6 +114,7 @@ def _credential_from_dict(
 ) -> CredentialEntry:
     values = {
         'id': str(item.get('id', '')).strip(),
+        'principal_id': str(item.get('principal_id', '')).strip(),
         'kind': str(
             item.get('kind', CREDENTIAL_KIND_GITHUB_DEPLOY_KEY) or ''
         ).strip(),
@@ -173,6 +174,7 @@ def _credential_from_dict(
             provider_host=values['provider_host'],
             owner=values['owner'],
             repository=values['repository'],
+            principal_id=values['principal_id'],
         )
         provider_key_id = validate_provider_key_id(values['provider_key_id'])
         provider_key_title = validate_metadata_text(
@@ -186,6 +188,7 @@ def _credential_from_dict(
     return CredentialEntry(
         id=values['id'],
         vm_name=vm_name,
+        principal_id=values['principal_id'],
         kind=cast(CredentialKind, values['kind']),
         provider_host=repo.host,
         owner=repo.owner,
@@ -384,7 +387,7 @@ def parse_store_toml(text: str) -> Store:
                 reg.attachments.append(att)
 
         seen_credential_ids: set[str] = set()
-        seen_credential_scopes: set[tuple[str, str, str]] = set()
+        seen_credential_scopes: set[tuple[str, str, str, str]] = set()
         for cred_raw in item.get('credentials', []):
             if not isinstance(cred_raw, dict):
                 raise ValueError(
@@ -396,6 +399,7 @@ def parse_store_toml(text: str) -> Store:
                     f'VM {name!r} has duplicate credential id {cred.id!r}'
                 )
             scope = (
+                cred.principal_id,
                 cred.provider_host.lower(),
                 cred.owner.lower(),
                 cred.repository.lower(),
@@ -403,6 +407,7 @@ def parse_store_toml(text: str) -> Store:
             if scope in seen_credential_scopes:
                 raise ValueError(
                     f'VM {name!r} has duplicate credential scope '
+                    f'{cred.principal_id or "legacy"}:'
                     f'{cred.provider_host}/{cred.owner}/{cred.repository}'
                 )
             seen_credential_ids.add(cred.id)
@@ -454,4 +459,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = max(reg.schema_version, 9)
     if any(att.owner_principal_id for att in reg.attachments):
         reg.schema_version = max(reg.schema_version, 10)
+    if any(cred.principal_id for cred in reg.credentials):
+        reg.schema_version = max(reg.schema_version, 11)
     return reg
