@@ -18,10 +18,13 @@ from aivm.config_store import (
     find_vm,
     load_store,
     remove_attachment,
+    require_vm,
     save_store,
+    unknown_name_message,
     upsert_attachment,
     upsert_vm,
 )
+from aivm.errors import AIVMError
 
 
 def test_store_roundtrip(tmp_path: Path) -> None:
@@ -507,7 +510,7 @@ def test_match_host_user_ids_round_trips_per_vm(tmp_path: Path) -> None:
     save_store(store, fpath)
 
     loaded = load_store(fpath)
-    assert loaded.schema_version == 7
+    assert loaded.schema_version == 8
     [vm] = loaded.vms
     assert vm.cfg.vm.match_host_user_ids is False
     assert vm.cfg.vm.mirror_shared_home_folders is True
@@ -647,3 +650,78 @@ def test_save_store_uses_atomic_replace(
     assert dst == path.resolve()
     assert src.parent == path.parent
     assert load_store(path).active_vm == 'atomic'
+
+
+@pytest.mark.parametrize(
+    ('missing', 'known', 'expected'),
+    [
+        pytest.param(
+            'aivm-2404',
+            ['aivm-2404-workstation', 'demo-vm'],
+            "Did you mean 'aivm-2404-workstation'?",
+            id='name_is_a_prefix_of_a_longer_one',
+        ),
+        pytest.param(
+            'aivm-2440',
+            ['aivm-2404', 'demo-vm'],
+            "Did you mean 'aivm-2404'?",
+            id='transposed_characters',
+        ),
+        pytest.param(
+            'aivm',
+            ['aivm-2404', 'aivm-dev', 'other'],
+            "Did you mean 'aivm-2404' or 'aivm-dev'?",
+            id='several_plausible_names_read_as_a_list',
+        ),
+    ],
+)
+def test_unknown_name_suggests_the_likely_intent(
+    missing: str, known: list[str], expected: str
+) -> None:
+    """A near miss is named, so a typo does not read like a missing VM."""
+    assert expected in unknown_name_message('VM', missing, known)
+
+
+def test_unknown_name_offers_nothing_when_nothing_is_close() -> None:
+    """A uniformly-named store must not manufacture a suggestion.
+
+    Shared punctuation lets unrelated short names clear a naive edit-distance
+    bar; a confident wrong guess is worse than none, because it sends the
+    user to a VM they never meant.
+    """
+    message = unknown_name_message(
+        'VM', 'aivm-240', [f'vm-{index:02d}' for index in range(14)]
+    )
+    assert 'Did you mean' not in message
+    assert 'Known VMs: vm-00' in message
+    assert '(+4 more)' in message
+
+
+def test_unknown_name_lists_what_the_store_actually_has() -> None:
+    """The listing is what tells a user they are on the wrong host."""
+    message = unknown_name_message('VM', 'aivm-2404', ['scratch', 'yardrat-dev'])
+    assert 'Known VMs: scratch, yardrat-dev.' in message
+
+
+def test_unknown_name_in_an_empty_store_says_so_and_points_forward() -> None:
+    """'No VMs are defined' is a different problem from 'wrong name'."""
+    message = unknown_name_message(
+        'VM', 'aivm-2404', [], empty_hint='Run `aivm config init` to define one.'
+    )
+    assert 'No VMs are defined in this config store.' in message
+    assert 'aivm config init' in message
+
+
+def test_require_vm_names_the_alternatives(tmp_path: Path) -> None:
+    """The raise carries the suggestion, so every caller inherits it."""
+    store = Store()
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404-workstation'
+    upsert_vm(store, cfg)
+
+    with pytest.raises(AIVMError) as excinfo:
+        require_vm(store, 'aivm-2404')
+    assert "Did you mean 'aivm-2404-workstation'?" in str(excinfo.value)
+    assert require_vm(store, 'aivm-2404-workstation').name == (
+        'aivm-2404-workstation'
+    )

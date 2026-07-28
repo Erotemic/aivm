@@ -24,6 +24,10 @@ from ..config_store import (
     remove_vm,
     save_store,
 )
+from ..credentials.guards import (
+    discard_released_credential_material,
+    require_vm_credentials_released,
+)
 from ..services import (
     cfg_path,
     load_cfg,
@@ -68,7 +72,10 @@ class VMUpCLI(_BaseCommand):
             role='modify',
         ):
             create_or_start_vm(
-                cfg, dry_run=args.dry_run, recreate=args.recreate
+                cfg,
+                dry_run=args.dry_run,
+                recreate=args.recreate,
+                config_store_path=cfg_path,
             )
         if not args.dry_run and not args.recreate:
             _maybe_warn_hardware_drift(cfg)
@@ -201,36 +208,58 @@ class VMDeleteCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
+        reg = load_store(cfg_path)
+        credentials = require_vm_credentials_released(
+            reg, cfg.vm.name, action='deleted'
+        )
         mgr = CommandManager.current()
-        with mgr.intent(
-            f'Delete VM {cfg.vm.name}',
-            why=(
-                'Remove the managed VM domain while leaving host project directories intact.'
-            ),
-            role='modify',
-        ):
-            destroy_vm(cfg, dry_run=args.dry_run)
-        if not args.dry_run:
-            reg = load_store(cfg_path)
-            remove_vm(reg, cfg.vm.name, remove_attachments=True)
-            save_store(
-                reg,
-                cfg_path,
-                reason=(
-                    f'Remove VM record for {cfg.vm.name} after deleting the '
-                    'managed libvirt domain.'
+        if args.dry_run:
+            with mgr.intent(
+                f'Delete VM {cfg.vm.name}',
+                why=(
+                    'Preview removal of the managed VM domain while leaving '
+                    'host project directories intact.'
                 ),
+                role='modify',
+            ):
+                destroy_vm(cfg, dry_run=True)
+            return 0
+
+        with mgr.approved_action(
+            purpose=(
+                f'Delete VM {cfg.vm.name}, remove revoked credential key '
+                'material, and remove its AIVM configuration record.'
             )
-            net_name = (cfg.network.name or '').strip()
-            if net_name:
-                net = find_network(reg, net_name)
-                if net is not None and not network_users(reg, net_name):
-                    log.warning(
-                        "Network '{}' now has no VM users and remains defined. "
-                        'Destroy it explicitly if no longer needed: aivm host net destroy {}',
-                        net_name,
-                        net_name,
-                    )
+        ):
+            with mgr.intent(
+                f'Delete VM {cfg.vm.name}',
+                why=(
+                    'Remove the managed VM domain while leaving host project '
+                    'directories intact.'
+                ),
+                role='modify',
+            ):
+                discard_released_credential_material(credentials)
+                destroy_vm(cfg, dry_run=False)
+                remove_vm(reg, cfg.vm.name, remove_attachments=True)
+                save_store(
+                    reg,
+                    cfg_path,
+                    reason=(
+                        f'Remove VM record for {cfg.vm.name} after deleting '
+                        'the managed libvirt domain.'
+                    ),
+                )
+        net_name = (cfg.network.name or '').strip()
+        if net_name:
+            net = find_network(reg, net_name)
+            if net is not None and not network_users(reg, net_name):
+                log.warning(
+                    "Network '{}' now has no VM users and remains defined. "
+                    'Destroy it explicitly if no longer needed: aivm host net destroy {}',
+                    net_name,
+                    net_name,
+                )
         return 0
 
 

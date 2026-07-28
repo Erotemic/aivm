@@ -152,7 +152,7 @@ def _ensure_persistent_root_parent_dir(
         approval_scope=f'persistent-root-parent:{cfg.vm.name}',
     ):
         mgr.submit(
-            ['mkdir', '-p', str(target)],
+            ['mkdir', '-p', str(target)], ownership='tool',
             sudo=path_needs_sudo(target),
             role='modify',
             summary='Create persistent-root parent directory',
@@ -216,7 +216,7 @@ def _ensure_persistent_root_host_bind(
     ):
         if needs_parent:
             mgr.submit(
-                ['mkdir', '-p', str(parent)],
+                ['mkdir', '-p', str(parent)], ownership='tool',
                 sudo=path_needs_sudo(parent),
                 role='modify',
                 summary='Create persistent-root parent directory',
@@ -224,7 +224,7 @@ def _ensure_persistent_root_host_bind(
             )
         if needs_target:
             mgr.submit(
-                ['mkdir', '-p', str(target)],
+                ['mkdir', '-p', str(target)], ownership='tool',
                 sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create persistent-root bind target',

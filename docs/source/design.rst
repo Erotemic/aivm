@@ -54,10 +54,16 @@ Reconciliation model
 Safety and Trust Boundaries
 ---------------------------
 
-1. Explicit consent for privileged host changes
+1. Visibility and consent are separate guarantees
 
-   Privileged operations must be visible and confirmable unless the user has
-   explicitly opted into automatic approval (``--yes`` / ``--yes-sudo``).
+   *Visible* and *confirmable* are two axes, and the automatic-approval flags
+   apply to only one of them. ``--yes`` / ``--yes-sudo`` waive **confirmation**.
+   They never waive **visibility**.
+
+   Every write, on the host or in the guest, is logged at ``INFO`` regardless of
+   sudo status, and so is every command that invokes sudo on the host even when
+   it only reads. Nothing a run changed may be absent from that run's default
+   output. See :ref:`command-visibility-and-approval` for the case table.
 
 2. No silent trust broadening
 
@@ -181,7 +187,9 @@ Operational command execution
   they pin ``-c qemu:///system`` explicitly (bare unprivileged ``virsh``
   would silently target ``qemu:///session``), and state-changing hypervisor
   commands require interactive approval regardless of whether sudo is used,
-  preserving the consent contract of principle 1.
+  preserving the consent contract of principle 1. Hypervisor control is one of
+  three things that require approval; see
+  :ref:`command-visibility-and-approval` for the full case table.
 * Preserve ``--dry_run`` as a true non-destructive preview path.
 * Automatic/background reconciliation must avoid disruptive host operations
   against existing mounts (for example, forced/lazy unmount of busy targets).
@@ -253,6 +261,380 @@ Plan and approval semantics
     reprompts
 * Once a plan is approved, legacy per-command sudo prompting must not fire for
   commands inside that approved plan.
+
+.. _command-visibility-and-approval:
+
+Command visibility and approval
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two independent questions are asked of every command, and they must not be
+collapsed into one:
+
+**Is it visible?**
+  Does the command appear at ``INFO``, the default verbosity, or only under
+  ``--verbose 2``?
+
+**Is it confirmable?**
+  Must the user interactively approve it before it runs?
+
+``--yes`` / ``--yes-sudo`` answer the second question only. No flag, mode, or
+setting suppresses the first.
+
+Secrets are kept out of arguments, not out of logs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Verbosity is not a security boundary. ``--verbose 2`` prints the literal
+command for anything abbreviated at ``INFO``, so a value that is an argument
+is a value that gets logged, and no amount of preview shortening changes that.
+
+The boundary is therefore placed earlier: **a secret is never a command
+argument.** A private deploy key reaches the guest through ``input_text`` on
+stdin, consumed by a remote ``cat`` (``aivm/credentials/guest.py``), and
+provider tokens are read from the environment into direct API calls. Neither
+appears in ``spec.cmd``, so neither can be logged, digested, or previewed at
+any verbosity.
+
+The rule for new code follows: if a value must not appear in a log, it must not
+be an argument. Redacting the preview is not an alternative, because the raw
+line still holds it.
+
+One value is deliberately outside this rule. ``vm.password`` is plaintext in
+the config store and rendered into cloud-init ``user-data``, so ``--verbose 2``
+prints it. That is accepted rather than overlooked: guest root sits inside the
+untrusted boundary and the VM's occupants are expected to hold it already. See
+"Guest credentials are not secrets; provider credentials are" in
+:doc:`security` for the reasoning and for what would have to change if the
+guest ever stopped being disposable.
+
+What "sudo" means here
+^^^^^^^^^^^^^^^^^^^^^^
+
+Throughout this policy, **sudo means sudo on the host**: a ``sudo`` token that
+this process places on a command line it executes, escalating the privilege of
+the user running ``aivm``.
+
+A ``sudo`` appearing *inside* a payload sent to the guest -- for example
+``ssh agent@vm 'sudo -n install ...'`` -- is **not** host sudo and does not make
+the command a privileged host operation. Guest root is not a meaningful
+boundary: the guest credentials are known to the tool, so escalating inside the
+VM costs nothing and proves nothing. Such a command is still a **write**, and is
+classified by its effect, never by the presence of that inner token.
+
+The visibility axis
+^^^^^^^^^^^^^^^^^^^
+
+A command is visible at ``INFO`` if **either**:
+
+* it writes -- changes state on the host or in the guest; or
+* it invokes sudo on the host, even if it only reads.
+
+The second clause is deliberate and is not redundant with the first. The user is
+made aware of anything with the potential to perform an unbounded privileged
+sudo op, even if we know what the program being called is. Merely invoking sudo
+on the command line is strong enough of a thing that it needs to be called out.
+Do not reduce this rule to effect alone.
+
+Only a read that escalates no host privilege is held back for ``--verbose 2``.
+Nothing is ever discarded: raising verbosity reveals every command, plus the
+literal text of any payload the log abbreviated.
+
+The exhaustive statement of this policy is
+``dev/design/programatic/command_policy.py``. The tables below are the
+human-readable summary; that file is the authority, because it encodes the
+rules as predicates and then forces the **entire** predicate cross-product, so
+every exception is visible as a row rather than implied by prose. Running it
+with no arguments prints the full report; ``command_policy.py csv --table=...``
+emits any single table for machine reading.
+
+Change the policy there first. The prose here is a view of it, not a second
+source of truth.
+
+Classification axes
+^^^^^^^^^^^^^^^^^^^
+
+Four properties decide both tables. They are independent questions and must be
+answered separately; collapsing any two of them is how a case goes unclassified.
+
+Effect
+  ``read`` or ``write``. A command writes if it changes state anywhere, on the
+  host or inside the guest.
+
+Authority
+  What the command spends: ``none``, ``host sudo`` (a ``sudo`` token this
+  process places on a command line), or ``hypervisor control`` (a
+  state-changing ``virsh`` / ``virt-install`` command, which spends
+  root-equivalent ``libvirt`` group membership whether or not sudo was needed).
+
+Ownership
+  Whose state a write touches. ``user`` covers the user's source tree, host
+  system configuration, and the guest -- anything the user would recognize as
+  theirs. ``tool`` is reserved for ``aivm``'s own bookkeeping: intermediate
+  state it creates, owns, and can regenerate from the user's config, such as
+  creating an export root before writing a generated artifact into it.
+
+  ``tool`` is an **exemption that a call site declares**, never something the
+  manager infers. An unmarked write is ``user``, and prompts. The test is not
+  "did aivm create this path" but "is this state regenerable bookkeeping the
+  user never authored and would not miss".
+
+Inspectability
+  Whether the log can render the command in full, or a payload is too large to
+  print and is omitted (see the ``Elided`` marker in ``aivm/commands.py``).
+  An omitted payload also carries the head of a SHA-256, so a reader can tell
+  which content ran; two scripts of equal length are otherwise
+  indistinguishable. It identifies and never verifies -- eight hex characters
+  is 32 bits, so nothing may use it to decide two payloads match and skip a
+  real check.
+  This axis governs what the log and the approval prompt can *show*. It is no
+  longer an approval trigger in its own right, because a write that cannot be
+  printed is already confirmable for being a write.
+
+Policy table: visibility
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Rows are evaluated in order; the first match decides. No flag or setting
+changes this table.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 22 18 30
+
+   * - Effect
+     - Host sudo
+     - Level
+     - Why
+   * - write (host or guest)
+     - any
+     - ``INFO``
+     - the run changed something; the record of it is not optional
+   * - read
+     - yes
+     - ``INFO``
+     - escalation is called out on its own merits, not for what it read
+   * - read
+     - no
+     - ``--verbose 2``
+     - changes nothing and crosses no boundary; plumbing
+
+Policy table: approval
+^^^^^^^^^^^^^^^^^^^^^^
+
+**A write is the guard.** Changing state is what requires consent, and neither
+privilege nor command family is what makes it so. Rows are evaluated in order;
+the first match decides. ``--yes`` / ``--yes-sudo`` waive every prompt below,
+and nothing else does.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 26 22 36
+
+   * - Effect
+     - Ownership
+     - Confirm
+     - Why
+   * - read
+     - --
+     - no, except a read using host sudo, which auto-approves under
+       ``auto_approve_readonly_sudo`` and otherwise prompts
+     - nothing is being changed
+   * - write
+     - ``user_driven`` (declared)
+     - no
+     - the user is at the keyboard making the change themselves
+   * - write
+     - ``tool`` (declared)
+     - no
+     - regenerable bookkeeping the user never authored
+   * - write
+     - ``user`` (default)
+     - yes
+     - it changes something the user owns
+
+Authority does not appear in this table, and that is deliberate. Host sudo
+already implies a write in every case that matters, and hypervisor control is
+subsumed: ``virsh destroy`` is confirmable because it destroys a VM, not because
+it is spelled ``virsh``. Gating on the command family guarded
+``undefine --remove-all-storage`` only by the coincidence that it shares a
+binary with ``setvcpus``, while an unprivileged non-``virsh`` command doing the
+same damage was never guarded at all.
+
+Inspectability does not appear either. A payload too large to print is
+confirmable for being a write; being unreadable raises the stakes of the prompt
+but is not what triggers it.
+
+**Overlapping triggers are one prompt, never two.** A command that both writes
+and escalates has two independent *reasons* to be confirmable, and the user is
+asked exactly once. Approval is a property of the command, not a toll collected
+per matching rule, so a second matching trigger must never produce a second
+prompt for the same command.
+
+The overlap is a backstop rather than redundancy. On a host without ``libvirt``
+group membership, ``virsh destroy`` needs sudo, so it still prompts even if its
+effect were mis-declared as a read -- the escalation path catches what the
+write rule missed. Classification is a judgment made per call site and will
+sometimes be wrong, so the axes are arranged for the common mistakes to fail
+safe. Do not "simplify" either trigger away on the grounds that the other
+already covers a case: covering the same case twice is the design, and
+collapsing them to one prompt is what keeps that free.
+
+Handing the terminal to the user is not aivm writing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``aivm config edit`` launches an editor. ``aivm ssh`` opens a shell.
+``aivm code`` starts an IDE against the guest. These change things, but aivm is
+not the one changing them: control passes to the user, who authors any change
+themselves and watches it happen. There is no consent left to collect, and
+asking for it means prompting someone to confirm the command they just typed.
+
+Such call sites declare ``user_driven=True``. The bar is that the command hands
+the terminal over and aivm performs no write of its own -- not merely that the
+command is interactive, and not that the user invoked the CLI, which is true of
+everything.
+
+Like every other exemption here it is declared, never inferred. These commands
+all pass ``capture=False``, which would make a tempting heuristic and would be
+wrong for the same reason every other shape heuristic was: it describes how the
+command is wired, not what it does.
+
+One write, one guard
+^^^^^^^^^^^^^^^^^^^^
+
+If a write goes through a command, **the command carries the consent**.
+``confirm_file_update`` exists only for writes that never reach the manager,
+such as editing ``~/.ssh/config`` with ``Path.write_text``. Calling both for
+one action asks the user twice, which the single-prompt rule above forbids.
+
+When a higher-level confirmation is replaced by the command guard, move its
+path and reason into the command's ``summary`` / ``detail`` so the prompt still
+names the file being changed. Nothing is lost by having one prompt instead of
+two except the duplication.
+
+``confirm_file_update``'s remaining callers are therefore a marker for the
+direct-filesystem-write gap: when those writes are routed through the manager,
+it has no callers left and can go.
+
+The exemption is narrow and is declared per call site
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Prompting on every write would be the approval fatigue principle 1 warns about,
+so ``tool`` ownership exempts a write. It is deliberately hard to qualify for:
+
+* the state is **regenerable** from the user's config;
+* the user never authored it and would not miss it;
+* it exists as bookkeeping for work the user already asked for.
+
+Creating an export root before writing a generated artifact into it qualifies.
+Writing into the user's source tree, editing ``~/.ssh/config``, or installing
+into the guest does not, however routine it feels.
+
+The exemption must be **marked at the call site**, and an unmarked write
+defaults to ``user`` and prompts. This is the same rule already applied to
+elision and to log visibility: the safe behavior is the default, and the quiet
+behavior is something code has to say out loud. Forgetting to mark a
+bookkeeping write costs a prompt; forgetting to mark a real write would have
+cost the user their consent, so the default falls the other way.
+
+Worked examples
+^^^^^^^^^^^^^^^
+
+Each row is classified on the four axes, then read off the tables above.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 26 10 18 12 16 10 10
+
+   * - Command
+     - Effect
+     - Authority
+     - Ownership
+     - Inspectability
+     - Visible
+     - Confirm
+   * - ``virsh dominfo``
+     - read
+     - none
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``sudo qemu-img info``
+     - read
+     - host sudo
+     - --
+     - fully logged
+     - ``INFO``
+     - by policy [#robypolicy]_
+   * - ``qemu-img info`` as root
+     - read
+     - none [#root]_
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``ssh vm true``
+     - read
+     - none
+     - --
+     - fully logged
+     - ``-vv``
+     - no
+   * - ``virsh setvcpus``
+     - write
+     - hypervisor control
+     - user
+     - fully logged
+     - ``INFO``
+     - yes
+   * - ``sudo nft ...``
+     - write
+     - host sudo
+     - user
+     - fully logged
+     - ``INFO``
+     - yes
+   * - ``mkdir -p`` on an export root
+     - write
+     - none
+     - tool (declared)
+     - fully logged
+     - ``INFO``
+     - no
+   * - ``ssh vm 'sudo -n install ...'``
+     - write
+     - none [#guest]_
+     - user
+     - payload omitted
+     - ``INFO``
+     - yes
+   * - ``ssh vm 'mkdir -p ...'``
+     - write
+     - none
+     - user
+     - fully logged
+     - ``INFO``
+     - yes
+
+.. [#robypolicy] A read that spends host sudo auto-approves under
+   ``auto_approve_readonly_sudo`` and prompts otherwise. Visible either way.
+.. [#root] Already root, so no ``sudo`` token reaches the command line. There
+   is no escalation to call out.
+.. [#guest] The ``sudo -n`` runs in the guest and is not host sudo, so the row
+   is decided by the write and by the payload being unprintable, never by that
+   token.
+
+Loose commands are a defect, not a mode
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A command submitted outside ``mgr.step(...)`` is queued loose and gets a
+reduced prompt that cannot show its full text. This is not a second supported
+approval path; it is a call site that was never wrapped. ``submit`` already
+appends to the open plan when there is one, so wrapping a call site is
+sufficient to give it the full ``y`` / ``a`` / ``s`` semantics above.
+
+The "not grouped into an explicit step" warning enumerates the remaining work.
+The target state is that ``_confirm_loose_command`` has no callers and the
+reduced prompt is deleted, rather than that it grows features to match the plan
+prompt.
 
 Design constraints
 ~~~~~~~~~~~~~~~~~~
@@ -353,6 +735,12 @@ should be evolved in these areas:
 * Folder sharing backend flexibility:
   evaluate alternatives that scale beyond per-folder virtiofs device-slot
   limits (see ``dev/design/future/flexible-folder-sharing.md``).
+* Guest password handling:
+  ``vm.password`` is plaintext in the config store and in generated cloud-init
+  ``user-data``, and is therefore visible at ``--verbose 2``. Accepted while
+  the guest is a disposable sandbox whose agents hold root anyway; revisit if
+  ``aivm`` targets multi-tenant hosts or long-lived guests. The fix is to
+  inject it off the command line, not to redact logs.
 * Long-lived virtiofs FD growth:
   continue investigating ``virtiofsd`` FD retention/growth on ``shared-root``
   and ``persistent`` exports. ``dev/devcheck/debug-harness.sh`` is the current

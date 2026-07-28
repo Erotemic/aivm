@@ -4,9 +4,34 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import cast
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
-from .models import AttachmentEntry, NetworkEntry, Store, VMEntry
+from ..credentials.schema import (
+    CREDENTIAL_ACCESS_READ,
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    CREDENTIAL_STATE_PENDING,
+    VALID_CREDENTIAL_ACCESS,
+    VALID_CREDENTIAL_KINDS,
+    VALID_CREDENTIAL_STATES,
+    CredentialAccess,
+    CredentialKind,
+    CredentialState,
+)
+from ..credentials.validation import (
+    CredentialValidationError,
+    validate_credential_identity,
+    validate_key_fingerprint,
+    validate_metadata_text,
+    validate_provider_key_id,
+)
+from .models import (
+    AttachmentEntry,
+    CredentialEntry,
+    NetworkEntry,
+    Store,
+    VMEntry,
+)
 
 
 def _norm_dir(path: str | Path) -> str:
@@ -75,6 +100,90 @@ def _attachment_from_dict(
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
         host_lexical_paths=_parse_host_lexical_paths(item),
+    )
+
+
+def _credential_from_dict(
+    item: dict[str, object], *, vm_name: str
+) -> CredentialEntry:
+    values = {
+        'id': str(item.get('id', '')).strip(),
+        'kind': str(
+            item.get('kind', CREDENTIAL_KIND_GITHUB_DEPLOY_KEY) or ''
+        ).strip(),
+        'provider_host': str(item.get('provider_host', 'github.com') or '').strip(),
+        'owner': str(item.get('owner', '')).strip(),
+        'repository': str(item.get('repository', '')).strip(),
+        'access': str(item.get('access', CREDENTIAL_ACCESS_READ) or '').strip(),
+        'provider_key_id': str(item.get('provider_key_id', '')).strip(),
+        'provider_key_title': str(item.get('provider_key_title', '')).strip(),
+        'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
+        'state': str(item.get('state', CREDENTIAL_STATE_PENDING) or '').strip(),
+    }
+    required = (
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    )
+    missing = [name for name in required if not values[name]]
+    if missing:
+        raise ValueError(
+            f'VM {vm_name!r} credential is missing required field(s): '
+            + ', '.join(missing)
+        )
+    if values['kind'] not in VALID_CREDENTIAL_KINDS:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has unsupported '
+            f'kind {values["kind"]!r}'
+        )
+    if values['access'] not in VALID_CREDENTIAL_ACCESS:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has invalid '
+            f'access {values["access"]!r}'
+        )
+    if values['state'] not in VALID_CREDENTIAL_STATES:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} has invalid '
+            f'state {values["state"]!r}'
+        )
+    try:
+        repo = validate_credential_identity(
+            vm_name=vm_name,
+            cred_id=values['id'],
+            provider_host=values['provider_host'],
+            owner=values['owner'],
+            repository=values['repository'],
+        )
+        provider_key_id = validate_provider_key_id(values['provider_key_id'])
+        provider_key_title = validate_metadata_text(
+            'provider_key_title', values['provider_key_title']
+        )
+        key_fingerprint = validate_key_fingerprint(values['key_fingerprint'])
+    except CredentialValidationError as ex:
+        raise ValueError(
+            f'VM {vm_name!r} credential {values["id"]!r} is invalid: {ex}'
+        ) from ex
+    return CredentialEntry(
+        id=values['id'],
+        vm_name=vm_name,
+        kind=cast(CredentialKind, values['kind']),
+        provider_host=repo.host,
+        owner=repo.owner,
+        repository=repo.name,
+        access=cast(CredentialAccess, values['access']),
+        provider_key_id=provider_key_id,
+        provider_key_title=provider_key_title,
+        key_fingerprint=key_fingerprint,
+        state=cast(CredentialState, values['state']),
+        # Absent in stores written before provider-unmanaged credentials
+        # existed, and every credential recorded then was AIVM-administered.
+        provider_managed=bool(item.get('provider_managed', True)),
     )
 
 
@@ -201,6 +310,32 @@ def parse_store_toml(text: str) -> Store:
             if att is not None:
                 reg.attachments.append(att)
 
+        seen_credential_ids: set[str] = set()
+        seen_credential_scopes: set[tuple[str, str, str]] = set()
+        for cred_raw in item.get('credentials', []):
+            if not isinstance(cred_raw, dict):
+                raise ValueError(
+                    f'VM {name!r} credential entry must be a table/object'
+                )
+            cred = _credential_from_dict(cred_raw, vm_name=name)
+            if cred.id in seen_credential_ids:
+                raise ValueError(
+                    f'VM {name!r} has duplicate credential id {cred.id!r}'
+                )
+            scope = (
+                cred.provider_host.lower(),
+                cred.owner.lower(),
+                cred.repository.lower(),
+            )
+            if scope in seen_credential_scopes:
+                raise ValueError(
+                    f'VM {name!r} has duplicate credential scope '
+                    f'{cred.provider_host}/{cred.owner}/{cred.repository}'
+                )
+            seen_credential_ids.add(cred.id)
+            seen_credential_scopes.add(scope)
+            reg.credentials.append(cred)
+
     for item in raw.get('attachments', []):
         if not isinstance(item, dict):
             continue
@@ -218,4 +353,6 @@ def parse_store_toml(text: str) -> Store:
         att.host_lexical_paths for att in reg.attachments
     ):
         reg.schema_version = 7
+    if reg.credentials:
+        reg.schema_version = max(reg.schema_version, 8)
     return reg

@@ -460,6 +460,9 @@ def test_firewall_reconciled_when_table_missing(
             'nft list table': FakeProc(1, '', 'No such file or directory'),
             'nft delete table': FakeProc(0),
             'nft -f': FakeProc(0),
+            # `sudo -n true`, normalized: sudo is already authenticated, so
+            # no password prompt is coming and no note is emitted.
+            'true': FakeProc(0),
         },
     )
 
@@ -475,6 +478,48 @@ def test_firewall_reconciled_when_table_missing(
         rec.count('nft', 'list', 'table', 'inet', effective_firewall_table(cfg))
         == 1
     )
+
+
+def test_firewall_probe_explains_its_unavoidable_sudo_prompt(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cold sudo timestamp gets an explanation before the password prompt.
+
+    ``nft`` has no unprivileged read and the managed table dies with every
+    host reboot, so this prompt is genuinely unavoidable rather than a sign
+    of misconfiguration.  Saying so keeps it from reading as a stray
+    escalation, and points at ``--no-ensure_firewall`` for anyone who wants
+    it gone.
+    """
+    cfg, host_src, attachment = _make_env(tmp_path)
+    activate_manager(monkeypatch)
+    xml = _domain_xml(
+        filesystems=((str(host_src.resolve()), PROJ_TAG),),
+        shared_memory=True,
+    )
+    command_recorder(
+        monkeypatch,
+        {
+            LIBVIRT_PROBE: FakeProc(0),
+            'virsh domstate': FakeProc(0, 'running\n'),
+            'virsh net-info': _active_net(),
+            'virsh dumpxml': FakeProc(0, xml),
+            'nft list table': FakeProc(0, 'table inet x {}\n'),
+            # `sudo -n true`, normalized: authentication is *not* cached, so
+            # a password prompt is about to appear.
+            'true': FakeProc(1, '', 'a password is required'),
+        },
+    )
+    messages = capture_logs(monkeypatch, 'aivm.attachments.session.log')
+
+    _reconcile_attached_vm(
+        cfg, host_src, attachment, policy=_policy(ensure_firewall=True)
+    )
+
+    joined = '\n'.join(messages)
+    assert 'no unprivileged fallback' in joined
+    assert 'gone after every host reboot' in joined
+    assert '--no-ensure_firewall' in joined
 
 
 def test_firewall_skipped_and_warned_when_privilege_never(

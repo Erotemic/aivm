@@ -60,7 +60,7 @@ from ..config_store import (
     remove_attachment,
     save_store,
 )
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from ..services import (
     load_cfg_with_path,
     maybe_offer_create_ssh_identity,
@@ -448,6 +448,10 @@ def _detach_shared_root_attachment(
                 dry_run=False,
             )
             detached_guest = True
+        # A declined prompt is the user answering the question, not a step
+        # that went wrong. Best-effort recovery must not continue past it.
+        except CommandControlError:
+            raise
         except Exception as ex:
             failed = True
             log.warning(
@@ -465,6 +469,8 @@ def _detach_shared_root_attachment(
                 dry_run=False,
             )
             detached_host = True
+        except CommandControlError:
+            raise
         except Exception as ex:
             failed = True
             log.warning(
@@ -531,6 +537,8 @@ def _detach_persistent_attachment(
             ip,
             dry_run=False,
         )
+    except CommandControlError:
+        raise
     except Exception as ex:
         log.warning(
             'Could not reconcile persistent attachment removal for VM {} source={} guest_dst={} token={}: {}',

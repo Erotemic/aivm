@@ -37,3 +37,19 @@ user's source tree.
 ``libvirt`` group membership grants control of the root daemon and is therefore
 effectively root-equivalent. Reducing sudo prompts is not the same as reducing
 the account's host authority. See :doc:`security` for the full analysis.
+
+What appears in the log
+-----------------------
+
+You are made aware of anything with the potential to perform an unbounded
+privileged sudo op, even when the program being called is known. Merely
+invoking ``sudo`` on the command line is strong enough of a thing that it needs
+to be called out, so every escalated command is printed at default verbosity
+regardless of whether it only reads. ``sudo qemu-img info`` inspects a disk and
+changes nothing, and it is still announced.
+
+State-changing commands are likewise always printed. What is held back for
+``--verbose 2`` is the remainder: reads that escalate nothing, such as ``virsh
+dominfo`` on a host where ``libvirt`` group membership has already removed the
+need for sudo. Nothing is discarded -- raising verbosity shows every command,
+along with the literal text of any payload the log abbreviated.

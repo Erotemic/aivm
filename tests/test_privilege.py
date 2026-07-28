@@ -16,7 +16,9 @@ from aivm.privilege import (
     file_write_needs_sudo,
     normalize_privilege_mode,
     path_needs_sudo,
+    path_read_needs_sudo,
     qemu_traversal_blockers,
+    user_can_read_path,
     user_can_write_file,
     user_can_write_path,
     virsh_needs_sudo,
@@ -99,6 +101,42 @@ def test_path_privilege_decisions(tmp_path: Path) -> None:
     assert path_needs_sudo(writable) is True
     _activate('never')
     assert path_needs_sudo(root_only) is False
+
+
+def test_read_probe_privilege_ignores_writability(tmp_path: Path) -> None:
+    """Inspecting a path asks about traversal, not write access.
+
+    ``mount -o remount,bind,ro`` leaves a bind target readable and
+    traversable while ``W_OK`` fails, so a write-based verdict escalated
+    ``findmnt``/``mountpoint`` on every ``ro`` attachment -- forever, and
+    for probes that exist precisely to *avoid* privileged repair. ``0555``
+    reproduces that permission shape without needing a real mount.
+    """
+    if os.geteuid() == 0:
+        pytest.skip('root passes every access check regardless of mode bits')
+
+    _activate('as-needed')
+    ro_like = tmp_path / 'ro-bind-target'
+    ro_like.mkdir()
+    ro_like.chmod(0o555)
+    assert user_can_write_path(ro_like) is False
+    assert path_needs_sudo(ro_like) is True
+    assert user_can_read_path(ro_like) is True
+    assert path_read_needs_sudo(ro_like) is False
+
+    # An untraversable ancestor is the case that genuinely needs root.
+    sealed = tmp_path / 'sealed'
+    sealed.mkdir()
+    sealed.chmod(0o000)
+    try:
+        assert user_can_read_path(sealed / 'child') is False
+        assert path_read_needs_sudo(sealed / 'child') is True
+        _activate('always')
+        assert path_read_needs_sudo(ro_like) is True
+        _activate('never')
+        assert path_read_needs_sudo(sealed / 'child') is False
+    finally:
+        sealed.chmod(0o755)
 
 
 def test_file_write_privilege_decisions(tmp_path: Path) -> None:

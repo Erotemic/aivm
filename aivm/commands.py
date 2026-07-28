@@ -12,14 +12,16 @@ approval prompts.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
 import sys
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from sys import version_info
-from typing import Literal, Sequence
+from typing import Iterator, Literal, Sequence
 
 if version_info >= (3, 11):
     from types import TracebackType
@@ -28,7 +30,14 @@ else:
 
 from loguru import logger
 
-from .errors import AIVMError, SudoRequiredError
+from .errors import (
+    AIVMError,
+    ApprovalUnavailableError,
+    CommandControlError,
+    CommandNotExecutedError,
+    SudoRequiredError,
+    UserDeclinedError,
+)
 from .modes import (
     DEFAULT_PRIVILEGE_MODE,
     PrivilegeMode,
@@ -65,6 +74,12 @@ log = logger
 
 CommandRole = Literal['read', 'modify']
 
+#: Whose state a write touches. ``user`` is anything the user would recognize
+#: as theirs, including the guest; ``tool`` is aivm's own regenerable
+#: bookkeeping. See "Command visibility and approval" in docs/source/design.rst
+#: for the bar ``tool`` has to clear.
+CommandOwnership = Literal['user', 'tool']
+
 
 def shell_join(cmd: Sequence[str]) -> str:
     """Render a command sequence as a shell-escaped string.
@@ -82,6 +97,64 @@ def shell_join(cmd: Sequence[str]) -> str:
     return ' '.join(shlex.quote(str(c)) for c in cmd)
 
 
+#: Length past which an *unmarked* argument is not printed in full. Crossing it
+#: says only that the argument is too long to show: never what it contains.
+#: Payloads worth naming are marked :class:`Elided` at the call site instead.
+PREVIEW_ARG_MAX_LEN = 400
+
+
+class Elided(str):
+    """A command argument shown in previews as a label instead of its value.
+
+    Execution is unaffected. This is a ``str`` subclass, so :func:`shell_join`
+    and :mod:`subprocess` see the real payload; only preview rendering
+    consults the label::
+
+        Elided(script, 'virtiofs guard installer: script, conf, service, timer')
+
+    Hiding is declared here, at the call site that knows what the payload is.
+    The renderer never infers from an argument's shape or position what it
+    holds, because a guess that reads as fact ("<remote command omitted>")
+    teaches the user something the log does not actually know.
+
+    The preview also carries the head of a SHA-256 of the value, which pins
+    which content ran far better than a character count: two scripts of equal
+    length are otherwise indistinguishable in a log.
+
+    Digesting is unconditional, and safe because of an invariant that holds
+    elsewhere: **secrets are never passed on a command line.** A private
+    deploy key reaches the guest through ``input_text`` on stdin, and provider
+    tokens are read from the environment, so no secret appears in ``spec.cmd``
+    to be digested. Anything that does appear there is already printed in full
+    by the ``raw command`` line at ``--verbose 2``, so withholding 32 bits of
+    its hash would protect nothing -- verbosity is not a security boundary.
+
+    The consequence for new code is the invariant, not the digest: if a value
+    must not be logged, it must not be an argument. Put it in ``input_text``.
+
+    The digest identifies; it never verifies. Eight hex characters is 32 bits
+    and trivially collidable, so nothing may use it to decide two payloads are
+    the same and skip a real check.
+
+    Attributes:
+        label: Short description rendered in place of the value.
+        digest_hex: Leading SHA-256 hex characters of the value.
+    """
+
+    label: str
+    digest_hex: str
+
+    #: Enough to tell runs apart in a log; nowhere near enough to trust.
+    DIGEST_CHARS = 8
+
+    def __new__(cls, value: str, label: str) -> 'Elided':
+        obj = super().__new__(cls, value)
+        obj.label = label
+        full = hashlib.sha256(value.encode('utf-8')).hexdigest()
+        obj.digest_hex = full[: cls.DIGEST_CHARS]
+        return obj
+
+
 @dataclass(frozen=True)
 class CommandResult:
     """Immutable result of one executed command.
@@ -95,6 +168,17 @@ class CommandResult:
     code: int
     stdout: str
     stderr: str
+
+
+CommandState = Literal['pending', 'succeeded', 'failed', 'not-executed']
+
+
+class CommandManagerInvariantError(CommandControlError):
+    """Raised when the manager cannot say what happened to a command.
+
+    Not knowing whether a command ran is never a recoverable outcome: the
+    only safe response is to stop rather than guess or re-execute.
+    """
 
 
 class CommandError(AIVMError):
@@ -151,6 +235,12 @@ class CommandSpec:
         sudo: If True, execute through ``sudo`` when needed.
         role: Optional explicit command role. When omitted, the role is
             inferred from the surrounding intent context.
+        ownership: Whose state a write touches. Defaults to ``user``, which
+            confirms; ``tool`` is the declared exemption for aivm's own
+            regenerable bookkeeping.
+        user_driven: True when the command hands the terminal to the user --
+            an editor, a shell, an IDE. Any change is authored by them, in
+            front of them, so there is nothing left to confirm.
         check: If True, raise :class:`CommandError` on non-zero exit.
         capture: If True, capture stdout and stderr.
         text: If True, run the subprocess in text mode.
@@ -164,6 +254,8 @@ class CommandSpec:
     cmd: Sequence[str]
     sudo: bool = False
     role: CommandRole | None = None
+    ownership: CommandOwnership = 'user'
+    user_driven: bool = False
     check: bool = True
     capture: bool = True
     text: bool = True
@@ -190,28 +282,72 @@ class CommandHandle:
     manager: 'CommandManager'
     command_id: int
     _result: CommandResult | None = None
-    _executed: bool = False
+    _state: CommandState = 'pending'
+    _error: BaseException | None = None
 
     def done(self) -> bool:
-        """Return True if this command has already been executed."""
-        return self._executed
+        """Return True once this command has reached a terminal state.
+
+        Terminal means resolved, not successful: a command that failed or was
+        never executed is as finished as one that succeeded.
+        """
+        return self._state != 'pending'
 
     def result(self, *, _stacklevel: int = 1) -> CommandResult:
         """Return the command result, executing through this handle if needed.
 
-        If the command has not run yet, this method asks the manager to
-        flush execution through this handle's command id before returning
-        the cached result.
+        Only a pending handle triggers execution. Once a handle is terminal it
+        answers from stored state forever: a success replays its result, a
+        failure re-raises its exception, and a command that never ran raises
+        :class:`CommandNotExecutedError`.
+
+        Reading a result must never be a way to *cause* work. Before handles
+        owned their outcome, a failed one stayed pending, so re-reading it
+        flushed the queue again and ran whatever unrelated command happened to
+        be waiting there -- including state-changing ones.
 
         Returns:
             The normalized command result.
+
+        Raises:
+            CommandError: If the command ran and failed. The original
+                exception object is re-raised, not a reconstruction.
+            CommandNotExecutedError: If the command never ran.
         """
-        if not self._executed:
+        if self._state == 'pending':
             self.manager.flush_through(
                 self.command_id, _stacklevel=_stacklevel + 1
             )
-        assert self._result is not None
-        return self._result
+        if self._state == 'succeeded':
+            assert self._result is not None
+            return self._result
+        if self._error is not None:
+            raise self._error
+        raise CommandManagerInvariantError(
+            f'Command {self.command_id} is still pending after the flush that '
+            'was supposed to resolve it. Refusing to flush again, because '
+            'that would execute unrelated queued work.'
+        )
+
+    def _set_result(self, result: CommandResult) -> None:
+        """Record a successful execution on this handle."""
+        self._result = result
+        self._state = 'succeeded'
+
+    def _set_failure(self, error: BaseException) -> None:
+        """Record that execution was attempted and raised.
+
+        Stores :class:`BaseException` deliberately. A ``KeyboardInterrupt``
+        mid-command must leave the handle terminal like any other outcome; it
+        is re-raised untouched rather than translated into a domain failure.
+        """
+        self._error = error
+        self._state = 'failed'
+
+    def _set_not_executed(self, reason: str) -> None:
+        """Record that this command will never run."""
+        self._error = CommandNotExecutedError(reason)
+        self._state = 'not-executed'
 
     @property
     def stdout(self) -> str:
@@ -233,11 +369,6 @@ class CommandHandle:
         """Alias for :attr:`returncode`."""
         return self.result().code
 
-    def _set_result(self, result: CommandResult) -> None:
-        """Record the result of execution on this handle."""
-        self._result = result
-        self._executed = True
-
 
 @dataclass
 class PlannedCommand:
@@ -250,6 +381,39 @@ class PlannedCommand:
     command_id: int
     spec: CommandSpec
     handle: CommandHandle
+    # Set immediately before execution, so it means *attempted*, not
+    # *succeeded*. A command that raised has still been attempted, and this is
+    # the single invariant that keeps a later flush from re-running it: queue
+    # position and cursors cannot express that, because a raise skips whatever
+    # bookkeeping follows the call.
+    attempted: bool = False
+
+
+@dataclass
+class Attempt:
+    """Outcome of a :meth:`CommandManager.attempt` block.
+
+    Attributes:
+        title: What was being attempted.
+        error: The handled exception, or None when the block succeeded.
+    """
+
+    title: str
+    error: BaseException | None = None
+
+    @property
+    def failed(self) -> bool:
+        """Whether the attempt failed in a way the caller expected."""
+        return self.error is not None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    @property
+    def reason(self) -> str:
+        """The failure, phrased for a user, or '' when it succeeded."""
+        return str(self.error) if self.error is not None else ''
 
 
 @dataclass
@@ -511,6 +675,67 @@ class CommandManager:
         """
         return IntentScope(self, title, why=why, role=role, visible=visible)
 
+    @contextmanager
+    def attempt(
+        self,
+        title: str,
+        *,
+        why: str = '',
+        catch: type[BaseException] | tuple[type[BaseException], ...] = (
+            CommandError
+        ),
+    ) -> Iterator['Attempt']:
+        """Run commands whose failure is an expected, handled outcome.
+
+        Callers that can recover from a failure otherwise write their own
+        ``try``/``except`` around manager calls, which states *how* they are
+        coping rather than *what* they are doing, and leaves the manager
+        believing an error is still live. This declares the intent instead:
+        the block may fail, the failure is handled here, and execution
+        continues with whatever the caller does next.
+
+        The block's outcome is reported on the yielded :class:`Attempt`
+        instead of propagating::
+
+            with mgr.attempt('Register the deploy key') as registering:
+                remote = provider.add_key(...)
+            if registering.failed:
+                hand_off_to_a_human(registering.reason)
+
+        Logging says so too, so an ERROR line inside a handled attempt does
+        not read as a fatal error to whoever is watching.
+
+        Args:
+            title: What is being attempted, in user-facing words.
+            why: Optional longer explanation.
+            catch: Exception types treated as an outcome rather than an
+                error. Anything else propagates normally.
+                :class:`~aivm.errors.CommandControlError` is never caught
+                here, whatever this says.
+        """
+        record = Attempt(title=title)
+        log.debug('Attempting: {}{}', title, f' ({why})' if why else '')
+        try:
+            yield record
+        except CommandControlError:
+            # Defense in depth against a broad `catch`. A control error is a
+            # decision about whether work may happen at all -- the user
+            # declined, approval could not be requested, policy forbade it --
+            # and recovering from one continues past the user rather than past
+            # a failure. A caller cannot opt into swallowing that, by
+            # oversight or otherwise; `catch=AIVMError` is broad enough to
+            # cover these by accident, and did.
+            raise
+        except catch as ex:  # type: ignore[misc]
+            record.error = ex
+            log.info(
+                'Attempt failed but is handled by the caller: {}: {}',
+                title,
+                ex,
+            )
+        else:
+            log.debug('Attempt succeeded: {}', title)
+
     def step(
         self,
         title: str,
@@ -626,8 +851,19 @@ class CommandManager:
                 return
 
     def abort_plan(self, plan: CommandPlan) -> None:
-        """Mark ``plan`` as closed without executing its commands."""
+        """Mark ``plan`` as closed without executing its commands.
+
+        Every command that never ran is resolved here rather than left
+        pending. A handle that outlives its plan must still answer for itself:
+        awaiting one cannot be allowed to reopen a step the manager abandoned.
+        """
         # TODO: probably a good public method, let the underlying scope handle it.
+        for item in plan.commands:
+            if not item.attempted and not item.handle.done():
+                item.handle._set_not_executed(
+                    f'Step {plan.title!r} was aborted before this command ran: '
+                    f'{self._preview_command(item.spec)}'
+                )
         plan.closed = True
 
     def finish_plan(self, plan: CommandPlan, *, _stacklevel: int = 1) -> None:
@@ -654,6 +890,8 @@ class CommandManager:
         *,
         sudo: bool = False,
         role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -694,9 +932,13 @@ class CommandManager:
         # keep it type strict though. Don't do this one yet. Need to think
         # about it more.
         spec = CommandSpec(
-            cmd=tuple(str(c) for c in cmd),
+            # Coerce tokens to str, but never through Elided: str() would drop
+            # the label and silently restore the payload to previews.
+            cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
             sudo=bool(sudo),
             role=role,
+            ownership=ownership,
+            user_driven=bool(user_driven),
             check=bool(check),
             capture=bool(capture),
             text=bool(text),
@@ -732,6 +974,8 @@ class CommandManager:
         *,
         sudo: bool = False,
         role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
         check: bool = True,
         capture: bool = True,
         text: bool = True,
@@ -746,6 +990,8 @@ class CommandManager:
             cmd,
             sudo=sudo,
             role=role,
+            ownership=ownership,
+            user_driven=bool(user_driven),
             check=check,
             capture=capture,
             text=text,
@@ -764,7 +1010,7 @@ class CommandManager:
         if self.plan_stack:
             self._flush_plan(self.plan_stack[-1], _stacklevel=_stacklevel + 1)
             return
-        if self._loose_commands:
+        if self._has_pending_loose():
             self._flush_loose_commands(_stacklevel=_stacklevel + 1)
 
     def flush_through(self, command_id: int, *, _stacklevel: int = 1) -> None:
@@ -778,6 +1024,9 @@ class CommandManager:
             command_id: Identifier of the last command that must be run.
         """
         # TODO: does this need to be public?
+        # Only ever flush a queue that actually holds the requested command.
+        # Substituting "whatever else is pending" is how re-reading a resolved
+        # handle used to execute an unrelated command.
         for plan in reversed(self.plan_stack):
             if any(item.command_id == command_id for item in plan.commands):
                 self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
@@ -787,12 +1036,15 @@ class CommandManager:
                     _stacklevel=_stacklevel + 1,
                 )
                 return
-        if self._loose_commands:
+        if any(item.command_id == command_id for item in self._loose_commands):
             self._flush_loose_commands(
                 through_command_id=command_id, _stacklevel=_stacklevel + 1
             )
             return
-        raise RuntimeError(f'Unknown command handle id: {command_id}')
+        raise CommandManagerInvariantError(
+            f'No queue holds command {command_id}, so the manager cannot say '
+            'whether it ran. Refusing to execute anything else.'
+        )
 
     def _normalize_role(self, role: str | None) -> CommandRole:
         """Normalize a role string to ``'read'`` or ``'modify'``."""
@@ -956,7 +1208,7 @@ class CommandManager:
                 self._authenticate_sudo()
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -971,9 +1223,44 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
         if auth_required:
             self._authenticate_sudo()
+
+    @contextmanager
+    def approved_action(
+        self,
+        *,
+        purpose: str,
+        yes: bool = False,
+    ) -> Iterator[None]:
+        """Approve one compound action before any direct mutation occurs.
+
+        Some operations combine direct Python filesystem changes with later
+        subprocess mutations. This scope obtains approval up front and
+        temporarily suppresses nested command prompts so declining can never
+        happen after the direct portion has already changed state.
+        """
+        already_approved = bool(
+            yes or self.yes or self._approve_all_remaining
+        )
+        if not already_approved:
+            if not sys.stdin.isatty():
+                raise ApprovalUnavailableError(
+                    'This state-changing operation requires confirmation, '
+                    'but stdin is not interactive. Re-run with --yes.'
+                )
+            log.opt(depth=0).info('About to perform a state-changing action:')
+            log.opt(depth=0).info('  {}', purpose)
+            ans = input('Continue? [y/N]: ').strip().lower()
+            if ans not in {'y', 'yes'}:
+                raise UserDeclinedError('Aborted by user.')
+        previous = self._approve_all_remaining
+        self._approve_all_remaining = True
+        try:
+            yield
+        finally:
+            self._approve_all_remaining = previous
 
     def confirm_file_update(
         self,
@@ -986,7 +1273,7 @@ class CommandManager:
         if yes or self.yes or self._approve_all_remaining:
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'External host file updates require confirmation, but stdin is not interactive. '
                 'Re-run with --yes.'
             )
@@ -996,31 +1283,41 @@ class CommandManager:
         local_log.info('  {}', purpose)
         ans = input('Continue? [y/N]: ').strip().lower()
         if ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
-    def _is_system_libvirt_mutation(self, spec: CommandSpec) -> bool:
-        """Return True for state-changing hypervisor commands.
+    def _is_confirmable_write(self, spec: CommandSpec) -> bool:
+        """Return True for a state change the user has to consent to.
 
-        With libvirt group membership these run without sudo, but they keep
-        the approval contract of the sudo era: destroying a VM must not
-        become promptless just because escalation is no longer needed.
+        The write itself is the guard. This deliberately does not consult the
+        command name: gating on ``virsh`` guarded ``undefine
+        --remove-all-storage`` only by the coincidence that it shares a binary
+        with ``setvcpus``, while an unprivileged command doing the same damage
+        by another route was never guarded at all.
+
+        Two exemptions, both declared by the call site and never inferred:
+        ``ownership='tool'`` for aivm's own regenerable bookkeeping, and
+        ``user_driven`` for commands that hand the terminal to the user. See
+        docs/source/design.rst for the bar each must clear.
         """
         if self._effective_role(spec) != 'modify':
             return False
-        head = str(spec.cmd[0]) if spec.cmd else ''
-        return head in {'virsh', 'virt-install'}
+        if spec.user_driven:
+            return False
+        return spec.ownership != 'tool'
 
     def _command_needs_approval(self, spec: CommandSpec) -> bool:
         """Return True when ``spec`` must be confirmed before executing.
 
-        Approval applies to sudo commands and to unprivileged state-changing
-        libvirt commands; ``yes``/``yes_sudo`` and the read-only sudo
-        auto-approve policy suppress prompts exactly as before.
+        Two independent triggers: the command changes state, or it escalates
+        on the host. They overlap deliberately, so a write that also needs
+        sudo is caught even if its effect was mis-declared -- but the user is
+        asked exactly once, because approval is a property of the command
+        rather than a toll per matching rule.
         """
         if os.geteuid() == 0:
             return False
         privileged = spec.sudo
-        if not privileged and not self._is_system_libvirt_mutation(spec):
+        if not privileged and not self._is_confirmable_write(spec):
             return False
         if self.yes or self.yes_sudo or self._approve_all_remaining:
             return False
@@ -1073,7 +1370,7 @@ class CommandManager:
             plan.approved_command_count = len(plan.commands)
             return
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'Privileged host operations require confirmation, but stdin is not interactive. '
                 'Re-run with --yes or --yes-sudo.'
             )
@@ -1097,7 +1394,7 @@ class CommandManager:
                 plan.approved = True
                 plan.approved_command_count = len(plan.commands)
                 return
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
     def _render_plan_preview(
         self, plan: CommandPlan, *, _stacklevel: int = 1
@@ -1116,12 +1413,13 @@ class CommandManager:
         for idx, item in enumerate(plan.commands, start=1):
             summary = item.spec.summary or shell_join(item.spec.cmd)
             role = self._effective_role(item.spec)
-            preview_cmd = self._preview_command(item.spec)
+            preview_cmd, omissions = self._render_preview(item.spec)
             local_log.info('  {}. {}', idx, summary)
             command_label = (
                 'command (read-only)' if role == 'read' else 'command'
             )
             local_log.info('     {}: {}', command_label, preview_cmd)
+            self._announce_omissions(omissions, _stacklevel=_stacklevel)
             if item.spec.detail:
                 local_log.debug('     detail: {}', item.spec.detail)
             raw_cmd = self._raw_command(item.spec)
@@ -1189,7 +1487,7 @@ class CommandManager:
         """Prompt for a state-changing hypervisor command that needs no sudo."""
         local_log = log.opt(depth=0)
         local_log.info(
-            'About to run state-changing hypervisor operations (no sudo needed):'
+            'About to run state-changing operations (no sudo needed):'
         )
         local_log.info('  {}', purpose)
         if preview_cmds:
@@ -1199,7 +1497,7 @@ class CommandManager:
                     '    {}. {}', idx, shell_join([str(p) for p in cmd])
                 )
         if not sys.stdin.isatty():
-            raise AIVMError(
+            raise ApprovalUnavailableError(
                 'State-changing operations require confirmation, but stdin '
                 'is not interactive. Re-run with --yes.'
             )
@@ -1207,7 +1505,7 @@ class CommandManager:
         if ans in {'a', 'all'}:
             self._approve_all_remaining = True
         elif ans not in {'y', 'yes'}:
-            raise AIVMError('Aborted by user.')
+            raise UserDeclinedError('Aborted by user.')
 
     def _flush_plan(
         self,
@@ -1216,15 +1514,24 @@ class CommandManager:
         through_command_id: int | None = None,
         _stacklevel: int = 1,
     ) -> None:
-        """Execute pending commands in ``plan`` in submission order."""
-        for idx in range(plan.executed_upto + 1, len(plan.commands)):
+        """Execute pending commands in ``plan`` in submission order.
+
+        Iterates by index rather than over a snapshot because a command may be
+        appended mid-flush (a sudo escalation fallback does exactly that), and
+        skips anything already attempted rather than tracking a cursor.
+        """
+        idx = -1
+        while idx + 1 < len(plan.commands):
+            idx += 1
             item = plan.commands[idx]
+            if item.attempted:
+                continue
             if (
                 plan.approved
                 and idx >= plan.approved_command_count
                 and (
                     item.spec.sudo
-                    or self._is_system_libvirt_mutation(item.spec)
+                    or self._is_confirmable_write(item.spec)
                 )
             ):
                 # This command was appended after the step cleared approval
@@ -1249,12 +1556,17 @@ class CommandManager:
                     and self.sudo_authentication_required()
                 ):
                     self._authenticate_sudo()
-            res = self._execute_one(
-                item.spec,
-                ordinal=(idx + 1, len(plan.commands)),
-                within_plan=True,
-                _stacklevel=_stacklevel + 1,
-            )
+            item.attempted = True
+            try:
+                res = self._execute_one(
+                    item.spec,
+                    ordinal=(idx + 1, len(plan.commands)),
+                    within_plan=True,
+                    _stacklevel=_stacklevel + 1,
+                )
+            except BaseException as ex:
+                item.handle._set_failure(ex)
+                raise
             item.handle._set_result(res)
             plan.executed_upto = idx
             if (
@@ -1263,6 +1575,19 @@ class CommandManager:
             ):
                 break
 
+    def _next_unattempted_loose(self) -> PlannedCommand | None:
+        """Return the oldest loose command that has not been attempted."""
+        for item in self._loose_commands:
+            if not item.attempted:
+                return item
+        # Nothing left to do, so the queue can be released. Attempted items are
+        # kept until here only so a partial flush can find its place again.
+        self._loose_commands.clear()
+        return None
+
+    def _has_pending_loose(self) -> bool:
+        return any(not item.attempted for item in self._loose_commands)
+
     def _flush_loose_commands(
         self,
         *,
@@ -1270,13 +1595,19 @@ class CommandManager:
         _stacklevel: int = 1,
     ) -> None:
         """Execute pending loose commands in FIFO order."""
-        while self._loose_commands:
-            item = self._loose_commands[0]
-            res = self._execute_one(
-                item.spec, within_plan=False, _stacklevel=_stacklevel + 1
-            )
+        while True:
+            item = self._next_unattempted_loose()
+            if item is None:
+                return
+            item.attempted = True
+            try:
+                res = self._execute_one(
+                    item.spec, within_plan=False, _stacklevel=_stacklevel + 1
+                )
+            except BaseException as ex:
+                item.handle._set_failure(ex)
+                raise
             item.handle._set_result(res)
-            self._loose_commands.pop(0)
             if (
                 through_command_id is not None
                 and item.command_id >= through_command_id
@@ -1290,37 +1621,88 @@ class CommandManager:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         return shell_join(cmd)
 
-    def _preview_command(self, spec: CommandSpec, *, max_len: int = 160) -> str:
-        """Return a shortened command preview suitable for logs.
+    def _render_preview(self, spec: CommandSpec) -> tuple[str, list[str]]:
+        """Return ``(preview, omissions)`` for ``spec``.
 
-        Long shell snippets and remote command tails are abbreviated to keep
-        previews readable while still revealing the overall command shape.
+        Arguments render verbatim, so the line stays the command the user
+        would have typed. Two things are not printed in full: an argument the
+        call site marked :class:`Elided`, which renders as its label, and an
+        unmarked argument past :data:`PREVIEW_ARG_MAX_LEN`, which says only
+        that it is too long and asks to be marked.
+
+        Nothing here infers what a payload is. An unmarked payload therefore
+        reads as an unhelpful log line rather than a tidy one, which is the
+        point: it names work still to do, the way an ungrouped command does.
+
+        ``omissions`` describes anything left out, so the caller can say so
+        out loud. A quietly shortened command is worse than a long one: the
+        reader has no way to tell a faithful line from an abridged one.
         """
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         display_parts: list[str] = []
-        for idx, part in enumerate(cmd):
+        omissions: list[str] = []
+        for part in cmd:
+            if isinstance(part, Elided):
+                display_parts.append(f'<<OMITTED {part.label}>>')
+                omissions.append(
+                    f'{part.label} ({len(part)} characters, '
+                    f'sha256:{part.digest_hex})'
+                )
+                continue
             text = str(part)
-            prev = str(cmd[idx - 1]) if idx > 0 else ''
-            prev2 = str(cmd[idx - 2]) if idx > 1 else ''
-            if len(text) > 80:
-                if prev == '-c' and prev2 in {'bash', 'sh'}:
-                    text = '<shell script omitted>'
-                elif idx == len(cmd) - 1 and 'ssh' in {
-                    str(cmd[0]),
-                    str(cmd[1]) if len(cmd) > 1 else '',
-                }:
-                    text = '<remote command omitted>'
-                else:
-                    text = text[:57] + '...'
+            if len(text) > PREVIEW_ARG_MAX_LEN:
+                display_parts.append('<<OMITTED unmarked argument>>')
+                omissions.append(
+                    f'UNMARKED argument ({len(text)} characters). Mark it '
+                    'Elided(value, label) at the call site to name it'
+                )
+                continue
             display_parts.append(shlex.quote(text))
-        preview_cmd = ' '.join(display_parts)
-        if len(preview_cmd) <= max_len:
-            return preview_cmd
-        if max_len <= 3:
-            return preview_cmd[:max_len]
-        return preview_cmd[: max_len - 3] + '...'
+        return ' '.join(display_parts), omissions
+
+    def _preview_command(self, spec: CommandSpec) -> str:
+        """Return only the rendered preview line for ``spec``."""
+        return self._render_preview(spec)[0]
+
+    def _announce_omissions(
+        self,
+        omissions: Sequence[str],
+        *,
+        quiet: bool = False,
+        _stacklevel: int = 1,
+    ) -> None:
+        """Say plainly that the line above was not the whole command.
+
+        An unmarked payload is logged as a warning because it is a gap in the
+        code, not a deliberate choice; a marked one is expected and stays at
+        info. Both name how to recover the literal text.
+
+        The extra frame for this helper is added to ``_stacklevel`` so the
+        notice is attributed to the call site that ran the command, next to
+        the line it is talking about.
+
+        ``quiet`` follows the command's own visibility. A notice that says
+        "the command above" must never outlive the command above: an
+        unprivileged read is held for ``--verbose 2``, so its omission notice
+        is too, or the log shows a complaint about a line that is not there.
+        """
+        local_log = log.opt(depth=_stacklevel + 1)
+        for description in omissions:
+            if quiet:
+                emit = local_log.debug
+            else:
+                emit = (
+                    local_log.warning
+                    if description.startswith('UNMARKED')
+                    else local_log.info
+                )
+            emit(
+                '  ^^ OMITTED FROM THE COMMAND ABOVE: {}. Re-run with -vv to '
+                'log the literal command.',
+                description,
+            )
 
     def _execute_one(
         self,
@@ -1333,34 +1715,57 @@ class CommandManager:
         """Execute one command specification and normalize its result."""
         local_log = log.opt(depth=_stacklevel)
         self._reject_sudo_if_forbidden(spec.cmd, needs_sudo=spec.sudo)
-        if self._effective_role(spec) == 'modify':
+        role = self._effective_role(spec)
+        if role == 'modify':
             # Bump before running so probe caches are invalidated even if
             # the mutation fails partway through.
             self.mutation_generation += 1
         if not within_plan and (
-            spec.sudo or self._is_system_libvirt_mutation(spec)
+            spec.sudo or self._is_confirmable_write(spec)
         ):
             self._confirm_loose_command(spec, _stacklevel=_stacklevel + 1)
+        # Whether privilege is actually spent, not merely offered: under
+        # privilege_mode='as-needed' a caller passes sudo=True speculatively,
+        # and as root no escalation happens at all.
+        escalated = spec.sudo and os.geteuid() != 0
         cmd = list(spec.cmd)
-        if spec.sudo and os.geteuid() != 0:
+        if escalated:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
 
-        run_line = shell_join(cmd)
+        # Render what the user could have typed, minus payloads the call site
+        # marked. The literal line stays reachable at DEBUG in this same run,
+        # so following a log never requires re-running the command to read it.
+        run_line, omissions = self._render_preview(spec)
+        raw_line = shell_join(cmd)
 
-        # Keep mutating or privileged work visible at INFO while leaving
-        # unprivileged plumbing at DEBUG unless a plan preview already framed it.
-        if spec.sudo:
-            emit = local_log.info
-        else:
-            emit = local_log.debug
-
+        # POLICY (see CLAUDE.md, "`sudo` on the command line is always called
+        # out"): the user is made aware of anything with the potential to
+        # perform an unbounded privileged sudo op, even if we know what the
+        # program being called is. Merely invoking sudo on the command line is
+        # strong enough of a thing that it needs to be called out. Do not
+        # reduce this to role alone -- a privileged read still prints, because
+        # what is announced is the escalation, not the read.
+        #
+        # State changes are announced for the separate reason that they
+        # altered the host. What is left for -vv is the remainder: a read that
+        # escalates nothing, which is plumbing.
+        #
+        # Quiet is therefore declared, never inferred: a command is demoted
+        # only where a call site says role='read' or runs inside a read intent
+        # *and* no sudo was applied. An unclassified command defaults to
+        # 'modify' and stays loud, so an unaudited path is heard, not skipped.
+        quiet = role == 'read' and not escalated
+        emit = local_log.debug if quiet else local_log.info
         if within_plan and ordinal is not None:
             current, total = ordinal
             emit('RUN [{}/{}]: {}', current, total, run_line)
-        elif spec.check:
-            local_log.info('RUN: {}', run_line)
         else:
             emit('RUN: {}', run_line)
+        self._announce_omissions(
+            omissions, quiet=quiet, _stacklevel=_stacklevel
+        )
+        if raw_line != run_line:
+            local_log.debug('  raw command: {}', raw_line)
 
         try:
             proc = subprocess.run(

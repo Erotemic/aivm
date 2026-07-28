@@ -21,8 +21,8 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
-from ..errors import AIVMError
-from ..firewall import apply_firewall
+from ..errors import AIVMError, CommandControlError
+from ..firewall import apply_firewall, effective_firewall_table
 from ..net import ensure_network
 from ..privilege import sudo_allowed
 from ..services import (
@@ -323,6 +323,10 @@ def _restore_saved_vm_attachments(
                 dry_run=False,
                 continue_on_error=True,
             )
+        # A declined prompt is the user answering the question, not a step
+        # that went wrong. Best-effort recovery must not continue past it.
+        except CommandControlError:
+            raise
         except Exception as ex:
             log.warning(
                 'persistent-restore: VM {} replay failed during restore: {}',
@@ -382,6 +386,8 @@ def _restore_saved_vm_attachments(
                     tag=aligned.tag,
                 )
                 restored += 1
+            except CommandControlError:
+                raise
             except Exception as ex:
                 if (
                     isinstance(ex, RuntimeError)
@@ -421,6 +427,8 @@ def _restore_saved_vm_attachments(
                     dry_run=False,
                     read_only=(aligned.access == ATTACHMENT_ACCESS_RO),
                 )
+            except CommandControlError:
+                raise
             except Exception as ex:
                 log.warning(
                     'Could not restore saved attachment for VM {}: source={} guest_dst={} tag={} err={}',
@@ -471,6 +479,8 @@ def _restore_saved_vm_attachments(
                 tag=aligned.tag,
             )
             restored += 1
+        except CommandControlError:
+            raise
         except Exception as ex:
             log.warning(
                 'Could not remount saved attachment inside guest for VM {}: source={} guest_dst={} tag={} err={}',
@@ -517,7 +527,7 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
     from ..runtime import virsh_cmd
 
     res = CommandManager.current().run(
-        virsh_cmd('domstate', vm_name),
+        virsh_cmd('domstate', vm_name), role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -534,12 +544,44 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
     return 'running' in state
 
 
+def _note_unavoidable_firewall_sudo(cfg: AgentVMConfig) -> None:
+    """Explain the firewall probe's sudo prompt before it appears.
+
+    This one is not avoidable and not a symptom of anything being wrong, so
+    say that up front rather than letting it read as a stray escalation:
+    ``nft`` offers no unprivileged read, and the managed table lives only in
+    the kernel's live ruleset, so a host reboot always takes it with it.
+
+    Quiet when sudo is already authenticated -- with no prompt coming, the
+    explanation is just noise.
+    """
+    if not CommandManager.current().sudo_authentication_required():
+        return
+    log.info(
+        'The next step needs sudo and there is no way around it: reading '
+        'nftables state ({}) requires root, with no unprivileged fallback.',
+        f'table inet {effective_firewall_table(cfg)}',
+    )
+    log.info(
+        'The managed table exists only in the live kernel ruleset, so it is '
+        'gone after every host reboot and has to be checked (and usually '
+        'reinstalled) before the first session.'
+    )
+    log.info(
+        'Expect this roughly once per boot: later runs skip the firewall '
+        'check entirely while the VM stays reachable over SSH. Pass '
+        '--no-ensure_firewall to skip it, at the cost of running the '
+        'session without the sandbox rules.'
+    )
+
+
 def _reconcile_attached_vm(
     cfg: AgentVMConfig,
     host_src: Path,
     attachment: ResolvedAttachment,
     *,
     policy: ReconcilePolicy,
+    config_store_path: Path | None = None,
 ) -> ReconcileResult:
     """Reconcile VM/network/firewall/share state before code/ssh-style sessions.
 
@@ -587,6 +629,7 @@ def _reconcile_attached_vm(
                 # nft reads need root on almost every host, so probing
                 # without sudo first would just submit a doomed command; go
                 # straight to the read-only sudo probe.
+                _note_unavoidable_firewall_sudo(cfg)
                 fw_probe = probe_firewall(cfg, use_sudo=True).ok
                 need_firewall_apply = fw_probe is not True
         if need_firewall_apply:
@@ -642,11 +685,14 @@ def _reconcile_attached_vm(
                     cfg,
                     dry_run=policy.dry_run,
                     recreate=False,
+                    config_store_path=config_store_path,
                     share_source_dir=(
                         virtiofs_mapping[0] if virtiofs_mapping else ''
                     ),
                     share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
                 )
+            except CommandControlError:
+                raise
             except Exception as ex:
                 missing_virtiofs_dir = _missing_virtiofs_dir_from_error(ex)
                 if not policy.dry_run and missing_virtiofs_dir is not None:
@@ -659,6 +705,7 @@ def _reconcile_attached_vm(
                         cfg,
                         dry_run=False,
                         recreate=True,
+                        config_store_path=config_store_path,
                         share_source_dir=(
                             virtiofs_mapping[0] if virtiofs_mapping else ''
                         ),
@@ -760,6 +807,8 @@ def _reconcile_attached_vm(
                             ),
                         )
                     has_share = True
+                except CommandControlError:
+                    raise
                 except Exception as ex:
                     current_maps = mappings or vm_share_mappings(
                         cfg, use_sudo=False
@@ -815,6 +864,7 @@ def _reconcile_attached_vm(
                 cfg,
                 dry_run=policy.dry_run,
                 recreate=True,
+                config_store_path=config_store_path,
                 share_source_dir=(
                     virtiofs_mapping[0] if virtiofs_mapping else ''
                 ),
@@ -925,6 +975,7 @@ def _prepare_attached_session(
             dry_run=bool(dry_run),
             yes=bool(yes),
         ),
+        config_store_path=cfg_path,
     )
     attachment = reconcile.attachment
     cached_ip = reconcile.cached_ip

@@ -45,5 +45,9 @@ def edit_path(path: Path, command: list[str]) -> None:
     if not path.exists():
         path.write_text('', encoding='utf-8')
     CommandManager.current().run(
-        [*command, str(path)], sudo=False, check=True, capture=False
+        [*command, str(path)],
+        sudo=False,
+        user_driven=True,
+        check=True,
+        capture=False,
     )

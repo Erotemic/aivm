@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from .models import AttachmentEntry, Store
+from .models import AttachmentEntry, CredentialEntry, Store
 
 
 def _toml_escape(s: str) -> str:
@@ -38,6 +38,27 @@ def _emit_attachment(
             f'"{_toml_escape(p)}"' for p in att.host_lexical_paths
         ]
         lines.append(f'host_lexical_paths = [{", ".join(parts)}]')
+
+
+def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
+    for key in (
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_id',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    ):
+        lines.append(f'{key} = "{_toml_escape(str(getattr(cred, key)))}"')
+    # Emitted only when false so ordinary credentials -- and the stores that
+    # hold them -- render exactly as they did before this field existed.
+    if not cred.provider_managed:
+        lines.append('provider_managed = false')
+
 
 def _emit_defaults(lines: list[str], reg: Store) -> None:
     """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""
@@ -100,6 +121,11 @@ def render_store_toml(
     _emit_toml_kv(
         lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'as-needed')
     )
+    _emit_toml_kv(
+        lines,
+        'credential_directory_permission_policy',
+        str(reg.behavior.credential_directory_permission_policy or 'warn'),
+    )
     lines.append('')
 
     _emit_defaults(lines, reg)
@@ -144,6 +170,13 @@ def render_store_toml(
             for att in nested:
                 lines.append('[[vms.attachments]]')
                 _emit_attachment(lines, att, include_vm_name=False)
+        nested_creds = sorted(
+            (cred for cred in reg.credentials if cred.vm_name == vm.name),
+            key=lambda cred: cred.id,
+        )
+        for cred in nested_creds:
+            lines.append('[[vms.credentials]]')
+            _emit_credential(lines, cred)
         lines.append('')
 
     legacy_atts = reg.attachments
@@ -245,5 +278,12 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     for att in nested:
         lines.append('[[vms.attachments]]')
         _emit_attachment(lines, att, include_vm_name=False)
+    nested_creds = sorted(
+        (cred for cred in reg.credentials if cred.vm_name == vm.name),
+        key=lambda cred: cred.id,
+    )
+    for cred in nested_creds:
+        lines.append('[[vms.credentials]]')
+        _emit_credential(lines, cred)
     lines.append('')
     return '\n'.join(lines).rstrip() + '\n'

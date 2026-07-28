@@ -8,9 +8,9 @@ from typing import Any
 import kwconf
 
 from ...config_store import (
-    find_vm,
     load_config_document,
     load_store,
+    require_vm,
     save_store,
 )
 from ...errors import AIVMError
@@ -115,6 +115,5 @@ def _resolve_config_edit_target(
 
     if not vm_name:
         raise AIVMError('No VM specified and active_vm is unset.')
-    if find_vm(loaded.store, vm_name) is None:
-        raise AIVMError(f'VM not found in config: {vm_name}')
+    require_vm(loaded.store, vm_name)
     return _vm_config_source(root, loaded, vm_name)

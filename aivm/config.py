@@ -202,6 +202,10 @@ class BehaviorConfig:
     # new host bind mounts still require root on the supported runtime.
     # See `aivm host permissions check` for what this host still needs.
     privilege_mode: str = 'as-needed'
+    # How credential storage reacts when managed directories have broader
+    # group/other mode bits than recommended. This policy never weakens
+    # ownership, symlink, file-type, or key-file permission checks.
+    credential_directory_permission_policy: str = 'warn'
 
 
 @dataclass

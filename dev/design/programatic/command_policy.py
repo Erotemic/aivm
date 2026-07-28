@@ -3,6 +3,7 @@ from __future__ import annotations
 from itertools import product
 from typing import Any, Dict, Iterable, List, Literal, Optional
 
+import kwconf
 import pandas as pd
 
 STAR = '*'
@@ -20,6 +21,8 @@ BehaviorClass = Literal[
     'plan_noninteractive_error',
     'plan_prompt',
     'loose_non_sudo',
+    'loose_unprivileged_mutation_prompt',
+    'loose_unprivileged_mutation_noninteractive_error',
     'already_root',
     'loose_sudo_autoapproved',
     'loose_sudo_autoapproved_then_preauth',
@@ -60,6 +63,7 @@ BEHAVIOR_PREDICATE_COLS = [
     'auth_required',
     'effective_role',
     'auto_approve_readonly_sudo',
+    'is_hypervisor_mutation',
 ]
 
 BEHAVIOR_OUTCOME_KEY_COLS = [
@@ -91,6 +95,8 @@ def note_for_behavior_class(behavior_class: BehaviorClass) -> str:
         'plan_noninteractive_error': 'plan approval required but stdin is not interactive',
         'plan_prompt': 'Approve this step? [y]es/[a]ll/[s]how/[N]o',
         'loose_non_sudo': 'loose non-sudo command',
+        'loose_unprivileged_mutation_prompt': 'Continue? [y]es/[a]ll/[N]o',
+        'loose_unprivileged_mutation_noninteractive_error': 'unprivileged hypervisor mutation requires confirmation but stdin is not interactive',
         'already_root': 'already root',
         'loose_sudo_autoapproved': 'loose sudo auto-approved',
         'loose_sudo_autoapproved_then_preauth': 'loose sudo auto-approved, then sudo -v preauth',
@@ -163,9 +169,41 @@ def plan_command_behavior(
     auth_required: bool,
     effective_role: Role,
     auto_approve_readonly_sudo: bool,
+    is_hypervisor_mutation: bool = False,
 ) -> Dict[str, Any]:
     # Current code always renders the plan preview before deciding approval.
     if not sudo:
+        # A state-changing virsh/virt-install command spends root-equivalent
+        # libvirt group membership, so _command_needs_approval() holds the plan
+        # for approval even though no sudo is involved.
+        unprivileged_mutation = (
+            is_hypervisor_mutation and effective_role == 'modify'
+        )
+        auto_yes = manager_yes or yes_sudo or approve_all_remaining or is_root
+        if unprivileged_mutation and not auto_yes:
+            if not stdin_tty:
+                return {
+                    'render_plan_preview': True,
+                    'render_sudo_context': False,
+                    'prompt_kind': 'none',
+                    'noninteractive_error': True,
+                    'proceeds_without_prompt': False,
+                    'preauthenticate_without_prompt': False,
+                    'preauthenticate_if_prompt_approved': False,
+                    'sudo_auth_deferred_to_execute': False,
+                    'behavior_class': 'plan_noninteractive_error',
+                }
+            return {
+                'render_plan_preview': True,
+                'render_sudo_context': False,
+                'prompt_kind': 'plan',
+                'noninteractive_error': False,
+                'proceeds_without_prompt': False,
+                'preauthenticate_without_prompt': False,
+                'preauthenticate_if_prompt_approved': False,
+                'sudo_auth_deferred_to_execute': False,
+                'behavior_class': 'plan_prompt',
+            }
         return {
             'render_plan_preview': True,
             'render_sudo_context': False,
@@ -244,8 +282,49 @@ def loose_command_behavior(
     auth_required: bool,
     effective_role: Role,
     auto_approve_readonly_sudo: bool,
+    is_hypervisor_mutation: bool = False,
 ) -> Dict[str, Any]:
     if not sudo:
+        # _is_system_libvirt_mutation(): a state-changing virsh/virt-install
+        # command keeps the approval contract of the sudo era, because libvirt
+        # group membership is root-equivalent. Every other unprivileged command
+        # still proceeds without a prompt.
+        unprivileged_mutation = (
+            is_hypervisor_mutation and effective_role == 'modify'
+        )
+        auto_yes = (
+            op_yes
+            or manager_yes
+            or yes_sudo
+            or approve_all_remaining
+            or is_root
+        )
+        if unprivileged_mutation and not auto_yes:
+            if not stdin_tty:
+                return {
+                    'render_plan_preview': False,
+                    'render_sudo_context': False,
+                    'prompt_kind': 'none',
+                    'noninteractive_error': True,
+                    'proceeds_without_prompt': False,
+                    'preauthenticate_without_prompt': False,
+                    'preauthenticate_if_prompt_approved': False,
+                    'sudo_auth_deferred_to_execute': False,
+                    'behavior_class': (
+                        'loose_unprivileged_mutation_noninteractive_error'
+                    ),
+                }
+            return {
+                'render_plan_preview': False,
+                'render_sudo_context': False,
+                'prompt_kind': 'sudo',
+                'noninteractive_error': False,
+                'proceeds_without_prompt': False,
+                'preauthenticate_without_prompt': False,
+                'preauthenticate_if_prompt_approved': False,
+                'sudo_auth_deferred_to_execute': False,
+                'behavior_class': 'loose_unprivileged_mutation_prompt',
+            }
         return {
             'render_plan_preview': False,
             'render_sudo_context': False,
@@ -361,6 +440,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
             'auth_required': False,
             'effective_role': 'modify',
             'auto_approve_readonly_sudo': False,
+            'is_hypervisor_mutation': False,
         }
         rows.append(
             pred
@@ -383,6 +463,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
         auth_required,
         effective_role,
         auto_approve_readonly_sudo,
+        is_hypervisor_mutation,
     ) in product(
         [False, True],
         [False, True],
@@ -393,15 +474,14 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
         [False, True],
         ['read', 'modify'],
         [False, True],
+        [False, True],
     ):
-        # Canonicalize irrelevant fields for non-sudo plan commands
+        # Canonicalize fields that cannot affect a non-sudo plan command. The
+        # yes flags, is_root, stdin_tty and effective_role are NOT canonicalized
+        # here any more: an unprivileged hypervisor mutation is held for
+        # approval, so they decide its outcome.
         if not sudo:
-            is_root = False
-            manager_yes = False
-            yes_sudo = False
-            approve_all_remaining = False
             auth_required = False
-            effective_role = 'modify'
             auto_approve_readonly_sudo = False
 
         pred = {
@@ -417,6 +497,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
             'auth_required': auth_required,
             'effective_role': effective_role,
             'auto_approve_readonly_sudo': auto_approve_readonly_sudo,
+            'is_hypervisor_mutation': is_hypervisor_mutation,
         }
         rows.append(
             pred
@@ -430,6 +511,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
                 auth_required=auth_required,
                 effective_role=effective_role,  # type: ignore[arg-type]
                 auto_approve_readonly_sudo=auto_approve_readonly_sudo,
+                is_hypervisor_mutation=is_hypervisor_mutation,
             )
         )
 
@@ -445,6 +527,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
         auth_required,
         effective_role,
         auto_approve_readonly_sudo,
+        is_hypervisor_mutation,
     ) in product(
         [False, True],
         [False, True],
@@ -456,15 +539,13 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
         [False, True],
         ['read', 'modify'],
         [False, True],
+        [False, True],
     ):
+        # Only fields that genuinely cannot matter without sudo are collapsed.
+        # An unprivileged hypervisor mutation prompts, so the yes flags,
+        # is_root, stdin_tty and effective_role all still decide its outcome.
         if not sudo:
-            is_root = False
-            op_yes = False
-            manager_yes = False
-            yes_sudo = False
-            approve_all_remaining = False
             auth_required = False
-            effective_role = 'modify'
             auto_approve_readonly_sudo = False
 
         pred = {
@@ -480,6 +561,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
             'auth_required': auth_required,
             'effective_role': effective_role,
             'auto_approve_readonly_sudo': auto_approve_readonly_sudo,
+            'is_hypervisor_mutation': is_hypervisor_mutation,
         }
         rows.append(
             pred
@@ -494,6 +576,7 @@ def build_behavior_rows() -> List[Dict[str, Any]]:
                 auth_required=auth_required,
                 effective_role=effective_role,  # type: ignore[arg-type]
                 auto_approve_readonly_sudo=auto_approve_readonly_sudo,
+                is_hypervisor_mutation=is_hypervisor_mutation,
             )
         )
 
@@ -683,12 +766,6 @@ role_compact_rows = compress_rows_with_wildcards(
     outcome_cols=ROLE_OUTCOME_COLS,
 )
 
-from pprint import pformat
-
-print(
-    f'behavior_compact_rows = {pformat(behavior_compact_rows, sort_dicts=False)}'
-)
-
 behavior_compact_df = pd.DataFrame(behavior_compact_rows)
 role_compact_df = pd.DataFrame(role_compact_rows)
 
@@ -702,189 +779,237 @@ role_df = role_df[ROLE_PREDICATE_COLS + ROLE_OUTCOME_COLS]
 role_compact_df = role_compact_df[ROLE_PREDICATE_COLS + ROLE_OUTCOME_COLS]
 
 
-# ----
-# 4) A few useful inspection snippets
-# ----
+_GROUP_COLS = [
+    'queue',
+    'sudo',
+    'is_root',
+    'auth_required',
+    'effective_role',
+    'behavior_class',
+    'prompt_kind',
+]
 
-# The row you called out:
-loose_readonly_cold = behavior_df.query(
-    "op_kind == 'command' and queue == 'loose' and sudo == True "
-    "and is_root == False and auth_required == True and effective_role == 'read'"
-).sort_values(
-    [
-        'manager_yes',
-        'yes_sudo',
-        'approve_all_remaining',
-        'auto_approve_readonly_sudo',
-        'stdin_tty',
-        'op_yes',
-    ]
-)
-
-# Matching plan-side case:
-plan_readonly_cold = behavior_df.query(
-    "op_kind == 'command' and queue == 'plan' and sudo == True "
-    "and is_root == False and auth_required == True and effective_role == 'read'"
-).sort_values(
-    [
-        'manager_yes',
-        'yes_sudo',
-        'approve_all_remaining',
-        'auto_approve_readonly_sudo',
-        'stdin_tty',
-    ]
-)
-
-# Warm-auth readonly loose sudo:
-loose_readonly_warm = behavior_df.query(
-    "op_kind == 'command' and queue == 'loose' and sudo == True "
-    "and is_root == False and auth_required == False and effective_role == 'read'"
-).sort_values(
-    [
-        'manager_yes',
-        'yes_sudo',
-        'approve_all_remaining',
-        'auto_approve_readonly_sudo',
-        'stdin_tty',
-        'op_yes',
-    ]
-)
-
-# --- pretty terminal dumps with pandas formatting + Rich color ---
-
-from rich.console import Console
-
-console = Console()
-
-pd.set_option('display.max_rows', 200)
-pd.set_option('display.max_columns', 50)
-pd.set_option('display.width', 200)
-pd.set_option('display.max_colwidth', 80)
-
-
-def show_df(
-    title, df, *, sort_by=None, columns=None, max_rows=None, style='cyan'
-):
-    if sort_by:
-        df = df.sort_values(sort_by)
-    if columns:
-        df = df[columns]
-    if max_rows is not None:
-        df = df.head(max_rows)
-    console.rule(title, style='bold yellow')
-    console.print(df.to_string(index=False), style=style, markup=False)
-    console.print()
-
-
-# Core columns that are usually worth looking at
-main_cols = BEHAVIOR_PREDICATE_COLS + BEHAVIOR_OUTCOME_COLS
-
-show_df(
-    f'All behavior rows ({len(behavior_df)})',
-    behavior_df,
-    sort_by=[
-        'op_kind',
-        'queue',
-        'sudo',
-        'is_root',
-        'auth_required',
-        'effective_role',
-        'auto_approve_readonly_sudo',
-        'op_yes',
-        'manager_yes',
-        'yes_sudo',
-        'approve_all_remaining',
-        'stdin_tty',
-    ],
-    columns=main_cols,
-    style='bright_cyan',
-)
-
-show_df(
-    f'Compressed behavior rows ({len(behavior_compact_df)})',
-    behavior_compact_df,
-    sort_by=[
-        'op_kind',
-        'queue',
-        'sudo',
-        'is_root',
-        'auth_required',
-        'effective_role',
-        'auto_approve_readonly_sudo',
-        'behavior_class',
-    ],
-    columns=main_cols,
-    style='bright_green',
-)
-
-show_df(
-    f'Role derivation rows ({len(role_df)})',
-    role_df,
-    sort_by=['spec_role', 'spec_sudo', 'spec_check', 'intent_role'],
-    style='magenta',
-)
-
-show_df(
-    f'Compressed role derivation rows ({len(role_compact_df)})',
-    role_compact_df,
-    sort_by=['spec_role', 'spec_sudo', 'spec_check', 'intent_role'],
-    style='bright_magenta',
-)
-
-# --- subsets you said are most interesting ---
-
-show_df(
-    'Subset: loose sudo + read + cold auth',
-    loose_readonly_cold,
-    columns=main_cols,
-    style='bold bright_red',
-)
-
-show_df(
-    'Subset: plan sudo + read + cold auth',
-    plan_readonly_cold,
-    columns=main_cols,
-    style='bold red',
-)
-
-show_df(
-    'Subset: loose sudo + read + warm auth',
-    loose_readonly_warm,
-    columns=main_cols,
-    style='bold bright_yellow',
-)
-
-# Helpful grouped summary
 grouped = (
-    behavior_df.groupby(
-        [
-            'queue',
-            'sudo',
-            'is_root',
-            'auth_required',
-            'effective_role',
-            'behavior_class',
-            'prompt_kind',
-        ],
-        dropna=False,
-    )
+    behavior_df.groupby(_GROUP_COLS, dropna=False)
     .size()
     .reset_index(name='n')
-    .sort_values(
+    .sort_values(_GROUP_COLS)
+)
+
+
+# ----
+# 4) Inspection
+# ----
+
+
+class CommandPolicyCLI(kwconf.Config):
+    """Dump the command policy grid.
+
+    With no arguments this prints the same human report it always has. The
+    machine-readable formats exist so an agent can read the compressed tables
+    without scraping Rich output; they never change the default.
+    """
+
+    __command__ = 'command_policy'
+
+    format: str = kwconf.Value(
+        'human',
+        choices=['human', 'json', 'csv'],
+        help='Output format. "human" is the full Rich report.',
+        position=1,
+    )
+    table: str = kwconf.Value(
+        'grouped',
+        choices=[
+            'grouped',
+            'behavior',
+            'behavior_compact',
+            'role',
+            'role_compact',
+        ],
+        help=(
+            'Which table to emit for json/csv. Ignored when format=human, '
+            'which always prints every table.'
+        ),
+    )
+
+
+def main(argv: bool = True, **kwargs) -> int:
+    args = CommandPolicyCLI.cli(argv=argv, data=kwargs)
+    tables = {
+        'grouped': grouped,
+        'behavior': behavior_df,
+        'behavior_compact': behavior_compact_df,
+        'role': role_df,
+        'role_compact': role_compact_df,
+    }
+    if args.format == 'json':
+        print(tables[args.table].to_json(orient='records', indent=2))
+        return 0
+    if args.format == 'csv':
+        print(tables[args.table].to_csv(index=False), end='')
+        return 0
+    show_human_report()
+    return 0
+
+
+def show_human_report() -> None:
+
+
+    # The row you called out:
+    loose_readonly_cold = behavior_df.query(
+        "op_kind == 'command' and queue == 'loose' and sudo == True "
+        "and is_root == False and auth_required == True and effective_role == 'read'"
+    ).sort_values(
         [
+            'manager_yes',
+            'yes_sudo',
+            'approve_all_remaining',
+            'auto_approve_readonly_sudo',
+            'stdin_tty',
+            'op_yes',
+        ]
+    )
+
+    # Matching plan-side case:
+    plan_readonly_cold = behavior_df.query(
+        "op_kind == 'command' and queue == 'plan' and sudo == True "
+        "and is_root == False and auth_required == True and effective_role == 'read'"
+    ).sort_values(
+        [
+            'manager_yes',
+            'yes_sudo',
+            'approve_all_remaining',
+            'auto_approve_readonly_sudo',
+            'stdin_tty',
+        ]
+    )
+
+    # Warm-auth readonly loose sudo:
+    loose_readonly_warm = behavior_df.query(
+        "op_kind == 'command' and queue == 'loose' and sudo == True "
+        "and is_root == False and auth_required == False and effective_role == 'read'"
+    ).sort_values(
+        [
+            'manager_yes',
+            'yes_sudo',
+            'approve_all_remaining',
+            'auto_approve_readonly_sudo',
+            'stdin_tty',
+            'op_yes',
+        ]
+    )
+
+    # --- pretty terminal dumps with pandas formatting + Rich color ---
+
+    from rich.console import Console
+
+    console = Console()
+
+    pd.set_option('display.max_rows', 200)
+    pd.set_option('display.max_columns', 50)
+    pd.set_option('display.width', 200)
+    pd.set_option('display.max_colwidth', 80)
+
+
+    def show_df(
+        title, df, *, sort_by=None, columns=None, max_rows=None, style='cyan'
+    ):
+        if sort_by:
+            df = df.sort_values(sort_by)
+        if columns:
+            df = df[columns]
+        if max_rows is not None:
+            df = df.head(max_rows)
+        console.rule(title, style='bold yellow')
+        console.print(df.to_string(index=False), style=style, markup=False)
+        console.print()
+
+
+    # Core columns that are usually worth looking at
+    main_cols = BEHAVIOR_PREDICATE_COLS + BEHAVIOR_OUTCOME_COLS
+
+    show_df(
+        f'All behavior rows ({len(behavior_df)})',
+        behavior_df,
+        sort_by=[
+            'op_kind',
             'queue',
             'sudo',
             'is_root',
             'auth_required',
             'effective_role',
-            'behavior_class',
-            'prompt_kind',
-        ]
+            'auto_approve_readonly_sudo',
+            'op_yes',
+            'manager_yes',
+            'yes_sudo',
+            'approve_all_remaining',
+            'stdin_tty',
+        ],
+        columns=main_cols,
+        style='bright_cyan',
     )
-)
 
-show_df(
-    'Grouped summary',
-    grouped,
-    style='bright_blue',
-)
+    show_df(
+        f'Compressed behavior rows ({len(behavior_compact_df)})',
+        behavior_compact_df,
+        sort_by=[
+            'op_kind',
+            'queue',
+            'sudo',
+            'is_root',
+            'auth_required',
+            'effective_role',
+            'auto_approve_readonly_sudo',
+            'behavior_class',
+        ],
+        columns=main_cols,
+        style='bright_green',
+    )
+
+    show_df(
+        f'Role derivation rows ({len(role_df)})',
+        role_df,
+        sort_by=['spec_role', 'spec_sudo', 'spec_check', 'intent_role'],
+        style='magenta',
+    )
+
+    show_df(
+        f'Compressed role derivation rows ({len(role_compact_df)})',
+        role_compact_df,
+        sort_by=['spec_role', 'spec_sudo', 'spec_check', 'intent_role'],
+        style='bright_magenta',
+    )
+
+    # --- subsets you said are most interesting ---
+
+    show_df(
+        'Subset: loose sudo + read + cold auth',
+        loose_readonly_cold,
+        columns=main_cols,
+        style='bold bright_red',
+    )
+
+    show_df(
+        'Subset: plan sudo + read + cold auth',
+        plan_readonly_cold,
+        columns=main_cols,
+        style='bold red',
+    )
+
+    show_df(
+        'Subset: loose sudo + read + warm auth',
+        loose_readonly_warm,
+        columns=main_cols,
+        style='bold bright_yellow',
+    )
+
+    # Helpful grouped summary
+    show_df(
+        'Grouped summary',
+        grouped,
+        style='bright_blue',
+    )
+
+if __name__ == '__main__':
+    raise SystemExit(main())

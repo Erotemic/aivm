@@ -127,7 +127,7 @@ def _submit_qemu_dir_prepare(
     recursive: bool,
 ) -> None:
     mgr.submit(
-        ['mkdir', '-p', str(path)],
+        ['mkdir', '-p', str(path)], ownership='tool',
         sudo=True,
         role='modify',
         check=True,
@@ -189,7 +189,7 @@ def _ensure_qemu_access_unprivileged(
         ):
             for d in subdirs:
                 mgr.submit(
-                    ['mkdir', '-p', str(d)],
+                    ['mkdir', '-p', str(d)], ownership='tool',
                     sudo=False,
                     role='modify',
                     check=True,
@@ -269,7 +269,7 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     grp = 'libvirt-qemu'
     if (
         CommandManager.current()
-        .run(['getent', 'group', 'libvirt-qemu'], check=False, capture=True)
+        .run(['getent', 'group', 'libvirt-qemu'], role='read', check=False, capture=True)
         .code
         != 0
     ):

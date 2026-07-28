@@ -224,7 +224,9 @@ def _start_remote_tunnel_session(
         f'{cfg.vm.user}@{ip}',
         remote,
     ]
-    CommandManager.current().run(cmd, sudo=False, check=True, capture=False)
+    CommandManager.current().run(
+        cmd, sudo=False, user_driven=True, check=True, capture=False
+    )
 
 
 def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
@@ -456,6 +458,7 @@ class VMCodeCLI(_BaseCommand):
         CommandManager.current().run(
             ['code', '--remote', remote_target, session.share_guest_dst],
             sudo=False,
+            user_driven=True,
             check=True,
             capture=False,
         )
@@ -570,6 +573,7 @@ class VMSSHCLI(_BaseCommand):
                 remote_cmd,
             ],
             sudo=False,
+            user_driven=True,
             check=False,
             capture=False,
         )

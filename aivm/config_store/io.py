@@ -450,6 +450,15 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             'Cannot write split config with attachment records whose vm_name '
             f'does not match a configured VM: {names}'
         )
+    orphaned_credentials = sorted(
+        {cred.vm_name for cred in reg.credentials if cred.vm_name not in vm_names}
+    )
+    if orphaned_credentials:
+        names = ', '.join(orphaned_credentials)
+        raise ValueError(
+            'Cannot write split config with credential records whose vm_name '
+            f'does not match a configured VM: {names}'
+        )
 
 
 def render_split_fragments(reg: Store) -> dict[str, str]:

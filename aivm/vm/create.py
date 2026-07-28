@@ -8,7 +8,9 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..errors import AIVMError
+from ..config_store import load_store
+from ..credentials.guards import require_vm_credentials_released
+from ..errors import AIVMError, CommandControlError
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, virsh_cmd
 from ..util import CmdError
@@ -170,6 +172,7 @@ def create_or_start_vm(
     *,
     dry_run: bool = False,
     recreate: bool = False,
+    config_store_path: Path | None = None,
     share_source_dir: str = '',
     share_tag: str = '',
 ) -> None:
@@ -190,6 +193,16 @@ def create_or_start_vm(
         share_tag or '(none)',
     )
     log.debug('Creating or starting VM {}', cfg.vm.name)
+    if recreate:
+        if config_store_path is None:
+            raise AIVMError(
+                'VM recreation requires the config-store path so AIVM can '
+                'verify that repository credentials have been revoked.'
+            )
+        store = load_store(config_store_path)
+        require_vm_credentials_released(
+            store, cfg.vm.name, action='recreated'
+        )
     cfg = cfg.expanded_paths()
     mgr = CommandManager.current()
 
@@ -284,6 +297,10 @@ def create_or_start_vm(
         base_img = fetch_image(cfg, dry_run=dry_run)
         try:
             ci = _write_cloud_init(cfg, dry_run=dry_run)
+        # A declined prompt is the user answering the question, not a step
+        # that went wrong. Best-effort recovery must not continue past it.
+        except CommandControlError:
+            raise
         except Exception as ex:
             if _is_missing_command_error(ex):
                 missing = _failed_command_name(ex)

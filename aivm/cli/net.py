@@ -11,10 +11,10 @@ from aivm.config_store import Store
 from ..commands import CommandManager
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..config_store import (
-    find_network,
     load_store,
     network_users,
     remove_network,
+    require_network,
     save_store,
 )
 from ..errors import AIVMError
@@ -148,11 +148,7 @@ def _resolve_network_cfg(
         raise AIVMError(
             'Unable to resolve a managed network. Pass a network name explicitly.'
         )
-    net = find_network(reg, net_name)
-    if net is None:
-        raise AIVMError(
-            f'Managed network not found in config store: {net_name}'
-        )
+    net = require_network(reg, net_name)
     cfg = AgentVMConfig()
     cfg.network = NetworkConfig(**net.network.__dict__)
     cfg.firewall = FirewallConfig(**net.firewall.__dict__)

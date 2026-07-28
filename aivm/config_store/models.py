@@ -10,6 +10,14 @@ from ..config import (
     FirewallConfig,
     NetworkConfig,
 )
+from ..credentials.schema import (
+    CREDENTIAL_ACCESS_READ,
+    CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
+    CREDENTIAL_STATE_PENDING,
+    CredentialAccess,
+    CredentialKind,
+    CredentialState,
+)
 
 
 @dataclass
@@ -38,14 +46,36 @@ class AttachmentEntry:
 
 
 @dataclass
+class CredentialEntry:
+    id: str
+    vm_name: str
+    kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
+    provider_host: str = 'github.com'
+    owner: str = ''
+    repository: str = ''
+    access: CredentialAccess = CREDENTIAL_ACCESS_READ
+    provider_key_id: str = ''
+    provider_key_title: str = ''
+    key_fingerprint: str = ''
+    state: CredentialState = CREDENTIAL_STATE_PENDING
+    # False when AIVM installed and verified this credential but never
+    # administered it at the provider, because the account it uses is not an
+    # admin of the repository. Such a key was added by a human out of band, so
+    # AIVM has no provider key id and cannot revoke it -- see
+    # `aivm vm creds abandon`.
+    provider_managed: bool = True
+
+
+@dataclass
 class Store:
-    schema_version: int = 7
+    schema_version: int = 8
     active_vm: str = ''
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     defaults: AgentVMConfig | None = None
     networks: list[NetworkEntry] = field(default_factory=list)
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
+    credentials: list[CredentialEntry] = field(default_factory=list)
     # Private optimistic-concurrency metadata populated by load_store().
     # It is deliberately excluded from repr/equality and never serialized.
     _source_path: str = field(default='', repr=False, compare=False)

@@ -207,7 +207,7 @@ def read_actual_vm_hardware(
     """
     cmd = virsh_cmd('dominfo', cfg.vm.name)
     res = CommandManager.current().run(
-        cmd, sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
+        cmd, role='read', sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
     )
     if res.code != 0:
         # Check both stderr and stdout for error messages

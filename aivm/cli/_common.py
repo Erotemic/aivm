@@ -19,7 +19,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config_store import find_vm, load_store
 from ..errors import PrivilegeModeError
-from ..services import cfg_path
+from ..services import bind_active_config_option, cfg_path
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool, int] | None = None
@@ -76,6 +76,9 @@ class _BaseCommand(kwconf.Config):
         _CURRENT_AUTO_APPROVE_READONLY_SUDO.set(
             bool(cfg_auto_approve_readonly_sudo)
         )
+        # Optional features resolve their own settings from this store; the
+        # shared option surface stays free of any single feature's config.
+        bind_active_config_option(parsed.config)
         CommandManager.activate(
             CommandManager(
                 yes=bool(parsed.yes),

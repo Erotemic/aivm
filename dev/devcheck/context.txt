@@ -1,0 +1,289 @@
+1. Core objective
+
+Determine whether `aivm`’s filesystem attachment design is causing intermittent guest-side `OSError: [Errno 24] Too many open files`, then evolve the design to reduce or eliminate the failure mode.
+
+Subgoals:
+
+* get a reliable MWE / stress harness
+* distinguish host-side bind-churn effects from guest-side virtiofs effects
+* review and improve the new attachment architecture
+* migrate from legacy `shared-root` toward a safer persistent mode
+* preserve `ro` guest mounts and backwards compatibility while validating behavior
+
+2. Key context
+
+* The original issue is: inside the VM, normal filesystem operations can start failing with `EMFILE`; even simple `ls` can fail, and restarting the VM clears it.
+* The investigation started around attachment handling in `Erotemic/aivm`, especially the old `shared-root` design and PR #15.
+* Experiments / MWE work showed:
+
+  * repeated interactive host-side bind churn under a live shared-root export is fragile
+  * host teardown often fails with “target is busy”
+  * stable host-side staged binds plus guest-side replay/reconciliation is more viable
+* That led to the design shift:
+
+  * keep one virtiofs shared export
+  * keep host-side staged binds mostly stable
+  * persist desired attachments
+  * replay guest-visible mounts at boot / reconcile time
+  * make `aivm code .` / `aivm ssh .` validate/repair instead of reconstructing everything
+
+Current implementation context:
+
+* New mode introduced alongside legacy mode:
+
+  * old: `shared-root`
+  * new: renamed from `declared` to `persistent`
+* Persistent mode uses:
+
+  * host staging under `<base>/<vm>/persistent-root`
+  * one virtiofs tag `aivm-persistent-root`
+  * guest mount `/mnt/aivm-persistent`
+  * tokenized subpaths under that mount
+  * persisted host manifest + guest replay helper / systemd unit  
+* Persistent mode still fundamentally exports a tree containing host-side bind mountpoints, so it remains architecturally similar to the old shared-root topology.
+
+PR review history:
+
+* Initial PR review found:
+
+  * stopped-VM attach did not guarantee boot replay helper availability
+  * stale guest state could persist if host manifest disappeared
+* Later commits fixed:
+
+  * missing-manifest behavior now fails closed
+  * stopped-VM attach refreshes boot-time setup so helper can be present on next boot
+  * user-facing mode renamed to `persistent`
+* Additional bugs found and diagnosed:
+
+  * helper install script had an indented shebang bug; installed helper path existed but executed as “command not found”
+  * stopped-VM cloud-init refresh wrote a token into a root-owned path without sudo, causing `PermissionError`
+  * refreshing cloud-init for stopped-VM attach looked too heavy and may cause odd boot behavior
+  * SSH host-key mismatch during `wait_for_ssh()` caused apparent hangs; this was later fixed in PR head by fast-failing on common mismatch diagnostics 
+
+Current strongest reproduction evidence:
+
+* Guest `ls /mnt/aivm-persistent` once failed with `Too many open files`
+* Guest soft limit was high (`ulimit -n = 1048576`) and system-wide file table low (`file-nr = 2304`), so this is not a simple guest RLIMIT exhaustion 
+* `mount | grep aivm-persistent` showed:
+
+  * root mount `/mnt/aivm-persistent` as virtiofs
+  * token subpaths also appearing as distinct virtiofs mount entries
+* `lsof +D /mnt/aivm-persistent` failed almost entirely in the `geowatch` token subtree with repeated `Too many open files` on `lstat` 
+* `rg --files` on `/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef` reproduced the issue
+* `strace` showed `EMFILE` returned from both `openat(... O_DIRECTORY)` and `statx(...)` on paths in that `geowatch` token subtree 
+* Host-side `virtiofsd` FD-count loop did not show obvious runaway growth during reproduction
+* User later clarified there is no `/home/joncrall/code/geowatch` guest bind currently; `geowatch` is not in current attachment config, so the failure is happening on the token subtree inside `/mnt/aivm-persistent`, not on an active guest-visible bind destination.
+
+3. Constraints and preferences
+
+* Keep old `shared-root` working for now; new mode is additive and migration-friendly.
+* Preserve read-only guest mount capability.
+* Prefer explicit, conservative fixes over magic automation.
+
+  * Example: for SSH host-key mismatch, surface a clear remediation instead of silently rewriting `known_hosts`.
+* Prefer systemd-based replay over `/etc/fstab`.
+* Avoid aggressive live teardown of host-side bind mounts.
+* User wants practical scripts/prompts/reviews, not vague architecture advice.
+* Migration should be safe and incremental.
+* Future default behavior should eventually prefer `persistent`, but existing attachments should not be silently rewritten.
+
+4. Decisions made
+
+Architecture / design:
+
+* Adopt a new persistent attachment mode instead of replacing shared-root immediately.
+* Persist attachment intent and replay guest mounts on boot/reconcile.
+* Keep host-side staged binds mostly stable.
+* Make `aivm code .` / `aivm ssh .` lightweight reconcile/repair paths.
+
+Naming:
+
+* `declared` was renamed to `persistent`.
+
+Code review decisions:
+
+* Earlier PR versions were not ready due to replay/helper/state issues.
+* After later fixes, the stopped-VM replay path was considered substantially improved.
+* The latest SSH-host-key mismatch fix looked good and was approved in review, with only a minor non-blocking nit about broad pattern matching in `_is_ssh_host_key_mismatch()` 
+
+Operational decisions:
+
+* For migration from old `shared-root` to `persistent`, safest path is with the VM off.
+* Future persistent add/remove operations can happen with the VM on, but the stopped-VM cloud-init refresh path is still viewed as rough.
+* Cleanup of stale guest paths should be conservative:
+
+  * only remove empty dirs
+  * skip symlinks unless explicitly requested
+  * skip mountpoints
+  * skip active managed paths
+
+Default attach mode:
+
+* The actual default mode resolution lives in `aivm/attachments/resolve.py` in `_normalize_attachment_mode()`
+* CLI help also needs updating separately if the default changes.
+
+5. Lessons learned
+
+Durable technical lessons:
+
+* The core fragility is not just “shared-root” by name; it is the topology of a single virtiofs export containing many host-side bind mount boundaries.
+* Persistent mode improves lifecycle / replay / state management, but does not automatically remove the underlying virtiofs+bind-mount risk.
+* Guest-side `EMFILE` here is not explained by ordinary shell or system file descriptor limits.
+* `statx()` returning `EMFILE` is especially important: this suggests the error is surfacing from lower in the VFS / virtiofs path, not merely from userland forgetting to close FDs. 
+* The `virtio_fs_setup_dax: No cache capability` messages are probably incidental, not the main cause.
+
+Durable debugging lessons:
+
+* `lsof +D` on the problematic tree is invasive and can worsen or muddy the situation.
+* Better next captures are targeted and comparative:
+
+  * token subtree vs active bind path
+  * guest strace on `rg --files`
+  * host `virtiofsd` / qemu FD counts
+* The `geowatch` token subtree is currently the highest-value reproducer.
+* Apparent “boot hangs” can actually be later-phase issues:
+
+  * one case was really SSH host-key mismatch after the VM already had a DHCP lease
+  * clearing known_hosts fixed it
+* Restarting can clear transient bad states, but that does not identify root cause.
+
+Implementation lessons:
+
+* Generated helper scripts must preserve column-0 shebangs.
+* Fail closed when manifest state is missing rather than replaying stale guest state.
+* Heavy cloud-init replay is too blunt a mechanism for stopped-VM attach changes.
+
+6. Open questions / unresolved items
+
+Main unresolved technical question:
+
+* What exactly is the failure mechanism behind `EMFILE` in the token subtree under `/mnt/aivm-persistent`?
+
+  * virtiofs guest/kernel traversal issue?
+  * bug triggered by exported host bind-mount subtrees?
+  * race / concurrency interaction exposed by `rg`?
+  * something specific about stale staged binds that remain under `persistent-root` after detach?
+
+Specific open threads:
+
+* Confirm whether the failing `geowatch` token subtree corresponds to a leftover host-side staged bind that still exists under `persistent-root` even though `geowatch` is no longer in config.
+* Compare behavior of:
+
+  * token path under `/mnt/aivm-persistent/...`
+  * any active guest bind if present
+  * host staged path under `/var/lib/libvirt/aivm/<vm>/persistent-root/...`
+* Check whether `rg --threads 1` changes reproducibility.
+* Improve stopped-VM attach flow so it does not rely on heavy cloud-init refresh / pseudo-first-boot behavior.
+* Decide whether default attach mode should now become `persistent`.
+* Eventually add explicit garbage collection for leftover host staged binds / token dirs.
+
+7. Superseded or dropped context
+
+Superseded:
+
+* Early assumption that the issue was only about old `shared-root`; newer evidence shows the same class of problem can occur under `persistent`.
+* Earlier thought that a cold-boot hang was likely boot-order related; later evidence suggested one case was actually SSH host-key mismatch after boot/network were already up.
+* Earlier comparison suggestion using `/home/joncrall/code/geowatch` is invalid in the current state; user clarified that bind does not exist now.
+* The original concern that stale guest replay state might persist after manifest loss was addressed by later code changes.
+* The earlier helper “command not found” issue was traced to the shebang indentation bug and fixed.
+* The cloud-init token permission failure was localized to writing into a root-owned path.
+
+Dropped / low-value now:
+
+* Many intermediate MWE iterations and minor script bugfixes.
+* Repetitive PR review back-and-forth once the durable conclusions were extracted.
+* One-off cleanup/migration command details except the core migration policy.
+
+8. Compressed working state
+
+You are investigating `aivm` guest-side `EMFILE` failures caused by filesystem attachments. Earlier MWEs showed live host-side bind churn under the old shared-root export was fragile, which motivated a new `persistent` mode: stable host-side staged binds under `persistent-root`, one virtiofs export mounted in guest at `/mnt/aivm-persistent`, persisted manifest, and guest replay via systemd/helper. That architecture improved lifecycle handling and replay, but it still exports a tree containing host-side bind mountpoints, so it remains susceptible to the same underlying virtiofs/submount class of bug. Persistent mode must preserve `ro` support and coexist with legacy shared-root for now.
+
+PR review found and mostly resolved several implementation issues: missing stopped-VM boot replay setup, stale manifest handling, helper shebang formatting, and SSH apparent hangs from host-key mismatch. The latest SSH mismatch fix was acceptable. The stopped-VM cloud-init refresh path still feels too heavy and may cause odd startup behavior. If default mode is changed, the real default lives in `aivm/attachments/resolve.py`, with CLI help updated separately.
+
+The most important current debugging evidence is that the issue reproduces in the `geowatch` token subtree under `/mnt/aivm-persistent`, even though `geowatch` is no longer an active guest-visible attachment. Guest limits are not exhausted (`ulimit -n` high, `file-nr` low). `lsof +D` failed mainly in `/mnt/aivm-persistent/hostcode-geowatch-...`, and `rg --files` on that same token path reproduced the problem. `strace` showed `EMFILE` coming from both `openat(... O_DIRECTORY)` and `statx(...)` on paths in that token subtree, which strongly suggests a lower-level virtiofs/VFS traversal problem rather than a simple userspace FD leak. Host `virtiofsd` FD count did not obviously grow during reproduction, so a steady host-side userspace leak is less likely. The most plausible current hypothesis is: a leftover staged bind for `geowatch` remains exposed inside the persistent virtiofs root, and traversing that exported bind-mounted subtree triggers a virtiofs-related `EMFILE` failure. The next best step is to confirm on the host whether the `geowatch` staged bind still exists under `/var/lib/libvirt/aivm/aivm-2404/persistent-root/...`, and to compare token-path behavior, host staged path behavior, and any active guest bind path if present.
+
+
+**figure out why a detached/non-configured `geowatch` token subtree under `/mnt/aivm-persistent` can still trigger guest-side `EMFILE`, and determine whether that leftover subtree is the real reproducer.**
+
+The next steps I’d do, in order, are:
+
+1. **Confirm whether `geowatch` is truly absent from current config/state.**
+   Your trimmed config only shows `Contextual-Drag`, `aivm`, and `shitspotter`, not `geowatch` .
+   That makes the `geowatch` token path suspicious by itself.
+
+2. **Check whether the host still has a staged `geowatch` bind under `persistent-root`.**
+   This is the highest-value check now.
+
+   On the host:
+
+   ```bash
+   sudo findmnt -R /var/lib/libvirt/aivm/aivm-2404/persistent-root -o TARGET,SOURCE,FSTYPE,OPTIONS | grep geowatch || true
+   sudo ls -ld /var/lib/libvirt/aivm/aivm-2404/persistent-root/hostcode-geowatch-5f1a05ef
+   sudo mount | grep hostcode-geowatch-5f1a05ef || true
+   ```
+
+3. **Check what the guest thinks that token path is.**
+   On the guest:
+
+   ```bash
+   findmnt -T /mnt/aivm-persistent/hostcode-geowatch-5f1a05ef -o TARGET,SOURCE,FSTYPE,OPTIONS
+   mount | grep hostcode-geowatch-5f1a05ef || true
+   ls -ld /mnt/aivm-persistent/hostcode-geowatch-5f1a05ef
+   ```
+
+4. **Verify that `geowatch` is the reproducer and not just a symptom.**
+   You already have strong evidence: both `lsof +D` and `rg --files` fail inside that token subtree, and `strace` shows `EMFILE` coming from `statx` and `openat` there  .
+   The next explicit comparison is:
+
+   ```bash
+   TOKEN=/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef
+   rg --threads 1 --files "$TOKEN" >/dev/null
+   rg --files "$TOKEN" >/dev/null
+   ```
+
+   This tells you whether concurrency matters.
+
+5. **Measure whether `rg` itself is exhausting its own FDs.**
+   Since host `virtiofsd` didn’t show obvious FD growth, this is the next clean discriminator.
+
+   ```bash
+   TOKEN=/mnt/aivm-persistent/hostcode-geowatch-5f1a05ef
+   rg --files "$TOKEN" >/tmp/rg.out 2>/tmp/rg.err &
+   PID=$!
+   while kill -0 "$PID" 2>/dev/null; do
+       printf "%s fd=%s\n" "$(date +%H:%M:%S.%3N)" "$(ls /proc/$PID/fd | wc -l)"
+       sleep 0.05
+   done
+   tail -n 20 /tmp/rg.err
+   ```
+
+   If `rg` stays at a modest FD count but still gets `EMFILE`, that strongly supports “lower-level virtiofs/VFS problem,” not a plain userspace leak.
+
+6. **If the host still has a leftover staged `geowatch` bind, remove just that one with the VM off and retest.**
+   This is the cleanest causal test.
+
+   Proposed procedure:
+
+   * shut down the VM
+   * unmount/remove only the host staged `geowatch` token subtree
+   * boot VM
+   * retry `rg --files /mnt/aivm-persistent/hostcode-geowatch-5f1a05ef` or simply confirm the token is gone
+   * retry your normal workflow
+
+   If removing that leftover subtree makes the issue disappear, you have a much tighter root cause.
+
+7. **If that fixes it, the next code task is clear.**
+   The bug becomes:
+
+   > detached persistent attachments can leave stale staged bind subtrees under `persistent-root`, and traversing those leftover exported token paths can trigger guest-side `EMFILE`.
+
+   Then the implementation follow-up should be:
+
+   * add explicit garbage collection for stale staged token subtrees, or
+   * at minimum stop exposing detached tokens through `/mnt/aivm-persistent`.
+
+8. **If it still reproduces after removing the leftover `geowatch` token, narrow to active tokens only.**
+   Then repeat the same test on a currently attached path like `aivm` or `Contextual-Drag`, because the issue would then be “virtiofs over bind-mounted token subtrees in general,” not stale leftovers specifically.
+
+So the immediate next step is **Step 2**: verify on the host whether `/var/lib/libvirt/aivm/aivm-2404/persistent-root/hostcode-geowatch-5f1a05ef` is still a live staged bind. That is the most important branch point now.
+

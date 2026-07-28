@@ -99,6 +99,38 @@ def guest_ssh_env(monkeypatch: pytest.MonkeyPatch) -> None:
     activate_manager(monkeypatch)
 
 
+
+def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Answer the write-approval prompt and return what the user was shown.
+
+    A host git remote change is a write to the user's repo, so the command
+    manager confirms it. The test runs real git, so only the interactive
+    boundary is faked.
+    """
+    import builtins
+
+    import aivm.commands as commands_mod
+
+    messages: list[str] = []
+    monkeypatch.setattr(commands_mod.sys.stdin, 'isatty', lambda: True)
+    monkeypatch.setattr(builtins, 'input', lambda prompt: 'y')
+
+    original = commands_mod.CommandManager._confirm_unprivileged_mutation
+
+    def spy(
+        self: Any,
+        *,
+        purpose: str,
+        preview_cmds: Any = None,
+    ) -> None:
+        messages.append(purpose)
+        return original(self, purpose=purpose, preview_cmds=preview_cmds)
+
+    monkeypatch.setattr(
+        commands_mod.CommandManager, '_confirm_unprivileged_mutation', spy
+    )
+    return messages
+
 def test_upsert_host_git_remote_adds_remote(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -130,26 +162,20 @@ def test_upsert_host_git_remote_adds_remote(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     remote_name = _git_attachment_remote_name(cfg, repo)
-    prompts: list[str] = []
-
-    def _capture_prompt(**kwargs: Any) -> None:
-        prompts.append(kwargs['purpose'])
-
-    monkeypatch.setattr(
-        'aivm.attachments.guest.CommandManager.confirm_file_update',
-        lambda self, **kwargs: _capture_prompt(**kwargs),
-    )
+    messages = _approve_writes(monkeypatch)
     _, updated = _upsert_host_git_remote(
         repo,
         remote_name=remote_name,
         remote_url='vm-git:/workspace/repo',
-        yes=True,
     )
 
     assert updated is True
-    assert prompts == [
+    # the write is confirmed once, by the command itself, and the prompt still
+    # names the repo config it changes
+    assert (
         f"Register Git remote '{remote_name}' with URL 'vm-git:/workspace/repo'."
-    ]
+        in messages
+    )
     probe = subprocess.run(
         ['git', '-C', str(repo), 'remote', 'get-url', remote_name],
         check=True,
@@ -203,25 +229,18 @@ def test_upsert_host_git_remote_updates_remote_url(
         check=True,
         capture_output=True,
     )
-    prompts: list[str] = []
-    monkeypatch.setattr(
-        'aivm.attachments.guest.CommandManager.confirm_file_update',
-        lambda self, **kwargs: prompts.append(kwargs['purpose']),
-    )
+    messages = _approve_writes(monkeypatch)
     _, updated = _upsert_host_git_remote(
         repo,
         remote_name=remote_name,
         remote_url='vm-git:/workspace/repo',
-        yes=True,
     )
 
     assert updated is True
-    assert prompts == [
-        (
-            f"Update Git remote '{remote_name}' URL from 'vm-git:/old/path' "
-            "to 'vm-git:/workspace/repo'."
-        )
-    ]
+    assert (
+        f"Update Git remote '{remote_name}' URL from 'vm-git:/old/path' "
+        "to 'vm-git:/workspace/repo'." in messages
+    )
     probe = subprocess.run(
         ['git', '-C', str(repo), 'remote', 'get-url', remote_name],
         check=True,
@@ -240,7 +259,6 @@ def test_upsert_host_git_remote_raises_on_invalid_repo(tmp_path: Path) -> None:
             repo,
             remote_name='aivm-test',
             remote_url='vm-git:/workspace/repo',
-            yes=True,
         )
 
 

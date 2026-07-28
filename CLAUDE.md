@@ -92,3 +92,19 @@ is the subject of a different test file. Say which in a comment.
 - **Reconciliation Flow**: Many operations (like `aivm code .`) use a reconcile flow that ensures the VM, network, and folder attachments are in the desired state before proceeding.
 - **Privilege Model**: The tool distinguishes between read-only probes (often auto-approved) and state-changing operations that require explicit user confirmation.
 - **Enforce privilege at the command, not the feature**: whether an operation needs root is a property of the command being run, not of the feature requesting it. A `persistent` attachment needs `mount --bind` only when the bind is missing. Gate on the command (`CommandManager._reject_sudo_if_forbidden` sees every one) rather than refusing a feature that *might* need root.
+- **Declare a fallible step, don't hand-roll `try`/`except`**: when a failure is an expected outcome you can recover from, say so with `mgr.attempt(...)` and read the result off the yielded `Attempt` (`.failed`, `.reason`). Business logic then states *what* it is doing rather than *how* it copes, the manager knows the failure is handled, and the logs say so instead of showing an ERROR line that reads as fatal. A bare `try`/`except` around manager calls hides that intent from both the manager and the reader.
+- **An attempted command is never re-attempted**: `PlannedCommand.attempted` is set immediately *before* execution, because a command that raised has still been attempted. Both queues rely on that single flag; do not reintroduce a cursor or a pop-after-execute, which cannot express it (a raise skips whatever bookkeeping follows the call, leaving the command queued for an unrelated later flush to re-run and re-raise somewhere inexplicable).
+- **A handle owns its outcome; reading one never causes work**: every submitted command reaches exactly one terminal state (`succeeded` / `failed` / `not-executed`), stored on the `CommandHandle`. `result()` calls `flush_through` *only* while pending; afterwards it replays the result, re-raises the stored exception, or raises `CommandNotExecutedError`. Marking the queue entry attempted is not enough — the handle must be told too, or a failed one stays pending and re-reading it flushes the queue again and runs whatever unrelated command is sitting there. `abort_plan` resolves every command it abandons. Retry means a new `submit()`.
+- **`sudo` on the command line is always called out**: the user is made aware
+  of anything with the potential to perform an unbounded privileged sudo op,
+  *even if we know what the program being called is*. Merely invoking `sudo` on
+  the command line is strong enough of a thing that it needs to be called out.
+  So a privileged read logs at INFO next to every state-changing command, and
+  only a command that escalates nothing is held back for `--verbose 2`. Do not
+  "simplify" this to role alone: `qemu-img info` is read-only and still prints,
+  because what is announced is the escalation, not the read. Visibility keys on
+  whether the `sudo` prefix was actually applied rather than on `spec.sudo`,
+  because a caller passes `sudo=True` speculatively under
+  `privilege_mode='as-needed'` and no `sudo` reaches the command line when
+  already root. This is a deliberate policy, not an oversight to optimize away.
+- **A refusal is not a failure**: `CommandControlError` (user declined, approval unavailable, sudo forbidden, never executed) says the user did not authorize the work; `CommandError` says the work did not succeed. Best-effort machinery — `mgr.attempt(...)`, `except AIVMError`, `except Exception` — routinely recovers from the second and must never recover from the first, because continuing past it contradicts the user's own decision. `attempt()` re-raises every `CommandControlError` regardless of `catch`, and broad handlers wrapping manager calls re-raise it explicitly. When adding one, ask what it does to a declined prompt.

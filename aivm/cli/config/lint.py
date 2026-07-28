@@ -18,6 +18,18 @@ from ...config import (
     VMConfig,
 )
 from ...config_store import load_config_document
+from ...credentials.schema import (
+    VALID_CREDENTIAL_ACCESS,
+    VALID_CREDENTIAL_KINDS,
+    VALID_CREDENTIAL_STATES,
+)
+from ...credentials.validation import (
+    CredentialValidationError,
+    validate_credential_identity,
+    validate_key_fingerprint,
+    validate_metadata_text,
+    validate_provider_key_id,
+)
 from ...services import cfg_path
 from .._common import _BaseCommand
 
@@ -86,6 +98,7 @@ def _lint_store_text(text: str) -> list[str]:
         'paths',
         'virtiofs',
         'attachments',
+        'credentials',
     }
     section_allowed: dict[str, set[str]] = {
         'vm': _field_names(VMConfig),
@@ -106,6 +119,7 @@ def _lint_store_text(text: str) -> list[str]:
                 'auto_approve_readonly_sudo',
                 'verbose',
                 'privilege_mode',
+                'credential_directory_permission_policy',
             }
             # mirror_shared_home_folders moved to VMConfig in schema 6;
             # tolerate the legacy key here so older files lint cleanly
@@ -142,7 +156,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'defaults.{sec_name} should be a table/object'
                     )
                     continue
-                for key in sorted(sec.keys()):
+                sec = cast(dict[str, object], sec)
+                for key in sorted(str(key) for key in sec.keys()):
                     if key not in allowed:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
@@ -156,7 +171,7 @@ def _lint_store_text(text: str) -> list[str]:
                 problems.append(f'networks[{idx}] is not a table/object')
                 continue
             item = cast(dict[str, object], item)
-            for key in sorted(item.keys()):
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_network_record:
                     problems.append(
                         f'networks[{idx}] unknown key/section: {key!r}'
@@ -168,7 +183,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'networks[{idx}].network should be a table/object'
                     )
                 else:
-                    for key in sorted(net_sec.keys()):
+                    net_sec = cast(dict[str, object], net_sec)
+                    for key in sorted(str(key) for key in net_sec.keys()):
                         if key not in _field_names(NetworkConfig):
                             problems.append(
                                 f'networks[{idx}].network unknown key: {key!r}'
@@ -180,7 +196,8 @@ def _lint_store_text(text: str) -> list[str]:
                         f'networks[{idx}].firewall should be a table/object'
                     )
                 else:
-                    for key in sorted(fw_sec.keys()):
+                    fw_sec = cast(dict[str, object], fw_sec)
+                    for key in sorted(str(key) for key in fw_sec.keys()):
                         if key not in _field_names(FirewallConfig):
                             problems.append(
                                 f'networks[{idx}].firewall unknown key: {key!r}'
@@ -201,6 +218,19 @@ def _lint_store_text(text: str) -> list[str]:
         # configs that haven't been rewritten yet.
         'host_lexical_path',
     }
+    allowed_credential = {
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_id',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+        'provider_managed',
+    }
     vms = raw.get('vms', [])
     if isinstance(vms, list):
         for idx, item in enumerate(vms):
@@ -208,7 +238,7 @@ def _lint_store_text(text: str) -> list[str]:
                 problems.append(f'vms[{idx}] is not a table/object')
                 continue
             item = cast(dict[str, object], item)
-            for key in sorted(item.keys()):
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_vm_record:
                     problems.append(f'vms[{idx}] unknown key/section: {key!r}')
             for sec_name, allowed in section_allowed.items():
@@ -220,7 +250,7 @@ def _lint_store_text(text: str) -> list[str]:
                         f'vms[{idx}].{sec_name} should be a table/object'
                     )
                     continue
-                for key in sorted(sec.keys()):
+                for key in sorted(str(key) for key in sec.keys()):
                     if key not in allowed:
                         problems.append(
                             f'vms[{idx}].{sec_name} unknown key: {key!r}'
@@ -233,7 +263,8 @@ def _lint_store_text(text: str) -> list[str]:
                             f'vms[{idx}].attachments[{att_idx}] is not a table/object'
                         )
                         continue
-                    for key in sorted(att.keys()):
+                    att = cast(dict[str, object], att)
+                    for key in sorted(str(key) for key in att.keys()):
                         if key not in allowed_attachment:
                             problems.append(
                                 f'vms[{idx}].attachments[{att_idx}] unknown key: {key!r}'
@@ -241,6 +272,95 @@ def _lint_store_text(text: str) -> list[str]:
             elif nested_atts is not None:
                 problems.append(
                     f'vms[{idx}].attachments should be an array of tables'
+                )
+            nested_creds = item.get('credentials', [])
+            if isinstance(nested_creds, list):
+                seen_cred_ids: set[str] = set()
+                seen_cred_scopes: set[tuple[str, str, str]] = set()
+                required_credential = {
+                    'id',
+                    'kind',
+                    'provider_host',
+                    'owner',
+                    'repository',
+                    'access',
+                    'provider_key_title',
+                    'key_fingerprint',
+                    'state',
+                }
+                for cred_idx, cred in enumerate(nested_creds):
+                    label = f'vms[{idx}].credentials[{cred_idx}]'
+                    if not isinstance(cred, dict):
+                        problems.append(f'{label} is not a table/object')
+                        continue
+                    cred = cast(dict[str, object], cred)
+                    for key in sorted(str(key) for key in cred.keys()):
+                        if key not in allowed_credential:
+                            problems.append(f'{label} unknown key: {key!r}')
+                    missing = sorted(
+                        key
+                        for key in required_credential
+                        if not str(cred.get(key, '')).strip()
+                    )
+                    if missing:
+                        problems.append(
+                            f'{label} missing required key(s): '
+                            + ', '.join(missing)
+                        )
+                    kind = str(cred.get('kind', '')).strip()
+                    if kind and kind not in VALID_CREDENTIAL_KINDS:
+                        problems.append(f'{label} unsupported kind: {kind!r}')
+                    access = str(cred.get('access', '')).strip()
+                    if access and access not in VALID_CREDENTIAL_ACCESS:
+                        problems.append(f'{label} invalid access: {access!r}')
+                    state = str(cred.get('state', '')).strip()
+                    if state and state not in VALID_CREDENTIAL_STATES:
+                        problems.append(f'{label} invalid state: {state!r}')
+                    cred_id = str(cred.get('id', '')).strip()
+                    if cred_id:
+                        if cred_id in seen_cred_ids:
+                            problems.append(
+                                f'{label} duplicate credential id: {cred_id!r}'
+                            )
+                        seen_cred_ids.add(cred_id)
+                    scope = (
+                        str(cred.get('provider_host', '')).strip().lower(),
+                        str(cred.get('owner', '')).strip().lower(),
+                        str(cred.get('repository', '')).strip().lower(),
+                    )
+                    if all(scope):
+                        if scope in seen_cred_scopes:
+                            problems.append(
+                                f'{label} duplicate credential scope: '
+                                + '/'.join(scope)
+                            )
+                        seen_cred_scopes.add(scope)
+                    if not missing:
+                        try:
+                            validate_credential_identity(
+                                vm_name=str(item.get('name', '')).strip(),
+                                cred_id=cred_id,
+                                provider_host=str(
+                                    cred.get('provider_host', '')
+                                ),
+                                owner=str(cred.get('owner', '')),
+                                repository=str(cred.get('repository', '')),
+                            )
+                            validate_provider_key_id(
+                                str(cred.get('provider_key_id', ''))
+                            )
+                            validate_metadata_text(
+                                'provider_key_title',
+                                str(cred.get('provider_key_title', '')),
+                            )
+                            validate_key_fingerprint(
+                                str(cred.get('key_fingerprint', ''))
+                            )
+                        except CredentialValidationError as ex:
+                            problems.append(f'{label} invalid credential: {ex}')
+            elif nested_creds is not None:
+                problems.append(
+                    f'vms[{idx}].credentials should be an array of tables'
                 )
     elif vms is not None:
         problems.append('top-level key "vms" should be an array of tables')
@@ -251,7 +371,8 @@ def _lint_store_text(text: str) -> list[str]:
             if not isinstance(item, dict):
                 problems.append(f'attachments[{idx}] is not a table/object')
                 continue
-            for key in sorted(item.keys()):
+            item = cast(dict[str, object], item)
+            for key in sorted(str(key) for key in item.keys()):
                 if key not in allowed_attachment:
                     problems.append(f'attachments[{idx}] unknown key: {key!r}')
     elif atts is not None:

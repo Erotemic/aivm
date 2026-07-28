@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from .config_store import (
     find_vm,
     load_store,
     materialize_vm_cfg,
+    require_vm,
     save_store,
     store_path,
     upsert_network,
@@ -38,6 +40,28 @@ from .util import which
 
 def cfg_path(p: str | None) -> Path:
     return Path(p).expanduser().resolve() if p else store_path().resolve()
+
+
+_CURRENT_CONFIG_OPTION: ContextVar[str | None] = ContextVar(
+    'aivm_current_config_option', default=None
+)
+
+
+def bind_active_config_option(value: str | None) -> None:
+    """Record the ``--config`` value this invocation parsed.
+
+    Optional features resolve their own settings from the store lazily rather
+    than having the CLI push each one into them; this is how they find the
+    same store the command is using. Keeping the direction of that dependency
+    inward means the CLI's shared option surface stays free of any one
+    feature's configuration.
+    """
+    _CURRENT_CONFIG_OPTION.set(str(value) if value else None)
+
+
+def active_cfg_path() -> Path:
+    """Return the config-store path bound by the running command."""
+    return cfg_path(_CURRENT_CONFIG_OPTION.get())
 
 
 def hydrate_ssh_identity_defaults(cfg: AgentVMConfig) -> bool:
@@ -218,8 +242,7 @@ def resolve_vm_name(
     reg = load_store(store_path)
 
     if vm_opt:
-        if find_vm(reg, vm_opt) is None:
-            raise AIVMError(f'VM not found in config store: {vm_opt}')
+        require_vm(reg, vm_opt)
         return vm_opt, store_path
 
     if host_src is not None:
@@ -291,9 +314,7 @@ def load_cfg_with_path(
         host_src=host_src,
     )
     reg = load_store(store_path)
-    rec = find_vm(reg, vm_name)
-    if rec is None:
-        raise AIVMError(f'VM not found in config store: {vm_name}')
+    require_vm(reg, vm_name)
     cfg = materialize_vm_cfg(reg, vm_name)
     changed = (
         hydrate_ssh_identity_defaults(cfg)

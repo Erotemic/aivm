@@ -19,3 +19,39 @@ Detached /data/crfm-helm-audit from VM aivm-2404 (shared-root mode)
 Detached shared-root guest bind mount.
 Updated config store: /home/joncrall/.config/aivm/config.toml
 
+
+## 2026-07-24 18:30:00 -0400
+
+Hardened VM credential storage against intermediate symlinks after an external
+review demonstrated that a real credential leaf beneath a symlinked VM or
+`credentials` directory could redirect both key generation and recursive
+cleanup outside AIVM's data tree. The application-data directory is now
+resolved once as the trust boundary, and every AIVM-managed directory from that
+root through the credential leaf is checked with `lstat` before paths are used.
+Creation also avoids `mkdir -p` and creates each managed descendant separately.
+
+The main tradeoff is that intentionally symlinking an individual VM data
+directory or its credential parent is no longer supported. A symlink at the
+application-data root itself remains usable because its resolved directory is
+treated as the explicit trust boundary. The checks close the reported static
+redirection path; they are not intended as a complete defense against a
+same-user process racing path replacement between validation and filesystem
+mutation. Regression tests cover symlinked VM and credential ancestors during
+generation, revocation, and provider-unverified abandonment, and verify that
+external sentinel files remain untouched.
+
+## 2026-07-24 18:50:00 -0400
+
+Extended the credential filesystem trust boundary to reject an AIVM data root,
+VM data directory, or credential-parent directory that is writable by group or
+others. Ownership and symlink checks alone were insufficient on multi-user
+systems: another account with write access to one of those directories could
+replace a descendant after planning but before queued key-generation commands
+executed. Existing `0700` and `0755` directory layouts remain valid; modes with
+`0o022` set now fail closed before key creation or recursive cleanup.
+
+This closes races involving a different local UID within the intended threat
+model. It does not claim descriptor-relative protection against a process
+running as the same UID, which remains explicitly out of scope. Regression
+tests cover both group-writable and world-writable application roots, VM data
+directories, and credential-parent directories.
