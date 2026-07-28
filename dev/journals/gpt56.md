@@ -15,3 +15,11 @@ I kept the first integration deliberately local and dependency-free: there is no
 Rebased the GitLab integration onto commit ab2edad, after the credential lifecycle adopted administrator handoff as settled policy. Provider publication is now uniformly best effort: missing GitHub tooling or login, a missing GitLab token, permission and organization-policy failures, definitive provider refusals, and uncertain transport outcomes all preserve the generated keypair, install the private half in the VM, and record an unregistered credential for manual publication. Only failures in the local credential work itself remain fatal.
 
 The GitLab backend remains a direct v4 REST client with no glab dependency. Provider selection and recorded kinds dispatch add, status, and revoke without changing the shared SSH guest model. Direct GitLab API mutations use CommandManager approval, while setup remains a diagnostic for automation readiness rather than a prerequisite for creating a credential.
+
+## 2026-07-28 11:30:02 -0400
+
+Planned the move from AIVM's mixed per-user/global state into one shared-machine authority with per-host-user guest principals. The key decision is not to productize the tempting shadow-store or shared-single-account workaround. Instead, the hostname-qualified VM remains the natural rendezvous point: the first user creates it, and later users join through `aivm config init` without redefining the machine.
+
+The hardest usability seam is initial guest enrollment. A later user cannot use a personal key before it is authorized, so the plan introduces a narrow machine-scoped bootstrap identity and an idempotent guest helper rather than copying the creator's private key. This is intentionally designed so a future privileged host daemon can take over the transport without changing principals, attachments, or the user-facing join workflow.
+
+I am confident about the scope split and phased ordering. The main implementation risks are group-safe atomic machine-store writes, UID/GID collisions in existing guests, migration conflicts when multiple old stores claim one domain, and ensuring persistent attachment replay is generated only from the complete global inventory. The roadmap keeps each of those behind a separately testable work package and preserves legacy `agent` accounts during migration rather than forcing a risky rename.
