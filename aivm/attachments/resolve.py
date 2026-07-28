@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from loguru import logger as log
 
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..config_store import find_attachment_for_vm, load_store
 from ..errors import AIVMError
 from ..vm.share import (
@@ -148,7 +149,7 @@ def _compute_mirror_home_symlink(
     if not is_default_dst:
         return None
     host_home = Path.home()
-    guest_home = PurePosixPath('/home') / cfg.vm.user
+    guest_home = resolve_legacy_vm_context(cfg).guest_home
     if str(guest_home) == str(host_home):
         return None
     lexical = host_src.expanduser().absolute()

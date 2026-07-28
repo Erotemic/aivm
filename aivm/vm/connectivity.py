@@ -9,6 +9,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
@@ -72,6 +73,7 @@ def wait_for_ip(
     cfg: AgentVMConfig, *, timeout_s: int = 360, dry_run: bool = False
 ) -> str:
     log.debug('Waiting for VM IP via DHCP lease')
+    context = resolve_legacy_vm_context(cfg)
     p = _paths(cfg, dry_run=dry_run)
     ip_file = p['ip_file']
     if dry_run:
@@ -80,7 +82,7 @@ def wait_for_ip(
     ensure_dir(p['state_dir'])
     mac = _mac_for_vm(cfg)
     cached_ip = get_ip_cached(cfg)
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     if not mac:
         log.warning(
             'Could not determine VM MAC; DHCP lease lookup may fail. Falling back to domifaddr.'
@@ -158,7 +160,7 @@ def wait_for_ip(
                             connect_timeout=3,
                             strict_host_key_checking='accept-new',
                         ),
-                        f'{cfg.vm.user}@{cached_ip}',
+                        context.ssh_target(cached_ip),
                         'true',
                     ],
                     sudo=False,
@@ -230,12 +232,13 @@ def wait_for_ip(
 
 def ssh_config(cfg: AgentVMConfig) -> str:
     cfg = cfg.expanded_paths()
-    ident = cfg.paths.ssh_identity_file or '~/.ssh/id_ed25519'
+    context = resolve_legacy_vm_context(cfg)
+    ident = context.profile.ssh_identity_file or '~/.ssh/id_ed25519'
     host = cfg.vm.name
     ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
     return f"""Host {host}
   HostName {ip}
-  User {cfg.vm.user}
+  User {context.guest_user}
   IdentityFile {ident}
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
@@ -274,9 +277,10 @@ def wait_for_ssh(
     dry_run: bool = False,
 ) -> None:
     cfg = cfg.expanded_paths()
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     if dry_run:
-        log.info('DRYRUN: wait for SSH on {}@{}', cfg.vm.user, ip)
+        log.info('DRYRUN: wait for SSH on {}', context.ssh_target(ip))
         return
     deadline = time.time() + timeout_s
     # SSH can come up slowly on first boot, especially under nested
@@ -294,7 +298,7 @@ def wait_for_ssh(
                 connect_timeout=3,
                 strict_host_key_checking='accept-new',
             ),
-            f'{cfg.vm.user}@{ip}',
+            context.ssh_target(ip),
             'true',
         ]
         res = CommandManager.current().run(

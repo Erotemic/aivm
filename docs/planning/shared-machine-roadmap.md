@@ -57,6 +57,35 @@ than introducing a parallel configuration engine.
   about one domain and attachment inventory.
 - The codebase has an agreed call-site inventory for the principal refactor.
 
+## Current implementation status
+
+### Version 0.6.0 first organizational slice
+
+The first 0.6.0 change establishes the runtime boundary without changing the
+on-disk store. `aivm.config_scopes` now defines machine, principal, profile,
+and resolved-context types and translates the current `AgentVMConfig` into a
+synthetic legacy principal. This deliberately makes the first change
+serialization-neutral and keeps existing installations working.
+
+All post-creation guest operations now resolve that compatibility context:
+SSH connections and config rendering, provisioning, status probes, guest
+credential installation, attachment guest operations, persistent replay
+transport, shared-root reconciliation, cache flushing, and fdguard management.
+These paths no longer read `cfg.vm.user` or caller SSH paths directly.
+
+The remaining direct legacy reads are intentionally limited to boundaries that
+still create or edit the old schema:
+
+- `config init`, config review, and runtime default hydration;
+- host detection of SSH key paths;
+- cloud-init and VM creation of the original guest account.
+
+This completes the safe reorganizational half of work package 1. The next
+slice should make `ResolvedVMContext` the value returned by the service layer,
+then introduce persisted principals and the machine/user store split. No code
+should move persistent files to `/var/lib/aivm` until group-safe atomic writes
+and migration rollback are implemented and tested.
+
 ## Work package 1: Separate models without moving storage
 
 ### Goals

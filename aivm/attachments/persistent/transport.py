@@ -25,6 +25,7 @@ from ...commands import (
     CommandRole,
 )
 from ...config import AgentVMConfig
+from ...config_scopes import resolve_legacy_vm_context
 from ...privilege import path_needs_sudo
 from ...runtime import require_ssh_identity, ssh_base_args
 
@@ -255,7 +256,8 @@ def _run_guest_ssh_script_with_retry(
     connect_timeout_s: int = 15,
     retries: int = 3,
 ) -> CommandResult | None:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',
         *ssh_base_args(
@@ -264,7 +266,7 @@ def _run_guest_ssh_script_with_retry(
             connect_timeout=connect_timeout_s,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
     if dry_run:

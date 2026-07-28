@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
@@ -53,7 +54,8 @@ def _ensure_guest_symlink(
     - regular file: warn and skip
     - symlink to wrong target: warn and skip
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     link_q = shlex.quote(symlink_path)
     tgt_q = shlex.quote(target_path)
     parent_q = shlex.quote(str(PurePosixPath(symlink_path).parent))
@@ -88,7 +90,7 @@ def _ensure_guest_symlink(
             ident,
             strict_host_key_checking='accept-new',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
     res = CommandManager.current().run(
@@ -494,9 +496,10 @@ def _ensure_guest_git_repo(
     cfg: AgentVMConfig,
     guest_repo_root: str,
 ) -> None:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     root_q = shlex.quote(guest_repo_root)
-    user_q = shlex.quote(cfg.vm.user)
+    user_q = shlex.quote(context.guest_user)
     # Use sudo to create the full repo root path in case the parent dirs are
     # outside the guest home and not user-writable (e.g. /home/joncrall/code/repo).
     # Only chown the repo root leaf itself — never recursively chown parent trees.

@@ -23,3 +23,25 @@ Planned the move from AIVM's mixed per-user/global state into one shared-machine
 The hardest usability seam is initial guest enrollment. A later user cannot use a personal key before it is authorized, so the plan introduces a narrow machine-scoped bootstrap identity and an idempotent guest helper rather than copying the creator's private key. This is intentionally designed so a future privileged host daemon can take over the transport without changing principals, attachments, or the user-facing join workflow.
 
 I am confident about the scope split and phased ordering. The main implementation risks are group-safe atomic machine-store writes, UID/GID collisions in existing guests, migration conflicts when multiple old stores claim one domain, and ensuring persistent attachment replay is generated only from the complete global inventory. The roadmap keeps each of those behind a separately testable work package and preserves legacy `agent` accounts during migration rather than forcing a risky rename.
+
+## 2026-07-28 12:10:00 -0400
+
+Started the 0.6.0 implementation with the least risky architectural seam: a
+serialization-neutral runtime scope layer. `AgentVMConfig` still loads and
+saves exactly as before, but it is translated into explicit machine,
+principal, profile, and resolved-context objects before any post-creation
+operation reaches SSH or the guest. I moved the guest-runtime call sites as a
+coherent group so the later machine-store migration can change one resolver
+instead of reopening every attachment, provisioning, status, credential, and
+maintenance module.
+
+I deliberately left config editing, SSH-key discovery/hydration, cloud-init,
+and creator-account construction on the legacy fields. Those are persistence
+and enrollment boundaries, not ordinary runtime consumers, and pretending the
+new store exists before group-safe writes and migration semantics are ready
+would make the refactor less honest. The main remaining risk is that
+`ResolvedVMContext` is still constructed locally from a legacy config at each
+module boundary; the next slice should make the service layer return it
+centrally and then persist real principals. I am confident the current slice is
+behavior-preserving because it changes how identity is named in code, not which
+identity or key the current schema selects.

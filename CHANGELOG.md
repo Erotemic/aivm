@@ -2,7 +2,7 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.5.1 - Unreleased
+## Version 0.6.0 - Unreleased
 
 ### Added
 * Added ``aivm vm creds`` for VM-scoped repository credentials. The initial
@@ -74,6 +74,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* Began the shared-machine architecture refactor by introducing explicit
+  runtime scopes for machine state, VM principals, and per-user access
+  profiles. The existing on-disk schema remains compatible, but post-creation
+  guest operations now resolve a `ResolvedVMContext` instead of treating
+  `vm.user` and SSH identity paths as intrinsic VM properties. SSH, guest
+  provisioning, status probes, credentials, attachment reconciliation,
+  persistent replay transport, shared-root operations, cache maintenance, and
+  fdguard management all pass through this boundary. Config editing,
+  detection, and cloud-init intentionally remain on the legacy schema until
+  the machine-global store and principal enrollment work lands.
 * A command that changes state now requires confirmation because it is a
   write, not because it needs sudo or happens to be a `virsh` command. The
   previous rule guarded `virsh undefine --remove-all-storage` only by the

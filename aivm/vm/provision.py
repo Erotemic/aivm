@@ -8,6 +8,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import (
@@ -27,13 +28,14 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         log.info('Provision disabled; skipping.')
         return
     cfg = cfg.expanded_paths()
+    context = resolve_legacy_vm_context(cfg)
     if dry_run:
         ip = '0.0.0.0'
     else:
         ip = get_ip_cached(cfg) or wait_for_ip(
             cfg, timeout_s=360, dry_run=False
         )
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     pkgs = list(cfg.provision.packages)
     docker_pkgs = (
         ['docker.io', 'docker-compose-v2']
@@ -74,7 +76,7 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             ident,
             strict_host_key_checking='accept-new',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     if dry_run:

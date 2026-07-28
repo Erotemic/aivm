@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .config_scopes import resolve_legacy_vm_context
 from .config_store import AttachmentEntry, load_store
 from .firewall import effective_firewall_table
 from .host import check_commands
@@ -470,8 +471,9 @@ def probe_vm_state(
 
 def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Best-effort SSH readiness probe to the guest."""
+    context = resolve_legacy_vm_context(cfg)
     try:
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.profile.ssh_identity_file)
     except Exception as ex:
         return ProbeOutcome(False, str(ex), '')
     cmd = [
@@ -483,7 +485,7 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         'true',
     ]
     res = CommandManager.current().run(
@@ -519,10 +521,11 @@ def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
 
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Check whether configured guest packages appear to be installed."""
+    context = resolve_legacy_vm_context(cfg)
     if not cfg.provision.enabled:
         return ProbeOutcome(None, 'disabled in config', '')
     try:
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.profile.ssh_identity_file)
     except Exception as ex:
         return ProbeOutcome(False, str(ex), '')
     needed = list(cfg.provision.packages)
@@ -554,7 +557,7 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     res = CommandManager.current().run(

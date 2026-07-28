@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...config_scopes import resolve_legacy_vm_context
 from ...config_store import (
     find_attachments_for_vm,
     load_store,
@@ -243,11 +244,12 @@ def _sync_persistent_attachment_manifest_to_guest(
     dry_run: bool,
     check: bool = True,
 ) -> bool:
+    context = resolve_legacy_vm_context(cfg)
     manifest_path = _persistent_host_manifest_path(cfg)
     remote_target = (
-        f'{cfg.vm.user}@{ip}:{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}'
+        f'{context.ssh_target(ip)}:{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}'
     )
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     ssh_args = [
         'ssh',
         *ssh_base_args(

@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..privilege import path_needs_sudo, path_read_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -37,7 +38,8 @@ def _shared_root_guest_mount_cmd(
     # coexist. Read-only policy is enforced on each host bind and guest child
     # bind, never by remounting the shared root.
     del read_only
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     mount_cmd = (
         f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
         f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
@@ -61,7 +63,7 @@ def _shared_root_guest_mount_cmd(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
 
@@ -640,7 +642,8 @@ def _ensure_shared_root_guest_bind(
         'exit 2; '
         'esac'
     )
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',
         *ssh_base_args(
@@ -649,7 +652,7 @@ def _ensure_shared_root_guest_bind(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
     if dry_run:
@@ -790,7 +793,8 @@ def _detach_shared_root_guest_bind(
     *,
     dry_run: bool,
 ) -> None:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     source_in_guest = str(
         PurePosixPath(SHARED_ROOT_GUEST_MOUNT_ROOT)
         / (attachment.tag or '').strip()
@@ -807,7 +811,7 @@ def _detach_shared_root_guest_bind(
     cmd = [
         'ssh',
         *ssh_base_args(ident, strict_host_key_checking='accept-new'),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
     if dry_run:

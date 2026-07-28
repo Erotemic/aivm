@@ -24,6 +24,7 @@ from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
+from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..fdguard import (
     fdguard_install_script,
@@ -127,6 +128,7 @@ class VMFdGuardCLI(_BaseCommand):
             )
 
         cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
+        context = resolve_legacy_vm_context(cfg)
         vm_name = cfg.vm.name
         threshold = int(args.threshold or 0) or int(
             cfg.virtiofs.fd_guard_threshold
@@ -159,7 +161,7 @@ class VMFdGuardCLI(_BaseCommand):
             print('Guest script:')
             print(script)
             print('SSH shape:')
-            print(f'ssh <ssh-options> {cfg.vm.user}@<vm-ip> {remote_command}')
+            print(f'ssh <ssh-options> {context.guest_user}@<vm-ip> {remote_command}')
             return 0
 
         intent_why = {
@@ -182,7 +184,7 @@ class VMFdGuardCLI(_BaseCommand):
                 yes=bool(args.yes),
                 purpose='Resolve VM networking before managing the fd guard.',
             )
-            ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+            ident = require_ssh_identity(context.profile.ssh_identity_file)
             cmd = [
                 'ssh',
                 *ssh_base_args(
@@ -191,7 +193,7 @@ class VMFdGuardCLI(_BaseCommand):
                     connect_timeout=10,
                     batch_mode=True,
                 ),
-                f'{cfg.vm.user}@{ip}',
+                context.ssh_target(ip),
                 remote_command,
             ]
             log.debug('Running fdguard {} command: {}', action, shell_join(cmd))

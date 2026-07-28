@@ -22,6 +22,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..modes import PrivilegeMode
 from ..privilege import virsh_needs_sudo
@@ -548,7 +549,8 @@ def ensure_share_mounted(
     dry_run: bool = False,
 ) -> None:
     cfg = cfg.expanded_paths()
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     if not guest_dst:
         raise RuntimeError('Share guest_dst is empty.')
     if not tag:
@@ -581,7 +583,7 @@ def ensure_share_mounted(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     if dry_run:

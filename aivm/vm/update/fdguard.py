@@ -16,6 +16,7 @@ import shlex
 
 from ...commands import CommandManager, Elided
 from ...config import AgentVMConfig
+from ...config_scopes import resolve_legacy_vm_context
 from ...errors import AIVMError
 from ...fdguard import (
     FDGUARD_TIMER,
@@ -40,7 +41,8 @@ def _guest_ssh_cmd(
     base64 file payloads and run to several kilobytes on one line, which is
     unreadable in a log, so the caller says what the script does instead.
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     return [
         'ssh',
         *ssh_base_args(
@@ -49,7 +51,7 @@ def _guest_ssh_cmd(
             connect_timeout=10,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         Elided(f'sh -c {shlex.quote(script)}', label),
     ]
 

@@ -18,6 +18,7 @@ from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
+from ..config_scopes import resolve_legacy_vm_context
 from ..config_store import load_store
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -216,12 +217,13 @@ def _start_remote_tunnel_session(
     tunnel_name: str,
 ) -> None:
     """Idempotently start the ``code tunnel`` tmux session inside the guest."""
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     remote = _build_tunnel_remote_script(guest_path, tunnel_name)
     cmd = [
         'ssh',
         *ssh_base_args(ident),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     CommandManager.current().run(
@@ -239,12 +241,13 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
     :class:`CommandManager`: a subprocess cannot hand the caller's TTY back
     cleanly, so the command is logged here for auditability and then exec'd.
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = resolve_legacy_vm_context(cfg)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',
         '-t',
         *ssh_base_args(ident),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
     log.info('RUN (exec, replaces this process): {}', shell_join(cmd))
@@ -260,6 +263,7 @@ def _print_remote_session_recipe(
     reason: str,
 ) -> None:
     """Print a connect-from-workstation recipe in lieu of launching code."""
+    context = resolve_legacy_vm_context(cfg)
     vm_name = cfg.vm.name
     guest_path = session.share_guest_dst
     tunnel_name = _remote_tunnel_name(cfg)
@@ -303,7 +307,7 @@ def _print_remote_session_recipe(
     print()
     print(f'  VM:      {vm_name}')
     print(f'  Host:    {session.ip}')
-    print(f'  User:    {cfg.vm.user}')
+    print(f'  User:    {context.guest_user}')
     print(f'  Path:    {guest_path}')
     print(f'  Tunnel:  {tunnel_name}')
     if ssh_cfg_updated:
@@ -546,9 +550,10 @@ class VMSSHCLI(_BaseCommand):
             log.error(str(ex))
             return 1
         cfg = session.cfg
+        context = resolve_legacy_vm_context(cfg)
         if args.dry_run:
             print(
-                f'DRYRUN: would SSH to {cfg.vm.user}@<ip> and cd {session.share_guest_dst}'
+                f'DRYRUN: would SSH to {context.guest_user}@<ip> and cd {session.share_guest_dst}'
             )
             return 0
 
@@ -557,7 +562,7 @@ class VMSSHCLI(_BaseCommand):
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
             cfg, dry_run=False, yes=bool(args.yes)
         )
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.profile.ssh_identity_file)
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
@@ -569,7 +574,7 @@ class VMSSHCLI(_BaseCommand):
                     ident,
                     strict_host_key_checking='accept-new',
                 ),
-                f'{cfg.vm.user}@{ip}',
+                context.ssh_target(ip),
                 remote_cmd,
             ],
             sudo=False,
@@ -585,11 +590,11 @@ class VMSSHCLI(_BaseCommand):
             log.error(
                 'SSH connection to {}@{} failed; check that the VM is '
                 'running and reachable (aivm status).',
-                cfg.vm.user,
+                context.guest_user,
                 ip,
             )
             return 1
-        print(f'SSH session ended for {cfg.vm.user}@{ip}')
+        print(f'SSH session ended for {context.ssh_target(ip)}')
         if ssh_result.code:
             log.debug(
                 'Interactive shell exited with status {}', ssh_result.code
