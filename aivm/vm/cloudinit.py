@@ -23,6 +23,13 @@ from ..fdguard import (
     fdguard_service_unit,
     fdguard_timer_unit,
 )
+from ..guestctl import (
+    BOOTSTRAP_GUEST_USER,
+    BOOTSTRAP_SUDOERS_PATH,
+    GUESTCTL_PATH,
+    guestctl_source,
+    restricted_bootstrap_authorized_key,
+)
 from ..persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
@@ -106,7 +113,12 @@ def refresh_cloud_init_seed_for_next_boot(
         _write_cloud_init(cfg, dry_run=False)
 
 
-def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
+def _render_user_data_text(
+    cfg: AgentVMConfig,
+    *,
+    pubkey: str,
+    bootstrap_public_key: str = '',
+) -> str:
     """Render the cloud-init ``user-data`` document for ``cfg``.
 
     Pure helper: takes config + SSH public key, returns the YAML body.
@@ -197,6 +209,42 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
             f'\n          - systemctl start {FDGUARD_SERVICE}'
         )
 
+    bootstrap_user = ''
+    bootstrap_write_files = ''
+    if bootstrap_public_key.strip():
+        restricted_key = restricted_bootstrap_authorized_key(
+            bootstrap_public_key
+        )
+        bootstrap_user = textwrap.indent(
+            textwrap.dedent(
+                f"""\
+                - name: {BOOTSTRAP_GUEST_USER}
+                  system: true
+                  homedir: /var/lib/{BOOTSTRAP_GUEST_USER}
+                  shell: /bin/bash
+                  lock_passwd: true
+                  ssh_authorized_keys:
+                    - {json.dumps(restricted_key)}
+                """
+            ).rstrip(),
+            ' ' * 10,
+        )
+        indent14 = ' ' * 14
+        sudoers = (
+            f'{BOOTSTRAP_GUEST_USER} ALL=(root) NOPASSWD: '
+            f'{GUESTCTL_PATH} --forced\n'
+        )
+        bootstrap_write_files = (
+            f'\n          - path: {GUESTCTL_PATH}\n'
+            '            permissions: "0755"\n'
+            '            content: |\n'
+            f'{textwrap.indent(guestctl_source().rstrip(), indent14)}\n'
+            f'          - path: {BOOTSTRAP_SUDOERS_PATH}\n'
+            '            permissions: "0440"\n'
+            '            content: |\n'
+            f'{textwrap.indent(sudoers.rstrip(), indent14)}'
+        )
+
     if cfg.vm.allow_password_login:
         if '\n' in cfg.vm.password:
             raise AIVMError(
@@ -226,6 +274,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
             lock_passwd: {lock_passwd}
             ssh_authorized_keys:
               - {pubkey}
+{bootstrap_user}
 
         ssh_pwauth: {ssh_pwauth}
         disable_root: true{timezone_line}
@@ -265,7 +314,7 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
           - path: /etc/systemd/system/{PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
             permissions: "0644"
             content: |
-{textwrap.indent(persistent_replay_service_unit().rstrip(), '              ')}{fdguard_write_files}
+{textwrap.indent(persistent_replay_service_unit().rstrip(), '              ')}{fdguard_write_files}{bootstrap_write_files}
 
         runcmd:
           - systemctl mask --now systemd-networkd-wait-online.service NetworkManager-wait-online.service || true
@@ -278,7 +327,10 @@ def _render_user_data_text(cfg: AgentVMConfig, *, pubkey: str) -> str:
 
 
 def _write_cloud_init(
-    cfg: AgentVMConfig, *, dry_run: bool = False
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool = False,
+    bootstrap_public_key: str = '',
 ) -> dict[str, Path]:
     """Render and materialize cloud-init artifacts for a VM definition.
 
@@ -303,7 +355,11 @@ def _write_cloud_init(
         )
     pubkey = pubkey_path.read_text(encoding='utf-8').strip()
 
-    cloud = _render_user_data_text(cfg, pubkey=pubkey)
+    cloud = _render_user_data_text(
+        cfg,
+        pubkey=pubkey,
+        bootstrap_public_key=bootstrap_public_key,
+    )
 
     meta = textwrap.dedent(
         f"""\

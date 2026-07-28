@@ -11,6 +11,8 @@ from ..config import AgentVMConfig
 from ..config_store import load_store
 from ..credentials.guards import require_vm_credentials_released
 from ..errors import AIVMError, CommandControlError
+from ..enrollment import ensure_bootstrap_identity
+from ..machine_store import is_machine_store_path
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, virsh_cmd
 from ..util import CmdError
@@ -295,8 +297,21 @@ def create_or_start_vm(
                 _destroy_and_undefine_vm(cfg.vm.name)
 
         base_img = fetch_image(cfg, dry_run=dry_run)
+        bootstrap_public_key = ''
+        if config_store_path is not None and is_machine_store_path(
+            Path(config_store_path)
+        ):
+            bootstrap = ensure_bootstrap_identity(
+                cfg.vm.name,
+                dry_run=dry_run,
+            )
+            bootstrap_public_key = bootstrap.public_key
         try:
-            ci = _write_cloud_init(cfg, dry_run=dry_run)
+            ci = _write_cloud_init(
+                cfg,
+                dry_run=dry_run,
+                bootstrap_public_key=bootstrap_public_key,
+            )
         # A declined prompt is the user answering the question, not a step
         # that went wrong. Best-effort recovery must not continue past it.
         except CommandControlError:

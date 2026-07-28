@@ -7,14 +7,13 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Package / CLI name: `aivm`
 - Primary goal: manage local libvirt/KVM VMs for agent workflows.
 - Config model:
-  - Fresh implicit 0.6 installations use a schema-version-9 machine store
-    under `/var/lib/aivm` plus a private `~/.config/aivm/profile.toml`.
-  - Existing released per-user stores remain selected unchanged until an
-    explicit migration command is implemented; explicit non-machine
-    `--config` paths retain legacy semantics.
-  - Machine operations must resolve `ResolvedVMContext` from machine state,
-    the caller profile, and one persisted principal. Do not reintroduce
-    `vm.user` or SSH paths as machine-owned fields.
+  - Existing released per-user stores remain readable and are not silently
+    migrated.
+  - Fresh implicit 0.6 installations use the machine-global store under
+    `/var/lib/aivm` plus a private XDG user profile.
+  - Managed VMs persist host-to-guest principals. Later users are enrolled only
+    through the forced `aivm-guestctl` bootstrap channel; never reintroduce
+    shadow machine stores or use the bootstrap key for interactive access.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

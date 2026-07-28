@@ -304,13 +304,15 @@ def resolve_machine_context(
     if principal is None:
         raise AIVMError(
             f'Host user {user!r} is not enrolled for managed VM {vm_name!r}. '
-            'Automatic enrollment is the next implementation stage.'
+            f'Run `aivm vm access reconcile --vm {vm_name}` after creating '
+            'this user\'s AIVM SSH identity.'
         )
     if principal.state not in {'active', 'legacy'}:
         raise AIVMError(
             f'Principal {principal.id!r} for VM {vm_name!r} is '
-            f'{principal.state!r}, not active. Run the future access '
-            'reconciliation command after enrollment support lands.'
+            f'{principal.state!r}, not active. Run '
+            f'`aivm vm access reconcile --vm {vm_name}` to retry or repair '
+            'the enrollment.'
         )
     cfg = materialize_machine_cfg(
         reg,

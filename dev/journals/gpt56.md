@@ -132,3 +132,31 @@ first, but the later enrollment/migration commands still need explicit
 reconciliation phases. The complete non-e2e suite passed as a non-root user
 (859 passed, 8 skipped). I did not run the expensive real-host E2E suite, in
 accordance with the release-train testing plan.
+
+## 2026-07-28 14:06:58 -0400
+
+Implemented the restricted principal-enrollment channel on top of the new
+machine/profile store. The most important design constraint was keeping the
+bootstrap identity useful without turning it into a second shared login. The
+machine-owned key is therefore accepted only by a dedicated system account,
+and its authorized-key entry replaces every requested remote command with a
+stdlib-only guest helper. Forwarding, PTY allocation, X11, agent forwarding,
+and user rc processing are disabled, and sudo permits only the exact forced
+helper invocation.
+
+I made principal state transactional enough to be recoverable rather than
+optimistic: the host writes `pending` before transport, distinguishes an
+unreachable VM from a rejected enrollment request, and does not mark a
+principal active until a new SSH connection succeeds with the user's personal
+key. The helper itself is deliberately idempotent and additive for authorized
+keys, while UID/GID collisions fail rather than silently changing another
+account. A late review caught a practical executable issue—the installed helper
+needed a shebang—which is now asserted in cloud-init tests.
+
+The complete non-e2e suite passed as a non-root user (874 passed, 8 skipped).
+I did not run the expensive real-system E2E suite. The main remaining risk is
+integration behavior on an actual cloud-init/libvirt guest, especially distro
+account-management details and forced-command quoting; that belongs in the
+final real-system run. The next code stage should connect exact managed-machine
+discovery in `config init` to this reconciliation service without allowing a
+joining user to rewrite machine configuration.

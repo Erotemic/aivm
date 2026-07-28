@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import kwconf
 
+from .vm_access import VMAccessModalCLI
 from .vm_attach import (
     VMAttachCLI,
     VMDetachCLI,
@@ -60,6 +61,7 @@ class VMModalCLI(kwconf.ModalCLI):
     flush_caches = VMFlushCachesCLI
     fdguard = VMFdGuardCLI
     creds = VMCredsModalCLI
+    access = VMAccessModalCLI
 
 
 __all__ = [
@@ -85,4 +87,5 @@ __all__ = [
     'VMFlushCachesCLI',
     'VMFdGuardCLI',
     'VMCredsModalCLI',
+    'VMAccessModalCLI',
 ]

@@ -10,6 +10,7 @@ error messages.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -104,6 +105,58 @@ def test_create_vm_prefers_uefi_even_when_host_looks_nested(
     assert 'none' in virt_calls[0]
     assert '--boot' in virt_calls[0]
     assert 'uefi,loader.secure=no,bios.useserial=on' in virt_calls[0]
+
+
+def test_machine_store_create_seeds_bootstrap_public_key(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only machine-store VM creation installs the enrollment bootstrap key."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    machine_config = tmp_path / 'machine' / 'config.toml'
+    monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(machine_config.parent))
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
+    monkeypatch.setattr(
+        'aivm.vm.create.fetch_image', lambda *a, **k: Path('/tmp/base.img')
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create._ensure_disk', lambda *a, **k: Path('/tmp/vm.qcow2')
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create.ensure_bootstrap_identity',
+        lambda *a, **k: SimpleNamespace(
+            public_key='ssh-ed25519 AAAABOOTSTRAP bootstrap@test'
+        ),
+    )
+    captured: dict[str, str] = {}
+
+    def fake_cloud_init(
+        cfg: AgentVMConfig,
+        *,
+        dry_run: bool,
+        bootstrap_public_key: str = '',
+    ) -> dict[str, Path]:
+        del cfg, dry_run
+        captured['bootstrap_public_key'] = bootstrap_public_key
+        return {'seed_iso': Path('/tmp/seed.iso')}
+
+    monkeypatch.setattr('aivm.vm.create._write_cloud_init', fake_cloud_init)
+    monkeypatch.setattr(
+        'aivm.vm.create.CommandManager.run',
+        lambda *a, **k: CmdResult(0, '', ''),
+    )
+
+    create_or_start_vm(
+        cfg,
+        dry_run=False,
+        recreate=False,
+        config_store_path=machine_config,
+    )
+
+    assert captured == {
+        'bootstrap_public_key': 'ssh-ed25519 AAAABOOTSTRAP bootstrap@test'
+    }
 
 
 def test_create_or_start_existing_vm_uses_step_for_state_and_start(

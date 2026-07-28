@@ -204,6 +204,40 @@ The next tranche is work package 3: the restricted guest bootstrap helper and
 idempotent principal enrollment. Until that lands, a later host user sees an
 actionable not-enrolled error rather than a shadow machine definition.
 
+### Stage 5 execution checklist: restricted guest enrollment
+
+The fifth 0.6.0 tranche implements work package 3 while leaving automatic
+`config init` join behavior for the next stage.
+
+- [x] Generate one stable machine-scoped bootstrap SSH keypair before creating
+  a machine-store VM.
+- [x] Add a dedicated `aivm-bootstrap` guest system account whose key is forced
+  to one non-interactive command with PTY, forwarding, X11, agent forwarding,
+  and user rc processing disabled.
+- [x] Install a stdlib-only `/usr/local/sbin/aivm-guestctl` executable and an
+  exact-command sudoers rule through cloud-init.
+- [x] Validate one JSON enrollment request and idempotently create or repair
+  the guest group, user, home, authorized personal key, sudoers fragment, and
+  existing common development-group memberships.
+- [x] Reject invalid usernames, malformed SSH keys, and conflicting UID/GID
+  assignments with actionable diagnostics.
+- [x] Persist the caller as `pending` before transport, retain `pending` when
+  the VM is unreachable, record helper failures as `error`, and mark `active`
+  only after a fresh personal-key SSH verification succeeds.
+- [x] Add `aivm vm access list` and `aivm vm access reconcile`, including a
+  non-mutating dry-run path.
+- [x] Keep bootstrap material outside user profiles and prevent it from
+  becoming an ordinary interactive SSH identity.
+- [x] Cover forced-command rendering, guest reconciliation idempotence,
+  collisions, host state transitions, CLI exposure, and machine-create
+  integration in unit tests.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The exact protocol and compatibility boundary are recorded in
+[`guest-enrollment-control.md`](guest-enrollment-control.md). The next tranche
+is work package 4: make `aivm config init` initialize a later user's profile and
+invoke this enrollment channel when it finds an exact managed machine match.
+
 ## Work package 1: Separate models without moving storage
 
 ### Goals

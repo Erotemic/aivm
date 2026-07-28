@@ -73,6 +73,45 @@ def test_write_cloud_init_user_data_avoids_invalid_datasource_keys(
     )
 
 
+def test_write_cloud_init_installs_restricted_enrollment_bootstrap(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A machine-created VM receives only a forced enrollment SSH channel."""
+    cfg = _cfg_with_pubkey(tmp_path)
+    monkeypatch.setattr(
+        'aivm.vm.cloudinit._ensure_qemu_access', lambda *a, **k: None
+    )
+    activate_manager(monkeypatch, isatty=True)
+    rec = command_recorder(monkeypatch, {}, default=FakeProc(0, '', ''))
+
+    _write_cloud_init(
+        cfg,
+        dry_run=False,
+        bootstrap_public_key='ssh-ed25519 AAAABOOTSTRAP bootstrap@test',
+    )
+
+    user_data_script = _heredoc_for(rec.normalized, 'user-data')
+    assert '- name: aivm-bootstrap' in user_data_script
+    assert 'system: true' in user_data_script
+    assert 'lock_passwd: true' in user_data_script
+    assert 'no-agent-forwarding' in user_data_script
+    assert 'no-port-forwarding' in user_data_script
+    assert 'no-pty' in user_data_script
+    assert (
+        'command=\\"/usr/bin/sudo -n '
+        '/usr/local/sbin/aivm-guestctl --forced\\"'
+        in user_data_script
+    )
+    assert 'path: /usr/local/sbin/aivm-guestctl' in user_data_script
+    assert '#!/usr/bin/env python3' in user_data_script
+    assert 'path: /etc/sudoers.d/aivm-bootstrap' in user_data_script
+    assert (
+        'aivm-bootstrap ALL=(root) NOPASSWD: '
+        '/usr/local/sbin/aivm-guestctl --forced'
+        in user_data_script
+    )
+
+
 def test_write_cloud_init_unlinks_seed_iso_before_rebuild(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
