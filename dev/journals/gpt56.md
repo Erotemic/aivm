@@ -45,3 +45,33 @@ module boundary; the next slice should make the service layer return it
 centrally and then persist real principals. I am confident the current slice is
 behavior-preserving because it changes how identity is named in code, not which
 identity or key the current schema selects.
+
+## 2026-07-28 13:00:58 -0400
+
+Completed the stage 0/1 shared-machine prerequisites without moving persistence.
+The most important change is that folder-oriented runtime preparation now asks
+the service layer for a `ResolvedVMContext` and carries that exact selection in
+`PreparedSession`; the SSH and VS Code entry points no longer reconstruct a
+principal from the legacy aggregate config after the session has already been
+prepared. I kept a read-only `session.cfg` compatibility property because many
+machine operations still need the old aggregate model, but identity-bearing
+callers now use `session.context` explicitly.
+
+I also made the test environment match the risk profile of the coming store
+migration. Every ordinary test gets an isolated HOME and XDG tree plus a future
+machine-store root, and the suite has reusable Alice/Bob fixtures, frozen
+schema-version-8 monolithic and split documents, a characterization of the
+current partial attachment inventories, and a synthetic end-to-end session
+path that stops at captured libvirt/SSH/sudo boundaries. Running the complete
+non-e2e suite as a non-root user was important: several privilege tests are
+meaningless under root's access semantics. The result was 838 passing tests and
+8 expected skips; the opt-in real-host e2e collection also remained healthy and
+skipped all seven cases without its enable flags.
+
+The branch used only two ubelt features, so I removed the runtime dependency
+rather than preserving it solely for XDG paths and presentation. The new helper
+modules explicitly record the historical ubelt APIs they replace and state that
+the code is a fresh stdlib/Pygments implementation, not copied vendored source.
+The main remaining architectural risk is now concentrated where it belongs:
+group-safe atomic machine-store writes, lock ordering, and rollback. None of
+those should be hidden inside the compatibility context layer.

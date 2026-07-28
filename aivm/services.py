@@ -21,6 +21,7 @@ from loguru import logger as log
 
 from .commands import CommandManager
 from .config import AgentVMConfig
+from .config_scopes import ResolvedVMContext, resolve_legacy_vm_context
 from .config_store import (
     find_attachments,
     find_vm,
@@ -335,6 +336,41 @@ def load_cfg_with_path(
     return cfg, store_path
 
 
+def load_vm_context_with_path(
+    config_path: str | None,
+    *,
+    vm_opt: str = '',
+    host_src: Path | None = None,
+    hydrate_runtime_defaults: bool = True,
+    persist_runtime_defaults: bool = True,
+) -> tuple[ResolvedVMContext, Path]:
+    """Load one VM and resolve the invoking user's runtime identity.
+
+    This is the canonical service-layer entry point for post-creation work.
+    The legacy loader remains available to config editing, creation, and
+    migration boundaries until the physical store split lands.
+    """
+    cfg, resolved_path = load_cfg_with_path(
+        config_path,
+        vm_opt=vm_opt,
+        host_src=host_src,
+        hydrate_runtime_defaults=hydrate_runtime_defaults,
+        persist_runtime_defaults=persist_runtime_defaults,
+    )
+    return resolve_legacy_vm_context(cfg), resolved_path
+
+
+def load_vm_context(
+    config_path: str | None, *, vm_opt: str = ''
+) -> ResolvedVMContext:
+    context, _ = load_vm_context_with_path(
+        config_path,
+        vm_opt=vm_opt,
+        host_src=Path.cwd(),
+    )
+    return context
+
+
 def load_cfg(config_path: str | None, *, vm_opt: str = '') -> AgentVMConfig:
     cfg, _ = load_cfg_with_path(
         config_path,
@@ -374,8 +410,22 @@ def resolve_cfg_for_code(
     vm_opt: str,
     host_src: Path,
 ) -> tuple[AgentVMConfig, Path]:
-    """Resolve VM config for folder-oriented flows (``code``/``ssh``/``attach``)."""
+    """Legacy config resolver for creation/editing compatibility boundaries."""
     return load_cfg_with_path(
+        config_opt,
+        vm_opt=vm_opt,
+        host_src=host_src,
+    )
+
+
+def resolve_context_for_code(
+    *,
+    config_opt: str | None,
+    vm_opt: str,
+    host_src: Path,
+) -> tuple[ResolvedVMContext, Path]:
+    """Resolve a principal-aware context for folder-oriented runtime flows."""
+    return load_vm_context_with_path(
         config_opt,
         vm_opt=vm_opt,
         host_src=host_src,
@@ -384,7 +434,7 @@ def resolve_cfg_for_code(
 
 @dataclass
 class PreparedSession:
-    cfg: AgentVMConfig
+    context: ResolvedVMContext
     cfg_path: Path
     host_src: Path
     attachment_mode: str
@@ -394,6 +444,11 @@ class PreparedSession:
     ip: str | None
     reg_path: Path | None
     meta_path: Path | None
+
+    @property
+    def cfg(self) -> AgentVMConfig:
+        """Legacy machine config view for call sites not yet context-native."""
+        return self.context.legacy_cfg
 
 
 def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:

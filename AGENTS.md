@@ -7,7 +7,7 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Package / CLI name: `aivm`
 - Primary goal: manage local libvirt/KVM VMs for agent workflows.
 - Config model:
-  - User/global registry + per-VM config under app config dir via `ub.Path.appdir('aivm', type='config')`
+  - User/global registry + per-VM config under app config dir via the stdlib XDG helpers in `aivm.user_paths`
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

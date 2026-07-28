@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
-import ubelt as ub
 
 from ..config import default_vm_name
 from ..config_store import find_vm, load_store
 from ..errors import AIVMError
 from ..services import cfg_path
+from ..terminal import highlight_code
 from ._common import _BaseCommand
 
 
@@ -145,7 +145,7 @@ class HelpRawCLI(_BaseCommand):
             grep -m1 -E '^(flags|Features)' /proc/cpuinfo
             """
         ).strip()
-        print(ub.highlight_code(lines, lexer_name='bash'))
+        print(highlight_code(lines, lexer_name='bash'))
         return 0
 
 
@@ -176,7 +176,7 @@ class HelpCompletionCLI(_BaseCommand):
             activate_global_cmd=activate_global,
             suggested_shell=suggested_shell,
         )
-        print(ub.highlight_code(lines, lexer_name='bash'))
+        print(highlight_code(lines, lexer_name='bash'))
         return 0
 
 

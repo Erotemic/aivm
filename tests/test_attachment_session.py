@@ -113,12 +113,13 @@ def _fake_prepare_session(
     captured: list,
 ) -> Any:
     """Return a fake _prepare_attached_session callable that records its kwargs."""
+    from aivm.config_scopes import resolve_legacy_vm_context
     from aivm.services import PreparedSession
 
     def fake_prepare(**kw: Any) -> PreparedSession:
         captured.append(kw)
         return PreparedSession(
-            cfg=cfg,
+            context=resolve_legacy_vm_context(cfg),
             cfg_path=cfg_path,
             host_src=kw['host_src'],
             attachment_mode=attachment.mode,

@@ -17,6 +17,7 @@ import pytest
 from aivm.cli.vm_guard import VMFdGuardCLI
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
+from aivm.config_scopes import resolve_legacy_vm_context
 from aivm.fdguard import (
     FDGUARD_BIN,
     FDGUARD_TIMER,
@@ -637,7 +638,10 @@ def test_vm_fdguard_install_runs_quoted_remote_command(
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_aivm'
 
-    monkeypatch.setattr('aivm.cli.vm_guard.load_cfg', lambda *a, **k: cfg)
+    monkeypatch.setattr(
+        'aivm.cli.vm_guard.load_vm_context',
+        lambda *a, **k: resolve_legacy_vm_context(cfg),
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_guard._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.123',

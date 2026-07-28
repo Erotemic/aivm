@@ -14,6 +14,7 @@ from ...config_store import (
     save_store,
 )
 from ...services import cfg_path, load_cfg_with_path
+from ...terminal import highlight_code
 from .._common import _BaseCommand
 
 
@@ -62,9 +63,7 @@ class ConfigShowCLI(_BaseCommand):
                 toml_text = loaded.source_text or path.read_text(
                     encoding='utf-8'
                 )
-        import ubelt as ub
-
-        text = ub.highlight_code(toml_text, lexer_name='toml')
+        text = highlight_code(toml_text, lexer_name='toml')
         print(text, end='')
         return 0
 

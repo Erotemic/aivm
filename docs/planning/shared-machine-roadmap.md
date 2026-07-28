@@ -80,11 +80,52 @@ still create or edit the old schema:
 - host detection of SSH key paths;
 - cloud-init and VM creation of the original guest account.
 
-This completes the safe reorganizational half of work package 1. The next
-slice should make `ResolvedVMContext` the value returned by the service layer,
-then introduce persisted principals and the machine/user store split. No code
+This completes the safe reorganizational half of work package 1. No code
 should move persistent files to `/var/lib/aivm` until group-safe atomic writes
 and migration rollback are implemented and tested.
+
+### Stage 0/1 execution checklist
+
+The second 0.6.0 tranche completes the test and runtime prerequisites before
+physical store movement:
+
+#### Stage 0: isolated shared-host scaffolding
+
+- [x] Route implicit `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_CACHE_HOME`, and `XDG_STATE_HOME` paths into each pytest sandbox.
+- [x] Reserve an isolated `AIVM_MACHINE_STORE_ROOT` in every test process so
+  the later machine-store implementation cannot accidentally touch
+  `/var/lib/aivm`.
+- [x] Add reusable Alice and Bob fixtures with different homes, UIDs, GIDs,
+  SSH keys, guest users, and legacy stores selecting one VM identity.
+- [x] Freeze representative released schema-version-8 monolithic and split
+  stores as migration fixtures.
+- [x] Characterize the current split-brain failure: Alice and Bob can describe
+  the same VM while seeing disjoint attachment inventories.
+- [x] Add a synthetic end-to-end path that crosses real store parsing, VM
+  selection, context resolution, attachment resolution, and prepared-session
+  construction while capturing libvirt/SSH/sudo boundaries.
+- [x] Run the complete non-e2e suite as a non-root user; privilege-sensitive
+  tests must not be evaluated under root semantics.
+
+#### Stage 1: central resolved-context service boundary
+
+- [x] Add canonical `load_vm_context_with_path`, `load_vm_context`, and
+  `resolve_context_for_code` service entry points.
+- [x] Make `PreparedSession` carry the selected `ResolvedVMContext`; retain a
+  read-only `cfg` compatibility property while machine operations still use
+  the legacy aggregate model.
+- [x] Make code/SSH session entry points use the context already selected by
+  session preparation instead of reconstructing principal identity.
+- [x] Move direct cache-flush and fdguard CLI loading onto the context service.
+- [x] Refresh a prepared context after on-demand SSH-key creation so the
+  session cannot carry stale profile paths.
+- [x] Add static regression checks preventing session code from returning to
+  `resolve_cfg_for_code` or `session.cfg` as its identity source.
+- [x] Preserve the legacy serialized bytes and current single-user behavior.
+
+The next tranche is work package 2: prototype group-safe machine-store writes,
+locks, and recovery before changing default persistence locations.
 
 ## Work package 1: Separate models without moving storage
 

@@ -74,6 +74,18 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* Completed the stage 0/1 prerequisites for the shared-machine migration.
+  Tests now isolate all implicit HOME/XDG paths, provide Alice/Bob fixtures and
+  frozen released-store migration documents, and exercise a captured
+  two-principal session path from store loading through attachment resolution.
+  The service layer now exposes canonical `ResolvedVMContext` loaders and
+  `PreparedSession` retains that selected context through SSH and VS Code
+  entry points instead of reconstructing caller identity later.
+* Removed the runtime `ubelt` dependency. AIVM now owns the small XDG path
+  resolver it needs and calls Pygments directly when optional terminal syntax
+  highlighting is available. The replacement modules record the historical
+  ubelt symbols they replace and explicitly note that their implementations
+  are new rather than copied source.
 * Began the shared-machine architecture refactor by introducing explicit
   runtime scopes for machine state, VM principals, and per-user access
   profiles. The existing on-disk schema remains compatible, but post-creation

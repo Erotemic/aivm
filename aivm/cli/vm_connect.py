@@ -18,7 +18,7 @@ from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
-from ..config_scopes import resolve_legacy_vm_context
+from ..config_scopes import ResolvedVMContext
 from ..config_store import load_store
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -211,13 +211,12 @@ def _build_tunnel_remote_script(guest_path: str, tunnel_name: str) -> str:
 
 
 def _start_remote_tunnel_session(
-    cfg: Any,
+    context: ResolvedVMContext,
     ip: str,
     guest_path: str,
     tunnel_name: str,
 ) -> None:
     """Idempotently start the ``code tunnel`` tmux session inside the guest."""
-    context = resolve_legacy_vm_context(cfg)
     ident = require_ssh_identity(context.profile.ssh_identity_file)
     remote = _build_tunnel_remote_script(guest_path, tunnel_name)
     cmd = [
@@ -231,7 +230,9 @@ def _start_remote_tunnel_session(
     )
 
 
-def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
+def _attach_remote_tunnel_session(
+    context: ResolvedVMContext, ip: str
+) -> int:
     """Interactively attach to the ``aivm-tunnel`` tmux session in the guest.
 
     Replaces the current process so stdio, signals, and TTY handling match
@@ -241,7 +242,6 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
     :class:`CommandManager`: a subprocess cannot hand the caller's TTY back
     cleanly, so the command is logged here for auditability and then exec'd.
     """
-    context = resolve_legacy_vm_context(cfg)
     ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',
@@ -256,15 +256,15 @@ def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
 
 
 def _print_remote_session_recipe(
-    cfg: Any,
+    context: ResolvedVMContext,
     session: Any,
     ssh_cfg: Any,
     ssh_cfg_updated: bool,
     reason: str,
 ) -> None:
     """Print a connect-from-workstation recipe in lieu of launching code."""
-    context = resolve_legacy_vm_context(cfg)
-    vm_name = cfg.vm.name
+    cfg = context.legacy_cfg
+    vm_name = context.machine.vm.name
     guest_path = session.share_guest_dst
     tunnel_name = _remote_tunnel_name(cfg)
     tunnel_cmd = (
@@ -406,7 +406,8 @@ class VMCodeCLI(_BaseCommand):
             log.opt(exception=True).trace('Failed preparing code session')
             log.error(str(ex))
             return 1
-        cfg = session.cfg
+        context = session.context
+        cfg = context.legacy_cfg
         if args.dry_run:
             if args.tunnel:
                 print(
@@ -429,7 +430,7 @@ class VMCodeCLI(_BaseCommand):
         if args.tunnel:
             tunnel_name = _remote_tunnel_name(cfg)
             _start_remote_tunnel_session(
-                cfg, ip, session.share_guest_dst, tunnel_name
+                context, ip, session.share_guest_dst, tunnel_name
             )
             print(f'Tunnel name: {tunnel_name}')
             print(f'VM:          {cfg.vm.name}')
@@ -449,12 +450,12 @@ class VMCodeCLI(_BaseCommand):
                 return 0
             # Replaces this process with `ssh -t` so the tmux UI is interactive
             # (device-code auth on first run; tunnel log thereafter).
-            return _attach_remote_tunnel_session(cfg, ip)
+            return _attach_remote_tunnel_session(context, ip)
 
         can_open_local, reason = _vscode_can_open_locally()
         if not can_open_local:
             _print_remote_session_recipe(
-                cfg, session, ssh_cfg, ssh_cfg_updated, reason or ''
+                context, session, ssh_cfg, ssh_cfg_updated, reason or ''
             )
             return 0
 
@@ -549,8 +550,8 @@ class VMSSHCLI(_BaseCommand):
         except RuntimeError as ex:
             log.error(str(ex))
             return 1
-        cfg = session.cfg
-        context = resolve_legacy_vm_context(cfg)
+        context = session.context
+        cfg = context.legacy_cfg
         if args.dry_run:
             print(
                 f'DRYRUN: would SSH to {context.guest_user}@<ip> and cd {session.share_guest_dst}'

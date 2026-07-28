@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import ubelt as ub
+from ..user_paths import user_app_dir
 
 
 def _appdir(appname: str, kind: str, *, mode: int = 0o777) -> Path:
-    p = ub.Path.appdir(appname, type=kind).ensuredir(mode=mode)
-    return Path(p)
+    return user_app_dir(appname, kind, mode=mode)
 
 
 def app_data_dir() -> Path:

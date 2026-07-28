@@ -14,7 +14,6 @@ dependencies = [
     { name = "kwconf" },
     { name = "loguru" },
     { name = "rich" },
-    { name = "ubelt" },
 ]
 
 [package.optional-dependencies]
@@ -63,7 +62,6 @@ requires-dist = [
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=5.0.1" },
     { name = "sphinx-autobuild", marker = "extra == 'docs'", specifier = ">=2021.3.14" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=1.0.0" },
-    { name = "ubelt", specifier = ">=1.3.6" },
     { name = "xdoctest", marker = "extra == 'tests'", specifier = ">=1.1.5" },
 ]
 provides-extras = ["all", "docs", "optional", "tests"]
@@ -850,14 +848,6 @@ wheels = [
     { url = "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/pypi/pypi-public/packages/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548", size = 44614, upload-time = "2025-08-25T13:49:24.86Z" },
 ]
 
-[[package]]
-name = "ubelt"
-version = "1.4.1"
-source = { registry = "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/pypi/pypi-public/simple" }
-sdist = { url = "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/pypi/pypi-public/packages/packages/8e/e6/8507bafc81672d527a11f4cdbc5d697ca1e8229177c985b7fcc6584f1299/ubelt-1.4.1.tar.gz", hash = "sha256:adb17ab91d929b38e9f787a1cecd10546b64a2b92320940cdc3ab7e14af7d351", size = 300346, upload-time = "2026-02-08T23:34:21.185Z" }
-wheels = [
-    { url = "https://packages.applied-caas-gateway1.internal.api.openai.org/artifactory/api/pypi/pypi-public/packages/packages/2f/e5/8d7b47164fe2b171d5cceecc4f2efa663fe031fa0c02091cff1d160e22a8/ubelt-1.4.1-py3-none-any.whl", hash = "sha256:3afd77c5828af14e6f4d441e62f1025fa254b091acffe1bd67f71d294a8201db", size = 228429, upload-time = "2026-02-08T23:34:19.132Z" },
-]
 
 [[package]]
 name = "urllib3"

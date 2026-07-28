@@ -10,10 +10,9 @@ from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
-from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..services import load_cfg
+from ..services import load_vm_context
 from ._common import _BaseCommand
 
 _DROP_CACHES_HELP = (
@@ -116,8 +115,8 @@ class VMFlushCachesCLI(_BaseCommand):
         except ValueError as ex:
             raise AIVMError(str(ex)) from ex
 
-        cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
-        context = resolve_legacy_vm_context(cfg)
+        context = load_vm_context(args.config, vm_opt=str(args.vm or ''))
+        cfg = context.legacy_cfg
         vm_name = cfg.vm.name
         # Quote the guest script so the remote login shell hands it to
         # `sh -c` as one argument. Without this the remote shell executed

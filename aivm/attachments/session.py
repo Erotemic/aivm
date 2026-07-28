@@ -30,7 +30,7 @@ from ..services import (
     maybe_install_missing_host_deps,
     maybe_offer_create_ssh_identity,
     record_vm,
-    resolve_cfg_for_code,
+    resolve_context_for_code,
 )
 from ..status import (
     probe_firewall,
@@ -923,11 +923,12 @@ def _prepare_attached_session(
         )
 
     try:
-        cfg, cfg_path = resolve_cfg_for_code(
+        context, cfg_path = resolve_context_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
+        cfg = context.legacy_cfg
     except RuntimeError as ex:
         if (
             'No VM definitions found in config store' not in str(ex)
@@ -935,11 +936,12 @@ def _prepare_attached_session(
         ):
             raise
         bootstrap_missing_vm(ex)
-        cfg, cfg_path = resolve_cfg_for_code(
+        context, cfg_path = resolve_context_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
+        cfg = context.legacy_cfg
 
     existing_store = load_store(cfg_path)
     ok, _report = attachment_safety_preflight(
@@ -996,10 +998,15 @@ def _prepare_attached_session(
                 f'{cfg.vm.name} before preparing the attached session.'
             ),
         )
+        # The profile snapshot predates key creation; refresh the compatibility
+        # context so the prepared session carries the identity just persisted.
+        from ..config_scopes import resolve_legacy_vm_context
+
+        context = resolve_legacy_vm_context(cfg)
 
     if dry_run:
         return PreparedSession(
-            cfg=cfg,
+            context=context,
             cfg_path=cfg_path,
             host_src=host_src,
             attachment_mode=attachment.mode,
@@ -1097,7 +1104,7 @@ def _prepare_attached_session(
             mirror_home=mirror_home,
         )
     return PreparedSession(
-        cfg=cfg,
+        context=context,
         cfg_path=cfg_path,
         host_src=host_src,
         attachment_mode=attachment.mode,

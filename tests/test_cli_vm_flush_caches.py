@@ -14,6 +14,7 @@ from aivm.cli.vm_cache import (
 )
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
+from aivm.config_scopes import resolve_legacy_vm_context
 from tests.helpers import run_cli
 
 
@@ -70,7 +71,10 @@ def test_vm_flush_caches_runs_guest_command(monkeypatch: pytest.MonkeyPatch) -> 
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_aivm'
 
-    monkeypatch.setattr('aivm.cli.vm_cache.load_cfg', lambda *a, **k: cfg)
+    monkeypatch.setattr(
+        'aivm.cli.vm_cache.load_vm_context',
+        lambda *a, **k: resolve_legacy_vm_context(cfg),
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_cache._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.123',

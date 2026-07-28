@@ -23,6 +23,7 @@ import pytest
 
 from aivm.cli.vm_connect import _bootstrap_vm_for_folder
 from aivm.config import AgentVMConfig
+from aivm.config_scopes import ResolvedVMContext
 from aivm.config_store import (
     Store,
     load_store,
@@ -972,14 +973,15 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
 
     resolve_calls = {'count': 0}
 
-    def fake_resolve_cfg_for_code(**kwargs: Any) -> tuple[AgentVMConfig, Path]:
+    def fake_resolve_context_for_code(**kwargs: Any) -> tuple[ResolvedVMContext, Path]:
         resolve_calls['count'] += 1
         if resolve_calls['count'] == 1:
             raise RuntimeError(
                 f'No VM definitions found in config store: {cfg_path}. '
                 'Run `aivm config init` then `aivm vm create` first.'
             )
-        return cfg, cfg_path
+        from aivm.config_scopes import resolve_legacy_vm_context
+        return resolve_legacy_vm_context(cfg), cfg_path
 
     create_calls: list[dict] = []
 
@@ -988,8 +990,8 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
         return 0
 
     monkeypatch.setattr(
-        'aivm.attachments.session.resolve_cfg_for_code',
-        fake_resolve_cfg_for_code,
+        'aivm.attachments.session.resolve_context_for_code',
+        fake_resolve_context_for_code,
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_vm_from_defaults',

@@ -106,7 +106,15 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cfg = SimpleNamespace(vm=SimpleNamespace(name='aivm-2404', user='agent'))
+    from aivm.config import AgentVMConfig
+    from aivm.config_scopes import resolve_legacy_vm_context
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    cfg.vm.user = 'agent'
+    context = resolve_legacy_vm_context(
+        cfg, host_user='joncrall', host_uid=1001, host_gid=1001
+    )
     session = SimpleNamespace(
         ip='10.77.0.103',
         share_guest_dst='/home/joncrall/code/aivm',
@@ -116,7 +124,7 @@ def test_print_remote_session_recipe_includes_tunnel_command(
         'aivm.cli.vm_connect.socket.gethostname', lambda: 'builder'
     )
     _print_remote_session_recipe(
-        cfg,
+        context,
         session,
         ssh_cfg='~/.ssh/config',
         ssh_cfg_updated=True,

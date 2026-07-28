@@ -24,7 +24,6 @@ from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
 from ..commands import CommandManager, shell_join
-from ..config_scopes import resolve_legacy_vm_context
 from ..errors import AIVMError
 from ..fdguard import (
     fdguard_install_script,
@@ -32,7 +31,7 @@ from ..fdguard import (
     fdguard_uninstall_script,
 )
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..services import load_cfg
+from ..services import load_vm_context
 from ._common import _BaseCommand
 
 _ACTIONS = ('status', 'install', 'uninstall')
@@ -127,8 +126,8 @@ class VMFdGuardCLI(_BaseCommand):
                 f'invalid action {action!r}; expected one of {", ".join(_ACTIONS)}'
             )
 
-        cfg = load_cfg(args.config, vm_opt=str(args.vm or ''))
-        context = resolve_legacy_vm_context(cfg)
+        context = load_vm_context(args.config, vm_opt=str(args.vm or ''))
+        cfg = context.legacy_cfg
         vm_name = cfg.vm.name
         threshold = int(args.threshold or 0) or int(
             cfg.virtiofs.fd_guard_threshold
