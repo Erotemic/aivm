@@ -7,7 +7,6 @@ legacy stores retain the released user-owned XDG location.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import re
@@ -15,7 +14,7 @@ import shlex
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterator
+from types import TracebackType
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
@@ -30,6 +29,7 @@ from ...machine_store import (
     current_machine_group_gid,
     current_machine_store_policy,
     is_machine_store_path,
+    MachineResourceLockScope,
     machine_resource_locks,
     machine_store_layout,
 )
@@ -81,22 +81,40 @@ def _persistent_host_manifest_path(
     )
 
 
-@contextlib.contextmanager
+class _PersistentManifestLock:
+    """Serialize manifest generation with machine-store mutations."""
+
+    def __init__(self, cfg: AgentVMConfig, cfg_path: Path) -> None:
+        self.scope: MachineResourceLockScope | None = None
+        if is_machine_store_path(cfg_path):
+            self.scope = machine_resource_locks(
+                machine_store_layout(),
+                group_gid=current_machine_group_gid(),
+                include_store=True,
+                vms=[cfg.vm.name],
+            )
+
+    def __enter__(self) -> None:
+        if self.scope is not None:
+            self.scope.__enter__()
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        if self.scope is None:
+            return False
+        return self.scope.__exit__(exc_type, exc, tb)
+
+
 def _persistent_manifest_lock(
     cfg: AgentVMConfig, cfg_path: Path
-) -> Iterator[None]:
-    """Serialize global manifest generation with store and VM mutations."""
-    if not is_machine_store_path(cfg_path):
-        yield
-        return
-    layout = machine_store_layout()
-    with machine_resource_locks(
-        layout,
-        group_gid=current_machine_group_gid(),
-        include_store=True,
-        vms=[cfg.vm.name],
-    ):
-        yield
+) -> _PersistentManifestLock:
+    """Return the class-based persistent-manifest lock scope."""
+    return _PersistentManifestLock(cfg, cfg_path)
 
 
 def _persistent_host_replay_manifest_path(cfg: AgentVMConfig) -> Path:
@@ -184,9 +202,11 @@ def _persistent_host_replay_state_needed(
     """
     with _persistent_manifest_lock(cfg, cfg_path):
         if _persistent_host_replay_manifest_path(cfg).exists():
-            return True
-        records = _persistent_attachment_records_for_vm(cfg, cfg_path)
-        return any(rec.enabled for rec in records)
+            needed = True
+        else:
+            records = _persistent_attachment_records_for_vm(cfg, cfg_path)
+            needed = any(rec.enabled for rec in records)
+    return needed
 
 
 def _sync_persistent_host_replay_manifest(

@@ -21,10 +21,10 @@ import shutil
 import subprocess
 import sys
 import uuid
-from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterator, Mapping, Sequence
+from types import TracebackType
+from typing import Literal, Mapping, Sequence
 from urllib.parse import urlparse
 
 import pytest
@@ -413,28 +413,43 @@ def save_e2e_store(
 # ---------------------------------------------------------------------------
 
 
-@contextmanager
-def e2e_teardown(
-    cfg_path: Path,
-    *,
-    env: dict[str, str],
-    timeout_s: int,
-    extra_args: Sequence[str] = (),
-) -> Iterator[None]:
-    """Run the suite body, then always delete the VM and destroy the net.
+class E2ETeardown:
+    """Class-based best-effort cleanup scope for real-system tests."""
 
-    Teardown is best-effort (``check=False``): a run that failed partway
-    should still tear down whatever it managed to create.  ``extra_args``
-    threads shared CLI flags (e.g. ``--verbose``) into both commands.
-    """
-    try:
-        yield
-    finally:
+    def __init__(
+        self,
+        cfg_path: Path,
+        *,
+        env: dict[str, str],
+        timeout_s: int,
+        extra_args: Sequence[str] = (),
+    ) -> None:
+        self.cfg_path = cfg_path
+        self.env = env
+        self.timeout_s = timeout_s
+        self.extra_args = tuple(extra_args)
+
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         _run_cli(
-            ['vm', 'delete', *extra_args, '--yes', '--config', str(cfg_path)],
+            [
+                'vm',
+                'delete',
+                *self.extra_args,
+                '--yes',
+                '--config',
+                str(self.cfg_path),
+            ],
             cwd=REPO_ROOT,
-            timeout_s=timeout_s,
-            env=env,
+            timeout_s=self.timeout_s,
+            env=self.env,
             check=False,
         )
         _run_cli(
@@ -442,13 +457,30 @@ def e2e_teardown(
                 'host',
                 'net',
                 'destroy',
-                *extra_args,
+                *self.extra_args,
                 '--yes',
                 '--config',
-                str(cfg_path),
+                str(self.cfg_path),
             ],
             cwd=REPO_ROOT,
-            timeout_s=timeout_s,
-            env=env,
+            timeout_s=self.timeout_s,
+            env=self.env,
             check=False,
         )
+        return False
+
+
+def e2e_teardown(
+    cfg_path: Path,
+    *,
+    env: dict[str, str],
+    timeout_s: int,
+    extra_args: Sequence[str] = (),
+) -> E2ETeardown:
+    """Return a scope that always tears down its VM and network."""
+    return E2ETeardown(
+        cfg_path,
+        env=env,
+        timeout_s=timeout_s,
+        extra_args=extra_args,
+    )

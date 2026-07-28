@@ -379,3 +379,38 @@ call. Runtime behavior is unchanged; the adjustment prevents `ty` from widening
 the class helper's `disable`/`remove` choices to an arbitrary string. The
 remaining reported mypy failure is in the installed NumPy stub while the project
 is configured to target Python 3.11, not in AIVM source.
+
+## 2026-07-28 18:52:00 -0400
+
+Reworked every generator-decorated context manager in production and E2E
+scaffolding into an explicit scope class with `__enter__` and `__exit__`. The
+public call patterns remain unchanged through small factory functions, but the
+resource lifecycle is now visible in ordinary class methods: nested advisory
+file locks, ordered machine locks, store locking, persistent-manifest locking,
+handled command attempts, compound-action approval, and E2E teardown.
+
+The lock conversion was the highest-risk part because generator finalization had
+implicitly provided exception cleanup. The new classes preserve the same
+reentrant process/thread accounting, close descriptors on partial entry failure,
+and unwind ordered lock sets through `ExitStack`. I am confident in the resource
+lifetimes after focused nesting/exception tests, but type checkers may expose
+small annotation differences around `__exit__` return values; those should be
+fixed directly rather than reintroducing decorator-based scopes. The repository
+style guidance now records the class-based preference so future work does not
+recreate a mixed idiom.
+
+## 2026-07-28 19:10:42 -0400
+
+Corrected the explicit machine-resource lock scope's `__exit__` annotation to
+match `contextlib.ExitStack`: cleanup may return either `False` or `None` when
+it does not suppress an exception. This is an annotation-only fix; ordered lock
+release and exception propagation are unchanged. The broader class-based
+context-manager conversion remains intact.
+
+## 2026-07-28 19:24:00 -0400
+
+Corrected the persistent-manifest lock scope to expose the same `bool | None`
+`__exit__` contract as its machine-resource lock delegate. I also moved the
+replay-state decision's final return outside the `with` block so mypy can prove
+that the function returns on every normal path. Neither change alters locking,
+exception propagation, or replay-state selection.

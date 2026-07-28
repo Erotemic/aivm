@@ -17,11 +17,10 @@ import os
 import shlex
 import subprocess
 import sys
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from sys import version_info
-from typing import Iterator, Literal, Sequence
+from typing import Literal, Sequence
 
 if version_info >= (3, 11):
     from types import TracebackType
@@ -416,6 +415,53 @@ class Attempt:
         return str(self.error) if self.error is not None else ''
 
 
+class AttemptScope:
+    """Class-based context manager for an expected, handled failure."""
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        why: str = '',
+        catch: type[BaseException] | tuple[type[BaseException], ...] = (
+            CommandError
+        ),
+    ) -> None:
+        self.title = title
+        self.why = why
+        self.catch = catch
+        self.record = Attempt(title=title)
+
+    def __enter__(self) -> Attempt:
+        log.debug(
+            'Attempting: {}{}',
+            self.title,
+            f' ({self.why})' if self.why else '',
+        )
+        return self.record
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
+        if exc is None:
+            log.debug('Attempt succeeded: {}', self.title)
+            return False
+        if isinstance(exc, CommandControlError):
+            return False
+        if isinstance(exc, self.catch):
+            self.record.error = exc
+            log.info(
+                'Attempt failed but is handled by the caller: {}: {}',
+                self.title,
+                exc,
+            )
+            return True
+        return False
+
+
 @dataclass
 class CommandPlan:
     """Ordered group of commands previewed and executed as one step.
@@ -535,6 +581,52 @@ class PlanScope:
                 self.manager.abort_plan(self.plan)
         finally:
             self.manager.end_plan(self.plan)
+        return False
+
+
+class ApprovedActionScope:
+    """Class-based approval scope for one compound state-changing action."""
+
+    def __init__(
+        self,
+        manager: 'CommandManager',
+        *,
+        purpose: str,
+        yes: bool = False,
+    ) -> None:
+        self.manager = manager
+        self.purpose = purpose
+        self.yes = yes
+        self.previous_approval = False
+
+    def __enter__(self) -> None:
+        already_approved = bool(
+            self.yes
+            or self.manager.yes
+            or self.manager._approve_all_remaining
+        )
+        if not already_approved:
+            if not sys.stdin.isatty():
+                raise ApprovalUnavailableError(
+                    'This state-changing operation requires confirmation, '
+                    'but stdin is not interactive. Re-run with --yes.'
+                )
+            log.opt(depth=0).info('About to perform a state-changing action:')
+            log.opt(depth=0).info('  {}', self.purpose)
+            ans = input('Continue? [y/N]: ').strip().lower()
+            if ans not in {'y', 'yes'}:
+                raise UserDeclinedError('Aborted by user.')
+        self.previous_approval = self.manager._approve_all_remaining
+        self.manager._approve_all_remaining = True
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
+        self.manager._approve_all_remaining = self.previous_approval
         return False
 
 
@@ -675,7 +767,6 @@ class CommandManager:
         """
         return IntentScope(self, title, why=why, role=role, visible=visible)
 
-    @contextmanager
     def attempt(
         self,
         title: str,
@@ -684,7 +775,7 @@ class CommandManager:
         catch: type[BaseException] | tuple[type[BaseException], ...] = (
             CommandError
         ),
-    ) -> Iterator['Attempt']:
+    ) -> AttemptScope:
         """Run commands whose failure is an expected, handled outcome.
 
         Callers that can recover from a failure otherwise write their own
@@ -713,28 +804,7 @@ class CommandManager:
                 :class:`~aivm.errors.CommandControlError` is never caught
                 here, whatever this says.
         """
-        record = Attempt(title=title)
-        log.debug('Attempting: {}{}', title, f' ({why})' if why else '')
-        try:
-            yield record
-        except CommandControlError:
-            # Defense in depth against a broad `catch`. A control error is a
-            # decision about whether work may happen at all -- the user
-            # declined, approval could not be requested, policy forbade it --
-            # and recovering from one continues past the user rather than past
-            # a failure. A caller cannot opt into swallowing that, by
-            # oversight or otherwise; `catch=AIVMError` is broad enough to
-            # cover these by accident, and did.
-            raise
-        except catch as ex:  # type: ignore[misc]
-            record.error = ex
-            log.info(
-                'Attempt failed but is handled by the caller: {}: {}',
-                title,
-                ex,
-            )
-        else:
-            log.debug('Attempt succeeded: {}', title)
+        return AttemptScope(title, why=why, catch=catch)
 
     def step(
         self,
@@ -1227,13 +1297,12 @@ class CommandManager:
         if auth_required:
             self._authenticate_sudo()
 
-    @contextmanager
     def approved_action(
         self,
         *,
         purpose: str,
         yes: bool = False,
-    ) -> Iterator[None]:
+    ) -> ApprovedActionScope:
         """Approve one compound action before any direct mutation occurs.
 
         Some operations combine direct Python filesystem changes with later
@@ -1241,26 +1310,7 @@ class CommandManager:
         temporarily suppresses nested command prompts so declining can never
         happen after the direct portion has already changed state.
         """
-        already_approved = bool(
-            yes or self.yes or self._approve_all_remaining
-        )
-        if not already_approved:
-            if not sys.stdin.isatty():
-                raise ApprovalUnavailableError(
-                    'This state-changing operation requires confirmation, '
-                    'but stdin is not interactive. Re-run with --yes.'
-                )
-            log.opt(depth=0).info('About to perform a state-changing action:')
-            log.opt(depth=0).info('  {}', purpose)
-            ans = input('Continue? [y/N]: ').strip().lower()
-            if ans not in {'y', 'yes'}:
-                raise UserDeclinedError('Aborted by user.')
-        previous = self._approve_all_remaining
-        self._approve_all_remaining = True
-        try:
-            yield
-        finally:
-            self._approve_all_remaining = previous
+        return ApprovedActionScope(self, purpose=purpose, yes=yes)
 
     def confirm_file_update(
         self,

@@ -8,7 +8,6 @@ writes, recovery, and lock ordering work in isolation.
 
 from __future__ import annotations
 
-import contextlib
 import getpass
 import grp
 import hashlib
@@ -17,7 +16,8 @@ import re
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from types import TracebackType
+from typing import Iterable
 
 from .config_store.fs_policy import (
     StoreFilesystemPolicy,
@@ -265,7 +265,48 @@ def ordered_machine_locks(
     return tuple(sorted(specs))
 
 
-@contextlib.contextmanager
+class MachineResourceLockScope:
+    """Acquire machine resource locks in the one supported global order."""
+
+    def __init__(
+        self,
+        layout: MachineStoreLayout,
+        *,
+        group_gid: int,
+        include_store: bool = False,
+        networks: Iterable[str] = (),
+        vms: Iterable[str] = (),
+    ) -> None:
+        self.policy = machine_store_policy(layout, group_gid=group_gid)
+        self.specs = ordered_machine_locks(
+            layout,
+            include_store=include_store,
+            networks=networks,
+            vms=vms,
+        )
+        self.stack = ExitStack()
+
+    def __enter__(self) -> tuple[MachineLockSpec, ...]:
+        self.stack.__enter__()
+        try:
+            for spec in self.specs:
+                self.stack.enter_context(
+                    exclusive_file_lock(spec.path, self.policy)
+                )
+        except BaseException:
+            self.stack.close()
+            raise
+        return self.specs
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        return self.stack.__exit__(exc_type, exc, tb)
+
+
 def machine_resource_locks(
     layout: MachineStoreLayout,
     *,
@@ -273,16 +314,12 @@ def machine_resource_locks(
     include_store: bool = False,
     networks: Iterable[str] = (),
     vms: Iterable[str] = (),
-) -> Iterator[tuple[MachineLockSpec, ...]]:
-    """Acquire machine resource locks in the one supported global order."""
-    policy = machine_store_policy(layout, group_gid=group_gid)
-    specs = ordered_machine_locks(
+) -> MachineResourceLockScope:
+    """Return a class-based ordered machine-resource lock scope."""
+    return MachineResourceLockScope(
         layout,
+        group_gid=group_gid,
         include_store=include_store,
         networks=networks,
         vms=vms,
     )
-    with ExitStack() as stack:
-        for spec in specs:
-            stack.enter_context(exclusive_file_lock(spec.path, policy))
-        yield specs

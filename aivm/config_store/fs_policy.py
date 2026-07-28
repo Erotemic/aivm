@@ -10,14 +10,14 @@ filesystem rules explicit and injectable so tests never need to touch the real
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
 import os
 import stat
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterator
+from types import TracebackType
+from typing import Literal
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
@@ -148,43 +148,85 @@ def apply_store_file_descriptor_policy(
         os.fchmod(fd, policy.file_mode)
 
 
-@contextlib.contextmanager
+class ExclusiveFileLock:
+    """Process/thread-safe reentrant advisory file lock scope."""
+
+    def __init__(
+        self,
+        path: Path,
+        policy: StoreFilesystemPolicy | None = None,
+    ) -> None:
+        self.policy = policy or StoreFilesystemPolicy()
+        self.lock_path = _absolute(path)
+        self.key = os.fspath(self.lock_path)
+        self.process_lock = _process_lock(self.lock_path)
+        self.fd: int | None = None
+        self.nested = False
+        self.entered = False
+
+    def __enter__(self) -> None:
+        """Acquire the in-process lock and, for the outer scope, ``flock``."""
+        if self.entered:
+            raise RuntimeError('ExclusiveFileLock instances are single-use')
+        self.entered = True
+        self.process_lock.acquire()
+        try:
+            held = _held_locks()
+            if self.key in held:
+                held[self.key] += 1
+                self.nested = True
+                return None
+
+            ensure_store_directory(self.lock_path.parent, self.policy)
+            flags = os.O_RDWR | os.O_CREAT
+            if self.policy.reject_symlinks and hasattr(os, 'O_NOFOLLOW'):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(
+                self.lock_path,
+                flags,
+                self.policy.file_mode or 0o666,
+            )
+            try:
+                apply_store_file_descriptor_policy(fd, self.policy)
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(fd)
+                raise
+            self.fd = fd
+            held[self.key] = 1
+            return None
+        except BaseException:
+            self.entered = False
+            self.process_lock.release()
+            raise
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
+        """Release the nesting count or outer kernel and process locks."""
+        try:
+            held = _held_locks()
+            if self.nested:
+                held[self.key] -= 1
+            else:
+                held.pop(self.key, None)
+                if self.fd is not None:
+                    try:
+                        fcntl.flock(self.fd, fcntl.LOCK_UN)
+                    finally:
+                        os.close(self.fd)
+                        self.fd = None
+        finally:
+            self.entered = False
+            self.process_lock.release()
+        return False
+
+
 def exclusive_file_lock(
     path: Path, policy: StoreFilesystemPolicy | None = None
-) -> Iterator[None]:
-    """Acquire a process/thread-safe reentrant advisory file lock.
-
-    The in-process ``RLock`` supplies thread serialization and makes nested
-    store/resource operations safe. The kernel ``flock`` supplies exclusion
-    between independent AIVM processes.
-    """
-    policy = policy or StoreFilesystemPolicy()
-    lock_path = _absolute(path)
-    key = os.fspath(lock_path)
-    process_lock = _process_lock(lock_path)
-    with process_lock:
-        held = _held_locks()
-        if key in held:
-            held[key] += 1
-            try:
-                yield
-            finally:
-                held[key] -= 1
-            return
-
-        ensure_store_directory(lock_path.parent, policy)
-        flags = os.O_RDWR | os.O_CREAT
-        if policy.reject_symlinks and hasattr(os, 'O_NOFOLLOW'):
-            flags |= os.O_NOFOLLOW
-        fd = os.open(lock_path, flags, policy.file_mode or 0o666)
-        try:
-            apply_store_file_descriptor_policy(fd, policy)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            held[key] = 1
-            try:
-                yield
-            finally:
-                held.pop(key, None)
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+) -> ExclusiveFileLock:
+    """Return a class-based advisory file-lock context manager."""
+    return ExclusiveFileLock(path, policy)

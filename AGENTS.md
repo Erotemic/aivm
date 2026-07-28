@@ -87,6 +87,7 @@ Guidance for contributors (human or AI agents) working in this repository.
 
 * When using multiline strings use textwrap to keep indentation nice.
 * Comment code so the motivation and intent is readable for humans and agents.
+* Prefer explicit context-manager classes with `__enter__` and `__exit__`; do not use `contextlib.contextmanager`.
 
 ## Developer journal
 Keep a running journal at `dev/journals/<agent_name>.md` (e.g.

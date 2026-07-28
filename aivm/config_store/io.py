@@ -13,7 +13,6 @@ supported, and `aivm config format` can canonicalize a monolith into fragments.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import os
@@ -23,7 +22,8 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from types import TracebackType
+from typing import Any, Callable, Iterable, Literal
 
 from loguru import logger as log
 
@@ -72,15 +72,36 @@ def _lock_path(root: Path) -> Path:
     return root.parent / '.aivm-store.lock'
 
 
-@contextlib.contextmanager
+class _StoreLock:
+    """Class-based scope for one store's configured advisory lock."""
+
+    def __init__(
+        self,
+        root: Path,
+        io_policy: StoreFilesystemPolicy | None = None,
+    ) -> None:
+        policy = io_policy or StoreFilesystemPolicy()
+        lock_path = policy.lock_path or _lock_path(root)
+        self.lock = exclusive_file_lock(lock_path, policy)
+
+    def __enter__(self) -> None:
+        self.lock.__enter__()
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
+        return self.lock.__exit__(exc_type, exc, tb)
+
+
 def _store_lock(
     root: Path, io_policy: StoreFilesystemPolicy | None = None
-) -> Iterator[None]:
-    """Serialize operations for one store through its configured lock path."""
-    policy = io_policy or StoreFilesystemPolicy()
-    lock_path = policy.lock_path or _lock_path(root)
-    with exclusive_file_lock(lock_path, policy):
-        yield
+) -> _StoreLock:
+    """Return the class-based lock scope for one config store."""
+    return _StoreLock(root, io_policy)
 
 
 def _fsync_dir(path: Path) -> None:
