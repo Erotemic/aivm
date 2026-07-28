@@ -235,3 +235,21 @@ the desired-state and locking model is now deterministic, but final system
 validation must confirm the root host replay service and guest mount cleanup.
 The next architectural tranche is principal-scoped credential metadata and
 operations.
+
+## 2026-07-28 15:37:29 -0400
+
+Followed up on the attachment-ownership tranche after local static checking
+found three variable-inference collisions that runtime tests could not expose.
+The attachment resolver and CLI attach path now declare their optional selected
+record explicitly before the administrative/current-owner branches, and the
+status renderer uses distinct names for attachment inventory entries and drift
+items. These changes are deliberately type-only and do not alter ownership,
+selection, replay, or status behavior.
+
+The focused attachment/status tests and complete non-E2E suite remain the
+behavioral validation target. The artifact environment still lacks `ty` and
+`mypy`, so final checker confirmation must happen in the development checkout;
+however, each reported error arose from branch or loop-variable inference and is
+addressed directly without casts or ignores. I am confident this is a narrow
+correction, with the main residual risk being another checker-specific inference
+collision elsewhere in the new stage-7 code.

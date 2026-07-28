@@ -10,6 +10,7 @@ from loguru import logger as log
 from ..config import AgentVMConfig
 from ..config_scopes import resolve_legacy_vm_context
 from ..config_store import (
+    AttachmentEntry,
     find_attachment_by_guest_dst,
     find_attachment_for_vm,
     find_attachments_for_vm_path,
@@ -234,6 +235,7 @@ def _resolve_attachment(
     reg = load_store(cfg_path)
     current_owner = str(owner_principal_id or '').strip()
     requested_owner = str(administrative_owner_principal_id or '').strip()
+    att: AttachmentEntry | None = None
     if requested_owner and not administrative_override:
         raise AIVMError(
             '--owner_principal requires --admin_override when targeting an '

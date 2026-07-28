@@ -658,6 +658,7 @@ def run_vm_detach(request: VMDetachRequest) -> int:
     current_owner = attachment_owner_for_context(context, cfg_path)
     reg = load_store(cfg_path)
     requested_owner = str(request.owner_principal or '').strip()
+    att: AttachmentEntry | None = None
     if requested_owner and not request.admin_override:
         raise AIVMError(
             '--owner_principal requires --admin_override when targeting an '

@@ -747,13 +747,13 @@ def render_status(
             f'{len(desired_attachments)} machine-wide record(s)',
             counted=False,
         )
-        for item in desired_attachments:
+        for attachment in desired_attachments:
             report.lines.append(
                 '  - '
-                f'owner={attachment_owner_label(reg, item.owner_principal_id)} '
-                f'host={item.host_path} '
-                f'guest={item.guest_dst or "(default)"} '
-                f'mode={item.mode} access={item.access}'
+                f'owner={attachment_owner_label(reg, attachment.owner_principal_id)} '
+                f'host={attachment.host_path} '
+                f'guest={attachment.guest_dst or "(default)"} '
+                f'mode={attachment.mode} access={attachment.access}'
             )
     else:
         report.check(
@@ -790,9 +790,10 @@ def render_status(
                 )
                 if detail:
                     report.lines.append('Config Drift Details:')
-                    for item in drift.items:
+                    for drift_item in drift.items:
                         report.lines.append(
-                            f'  - {item.key}: expected={item.expected}, actual={item.actual}'
+                            f'  - {drift_item.key}: expected={drift_item.expected}, '
+                            f'actual={drift_item.actual}'
                         )
         else:
             # drift.available is False here (unavailable)
