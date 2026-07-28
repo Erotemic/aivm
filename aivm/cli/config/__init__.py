@@ -18,6 +18,7 @@ from .init import (
     _render_init_default_summary,
 )
 from .lint import ConfigLintCLI, _lint_store_file
+from .migrate import ConfigMigrateModalCLI, ConfigMigratePlanCLI
 from .paths import ConfigPathsCLI
 from .show import ConfigFormatCLI, ConfigShowCLI
 
@@ -29,6 +30,7 @@ class ConfigModalCLI(kwconf.ModalCLI):
     discover = ConfigDiscoverCLI
     lint = ConfigLintCLI
     paths = ConfigPathsCLI
+    migrate = ConfigMigrateModalCLI
     format = ConfigFormatCLI
     show = ConfigShowCLI
     edit = ConfigEditCLI
@@ -39,6 +41,8 @@ __all__ = [
     'ConfigEditCLI',
     'ConfigFormatCLI',
     'ConfigLintCLI',
+    'ConfigMigrateModalCLI',
+    'ConfigMigratePlanCLI',
     'ConfigModalCLI',
     'ConfigPathsCLI',
     'ConfigShowCLI',

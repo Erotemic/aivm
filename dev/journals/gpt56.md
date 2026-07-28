@@ -282,3 +282,33 @@ intentionally deferred. The next architectural risk is migration: old
 unattributed credential IDs and existing key directories must be assigned to
 the creator without regenerating provider keys or losing provider-management
 state.
+
+## 2026-07-28 16:34:10 -0400
+
+Implemented the read-only half of released-installation migration. The main
+constraint was resisting the temptation to make the planner "helpful" by
+writing scaffolding or choosing between old stores. A migration report is most
+valuable as a trustworthy boundary: every source fragment is fingerprinted,
+all proposed machine/profile/ownership translations happen in memory, and any
+second store claiming the same VM is a blocker even when much of the machine
+configuration appears identical. That conservative choice leaves an explicit
+human merge decision for the apply phase rather than turning historical
+per-user disagreement into global state accidentally.
+
+The planner also exposed an easy-to-miss credential detail. Principal-scoped
+credential IDs differ from released VM/repository IDs, so migration cannot only
+rewrite metadata; it must later rename the user-owned credential directory while
+preserving provider key IDs, fingerprints, and private key bytes. The plan now
+reports those renames separately from persistent replay movement. Public SSH
+keys, host UID/GID, profile path consistency, target-store contents, guest mount
+destinations, and libvirt identity are all checked before a plan can be marked
+ready.
+
+Focused tests cover deterministic JSON/text output, strict non-mutation,
+monolithic/split fixture equivalence, duplicate VM claims, profile divergence,
+runtime absence, and an existing machine target. The complete non-E2E suite
+passed as an unprivileged user (906 passed, 8 skipped). I am confident in the
+planning boundary, but the next apply/resume/rollback phase is much higher risk:
+it must revalidate fingerprints, journal every phase durably, preserve a
+working legacy SSH path until verification completes, and make rollback
+meaningful after partial filesystem and guest changes.

@@ -9,7 +9,7 @@ Audit boundary
 This package is optional: nothing here runs unless a user grants a VM access
 to a repository. It is deliberately kept off the path of the core VM, network,
 firewall, and privilege code so that a review of *those* never has to reason
-about deploy keys. Core modules reference this package in exactly four places,
+about deploy keys. Core modules reference this package in exactly five places,
 and that list is the thing to check when reviewing the boundary:
 
 - ``config_store.models`` / ``config_store.parse`` import :mod:`.schema` and
@@ -20,6 +20,10 @@ and that list is the thing to check when reviewing the boundary:
   live deploy key.
 - ``cli.config.lint`` imports :mod:`.schema` and :mod:`.validation` to lint
   credential blocks in the store.
+- ``migration`` imports only :mod:`.validation` so the explicit released-store
+  planner can preserve repository identity while assigning principal-scoped
+  credential IDs. Planning remains read-only and does not import key/provider
+  lifecycle code.
 - ``cli.vm_creds`` is the feature's own command surface.
 
 The shared CLI option surface (``cli._common``) must stay free of credential

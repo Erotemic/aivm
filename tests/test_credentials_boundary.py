@@ -39,6 +39,9 @@ _ALLOWED: dict[str, set[str]] = {
         'aivm.credentials.schema',
         'aivm.credentials.validation',
     },
+    # Released-store migration must preserve repository identity while
+    # assigning principal-scoped IDs. It may use only the pure validator.
+    'aivm/migration.py': {'aivm.credentials.validation'},
 }
 
 # The feature's own command surface, exempt by definition.

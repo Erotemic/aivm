@@ -25,6 +25,10 @@ Guidance for contributors (human or AI agents) working in this repository.
     guest-home installation, revocation, and abandonment must execute only as
     the owning host principal. Never treat trusted-host administration as
     permission to borrow another user's secrets.
+  - Released per-user stores are migrated only through an explicit reviewed
+    plan. Migration planning must remain read-only, fingerprint every source,
+    and fail closed on multiple stores claiming one VM. Do not silently merge,
+    rewrite, or delete released stores.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

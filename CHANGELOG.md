@@ -5,6 +5,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* Added a strictly read-only released-store migration planner at
+  `aivm config migrate plan`. It fingerprints monolithic or split source files,
+  proposes machine/profile records, attributes legacy attachments and
+  credentials to their creator identity, reports credential-directory and
+  persistent-state moves, and inventories libvirt resources. Multiple old
+  stores claiming one VM, divergent machine/profile state, missing identities
+  or SSH keys, target-store collisions, and missing runtime domains are
+  reported as blockers. Text and JSON reports perform no writes or guest/provider
+  operations; backup, apply, resume, verification, and rollback remain the next
+  migration phase.
 * Added principal-scoped machine-store repository credentials. Credential
   records now carry `principal_id`, stable IDs include the principal scope,
   and machine writes reject unattributed or dangling owners. Ordinary

@@ -334,8 +334,41 @@ without moving legacy credential key material:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The ownership and operational contract is recorded in
-[`principal-scoped-credentials.md`](principal-scoped-credentials.md). The next
-tranche is work package 7: explicit migration of released installations.
+[`principal-scoped-credentials.md`](principal-scoped-credentials.md).
+
+### Stage 9 execution checklist: released-store migration planning
+
+The ninth 0.6.0 tranche begins work package 7 with a strictly read-only planner.
+It intentionally stops before backups, machine-store writes, guest changes, or
+rollback state:
+
+- [x] Add `aivm config migrate plan` with deterministic text and JSON output.
+- [x] Accept one or more released monolithic or split stores using
+  `[HOST_USER=]PATH` source descriptors.
+- [x] Fingerprint every contributing source file so the later apply phase can
+  detect changes between review and execution.
+- [x] Propose machine defaults, networks, VMs, creator access identities,
+  per-user profiles, attachment ownership, and credential attribution entirely
+  in memory.
+- [x] Preserve provider IDs, fingerprints, access, and lifecycle state while
+  showing the principal-scoped credential ID that apply will write.
+- [x] Report user-owned credential-directory renames and persistent replay state
+  movement without performing either operation.
+- [x] Detect multiple released stores claiming one VM and report differing
+  machine fields instead of merging silently.
+- [x] Detect divergent defaults, networks, profile paths, host identity gaps,
+  SSH public-key problems, guest destination collisions, and an existing
+  non-empty machine store.
+- [x] Inventory managed, missing, and unmanaged libvirt domains and networks
+  through read-only commands, with explicit skip and sudo modes.
+- [x] Prove the planner leaves source bytes, target paths, libvirt state, guest
+  state, and provider state unchanged.
+- [x] Cover both frozen released monolithic and split fixtures.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The report contract and apply boundary are recorded in
+[`released-store-migration-plan.md`](released-store-migration-plan.md). The next
+tranche adds backups, resumable apply, verification, and rollback.
 
 ## Work package 1: Separate models without moving storage
 

@@ -423,10 +423,25 @@ Config-store lifecycle (explicit flow)
    aivm config lint
    aivm config format
    aivm config paths
+   aivm config migrate plan
    aivm help plan
    aivm help tree
    aivm help completion
    aivm host doctor
+
+Released per-user stores are not migrated automatically. Review the proposed
+machine store, user profile, attachment/credential ownership, persistent-state
+moves, and libvirt conflicts before the later apply phase::
+
+   aivm config migrate plan
+   aivm config migrate plan --output json
+   aivm config migrate plan \
+       alice=/home/alice/.config/aivm/config.toml \
+       bob=/home/bob/.config/aivm/config.toml
+
+The planner is read-only. It fingerprints every input and reports blockers, but
+does not write the machine store, move key/state directories, alter guests, or
+change provider deploy keys.
 
 Alternatives and related projects
 ---------------------------------
