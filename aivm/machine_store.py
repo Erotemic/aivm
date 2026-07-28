@@ -9,6 +9,7 @@ writes, recovery, and lock ordering work in isolation.
 from __future__ import annotations
 
 import contextlib
+import getpass
 import grp
 import hashlib
 import os
@@ -27,6 +28,7 @@ from .config_store.fs_policy import (
 MACHINE_STORE_ROOT_ENV = 'AIVM_MACHINE_STORE_ROOT'
 DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm')
 DEFAULT_MACHINE_GROUP = 'aivm'
+MACHINE_GROUP_ENV = 'AIVM_MACHINE_GROUP'
 
 MACHINE_DIRECTORY_MODE = 0o2775
 MACHINE_FILE_MODE = 0o664
@@ -93,6 +95,67 @@ def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:
         ) from ex
 
 
+def current_machine_group_name() -> str:
+    """Return the trusted group configured for the shared machine store."""
+    return (
+        os.environ.get(MACHINE_GROUP_ENV, DEFAULT_MACHINE_GROUP).strip()
+        or DEFAULT_MACHINE_GROUP
+    )
+
+
+def machine_group_exists(group_name: str | None = None) -> bool:
+    """Return whether the configured trusted host group exists."""
+    name = group_name or current_machine_group_name()
+    try:
+        grp.getgrnam(name)
+    except KeyError:
+        return False
+    return True
+
+
+def user_in_machine_group(
+    user: str | None = None, *, group_name: str | None = None
+) -> bool:
+    """Return whether the current login has active trusted-group access."""
+    name = group_name or current_machine_group_name()
+    try:
+        record = grp.getgrnam(name)
+    except KeyError:
+        return False
+    selected = user or os.environ.get('SUDO_USER') or getpass.getuser()
+    if selected in record.gr_mem:
+        return True
+    try:
+        return int(record.gr_gid) in {int(gid) for gid in os.getgroups()}
+    except OSError:
+        return False
+
+
+def machine_store_root_ready(
+    layout: MachineStoreLayout | None = None,
+) -> bool:
+    """Return whether the caller can use the configured machine root."""
+    layout = layout or machine_store_layout()
+    root = layout.root
+    if not root.is_dir() or root.is_symlink():
+        return False
+    return os.access(root, os.R_OK | os.W_OK | os.X_OK)
+
+
+def current_machine_group_gid() -> int:
+    """Resolve the group for real installs and the caller gid for test roots.
+
+    An explicit ``AIVM_MACHINE_STORE_ROOT`` is an advanced/test override and
+    normally points at a caller-owned sandbox. Requiring a system ``aivm``
+    group there would make isolated tests and local prototypes unnecessarily
+    privileged. The default ``/var/lib/aivm`` path always uses the configured
+    trusted group.
+    """
+    if os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip():
+        return int(os.getgid())
+    return resolve_machine_group_gid(current_machine_group_name())
+
+
 def machine_store_policy(
     layout: MachineStoreLayout | None = None,
     *,
@@ -110,6 +173,25 @@ def machine_store_policy(
         lock_path=layout.store_lock_path,
         reject_symlinks=True,
     )
+
+
+def current_machine_store_policy(
+    layout: MachineStoreLayout | None = None,
+) -> StoreFilesystemPolicy:
+    """Return the policy used by normal machine-store reads and writes."""
+    layout = layout or machine_store_layout()
+    return machine_store_policy(layout, group_gid=current_machine_group_gid())
+
+
+def is_machine_store_path(path: Path) -> bool:
+    """Return whether ``path`` is inside the configured machine root."""
+    layout = machine_store_layout()
+    candidate = Path(os.path.abspath(os.fspath(path.expanduser())))
+    try:
+        candidate.relative_to(layout.root)
+    except ValueError:
+        return False
+    return True
 
 
 def ensure_machine_store_layout(

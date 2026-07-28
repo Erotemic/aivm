@@ -10,6 +10,7 @@ from .models import (
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
+    PrincipalEntry,
     Store,
     VMEntry,
 )
@@ -36,7 +37,8 @@ def upsert_vm_with_network(
         reg.vms[i] = rec
     else:
         reg.vms.append(rec)
-    reg.active_vm = name
+    if reg.store_kind != 'machine':
+        reg.active_vm = name
 
 
 def upsert_network(
@@ -83,6 +85,7 @@ def remove_vm(
     if remove_attachments:
         reg.attachments = [a for a in reg.attachments if a.vm_name != vm_name]
     reg.credentials = [c for c in reg.credentials if c.vm_name != vm_name]
+    reg.principals = [p for p in reg.principals if p.vm_name != vm_name]
     if reg.active_vm == vm_name:
         reg.active_vm = reg.vms[0].name if reg.vms else ''
     return True
@@ -187,3 +190,25 @@ def remove_credential(
         if not (item.vm_name == vm_name and item.id == credential_id)
     ]
     return len(reg.credentials) != original
+
+
+def upsert_principal(reg: Store, principal: PrincipalEntry) -> None:
+    """Insert or replace one VM principal by stable id."""
+    existing = [item for item in reg.principals if item.id == principal.id]
+    if existing:
+        reg.principals[reg.principals.index(existing[0])] = principal
+    else:
+        reg.principals.append(principal)
+    reg.schema_version = max(reg.schema_version, 9)
+
+
+def remove_principal(
+    reg: Store, *, vm_name: str, principal_id: str
+) -> bool:
+    original = len(reg.principals)
+    reg.principals = [
+        item
+        for item in reg.principals
+        if not (item.vm_name == vm_name and item.id == principal_id)
+    ]
+    return len(reg.principals) != original

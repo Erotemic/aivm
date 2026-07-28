@@ -29,6 +29,8 @@ from .config import (
     ToolsConfig,
     VirtiofsConfig,
 )
+from .config_store.models import PrincipalEntry
+from .profile_store import UserProfileStore
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,58 @@ def _host_gid() -> int:
     return int(getter()) if getter is not None else -1
 
 
+def machine_config_from_effective(cfg: AgentVMConfig) -> MachineConfig:
+    """Snapshot only the machine-owned portion of an effective config."""
+    return MachineConfig(
+        vm=MachineVMConfig(
+            name=cfg.vm.name,
+            cpus=cfg.vm.cpus,
+            ram_mb=cfg.vm.ram_mb,
+            disk_gb=cfg.vm.disk_gb,
+            timezone=cfg.vm.timezone,
+            mirror_shared_home_folders=cfg.vm.mirror_shared_home_folders,
+        ),
+        network=deepcopy(cfg.network),
+        firewall=deepcopy(cfg.firewall),
+        image=deepcopy(cfg.image),
+        provision=deepcopy(cfg.provision),
+        tools=deepcopy(cfg.tools),
+        virtiofs=deepcopy(cfg.virtiofs),
+        base_dir=cfg.paths.base_dir,
+    )
+
+
+def resolve_persisted_vm_context(
+    cfg: AgentVMConfig,
+    *,
+    principal_entry: PrincipalEntry,
+    profile_store: UserProfileStore,
+) -> ResolvedVMContext:
+    """Build runtime context from machine state plus the caller's profile."""
+    principal = VMPrincipal(
+        id=principal_entry.id,
+        host_user=principal_entry.host_user,
+        host_uid=principal_entry.host_uid,
+        host_gid=principal_entry.host_gid,
+        guest_user=principal_entry.guest_user,
+        ssh_public_key=principal_entry.ssh_public_key,
+        state=principal_entry.state,
+    )
+    profile = UserProfile(
+        active_vm=profile_store.active_vm,
+        behavior=deepcopy(profile_store.behavior),
+        ssh_identity_file=profile_store.ssh_identity_file,
+        ssh_pubkey_path=profile_store.ssh_pubkey_path,
+        state_dir=profile_store.state_dir,
+    )
+    return ResolvedVMContext(
+        machine=machine_config_from_effective(cfg),
+        principal=principal,
+        profile=profile,
+        legacy_cfg=cfg,
+    )
+
+
 def resolve_legacy_vm_context(
     cfg: AgentVMConfig,
     *,
@@ -133,23 +187,7 @@ def resolve_legacy_vm_context(
     resolved_uid = _host_uid() if host_uid is None else int(host_uid)
     resolved_gid = _host_gid() if host_gid is None else int(host_gid)
 
-    machine = MachineConfig(
-        vm=MachineVMConfig(
-            name=cfg.vm.name,
-            cpus=cfg.vm.cpus,
-            ram_mb=cfg.vm.ram_mb,
-            disk_gb=cfg.vm.disk_gb,
-            timezone=cfg.vm.timezone,
-            mirror_shared_home_folders=cfg.vm.mirror_shared_home_folders,
-        ),
-        network=deepcopy(cfg.network),
-        firewall=deepcopy(cfg.firewall),
-        image=deepcopy(cfg.image),
-        provision=deepcopy(cfg.provision),
-        tools=deepcopy(cfg.tools),
-        virtiofs=deepcopy(cfg.virtiofs),
-        base_dir=cfg.paths.base_dir,
-    )
+    machine = machine_config_from_effective(cfg)
     principal = VMPrincipal(
         id=f'legacy:{cfg.vm.name}:{resolved_host_user}',
         host_user=resolved_host_user,

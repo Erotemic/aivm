@@ -74,14 +74,24 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
-* Added the inactive machine-store filesystem foundation for the shared-host
+* Activated the shared machine/profile persistence split for fresh implicit
+  installations. Machine schema version 9 stores defaults, networks, VMs, and
+  persisted principals under `/var/lib/aivm`, while each host user keeps active
+  selection, behavior, SSH paths, and local state in a private schema-version-1
+  profile. Existing released stores remain selected without implicit migration,
+  and explicit non-machine `--config` paths retain legacy behavior. Successful
+  VM creation now adopts the creator as an active persisted principal, runtime
+  loading resolves that principal by host login, config tools expose the
+  profile, and `aivm host permissions setup` prepares the trusted `aivm` group
+  and shared root. Automatic enrollment of later users remains the next stage.
+* Established the machine-store filesystem foundation for the shared-host
   architecture. AIVM now has an injectable `/var/lib/aivm` layout, explicit
   `root:aivm`-style directory and file modes, metadata-preserving atomic
   replacement, group-readable split-transaction recovery, a centralized store
   lock, deterministic network/VM lock ordering, and a lock-spanning
   `update_store` mutation primitive. Unit tests exercise real process-level
-  contention and interrupted recovery without changing the default per-user
-  persistence path.
+  contention and interrupted recovery; fresh implicit installations now use
+  this path through the machine/profile split.
 * Completed the stage 0/1 prerequisites for the shared-machine migration.
   Tests now isolate all implicit HOME/XDG paths, provide Alice/Bob fixtures and
   frozen released-store migration documents, and exercise a captured

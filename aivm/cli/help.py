@@ -17,6 +17,7 @@ import kwconf
 from ..config import default_vm_name
 from ..config_store import find_vm, load_store
 from ..errors import AIVMError
+from ..scoped_store import load_scope_profile, resolve_store_scope
 from ..services import cfg_path
 from ..terminal import highlight_code
 from ._common import _BaseCommand
@@ -198,10 +199,15 @@ def _resolve_raw_targets(
     vm_name = vm_opt or default_vm_name()
     net_name = 'aivm-net'
     fw_table = 'aivm_sandbox'
-    reg = load_store(cfg_path(config_opt))
+    scope = resolve_store_scope(config_opt)
+    reg = load_store(scope.store_path)
     rec = None
     if vm_opt:
         rec = find_vm(reg, vm_opt)
+    elif scope.is_machine:
+        active_vm = load_scope_profile(scope).active_vm
+        if active_vm:
+            rec = find_vm(reg, active_vm)
     elif reg.active_vm:
         rec = find_vm(reg, reg.active_vm)
     elif len(reg.vms) == 1:

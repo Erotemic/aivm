@@ -11,7 +11,11 @@ from ...config import dump_toml
 from ...config_store import (
     format_existing_config,
     load_config_document,
-    save_store,
+)
+from ...scoped_store import (
+    load_scope_store,
+    resolve_store_scope,
+    save_scope_store,
 )
 from ...services import cfg_path, load_cfg_with_path
 from ...terminal import highlight_code
@@ -39,7 +43,8 @@ class ConfigShowCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = cfg_path(args.config)
+        scope = resolve_store_scope(args.config)
+        path = scope.store_path
         vm_name = str(args.vm or '').strip()
         if bool(args.resolved) or vm_name:
             cfg, resolved_store_path = load_cfg_with_path(
@@ -57,8 +62,12 @@ class ConfigShowCLI(_BaseCommand):
             if loaded.sources:
                 toml_text = loaded.source_text
             else:
-                store = loaded.store
-                save_store(store, path)
+                store = load_scope_store(scope)
+                save_scope_store(
+                    scope,
+                    store,
+                    reason='Create empty config document for display.',
+                )
                 loaded = load_config_document(path)
                 toml_text = loaded.source_text or path.read_text(
                     encoding='utf-8'

@@ -31,6 +31,15 @@ from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
+from ..machine_store import (
+    MACHINE_STORE_ROOT_ENV,
+    current_machine_group_name,
+    ensure_machine_store_layout,
+    machine_group_exists,
+    machine_store_layout,
+    machine_store_root_ready,
+    user_in_machine_group,
+)
 from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
@@ -422,7 +431,14 @@ def _print_base_dir_toml(base_dir: Path) -> None:
 def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
     """Return the persisted privilege mode."""
     try:
-        path = cfg_path(config_opt)
+        from ..scoped_store import load_scope_profile, resolve_store_scope
+
+        scope = resolve_store_scope(config_opt)
+        if scope.is_machine:
+            return normalize_privilege_mode(
+                load_scope_profile(scope).behavior.privilege_mode
+            )
+        path = scope.store_path
         if not path.exists():
             return normalize_privilege_mode(BehaviorConfig().privilege_mode)
         reg = load_store(path)
@@ -496,6 +512,36 @@ class HostPermissionsCheckCLI(_BaseCommand):
             if not ok:
                 sudo_needs.append(need)
             return status_line(ok, label, detail, warn_only=True)
+
+        machine_group = current_machine_group_name()
+        machine_group_ok = (
+            bool(os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip())
+            or (
+                machine_group_exists(machine_group)
+                and user_in_machine_group(group_name=machine_group)
+            )
+        )
+        lines.append(
+            friction_line(
+                machine_group_ok,
+                f'{machine_group} machine-store membership',
+                'permits shared desired-state updates'
+                if machine_group_ok
+                else 'run `aivm host permissions setup`, then log out/in',
+                'shared machine-store access',
+            )
+        )
+        machine_root_ok = machine_store_root_ready()
+        lines.append(
+            friction_line(
+                machine_root_ok,
+                'shared machine-store root',
+                str(machine_store_layout().root)
+                if machine_root_ok
+                else 'run `aivm host permissions setup`',
+                'shared machine-store access',
+            )
+        )
 
         in_group = user_in_libvirt_group()
         lines.append(
@@ -657,6 +703,113 @@ class HostPermissionsCheckCLI(_BaseCommand):
         return 0
 
 
+def _prepare_machine_store_access(
+    args: Any,
+    mgr: CommandManager,
+    *,
+    user: str,
+) -> bool:
+    """Prepare the shared config root; return whether membership was added."""
+    layout = machine_store_layout()
+    configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    if configured_root:
+        if args.dry_run:
+            print(
+                f'DRYRUN: prepare caller-owned AIVM machine store at '
+                f'{layout.root}'
+            )
+        else:
+            ensure_machine_store_layout(layout, group_gid=os.getgid())
+        return False
+
+    group_name = current_machine_group_name()
+    group_exists = machine_group_exists(group_name)
+    listed = group_exists and user_in_machine_group(
+        user, group_name=group_name
+    )
+    if args.dry_run:
+        if not group_exists:
+            print(f'DRYRUN: sudo groupadd --system {group_name}')
+        if not listed:
+            print(f'DRYRUN: sudo usermod -aG {group_name} {user}')
+        print(
+            f'DRYRUN: sudo install -d -o root -g {group_name} '
+            f'-m 2775 {layout.root}'
+        )
+        return not listed
+
+    membership_added = False
+    with mgr.intent(
+        'Prepare the shared AIVM machine store',
+        why=(
+            'Machine definitions, principals, and attachments need one '
+            'group-writable host-wide authority.'
+        ),
+        role='modify',
+    ):
+        if not group_exists:
+            with mgr.step(
+                'Create the trusted AIVM host group',
+                why='The machine store is shared by trusted local AIVM users.',
+                approval_scope='host-permissions-setup-aivm-group',
+            ):
+                mgr.submit(
+                    ['groupadd', '--system', group_name],
+                    sudo=True,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Create the {group_name} group',
+                )
+        if not listed:
+            with mgr.step(
+                'Add the invoking user to the AIVM host group',
+                why='Group membership permits shared machine-store updates.',
+                approval_scope='host-permissions-setup-aivm-member',
+            ):
+                mgr.submit(
+                    ['usermod', '-aG', group_name, user],
+                    sudo=True,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Add {user} to the {group_name} group',
+                )
+            membership_added = True
+        with mgr.step(
+            'Create the shared AIVM machine-store root',
+            why=(
+                'The setgid root preserves trusted-group ownership on '
+                'atomic replacements and split config fragments.'
+            ),
+            approval_scope='host-permissions-setup-aivm-root',
+        ):
+            mgr.submit(
+                [
+                    'install',
+                    '-d',
+                    '-o',
+                    'root',
+                    '-g',
+                    group_name,
+                    '-m',
+                    '2775',
+                    str(layout.root),
+                ],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Prepare shared AIVM state at {layout.root}',
+            )
+    if membership_added:
+        print(
+            f'👉 Added {user} to {group_name}. Log out and back in before '
+            'running `aivm config init` against the shared machine store.'
+        )
+    return membership_added
+
+
 class HostPermissionsSetupCLI(_BaseCommand):
     """Prepare host permissions for routine aivm operation.
 
@@ -698,12 +851,13 @@ class HostPermissionsSetupCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
+        user = os.environ.get('SUDO_USER') or getpass.getuser()
+        _prepare_machine_store_access(args, mgr, user=user)
 
         group_added = False
         if not user_in_libvirt_group():
             # Under `sudo aivm ...`, the account that needs libvirt access
             # is the invoking user, not root.
-            user = os.environ.get('SUDO_USER') or getpass.getuser()
             if args.dry_run:
                 print(f'DRYRUN: sudo usermod -aG {LIBVIRT_GROUP} {user}')
             else:

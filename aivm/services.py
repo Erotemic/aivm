@@ -25,22 +25,28 @@ from .config_scopes import ResolvedVMContext, resolve_legacy_vm_context
 from .config_store import (
     find_attachments,
     find_vm,
-    load_store,
-    materialize_vm_cfg,
     require_vm,
     save_store,
-    store_path,
     upsert_network,
     upsert_vm_with_network,
 )
 from .detect import detect_ssh_identity
 from .errors import AIVMError, NoVMContextError
 from .host import check_commands, host_is_debian_like, install_deps_debian
+from .profile_store import save_user_profile
+from .scoped_store import (
+    load_scope_profile,
+    load_scope_store,
+    persist_creator_vm,
+    profile_from_effective_cfg,
+    resolve_machine_context,
+    resolve_store_scope,
+)
 from .util import which
 
 
 def cfg_path(p: str | None) -> Path:
-    return Path(p).expanduser().resolve() if p else store_path().resolve()
+    return resolve_store_scope(p).store_path
 
 
 _CURRENT_CONFIG_OPTION: ContextVar[str | None] = ContextVar(
@@ -239,8 +245,11 @@ def resolve_vm_name(
         vm_opt,
         host_src,
     )
-    store_path = cfg_path(config_opt)
-    reg = load_store(store_path)
+    scope = resolve_store_scope(config_opt)
+    store_path = scope.store_path
+    reg = load_scope_store(scope)
+    profile = load_scope_profile(scope) if scope.is_machine else None
+    active_vm = profile.active_vm if profile is not None else reg.active_vm
 
     if vm_opt:
         require_vm(reg, vm_opt)
@@ -259,8 +268,8 @@ def resolve_vm_name(
             if len(attached_vm_names) == 1:
                 return attached_vm_names[0], store_path
             if attached_vm_names:
-                if reg.active_vm in attached_vm_names:
-                    return reg.active_vm, store_path
+                if active_vm in attached_vm_names:
+                    return active_vm, store_path
                 if not sys.stdin.isatty():
                     vm_names = ', '.join(attached_vm_names)
                     raise NoVMContextError(
@@ -276,8 +285,8 @@ def resolve_vm_name(
                 )
                 return chosen, store_path
 
-    if reg.active_vm and find_vm(reg, reg.active_vm) is not None:
-        return reg.active_vm, store_path
+    if active_vm and find_vm(reg, active_vm) is not None:
+        return active_vm, store_path
 
     if len(reg.vms) == 1:
         return reg.vms[0].name, store_path
@@ -295,14 +304,14 @@ def resolve_vm_name(
     )
 
 
-def load_cfg_with_path(
+def _load_context_with_path(
     config_path: str | None,
     *,
     vm_opt: str = '',
     host_src: Path | None = None,
     hydrate_runtime_defaults: bool = True,
     persist_runtime_defaults: bool = True,
-) -> tuple[AgentVMConfig, Path]:
+) -> tuple[ResolvedVMContext, Path]:
     log.trace(
         'Loading cfg with path config_path={} vm_opt={} host_src={}',
         config_path,
@@ -314,26 +323,60 @@ def load_cfg_with_path(
         vm_opt=vm_opt,
         host_src=host_src,
     )
-    reg = load_store(store_path)
+    scope = resolve_store_scope(str(store_path))
+    reg = load_scope_store(scope)
     require_vm(reg, vm_name)
-    cfg = materialize_vm_cfg(reg, vm_name)
+    if scope.is_machine:
+        profile = load_scope_profile(scope)
+        context = resolve_machine_context(reg, vm_name, profile=profile)
+        cfg = context.legacy_cfg
+    else:
+        from .config_store import materialize_vm_cfg
+
+        cfg = materialize_vm_cfg(reg, vm_name)
+        context = resolve_legacy_vm_context(cfg)
     changed = (
         hydrate_ssh_identity_defaults(cfg)
         if hydrate_runtime_defaults
         else False
     )
     if changed and persist_runtime_defaults:
-        upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
-        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-        save_store(
-            reg,
-            store_path,
-            reason=(
-                f'Persist hydrated runtime defaults discovered while loading '
-                f'VM {cfg.vm.name}.'
-            ),
-        )
-    return cfg, store_path
+        if scope.is_machine:
+            profile = profile_from_effective_cfg(cfg, existing=profile)
+            assert scope.profile_path is not None
+            save_user_profile(profile, scope.profile_path)
+            context = resolve_machine_context(reg, vm_name, profile=profile)
+        else:
+            upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+            upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+            save_store(
+                reg,
+                store_path,
+                reason=(
+                    'Persist hydrated runtime defaults discovered while '
+                    f'loading VM {cfg.vm.name}.'
+                ),
+            )
+            context = resolve_legacy_vm_context(cfg)
+    return context, store_path
+
+
+def load_cfg_with_path(
+    config_path: str | None,
+    *,
+    vm_opt: str = '',
+    host_src: Path | None = None,
+    hydrate_runtime_defaults: bool = True,
+    persist_runtime_defaults: bool = True,
+) -> tuple[AgentVMConfig, Path]:
+    context, path = _load_context_with_path(
+        config_path,
+        vm_opt=vm_opt,
+        host_src=host_src,
+        hydrate_runtime_defaults=hydrate_runtime_defaults,
+        persist_runtime_defaults=persist_runtime_defaults,
+    )
+    return context.legacy_cfg, path
 
 
 def load_vm_context_with_path(
@@ -350,14 +393,13 @@ def load_vm_context_with_path(
     The legacy loader remains available to config editing, creation, and
     migration boundaries until the physical store split lands.
     """
-    cfg, resolved_path = load_cfg_with_path(
+    return _load_context_with_path(
         config_path,
         vm_opt=vm_opt,
         host_src=host_src,
         hydrate_runtime_defaults=hydrate_runtime_defaults,
         persist_runtime_defaults=persist_runtime_defaults,
     )
-    return resolve_legacy_vm_context(cfg), resolved_path
 
 
 def load_vm_context(
@@ -396,11 +438,21 @@ def record_vm(
     *,
     reason: str = '',
 ) -> Path:
-    target = store_file or store_path()
-    reg = load_store(target)
+    target = store_file or cfg_path(None)
+    scope = resolve_store_scope(str(target))
+    reg = load_scope_store(scope)
+    why = reason.strip() or f'Persist managed VM record for {cfg.vm.name}.'
+    if scope.is_machine:
+        persist_creator_vm(
+            scope,
+            reg,
+            cfg,
+            set_active=False,
+            reason=why,
+        )
+        return target
     upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
     upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-    why = reason.strip() or f'Persist managed VM record for {cfg.vm.name}.'
     return save_store(reg, target, reason=why)
 
 

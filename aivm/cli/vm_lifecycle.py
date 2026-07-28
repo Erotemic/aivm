@@ -36,6 +36,8 @@ from ..services import (
     record_vm,
     resolve_cfg_for_code,
 )
+from ..profile_store import save_user_profile
+from ..scoped_store import load_scope_profile, resolve_store_scope
 from ..vm import (
     create_or_start_vm,
     destroy_vm,
@@ -208,6 +210,7 @@ class VMDeleteCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
+        scope = resolve_store_scope(str(cfg_path))
         reg = load_store(cfg_path)
         credentials = require_vm_credentials_released(
             reg, cfg.vm.name, action='deleted'
@@ -250,6 +253,16 @@ class VMDeleteCLI(_BaseCommand):
                         'the managed libvirt domain.'
                     ),
                 )
+                if scope.is_machine:
+                    profile = load_scope_profile(scope)
+                    if profile.active_vm == cfg.vm.name:
+                        profile.active_vm = (
+                            sorted(vm.name for vm in reg.vms)[0]
+                            if reg.vms
+                            else ''
+                        )
+                        assert scope.profile_path is not None
+                        save_user_profile(profile, scope.profile_path)
         net_name = (cfg.network.name or '').strip()
         if net_name:
             net = find_network(reg, net_name)

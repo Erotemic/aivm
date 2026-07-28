@@ -1,11 +1,11 @@
 # Machine-store filesystem contract
 
-Status: implemented as an isolated 0.6.0 foundation, but not yet used by the
-normal config loader or migration path.
+Status: implemented and used by fresh machine/profile installations in the
+0.6.0 development branch. Released stores are still not migrated implicitly.
 
-This document records the executable decisions from the machine-store
-filesystem prototype. They are intentionally settled before AIVM moves live
-state out of user XDG directories.
+This document records the executable filesystem decisions used by the
+machine-global store. They were settled in isolation before activation and now
+serve fresh machine/profile installations.
 
 ## Layout
 
@@ -27,8 +27,8 @@ replace it with `AIVM_MACHINE_STORE_ROOT`.
 ```
 
 The split config fragments retain their existing literal-concatenation
-contract. The future machine schema may change which logical fields are stored,
-but it should reuse this physical layout and transaction machinery.
+contract. Machine schema version 9 changes which logical fields are stored but
+reuses this physical layout and transaction machinery.
 
 ## Ownership and modes
 
@@ -115,17 +115,17 @@ The unit tests verify that:
 These tests are deliberately unit/integration-scale. The expensive real-host
 E2E suite remains deferred until the shared-machine workflow is complete.
 
-## Not activated yet
+## Activation status
 
-This tranche does **not**:
+Fresh implicit installations now use this layout with the schema and routing
+rules in
+[`machine-profile-store-contract.md`](machine-profile-store-contract.md).
+`aivm host permissions setup` prepares the production group and root. Existing
+released stores are still selected unchanged when no machine store exists.
 
-- make `/var/lib/aivm` the default config source;
-- create the production `aivm` group;
-- split the logical machine and profile schemas;
-- migrate any released store;
-- install enrollment credentials;
-- change attachment ownership.
+The remaining work on top of this physical contract is:
 
-The next implementation tranche should define and persist the machine schema
-and per-user profile on top of this physical contract, while leaving released
-stores readable through the compatibility path.
+- install the restricted enrollment bootstrap identity and guest helper;
+- migrate released stores explicitly and recoverably;
+- add principal ownership to attachments and credentials;
+- move persistent replay state into the complete machine-global inventory.

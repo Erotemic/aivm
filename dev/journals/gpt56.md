@@ -102,3 +102,33 @@ there is still no production machine document to initialize. The next step is
 to define persisted machine and user-profile documents and composite loading on
 top of this contract; released stores and migration should remain untouched
 until that new path works for fresh synthetic state.
+
+## 2026-07-28 13:42:46 -0400
+
+Activated the machine/profile split for fresh installations and persisted the
+first real VM principal. This is the first tranche where the shared-machine
+architecture changes ordinary persistence rather than only introducing a seam
+or an inactive filesystem primitive. The selection rule is intentionally
+conservative: an existing released per-user store continues to win when no
+machine store exists, while a genuinely new implicit installation starts under
+`/var/lib/aivm` with a private user profile. Explicit non-machine config paths
+remain legacy boundaries, which gives migration and recovery tools a stable way
+to inspect old documents later.
+
+The creator-adoption step clarified an important invariant: the profile may
+suggest a guest username only before creation, but the persisted principal owns
+the guest username afterward. Runtime loading now fails if the current host
+login has no active principal rather than falling back to a machine default or
+reconstructing identity from `vm.user`. That failure is deliberate; the next
+stage must solve enrollment through the restricted bootstrap channel, not by
+reviving shadow stores or a shared guest account.
+
+I also connected the physical contract to operator tooling. Config path/edit
+commands expose the private profile, and host-permissions setup can create the
+trusted `aivm` group and root-owned setgid machine directory. The main remaining
+risk is interruption between the authoritative machine write and the private
+profile update; both operations are idempotent and machine state is written
+first, but the later enrollment/migration commands still need explicit
+reconciliation phases. The complete non-e2e suite passed as a non-root user
+(859 passed, 8 skipped). I did not run the expensive real-host E2E suite, in
+accordance with the release-train testing plan.

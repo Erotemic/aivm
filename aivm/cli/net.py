@@ -20,6 +20,7 @@ from ..config_store import (
 from ..errors import AIVMError
 from ..net import destroy_network, ensure_network, network_status
 from ..services import cfg_path
+from ..scoped_store import load_scope_profile, resolve_store_scope
 from ._common import _BaseCommand
 
 
@@ -133,11 +134,17 @@ def _resolve_network_cfg(
     network_opt: str = '',
     reg: Store | None = None,
 ) -> AgentVMConfig:
-    reg = reg if reg is not None else load_store(cfg_path(config_opt))
+    scope = resolve_store_scope(config_opt)
+    reg = reg if reg is not None else load_store(scope.store_path)
     net_name = str(network_opt or '').strip()
     if not net_name:
-        if reg.active_vm:
-            vm = next((v for v in reg.vms if v.name == reg.active_vm), None)
+        active_vm = (
+            load_scope_profile(scope).active_vm
+            if scope.is_machine
+            else reg.active_vm
+        )
+        if active_vm:
+            vm = next((v for v in reg.vms if v.name == active_vm), None)
             if vm is not None:
                 net_name = vm.network_name
         if not net_name and len(reg.networks) == 1:

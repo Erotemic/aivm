@@ -50,6 +50,24 @@ class ConcurrentStoreUpdateError(RuntimeError):
     """Raised when saving a Store loaded from an older on-disk revision."""
 
 
+def _resolve_io_policy(
+    root: Path, io_policy: StoreFilesystemPolicy | None
+) -> StoreFilesystemPolicy | None:
+    """Apply the configured machine-store policy when callers omit one."""
+    if io_policy is not None:
+        return io_policy
+    # Lazy import avoids making the generic store layer depend on the machine
+    # layout during module initialization.
+    from ..machine_store import (
+        current_machine_store_policy,
+        is_machine_store_path,
+    )
+
+    if is_machine_store_path(root):
+        return current_machine_store_policy()
+    return None
+
+
 def _lock_path(root: Path) -> Path:
     return root.parent / '.aivm-store.lock'
 
@@ -403,6 +421,7 @@ def load_config_document(
 ) -> LoadedStore:
     """Load one coherent store revision, recovering interrupted writes first."""
     fpath = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(fpath, io_policy)
     with _store_lock(fpath, io_policy):
         _recover_split_transaction(fpath, io_policy)
         loaded = _load_config_document_unlocked(fpath, logger=logger)
@@ -488,6 +507,19 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             'Cannot write split config with credential records whose vm_name '
             f'does not match a configured VM: {names}'
         )
+    orphaned_principals = sorted(
+        {
+            principal.vm_name
+            for principal in reg.principals
+            if principal.vm_name not in vm_names
+        }
+    )
+    if orphaned_principals:
+        names = ', '.join(orphaned_principals)
+        raise ValueError(
+            'Cannot write split config with principal records whose vm_name '
+            f'does not match a configured VM: {names}'
+        )
 
 
 def render_split_fragments(reg: Store) -> dict[str, str]:
@@ -559,6 +591,7 @@ def save_store_split(
     io_policy: StoreFilesystemPolicy | None = None,
 ) -> list[Path]:
     root = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(root, io_policy)
     with _store_lock(root, io_policy):
         _recover_split_transaction(root, io_policy)
         _check_store_revision(reg, root)
@@ -609,6 +642,7 @@ def save_store(
     io_policy: StoreFilesystemPolicy | None = None,
 ) -> Path:
     fpath = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(fpath, io_policy)
     with _store_lock(fpath, io_policy):
         _recover_split_transaction(fpath, io_policy)
         _check_store_revision(reg, fpath)
@@ -638,6 +672,7 @@ def update_store(
     to merge must express the mutation through this transaction boundary.
     """
     fpath = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(fpath, io_policy)
     with _store_lock(fpath, io_policy):
         _recover_split_transaction(fpath, io_policy)
         loaded = _load_config_document_unlocked(fpath, logger=logger)
@@ -674,6 +709,7 @@ def format_existing_config(
     is accepted for API compatibility but is not required.
     """
     root = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(root, io_policy)
     was_split = is_split_layout(root)
     loaded = load_config_document(root, logger=logger, io_policy=io_policy)
     reg = loaded.store

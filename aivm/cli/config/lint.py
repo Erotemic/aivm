@@ -77,6 +77,7 @@ def _lint_store_text(text: str) -> list[str]:
 
     allowed_top = {
         'schema_version',
+        'store_kind',
         'active_vm',
         'behavior',
         'defaults',
@@ -99,6 +100,7 @@ def _lint_store_text(text: str) -> list[str]:
         'virtiofs',
         'attachments',
         'credentials',
+        'principals',
     }
     section_allowed: dict[str, set[str]] = {
         'vm': _field_names(VMConfig),
@@ -162,6 +164,46 @@ def _lint_store_text(text: str) -> list[str]:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
                         )
+
+    valid_principal_states = {
+        'pending',
+        'active',
+        'disabled',
+        'error',
+        'legacy',
+    }
+    for vm_idx, item in enumerate(raw.get('vms', []) or []):
+        if not isinstance(item, dict):
+            continue
+        principals = item.get('principals', [])
+        if not isinstance(principals, list):
+            problems.append(
+                f'vms[{vm_idx}].principals should be an array of tables'
+            )
+            continue
+        allowed_principal = {
+            'id',
+            'host_user',
+            'host_uid',
+            'host_gid',
+            'guest_user',
+            'ssh_public_key',
+            'state',
+        }
+        for principal_idx, principal in enumerate(principals):
+            prefix = f'vms[{vm_idx}].principals[{principal_idx}]'
+            if not isinstance(principal, dict):
+                problems.append(f'{prefix} is not a table/object')
+                continue
+            for key in sorted(str(key) for key in principal.keys()):
+                if key not in allowed_principal:
+                    problems.append(f'{prefix} unknown key: {key!r}')
+            for required in ('id', 'host_user', 'guest_user'):
+                if not str(principal.get(required, '')).strip():
+                    problems.append(f'{prefix} missing {required!r}')
+            state = str(principal.get('state', 'pending'))
+            if state not in valid_principal_states:
+                problems.append(f'{prefix} invalid state: {state!r}')
 
     networks = raw.get('networks', [])
     if isinstance(networks, list):

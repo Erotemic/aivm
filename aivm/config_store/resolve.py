@@ -13,6 +13,7 @@ from .models import (
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
+    PrincipalEntry,
     Store,
     VMEntry,
 )
@@ -31,6 +32,39 @@ def find_network(reg: Store, network_name: str) -> NetworkEntry | None:
         if rec.name == network_name:
             return rec
     return None
+
+
+def find_principal(
+    reg: Store, *, vm_name: str, principal_id: str
+) -> PrincipalEntry | None:
+    for item in reg.principals:
+        if item.vm_name == vm_name and item.id == principal_id:
+            return item
+    return None
+
+
+def find_principals_for_vm(reg: Store, vm_name: str) -> list[PrincipalEntry]:
+    return sorted(
+        (item for item in reg.principals if item.vm_name == vm_name),
+        key=lambda item: (item.host_user, item.id),
+    )
+
+
+def find_principal_for_host(
+    reg: Store, *, vm_name: str, host_user: str
+) -> PrincipalEntry | None:
+    matches = [
+        item
+        for item in reg.principals
+        if item.vm_name == vm_name and item.host_user == host_user
+    ]
+    if len(matches) > 1:
+        ids = ', '.join(sorted(item.id for item in matches))
+        raise AIVMError(
+            f'Multiple principals for host user {host_user!r} on VM '
+            f'{vm_name!r}: {ids}. Repair the machine store before continuing.'
+        )
+    return matches[0] if matches else None
 
 
 #: Beyond this many known names, list a sample rather than the whole store.

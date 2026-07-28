@@ -19,6 +19,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config_store import find_vm, load_store
 from ..errors import PrivilegeModeError
+from ..scoped_store import load_scope_profile, resolve_store_scope
 from ..services import bind_active_config_option, cfg_path
 
 log = logger
@@ -38,7 +39,11 @@ class _BaseCommand(kwconf.Config):
 
     config: str | None = kwconf.Value(
         None,
-        help='Path to global aivm config store (default: ~/.config/aivm/config.toml).',
+        help=(
+            'Explicit config-store path. Without this option, AIVM uses an '
+            'existing legacy user store or the shared machine store under '
+            '/var/lib/aivm.'
+        ),
     )
     verbose: int = kwconf.Value(
         0,
@@ -106,7 +111,10 @@ class _BaseCommand(kwconf.Config):
 def _resolve_cfg_verbosity(config_opt: str | None) -> int:
     cfg_verbosity = 1
     try:
-        path = cfg_path(config_opt)
+        scope = resolve_store_scope(config_opt)
+        path = scope.store_path
+        if scope.is_machine:
+            return int(load_scope_profile(scope).behavior.verbose or 1)
         if path.exists():
             reg = load_store(path)
             behavior_verbose = int(reg.behavior.verbose or 1)
@@ -126,7 +134,10 @@ def _resolve_cfg_verbosity(config_opt: str | None) -> int:
 def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
     cfg_yes_sudo = False
     try:
-        path = cfg_path(config_opt)
+        scope = resolve_store_scope(config_opt)
+        path = scope.store_path
+        if scope.is_machine:
+            return bool(load_scope_profile(scope).behavior.yes_sudo)
         if path.exists():
             reg = load_store(path)
             cfg_yes_sudo = bool(reg.behavior.yes_sudo)
@@ -143,7 +154,14 @@ def _resolve_cfg_privilege_mode(config_opt: str | None) -> str:
     # that escape is the point -- silently choosing a privilege mode for the
     # user is what we are trying to avoid.
     try:
-        path = cfg_path(config_opt)
+        scope = resolve_store_scope(config_opt)
+        if scope.is_machine:
+            return str(
+                normalize_privilege_mode(
+                    load_scope_profile(scope).behavior.privilege_mode
+                )
+            )
+        path = scope.store_path
         if not path.exists():
             return str(DEFAULT_PRIVILEGE_MODE)
         reg = load_store(path)
@@ -155,7 +173,14 @@ def _resolve_cfg_privilege_mode(config_opt: str | None) -> str:
 def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:
     auto_approve_readonly_sudo = True
     try:
-        path = cfg_path(config_opt)
+        scope = resolve_store_scope(config_opt)
+        path = scope.store_path
+        if scope.is_machine:
+            return bool(
+                load_scope_profile(
+                    scope
+                ).behavior.auto_approve_readonly_sudo
+            )
         if path.exists():
             reg = load_store(path)
             auto_approve_readonly_sudo = bool(

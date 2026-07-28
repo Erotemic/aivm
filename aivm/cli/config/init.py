@@ -24,7 +24,6 @@ from ...config_review import (
 )
 from ...config_store import (
     Store,
-    load_store,
     parse_store_toml,
     render_store_defaults_toml,
     save_store,
@@ -32,6 +31,15 @@ from ...config_store import (
 from ...detect import auto_defaults
 from ...errors import AIVMError
 from ...resource_checks import vm_resource_warning_lines
+from ...profile_store import save_user_profile
+from ...scoped_store import (
+    ensure_machine_scope_ready,
+    load_scope_profile,
+    load_scope_store,
+    profile_from_effective_cfg,
+    resolve_store_scope,
+    save_scope_store,
+)
 from ...services import cfg_path, maybe_offer_create_ssh_identity
 from .._common import _BaseCommand
 from .editor import edit_path, select_editor_command
@@ -83,7 +91,11 @@ def initialize_config_defaults(
 ) -> int:
     """Initialize defaults, with wording appropriate to the calling workflow."""
     path = cfg_path(config_opt)
-    reg = load_store(path)
+    scope = resolve_store_scope(str(path), for_init=True)
+    path = scope.store_path
+    if scope.is_machine:
+        ensure_machine_scope_ready(scope)
+    reg = load_scope_store(scope)
     cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
     maybe_offer_create_ssh_identity(
         cfg,
@@ -105,8 +117,23 @@ def initialize_config_defaults(
         print('Use --force to overwrite defaults.', file=sys.stderr)
         return 2
     reg.defaults = cfg
-    save_store(reg, path)
-    print(f'Updated config defaults: {path}')
+    if scope.is_machine:
+        save_scope_store(
+            scope,
+            reg,
+            reason='Initialize shared machine defaults.',
+        )
+        profile = profile_from_effective_cfg(
+            cfg,
+            existing=load_scope_profile(scope),
+        )
+        assert scope.profile_path is not None
+        save_user_profile(profile, scope.profile_path)
+        print(f'Updated machine defaults: {path}')
+        print(f'Updated user profile: {scope.profile_path}')
+    else:
+        save_store(reg, path)
+        print(f'Updated config defaults: {path}')
     if standalone_guidance:
         print(
             'No VM created. Use `aivm vm create` to create one from defaults.'

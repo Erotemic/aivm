@@ -527,3 +527,37 @@ def test_adopt_reports_when_nothing_needs_adopting(
     assert rc == 0
     assert 'Nothing to adopt' in out
     assert rec.normalized == []
+
+
+def test_setup_dry_run_describes_production_machine_store_bootstrap(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """The normal setup path prepares the shared group and root explicitly."""
+    activate_manager(monkeypatch, yes=True)
+    _stub_host_probes(monkeypatch)
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.machine_group_exists', lambda name: False
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.user_in_machine_group',
+        lambda *args, **kwargs: False,
+    )
+    cfg_path = tmp_path / 'config.toml'
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
+
+    rc = HostPermissionsSetupCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        base_dir=str(tmp_path / 'vmstore'),
+        dry_run=True,
+        yes=True,
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'sudo groupadd --system aivm' in out
+    assert 'sudo usermod -aG aivm' in out
+    assert 'sudo install -d -o root -g aivm -m 2775 /var/lib/aivm' in out

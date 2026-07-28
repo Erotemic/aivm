@@ -67,8 +67,26 @@ class CredentialEntry:
 
 
 @dataclass
+class PrincipalEntry:
+    """One host user's persisted identity inside a managed VM."""
+
+    id: str
+    vm_name: str
+    host_user: str
+    host_uid: int
+    host_gid: int
+    guest_user: str
+    ssh_public_key: str = ''
+    state: str = 'pending'
+
+
+@dataclass
 class Store:
     schema_version: int = 8
+    # ``legacy`` is the released per-user document. ``machine`` is the new
+    # host-wide desired-state document; user selection and SSH paths live in a
+    # separate profile file.
+    store_kind: str = 'legacy'
     active_vm: str = ''
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     defaults: AgentVMConfig | None = None
@@ -76,6 +94,7 @@ class Store:
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
     credentials: list[CredentialEntry] = field(default_factory=list)
+    principals: list[PrincipalEntry] = field(default_factory=list)
     # Private optimistic-concurrency metadata populated by load_store().
     # It is deliberately excluded from repr/equality and never serialized.
     _source_path: str = field(default='', repr=False, compare=False)

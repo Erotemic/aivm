@@ -29,9 +29,14 @@ from .models import (
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
+    PrincipalEntry,
     Store,
     VMEntry,
 )
+
+
+_VALID_STORE_KINDS = {'legacy', 'machine'}
+_VALID_PRINCIPAL_STATES = {'pending', 'active', 'disabled', 'error', 'legacy'}
 
 
 def _norm_dir(path: str | Path) -> str:
@@ -111,14 +116,22 @@ def _credential_from_dict(
         'kind': str(
             item.get('kind', CREDENTIAL_KIND_GITHUB_DEPLOY_KEY) or ''
         ).strip(),
-        'provider_host': str(item.get('provider_host', 'github.com') or '').strip(),
+        'provider_host': str(
+            item.get('provider_host', 'github.com') or ''
+        ).strip(),
         'owner': str(item.get('owner', '')).strip(),
         'repository': str(item.get('repository', '')).strip(),
-        'access': str(item.get('access', CREDENTIAL_ACCESS_READ) or '').strip(),
+        'access': str(
+            item.get('access', CREDENTIAL_ACCESS_READ) or ''
+        ).strip(),
         'provider_key_id': str(item.get('provider_key_id', '')).strip(),
-        'provider_key_title': str(item.get('provider_key_title', '')).strip(),
+        'provider_key_title': str(
+            item.get('provider_key_title', '')
+        ).strip(),
         'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
-        'state': str(item.get('state', CREDENTIAL_STATE_PENDING) or '').strip(),
+        'state': str(
+            item.get('state', CREDENTIAL_STATE_PENDING) or ''
+        ).strip(),
     }
     required = (
         'id',
@@ -181,9 +194,52 @@ def _credential_from_dict(
         provider_key_title=provider_key_title,
         key_fingerprint=key_fingerprint,
         state=cast(CredentialState, values['state']),
-        # Absent in stores written before provider-unmanaged credentials
-        # existed, and every credential recorded then was AIVM-administered.
         provider_managed=bool(item.get('provider_managed', True)),
+    )
+
+
+def _principal_from_dict(
+    item: dict[str, object], *, vm_name: str
+) -> PrincipalEntry:
+    values = {
+        'id': str(item.get('id', '')).strip(),
+        'host_user': str(item.get('host_user', '')).strip(),
+        'guest_user': str(item.get('guest_user', '')).strip(),
+        'ssh_public_key': str(item.get('ssh_public_key', '')).strip(),
+        'state': str(item.get('state', 'pending') or 'pending').strip(),
+    }
+    missing = [
+        name for name in ('id', 'host_user', 'guest_user') if not values[name]
+    ]
+    if missing:
+        raise ValueError(
+            f'VM {vm_name!r} principal is missing required field(s): '
+            + ', '.join(missing)
+        )
+    state = values['state']
+    if state not in _VALID_PRINCIPAL_STATES:
+        allowed = ', '.join(sorted(_VALID_PRINCIPAL_STATES))
+        raise ValueError(
+            f'VM {vm_name!r} principal {values["id"]!r} has invalid '
+            f'state {state!r}; expected one of: {allowed}'
+        )
+    try:
+        host_uid = int(item.get('host_uid', -1))
+        host_gid = int(item.get('host_gid', -1))
+    except (TypeError, ValueError) as ex:
+        raise ValueError(
+            f'VM {vm_name!r} principal {values["id"]!r} has non-integer '
+            'host_uid/host_gid'
+        ) from ex
+    return PrincipalEntry(
+        id=values['id'],
+        vm_name=vm_name,
+        host_user=values['host_user'],
+        host_uid=host_uid,
+        host_gid=host_gid,
+        guest_user=values['guest_user'],
+        ssh_public_key=values['ssh_public_key'],
+        state=state,
     )
 
 
@@ -229,6 +285,13 @@ def parse_store_toml(text: str) -> Store:
     reg = Store()
     parsed_schema_version = int(raw.get('schema_version', 5))
     reg.schema_version = parsed_schema_version
+    store_kind = str(raw.get('store_kind', 'legacy') or 'legacy').strip()
+    if store_kind not in _VALID_STORE_KINDS:
+        allowed = ', '.join(sorted(_VALID_STORE_KINDS))
+        raise ValueError(
+            f'Invalid store_kind {store_kind!r}; expected one of: {allowed}'
+        )
+    reg.store_kind = store_kind
     reg.active_vm = str(raw.get('active_vm', '')).strip()
     # Legacy (schema_version < 6) stored mirror_shared_home_folders under
     # [behavior]. Newer schemas store it per-VM under [vms.vm]. Capture
@@ -336,6 +399,28 @@ def parse_store_toml(text: str) -> Store:
             seen_credential_scopes.add(scope)
             reg.credentials.append(cred)
 
+        seen_principal_ids: set[str] = set()
+        seen_host_users: set[str] = set()
+        for principal_raw in item.get('principals', []):
+            if not isinstance(principal_raw, dict):
+                raise ValueError(
+                    f'VM {name!r} principal entry must be a table/object'
+                )
+            principal = _principal_from_dict(principal_raw, vm_name=name)
+            if principal.id in seen_principal_ids:
+                raise ValueError(
+                    f'VM {name!r} has duplicate principal id '
+                    f'{principal.id!r}'
+                )
+            if principal.host_user in seen_host_users:
+                raise ValueError(
+                    f'VM {name!r} has duplicate principal host user '
+                    f'{principal.host_user!r}'
+                )
+            seen_principal_ids.add(principal.id)
+            seen_host_users.add(principal.host_user)
+            reg.principals.append(principal)
+
     for item in raw.get('attachments', []):
         if not isinstance(item, dict):
             continue
@@ -355,4 +440,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = 7
     if reg.credentials:
         reg.schema_version = max(reg.schema_version, 8)
+    if reg.principals or reg.store_kind == 'machine':
+        reg.schema_version = max(reg.schema_version, 9)
     return reg

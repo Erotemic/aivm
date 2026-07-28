@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from .models import AttachmentEntry, CredentialEntry, Store
+from .models import AttachmentEntry, CredentialEntry, PrincipalEntry, Store
 
 
 def _toml_escape(s: str) -> str:
@@ -60,6 +60,38 @@ def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
         lines.append('provider_managed = false')
 
 
+def _emit_principal(lines: list[str], principal: PrincipalEntry) -> None:
+    for key in (
+        'id',
+        'host_user',
+        'host_uid',
+        'host_gid',
+        'guest_user',
+        'ssh_public_key',
+        'state',
+    ):
+        _emit_toml_kv(lines, key, getattr(principal, key))
+
+
+def _section_items(
+    reg: Store, section: str, body: dict[str, object]
+) -> list[tuple[str, object]]:
+    """Return serialized fields for one config section.
+
+    Machine stores deliberately omit caller identity and user-owned paths.
+    Those values are materialized from the selected principal and profile at
+    runtime.
+    """
+    items = list(body.items())
+    if reg.store_kind != 'machine':
+        return items
+    if section == 'vm':
+        return [(key, val) for key, val in items if key != 'user']
+    if section == 'paths':
+        return [(key, val) for key, val in items if key == 'base_dir']
+    return items
+
+
 def _emit_defaults(lines: list[str], reg: Store) -> None:
     """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""
     if reg.defaults is None:
@@ -83,7 +115,7 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
         if not isinstance(body, dict):
             continue
         lines.append(f'[defaults.{section}]')
-        for k, v in body.items():
+        for k, v in _section_items(reg, section, body):
             _emit_toml_kv(lines, k, v)
         lines.append('')
 
@@ -108,25 +140,31 @@ def render_store_toml(
         )
 
     lines: list[str] = [f'schema_version = {reg.schema_version}']
-    lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
-    lines.append('')
-    lines.append('[behavior]')
-    _emit_toml_kv(lines, 'yes_sudo', bool(reg.behavior.yes_sudo))
-    _emit_toml_kv(
-        lines,
-        'auto_approve_readonly_sudo',
-        bool(reg.behavior.auto_approve_readonly_sudo),
-    )
-    _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
-    _emit_toml_kv(
-        lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'as-needed')
-    )
-    _emit_toml_kv(
-        lines,
-        'credential_directory_permission_policy',
-        str(reg.behavior.credential_directory_permission_policy or 'warn'),
-    )
-    lines.append('')
+    if reg.store_kind == 'machine':
+        lines.append('store_kind = "machine"')
+        lines.append('')
+    else:
+        lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
+        lines.append('')
+        lines.append('[behavior]')
+        _emit_toml_kv(lines, 'yes_sudo', bool(reg.behavior.yes_sudo))
+        _emit_toml_kv(
+            lines,
+            'auto_approve_readonly_sudo',
+            bool(reg.behavior.auto_approve_readonly_sudo),
+        )
+        _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
+        _emit_toml_kv(
+            lines,
+            'privilege_mode',
+            str(reg.behavior.privilege_mode or 'as-needed'),
+        )
+        _emit_toml_kv(
+            lines,
+            'credential_directory_permission_policy',
+            str(reg.behavior.credential_directory_permission_policy or 'warn'),
+        )
+        lines.append('')
 
     _emit_defaults(lines, reg)
 
@@ -159,7 +197,7 @@ def render_store_toml(
             if not isinstance(body, dict):
                 continue
             lines.append(f'[vms.{section}]')
-            for k, v in body.items():
+            for k, v in _section_items(reg, section, body):
                 _emit_toml_kv(lines, k, v)
 
         if attachment_style == 'nested':
@@ -177,6 +215,13 @@ def render_store_toml(
         for cred in nested_creds:
             lines.append('[[vms.credentials]]')
             _emit_credential(lines, cred)
+        nested_principals = sorted(
+            (item for item in reg.principals if item.vm_name == vm.name),
+            key=lambda item: (item.host_user, item.id),
+        )
+        for principal in nested_principals:
+            lines.append('[[vms.principals]]')
+            _emit_principal(lines, principal)
         lines.append('')
 
     legacy_atts = reg.attachments
@@ -206,6 +251,7 @@ def render_store_root_toml(reg: Store) -> str:
     """
     root = Store(
         schema_version=reg.schema_version,
+        store_kind=reg.store_kind,
         active_vm=reg.active_vm,
         behavior=reg.behavior,
         defaults=None,
@@ -268,7 +314,7 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
         if not isinstance(body, dict):
             continue
         lines.append(f'[vms.{section}]')
-        for k, v in body.items():
+        for k, v in _section_items(reg, section, body):
             _emit_toml_kv(lines, k, v)
 
     nested = sorted(
@@ -285,5 +331,12 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     for cred in nested_creds:
         lines.append('[[vms.credentials]]')
         _emit_credential(lines, cred)
+    nested_principals = sorted(
+        (item for item in reg.principals if item.vm_name == vm.name),
+        key=lambda item: (item.host_user, item.id),
+    )
+    for principal in nested_principals:
+        lines.append('[[vms.principals]]')
+        _emit_principal(lines, principal)
     lines.append('')
     return '\n'.join(lines).rstrip() + '\n'

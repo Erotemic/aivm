@@ -154,9 +154,55 @@ leaving normal config resolution on the legacy per-user store:
 The exact layout, permissions, replacement sequence, and lock-order rule are
 recorded in
 [`machine-store-filesystem-contract.md`](machine-store-filesystem-contract.md).
-The next tranche is the remaining work-package-2 model/persistence split:
-introduce real machine and profile documents on top of this tested filesystem
-contract without migrating released installations yet.
+
+### Stage 3/4 execution checklist: activate scopes and adopt the creator
+
+The fourth 0.6.0 tranche activates the logical store split for fresh implicit
+installations and persists the first real principal. It deliberately stops
+before automatic enrollment of a second user.
+
+#### Stage 3: machine and profile documents
+
+- [x] Add config-store schema version 9 with an explicit `store_kind =
+  "machine"` marker.
+- [x] Keep machine defaults, networks, VMs, principals, attachments, and
+  transitional credential records in the global split store.
+- [x] Omit `active_vm`, behavior, `vm.user`, caller SSH paths, and caller state
+  paths from machine serialization.
+- [x] Add a private schema-version-1 `~/.config/aivm/profile.toml` with mode
+  `0600` for active selection, behavior, SSH paths, local state, and the
+  guest-user default used during creation.
+- [x] Select an existing released user store without migrating it; select the
+  machine/profile split for a brand-new implicit installation.
+- [x] Make explicit non-machine `--config` paths retain legacy semantics.
+- [x] Make service loading compose the machine document, current profile, and
+  persisted principal into `ResolvedVMContext`.
+- [x] Expose the profile through `aivm config paths` and `aivm config edit
+  profile`.
+- [x] Extend `aivm host permissions setup` to create/diagnose the trusted
+  `aivm` group and `/var/lib/aivm` root.
+
+#### Stage 4: creator principal persistence
+
+- [x] Add persisted principal records containing stable id, host login,
+  UID/GID, guest username, public key, and state.
+- [x] Adopt the invoking host user as the active creator principal after a
+  successful machine-store VM creation.
+- [x] Preserve the creator's selected guest username rather than deriving it
+  again at runtime.
+- [x] Resolve runtime identity by current host login and reject missing,
+  duplicate, disabled, pending, or error principals.
+- [x] Keep creator persistence idempotent and keep user-profile writes unable
+  to alter machine bytes.
+- [x] Add unit coverage for fresh initialization, creator adoption, legacy
+  fallback, profile isolation, config-path UX, and missing-principal errors.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The exact logical split and compatibility rules are recorded in
+[`machine-profile-store-contract.md`](machine-profile-store-contract.md).
+The next tranche is work package 3: the restricted guest bootstrap helper and
+idempotent principal enrollment. Until that lands, a later host user sees an
+actionable not-enrolled error rather than a shadow machine definition.
 
 ## Work package 1: Separate models without moving storage
 
