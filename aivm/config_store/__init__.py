@@ -11,9 +11,11 @@ from .io import (
     render_split_fragments,
     save_store,
     save_store_split,
+    update_store,
     split_fragment_paths,
     split_source_paths,
 )
+from .fs_policy import StoreFilesystemPolicy
 from .models import (
     AttachmentEntry,
     CredentialEntry,
@@ -73,6 +75,7 @@ __all__ = [
     'ConfigSource',
     'NetworkEntry',
     'Store',
+    'StoreFilesystemPolicy',
     'VMEntry',
     'app_data_dir',
     'app_data_path',
@@ -106,6 +109,7 @@ __all__ = [
     'render_store_vm_toml',
     'render_store_toml',
     'save_store',
+    'update_store',
     'store_path',
     'upsert_attachment',
     'upsert_credential',

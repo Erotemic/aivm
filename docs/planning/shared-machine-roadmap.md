@@ -124,8 +124,39 @@ physical store movement:
   `resolve_cfg_for_code` or `session.cfg` as its identity source.
 - [x] Preserve the legacy serialized bytes and current single-user behavior.
 
-The next tranche is work package 2: prototype group-safe machine-store writes,
-locks, and recovery before changing default persistence locations.
+### Stage 2 execution checklist: machine-store filesystem contract
+
+The third 0.6.0 tranche implements the physical machine-store foundation while
+leaving normal config resolution on the legacy per-user store:
+
+- [x] Define the injectable machine layout under `/var/lib/aivm`, including
+  config fragments, state, bootstrap material, and centralized lock paths.
+- [x] Define the trusted `root:aivm` mode contract: `02775` for ordinary
+  machine directories, `0664` for config/transaction/lock files, and `02750`
+  for the bootstrap directory.
+- [x] Make atomic replacement set group and mode on the temporary descriptor
+  before replacement and reassert metadata afterward.
+- [x] Make split-layout staging and interrupted-transaction recovery use the
+  same group-safe policy.
+- [x] Reject symlinked managed roots and target files.
+- [x] Route the config-store lock to `locks/store.lock` when a machine policy is
+  selected.
+- [x] Add deterministic store -> sorted network -> sorted VM resource locking.
+- [x] Add `update_store` as the lock-spanning read-modify-write primitive for
+  mutations that must merge rather than reject concurrent changes.
+- [x] Prove with two child processes that concurrent attachment additions both
+  survive.
+- [x] Prove that recovery of one interrupted VM-fragment replacement preserves
+  unrelated VM fragments.
+- [x] Keep this machinery inactive in the normal loader until the machine and
+  profile schemas are ready.
+
+The exact layout, permissions, replacement sequence, and lock-order rule are
+recorded in
+[`machine-store-filesystem-contract.md`](machine-store-filesystem-contract.md).
+The next tranche is the remaining work-package-2 model/persistence split:
+introduce real machine and profile documents on top of this tested filesystem
+contract without migrating released installations yet.
 
 ## Work package 1: Separate models without moving storage
 

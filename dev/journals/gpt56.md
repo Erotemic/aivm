@@ -75,3 +75,30 @@ the code is a fresh stdlib/Pygments implementation, not copied vendored source.
 The main remaining architectural risk is now concentrated where it belongs:
 group-safe atomic machine-store writes, lock ordering, and rollback. None of
 those should be hidden inside the compatibility context layer.
+
+## 2026-07-28 13:20:09 -0400
+
+Implemented the machine-store filesystem contract without activating it in the
+normal config path. The main decision was to make shared-write semantics an
+explicit policy passed into the existing store engine rather than fork a second
+I/O implementation. That keeps monolithic and split parsing, optimistic
+concurrency, transaction recovery, and rendering in one place while allowing a
+machine store to select a centralized lock, setgid directories, group-writable
+files, and symlink refusal.
+
+The key concurrency addition is `update_store`, which holds the physical store
+lock across load, mutation, and replacement. Separate load/save remains useful
+because it rejects stale writers, but it cannot merge Alice's and Bob's changes.
+A process-level test now contends two attachment additions and proves both
+survive; another constructs an interrupted split transaction and verifies that
+recovering one VM fragment leaves an unrelated VM fragment intact. I am
+confident this gives the later schema split a sound physical substrate without
+prematurely touching `/var/lib/aivm` on real systems.
+
+The principal remaining uncertainty is operational setup: a later tranche must
+create or diagnose the `aivm` group and root-owned layout through the normal
+approval/privilege machinery. I deliberately did not add that CLI yet, because
+there is still no production machine document to initialize. The next step is
+to define persisted machine and user-profile documents and composite loading on
+top of this contract; released stores and migration should remain untouched
+until that new path works for fresh synthetic state.

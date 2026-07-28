@@ -74,6 +74,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* Added the inactive machine-store filesystem foundation for the shared-host
+  architecture. AIVM now has an injectable `/var/lib/aivm` layout, explicit
+  `root:aivm`-style directory and file modes, metadata-preserving atomic
+  replacement, group-readable split-transaction recovery, a centralized store
+  lock, deterministic network/VM lock ordering, and a lock-spanning
+  `update_store` mutation primitive. Unit tests exercise real process-level
+  contention and interrupted recovery without changing the default per-user
+  persistence path.
 * Completed the stage 0/1 prerequisites for the shared-machine migration.
   Tests now isolate all implicit HOME/XDG paths, provide Alice/Bob fixtures and
   frozen released-store migration documents, and exercise a captured
