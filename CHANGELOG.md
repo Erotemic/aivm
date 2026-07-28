@@ -5,6 +5,21 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* Added the final shared-machine access lifecycle and operational scope UX.
+  `aivm vm access disable` revokes one personal guest key and AIVM sudo policy
+  while retaining the account, home, attachments, credentials, and provider
+  evidence; `access remove` deletes the machine identity only after owned
+  records are resolved. Cross-user and last-access changes require explicit
+  overrides, disabled identities require `access reconcile --enable`, and
+  list/status plus VM/network lifecycle commands now show trust mode and
+  machine-wide impact using the operator-facing term “access identity”.
+* Added resumable released-store migration application. Reviewed plans are
+  revalidated before ownership-preserving backups, schema-11 machine/profile
+  writes, credential and persistent-state copies, restricted guest bootstrap
+  installation, and final runtime verification. Durable phase journals support
+  status, resume, verify, and reverse-order host rollback while retaining all
+  released inputs, provider state, VM disks, domain definitions, and legacy SSH
+  access.
 * Added a strictly read-only released-store migration planner at
   `aivm config migrate plan`. It fingerprints monolithic or split source files,
   proposes machine/profile records, attributes legacy attachments and
@@ -13,8 +28,8 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   stores claiming one VM, divergent machine/profile state, missing identities
   or SSH keys, target-store collisions, and missing runtime domains are
   reported as blockers. Text and JSON reports perform no writes or guest/provider
-  operations; backup, apply, resume, verification, and rollback remain the next
-  migration phase.
+  operations. The corresponding apply command revalidates this reviewed
+  evidence before starting its durable migration transaction.
 * Added principal-scoped machine-store repository credentials. Credential
   records now carry `principal_id`, stable IDs include the principal scope,
   and machine writes reject unattributed or dangling owners. Ordinary
@@ -42,10 +57,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   success, and unmanaged same-name libvirt domains are never adopted silently.
 * Added the restricted shared-machine enrollment channel. New machine-store
   VMs receive a machine-owned bootstrap SSH key and a forced, non-interactive
-  `aivm-guestctl` account that can only create or repair one guest principal
-  from a validated JSON request. `aivm vm access reconcile` persists pending
+  `aivm-guestctl` account that can create/repair one guest identity or remove
+  that identity's exact key and AIVM sudo policy from a validated JSON request.
+  `aivm vm access reconcile` persists pending
   and error states, verifies the caller's personal SSH key before activation,
-  and `aivm vm access list` shows the machine-wide principal inventory.
+  and `aivm vm access list` shows the machine-wide access inventory.
 * Added ``aivm vm creds`` for VM-scoped repository credentials. The initial
   backend creates one GitHub deploy key per VM/repository pair, keeps a
   protected host copy, installs the private key in the guest, and supports

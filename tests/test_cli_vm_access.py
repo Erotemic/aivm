@@ -124,3 +124,187 @@ def test_vm_access_reconcile_dry_run_derives_current_principal(
     output = capsys.readouterr().out
     assert 'Would enroll edward.wang as edward-wang-agent' in output
     assert 'state=pending' in output
+
+
+def test_vm_access_reconcile_enable_is_explicit(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_reconcile(scope: object, **kwargs: object) -> object:
+        captured['scope'] = scope
+        captured.update(kwargs)
+        return SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='alice',
+                guest_user='alice-agent',
+                state='active',
+            ),
+            ip='10.77.0.10',
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.reconcile_current_principal', fake_reconcile
+    )
+
+    rc = run_cli(
+        [
+            'vm',
+            'access',
+            'reconcile',
+            '--vm',
+            vm_name,
+            '--config',
+            str(store_path),
+            '--enable',
+        ]
+    )
+
+    assert rc == 0
+    assert captured['enable_disabled'] is True
+    assert 'Enrolled alice as alice-agent' in capsys.readouterr().out
+
+
+def test_vm_access_disable_selector_defaults_to_caller(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_mutate(scope: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='alice',
+                guest_user='alice-agent',
+                id='principal-alice',
+            ),
+            ownership=SimpleNamespace(
+                has_owned_records=False,
+                attachment_count=0,
+                credential_count=0,
+            ),
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.mutate_access_identity', fake_mutate
+    )
+    rc = run_cli(
+        [
+            'vm',
+            'access',
+            'disable',
+            '--vm',
+            vm_name,
+            '--config',
+            str(store_path),
+            '--dry-run',
+        ]
+    )
+
+    assert rc == 0
+    assert captured['selector'] == ''
+
+
+def test_vm_access_disable_dry_run_uses_lifecycle_service(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_mutate(scope: object, **kwargs: object) -> object:
+        captured['scope'] = scope
+        captured.update(kwargs)
+        return SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='alice',
+                guest_user='alice-agent',
+                id='principal-alice',
+            ),
+            ownership=SimpleNamespace(
+                has_owned_records=True,
+                attachment_count=2,
+                credential_count=1,
+            ),
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.mutate_access_identity', fake_mutate
+    )
+
+    rc = run_cli(
+        [
+            'vm',
+            'access',
+            'disable',
+            'alice',
+            '--vm',
+            vm_name,
+            '--config',
+            str(store_path),
+            '--dry-run',
+        ]
+    )
+
+    assert rc == 0
+    assert captured['action'] == 'disable'
+    assert captured['dry_run'] is True
+    output = capsys.readouterr().out
+    assert 'Would disable access identity alice -> alice-agent' in output
+    assert 'Owned records retained: 2 attachment(s), 1 credential(s).' in output
+
+
+def test_vm_access_remove_dry_run_states_guest_home_retention(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.mutate_access_identity',
+        lambda scope, **kwargs: SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='alice',
+                guest_user='alice-agent',
+                id='principal-alice',
+            ),
+            ownership=SimpleNamespace(
+                has_owned_records=False,
+                attachment_count=0,
+                credential_count=0,
+            ),
+        ),
+    )
+
+    rc = run_cli(
+        [
+            'vm',
+            'access',
+            'remove',
+            'alice',
+            '--vm',
+            vm_name,
+            '--config',
+            str(store_path),
+            '--dry-run',
+        ]
+    )
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert 'Would remove access identity alice -> alice-agent' in output
+    assert 'Guest home retained; no guest files were deleted.' in output

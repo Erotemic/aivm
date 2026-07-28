@@ -301,6 +301,7 @@ def reconcile_current_principal(
     guest_user: str = '',
     ip_override: str = '',
     dry_run: bool = False,
+    enable_disabled: bool = False,
 ) -> EnrollmentReport:
     """Enroll or repair the caller through the forced bootstrap key."""
     if not scope.is_machine or scope.machine_layout is None:
@@ -315,10 +316,15 @@ def reconcile_current_principal(
     existing = find_principal_for_host(
         reg, vm_name=vm_name, host_user=host_user
     )
-    if existing is not None and existing.state == 'disabled':
+    if (
+        existing is not None
+        and existing.state == 'disabled'
+        and not enable_disabled
+    ):
         raise AIVMError(
-            f'Principal {existing.id!r} is disabled; an administrator must '
-            're-enable it before reconciliation.'
+            f'Access identity {existing.id!r} is disabled. Retry with '
+            '`aivm vm access reconcile --enable` as the owning host user to '
+            'restore its personal key and sudo policy.'
         )
     selected_guest = (
         guest_user.strip()

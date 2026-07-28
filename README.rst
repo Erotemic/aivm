@@ -415,6 +415,13 @@ Config-store lifecycle (explicit flow)
    # Later host user: initialize profile and join the exact managed VM
    aivm config init
 
+   # Inspect, repair, disable, or remove shared-VM access identities
+   aivm vm access list
+   aivm vm access reconcile
+   aivm vm access reconcile --enable
+   aivm vm access disable
+   aivm vm access remove
+
    aivm vm update
    aivm vm edit
    aivm config discover
@@ -424,14 +431,38 @@ Config-store lifecycle (explicit flow)
    aivm config format
    aivm config paths
    aivm config migrate plan
+   aivm config migrate apply
+   aivm config migrate status
+   aivm config migrate resume
+   aivm config migrate verify
+   aivm config migrate rollback
    aivm help plan
    aivm help tree
    aivm help completion
    aivm host doctor
 
+Shared-machine access lifecycle
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Operator-facing commands call each persisted host-to-guest binding an **access
+identity**. The on-disk/internal field name remains ``principal`` for this
+release. ``access disable`` removes only that identity's personal key and
+AIVM-managed sudo policy; it retains the guest account/home and all ownership
+records. ``access remove`` additionally deletes the machine-store identity, but
+only after its attachments and credentials have been resolved. Cross-user
+operations require ``--admin_override``, and disabling the last active identity
+requires ``--allow_last_access``. Restore a disabled caller with ``access
+reconcile --enable``.
+
+The trust mode is ``trusted-host-users``. Access ownership prevents accidental
+cross-user changes and preserves recovery metadata, but it does not isolate
+mutually hostile host users who control system libvirt. VM and network lifecycle
+commands therefore label machine-wide effects and list/status show active access
+identity counts. See ``docs/planning/operational-lifecycle.md``.
+
 Released per-user stores are not migrated automatically. Review the proposed
 machine store, user profile, attachment/credential ownership, persistent-state
-moves, and libvirt conflicts before the later apply phase::
+moves, and libvirt conflicts before the apply phase::
 
    aivm config migrate plan
    aivm config migrate plan --output json
@@ -440,8 +471,26 @@ moves, and libvirt conflicts before the later apply phase::
        bob=/home/bob/.config/aivm/config.toml
 
 The planner is read-only. It fingerprints every input and reports blockers, but
-does not write the machine store, move key/state directories, alter guests, or
-change provider deploy keys.
+does not write the machine store, copy key/state directories, alter guests, or
+change provider deploy keys. After reviewing a ready plan, apply it with the
+same source descriptors::
+
+   aivm config migrate apply \
+       alice=/home/alice/.config/aivm/config.toml \
+       bob=/home/bob/.config/aivm/config.toml
+
+Apply creates verified backups and a durable phase journal before writing the
+machine/profile stores. Legacy config, credential, and persistent-state inputs
+remain retained. Interrupted work is explicit and resumable::
+
+   aivm config migrate status
+   aivm config migrate resume migration-0123456789abcdef
+   aivm config migrate verify migration-0123456789abcdef
+   aivm config migrate rollback migration-0123456789abcdef
+
+Migration does not recreate the VM or replace the legacy guest account. See
+``docs/planning/released-store-migration-apply.md`` for root requirements,
+transaction phases, verification, and rollback semantics.
 
 Alternatives and related projects
 ---------------------------------

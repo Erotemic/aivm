@@ -15,6 +15,7 @@ from typing import Any, Literal
 import kwconf
 from loguru import logger as log
 
+from ..access_control import TRUST_MODE
 from ..attachments.ownership import attachment_owner_label
 from ..commands import CommandManager
 from ..config_store import load_store
@@ -55,6 +56,8 @@ class ListCLI(_BaseCommand):
 
         if want in {'all', 'vms'}:
             print('Managed VMs')
+            if reg.store_kind == 'machine':
+                print(f'  Trust mode: {TRUST_MODE}')
             if not reg.vms:
                 print('  (none)')
             else:
@@ -65,9 +68,18 @@ class ListCLI(_BaseCommand):
                         if vm.network_name in by_net
                         else False
                     )
+                    identities = [
+                        item for item in reg.principals if item.vm_name == vm.name
+                    ]
+                    active_identities = sum(
+                        1
+                        for item in identities
+                        if item.state in {'active', 'legacy'}
+                    )
                     print(
                         f'  - {vm.name} | network={vm.network_name} '
                         f'| strict_firewall={"yes" if strict else "no"} '
+                        f'| access={active_identities}/{len(identities)} active '
                         f'| store={reg_path}'
                     )
 

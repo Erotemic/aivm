@@ -367,8 +367,71 @@ rollback state:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The report contract and apply boundary are recorded in
-[`released-store-migration-plan.md`](released-store-migration-plan.md). The next
-tranche adds backups, resumable apply, verification, and rollback.
+[`released-store-migration-plan.md`](released-store-migration-plan.md).
+
+### Stage 10 execution checklist: released-store migration apply
+
+The tenth 0.6.0 tranche completes the state-changing half of work package 7
+without deleting or rewriting the released inputs:
+
+- [x] Rebuild the reviewed plan at apply time and reject changed source hashes,
+  planner output, or a mismatched target layout.
+- [x] Create and verify backups for every source and replacement target before
+  application-state writes.
+- [x] Add a deterministic migration id and durable atomic phase journal under
+  machine state.
+- [x] Write the schema-11 machine store and private user profiles with their
+  existing UID/GID ownership.
+- [x] Copy principal-scoped credential material and machine persistent state
+  while retaining the released source directories for rollback.
+- [x] Install the restricted bootstrap helper through each creator's existing
+  working SSH account without recreating or redefining a VM.
+- [x] Make every phase idempotent and resume at the first incomplete journaled
+  phase after interruption.
+- [x] Verify source immutability, logical machine/profile state, copied trees,
+  libvirt domain identity, and creator SSH before marking complete.
+- [x] Add status, verify, resume, and reverse-order host rollback commands; keep
+  the journal as durable recovery evidence.
+- [x] Keep provider APIs, VM disks, domain definitions, and legacy SSH access
+  unchanged.
+- [x] Cover completed reruns, injected interruption, resume, source mutation,
+  guest-helper rendering/transport, and rollback in synthetic tests.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The transaction, recovery, and retained-input rules are recorded in
+[`released-store-migration-apply.md`](released-store-migration-apply.md).
+
+### Stage 11 execution checklist: operational lifecycle and release seam
+
+The eleventh 0.6.0 tranche completes work package 8 without introducing a new
+host authorization system:
+
+- [x] Add `aivm vm access disable` and `remove`, with id/host-login targeting,
+  caller defaults, dry-run support, and explicit cross-user administration.
+- [x] Remove only the selected personal key and AIVM sudoers fragment in the
+  guest; retain the account, home, unrelated keys, and ownership metadata.
+- [x] Require `--allow_last_access` before disabling or removing the final
+  active identity.
+- [x] Make `access reconcile --enable` the explicit path for restoring a
+  disabled identity and verify the personal key before activation.
+- [x] Refuse identity removal while attachment or credential records still
+  refer to it; do not invent automatic ownership transfer or discard provider
+  revocation evidence.
+- [x] Clear the owning caller's active profile selection after disable/remove.
+- [x] Label VM and network lifecycle changes as machine-wide and summarize the
+  affected identity, attachment, and credential inventory.
+- [x] Show trust mode and active/total access identity counts in list and status
+  output.
+- [x] Keep lifecycle mutations behind reusable services so a future privileged
+  broker can enforce the existing model.
+- [x] Use “access identity” in new operator-facing text while retaining the
+  internal `principal` schema vocabulary until a separate naming decision.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The lifecycle, trust, and removal rules are recorded in
+[`operational-lifecycle.md`](operational-lifecycle.md). The implementation
+roadmap is complete; the remaining work is real-system migration/shared-user
+validation and release review.
 
 ## Work package 1: Separate models without moving storage
 

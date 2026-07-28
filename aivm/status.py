@@ -12,11 +12,16 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .access_control import TRUST_MODE, access_ownership_summary
 from .attachments.ownership import attachment_owner_label
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_scopes import resolve_legacy_vm_context
-from .config_store import AttachmentEntry, load_store
+from .config_store import (
+    AttachmentEntry,
+    find_principals_for_vm,
+    load_store,
+)
 from .firewall import effective_firewall_table
 from .host import check_commands
 from .modes import PrivilegeMode
@@ -628,6 +633,7 @@ def render_status(
     sudo-only checks as inconclusive instead of failing hard.
     """
     privilege_mode = CommandManager.current().privilege_mode
+    selected_guest_user = resolve_legacy_vm_context(cfg).guest_user
     lines: list[str] = [
         '🧭 AgentVM Status',
         f'📄 Config: {path}',
@@ -734,6 +740,32 @@ def render_status(
         report.check(None, 'VM shared folders', 'VM not defined', counted=False)
 
     reg = load_store(path)
+    if reg.store_kind == 'machine':
+        report.check(True, 'Trust mode', TRUST_MODE, counted=False)
+        identities = find_principals_for_vm(reg, cfg.vm.name)
+        active_count = sum(
+            1
+            for item in identities
+            if item.state in {'active', 'legacy'}
+        )
+        report.check(
+            bool(active_count),
+            'Access identities',
+            f'{active_count}/{len(identities)} active',
+            counted=False,
+        )
+        for identity in identities:
+            owned = access_ownership_summary(
+                reg, vm_name=cfg.vm.name, principal_id=identity.id
+            )
+            marker = (
+                '*' if identity.guest_user == selected_guest_user else ' '
+            )
+            report.lines.append(
+                f'  {marker} {identity.host_user} -> {identity.guest_user} '
+                f'state={identity.state} attachments={owned.attachment_count} '
+                f'credentials={owned.credential_count} id={identity.id}'
+            )
     desired_attachments = sorted(
         (item for item in reg.attachments if item.vm_name == cfg.vm.name),
         key=lambda item: (
@@ -1017,6 +1049,20 @@ def render_global_status(store_cfg_path: Path) -> str:
 
     reg = load_store(store_cfg_path)
     lines.append(status_line(True, 'Config store', str(store_cfg_path)))
+    if reg.store_kind == 'machine':
+        active_identities = sum(
+            1
+            for item in reg.principals
+            if item.state in {'active', 'legacy'}
+        )
+        lines.append(status_line(True, 'Trust mode', TRUST_MODE))
+        lines.append(
+            status_line(
+                True,
+                'Access identities',
+                f'{active_identities}/{len(reg.principals)} active',
+            )
+        )
     lines.append('')
     lines.append('📦 Managed Resources')
     lines.append(f'- VMs: {len(reg.vms)}')

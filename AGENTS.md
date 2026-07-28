@@ -29,6 +29,18 @@ Guidance for contributors (human or AI agents) working in this repository.
     plan. Migration planning must remain read-only, fingerprint every source,
     and fail closed on multiple stores claiming one VM. Do not silently merge,
     rewrite, or delete released stores.
+  - New operator-facing text calls a persisted host-to-guest principal an
+    “access identity”; keep the internal schema names stable until a separate
+    terminology change is chosen.
+  - Disabling an access identity removes only its recorded guest public key and
+    AIVM sudoers fragment. Retain the guest account/home, unrelated keys,
+    attachments, credentials, and provider revocation metadata.
+  - Removing an access identity is forbidden while attachment or credential
+    records refer to it. Never silently transfer ownership or delete those
+    records as a side effect.
+  - VM/network lifecycle commands on a machine store must make their global
+    effect visible. The current trust mode assumes mutually trusted host users;
+    ownership fields are not a hostile-user isolation boundary.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

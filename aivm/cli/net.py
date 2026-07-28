@@ -19,6 +19,7 @@ from ..config_store import (
 )
 from ..errors import AIVMError
 from ..net import destroy_network, ensure_network, network_status
+from ..operational_scope import announce_network_machine_impact
 from ..services import cfg_path
 from ..scoped_store import load_scope_profile, resolve_store_scope
 from ._common import _BaseCommand
@@ -42,7 +43,11 @@ class NetCreateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        store_fpath = cfg_path(args.config)
         cfg = _resolve_network_cfg(args.config, network_opt=args.network)
+        announce_network_machine_impact(
+            store_fpath, cfg.network.name, action='create or recreate'
+        )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Create/update network {cfg.network.name}',
@@ -107,6 +112,9 @@ class NetDestroyCLI(_BaseCommand):
                 f"Network '{cfg.network.name}' is referenced by managed VMs: {names}. "
                 'Detach or destroy those VMs first, or use --force.'
             )
+        announce_network_machine_impact(
+            store_fpath, cfg.network.name, action='destroy'
+        )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Destroy network {cfg.network.name}',

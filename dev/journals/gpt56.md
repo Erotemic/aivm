@@ -312,3 +312,70 @@ planning boundary, but the next apply/resume/rollback phase is much higher risk:
 it must revalidate fingerprints, journal every phase durably, preserve a
 working legacy SSH path until verification completes, and make rollback
 meaningful after partial filesystem and guest changes.
+
+## 2026-07-28 17:28:00 -0400
+
+Completed the state-changing half of released-store migration. The central
+choice was to treat migration as a durable transaction without pretending the
+host filesystem, guest, and libvirt form one atomic database. A reviewed plan
+gets a deterministic identity, every replaceable host path is backed up and
+verified, and each idempotent phase is journaled before moving to the next.
+Resume therefore has evidence rather than heuristics: it rebuilds the plan from
+the recorded sources, rechecks their hashes, accepts only the exact machine
+state produced by that plan, and continues at the first incomplete phase.
+
+I kept released stores and user-owned credential/persistent directories in
+place. Copying costs temporary disk space, but it avoids making rollback depend
+on reconstructing old paths and preserves provider key bytes and IDs without
+contacting provider APIs. The guest bootstrap installation is similarly
+additive: it uses the already-working legacy account, leaves that account
+untouched, and installs only the restricted forced-command recovery channel.
+Host rollback restores every backed-up path and intentionally retains that
+narrow helper so a failed migration cannot delete its own guest recovery path.
+
+Synthetic tests cover successful application, verification-only reruns,
+injected interruption after the machine write, journal-based resume, source
+mutation detection, restricted guest installation transport, and reverse-order
+rollback. The complete non-E2E suite remains the final local validation target.
+The largest remaining risks are real multi-user ownership under sudo, guest
+package/user variations during helper installation, and runtime attachment
+replay after a migrated persistent manifest. Those belong in the deferred
+real-system migration rehearsal. The architecture is otherwise ready for the
+last operational-lifecycle and release-hardening tranche.
+
+## 2026-07-28 18:07:42 -0400
+
+Completed the final implementation tranche for the trusted shared-machine
+architecture. I kept the serialized principal vocabulary stable but moved new
+operator-facing text toward “access identity”; this avoids a broad schema/API
+rename while the user is still evaluating terminology. The more important
+boundary is behavioral: disable is reversible and removes only the exact guest
+public key plus AIVM sudoers fragment, whereas remove is metadata deletion and
+is blocked until every owned attachment and credential has been resolved.
+Neither path deletes a guest home or invents an ownership transfer.
+
+The last-active guard is intentionally explicit. The restricted bootstrap
+channel can recover a disabled machine, but making that fact an implicit excuse
+to cut off all ordinary access would be surprising and operationally risky.
+Cross-user changes likewise require a named trusted-host override. These are
+accident-prevention and audit controls, not claims of hostile-user isolation;
+libvirt control on the host remains effectively root-equivalent.
+
+I also added machine-impact summaries around VM and network lifecycle changes
+and surfaced trust mode plus active identity counts in list/status output. The
+service modules now provide a plausible seam for a future privileged broker,
+but no daemon or speculative policy schema was introduced. Synthetic tests
+cover reversible disable, ownership-blocked removal, cross-user and last-access
+guards, explicit re-enable, forced guest cleanup, CLI dry runs, and global
+impact counts. The remaining uncertainty is now environmental rather than
+architectural: real sudo ownership, distro guest behavior, migrated persistent
+replay, and two-host-user operation need the deferred real-system rehearsal.
+
+## 2026-07-28 18:34:00 -0400
+
+Corrected the final operational-lifecycle CLI boundary so the internal action
+parameter retains the `AccessAction` literal type all the way into the service
+call. Runtime behavior is unchanged; the adjustment prevents `ty` from widening
+the class helper's `disable`/`remove` choices to an arbitrary string. The
+remaining reported mypy failure is in the installed NumPy stub while the project
+is configured to target Python 3.11, not in AIVM source.

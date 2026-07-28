@@ -194,3 +194,60 @@ def test_guest_enrollment_rejects_invalid_usernames(guest_user: str) -> None:
             gid=1001,
             public_key='ssh-ed25519 AAAATEST user@test',
         ).validated()
+
+
+def test_guest_disable_removes_only_selected_key_and_sudoers(
+    tmp_path: Path,
+) -> None:
+    from aivm.guestctl import GuestAccessRequest, disable_guest_principal
+
+    system = FakeGuestSystem()
+    enrollment = GuestEnrollmentRequest(
+        guest_user='edward-wang-agent',
+        uid=1201,
+        gid=1201,
+        public_key='ssh-ed25519 AAAAEDWARD edward@test',
+    )
+    reconcile_guest_principal(
+        enrollment,
+        runner=system,
+        home_root=tmp_path / 'home',
+        sudoers_root=tmp_path / 'sudoers',
+        chown=lambda *args: None,
+    )
+    authorized = (
+        tmp_path / 'home' / 'edward-wang-agent' / '.ssh' / 'authorized_keys'
+    )
+    unrelated = 'ssh-ed25519 AAAAOTHER other@test'
+    authorized.write_text(
+        enrollment.public_key + '\n' + unrelated + '\n', encoding='utf-8'
+    )
+
+    report = disable_guest_principal(
+        GuestAccessRequest(
+            operation='disable-principal',
+            guest_user=enrollment.guest_user,
+            public_key=enrollment.public_key,
+        ),
+        runner=system,
+        home_root=tmp_path / 'home',
+        sudoers_root=tmp_path / 'sudoers',
+        chown=lambda *args: None,
+    )
+
+    assert report['authorized_key_removed'] is True
+    assert authorized.read_text(encoding='utf-8').splitlines() == [unrelated]
+    assert not (
+        tmp_path / 'sudoers' / 'aivm-principal-edward-wang-agent'
+    ).exists()
+    assert (tmp_path / 'home' / 'edward-wang-agent').is_dir()
+
+
+def test_guest_access_request_rejects_unknown_operation() -> None:
+    from aivm.guestctl import GuestAccessRequest
+
+    with pytest.raises(GuestEnrollmentError, match='unsupported guest access'):
+        GuestAccessRequest.from_json(
+            '{"operation":"delete-home","guest_user":"agent",'
+            '"public_key":"ssh-ed25519 AAAATEST user@test"}'
+        )

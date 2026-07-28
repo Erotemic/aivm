@@ -36,6 +36,7 @@ from ..services import (
     record_vm,
     resolve_cfg_for_code,
 )
+from ..operational_scope import announce_vm_machine_impact
 from ..profile_store import save_user_profile
 from ..scoped_store import load_scope_profile, resolve_store_scope
 from ..vm import (
@@ -64,6 +65,9 @@ class VMUpCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
+        announce_vm_machine_impact(
+            cfg_path, cfg.vm.name, action='start or reconcile'
+        )
         maybe_install_missing_host_deps(
             yes=bool(args.yes), dry_run=bool(args.dry_run)
         )
@@ -108,6 +112,9 @@ class VMDownCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
+        announce_vm_machine_impact(
+            cfg_path, cfg.vm.name, action='shut down'
+        )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Shut down VM {cfg.vm.name}',
@@ -129,6 +136,9 @@ class VMRestartCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
+        announce_vm_machine_impact(
+            cfg_path, cfg.vm.name, action='restart'
+        )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',
@@ -214,6 +224,9 @@ class VMDeleteCLI(_BaseCommand):
         reg = load_store(cfg_path)
         credentials = require_vm_credentials_released(
             reg, cfg.vm.name, action='deleted'
+        )
+        announce_vm_machine_impact(
+            cfg_path, cfg.vm.name, action='delete'
         )
         mgr = CommandManager.current()
         if args.dry_run:

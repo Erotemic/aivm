@@ -17,7 +17,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 BOOTSTRAP_GUEST_USER = 'aivm-bootstrap'
 GUESTCTL_PATH = '/usr/local/sbin/aivm-guestctl'
@@ -112,6 +112,68 @@ class GuestEnrollmentRequest:
             raise GuestEnrollmentError(
                 f'invalid enrollment fields: {ex}'
             ) from ex
+        return request.validated()
+
+
+@dataclass(frozen=True)
+class GuestAccessRequest:
+    """Restricted request that removes one persisted access key."""
+
+    operation: Literal['disable-principal']
+    guest_user: str
+    public_key: str
+
+    def validated(self) -> 'GuestAccessRequest':
+        if self.operation != 'disable-principal':
+            raise GuestEnrollmentError(
+                f'unsupported guest access operation {self.operation!r}'
+            )
+        user = self.guest_user.strip()
+        if not _GUEST_USER_RE.fullmatch(user):
+            raise GuestEnrollmentError(
+                f'invalid guest username {user!r}; expected a lowercase POSIX '
+                'login containing only letters, digits, underscores, or hyphens'
+            )
+        key = self.public_key.strip()
+        if (
+            '\n' in key
+            or '\r' in key
+            or not key.startswith(_ALLOWED_KEY_PREFIXES)
+        ):
+            raise GuestEnrollmentError(
+                'public_key must be one supported single-line SSH key'
+            )
+        return GuestAccessRequest(
+            operation='disable-principal',
+            guest_user=user,
+            public_key=key,
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self.validated()), sort_keys=True)
+
+    @classmethod
+    def from_json(cls, text: str) -> 'GuestAccessRequest':
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as ex:
+            raise GuestEnrollmentError(f'invalid access JSON: {ex}') from ex
+        if not isinstance(raw, dict):
+            raise GuestEnrollmentError('access payload must be a JSON object')
+        try:
+            operation_raw = str(raw['operation'])
+            if operation_raw != 'disable-principal':
+                raise GuestEnrollmentError(
+                    f'unsupported guest access operation {operation_raw!r}'
+                )
+            operation: Literal['disable-principal'] = 'disable-principal'
+            request = cls(
+                operation=operation,
+                guest_user=str(raw['guest_user']),
+                public_key=str(raw['public_key']),
+            )
+        except (KeyError, TypeError, ValueError) as ex:
+            raise GuestEnrollmentError(f'invalid access fields: {ex}') from ex
         return request.validated()
 
 
@@ -334,13 +396,77 @@ def reconcile_guest_principal(
     }
 
 
+
+def disable_guest_principal(
+    request: GuestAccessRequest,
+    *,
+    runner: Runner = subprocess.run,
+    home_root: Path = Path('/home'),
+    sudoers_root: Path = Path('/etc/sudoers.d'),
+    chown: Chown = os.chown,
+) -> dict[str, object]:
+    """Remove one AIVM key and sudoers fragment without deleting the home."""
+    request = request.validated()
+    passwd = _getent(runner, 'passwd', request.guest_user)
+    account_present = passwd is not None
+    removed_key = False
+    if passwd is not None:
+        fields = passwd.split(':')
+        uid = int(fields[2]) if len(fields) > 2 else -1
+        gid = int(fields[3]) if len(fields) > 3 else -1
+        home = (
+            Path(fields[5])
+            if len(fields) > 5 and fields[5]
+            else home_root / request.guest_user
+        )
+        authorized = home / '.ssh' / 'authorized_keys'
+        if authorized.exists():
+            original = authorized.read_text(encoding='utf-8').splitlines()
+            retained = [line for line in original if line != request.public_key]
+            removed_key = retained != original
+            _atomic_text(
+                authorized,
+                ('\n'.join(retained).rstrip() + '\n') if retained else '',
+                0o600,
+            )
+            if uid >= 0 and gid >= 0:
+                chown(authorized, uid, gid)
+    sudoers = sudoers_root / f'aivm-principal-{request.guest_user}'
+    removed_sudoers = sudoers.exists()
+    sudoers.unlink(missing_ok=True)
+    return {
+        'status': 'ok',
+        'operation': request.operation,
+        'guest_user': request.guest_user,
+        'account_present': account_present,
+        'authorized_key_removed': removed_key,
+        'sudoers_removed': removed_sudoers,
+        'home_retained': True,
+    }
+
 def _forced_main() -> int:
     if os.geteuid() != 0:
         print('aivm-guestctl --forced must run as root', file=sys.stderr)
         return 77
+    text = sys.stdin.read()
     try:
-        request = GuestEnrollmentRequest.from_json(sys.stdin.read())
-        report = reconcile_guest_principal(request)
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as ex:
+            raise GuestEnrollmentError(f'invalid request JSON: {ex}') from ex
+        if not isinstance(raw, dict):
+            raise GuestEnrollmentError('request payload must be a JSON object')
+        operation = str(raw.get('operation', 'enroll-principal'))
+        if operation == 'enroll-principal':
+            request = GuestEnrollmentRequest.from_json(text)
+            report = reconcile_guest_principal(request)
+        elif operation == 'disable-principal':
+            access_request = GuestAccessRequest.from_json(text)
+            report = disable_guest_principal(access_request)
+        else:
+            raise GuestEnrollmentError(
+                f'unsupported guestctl operation {operation!r}'
+            )
     except GuestEnrollmentError as ex:
         print(
             json.dumps({'status': 'error', 'error': str(ex)}),
