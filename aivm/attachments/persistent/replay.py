@@ -94,6 +94,7 @@ def _reconcile_persistent_attachments_in_guest(
             manifest._sync_persistent_attachment_manifest_to_guest(
                 cfg,
                 ip,
+                cfg_path=cfg_path,
                 dry_run=dry_run,
                 check=not continue_on_error,
             )

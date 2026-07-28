@@ -29,6 +29,10 @@ def _emit_attachment(
     lines.append(f'host_path = "{_toml_escape(att.host_path)}"')
     if include_vm_name:
         lines.append(f'vm_name = "{_toml_escape(att.vm_name)}"')
+    if att.owner_principal_id:
+        lines.append(
+            f'owner_principal_id = "{_toml_escape(att.owner_principal_id)}"'
+        )
     lines.append(f'mode = "{_toml_escape(att.mode)}"')
     lines.append(f'access = "{_toml_escape(att.access)}"')
     lines.append(f'guest_dst = "{_toml_escape(att.guest_dst)}"')

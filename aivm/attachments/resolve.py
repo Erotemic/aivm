@@ -9,8 +9,14 @@ from loguru import logger as log
 
 from ..config import AgentVMConfig
 from ..config_scopes import resolve_legacy_vm_context
-from ..config_store import find_attachment_for_vm, load_store
+from ..config_store import (
+    find_attachment_by_guest_dst,
+    find_attachment_for_vm,
+    find_attachments_for_vm_path,
+    load_store,
+)
 from ..errors import AIVMError
+from .ownership import require_attachment_mutation_permission
 from ..vm.share import (
     AttachmentAccess,
     AttachmentMode,
@@ -215,6 +221,10 @@ def _resolve_attachment(
     guest_dst_opt: str,
     mode_opt: str = '',
     access_opt: str = '',
+    *,
+    owner_principal_id: str = '',
+    administrative_override: bool = False,
+    administrative_owner_principal_id: str = '',
 ) -> ResolvedAttachment:
     source_dir = str(host_src.resolve())
     guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
@@ -222,7 +232,64 @@ def _resolve_attachment(
     mode = _normalize_attachment_mode(mode_opt)
     access = _normalize_attachment_access(access_opt)
     reg = load_store(cfg_path)
-    att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    current_owner = str(owner_principal_id or '').strip()
+    requested_owner = str(administrative_owner_principal_id or '').strip()
+    if requested_owner and not administrative_override:
+        raise AIVMError(
+            '--owner_principal requires --admin_override when targeting an '
+            'attachment owner explicitly.'
+        )
+    if requested_owner:
+        targeted = [
+            item
+            for item in find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
+            if item.owner_principal_id == requested_owner
+        ]
+        if len(targeted) != 1:
+            raise AIVMError(
+                f'No unique attachment record for owner {requested_owner!r} '
+                f'matches {host_src} on VM {cfg.vm.name!r}.'
+            )
+        att = targeted[0]
+        require_attachment_mutation_permission(
+            reg,
+            att,
+            current_principal_id=current_owner,
+            administrative_override=True,
+        )
+    else:
+        att = find_attachment_for_vm(
+            reg,
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(current_owner if current_owner else None),
+        )
+        if att is None and current_owner:
+            foreign = find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
+            if foreign:
+                if len(foreign) > 1:
+                    owners = ', '.join(
+                        sorted(
+                            item.owner_principal_id or '(legacy)'
+                            for item in foreign
+                        )
+                    )
+                    raise AIVMError(
+                        'Multiple principals own attachment records for this '
+                        'host path; retry with --owner_principal and '
+                        f'--admin_override. Owners: {owners}'
+                    )
+                candidate = foreign[0]
+                require_attachment_mutation_permission(
+                    reg,
+                    candidate,
+                    current_principal_id=current_owner,
+                    administrative_override=administrative_override,
+                )
+                att = candidate
+    selected_owner = current_owner
+    if att is not None and att.owner_principal_id:
+        selected_owner = att.owner_principal_id
     if att is not None:
         saved_mode = _normalize_attachment_mode(att.mode)
         saved_access = _normalize_attachment_access(att.access)
@@ -258,6 +325,23 @@ def _resolve_attachment(
             guest_dst = att.guest_dst
         if att.tag:
             tag = att.tag
+    if reg.store_kind == 'machine':
+        conflict = find_attachment_by_guest_dst(
+            reg,
+            vm_name=cfg.vm.name,
+            guest_dst=guest_dst,
+        )
+        if conflict is not None and conflict is not att:
+            raise AIVMError(
+                'Attachment guest destination is already owned by another '
+                'machine-wide record.\n'
+                f'VM: {cfg.vm.name}\n'
+                f'Guest destination: {guest_dst}\n'
+                f'Owner principal: '
+                f'{conflict.owner_principal_id or "legacy/unattributed"}\n'
+                f'Host path: {conflict.host_path}\n'
+                'Choose a different --guest_dst or detach the existing record.'
+            )
     if access == ATTACHMENT_ACCESS_RO and mode == ATTACHMENT_MODE_GIT:
         raise NotImplementedError(
             'Read-only attachments are currently only implemented for '
@@ -273,4 +357,5 @@ def _resolve_attachment(
         source_dir=source_dir,
         guest_dst=guest_dst,
         tag=tag,
+        owner_principal_id=selected_owner,
     )

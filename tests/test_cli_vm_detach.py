@@ -8,6 +8,7 @@ from typing import Any, Callable
 from pytest import MonkeyPatch
 
 from aivm.cli.vm_attach import VMDetachCLI
+from aivm.config_scopes import resolve_legacy_vm_context
 from aivm.config_store import AttachmentEntry, Store, find_attachment_for_vm
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentMode
@@ -24,13 +25,16 @@ def _forbidden(message: str) -> Callable[..., Any]:
     return _stub
 
 
-def _record_save(saved: list[Path]) -> Callable[..., Path]:
-    """Stub for ``save_store`` that records the path it saved to."""
+def _record_remove(
+    store: Store, saved: list[Path]
+) -> Callable[[Any, Path, AttachmentEntry], bool]:
+    """Remove the exact record from the in-memory store and record its path."""
 
-    def _stub(reg: Any, path: Path, **kwargs: Any) -> Path:
-        del reg, kwargs
+    def _stub(cfg: Any, path: Path, attachment: AttachmentEntry) -> bool:
+        del cfg
         saved.append(path)
-        return path
+        store.attachments.remove(attachment)
+        return True
 
     return _stub
 
@@ -60,11 +64,11 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             'detach_vm_share': records(detached, True),
-            'save_store': _record_save(saved),
+            '_remove_attachment_record': _record_remove(store, saved),
         },
     )
 
@@ -104,13 +108,13 @@ def test_vm_detach_git_only_updates_store(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(False, 'shut off'), True)),
             'detach_vm_share': _forbidden(
                 'detach_vm_share should not be called for git mode'
             ),
-            'save_store': _record_save(saved),
+            '_remove_attachment_record': _record_remove(store, saved),
         },
     )
 
@@ -151,7 +155,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             '_resolve_ip_for_ssh_ops': returns('10.77.0.42'),
@@ -160,7 +164,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
             'detach_vm_share': _forbidden(
                 'detach_vm_share should not be called for shared-root mode'
             ),
-            'save_store': _record_save(saved),
+            '_remove_attachment_record': _record_remove(store, saved),
         },
     )
 
@@ -204,7 +208,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_cfg_for_code': returns((cfg, cfg_path)),
+            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
             'probe_vm_state': returns(
                 (
                     ProbeOutcome(True, 'vm-persistent-detach state=running'),

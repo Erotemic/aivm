@@ -18,6 +18,7 @@ from ...config_store import (
     split_fragment_paths,
 )
 from ...errors import AIVMError
+from ...machine_store import machine_store_layout
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
 from ...scoped_store import load_scope_profile, resolve_store_scope
 from ...vm.paths import _paths as _vm_runtime_paths
@@ -212,6 +213,12 @@ def _print_config_paths(
         )
 
 
+def _persistent_state_dir_for_store(loaded: Any, vm_name: str) -> Path:
+    if getattr(loaded.store, 'store_kind', 'legacy') == 'machine':
+        return machine_store_layout().vm_state_dir(vm_name) / 'persistent'
+    return persistent_host_state_dir(vm_name)
+
+
 def _print_data_paths(loaded: Any, *, vm_name: str) -> None:
     print('data:')
     _print_path('app_data_dir', app_data_dir(), kind='dir')
@@ -223,7 +230,7 @@ def _print_data_paths(loaded: Any, *, vm_name: str) -> None:
     for name in names:
         if not name:
             continue
-        state_dir = persistent_host_state_dir(name)
+        state_dir = _persistent_state_dir_for_store(loaded, name)
         _print_path(
             f'vm:{name}:persistent_host_state_dir', state_dir, kind='dir'
         )
@@ -285,11 +292,13 @@ def _print_libvirt_paths(
         _print_path('ip_file', p['ip_file'], kind='file')
         _print_path('known_hosts', p['known_hosts'], kind='file')
         _print_path(
-            'persistent_host_state_dir', persistent_host_state_dir(vm), kind='dir'
+            'persistent_host_state_dir',
+            _persistent_state_dir_for_store(loaded, vm),
+            kind='dir',
         )
         _print_path(
             'persistent_host_manifest',
-            persistent_host_state_dir(vm)
+            _persistent_state_dir_for_store(loaded, vm)
             / PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME,
             kind='file',
         )

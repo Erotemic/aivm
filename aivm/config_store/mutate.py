@@ -96,6 +96,7 @@ def upsert_attachment(
     *,
     host_path: str | Path,
     vm_name: str,
+    owner_principal_id: str = '',
     mode: str = 'shared',
     access: str = 'rw',
     guest_dst: str = '',
@@ -130,14 +131,18 @@ def upsert_attachment(
             seen.add(legacy)
             paths.append(legacy)
     norm = _norm_dir(host_path)
+    owner_principal_id = str(owner_principal_id or '').strip()
     existing = [
         a
         for a in reg.attachments
-        if a.host_path == norm and a.vm_name == vm_name
+        if a.host_path == norm
+        and a.vm_name == vm_name
+        and a.owner_principal_id == owner_principal_id
     ]
     rec = AttachmentEntry(
         host_path=norm,
         vm_name=vm_name,
+        owner_principal_id=owner_principal_id,
         mode=mode,
         access=access,
         guest_dst=guest_dst,
@@ -149,6 +154,8 @@ def upsert_attachment(
         reg.attachments[i] = rec
     else:
         reg.attachments.append(rec)
+    if owner_principal_id:
+        reg.schema_version = max(reg.schema_version, 10)
 
 
 def remove_attachment(
@@ -156,14 +163,24 @@ def remove_attachment(
     *,
     host_path: str | Path,
     vm_name: str,
+    owner_principal_id: str | None = None,
 ) -> bool:
     norm = _norm_dir(host_path)
     vm_name = str(vm_name).strip()
+    owner = (
+        None
+        if owner_principal_id is None
+        else str(owner_principal_id or '').strip()
+    )
     orig_n = len(reg.attachments)
     reg.attachments = [
         a
         for a in reg.attachments
-        if not (a.host_path == norm and a.vm_name == vm_name)
+        if not (
+            a.host_path == norm
+            and a.vm_name == vm_name
+            and (owner is None or a.owner_principal_id == owner)
+        )
     ]
     return len(reg.attachments) != orig_n
 

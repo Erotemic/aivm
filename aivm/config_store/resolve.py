@@ -195,22 +195,55 @@ def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
 
 
 def find_attachments(
-    reg: Store, host_path: str | Path
+    reg: Store,
+    host_path: str | Path,
+    *,
+    owner_principal_id: str | None = None,
 ) -> list[AttachmentEntry]:
     norm = _norm_dir(host_path)
-    return [att for att in reg.attachments if att.host_path == norm]
+    return [
+        att
+        for att in reg.attachments
+        if att.host_path == norm
+        and (
+            owner_principal_id is None
+            or att.owner_principal_id == owner_principal_id
+        )
+    ]
 
 
-def find_attachments_for_vm(reg: Store, vm_name: str) -> list[AttachmentEntry]:
+def find_attachments_for_vm(
+    reg: Store,
+    vm_name: str,
+    *,
+    owner_principal_id: str | None = None,
+) -> list[AttachmentEntry]:
     vm_name = str(vm_name).strip()
     return sorted(
-        (att for att in reg.attachments if att.vm_name == vm_name),
-        key=lambda att: (att.host_path, att.guest_dst, att.tag),
+        (
+            att
+            for att in reg.attachments
+            if att.vm_name == vm_name
+            and (
+                owner_principal_id is None
+                or att.owner_principal_id == owner_principal_id
+            )
+        ),
+        key=lambda att: (
+            att.owner_principal_id,
+            att.host_path,
+            att.guest_dst,
+            att.tag,
+        ),
     )
 
 
 def find_attachment_for_vm(
-    reg: Store, host_path: str | Path, vm_name: str
+    reg: Store,
+    host_path: str | Path,
+    vm_name: str,
+    *,
+    owner_principal_id: str | None = None,
 ) -> AttachmentEntry | None:
     """Locate an attachment for ``vm_name`` by host path.
 
@@ -225,7 +258,15 @@ def find_attachment_for_vm(
        many attachments; we only resolve when (1) and (2) miss.
     """
     norm = _norm_dir(host_path)
-    candidates = [a for a in reg.attachments if a.vm_name == vm_name]
+    candidates = [
+        a
+        for a in reg.attachments
+        if a.vm_name == vm_name
+        and (
+            owner_principal_id is None
+            or a.owner_principal_id == owner_principal_id
+        )
+    ]
     for att in candidates:
         if att.host_path == norm:
             return att
@@ -244,6 +285,70 @@ def find_attachment_for_vm(
             continue
     return None
 
+
+
+def find_attachments_for_vm_path(
+    reg: Store, host_path: str | Path, vm_name: str
+) -> list[AttachmentEntry]:
+    """Return every owner's record matching one VM-local host path."""
+    norm = _norm_dir(host_path)
+    candidates = [att for att in reg.attachments if att.vm_name == vm_name]
+    exact = [att for att in candidates if att.host_path == norm]
+    aliases = [
+        att
+        for att in candidates
+        if att not in exact and norm in (att.host_lexical_paths or [])
+    ]
+    if exact or aliases:
+        return sorted(
+            exact + aliases,
+            key=lambda att: (att.owner_principal_id, att.guest_dst, att.tag),
+        )
+    try:
+        target_resolved = str(Path(norm).resolve())
+    except OSError:
+        return []
+    resolved: list[AttachmentEntry] = []
+    for att in candidates:
+        try:
+            if str(Path(att.host_path).resolve()) == target_resolved:
+                resolved.append(att)
+        except OSError:
+            continue
+    return sorted(
+        resolved,
+        key=lambda att: (att.owner_principal_id, att.guest_dst, att.tag),
+    )
+
+
+def find_attachment_by_guest_dst(
+    reg: Store,
+    *,
+    vm_name: str,
+    guest_dst: str,
+    owner_principal_id: str | None = None,
+) -> AttachmentEntry | None:
+    """Locate one attachment by its machine-global guest destination."""
+    target = str(guest_dst or '').strip()
+    matches = [
+        att
+        for att in reg.attachments
+        if att.vm_name == vm_name
+        and att.guest_dst == target
+        and (
+            owner_principal_id is None
+            or att.owner_principal_id == owner_principal_id
+        )
+    ]
+    if len(matches) > 1:
+        owners = ', '.join(
+            sorted(att.owner_principal_id or '(legacy)' for att in matches)
+        )
+        raise AIVMError(
+            f'Multiple attachments for VM {vm_name!r} use guest destination '
+            f'{target!r}: {owners}.'
+        )
+    return matches[0] if matches else None
 
 def find_attachment(
     reg: Store, host_path: str | Path

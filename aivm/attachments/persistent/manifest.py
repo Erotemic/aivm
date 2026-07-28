@@ -1,11 +1,13 @@
 """Persistent-attachment manifest model and host/guest sync.
 
-Hosts the canonical desired-state manifest writes (under user-owned
-``app_data_dir``) plus the rsync-based push into the guest.
+Hosts canonical desired-state manifest writes plus the rsync-based push
+into the guest. Machine-store VMs use one global manifest under machine state;
+legacy stores retain the released user-owned XDG location.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -13,6 +15,7 @@ import shlex
 import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Iterator
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
@@ -21,6 +24,14 @@ from ...config_store import (
     find_attachments_for_vm,
     load_store,
     persistent_host_state_dir,
+)
+from ...config_store.io import _atomic_write_text
+from ...machine_store import (
+    current_machine_group_gid,
+    current_machine_store_policy,
+    is_machine_store_path,
+    machine_resource_locks,
+    machine_store_layout,
 )
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_GUEST_STATE_PATH,
@@ -37,6 +48,7 @@ from . import transport
 @dataclass(frozen=True)
 class PersistentAttachmentRecord:
     attachment_id: str
+    owner_principal_id: str
     mode: str
     source_dir: str
     host_lexical_paths: tuple[str, ...]
@@ -46,18 +58,45 @@ class PersistentAttachmentRecord:
     enabled: bool = True
 
 
-def _persistent_host_state_dir(cfg: AgentVMConfig) -> Path:
-    # Keep the canonical manifest outside the exported persistent-root tree so
-    # the guest replay helper never depends on reading through virtiofs.
-    # This lives in user-owned app data, not under the libvirt-managed VM tree.
+def _persistent_host_state_dir(
+    cfg: AgentVMConfig, cfg_path: Path | None = None
+) -> Path:
+    """Return canonical host replay state for one VM.
+
+    Machine-store installations keep replay state beside the host-wide desired
+    state so every trusted caller observes one manifest. Legacy stores retain
+    their released per-user XDG location until migration.
+    """
+    if cfg_path is not None and is_machine_store_path(cfg_path):
+        return machine_store_layout().vm_state_dir(cfg.vm.name) / 'persistent'
     return persistent_host_state_dir(cfg.vm.name)
 
 
-def _persistent_host_manifest_path(cfg: AgentVMConfig) -> Path:
+def _persistent_host_manifest_path(
+    cfg: AgentVMConfig, cfg_path: Path | None = None
+) -> Path:
     return (
-        _persistent_host_state_dir(cfg)
+        _persistent_host_state_dir(cfg, cfg_path)
         / PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
     )
+
+
+@contextlib.contextmanager
+def _persistent_manifest_lock(
+    cfg: AgentVMConfig, cfg_path: Path
+) -> Iterator[None]:
+    """Serialize global manifest generation with store and VM mutations."""
+    if not is_machine_store_path(cfg_path):
+        yield
+        return
+    layout = machine_store_layout()
+    with machine_resource_locks(
+        layout,
+        group_gid=current_machine_group_gid(),
+        include_store=True,
+        vms=[cfg.vm.name],
+    ):
+        yield
 
 
 def _persistent_host_replay_manifest_path(cfg: AgentVMConfig) -> Path:
@@ -143,10 +182,11 @@ def _persistent_host_replay_state_needed(
     attachments must not demand root for their replay machinery (e.g.
     ``vm up`` under ``privilege_mode='never'``).
     """
-    if _persistent_host_replay_manifest_path(cfg).exists():
-        return True
-    records = _persistent_attachment_records_for_vm(cfg, cfg_path)
-    return any(rec.enabled for rec in records)
+    with _persistent_manifest_lock(cfg, cfg_path):
+        if _persistent_host_replay_manifest_path(cfg).exists():
+            return True
+        records = _persistent_attachment_records_for_vm(cfg, cfg_path)
+        return any(rec.enabled for rec in records)
 
 
 def _sync_persistent_host_replay_manifest(
@@ -157,20 +197,21 @@ def _sync_persistent_host_replay_manifest(
 ) -> Path:
     """Install the replay input into root-owned, non-user-writable storage."""
     target = _persistent_host_replay_manifest_path(cfg)
-    if not _persistent_host_replay_state_needed(cfg, cfg_path):
-        return target
-    _ensure_approved_state_directories(dry_run=dry_run)
-    manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
-    transport._install_host_text_if_changed(
-        target,
-        manifest_text,
-        '0644',
-        label='approved persistent host replay manifest',
-        dry_run=dry_run,
-        force_sudo=True,
-        owner='root',
-        group='root',
-    )
+    with _persistent_manifest_lock(cfg, cfg_path):
+        if not _persistent_host_replay_state_needed(cfg, cfg_path):
+            return target
+        _ensure_approved_state_directories(dry_run=dry_run)
+        manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
+        transport._install_host_text_if_changed(
+            target,
+            manifest_text,
+            '0644',
+            label='approved persistent host replay manifest',
+            dry_run=dry_run,
+            force_sudo=True,
+            owner='root',
+            group='root',
+        )
     return target
 
 
@@ -191,7 +232,11 @@ def _persistent_attachment_records_for_vm(
             continue
         records.append(
             PersistentAttachmentRecord(
-                attachment_id=str(att.tag or att.host_path),
+                attachment_id=(
+                    f'{att.owner_principal_id or "legacy"}:'
+                    f'{att.tag or att.host_path}'
+                ),
+                owner_principal_id=str(att.owner_principal_id or ''),
                 mode=str(att.mode or ATTACHMENT_MODE_PERSISTENT),
                 source_dir=str(att.host_path),
                 host_lexical_paths=tuple(att.host_lexical_paths or ()),
@@ -202,7 +247,10 @@ def _persistent_attachment_records_for_vm(
             )
         )
     return sorted(
-        records, key=lambda rec: (rec.guest_dst, rec.shared_root_token)
+        records,
+        key=lambda rec: (
+            rec.owner_principal_id, rec.guest_dst, rec.shared_root_token
+        ),
     )
 
 
@@ -226,14 +274,24 @@ def _sync_persistent_attachment_manifest_on_host(
     *,
     dry_run: bool,
 ) -> Path:
-    manifest_path = _persistent_host_manifest_path(cfg)
-    manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
-    if dry_run:
-        print(
-            f'DRYRUN: would write persistent attachment manifest to {manifest_path}'
-        )
-        return manifest_path
-    transport._write_text_if_changed(manifest_path, manifest_text)
+    manifest_path = _persistent_host_manifest_path(cfg, cfg_path)
+    with _persistent_manifest_lock(cfg, cfg_path):
+        manifest_text = _persistent_attachment_manifest_text(cfg, cfg_path)
+        if dry_run:
+            print(
+                f'DRYRUN: would write persistent attachment manifest to {manifest_path}'
+            )
+            return manifest_path
+        if is_machine_store_path(cfg_path):
+            new_bytes = manifest_text.encode('utf-8')
+            if not manifest_path.exists() or manifest_path.read_bytes() != new_bytes:
+                _atomic_write_text(
+                    manifest_path,
+                    manifest_text,
+                    current_machine_store_policy(),
+                )
+        else:
+            transport._write_text_if_changed(manifest_path, manifest_text)
     return manifest_path
 
 
@@ -241,11 +299,12 @@ def _sync_persistent_attachment_manifest_to_guest(
     cfg: AgentVMConfig,
     ip: str,
     *,
+    cfg_path: Path | None = None,
     dry_run: bool,
     check: bool = True,
 ) -> bool:
     context = resolve_legacy_vm_context(cfg)
-    manifest_path = _persistent_host_manifest_path(cfg)
+    manifest_path = _persistent_host_manifest_path(cfg, cfg_path)
     remote_target = (
         f'{context.ssh_target(ip)}:{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}'
     )

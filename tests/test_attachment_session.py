@@ -91,12 +91,16 @@ def patch_vm_attach_env(
 ) -> None:
     """Stub the four ``aivm.cli.vm_attach`` seams every attach test shares.
 
-    Patches ``load_cfg_with_path``/``record_vm``/``_resolve_attachment``
+    Patches the resolved-context, persistence, and attachment seams
     unconditionally; ``probe_vm_state`` reports ``running`` unless it is
     ``None`` (the caller installs its own probe to inspect kwargs).
     """
+    from aivm.config_scopes import resolve_legacy_vm_context
+
     mapping: dict[str, Any] = {
-        'load_cfg_with_path': returns((cfg, cfg_path)),
+        '_resolve_attach_context': returns(
+            (resolve_legacy_vm_context(cfg), cfg_path)
+        ),
         'record_vm': returns(cfg_path),
         '_resolve_attachment': returns(attachment),
     }
@@ -444,9 +448,7 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
     assert att.tag == ''
 
 
-def test_record_attachment_skips_save_when_unchanged(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_record_attachment_is_idempotent_when_unchanged(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
@@ -467,16 +469,6 @@ def test_record_attachment_skips_save_when_unchanged(
     )
     save_store(reg, cfg_path)
 
-    # save_store stays faked here: an unchanged record renders byte-identically,
-    # so the persisted file cannot distinguish "skipped the save" from
-    # "re-saved identical content". Observing that the call never happens is the
-    # only proof of the short-circuit.
-    save_calls: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.attachments.session.save_store',
-        lambda *a, **k: save_calls.append((a, k)) or cfg_path,
-    )
-
     out = _record_attachment(
         cfg,
         cfg_path,
@@ -487,34 +479,37 @@ def test_record_attachment_skips_save_when_unchanged(
         tag='',
     )
     assert out == cfg_path
-    assert save_calls == []
-    # And the persisted store still holds exactly the one original entry.
     records = load_store(cfg_path).attachments
     assert len(records) == 1
     assert records[0].mode == 'git'
     assert records[0].guest_dst == guest_dst
 
 
-def test_record_attachment_passes_reason_to_save_store(
+def test_record_attachment_passes_reason_to_update_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
-    # A symlinked host_src makes the lexical/resolved paths differ, so the
-    # typed path is also recorded as an alias — exercising that branch.
     real = tmp_path / 'real-repo'
     real.mkdir()
     host_src = tmp_path / 'repo'
     host_src.symlink_to(real)
 
-    # save_store stays faked: it only ever *logs* the reason (never persists
-    # it), and loguru binds its default logger at definition time, so the
-    # reason is observable only by intercepting the call.
-    save_kwargs: list[dict] = []
+    calls: list[dict[str, Any]] = []
+
+    def fake_update_store(
+        mutate: Callable[[Store], None],
+        path: Path,
+        **kwargs: Any,
+    ) -> Store:
+        reg = Store()
+        mutate(reg)
+        calls.append({'path': path, **kwargs})
+        return reg
+
     monkeypatch.setattr(
-        'aivm.attachments.session.save_store',
-        lambda *a, **k: save_kwargs.append(dict(k)) or cfg_path,
+        'aivm.attachments.session.update_store', fake_update_store
     )
 
     out = _record_attachment(
@@ -528,12 +523,14 @@ def test_record_attachment_passes_reason_to_save_store(
     )
 
     assert out == cfg_path
-    assert save_kwargs == [
+    assert calls == [
         {
+            'path': cfg_path,
             'reason': (
                 f'Persist attachment record for {host_src} on VM vm-git '
-                '(mode=git, access=rw, guest_dst=/workspace/repo).'
-            )
+                '(owner=legacy, mode=git, access=rw, '
+                'guest_dst=/workspace/repo).'
+            ),
         }
     ]
 

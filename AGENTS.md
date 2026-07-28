@@ -16,6 +16,10 @@ Guidance for contributors (human or AI agents) working in this repository.
     record, then enrolls through the forced `aivm-guestctl` bootstrap channel.
     Never reintroduce shadow machine stores, silently adopt an unmanaged
     same-name domain, or use the bootstrap key for interactive access.
+  - Machine-store attachments are globally visible but principal-owned. New
+    records must carry the selected principal, ordinary path resolution and
+    session restoration must remain caller-scoped, and another owner's record
+    requires an explicit administrative override to mutate or detach.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles

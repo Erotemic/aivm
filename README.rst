@@ -285,6 +285,23 @@ If the guest can mount the persistent-root export but the host manifest is
 missing, replay now fails closed instead of silently reusing stale cached guest
 state.
 
+On a shared-machine installation, attachment declarations are machine-wide but
+owned by the enrolled principal that created them. ``aivm list`` and status show
+every owner's records, while ordinary path lookup and session restoration use
+only the current principal's paths. Updating or detaching somebody else's
+record requires an explicit trusted-host override:
+
+.. code-block:: bash
+
+   aivm detach /path/to/project \
+       --owner_principal principal-0123456789abcdef \
+       --admin_override
+
+Guest destinations are global to the VM, so two owners cannot declare the same
+``--guest_dst``. AIVM also warns when a path beneath a private home directory is
+exposed to a VM with multiple principals; this release assumes those users are
+mutually trusted.
+
 Major limitation: shared-mode folder count
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

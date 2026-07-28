@@ -14,6 +14,7 @@ import pytest
 
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
+    PrincipalEntry,
     Store,
     load_store,
     render_split_fragments,
@@ -44,6 +45,7 @@ def _attachment_worker(
     group_gid: int,
     host_path: str,
     vm_name: str,
+    owner_principal_id: str,
     start: Any,
     errors: Any,
 ) -> None:
@@ -61,6 +63,7 @@ def _attachment_worker(
                 reg,
                 host_path=host_path,
                 vm_name=vm_name,
+                owner_principal_id=owner_principal_id,
                 guest_dst=f'/home/agent/{Path(host_path).name}',
             )
 
@@ -85,6 +88,33 @@ def _single_vm_store(vm_name: str = 'aivm-2404-host') -> Store:
     cfg = AgentVMConfig()
     cfg.vm.name = vm_name
     upsert_vm(reg, cfg)
+    return reg
+
+
+def _shared_vm_store(vm_name: str = 'aivm-2404-host') -> Store:
+    reg = _single_vm_store(vm_name)
+    reg.store_kind = 'machine'
+    reg.schema_version = 10
+    reg.principals = [
+        PrincipalEntry(
+            id='principal-alice',
+            vm_name=vm_name,
+            host_user='alice',
+            host_uid=1001,
+            host_gid=1001,
+            guest_user='alice-agent',
+            state='active',
+        ),
+        PrincipalEntry(
+            id='principal-bob',
+            vm_name=vm_name,
+            host_user='bob',
+            host_uid=1002,
+            host_gid=1002,
+            guest_user='bob-agent',
+            state='active',
+        ),
+    ]
     return reg
 
 
@@ -254,7 +284,7 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
     policy = machine_store_policy(layout, group_gid=gid)
     vm_name = 'aivm-2404-host'
     save_store_split(
-        _single_vm_store(vm_name),
+        _shared_vm_store(vm_name),
         layout.config_path,
         io_policy=policy,
     )
@@ -275,11 +305,15 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
                 gid,
                 str(host_path),
                 vm_name,
+                owner,
                 start,
                 errors,
             ),
         )
-        for host_path in (alice_path, bob_path)
+        for host_path, owner in (
+            (alice_path, 'principal-alice'),
+            (bob_path, 'principal-bob'),
+        )
     ]
     for process in processes:
         process.start()
@@ -292,9 +326,12 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
     assert reported == ['', '']
 
     loaded = load_store(layout.config_path, io_policy=policy)
-    assert {item.host_path for item in loaded.attachments} == {
-        str(alice_path.resolve()),
-        str(bob_path.resolve()),
+    assert {
+        (item.host_path, item.owner_principal_id)
+        for item in loaded.attachments
+    } == {
+        (str(alice_path.resolve()), 'principal-alice'),
+        (str(bob_path.resolve()), 'principal-bob'),
     }
 
 

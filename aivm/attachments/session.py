@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -13,10 +12,11 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..config_store import (
+    Store,
     find_attachment_for_vm,
     find_attachments_for_vm,
     load_store,
-    save_store,
+    update_store,
     upsert_attachment,
     upsert_network,
     upsert_vm_with_network,
@@ -63,6 +63,7 @@ from .guest import (
     _ensure_attachment_available_in_guest,
     _ensure_git_clone_attachment,
 )
+from .ownership import attachment_owner_for_context
 from .persistent import (
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     _prepare_persistent_attachment_host_and_vm,
@@ -168,51 +169,48 @@ def _record_attachment(
     access: str,
     guest_dst: str,
     tag: str,
+    owner_principal_id: str = '',
 ) -> Path:
-    # The canonical attachment key (host_path) is always the resolved real
-    # path so that re-attaching via a different symlink chain (or via the
-    # canonical path itself) updates the same record. The lexical form the
-    # user typed — if it differs — is recorded as an alias so the guest can
-    # mirror it via a symlink. Aliases accumulate across re-attaches.
+    """Persist one owner-scoped attachment under the store lock."""
     lexical_str = str(host_src.expanduser().absolute())
     resolved_str = str(host_src.resolve())
-    reg = load_store(cfg_path)
-    existing = find_attachment_for_vm(reg, host_src, cfg.vm.name)
-    aliases: list[str] = []
-    if existing is not None:
-        aliases = list(existing.host_lexical_paths or [])
-    if lexical_str != resolved_str and lexical_str not in aliases:
-        aliases.append(lexical_str)
+    owner = str(owner_principal_id or '').strip()
 
-    before = deepcopy(reg)
-    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
-    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-    upsert_attachment(
-        reg,
-        host_path=resolved_str,
-        vm_name=cfg.vm.name,
-        mode=mode,
-        access=access,
-        guest_dst=guest_dst,
-        tag=tag,
-        host_lexical_paths=aliases,
-    )
-    if reg == before:
-        log.debug(
-            'Attachment record already up to date for vm={} host_src={} in {}',
-            cfg.vm.name,
+    def mutate(reg: Store) -> None:
+        existing = find_attachment_for_vm(
+            reg,
             host_src,
-            cfg_path,
+            cfg.vm.name,
+            owner_principal_id=(owner if owner else None),
         )
-        return cfg_path
-    return save_store(
-        reg,
+        aliases = list(existing.host_lexical_paths or []) if existing else []
+        if lexical_str != resolved_str and lexical_str not in aliases:
+            aliases.append(lexical_str)
+        upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+        upsert_attachment(
+            reg,
+            host_path=resolved_str,
+            vm_name=cfg.vm.name,
+            owner_principal_id=owner,
+            mode=mode,
+            access=access,
+            guest_dst=guest_dst,
+            tag=tag,
+            host_lexical_paths=aliases,
+        )
+        return None
+
+    update_store(
+        mutate,
         cfg_path,
         reason=(
             f'Persist attachment record for {host_src} on VM {cfg.vm.name} '
-            f'(mode={mode}, access={access}, guest_dst={guest_dst}).'
+            f'(owner={owner or "legacy"}, mode={mode}, access={access}, '
+            f'guest_dst={guest_dst}).'
         ),
     )
+    return cfg_path
 
 
 def _saved_vm_attachments(
@@ -220,6 +218,7 @@ def _saved_vm_attachments(
     cfg_path: Path,
     *,
     primary_attachment: ResolvedAttachment | None = None,
+    owner_principal_id: str = '',
 ) -> list[ResolvedAttachment]:
     """Return persisted share-like attachments that should be present for this VM.
 
@@ -239,7 +238,11 @@ def _saved_vm_attachments(
 
     # Restore any other folders already associated with this VM so a rebooted
     # guest comes back with the broader working set the user previously chose.
-    for att in find_attachments_for_vm(reg, cfg.vm.name):
+    for att in find_attachments_for_vm(
+        reg,
+        cfg.vm.name,
+        owner_principal_id=(owner_principal_id or None),
+    ):
         mode = _normalize_attachment_mode(att.mode)
         if mode not in {
             ATTACHMENT_MODE_PERSISTENT,
@@ -268,7 +271,15 @@ def _saved_vm_attachments(
                 host_src,
             )
             continue
-        attachments.append(_resolve_attachment(cfg, cfg_path, host_src, ''))
+        attachments.append(
+            _resolve_attachment(
+                cfg,
+                cfg_path,
+                host_src,
+                '',
+                owner_principal_id=owner_principal_id,
+            )
+        )
         seen_sources.add(source_dir)
     return attachments
 
@@ -281,6 +292,7 @@ def _restore_saved_vm_attachments(
     primary_attachment: ResolvedAttachment | None,
     yes: bool,
     mirror_home: bool = False,
+    owner_principal_id: str = '',
 ) -> None:
     """Best-effort restore saved non-primary attachments for a running VM session.
 
@@ -303,6 +315,7 @@ def _restore_saved_vm_attachments(
         cfg,
         cfg_path,
         primary_attachment=primary_attachment,
+        owner_principal_id=owner_principal_id,
     )
     if len(saved_attachments) <= 1:
         return
@@ -341,7 +354,11 @@ def _restore_saved_vm_attachments(
     _restore_reg = load_store(cfg_path)
     _lexical_by_source: dict[str, list[str]] = {
         e.host_path: list(e.host_lexical_paths)
-        for e in find_attachments_for_vm(_restore_reg, cfg.vm.name)
+        for e in find_attachments_for_vm(
+            _restore_reg,
+            cfg.vm.name,
+            owner_principal_id=(owner_principal_id or None),
+        )
         if e.host_lexical_paths
     }
     shared_secondary = [
@@ -384,6 +401,7 @@ def _restore_saved_vm_attachments(
                     access=aligned.access,
                     guest_dst=aligned.guest_dst,
                     tag=aligned.tag,
+                    owner_principal_id=aligned.owner_principal_id,
                 )
                 restored += 1
             except CommandControlError:
@@ -477,6 +495,7 @@ def _restore_saved_vm_attachments(
                 access=aligned.access,
                 guest_dst=aligned.guest_dst,
                 tag=aligned.tag,
+                owner_principal_id=aligned.owner_principal_id,
             )
             restored += 1
         except CommandControlError:
@@ -910,7 +929,7 @@ def _prepare_attached_session(
     # bootstrap a brand-new VM — refusing here avoids creating a VM only to
     # block on the attachment. Overlap checks run later, once we know which
     # VM and store we're targeting.
-    from .safety import attachment_safety_preflight
+    from .safety import attachment_safety_preflight, warn_shared_home_attachment
 
     ok, _report = attachment_safety_preflight(
         host_src,
@@ -943,7 +962,15 @@ def _prepare_attached_session(
         )
         cfg = context.legacy_cfg
 
+    owner_principal_id = attachment_owner_for_context(context, cfg_path)
     existing_store = load_store(cfg_path)
+    warn_shared_home_attachment(
+        host_src,
+        shared_vm=(
+            sum(1 for item in existing_store.principals if item.vm_name == cfg.vm.name)
+            > 1
+        ),
+    )
     ok, _report = attachment_safety_preflight(
         host_src,
         existing_attachments=existing_store.attachments,
@@ -964,9 +991,16 @@ def _prepare_attached_session(
             guest_dst_opt,
             attach_mode_opt,
             attach_access_opt,
+            owner_principal_id=owner_principal_id,
         )
     else:
-        attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
+        attachment = _resolve_attachment(
+            cfg,
+            cfg_path,
+            host_src,
+            guest_dst_opt,
+            owner_principal_id=owner_principal_id,
+        )
     reconcile = _reconcile_attached_vm(
         cfg,
         host_src,
@@ -998,11 +1032,15 @@ def _prepare_attached_session(
                 f'{cfg.vm.name} before preparing the attached session.'
             ),
         )
-        # The profile snapshot predates key creation; refresh the compatibility
-        # context so the prepared session carries the identity just persisted.
-        from ..config_scopes import resolve_legacy_vm_context
+        # The profile snapshot predates key creation; reload the persisted
+        # principal/profile context rather than synthesizing a legacy identity.
+        from ..services import load_vm_context_with_path
 
-        context = resolve_legacy_vm_context(cfg)
+        context, _ = load_vm_context_with_path(
+            str(cfg_path), vm_opt=cfg.vm.name, host_src=host_src
+        )
+        cfg = context.legacy_cfg
+        owner_principal_id = attachment_owner_for_context(context, cfg_path)
 
     if dry_run:
         return PreparedSession(
@@ -1026,6 +1064,7 @@ def _prepare_attached_session(
         access=attachment.access,
         guest_dst=attachment.guest_dst,
         tag=attachment.tag,
+        owner_principal_id=attachment.owner_principal_id,
     )
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)
@@ -1045,7 +1084,12 @@ def _prepare_attached_session(
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
         _reg_for_aliases = load_store(cfg_path)
-        _saved = find_attachment_for_vm(_reg_for_aliases, host_src, cfg.vm.name)
+        _saved = find_attachment_for_vm(
+            _reg_for_aliases,
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(owner_principal_id or None),
+        )
         _primary_aliases = list(_saved.host_lexical_paths) if _saved else []
         _ensure_attachment_available_in_guest(
             cfg,
@@ -1076,6 +1120,7 @@ def _prepare_attached_session(
             primary_attachment=attachment,
             yes=bool(yes),
             mirror_home=mirror_home,
+            owner_principal_id=owner_principal_id,
         )
     else:
         _ensure_git_clone_attachment(
@@ -1102,6 +1147,7 @@ def _prepare_attached_session(
             primary_attachment=None,
             yes=bool(yes),
             mirror_home=mirror_home,
+            owner_principal_id=owner_principal_id,
         )
     return PreparedSession(
         context=context,

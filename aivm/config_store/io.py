@@ -520,6 +520,25 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             'Cannot write split config with principal records whose vm_name '
             f'does not match a configured VM: {names}'
         )
+    if reg.store_kind == 'machine':
+        principal_keys = {(item.vm_name, item.id) for item in reg.principals}
+        dangling_owners = sorted(
+            {
+                (att.vm_name, att.owner_principal_id)
+                for att in reg.attachments
+                if att.owner_principal_id
+                and att.owner_principal_id != 'system'
+                and (att.vm_name, att.owner_principal_id) not in principal_keys
+            }
+        )
+        if dangling_owners:
+            details = ', '.join(
+                f'{vm}:{owner}' for vm, owner in dangling_owners
+            )
+            raise ValueError(
+                'Cannot write machine config with attachment records that '
+                f'reference unknown principals: {details}'
+            )
 
 
 def render_split_fragments(reg: Store) -> dict[str, str]:

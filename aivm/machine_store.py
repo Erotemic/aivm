@@ -75,6 +75,10 @@ class MachineStoreLayout:
     def network_lock_path(self, network_name: str) -> Path:
         return self.network_locks_dir / f'{_resource_stem(network_name)}.lock'
 
+    def vm_state_dir(self, vm_name: str) -> Path:
+        """Return machine-owned runtime state for one managed VM."""
+        return self.state_dir / 'vms' / _resource_stem(vm_name)
+
 
 def machine_store_layout(root: Path | None = None) -> MachineStoreLayout:
     """Resolve the machine-store layout without creating it."""

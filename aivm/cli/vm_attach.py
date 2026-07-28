@@ -39,6 +39,7 @@ from ..attachments.resolve import (
 from ..attachments.safety import (
     AttachmentSafetyReport,
     attachment_safety_preflight,
+    warn_shared_home_attachment,
 )
 from ..attachments.session import (
     _record_attachment,
@@ -52,20 +53,27 @@ from ..attachments.shared_root import (
 )
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..config_scopes import ResolvedVMContext
 from ..config_store import (
     AttachmentEntry,
     Store,
     find_attachment_for_vm,
+    find_attachments_for_vm_path,
     load_store,
     remove_attachment,
-    save_store,
+    update_store,
 )
 from ..errors import AIVMError, CommandControlError
+from ..attachments.ownership import (
+    attachment_owner_for_context,
+    require_attachment_mutation_permission,
+)
 from ..services import (
     load_cfg_with_path,
+    load_vm_context_with_path,
     maybe_offer_create_ssh_identity,
     record_vm,
-    resolve_cfg_for_code,
+    resolve_context_for_code,
 )
 from ..status import probe_vm_state
 from ..vm import (
@@ -94,6 +102,8 @@ class VMAttachRequest:
     access: str = ''
     dry_run: bool = False
     yes: bool = False
+    admin_override: bool = False
+    owner_principal: str = ''
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,8 @@ class VMDetachRequest:
     host_src: Path
     dry_run: bool = False
     yes: bool = False
+    admin_override: bool = False
+    owner_principal: str = ''
 
 
 @dataclass(frozen=True)
@@ -130,20 +142,19 @@ def _validate_host_directory(path: Path) -> None:
         raise AIVMError(f'host_src must be an existing directory: {path}')
 
 
-def _resolve_attach_config(
+def _resolve_attach_context(
     request: VMAttachRequest, host_src: Path
-) -> tuple[AgentVMConfig, Path]:
-    """Resolve the target VM config for an attach request.
-
-    An explicit ``--config`` wins, then ``--vm``; otherwise fall back to the
-    folder-oriented resolution used by ``aivm code`` (nearest saved
-    attachment or the default VM for this host).
-    """
+) -> tuple[ResolvedVMContext, Path]:
+    """Resolve the target VM and invoking principal for an attach request."""
     if request.config_opt:
-        return load_cfg_with_path(request.config_opt, vm_opt=request.vm_opt)
+        return load_vm_context_with_path(
+            request.config_opt, vm_opt=request.vm_opt, host_src=host_src
+        )
     if request.vm_opt:
-        return load_cfg_with_path(None, vm_opt=request.vm_opt)
-    return resolve_cfg_for_code(
+        return load_vm_context_with_path(
+            None, vm_opt=request.vm_opt, host_src=host_src
+        )
+    return resolve_context_for_code(
         config_opt=None,
         vm_opt='',
         host_src=host_src,
@@ -275,7 +286,12 @@ def _reconcile_attachment_in_running_guest(
     # Look up the persisted record (matched by resolved host_path) so
     # any aliases recorded earlier are also surfaced as guest symlinks.
     reg_for_aliases = load_store(cfg_path)
-    saved = find_attachment_for_vm(reg_for_aliases, host_src, cfg.vm.name)
+    saved = find_attachment_for_vm(
+        reg_for_aliases,
+        host_src,
+        cfg.vm.name,
+        owner_principal_id=(attachment.owner_principal_id or None),
+    )
     aliases = list(saved.host_lexical_paths) if saved else []
     _ensure_attachment_available_in_guest(
         cfg,
@@ -345,7 +361,9 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     """
     host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
-    cfg, cfg_path = _resolve_attach_config(request, host_src)
+    context, cfg_path = _resolve_attach_context(request, host_src)
+    cfg = context.legacy_cfg
+    owner_principal_id = attachment_owner_for_context(context, cfg_path)
     attachment = _resolve_attachment(
         cfg,
         cfg_path,
@@ -353,9 +371,19 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         request.guest_dst,
         request.mode,
         request.access,
+        owner_principal_id=owner_principal_id,
+        administrative_override=bool(request.admin_override),
+        administrative_owner_principal_id=request.owner_principal,
     )
 
     existing_reg = load_store(cfg_path)
+    warn_shared_home_attachment(
+        host_src,
+        shared_vm=(
+            sum(1 for item in existing_reg.principals if item.vm_name == cfg.vm.name)
+            > 1
+        ),
+    )
     ok, report = attachment_safety_preflight(
         host_src,
         existing_attachments=existing_reg.attachments,
@@ -391,6 +419,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         access=attachment.access,
         guest_dst=attachment.guest_dst,
         tag=attachment.tag,
+        owner_principal_id=attachment.owner_principal_id,
     )
     if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
         _sync_persistent_attachment_manifest_on_host(
@@ -491,11 +520,38 @@ def _detach_shared_root_attachment(
     return detached_guest, detached_host, failed
 
 
+def _remove_attachment_record(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    attachment: AttachmentEntry,
+) -> bool:
+    """Remove one exact owner-scoped record under the store lock."""
+    removed = False
+
+    def mutate(reg: Store) -> None:
+        nonlocal removed
+        removed = remove_attachment(
+            reg,
+            host_path=attachment.host_path,
+            vm_name=cfg.vm.name,
+            owner_principal_id=attachment.owner_principal_id,
+        )
+
+    update_store(
+        mutate,
+        cfg_path,
+        reason=(
+            f'Remove attachment record for {attachment.host_path} from VM '
+            f'{cfg.vm.name} (owner={attachment.owner_principal_id or "legacy"}).'
+        ),
+    )
+    return removed
+
+
 def _detach_persistent_attachment(
     cfg: AgentVMConfig,
     cfg_path: Path,
-    reg: Store,
-    host_src: Path,
+    attachment: AttachmentEntry,
     resolved: ResolvedAttachment,
     *,
     vm_running: bool,
@@ -507,16 +563,8 @@ def _detach_persistent_attachment(
     guest replays — and guest reconciliation then prunes the now-unlisted
     mount. Returns True when cleanup was incomplete.
     """
-    removed = remove_attachment(reg, host_path=host_src, vm_name=cfg.vm.name)
+    removed = _remove_attachment_record(cfg, cfg_path, attachment)
     if removed:
-        save_store(
-            reg,
-            cfg_path,
-            reason=(
-                f'Remove persistent attachment record for {host_src} from VM '
-                f'{cfg.vm.name}.'
-            ),
-        )
         _sync_persistent_attachment_manifest_on_host(
             cfg,
             cfg_path,
@@ -601,13 +649,68 @@ def run_vm_detach(request: VMDetachRequest) -> int:
     host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
 
-    cfg, cfg_path = resolve_cfg_for_code(
+    context, cfg_path = resolve_context_for_code(
         config_opt=request.config_opt,
         vm_opt=request.vm_opt,
         host_src=host_src,
     )
+    cfg = context.legacy_cfg
+    current_owner = attachment_owner_for_context(context, cfg_path)
     reg = load_store(cfg_path)
-    att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    requested_owner = str(request.owner_principal or '').strip()
+    if requested_owner and not request.admin_override:
+        raise AIVMError(
+            '--owner_principal requires --admin_override when targeting an '
+            'attachment owner explicitly.'
+        )
+    if requested_owner:
+        targeted = [
+            item
+            for item in find_attachments_for_vm_path(
+                reg, host_src, cfg.vm.name
+            )
+            if item.owner_principal_id == requested_owner
+        ]
+        if len(targeted) != 1:
+            raise AIVMError(
+                f'No unique attachment record for owner {requested_owner!r} '
+                f'matches {host_src} on VM {cfg.vm.name!r}.'
+            )
+        att = targeted[0]
+        require_attachment_mutation_permission(
+            reg,
+            att,
+            current_principal_id=current_owner,
+            administrative_override=True,
+        )
+    else:
+        att = find_attachment_for_vm(
+            reg,
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(current_owner if current_owner else None),
+        )
+        if att is None and current_owner:
+            foreign = find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
+            if len(foreign) > 1:
+                owners = ', '.join(
+                    sorted(
+                        item.owner_principal_id or '(legacy)'
+                        for item in foreign
+                    )
+                )
+                raise AIVMError(
+                    'Multiple attachment owners match this host path. Retry '
+                    f'with --owner_principal. Owners: {owners}'
+                )
+            if foreign:
+                att = foreign[0]
+                require_attachment_mutation_permission(
+                    reg,
+                    att,
+                    current_principal_id=current_owner,
+                    administrative_override=bool(request.admin_override),
+                )
     if att is None:
         print(
             f'No attachment found for {host_src} on VM {cfg.vm.name}. '
@@ -616,7 +719,8 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         return 0
     if request.dry_run:
         print(
-            f'DRYRUN: would detach {host_src} from VM {cfg.vm.name} ({att.mode} mode)'
+            f'DRYRUN: would detach {host_src} from VM {cfg.vm.name} '
+            f'({att.mode} mode, owner={att.owner_principal_id or "legacy"})'
         )
         return 0
 
@@ -629,9 +733,10 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         vm_name=cfg.vm.name,
         mode=mode,
         access=_normalize_attachment_access(att.access),
-        source_dir=str(host_src),
-        guest_dst=att.guest_dst or str(host_src),
+        source_dir=att.host_path,
+        guest_dst=att.guest_dst or att.host_path,
         tag=att.tag,
+        owner_principal_id=att.owner_principal_id,
     )
 
     detached_share = False
@@ -658,8 +763,7 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         detach_failed = _detach_persistent_attachment(
             cfg,
             cfg_path,
-            reg,
-            host_src,
+            att,
             resolved,
             vm_running=vm_running,
             yes=bool(request.yes),
@@ -674,18 +778,7 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         return 2
 
     if mode != ATTACHMENT_MODE_PERSISTENT:
-        removed = remove_attachment(
-            reg, host_path=host_src, vm_name=cfg.vm.name
-        )
-        if removed:
-            save_store(
-                reg,
-                cfg_path,
-                reason=(
-                    f'Remove attachment record for {host_src} from VM '
-                    f'{cfg.vm.name}.'
-                ),
-            )
+        _remove_attachment_record(cfg, cfg_path, att)
 
     _print_detach_result(
         cfg,
@@ -776,6 +869,14 @@ class VMAttachCLI(_BaseCommand):
         help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
     )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    admin_override: bool = kwconf.Flag(
+        False,
+        help="Allow a trusted host administrator to update another principal's attachment.",
+    )
+    owner_principal: str = kwconf.Value(
+        '',
+        help='Owner principal id to target with --admin_override when a host path is ambiguous.',
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -800,6 +901,8 @@ class VMAttachCLI(_BaseCommand):
                 access=args.access,
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
+                admin_override=bool(args.admin_override),
+                owner_principal=args.owner_principal,
             )
         )
 
@@ -812,6 +915,14 @@ class VMDetachCLI(_BaseCommand):
         '.', position=1, help='Host directory to detach.'
     )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    admin_override: bool = kwconf.Flag(
+        False,
+        help="Allow a trusted host administrator to detach another principal's attachment.",
+    )
+    owner_principal: str = kwconf.Value(
+        '',
+        help='Owner principal id to target with --admin_override when a host path is ambiguous.',
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -823,6 +934,8 @@ class VMDetachCLI(_BaseCommand):
                 host_src=Path(args.host_src),
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
+                admin_override=bool(args.admin_override),
+                owner_principal=args.owner_principal,
             )
         )
 

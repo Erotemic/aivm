@@ -250,6 +250,7 @@ def _lint_store_text(text: str) -> list[str]:
     allowed_attachment = {
         'host_path',
         'vm_name',
+        'owner_principal_id',
         'mode',
         'access',
         'guest_dst',

@@ -100,6 +100,7 @@ def _attachment_from_dict(
     return AttachmentEntry(
         host_path=_norm_dir(host_path),
         vm_name=owner,
+        owner_principal_id=str(item.get('owner_principal_id', '')).strip(),
         mode=str(item.get('mode', 'shared') or 'shared'),
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
@@ -451,4 +452,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = max(reg.schema_version, 8)
     if reg.principals or reg.store_kind == 'machine':
         reg.schema_version = max(reg.schema_version, 9)
+    if any(att.owner_principal_id for att in reg.attachments):
+        reg.schema_version = max(reg.schema_version, 10)
     return reg

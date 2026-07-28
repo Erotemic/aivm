@@ -106,6 +106,11 @@ Notes
   attachment intent with replay helpers. ``shared-root`` remains available with
   ``aivm attach . --mode shared-root`` for the legacy single-export path, and
   both modes still rely on virtiofs.
+* On shared-machine installs, attachments are globally visible but owned by the
+  principal that declared them. Ordinary code/SSH restoration uses only the
+  caller's records. Mutating another owner's declaration requires both
+  ``--owner_principal`` and ``--admin_override``; guest destinations must be
+  unique across the VM.
 * Settings sync has been removed for now because it was too flaky. Use explicit
   attachments or manual Git operations until a replacement is designed.
 

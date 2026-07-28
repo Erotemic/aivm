@@ -34,10 +34,14 @@ class NetworkEntry:
     firewall: FirewallConfig = field(default_factory=FirewallConfig)
 
 
+ATTACHMENT_SYSTEM_OWNER = 'system'
+
+
 @dataclass
 class AttachmentEntry:
     host_path: str
     vm_name: str
+    owner_principal_id: str = ''
     mode: str = 'shared'
     access: str = 'rw'
     guest_dst: str = ''

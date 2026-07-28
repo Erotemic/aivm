@@ -207,3 +207,31 @@ to make those failures recoverable, but the final system run must confirm the
 operator experience. The next architectural task is global attachment ownership
 and complete replay, where the same principal boundary must prevent one user's
 local path aliases from mutating another user's declarations accidentally.
+
+## 2026-07-28 15:24:05 -0400
+
+Completed the machine-wide attachment ownership and replay tranche. The main
+tradeoff was separating global visibility from local path authority: the store
+and status surfaces must show every declaration, but path-based selection and
+ordinary session restoration must not cause Alice to inspect or replay Bob's
+private host path. New records are therefore keyed by VM, principal, and
+canonical path; owner-less records remain legacy input for the later migration.
+An explicit administrative override exists for trusted-host repair, but normal
+commands never infer that authority merely from group membership.
+
+Persistent replay is the one intentionally global behavior. Its canonical
+manifest now lives under per-VM machine state, is generated from the complete
+inventory while the store and VM locks are held, and includes owner identity in
+record IDs. I added a machine-wide guest-destination uniqueness check after
+noticing that separate ownership alone cannot make two bind mounts to the same
+guest path coherent. Shared/shared-root session restoration remains scoped to
+the caller, which keeps another user's missing or inaccessible host folder from
+breaking a routine SSH/code session.
+
+The complete non-e2e suite passed as a non-root user (890 passed, 8 skipped). I again deferred
+the expensive real-system E2E suite. The largest remaining uncertainty is
+operational replay across two real host users with different filesystem access:
+the desired-state and locking model is now deterministic, but final system
+validation must confirm the root host replay service and guest mount cleanup.
+The next architectural tranche is principal-scoped credential metadata and
+operations.

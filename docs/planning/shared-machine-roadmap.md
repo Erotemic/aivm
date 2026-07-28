@@ -267,8 +267,41 @@ machine discovery to the restricted enrollment service:
 - [x] Run the complete non-e2e suite as a non-root user.
 
 The decision table and recovery behavior are recorded in
-[`config-init-create-or-join.md`](config-init-create-or-join.md). The next
-tranche is work package 5: global attachment ownership and replay.
+[`config-init-create-or-join.md`](config-init-create-or-join.md).
+
+### Stage 7 execution checklist: global attachment ownership and replay
+
+The seventh 0.6.0 tranche completes work package 5 for fresh machine stores
+while preserving legacy single-user attachment semantics:
+
+- [x] Add `owner_principal_id` to attachment records and reserve `system` for
+  machine-managed exports.
+- [x] Make machine-store writes reject dangling or cross-VM owner references.
+- [x] Attribute every new machine-store attachment to the selected principal.
+- [x] Resolve folder paths and automatic VM selection against the current
+  principal's records before considering the global inventory.
+- [x] Keep session restoration principal-scoped so Alice's ordinary SSH/code
+  workflow never tries to restore Bob's private host path.
+- [x] Require owner permission for update/detach and add an explicit
+  `--admin_override` plus `--owner_principal` targeting path.
+- [x] Reject machine-wide guest-destination collisions across owners.
+- [x] Show the complete inventory, owner, host source, guest destination, mode,
+  and access in list and status output.
+- [x] Move the canonical persistent manifest into per-VM machine state and
+  generate it from every owner's persistent records while holding store and VM
+  locks.
+- [x] Include the owner in persistent attachment IDs so records remain distinct
+  across principals.
+- [x] Keep legacy replay state in its released XDG location until migration.
+- [x] Warn when a caller exposes a path beneath their private home to a VM with
+  multiple principals.
+- [x] Prove concurrent Alice/Bob attachment writes retain both owner-attributed
+  records and that both accounts see the same global inventory.
+- [x] Run the complete non-e2e suite as a non-root user.
+
+The exact ownership, visibility, override, and replay rules are recorded in
+[`global-attachment-ownership.md`](global-attachment-ownership.md). The next
+tranche is work package 6: principal-scoped credential metadata and operations.
 
 ## Work package 1: Separate models without moving storage
 

@@ -5,6 +5,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* Added principal-owned machine-wide attachments. New machine-store records
+  carry `owner_principal_id`; path resolution and session restoration default
+  to the current principal, while list/status expose the complete inventory.
+  Updates and detaches cannot select another principal's record without an
+  explicit `--admin_override`. Persistent replay manifests now live in per-VM
+  machine state, contain every owner's declarations exactly once, and are
+  generated under the global store/VM lock. Legacy stores retain their
+  released unattributed and XDG replay behavior until migration.
 * `aivm config init` now creates or joins naturally in shared-machine mode. It
   uses the hostname-qualified VM name as the onboarding key, initializes
   creator defaults only when no managed machine exists, and enrolls a later

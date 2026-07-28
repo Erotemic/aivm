@@ -94,9 +94,11 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
     cfg_path = tmp_path / 'config.toml'
 
+    from aivm.config_scopes import resolve_legacy_vm_context
+
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.load_cfg_with_path',
-        lambda *a, **k: (cfg, cfg_path),
+        'aivm.cli.vm_attach._resolve_attach_context',
+        lambda *a, **k: (resolve_legacy_vm_context(cfg), cfg_path),
     )
     monkeypatch.setattr(
         'aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path

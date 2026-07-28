@@ -11,6 +11,7 @@ package importing upward from the CLI layer.
 
 from __future__ import annotations
 
+import getpass
 import os
 import sys
 from contextvars import ContextVar
@@ -23,7 +24,9 @@ from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_scopes import ResolvedVMContext, resolve_legacy_vm_context
 from .config_store import (
+    AttachmentEntry,
     find_attachments,
+    find_principal_for_host,
     find_vm,
     require_vm,
     save_store,
@@ -256,7 +259,27 @@ def resolve_vm_name(
         return vm_opt, store_path
 
     if host_src is not None:
-        atts = find_attachments(reg, host_src)
+        if scope.is_machine:
+            host_user = getpass.getuser()
+            owned: list[AttachmentEntry] = []
+            for vm in reg.vms:
+                principal = find_principal_for_host(
+                    reg, vm_name=vm.name, host_user=host_user
+                )
+                if principal is None:
+                    continue
+                owned.extend(
+                    item
+                    for item in find_attachments(
+                        reg,
+                        host_src,
+                        owner_principal_id=principal.id,
+                    )
+                    if item.vm_name == vm.name
+                )
+            atts = owned
+        else:
+            atts = find_attachments(reg, host_src)
         if atts:
             attached_vm_names = sorted(
                 {

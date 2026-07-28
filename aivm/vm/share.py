@@ -83,6 +83,7 @@ class ResolvedAttachment:
     source_dir: str = ''
     guest_dst: str = ''
     tag: str = ''
+    owner_principal_id: str = ''
 
 
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:

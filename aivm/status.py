@@ -12,6 +12,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from .attachments.ownership import attachment_owner_label
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_scopes import resolve_legacy_vm_context
@@ -732,6 +733,33 @@ def render_status(
     else:
         report.check(None, 'VM shared folders', 'VM not defined', counted=False)
 
+    reg = load_store(path)
+    desired_attachments = sorted(
+        (item for item in reg.attachments if item.vm_name == cfg.vm.name),
+        key=lambda item: (
+            item.owner_principal_id, item.guest_dst, item.host_path
+        ),
+    )
+    if desired_attachments:
+        report.check(
+            True,
+            'Attachment inventory',
+            f'{len(desired_attachments)} machine-wide record(s)',
+            counted=False,
+        )
+        for item in desired_attachments:
+            report.lines.append(
+                '  - '
+                f'owner={attachment_owner_label(reg, item.owner_principal_id)} '
+                f'host={item.host_path} '
+                f'guest={item.guest_dst or "(default)"} '
+                f'mode={item.mode} access={item.access}'
+            )
+    else:
+        report.check(
+            True, 'Attachment inventory', 'none configured', counted=False
+        )
+
     # TODO: we probably want to clean up the detail that is shown here, but do want more than just
     # the path that is shared. We want what mode it is shared in, which VMs if is shared with, what its access is.
     # It could be the case that it is shared with more than 1 VM in different modes, maybe we only print the first
@@ -746,7 +774,6 @@ def render_status(
 
     # Config drift check: compare saved VM config against actual libvirt state
     if vm_defined is True:
-        reg = load_store(path)
         drift = saved_vm_drift_report(cfg, reg, use_sudo=use_sudo)
         if drift.available:
             if drift.ok is True:
@@ -997,6 +1024,22 @@ def render_global_status(store_cfg_path: Path) -> str:
         vm_names = ', '.join(sorted(v.name for v in reg.vms[:8]))
         extra = '' if len(reg.vms) <= 8 else f' (+{len(reg.vms) - 8} more)'
         lines.append(f'- VM names: {vm_names}{extra}')
+    if reg.attachments:
+        lines.append('- Attachment inventory:')
+        for item in sorted(
+            reg.attachments,
+            key=lambda item: (
+                item.vm_name, item.owner_principal_id, item.guest_dst, item.host_path
+            ),
+        ):
+            lines.append(
+                '  - '
+                f'vm={item.vm_name} '
+                f'owner={attachment_owner_label(reg, item.owner_principal_id)} '
+                f'host={item.host_path} '
+                f'guest={item.guest_dst or "(default)"} '
+                f'mode={item.mode} access={item.access}'
+            )
 
     lines.append('')
     lines.append('ℹ️ No VM context resolved for this directory.')

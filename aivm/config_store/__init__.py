@@ -17,6 +17,7 @@ from .io import (
 )
 from .fs_policy import StoreFilesystemPolicy
 from .models import (
+    ATTACHMENT_SYSTEM_OWNER,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -53,7 +54,9 @@ from .render import (
 )
 from .resolve import (
     find_attachment,
+    find_attachment_by_guest_dst,
     find_attachment_for_vm,
+    find_attachments_for_vm_path,
     find_attachments,
     find_attachments_for_vm,
     find_credential,
@@ -71,6 +74,7 @@ from .resolve import (
 )
 
 __all__ = [
+    'ATTACHMENT_SYSTEM_OWNER',
     'AttachmentEntry',
     'CredentialEntry',
     'split_source_paths',
@@ -87,7 +91,9 @@ __all__ = [
     'app_data_dir',
     'app_data_path',
     'find_attachment',
+    'find_attachment_by_guest_dst',
     'find_attachment_for_vm',
+    'find_attachments_for_vm_path',
     'find_attachments',
     'find_attachments_for_vm',
     'find_credential',

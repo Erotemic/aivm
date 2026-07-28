@@ -15,6 +15,7 @@ from typing import Any, Literal
 import kwconf
 from loguru import logger as log
 
+from ..attachments.ownership import attachment_owner_label
 from ..commands import CommandManager
 from ..config_store import load_store
 from ..errors import AIVMError, NoVMContextError
@@ -94,10 +95,14 @@ class ListCLI(_BaseCommand):
                 print('  (none)')
             else:
                 for att in sorted(
-                    reg.attachments, key=lambda x: (x.vm_name, x.host_path)
+                    reg.attachments,
+                    key=lambda x: (
+                        x.vm_name, x.owner_principal_id, x.host_path
+                    ),
                 ):
                     print(
                         f'  - {att.host_path} | vm={att.vm_name} '
+                        f'| owner={attachment_owner_label(reg, att.owner_principal_id)} '
                         f'| mode={att.mode} | access={att.access} '
                         f'| guest_dst={att.guest_dst or "(default)"}'
                     )
