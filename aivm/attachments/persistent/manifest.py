@@ -262,10 +262,22 @@ def _persistent_attachment_records_for_vm(
             source_dev = int(att.source_dev)
             source_ino = int(att.source_ino)
             if source_dev <= 0 or source_ino <= 0:
+                if is_machine_store_path(cfg_path):
+                    recovery = (
+                        'Detach and reattach this attachment before privileged '
+                        'replay.'
+                    )
+                else:
+                    recovery = (
+                        'This attachment is still recorded in a pre-0.6 legacy '
+                        'store. Run `aivm config migrate plan --sudo`, then '
+                        '`aivm config migrate apply --sudo --yes`. If migration '
+                        'reports that the source is unavailable, restore the '
+                        'source path or detach and reattach this attachment.'
+                    )
                 raise RuntimeError(
                     f'Persistent attachment {att.host_path!r} lacks a pinned '
-                    'source object identity; detach and reattach it before '
-                    'privileged replay.'
+                    f'source object identity. {recovery}'
                 )
         records.append(
             PersistentAttachmentRecord(

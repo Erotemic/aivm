@@ -240,6 +240,73 @@ def test_persistent_manifest_persists_records_and_access_modes(
     ]
 
 
+def test_legacy_unpinned_persistent_attachment_instructs_migration(
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-legacy-unpinned'
+    cfg_path = tmp_path / 'config.toml'
+    store = Store(
+        attachments=[
+            AttachmentEntry(
+                host_path='/data/audio-tools',
+                vm_name=cfg.vm.name,
+                mode='persistent',
+                guest_dst='/data/audio-tools',
+                tag='hostcode-audio-tools',
+            )
+        ]
+    )
+    save_store(store, cfg_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        persistent_manifest._persistent_attachment_records_for_vm(
+            cfg, cfg_path
+        )
+
+    message = str(exc_info.value)
+    assert 'pre-0.6 legacy store' in message
+    assert 'aivm config migrate plan --sudo' in message
+    assert 'aivm config migrate apply --sudo --yes' in message
+    assert 'source is unavailable' in message
+
+
+def test_machine_unpinned_persistent_attachment_instructs_reattach(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-machine-unpinned'
+    cfg_path = tmp_path / 'machine-store.toml'
+    store = Store(
+        store_kind='machine',
+        attachments=[
+            AttachmentEntry(
+                host_path='/data/audio-tools',
+                vm_name=cfg.vm.name,
+                mode='persistent',
+                guest_dst='/data/audio-tools',
+                tag='hostcode-audio-tools',
+            )
+        ],
+    )
+    save_store(store, cfg_path)
+    monkeypatch.setattr(
+        persistent_manifest,
+        'is_machine_store_path',
+        lambda path: True,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        persistent_manifest._persistent_attachment_records_for_vm(
+            cfg, cfg_path
+        )
+
+    message = str(exc_info.value)
+    assert 'Detach and reattach this attachment' in message
+    assert 'config migrate' not in message
+
+
 def test_persistent_manifest_write_is_byte_for_byte_noop(
     tmp_path: Path,
 ) -> None:
