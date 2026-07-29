@@ -18,10 +18,11 @@ aivm vm access reconcile --vm <vm-name>
 
 ## Trust model
 
-The current release targets mutually trusted host users. Enrolled guest users
-receive passwordless sudo, so separate guest accounts provide ownership,
-attribution, independent homes, and independent SSH identities rather than a
-security boundary between users.
+The enforcement boundary excludes unrestricted root and unrestricted
+system-libvirt administrators. Enrolled guest users receive passwordless sudo,
+so separate guest accounts provide ownership, attribution, independent homes,
+and independent SSH identities rather than isolation from an operator who
+already controls the host or shared guest.
 
 The bootstrap channel is not the interactive account and must never be used by
 normal SSH, code, attachment, provisioning, or credential commands.

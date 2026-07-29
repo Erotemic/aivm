@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
 
 from loguru import logger
 
@@ -53,55 +56,149 @@ def domain_is_defined(name: str) -> bool:
     return _vm_defined(name)
 
 
-def _destroy_and_undefine_vm(name: str) -> None:
+@dataclass(frozen=True)
+class DomainRemovalReport:
+    """Observed result of one libvirt domain removal."""
+
+    storage_paths: tuple[Path, ...]
+    retained_storage_paths: tuple[Path, ...]
+
+    @property
+    def storage_removed(self) -> bool:
+        return not self.retained_storage_paths
+
+
+def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
+    """Return every file-backed disk path from the live domain XML."""
+    if not _vm_defined(name):
+        return ()
     mgr = CommandManager.current()
-    mgr.run(
-        virsh_cmd('destroy', name),
+    res = mgr.run(
+        virsh_cmd('dumpxml', name),
         sudo=virsh_needs_sudo(),
-        role='modify',
+        role='read',
         check=False,
         capture=True,
+        summary=f'Capture managed storage coordinates for VM {name}',
     )
-    # Different libvirt states require different undefine flags.
-    attempts = [
-        virsh_cmd(
-            'undefine',
-            name,
-            '--managed-save',
-            '--snapshots-metadata',
-            '--nvram',
-            '--remove-all-storage',
-        ),
-        virsh_cmd(
-            'undefine',
-            name,
-            '--managed-save',
-            '--snapshots-metadata',
-            '--nvram',
-        ),
-        virsh_cmd('undefine', name, '--nvram', '--remove-all-storage'),
-        virsh_cmd('undefine', name, '--nvram'),
-        virsh_cmd('undefine', name, '--remove-all-storage'),
-        virsh_cmd('undefine', name),
-    ]
-    errs: list[str] = []
-    for cmd in attempts:
-        res = mgr.run(
-            cmd,
+    if res.code != 0:
+        detail = (res.stderr or res.stdout or '').strip()
+        raise AIVMError(
+            f'Could not capture storage paths before deleting VM {name!r}: '
+            f'{detail or "virsh dumpxml failed"}'
+        )
+    try:
+        root = ET.fromstring(res.stdout)
+    except ET.ParseError as ex:
+        raise AIVMError(
+            f'Could not parse libvirt XML before deleting VM {name!r}: {ex}'
+        ) from ex
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for disk in root.findall('./devices/disk'):
+        if str(disk.attrib.get('device', 'disk')).strip() != 'disk':
+            continue
+        source = disk.find('source')
+        if source is None:
+            raise AIVMError(
+                f'VM {name!r} has a disk without a source; AIVM cannot '
+                'verify storage deletion.'
+            )
+        raw = str(source.attrib.get('file', '')).strip()
+        if not raw:
+            source_kind = ', '.join(
+                f'{key}={value!r}' for key, value in sorted(source.attrib.items())
+            ) or '(no source attributes)'
+            raise AIVMError(
+                f'VM {name!r} uses non-file or otherwise unverifiable disk '
+                f'storage ({source_kind}). Refusing deletion because AIVM '
+                'cannot prove that every managed disk was removed.'
+            )
+        if raw in seen:
+            continue
+        path = Path(raw)
+        if not path.is_absolute():
+            raise AIVMError(
+                f'VM {name!r} has a non-absolute file-backed disk path: {raw!r}'
+            )
+        seen.add(raw)
+        paths.append(path)
+    return tuple(paths)
+
+
+def _host_path_exists(path: Path) -> bool:
+    result = CommandManager.current().run(
+        ['test', '-e', str(path)],
+        sudo=virsh_needs_sudo(),
+        role='read',
+        check=False,
+        capture=True,
+        summary=f'Verify managed VM storage removal: {path}',
+    )
+    return result.code == 0
+
+
+def _destroy_and_undefine_vm(
+    name: str,
+    *,
+    storage_paths: tuple[Path, ...] | None = None,
+) -> DomainRemovalReport:
+    """Remove one domain without ever falling back to retained storage."""
+    captured = (
+        domain_file_storage_paths(name)
+        if storage_paths is None
+        else tuple(storage_paths)
+    )
+    mgr = CommandManager.current()
+    if _vm_defined(name):
+        mgr.run(
+            virsh_cmd('destroy', name),
             sudo=virsh_needs_sudo(),
             role='modify',
             check=False,
             capture=True,
         )
-        if res.code != 0:
-            msg = (res.stderr or res.stdout or '').strip()
-            if msg:
-                errs.append(f'{cmd}: {msg}')
-        if not _vm_defined(name):
-            return
-    detail = '\n'.join(errs[-4:]) if errs else '(no details)'
-    raise RuntimeError(
-        f'Failed to undefine VM {name}; domain is still present after retries.\n{detail}'
+        # Different libvirt states require different metadata flags, but every
+        # attempt retains --remove-all-storage. Silently retrying without that
+        # flag destroys the only record that identifies orphaned disks.
+        attempts = [
+            virsh_cmd(
+                'undefine',
+                name,
+                '--managed-save',
+                '--snapshots-metadata',
+                '--nvram',
+                '--remove-all-storage',
+            ),
+            virsh_cmd(
+                'undefine', name, '--nvram', '--remove-all-storage'
+            ),
+            virsh_cmd('undefine', name, '--remove-all-storage'),
+        ]
+        errs: list[str] = []
+        for cmd in attempts:
+            res = mgr.run(
+                cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                check=False,
+                capture=True,
+            )
+            if res.code != 0:
+                msg = (res.stderr or res.stdout or '').strip()
+                if msg:
+                    errs.append(f'{cmd}: {msg}')
+            if not _vm_defined(name):
+                break
+        if _vm_defined(name):
+            detail = '\n'.join(errs[-3:]) if errs else '(no details)'
+            raise AIVMError(
+                f'Failed to undefine VM {name}; domain is still present after '
+                f'storage-removing retries.\n{detail}'
+            )
+    retained = tuple(path for path in captured if _host_path_exists(path))
+    return DomainRemovalReport(
+        storage_paths=captured, retained_storage_paths=retained
     )
 
 def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
@@ -426,7 +523,9 @@ def _start_vm(name: str) -> None:
         summary=f'Start VM {name}',
     )
 
-def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+def destroy_vm(
+    cfg: AgentVMConfig, *, dry_run: bool = False
+) -> DomainRemovalReport | None:
     name = cfg.vm.name
     if dry_run:
         log.info('DRYRUN: virsh destroy/undefine {}', name)
@@ -437,8 +536,16 @@ def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         why='Remove the libvirt domain and its related managed definition state.',
         role='modify',
     ):
-        _destroy_and_undefine_vm(name)
-    log.info('VM removed: {}', name)
+        report = _destroy_and_undefine_vm(name)
+    if report.retained_storage_paths:
+        rendered = '\n'.join(
+            f'  - {path}' for path in report.retained_storage_paths
+        )
+        raise AIVMError(
+            f'VM {name!r} was undefined, but storage remains:\n{rendered}'
+        )
+    log.info('VM removed with storage verified absent: {}', name)
+    return report
 
 def vm_status(cfg: AgentVMConfig) -> str:
     name = cfg.vm.name

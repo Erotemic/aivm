@@ -103,6 +103,9 @@ def upsert_attachment(
     access: str = 'rw',
     guest_dst: str = '',
     tag: str = '',
+    state: str = 'active',
+    source_dev: int = 0,
+    source_ino: int = 0,
     host_lexical_paths: list[str] | tuple[str, ...] | None = None,
     host_lexical_path: str | None = None,
 ) -> None:
@@ -149,6 +152,9 @@ def upsert_attachment(
         access=access,
         guest_dst=guest_dst,
         tag=tag,
+        state=state,
+        source_dev=int(source_dev),
+        source_ino=int(source_ino),
         host_lexical_paths=paths,
     )
     if existing:

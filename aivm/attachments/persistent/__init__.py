@@ -33,9 +33,9 @@ from ...persistent_replay import (
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from . import host_bind, manifest, replay, transport
 from .host_bind import (
-    _ensure_persistent_root_host_bind,
     _ensure_persistent_root_parent_dir,
     _ensure_persistent_root_vm_mapping,
+    _cleanup_persistent_host_replay_artifacts,
     _install_persistent_host_bind_replay,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_host_binds,
@@ -73,12 +73,12 @@ __all__ = [
     'PERSISTENT_ROOT_GUEST_MOUNT_ROOT',
     'PERSISTENT_ROOT_VIRTIOFS_TAG',
     'PersistentAttachmentRecord',
-    '_ensure_persistent_root_host_bind',
     '_ensure_persistent_root_parent_dir',
     '_ensure_persistent_root_vm_mapping',
     '_install_guest_text_if_changed',
     '_install_host_text_if_changed',
     '_install_persistent_attachment_replay',
+    '_cleanup_persistent_host_replay_artifacts',
     '_install_persistent_host_bind_replay',
     '_is_transient_ssh_transport_failure',
     '_persistent_attachment_manifest_text',

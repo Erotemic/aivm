@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 from typing import Any
 
 import kwconf
@@ -12,11 +11,13 @@ from ..access_control import (
     AccessAction,
     access_ownership_summary,
     mutate_access_identity,
+    repair_current_host_identity,
 )
 from ..commands import CommandManager
 from ..config_store import find_principals_for_vm
 from ..enrollment import reconcile_current_principal
 from ..errors import AIVMError
+from ..host_identity import current_host_identity
 from ..scoped_store import load_scope_store, resolve_store_scope
 from ..services import resolve_vm_name
 from ._common import _BaseCommand
@@ -41,14 +42,19 @@ class VMAccessListCLI(_BaseCommand):
                 'Access identity commands require the shared machine store.'
             )
         reg = load_scope_store(scope)
-        current = getpass.getuser()
+        current = current_host_identity()
         identities = find_principals_for_vm(reg, vm_name)
         print(f'VM access identities: {vm_name}')
         print(f'Trust mode: {TRUST_MODE}')
         if not identities:
             print('  (none)')
         for identity in identities:
-            marker = '*' if identity.host_user == current else ' '
+            marker = (
+                '*'
+                if identity.host_user == current.username
+                and identity.host_uid == current.uid
+                else ' '
+            )
             owned = access_ownership_summary(
                 reg, vm_name=vm_name, principal_id=identity.id
             )
@@ -115,6 +121,41 @@ class VMAccessReconcileCLI(_BaseCommand):
         return 0
 
 
+class VMAccessRepairHostIdentityCLI(_BaseCommand):
+    """Repair a host account rename while preserving the access identity id."""
+
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(
+        False, help='Describe the repair without changing the machine store.'
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config,
+            vm_opt=str(args.vm or ''),
+            host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        report = repair_current_host_identity(
+            scope, vm_name=vm_name, dry_run=bool(args.dry_run)
+        )
+        prefix = 'Would repair' if args.dry_run else 'Repaired'
+        if report.changed:
+            print(
+                f'{prefix} access identity {report.principal.id}: '
+                f'{report.previous_host_user} -> '
+                f'{report.principal.host_user} (uid={report.principal.host_uid}).'
+            )
+        else:
+            print(
+                f'Access identity {report.principal.id} already matches '
+                f'{report.principal.host_user} (uid={report.principal.host_uid}).'
+            )
+        return 0
+
+
 class _VMAccessMutationCLI(_BaseCommand):
     """Shared options for disable/remove commands."""
 
@@ -162,7 +203,7 @@ class _VMAccessMutationCLI(_BaseCommand):
         scope = resolve_store_scope(str(path))
         purpose = (
             f'{action.title()} access identity '
-            f'{str(args.identity or getpass.getuser())!r} on shared VM '
+            f'{str(args.identity or current_host_identity().username)!r} on shared VM '
             f'{vm_name}. This is a machine-wide access-control change.'
         )
         mgr = CommandManager.current()
@@ -230,6 +271,7 @@ class VMAccessModalCLI(kwconf.ModalCLI):
 
     list = VMAccessListCLI
     reconcile = VMAccessReconcileCLI
+    repair_host_identity = VMAccessRepairHostIdentityCLI
     disable = VMAccessDisableCLI
     remove = VMAccessRemoveCLI
 
@@ -239,5 +281,6 @@ __all__ = [
     'VMAccessListCLI',
     'VMAccessModalCLI',
     'VMAccessReconcileCLI',
+    'VMAccessRepairHostIdentityCLI',
     'VMAccessRemoveCLI',
 ]

@@ -1711,13 +1711,6 @@ def test_vm_delete_refuses_to_orphan_credentials(
     store = load_store(path)
     upsert_credential(store, _entry('vm-a'))
     save_store(store, path)
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm',
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError('destroy must not run')
-        ),
-    )
-
     with pytest.raises(AIVMError, match='still owns repository credentials'):
         VMDeleteCLI.main(
             argv=False,
@@ -1829,9 +1822,9 @@ def test_vm_delete_decline_preserves_revoked_credential_key(
     key_file = key_dir / 'id_ed25519'
     key_file.write_text('revoked', encoding='utf-8')
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm',
+        'aivm.cli.vm_lifecycle.delete_managed_vm',
         lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError('destroy must not run after declined approval')
+            AssertionError('deletion service must not run after declined approval')
         ),
     )
 
@@ -1873,16 +1866,30 @@ def test_vm_delete_cleans_revoked_pending_credentials(
 
     monkeypatch.setattr('builtins.input', answer)
 
-    def fake_destroy(cfg: Any, **kwargs: Any) -> None:
+    from aivm.vm.domain import DomainRemovalReport
+
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_is_defined', lambda name: False
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts',
+        lambda *a, **k: None,
+    )
+
+    def fake_remove_domain(*args: Any, **kwargs: Any) -> DomainRemovalReport:
         CommandManager.current().confirm_file_update(
             path=tmp_path / 'nested-operation',
             purpose='Confirm nested deletion work is already approved.',
         )
         destroyed.append(cfg.vm.name)
+        return DomainRemovalReport((), ())
 
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm',
-        fake_destroy,
+        'aivm.vm.deletion._destroy_and_undefine_vm', fake_remove_domain
+    )
+    monkeypatch.setattr('aivm.vm.deletion._path_exists', lambda path: False)
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_owned_trees', lambda *a, **k: None
     )
 
     rc = VMDeleteCLI.main(
@@ -2483,9 +2490,26 @@ def test_vm_delete_preserves_record_when_key_cleanup_fails(
             PermissionError('cannot remove private key')
         ),
     )
+    from aivm.vm.domain import DomainRemovalReport
+
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm',
-        lambda cfg, **kwargs: destroyed.append(cfg.vm.name),
+        'aivm.vm.deletion.domain_is_defined', lambda name: False
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts',
+        lambda *a, **k: None,
+    )
+
+    def fake_remove_domain(*args: Any, **kwargs: Any) -> DomainRemovalReport:
+        destroyed.append(cfg.vm.name)
+        return DomainRemovalReport((), ())
+
+    monkeypatch.setattr(
+        'aivm.vm.deletion._destroy_and_undefine_vm', fake_remove_domain
+    )
+    monkeypatch.setattr('aivm.vm.deletion._path_exists', lambda path: False)
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_owned_trees', lambda *a, **k: None
     )
 
     with pytest.raises(PermissionError, match='cannot remove private key'):

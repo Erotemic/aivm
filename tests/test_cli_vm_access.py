@@ -8,6 +8,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
+from aivm.host_identity import HostIdentity
 from aivm.config_store import (
     PrincipalEntry,
     load_store,
@@ -100,8 +101,8 @@ def test_vm_access_reconcile_dry_run_derives_current_principal(
 ) -> None:
     vm_name, store_path = _write_machine_and_profile(tmp_path)
     monkeypatch.setattr(
-        'aivm.enrollment._current_host_identity',
-        lambda: ('edward.wang', 1201, 1202),
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
     )
     monkeypatch.setattr(
         'aivm.enrollment.get_ip_cached', lambda cfg: '10.77.0.119'
@@ -308,3 +309,49 @@ def test_vm_access_remove_dry_run_states_guest_home_retention(
     output = capsys.readouterr().out
     assert 'Would remove access identity alice -> alice-agent' in output
     assert 'Guest home retained; no guest files were deleted.' in output
+
+
+
+def test_vm_access_repair_host_identity_uses_lifecycle_service(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_repair(scope: object, **kwargs: object) -> object:
+        captured['scope'] = scope
+        captured.update(kwargs)
+        return SimpleNamespace(
+            changed=True,
+            previous_host_user='alice',
+            principal=SimpleNamespace(
+                id='principal-alice',
+                host_user='alice-renamed',
+                host_uid=1001,
+            ),
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.repair_current_host_identity', fake_repair
+    )
+    rc = run_cli(
+        [
+            'vm',
+            'access',
+            'repair_host_identity',
+            '--vm',
+            vm_name,
+            '--config',
+            str(store_path),
+            '--dry-run',
+        ]
+    )
+
+    assert rc == 0
+    assert captured['vm_name'] == vm_name
+    assert captured['dry_run'] is True
+    assert 'Would repair access identity principal-alice' in capsys.readouterr().out

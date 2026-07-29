@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import getpass
 import hashlib
 import os
 import re
@@ -16,13 +15,15 @@ from .config import AgentVMConfig
 from .config_store import (
     PrincipalEntry,
     Store,
-    find_principal_for_host,
+    find_principal_for_host_identity,
+    find_principals_for_vm,
     find_vm,
     materialize_vm_cfg,
     upsert_principal,
 )
 from .errors import AIVMError, MissingSSHIdentityError
 from .guestctl import BOOTSTRAP_GUEST_USER, GuestEnrollmentRequest
+from .host_identity import current_host_identity
 from .machine_store import (
     MachineStoreLayout,
     current_machine_group_gid,
@@ -31,6 +32,7 @@ from .machine_store import (
 )
 from .profile_store import UserProfileStore
 from .runtime import require_ssh_identity, ssh_base_args
+from .ssh_keys import same_ssh_public_key
 from .scoped_store import (
     StoreScope,
     load_scope_profile,
@@ -246,8 +248,6 @@ def _read_profile_public_key(profile: UserProfileStore) -> str:
     return key
 
 
-def _current_host_identity() -> tuple[str, int, int]:
-    return getpass.getuser(), int(os.getuid()), int(os.getgid())
 
 
 def _effective_cfg_for_principal(
@@ -312,9 +312,12 @@ def reconcile_current_principal(
     if find_vm(reg, vm_name) is None:
         raise AIVMError(f'Unknown managed VM: {vm_name!r}')
     profile = load_scope_profile(scope)
-    host_user, host_uid, host_gid = _current_host_identity()
-    existing = find_principal_for_host(
-        reg, vm_name=vm_name, host_user=host_user
+    host_identity = current_host_identity()
+    host_user = host_identity.username
+    host_uid = host_identity.uid
+    host_gid = host_identity.gid
+    existing = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=host_identity
     )
     if (
         existing is not None
@@ -326,12 +329,47 @@ def reconcile_current_principal(
             '`aivm vm access reconcile --enable` as the owning host user to '
             'restore its personal key and sudo policy.'
         )
+    requested_guest = guest_user.strip()
     selected_guest = (
-        guest_user.strip()
+        requested_guest
         or (existing.guest_user if existing is not None else '')
         or normalized_guest_username(host_user)
     )
     public_key = _read_profile_public_key(profile)
+    if existing is not None:
+        if requested_guest and requested_guest != existing.guest_user:
+            raise AIVMError(
+                f'Access identity {existing.id!r} already uses guest account '
+                f'{existing.guest_user!r}. Guest-account rotation is not '
+                'supported by reconcile; disable the identity and use a '
+                'dedicated future rotation operation instead.'
+            )
+        if not same_ssh_public_key(public_key, existing.ssh_public_key):
+            raise AIVMError(
+                f'Access identity {existing.id!r} already has different SSH '
+                'key material. Key rotation is not supported by reconcile; '
+                'the old guest key must remain represented until an explicit '
+                'rotation operation can install, revoke, and verify both sides.'
+            )
+        # A comment-only edit is not a rotation. Keep the persisted line so a
+        # later disable removes exactly the originally enrolled representation.
+        public_key = existing.ssh_public_key
+    conflicts = [
+        item
+        for item in find_principals_for_vm(reg, vm_name)
+        if item.id != (existing.id if existing is not None else '')
+        and item.guest_user == selected_guest
+        and item.state not in {'removed'}
+    ]
+    if conflicts:
+        owners = ', '.join(
+            f'{item.host_user!r} ({item.id})' for item in conflicts
+        )
+        raise AIVMError(
+            f'Guest account {selected_guest!r} is already assigned to {owners}. '
+            'Each access identity must use a unique guest account because its '
+            'authorized_keys and sudo policy are reconciled as one unit.'
+        )
     principal = PrincipalEntry(
         id=stable_principal_id(vm_name, host_user),
         vm_name=vm_name,

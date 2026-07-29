@@ -278,9 +278,11 @@ live-attached when possible.
 ``aivm code`` and ``aivm ssh`` remount the selected folder and best-effort
 restore other folders already saved for that VM after guest startup.
 
-For ``persistent`` attachments, explicit detach updates the stored declaration
-and refreshes the replay manifest instead of depending on interactive teardown
-of the stable host-side staged bind mount.
+For ``persistent`` attachments, explicit detach first records a recoverable
+``detaching`` transition, immediately prunes the host-side bind, reconciles any
+live guest mount, and removes the declaration only after cleanup succeeds.
+Privileged replay pins the approved source and target directory objects through
+the bind mount instead of trusting a re-resolved user-controlled pathname.
 If the guest can mount the persistent-root export but the host manifest is
 missing, replay now fails closed instead of silently reusing stale cached guest
 state.
@@ -299,8 +301,9 @@ record requires an explicit trusted-host override:
 
 Guest destinations are global to the VM, so two owners cannot declare the same
 ``--guest_dst``. AIVM also warns when a path beneath a private home directory is
-exposed to a VM with multiple principals; this release assumes those users are
-mutually trusted.
+exposed to a VM with multiple principals. Ownership guards ordinary operation;
+unrestricted root and system-libvirt administrators remain outside AIVM's
+enforcement boundary.
 
 Major limitation: shared-mode folder count
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -455,10 +458,14 @@ requires ``--allow_last_access``. Restore a disabled caller with ``access
 reconcile --enable``.
 
 The trust mode is ``trusted-host-users``. Access ownership prevents accidental
-cross-user changes and preserves recovery metadata, but it does not isolate
-mutually hostile host users who control system libvirt. VM and network lifecycle
-commands therefore label machine-wide effects and list/status show active access
-identity counts. See ``docs/planning/operational-lifecycle.md``.
+cross-user changes and preserves recovery metadata, but unrestricted root and
+system-libvirt administrators can bypass AIVM policy. Caller selection uses the
+kernel UID/GID and passwd database rather than login environment variables.
+Key material and guest usernames are immutable during reconcile; use
+``repair_host_identity`` only for a host-account rename. VM/network lifecycle
+commands label machine-wide effects, and VM deletion uses a resumable cleanup
+journal with verified storage removal. See
+``docs/planning/operational-lifecycle.md``.
 
 Released per-user stores are not migrated automatically. Review the proposed
 machine store, user profile, attachment/credential ownership, persistent-state

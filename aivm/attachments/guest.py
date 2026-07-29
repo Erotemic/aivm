@@ -11,9 +11,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
@@ -56,8 +54,8 @@ def _ensure_guest_symlink(
     - regular file: warn and skip
     - symlink to wrong target: warn and skip
     """
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     link_q = shlex.quote(symlink_path)
     tgt_q = shlex.quote(target_path)
     parent_q = shlex.quote(str(PurePosixPath(symlink_path).parent))
@@ -498,8 +496,8 @@ def _ensure_guest_git_repo(
     cfg: AgentVMConfig,
     guest_repo_root: str,
 ) -> None:
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     root_q = shlex.quote(guest_repo_root)
     user_q = shlex.quote(context.guest_user)
     # Use sudo to create the full repo root path in case the parent dirs are

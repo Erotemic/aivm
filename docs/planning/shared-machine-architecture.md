@@ -355,9 +355,9 @@ By default:
   named path;
 - a bare `aivm ssh` does not require attachment ownership.
 
-The owner field should be enforced from the first implementation even though
-users are mutually trusted. This is primarily a footgun guard and a stable
-future authorization seam.
+The owner field is enforced as a footgun guard, audit coordinate, and stable
+future authorization seam. It is not an isolation boundary against unrestricted
+root or system-libvirt administrators.
 
 ### Host-path exposure
 

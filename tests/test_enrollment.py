@@ -13,11 +13,15 @@ import pytest
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
+    PrincipalEntry,
     find_principal_for_host,
     load_store,
     upsert_network,
+    upsert_principal,
     upsert_vm_with_network,
 )
+from aivm.host_identity import HostIdentity
+from aivm.errors import AIVMError
 from aivm.enrollment import (
     bootstrap_identity_paths,
     ensure_bootstrap_identity,
@@ -124,8 +128,8 @@ def test_reconcile_persists_pending_then_active_and_uses_two_keys(
         'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
     )
     monkeypatch.setattr(
-        'aivm.enrollment._current_host_identity',
-        lambda: ('edward.wang', 1201, 1202),
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
     )
     monkeypatch.setattr(
         'aivm.enrollment._resolve_enrollment_ip',
@@ -178,8 +182,8 @@ def test_reconcile_keeps_pending_when_bootstrap_transport_is_unreachable(
         'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
     )
     monkeypatch.setattr(
-        'aivm.enrollment._current_host_identity',
-        lambda: ('edward.wang', 1201, 1202),
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
     )
     monkeypatch.setattr(
         'aivm.enrollment._resolve_enrollment_ip',
@@ -200,3 +204,84 @@ def test_reconcile_keeps_pending_when_bootstrap_transport_is_unreachable(
     )
     assert persisted is not None
     assert persisted.state == 'pending'
+
+
+def _record_existing_identity(
+    scope: StoreScope,
+    cfg: AgentVMConfig,
+    *,
+    key: str = 'ssh-ed25519 AAAAEDWARD original-comment',
+    guest_user: str = 'edward-wang-agent',
+) -> None:
+    reg = load_store(scope.store_path)
+    upsert_principal(
+        reg,
+        PrincipalEntry(
+            id='principal-edward',
+            vm_name=cfg.vm.name,
+            host_user='edward.wang',
+            host_uid=1201,
+            host_gid=1202,
+            guest_user=guest_user,
+            ssh_public_key=key,
+            state='active',
+        ),
+    )
+    save_scope_store(scope, reg, reason='record existing identity')
+
+
+def test_reconcile_rejects_key_material_rotation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg)
+    assert scope.profile_path is not None
+    profile = UserProfileStore(
+        active_vm=cfg.vm.name,
+        ssh_identity_file=str(tmp_path / 'id'),
+        ssh_pubkey_path=str(tmp_path / 'id.pub'),
+        state_dir=str(tmp_path / 'state'),
+    )
+    Path(profile.ssh_pubkey_path).write_text(
+        'ssh-ed25519 AAAADIFFERENT new-comment\n', encoding='utf-8'
+    )
+    save_user_profile(profile, scope.profile_path)
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(1201, 1202, 'edward.wang'),
+    )
+    with pytest.raises(AIVMError, match='Key rotation is not supported'):
+        reconcile_current_principal(scope, vm_name=cfg.vm.name, dry_run=True)
+
+
+def test_reconcile_ignores_key_comment_only_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg)
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(1201, 1202, 'edward.wang'),
+    )
+    report = reconcile_current_principal(
+        scope, vm_name=cfg.vm.name, dry_run=True
+    )
+    assert report.principal.ssh_public_key.endswith('original-comment')
+
+
+def test_reconcile_rejects_guest_account_rotation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg)
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(1201, 1202, 'edward.wang'),
+    )
+    with pytest.raises(AIVMError, match='Guest-account rotation'):
+        reconcile_current_principal(
+            scope,
+            vm_name=cfg.vm.name,
+            guest_user='new-account',
+            dry_run=True,
+        )

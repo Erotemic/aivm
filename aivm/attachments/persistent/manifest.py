@@ -18,9 +18,7 @@ from types import TracebackType
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ...config_store import (
     find_attachments_for_vm,
     load_store,
@@ -57,6 +55,8 @@ class PersistentAttachmentRecord:
     shared_root_token: str
     guest_dst: str
     access: str
+    source_dev: int
+    source_ino: int
     enabled: bool = True
 
 
@@ -252,6 +252,18 @@ def _persistent_attachment_records_for_vm(
     for att in find_attachments_for_vm(reg, cfg.vm.name):
         if str(att.mode or '').strip() != ATTACHMENT_MODE_PERSISTENT:
             continue
+        enabled = str(att.state or 'active') == 'active'
+        source_dev = 0
+        source_ino = 0
+        if enabled:
+            source_dev = int(att.source_dev)
+            source_ino = int(att.source_ino)
+            if source_dev <= 0 or source_ino <= 0:
+                raise RuntimeError(
+                    f'Persistent attachment {att.host_path!r} lacks a pinned '
+                    'source object identity; detach and reattach it before '
+                    'privileged replay.'
+                )
         records.append(
             PersistentAttachmentRecord(
                 attachment_id=(
@@ -265,7 +277,9 @@ def _persistent_attachment_records_for_vm(
                 shared_root_token=str(att.tag or ''),
                 guest_dst=str(att.guest_dst or ''),
                 access=str(att.access or 'rw'),
-                enabled=True,
+                source_dev=source_dev,
+                source_ino=source_ino,
+                enabled=enabled,
             )
         )
     return sorted(
@@ -282,7 +296,7 @@ def _persistent_attachment_manifest_text(
 ) -> str:
     records = _persistent_attachment_records_for_vm(cfg, cfg_path)
     payload = {
-        'schema_version': 1,
+        'schema_version': 2,
         'vm_name': cfg.vm.name,
         'shared_root_mount': PERSISTENT_ROOT_GUEST_MOUNT_ROOT,
         'records': [asdict(rec) for rec in records],
@@ -325,12 +339,12 @@ def _sync_persistent_attachment_manifest_to_guest(
     dry_run: bool,
     check: bool = True,
 ) -> bool:
-    context = resolve_pre_0_6_0_vm_context(cfg)
+    context = guest_transport_from_effective_cfg(cfg)
     manifest_path = _persistent_host_manifest_path(cfg, cfg_path)
     remote_target = (
         f'{context.ssh_target(ip)}:{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}'
     )
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    ident = require_ssh_identity(context.ssh_identity_file)
     ssh_args = [
         'ssh',
         *ssh_base_args(

@@ -1,14 +1,11 @@
 """Machine-wide store layout, permissions, and resource locks.
 
-This module establishes the physical contract needed before AIVM moves any
-live configuration out of a user's XDG directories.  It is intentionally not
-wired into normal config loading yet: version 0.6 first proves that group-safe
-writes, recovery, and lock ordering work in isolation.
+This module establishes the physical contract for the active host-wide AIVM
+store: group-safe writes, recovery, and globally ordered resource locks.
 """
 
 from __future__ import annotations
 
-import getpass
 import grp
 import hashlib
 import os
@@ -19,6 +16,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Iterable
 
+from .host_identity import current_host_identity
 from .config_store.fs_policy import (
     StoreFilesystemPolicy,
     ensure_store_directory,
@@ -126,7 +124,7 @@ def user_in_machine_group(
         record = grp.getgrnam(name)
     except KeyError:
         return False
-    selected = user or os.environ.get('SUDO_USER') or getpass.getuser()
+    selected = user or current_host_identity().username
     if selected in record.gr_mem:
         return True
     try:

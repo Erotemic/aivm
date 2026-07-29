@@ -9,9 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..errors import AIVMError
 from ..privilege import path_needs_sudo, path_read_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -40,8 +38,8 @@ def _shared_root_guest_mount_cmd(
     # coexist. Read-only policy is enforced on each host bind and guest child
     # bind, never by remounting the shared root.
     del read_only
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     mount_cmd = (
         f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
         f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
@@ -644,8 +642,8 @@ def _ensure_shared_root_guest_bind(
         'exit 2; '
         'esac'
     )
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     cmd = [
         'ssh',
         *ssh_base_args(
@@ -795,8 +793,8 @@ def _detach_shared_root_guest_bind(
     *,
     dry_run: bool,
 ) -> None:
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     source_in_guest = str(
         PurePosixPath(SHARED_ROOT_GUEST_MOUNT_ROOT)
         / (attachment.tag or '').strip()

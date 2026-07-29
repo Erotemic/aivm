@@ -34,6 +34,7 @@ _ALLOWED: dict[str, set[str]] = {
     # These reach the feature through its guard seam only.
     'aivm/cli/vm_lifecycle.py': {'aivm.credentials.guards'},
     'aivm/vm/create.py': {'aivm.credentials.guards'},
+    'aivm/vm/deletion.py': {'aivm.credentials.guards'},
     # Config linting reports on credential blocks found in the store.
     'aivm/cli/config/lint.py': {
         'aivm.credentials.schema',

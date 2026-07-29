@@ -258,6 +258,11 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
         'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
         lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
     )
+    host_replays: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._reconcile_persistent_host_binds',
+        lambda *a, **k: host_replays.append((a, k)) or None,
+    )
     guest_mounts: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.cli.vm_attach._ensure_attachment_available_in_guest',
@@ -280,12 +285,15 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     assert rc == 0
     assert syncs
     assert replay_syncs
+    assert host_replays
     assert guest_mounts
     assert replays
     assert guest_mounts[0][1]['ensure_shared_root_host_side'] is True
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
     assert att.mode == 'persistent'
+    assert att.source_dev > 0
+    assert att.source_ino > 0
     assert att.guest_dst == '/workspace/proj'
 
 
@@ -308,6 +316,11 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     monkeypatch.setattr(
         'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
         lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
+    )
+    host_replays: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._reconcile_persistent_host_binds',
+        lambda *a, **k: host_replays.append((a, k)) or None,
     )
     prepares: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
@@ -339,10 +352,13 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert prepares[0][1]['vm_running'] is False
     assert syncs
     assert replay_syncs
+    assert host_replays
     assert refreshes
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
     assert att.mode == 'persistent'
+    assert att.source_dev > 0
+    assert att.source_ino > 0
 
 
 def test_vm_attach_uses_single_escalating_probe(

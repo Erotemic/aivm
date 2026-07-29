@@ -31,6 +31,8 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.errors import AIVMError
+from aivm.fs_identity import directory_identity
+from aivm.host_identity import HostIdentity
 from aivm.machine_store import machine_store_layout
 from aivm.services import resolve_vm_name
 from tests.helpers import resolved_test_context
@@ -218,7 +220,10 @@ def test_vm_resolution_uses_current_principals_attachment(
         owner_principal_id='principal-bob',
     )
     save_store_split(reg, layout.config_path)
-    monkeypatch.setattr('aivm.services.getpass.getuser', lambda: 'bob')
+    monkeypatch.setattr(
+        'aivm.services.current_host_identity',
+        lambda: HostIdentity(uid=1002, gid=1002, username='bob'),
+    )
 
     vm_name, path = resolve_vm_name(
         config_opt=str(layout.config_path), vm_opt='', host_src=source
@@ -243,6 +248,7 @@ def test_machine_persistent_manifest_contains_global_inventory(
     for owner in ('principal-alice', 'principal-bob'):
         source = tmp_path / owner
         source.mkdir()
+        source_identity = directory_identity(source)
         upsert_attachment(
             reg,
             host_path=source,
@@ -251,6 +257,8 @@ def test_machine_persistent_manifest_contains_global_inventory(
             mode='persistent',
             guest_dst=f'/srv/{owner}',
             tag=f'tag-{owner}',
+            source_dev=source_identity.dev,
+            source_ino=source_identity.ino,
         )
     save_store_split(reg, layout.config_path)
 

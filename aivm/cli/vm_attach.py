@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Literal
 
 import kwconf
@@ -19,8 +20,10 @@ from loguru import logger as log
 
 from ..attachments.guest import _ensure_attachment_available_in_guest
 from ..attachments.persistent import (
+    _cleanup_persistent_host_replay_artifacts,
     _install_persistent_host_bind_replay,
     _prepare_persistent_attachment_host_and_vm,
+    _persistent_attachment_records_for_vm,
     _reconcile_persistent_attachments_in_guest,
     _reconcile_persistent_host_binds,
     _sync_persistent_attachment_manifest_on_host,
@@ -64,10 +67,16 @@ from ..config_store import (
     update_store,
 )
 from ..errors import AIVMError, CommandControlError
+from ..machine_store import (
+    MachineResourceLockScope,
+    current_machine_group_gid,
+    machine_resource_locks,
+)
 from ..attachments.ownership import (
     attachment_owner_for_context,
     require_attachment_mutation_permission,
 )
+from ..scoped_store import resolve_store_scope
 from ..services import (
     load_cfg_with_path,
     load_vm_context_with_path,
@@ -428,6 +437,9 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             dry_run=False,
         )
         _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+        _reconcile_persistent_host_binds(
+            cfg, cfg_path, dry_run=False, vm_running=vm_running
+        )
         if vm_defined and not vm_running:
             refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
     if vm_running:
@@ -548,6 +560,44 @@ def _remove_attachment_record(
     return removed
 
 
+def _set_attachment_state(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    attachment: AttachmentEntry,
+    *,
+    state: str,
+) -> AttachmentEntry:
+    """Persist one exact attachment lifecycle state under the store lock."""
+    updated: AttachmentEntry | None = None
+
+    def mutate(reg: Store) -> None:
+        nonlocal updated
+        for item in reg.attachments:
+            if (
+                item.vm_name == cfg.vm.name
+                and item.host_path == attachment.host_path
+                and item.owner_principal_id == attachment.owner_principal_id
+            ):
+                item.state = state
+                updated = item
+                return
+        raise AIVMError(
+            f'Attachment record disappeared while transitioning to {state!r}: '
+            f'{attachment.host_path}'
+        )
+
+    update_store(
+        mutate,
+        cfg_path,
+        reason=(
+            f'Mark attachment {attachment.host_path} on VM {cfg.vm.name} '
+            f'as {state} before external cleanup.'
+        ),
+    )
+    assert updated is not None
+    return updated
+
+
 def _detach_persistent_attachment(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -557,39 +607,46 @@ def _detach_persistent_attachment(
     vm_running: bool,
     yes: bool,
 ) -> bool:
-    """Drop a persistent attachment intent and reconcile guest state.
+    """Convergently remove persistent host and guest exposure.
 
-    The store record is removed up front — the synced manifest is what the
-    guest replays — and guest reconciliation then prunes the now-unlisted
-    mount. Returns True when cleanup was incomplete.
+    The record remains as ``detaching`` until host pruning and any live guest
+    unmount both succeed. Retrying resumes from that durable desired state.
     """
-    removed = _remove_attachment_record(cfg, cfg_path, attachment)
-    if removed:
+    if attachment.state != 'detaching':
+        attachment = _set_attachment_state(
+            cfg, cfg_path, attachment, state='detaching'
+        )
+    try:
         _sync_persistent_attachment_manifest_on_host(
-            cfg,
-            cfg_path,
-            dry_run=False,
+            cfg, cfg_path, dry_run=False
         )
         _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
-    if not vm_running:
-        return False
-    try:
-        ip = _resolve_ip_for_ssh_ops(
-            cfg,
-            yes=yes,
-            purpose='Query VM networking state before reconciling persistent attachment removal.',
+        _reconcile_persistent_host_binds(
+            cfg, cfg_path, dry_run=False, vm_running=vm_running
         )
-        _reconcile_persistent_attachments_in_guest(
-            cfg,
-            cfg_path,
-            ip,
-            dry_run=False,
-        )
+        if vm_running:
+            ip = _resolve_ip_for_ssh_ops(
+                cfg,
+                yes=yes,
+                purpose=(
+                    'Query VM networking state before reconciling persistent '
+                    'attachment removal.'
+                ),
+            )
+            _reconcile_persistent_attachments_in_guest(
+                cfg, cfg_path, ip, dry_run=False
+            )
+        records = _persistent_attachment_records_for_vm(cfg, cfg_path)
+        if not any(record.enabled for record in records):
+            _cleanup_persistent_host_replay_artifacts(
+                cfg, cfg_path, dry_run=False, force=True
+            )
     except CommandControlError:
         raise
     except Exception as ex:
         log.warning(
-            'Could not reconcile persistent attachment removal for VM {} source={} guest_dst={} token={}: {}',
+            'Persistent detach remains resumable for VM {} source={} '
+            'guest_dst={} token={}: {}',
             cfg.vm.name,
             resolved.source_dir,
             resolved.guest_dst,
@@ -597,6 +654,21 @@ def _detach_persistent_attachment(
             ex,
         )
         return True
+
+    _remove_attachment_record(cfg, cfg_path, attachment)
+    # Refresh the unprivileged canonical manifest after finalizing the store.
+    # Root replay artifacts were already removed while the detaching record
+    # still made this operation resumable. If other active records remain,
+    # keep their approved manifest and binds converged.
+    _sync_persistent_attachment_manifest_on_host(
+        cfg, cfg_path, dry_run=False
+    )
+    remaining = _persistent_attachment_records_for_vm(cfg, cfg_path)
+    if any(record.enabled for record in remaining):
+        _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+        _reconcile_persistent_host_binds(
+            cfg, cfg_path, dry_run=False, vm_running=vm_running
+        )
     return False
 
 
@@ -638,22 +710,44 @@ def _print_detach_result(
     print(f'Updated config store: {cfg_path}')
 
 
-def run_vm_detach(request: VMDetachRequest) -> int:
-    """Detach/unregister a host directory from a managed VM.
+class _DetachLockScope:
+    """Serialize one machine-store attachment teardown with VM state."""
 
-    Phases: locate the saved attachment, probe VM state, run the
-    mode-specific teardown, then remove the store record only when cleanup
-    fully succeeded (persistent mode removes its record up front because the
-    manifest drives guest replay).
-    """
-    host_src = logical_absolute_path(request.host_src)
-    _validate_host_directory(host_src)
+    def __init__(self, cfg_path: Path, vm_name: str) -> None:
+        self.inner: MachineResourceLockScope | None = None
+        scope = resolve_store_scope(str(cfg_path))
+        if scope.is_machine:
+            assert scope.machine_layout is not None
+            self.inner = machine_resource_locks(
+                scope.machine_layout,
+                group_gid=current_machine_group_gid(),
+                include_store=True,
+                vms=[vm_name],
+            )
 
-    context, cfg_path = resolve_context_for_code(
-        config_opt=request.config_opt,
-        vm_opt=request.vm_opt,
-        host_src=host_src,
-    )
+    def __enter__(self) -> None:
+        if self.inner is not None:
+            self.inner.__enter__()
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        if self.inner is None:
+            return False
+        return self.inner.__exit__(exc_type, exc, tb)
+
+
+def _run_vm_detach_locked(
+    request: VMDetachRequest,
+    host_src: Path,
+    context: ResolvedVMContext,
+    cfg_path: Path,
+) -> int:
+    """Resolve and execute one detach while its machine VM lock is held."""
     cfg = context.effective_cfg
     current_owner = attachment_owner_for_context(context, cfg_path)
     reg = load_store(cfg_path)
@@ -794,6 +888,20 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         detached_shared_root_guest_bind=detached_shared_root_guest_bind,
     )
     return 0
+
+
+
+def run_vm_detach(request: VMDetachRequest) -> int:
+    """Detach one saved attachment through a serialized, resumable teardown."""
+    host_src = logical_absolute_path(request.host_src)
+    context, cfg_path = resolve_context_for_code(
+        config_opt=request.config_opt,
+        vm_opt=request.vm_opt,
+        host_src=host_src,
+    )
+    cfg = context.effective_cfg
+    with _DetachLockScope(cfg_path, cfg.vm.name):
+        return _run_vm_detach_locked(request, host_src, context, cfg_path)
 
 
 def run_persistent_host_replay(

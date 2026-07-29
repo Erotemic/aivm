@@ -11,7 +11,6 @@ package importing upward from the CLI layer.
 
 from __future__ import annotations
 
-import getpass
 import os
 import sys
 from contextvars import ContextVar
@@ -29,7 +28,7 @@ from .legacy.pre_0_6_0.context import (
 from .config_store import (
     AttachmentEntry,
     find_attachments,
-    find_principal_for_host,
+    find_principal_for_host_identity,
     find_vm,
     require_vm,
     save_store,
@@ -39,6 +38,7 @@ from .config_store import (
 from .detect import detect_ssh_identity
 from .errors import AIVMError, NoVMContextError
 from .host import check_commands, host_is_debian_like, install_deps_debian
+from .host_identity import current_host_identity
 from .profile_store import save_user_profile
 from .scoped_store import (
     load_scope_profile,
@@ -263,11 +263,11 @@ def resolve_vm_name(
 
     if host_src is not None:
         if scope.is_machine:
-            host_user = getpass.getuser()
+            identity = current_host_identity()
             owned: list[AttachmentEntry] = []
             for vm in reg.vms:
-                principal = find_principal_for_host(
-                    reg, vm_name=vm.name, host_user=host_user
+                principal = find_principal_for_host_identity(
+                    reg, vm_name=vm.name, identity=identity
                 )
                 if principal is None:
                     continue

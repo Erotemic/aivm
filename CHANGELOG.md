@@ -131,6 +131,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* Hardened destructive and privileged shared-machine lifecycle paths. Caller
+  authorization now uses kernel UID/GID plus passwd identity; access disable
+  and remove serialize policy checks with verified guest revocation; reconcile
+  rejects silent key or guest-account rotation; persistent mount approval is
+  bound to held filesystem objects; detach retains a resumable `detaching`
+  record until host/guest exposure is gone; and VM deletion uses a durable
+  phase journal with strict, verified storage removal. Canonical 0.6 runtime
+  paths no longer synthesize pre-0.6 contexts.
 * Quarantined compatibility for released pre-0.6 installations under the
   explicit `aivm.legacy.pre_0_6_0` namespace. Migration planning/execution,
   legacy context materialization, store selection and paths, schema upgrades,

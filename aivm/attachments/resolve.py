@@ -8,9 +8,7 @@ from pathlib import Path, PurePosixPath
 from loguru import logger as log
 
 from ..config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..config_store import (
     AttachmentEntry,
     find_attachment_by_guest_dst,
@@ -158,7 +156,7 @@ def _compute_mirror_home_symlink(
     if not is_default_dst:
         return None
     host_home = Path.home()
-    guest_home = resolve_pre_0_6_0_vm_context(cfg).guest_home
+    guest_home = guest_transport_from_effective_cfg(cfg).guest_home
     if str(guest_home) == str(host_home):
         return None
     lexical = host_src.expanduser().absolute()

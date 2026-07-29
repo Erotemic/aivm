@@ -8,9 +8,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import (
@@ -30,14 +28,14 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         log.info('Provision disabled; skipping.')
         return
     cfg = cfg.expanded_paths()
-    context = resolve_pre_0_6_0_vm_context(cfg)
+    context = guest_transport_from_effective_cfg(cfg)
     if dry_run:
         ip = '0.0.0.0'
     else:
         ip = get_ip_cached(cfg) or wait_for_ip(
             cfg, timeout_s=360, dry_run=False
         )
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    ident = require_ssh_identity(context.ssh_identity_file)
     pkgs = list(cfg.provision.packages)
     docker_pkgs = (
         ['docker.io', 'docker-compose-v2']

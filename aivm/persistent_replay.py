@@ -380,30 +380,45 @@ def persistent_host_replay_python() -> str:
         import re
         import stat
         import subprocess
-        import sys
         from pathlib import Path
 
         TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+        DIRECTORY_FLAGS = (
+            getattr(os, "O_PATH", os.O_RDONLY)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
 
-        def run(cmd, check=True, capture=False):
+        def run(cmd, *, check=True, capture=False, pass_fds=()):
             return subprocess.run(
                 cmd,
                 check=check,
                 text=True,
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE if capture else None,
+                pass_fds=tuple(pass_fds),
             )
 
-        def validate_manifest_file(path):
+        def fd_path(fd):
+            return f"/proc/self/fd/{fd}"
+
+        def open_validated_manifest(path):
             manifest = Path(path)
-            st = os.stat(manifest, follow_symlinks=False)
-            if not stat.S_ISREG(st.st_mode):
-                raise RuntimeError(f"host replay manifest is not a regular file: {manifest}")
-            if st.st_uid != 0:
-                raise RuntimeError(f"host replay manifest is not root-owned: {manifest}")
-            if st.st_mode & 0o022:
-                raise RuntimeError(f"host replay manifest is group/other writable: {manifest}")
-            return manifest
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            fd = os.open(manifest, flags)
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode):
+                    raise RuntimeError(f"host replay manifest is not a regular file: {manifest}")
+                if st.st_uid != 0:
+                    raise RuntimeError(f"host replay manifest is not root-owned: {manifest}")
+                if st.st_mode & 0o022:
+                    raise RuntimeError(f"host replay manifest is group/other writable: {manifest}")
+                return fd
+            except BaseException:
+                os.close(fd)
+                raise
 
         def validate_token(raw):
             token = str(raw or "").strip()
@@ -411,97 +426,149 @@ def persistent_host_replay_python() -> str:
                 raise RuntimeError(f"invalid persistent host bind token: {token!r}")
             return token
 
-        def canonical_directory(raw, *, label):
+        def path_parts(raw, *, label):
             path = Path(str(raw or "").strip())
             if not path.is_absolute():
                 raise RuntimeError(f"{label} must be absolute: {path}")
+            parts = [part for part in path.parts if part not in {"", "/"}]
+            if any(part in {".", ".."} for part in parts):
+                raise RuntimeError(f"{label} contains unsafe components: {path}")
+            return path, parts
+
+        def open_absolute_directory(raw, *, label, create=False, mode=0o755):
+            path, parts = path_parts(raw, label=label)
+            current_fd = os.open("/", DIRECTORY_FLAGS)
             try:
-                resolved = path.resolve(strict=True)
-            except OSError as ex:
-                raise RuntimeError(f"{label} does not exist: {path}") from ex
-            if not resolved.is_dir():
-                raise RuntimeError(f"{label} is not a directory: {resolved}")
-            return resolved
+                for part in parts:
+                    if create:
+                        try:
+                            os.mkdir(part, mode=mode, dir_fd=current_fd)
+                        except FileExistsError:
+                            pass
+                    next_fd = os.open(part, DIRECTORY_FLAGS, dir_fd=current_fd)
+                    info = os.fstat(next_fd)
+                    if not stat.S_ISDIR(info.st_mode):
+                        os.close(next_fd)
+                        raise RuntimeError(f"{label} component is not a directory: {path}")
+                    os.close(current_fd)
+                    current_fd = next_fd
+                return current_fd
+            except BaseException:
+                os.close(current_fd)
+                raise
 
-        def canonical_export_root(raw):
-            path = Path(str(raw or "").strip())
-            if not path.is_absolute():
-                raise RuntimeError(f"export root must be absolute: {path}")
-            if path.is_symlink():
-                raise RuntimeError(f"export root must not be a symlink: {path}")
-            path.mkdir(mode=0o755, parents=True, exist_ok=True)
-            resolved = path.resolve(strict=True)
-            if not resolved.is_dir():
-                raise RuntimeError(f"export root is not a directory: {resolved}")
-            return resolved
+        def open_child_directory(parent_fd, name, *, create=False, mode=0o755):
+            token = validate_token(name)
+            if create:
+                try:
+                    os.mkdir(token, mode=mode, dir_fd=parent_fd)
+                except FileExistsError:
+                    pass
+            fd = os.open(token, DIRECTORY_FLAGS, dir_fd=parent_fd)
+            info = os.fstat(fd)
+            if not stat.S_ISDIR(info.st_mode):
+                os.close(fd)
+                raise RuntimeError(f"persistent bind target is not a directory: {token}")
+            return fd
 
-        def target_for(export_root, token):
-            root = canonical_export_root(export_root)
-            target = root / validate_token(token)
-            if target.parent != root:
-                raise RuntimeError(f"persistent bind target escapes export root: {target}")
-            if target.is_symlink():
-                raise RuntimeError(f"persistent bind target must not be a symlink: {target}")
-            target.mkdir(mode=0o755, exist_ok=True)
-            resolved = target.resolve(strict=True)
-            if resolved.parent != root or resolved == root:
-                raise RuntimeError(f"persistent bind target escapes export root: {resolved}")
-            return root, resolved
-
-        def is_mountpoint(target):
-            return subprocess.run(["mountpoint", "-q", str(target)]).returncode == 0
-
-        def same_tree(source, target):
-            try:
-                src_stat = os.stat(source)
-                dst_stat = os.stat(target)
-            except OSError:
-                return False
-            return (
-                src_stat.st_dev == dst_stat.st_dev
-                and src_stat.st_ino == dst_stat.st_ino
+        def open_approved_source(record):
+            token = validate_token(record.get("shared_root_token"))
+            source_fd = open_absolute_directory(
+                record.get("source_dir"), label=f"source_dir for {token}"
             )
+            info = os.fstat(source_fd)
+            expected_dev = int(record.get("source_dev", -1))
+            expected_ino = int(record.get("source_ino", -1))
+            if expected_dev < 0 or expected_ino <= 0:
+                os.close(source_fd)
+                raise RuntimeError(f"manifest lacks approved source identity for {token}")
+            if (int(info.st_dev), int(info.st_ino)) != (expected_dev, expected_ino):
+                os.close(source_fd)
+                raise RuntimeError(
+                    f"approved persistent source changed for {token}: "
+                    f"expected dev={expected_dev} ino={expected_ino}, "
+                    f"found dev={info.st_dev} ino={info.st_ino}"
+                )
+            return source_fd
 
-        def enforce_access(target, raw_access):
-            desired = "ro" if str(raw_access or "").strip() == "ro" else "rw"
+        def is_mountpoint_fd(fd):
+            return run(
+                ["mountpoint", "-q", fd_path(fd)],
+                check=False,
+                pass_fds=(fd,),
+            ).returncode == 0
+
+        def same_tree_fds(left_fd, right_fd):
+            left = os.fstat(left_fd)
+            right = os.fstat(right_fd)
+            return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+        def unmount_fd(fd):
             result = run(
-                ["findmnt", "-n", "-o", "OPTIONS", "--mountpoint", str(target)],
+                ["umount", fd_path(fd)],
                 check=False,
                 capture=True,
+                pass_fds=(fd,),
+            )
+            if result.returncode == 0 or not is_mountpoint_fd(fd):
+                return
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"could not unmount persistent host bind: {detail}")
+
+        def enforce_access_fd(target_fd, raw_access):
+            desired = "ro" if str(raw_access or "").strip() == "ro" else "rw"
+            result = run(
+                ["findmnt", "-n", "-o", "OPTIONS", "--mountpoint", fd_path(target_fd)],
+                check=False,
+                capture=True,
+                pass_fds=(target_fd,),
             )
             options = {item.strip() for item in (result.stdout or "").split(",")}
             if desired in options:
                 return
-            run(["mount", "-o", f"remount,bind,{desired}", str(target)])
+            run(
+                ["mount", "-o", f"remount,bind,{desired}", fd_path(target_fd)],
+                pass_fds=(target_fd,),
+            )
 
-        def ensure_record(export_root, record):
-            enabled = bool(record.get("enabled", True))
-            if not enabled:
+        def ensure_record(export_root_fd, record):
+            if not bool(record.get("enabled", True)):
                 return
             token = validate_token(record.get("shared_root_token"))
-            source = canonical_directory(record.get("source_dir"), label=f"source_dir for {token}")
-            _, target = target_for(export_root, token)
-            if is_mountpoint(target) and same_tree(source, target):
-                enforce_access(target, record.get("access"))
-                return
-            if is_mountpoint(target):
-                run(["umount", str(target)])
-                if is_mountpoint(target):
-                    raise RuntimeError(f"could not replace existing persistent host bind {target}")
-            run(["mount", "--bind", str(source), str(target)])
-            if not (is_mountpoint(target) and same_tree(source, target)):
-                raise RuntimeError(f"could not verify persistent host bind {target} -> {source}")
-            enforce_access(target, record.get("access"))
+            source_fd = open_approved_source(record)
+            target_fd = open_child_directory(export_root_fd, token, create=True)
+            try:
+                if is_mountpoint_fd(target_fd) and same_tree_fds(source_fd, target_fd):
+                    enforce_access_fd(target_fd, record.get("access"))
+                    return
+                if is_mountpoint_fd(target_fd):
+                    unmount_fd(target_fd)
+                run(
+                    ["mount", "--bind", fd_path(source_fd), fd_path(target_fd)],
+                    pass_fds=(source_fd, target_fd),
+                )
+                os.close(target_fd)
+                target_fd = open_child_directory(export_root_fd, token)
+                if not is_mountpoint_fd(target_fd) or not same_tree_fds(source_fd, target_fd):
+                    raise RuntimeError(f"could not verify persistent host bind for {token}")
+                enforce_access_fd(target_fd, record.get("access"))
+            finally:
+                os.close(target_fd)
+                os.close(source_fd)
 
-        def prune_stale_mounts(export_root, desired_tokens):
-            root = canonical_export_root(export_root)
-            for child in root.iterdir():
-                if child.name in desired_tokens:
+        def prune_stale_mounts(export_root_fd, desired_tokens):
+            for child in os.listdir(export_root_fd):
+                if child in desired_tokens or not TOKEN_RE.fullmatch(child):
                     continue
-                if child.is_symlink() or child.parent != root:
+                try:
+                    child_fd = open_child_directory(export_root_fd, child)
+                except OSError:
                     continue
-                if is_mountpoint(child):
-                    run(["umount", str(child)])
+                try:
+                    if is_mountpoint_fd(child_fd):
+                        unmount_fd(child_fd)
+                finally:
+                    os.close(child_fd)
 
         def main(argv=None):
             parser = argparse.ArgumentParser()
@@ -511,34 +578,38 @@ def persistent_host_replay_python() -> str:
             parser.add_argument("--prune-stale", action="store_true")
             args = parser.parse_args(argv)
 
-            manifest = validate_manifest_file(args.manifest)
-            with manifest.open("r", encoding="utf-8") as file:
+            manifest_fd = open_validated_manifest(args.manifest)
+            with os.fdopen(manifest_fd, "r", encoding="utf-8") as file:
                 payload = json.load(file)
             if payload.get("vm_name") != args.vm_name:
                 raise RuntimeError(
                     f"host replay manifest VM mismatch: expected {args.vm_name!r}, "
                     f"found {payload.get('vm_name')!r}"
                 )
-
-            desired_tokens = set()
             records = payload.get("records", [])
             if not isinstance(records, list):
                 raise RuntimeError("host replay manifest records must be a list")
-            for record in records:
-                if not isinstance(record, dict):
-                    raise RuntimeError("host replay manifest contains a non-object record")
-                if bool(record.get("enabled", True)):
-                    desired_tokens.add(validate_token(record.get("shared_root_token")))
-                ensure_record(args.export_root, record)
 
-            if args.prune_stale:
-                prune_stale_mounts(args.export_root, desired_tokens)
+            export_root_fd = open_absolute_directory(
+                args.export_root, label="export root", create=True
+            )
+            try:
+                desired_tokens = set()
+                for record in records:
+                    if not isinstance(record, dict):
+                        raise RuntimeError("host replay manifest contains a non-object record")
+                    if bool(record.get("enabled", True)):
+                        desired_tokens.add(validate_token(record.get("shared_root_token")))
+                    ensure_record(export_root_fd, record)
+                if args.prune_stale:
+                    prune_stale_mounts(export_root_fd, desired_tokens)
+            finally:
+                os.close(export_root_fd)
 
         if __name__ == "__main__":
             main()
         """
     )
-
 
 def _systemd_exec_arg(value: str) -> str:
     if '\n' in value or '\r' in value:

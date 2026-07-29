@@ -725,3 +725,54 @@ def test_require_vm_names_the_alternatives(tmp_path: Path) -> None:
     assert require_vm(store, 'aivm-2404-workstation').name == (
         'aivm-2404-workstation'
     )
+
+
+def test_attachment_lookup_uses_saved_alias_after_source_disappears(
+    tmp_path: Path,
+) -> None:
+    store = Store()
+    canonical = tmp_path / 'canonical-gone'
+    alias = tmp_path / 'typed-alias-gone'
+    upsert_attachment(
+        store,
+        host_path=canonical,
+        vm_name='vm1',
+        host_lexical_paths=[str(alias)],
+    )
+
+    matches = find_attachments(store, alias)
+
+    assert len(matches) == 1
+    assert matches[0].host_path == str(canonical)
+
+
+def test_attachment_lookup_reports_ambiguous_absent_path(
+    tmp_path: Path,
+) -> None:
+    store = Store()
+    missing = tmp_path / 'gone'
+    upsert_attachment(
+        store,
+        host_path=missing,
+        vm_name='vm1',
+        owner_principal_id='principal-alice',
+        guest_dst='/work/alice',
+        tag='alice',
+    )
+    upsert_attachment(
+        store,
+        host_path=missing,
+        vm_name='vm1',
+        owner_principal_id='principal-bob',
+        guest_dst='/work/bob',
+        tag='bob',
+    )
+
+    with pytest.raises(AIVMError, match='Multiple attachment records') as info:
+        find_attachment_for_vm(store, missing, 'vm1')
+
+    text = str(info.value)
+    assert 'principal-alice' in text
+    assert '/work/alice' in text
+    assert 'principal-bob' in text
+    assert '/work/bob' in text

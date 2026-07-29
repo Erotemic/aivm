@@ -14,6 +14,7 @@ internal collaborator was called.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shlex
 from pathlib import Path
@@ -35,9 +36,11 @@ from aivm.attachments.persistent import (
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import AttachmentEntry, Store, save_store
+from aivm.fs_identity import directory_identity
 from aivm.persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
+    persistent_host_replay_python,
 )
 from tests.helpers import (
     CommandRecorder,
@@ -93,21 +96,37 @@ def _redirect_replay_state_dir(
     return state_dir
 
 
+def _persistent_entry(
+    path: Path,
+    *,
+    vm_name: str,
+    access: str = 'rw',
+    guest_dst: str = '/workspace/proj',
+    tag: str = 'hostcode-proj',
+    aliases: list[str] | None = None,
+) -> AttachmentEntry:
+    path.mkdir(parents=True, exist_ok=True)
+    identity = directory_identity(path)
+    return AttachmentEntry(
+        host_path=str(path.resolve()),
+        vm_name=vm_name,
+        mode='persistent',
+        access=access,
+        guest_dst=guest_dst,
+        tag=tag,
+        source_dev=identity.dev,
+        source_ino=identity.ino,
+        host_lexical_paths=list(aliases or []),
+    )
+
+
 def _record_persistent_attachment(
     cfg: AgentVMConfig, cfg_path: Path, tmp_path: Path
 ) -> None:
     """Persist one enabled persistent attachment record for ``cfg``'s VM."""
     store = Store()
     store.attachments.append(
-        AttachmentEntry(
-            host_path=str((tmp_path / 'proj').resolve()),
-            vm_name=cfg.vm.name,
-            mode='persistent',
-            access='rw',
-            guest_dst='/workspace/proj',
-            tag='hostcode-proj',
-            host_lexical_paths=[],
-        )
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
     )
     save_store(store, cfg_path)
 
@@ -174,23 +193,20 @@ def test_persistent_manifest_persists_records_and_access_modes(
     store = Store()
     store.attachments.extend(
         [
-            AttachmentEntry(
-                host_path=str((tmp_path / 'proj-rw').resolve()),
+            _persistent_entry(
+                tmp_path / 'proj-rw',
                 vm_name=cfg.vm.name,
-                mode='persistent',
                 access='rw',
                 guest_dst='/workspace/rw',
                 tag='hostcode-rw',
-                host_lexical_paths=[],
             ),
-            AttachmentEntry(
-                host_path=str((tmp_path / 'proj-ro').resolve()),
+            _persistent_entry(
+                tmp_path / 'proj-ro',
                 vm_name=cfg.vm.name,
-                mode='persistent',
                 access='ro',
                 guest_dst='/workspace/ro',
                 tag='hostcode-ro',
-                host_lexical_paths=[str(tmp_path / 'link-ro')],
+                aliases=[str(tmp_path / 'link-ro')],
             ),
             AttachmentEntry(
                 host_path=str((tmp_path / 'legacy').resolve()),
@@ -210,7 +226,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
     # The manifest is a wire format: the host writes it, the in-guest replay
     # helper reads it. Nothing in the code validates schema_version, so pin
     # it here -- bumping it is a guest-compatibility decision, not a typo.
-    assert payload['schema_version'] == 1
+    assert payload['schema_version'] == 2
     assert payload['vm_name'] == cfg.vm.name
     assert payload['shared_root_mount'] == '/mnt/aivm-persistent'
     assert [item['shared_root_token'] for item in payload['records']] == [
@@ -264,15 +280,7 @@ def test_persistent_manifest_sync_uses_checksum_rsync(
     cfg_path = tmp_path / 'config.toml'
     store = Store()
     store.attachments.append(
-        AttachmentEntry(
-            host_path=str((tmp_path / 'proj').resolve()),
-            vm_name=cfg.vm.name,
-            mode='persistent',
-            access='rw',
-            guest_dst='/workspace/proj',
-            tag='hostcode-proj',
-            host_lexical_paths=[],
-        )
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
     )
     save_store(store, cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
@@ -967,147 +975,182 @@ def test_persistent_host_replay_manifest_still_updates_after_last_detach(
     assert json.loads(staged[0])['records'] == []
 
 
-def test_persistent_root_host_bind_short_circuits_when_already_bound(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def _load_host_replay_helper(tmp_path: Path):
+    helper_path = tmp_path / 'aivm_persistent_host_replay.py'
+    helper_path.write_text(persistent_host_replay_python(), encoding='utf-8')
+    spec = importlib.util.spec_from_file_location(
+        'aivm_test_persistent_host_replay', helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_host_replay_rejects_source_replacement(
+    tmp_path: Path,
 ) -> None:
-    """An existing bind is probed for access mode but never re-mounted."""
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
-    )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
-
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-bound'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
-    )
-
-    activate_manager(monkeypatch)
-
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.host_bind._target_is_bind_of',
-        lambda *_a, **_k: True,
-    )
-
-    # Strict recorder: the read-only findmnt access probe is the only
-    # subprocess allowed; a mount/remount would raise as unrouted.
-    rec = command_recorder(
-        monkeypatch,
-        {
-            'findmnt -P -n': FakeProc(
-                0,
-                'SOURCE="/source" FSROOT="" FSTYPE="none" OPTIONS="rw"',
-                '',
-            ),
-        },
-    )
-
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
-
-    assert len(rec.normalized) == 1
-    assert rec.only('findmnt')[:6] == [
-        'findmnt',
-        '-P',
-        '-n',
-        '-o',
-        'SOURCE,FSROOT,FSTYPE,OPTIONS',
-        '--mountpoint',
-    ]
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    info = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    source.rename(tmp_path / 'approved-source')
+    source.mkdir()
+    with pytest.raises(RuntimeError, match='approved persistent source changed'):
+        helper.open_approved_source(record)
 
 
-def test_persistent_root_host_bind_issues_direct_mount_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_host_replay_rejects_symlink_replacement(
+    tmp_path: Path,
 ) -> None:
-    """When binding is needed, use a plain `mount --bind` argv (no bash script)."""
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
-    )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
-
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-bind'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
-    )
-
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.host_bind._target_is_bind_of',
-        lambda *_a, **_k: False,
-    )
-
-    rec = command_recorder(monkeypatch, default=FakeProc(0, '', ''))
-
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
-
-    flat = [' '.join(c) for c in rec.normalized]
-    assert any(line.startswith('mount --bind ') for line in flat), flat
-    assert all(not line.startswith('bash -c ') for line in flat), flat
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    info = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    approved = tmp_path / 'approved-source'
+    source.rename(approved)
+    source.symlink_to(approved, target_is_directory=True)
+    with pytest.raises(OSError):
+        helper.open_approved_source(record)
 
 
-def test_persistent_host_bind_escalates_only_for_the_bind_mount(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_host_replay_rejects_intermediate_symlink(
+    tmp_path: Path,
 ) -> None:
-    """`persistent` is the default attachment mode, so this is the hot path.
+    helper = _load_host_replay_helper(tmp_path)
+    real_parent = tmp_path / 'real-parent'
+    real_parent.mkdir()
+    source = real_parent / 'source'
+    source.mkdir()
+    info = source.stat()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(real_parent, target_is_directory=True)
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(alias / 'source'),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    with pytest.raises(OSError):
+        helper.open_approved_source(record)
 
-    On a user-owned storage tree the export directories are created without
-    privileges; only `mount --bind`, which has no unprivileged form, escalates.
-    """
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
+
+def test_held_source_descriptor_survives_path_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    approved = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': approved.st_dev,
+        'source_ino': approved.st_ino,
+    }
+    fd = helper.open_approved_source(record)
+    try:
+        source.rename(tmp_path / 'approved-source')
+        source.mkdir()
+        held = helper.os.fstat(fd)
+        replacement = source.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(fd)
+
+
+def test_host_replay_mounts_only_through_held_descriptors() -> None:
+    source = persistent_host_replay_python()
+    assert 'mount", "--bind", fd_path(source_fd), fd_path(target_fd)' in source
+    assert 'pass_fds=(source_fd, target_fd)' in source
+    assert 'expected_dev' in source and 'expected_ino' in source
+
+
+def test_held_export_root_descriptor_survives_path_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    approved = export_root.stat()
+    fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
     )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+    try:
+        export_root.rename(tmp_path / 'approved-export-root')
+        export_root.mkdir()
+        held = helper.os.fstat(fd)
+        replacement = export_root.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(fd)
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persist'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='proj',
+
+def test_held_target_descriptor_survives_child_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
     )
+    target_fd = helper.open_child_directory(root_fd, 'token', create=True)
+    try:
+        target = export_root / 'token'
+        approved = target.stat()
+        target.rename(export_root / 'approved-token')
+        target.mkdir()
+        held = helper.os.fstat(target_fd)
+        replacement = target.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(target_fd)
+        helper.os.close(root_fd)
 
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    CommandManager.activate(
-        CommandManager(yes=True, yes_sudo=True, privilege_mode='as-needed')
-    )
-    raw: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(p) for p in cmd]
-        raw.append(parts)
-        return FakeProc(0, '', '')
+def test_attachment_approval_rejects_intermediate_symlink(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / 'real-parent'
+    real_parent.mkdir()
+    source = real_parent / 'source'
+    source.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(real_parent, target_is_directory=True)
 
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
-
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
-
-    def program(parts: list[str]) -> str:
-        rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        rest = rest[1:] if rest[:1] == ['sudo'] else rest
-        return rest[0] if rest else ''
-
-    real = [p for p in raw if p[-1:] != ['true']]
-    escalated = {program(p) for p in real if p[:1] == ['sudo']}
-    plain = {program(p) for p in real if p[:1] != ['sudo']}
-    assert 'mkdir' in plain, raw
-    assert escalated == {'mount'}, raw
+    with pytest.raises((NotADirectoryError, OSError)):
+        directory_identity(alias / 'source')

@@ -47,6 +47,9 @@ class AttachmentEntry:
     access: str = 'rw'
     guest_dst: str = ''
     tag: str = ''
+    state: str = 'active'
+    source_dev: int = 0
+    source_ino: int = 0
     host_lexical_paths: list[str] = field(default_factory=list)
 
 

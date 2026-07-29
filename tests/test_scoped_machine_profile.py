@@ -135,6 +135,12 @@ def test_machine_create_persists_creator_and_resolves_context(
     monkeypatch.setattr('aivm.scoped_store._current_host_user', lambda: 'alice')
     monkeypatch.setattr('aivm.scoped_store._current_host_uid', lambda: 1001)
     monkeypatch.setattr('aivm.scoped_store._current_host_gid', lambda: 1002)
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr(
+        'aivm.scoped_store.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1002, username='alice'),
+    )
     monkeypatch.setattr(
         'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []
     )

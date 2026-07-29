@@ -17,17 +17,6 @@ from ..attachments.session import (
     _resolve_ip_for_ssh_ops,
 )
 from ..commands import CommandManager
-from ..config_store import (
-    find_network,
-    load_store,
-    network_users,
-    remove_vm,
-    save_store,
-)
-from ..credentials.guards import (
-    discard_released_credential_material,
-    require_vm_credentials_released,
-)
 from ..services import (
     cfg_path,
     load_cfg,
@@ -37,17 +26,16 @@ from ..services import (
     resolve_cfg_for_code,
 )
 from ..operational_scope import announce_vm_machine_impact
-from ..profile_store import save_user_profile
-from ..scoped_store import load_scope_profile, resolve_store_scope
+from ..scoped_store import resolve_store_scope
 from ..vm import (
     create_or_start_vm,
-    destroy_vm,
     provision,
     restart_vm,
     shutdown_vm,
     vm_status,
 )
 from ..vm.create_ops import create_vm_from_defaults
+from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
 from ._common import _BaseCommand
 
 
@@ -205,7 +193,7 @@ class VMStatusCLI(_BaseCommand):
 
 
 class VMDeleteCLI(_BaseCommand):
-    """Delete the managed VM domain (shared host directories are not deleted)."""
+    """Durably delete a managed VM and every AIVM-owned host artifact."""
 
     vm: str = kwconf.Value(
         '',
@@ -219,73 +207,38 @@ class VMDeleteCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        requested_vm = str(args.vm or '').strip()
+        if requested_vm and not bool(args.dry_run):
+            requested_path = resolve_store_scope(args.config).store_path
+            requested_scope = resolve_store_scope(str(requested_path))
+            completed = complete_missing_vm_deletion(
+                requested_scope, requested_path, requested_vm
+            )
+            if completed is not None:
+                print(
+                    f'Completed deletion journal recovery for {requested_vm}; '
+                    'the VM was already absent from the machine store.'
+                )
+                return 0
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         scope = resolve_store_scope(str(cfg_path))
-        reg = load_store(cfg_path)
-        credentials = require_vm_credentials_released(
-            reg, cfg.vm.name, action='deleted'
-        )
         announce_vm_machine_impact(
             cfg_path, cfg.vm.name, action='delete'
         )
         mgr = CommandManager.current()
-        if args.dry_run:
-            with mgr.intent(
-                f'Delete VM {cfg.vm.name}',
-                why=(
-                    'Preview removal of the managed VM domain while leaving '
-                    'host project directories intact.'
-                ),
-                role='modify',
-            ):
-                destroy_vm(cfg, dry_run=True)
-            return 0
-
         with mgr.approved_action(
             purpose=(
-                f'Delete VM {cfg.vm.name}, remove revoked credential key '
-                'material, and remove its AIVM configuration record.'
+                f'Create or resume the deletion journal for VM {cfg.vm.name}, '
+                'remove attachment exposure and host artifacts, delete the '
+                'domain with verified storage cleanup, and finalize the store.'
             )
         ):
-            with mgr.intent(
-                f'Delete VM {cfg.vm.name}',
-                why=(
-                    'Remove the managed VM domain while leaving host project '
-                    'directories intact.'
-                ),
-                role='modify',
-            ):
-                discard_released_credential_material(credentials)
-                destroy_vm(cfg, dry_run=False)
-                remove_vm(reg, cfg.vm.name, remove_attachments=True)
-                save_store(
-                    reg,
-                    cfg_path,
-                    reason=(
-                        f'Remove VM record for {cfg.vm.name} after deleting '
-                        'the managed libvirt domain.'
-                    ),
-                )
-                if scope.is_machine:
-                    profile = load_scope_profile(scope)
-                    if profile.active_vm == cfg.vm.name:
-                        profile.active_vm = (
-                            sorted(vm.name for vm in reg.vms)[0]
-                            if reg.vms
-                            else ''
-                        )
-                        assert scope.profile_path is not None
-                        save_user_profile(profile, scope.profile_path)
-        net_name = (cfg.network.name or '').strip()
-        if net_name:
-            net = find_network(reg, net_name)
-            if net is not None and not network_users(reg, net_name):
-                log.warning(
-                    "Network '{}' now has no VM users and remains defined. "
-                    'Destroy it explicitly if no longer needed: aivm host net destroy {}',
-                    net_name,
-                    net_name,
-                )
+            delete_managed_vm(
+                scope,
+                cfg,
+                cfg_path,
+                dry_run=bool(args.dry_run),
+            )
         return 0
 
 

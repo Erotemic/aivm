@@ -77,6 +77,40 @@ class UserProfile:
 
 
 @dataclass(frozen=True)
+class GuestTransportContext:
+    """Narrow SSH/guest addressing data needed by runtime helpers.
+
+    This deliberately carries no principal id, ownership, or authorization
+    state. Canonical runtime helpers that only need to reach the guest should
+    not fabricate a legacy :class:`ResolvedVMContext`.
+    """
+
+    guest_user: str
+    ssh_identity_file: str
+    ssh_pubkey_path: str
+    state_dir: str
+
+    @property
+    def guest_home(self) -> PurePosixPath:
+        return PurePosixPath('/home') / self.guest_user
+
+    def ssh_target(self, host: str) -> str:
+        return f'{self.guest_user}@{host}'
+
+
+def guest_transport_from_effective_cfg(
+    cfg: AgentVMConfig,
+) -> GuestTransportContext:
+    """Extract transport-only guest data from an effective runtime config."""
+    return GuestTransportContext(
+        guest_user=cfg.vm.user,
+        ssh_identity_file=cfg.paths.ssh_identity_file,
+        ssh_pubkey_path=cfg.paths.ssh_pubkey_path,
+        state_dir=cfg.paths.state_dir,
+    )
+
+
+@dataclass(frozen=True)
 class ResolvedVMContext:
     """Machine, principal, and profile selected for one VM operation."""
 

@@ -294,7 +294,15 @@ def create_or_start_vm(
             if dry_run:
                 log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
             else:
-                _destroy_and_undefine_vm(cfg.vm.name)
+                removal = _destroy_and_undefine_vm(cfg.vm.name)
+                if removal.retained_storage_paths:
+                    rendered = '\n'.join(
+                        f'  - {path}' for path in removal.retained_storage_paths
+                    )
+                    raise AIVMError(
+                        f'Cannot recreate VM {cfg.vm.name!r}: the old domain '
+                        f'was undefined but storage remains:\n{rendered}'
+                    )
 
         base_img = fetch_image(cfg, dry_run=dry_run)
         bootstrap_public_key = ''

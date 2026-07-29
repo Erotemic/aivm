@@ -94,3 +94,20 @@ def test_released_fixtures_live_with_removable_legacy_tests() -> None:
     fixture_root = ROOT / 'tests' / 'legacy' / 'pre_0_6_0' / 'data'
     assert (fixture_root / 'released_v0_5').is_dir()
     assert not (ROOT / 'tests' / 'data' / 'released_v0_5').exists()
+
+
+def test_canonical_runtime_does_not_construct_legacy_contexts() -> None:
+    """Only the store-loading bridge may adapt a released aggregate config."""
+    allowed = {'aivm/services.py'}
+    offenders: list[str] = []
+    for path in (ROOT / 'aivm').rglob('*.py'):
+        relative = path.relative_to(ROOT).as_posix()
+        if relative.startswith('aivm/legacy/pre_0_6_0/'):
+            continue
+        text = path.read_text(encoding='utf-8')
+        if (
+            'resolve_pre_0_6_0_vm_context' in text
+            or 'legacy.pre_0_6_0.context' in text
+        ) and relative not in allowed:
+            offenders.append(relative)
+    assert offenders == []

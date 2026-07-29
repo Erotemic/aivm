@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
+from ..fs_identity import directory_identity
 from ..config_store import (
     Store,
     find_attachment_for_vm,
@@ -175,6 +176,12 @@ def _record_attachment(
     lexical_str = str(host_src.expanduser().absolute())
     resolved_str = str(host_src.resolve())
     owner = str(owner_principal_id or '').strip()
+    source_dev = 0
+    source_ino = 0
+    if mode == ATTACHMENT_MODE_PERSISTENT:
+        identity = directory_identity(resolved_str)
+        source_dev = identity.dev
+        source_ino = identity.ino
 
     def mutate(reg: Store) -> None:
         existing = find_attachment_for_vm(
@@ -197,6 +204,8 @@ def _record_attachment(
             access=access,
             guest_dst=guest_dst,
             tag=tag,
+            source_dev=source_dev,
+            source_ino=source_ino,
             host_lexical_paths=aliases,
         )
         return None

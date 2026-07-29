@@ -24,7 +24,7 @@ from ...config_review import (
 )
 from ...config_store import (
     Store,
-    find_principal_for_host,
+    find_principal_for_host_identity,
     find_vm,
     materialize_vm_cfg,
     parse_store_toml,
@@ -34,6 +34,8 @@ from ...config_store import (
 from ...detect import auto_defaults
 from ...enrollment import normalized_guest_username, reconcile_current_principal
 from ...errors import AIVMError
+from ...host_identity import current_host_identity
+from ...ssh_keys import same_ssh_public_key
 from ...resource_checks import vm_resource_warning_lines
 from ...profile_store import save_user_profile
 from ...scoped_store import (
@@ -194,9 +196,10 @@ def _join_existing_machine(
 ) -> int:
     """Create/update only the caller profile, then enroll its principal."""
     profile = load_scope_profile(scope)
-    host_user = getpass.getuser()
-    existing = find_principal_for_host(
-        reg, vm_name=vm_name, host_user=host_user
+    host_identity = current_host_identity()
+    host_user = host_identity.username
+    existing = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=host_identity
     )
     profile_guest = profile.default_guest_user.strip()
     guest_user = (
@@ -233,7 +236,7 @@ def _join_existing_machine(
         and existing.state in {'active', 'legacy'}
         and existing.guest_user == guest_user
         and bool(current_key)
-        and existing.ssh_public_key.strip() == current_key
+        and same_ssh_public_key(existing.ssh_public_key, current_key)
     )
     print(f'Existing managed machine found: {vm_name}')
     print(f'Joining host user {host_user} as guest user {guest_user}.')
@@ -263,8 +266,8 @@ def _join_existing_machine(
         )
     except AIVMError as ex:
         refreshed = load_scope_store(scope)
-        pending = find_principal_for_host(
-            refreshed, vm_name=vm_name, host_user=host_user
+        pending = find_principal_for_host_identity(
+            refreshed, vm_name=vm_name, identity=host_identity
         )
         if pending is not None and pending.state == 'pending':
             profile.active_vm = vm_name

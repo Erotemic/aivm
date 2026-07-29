@@ -27,7 +27,7 @@ replace it with `AIVM_MACHINE_STORE_ROOT`.
 ```
 
 The split config fragments retain their existing literal-concatenation
-contract. Machine schema version 9 changes which logical fields are stored but
+contract. Machine schema version 11 changes which logical fields are stored but
 reuses this physical layout and transaction machinery.
 
 ## Ownership and modes
@@ -39,7 +39,7 @@ The production installation is expected to be owned by `root:aivm`.
 | Machine root, `vms`, `state`, and lock directories | `02775` | Trusted group members can create and replace state; setgid preserves the group on new entries. |
 | Config fragments, transaction metadata, and lock files | `0664` | Every trusted group member can complete a read-modify-write cycle and recover an interrupted transaction. |
 | `bootstrap` directory | `02750` | Enrollment material is not general config state and should not be world-readable. |
-| Future bootstrap private key | `0640` | Root writes it; trusted `aivm` members may use the restricted enrollment channel. |
+| Bootstrap private key | `0600` | Root owns and uses it through the restricted enrollment channel; group members never read the private key directly. |
 
 The implementation sets the target group before applying the final mode because
 `chown` may clear setgid bits. Tests inject the current process GID, so no test

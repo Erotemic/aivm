@@ -77,6 +77,22 @@ def _cfg_from_dict(raw: dict[str, object]) -> AgentVMConfig:
     return cfg
 
 
+def _nonnegative_int_field(
+    item: dict[str, object], key: str, *, default: int = 0
+) -> int:
+    value = item.get(key, default)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError as ex:
+            raise ValueError(f'invalid integer field {key}: {value!r}') from ex
+    raise ValueError(f'invalid integer field {key}: {value!r}')
+
+
 def _attachment_from_dict(
     item: dict[str, object], *, vm_name: str | None = None
 ) -> AttachmentEntry | None:
@@ -112,6 +128,9 @@ def _attachment_from_dict(
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
+        state=str(item.get('state', 'active') or 'active').strip(),
+        source_dev=_nonnegative_int_field(item, 'source_dev'),
+        source_ino=_nonnegative_int_field(item, 'source_ino'),
         host_lexical_paths=parse_host_lexical_paths(item),
     )
 

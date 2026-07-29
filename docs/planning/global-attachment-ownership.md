@@ -70,9 +70,9 @@ migration stage.
 ## Private-home exposure
 
 AIVM warns when a path under the caller's home is attached to a VM with
-multiple principals. The current release assumes mutually trusted host and
-guest users; ownership prevents accidental configuration mutation, not data
-isolation inside the shared guest.
+multiple principals. Ownership prevents accidental configuration mutation, not
+data isolation inside the shared guest or from unrestricted root/system-libvirt
+administrators.
 
 ## Migration boundary
 

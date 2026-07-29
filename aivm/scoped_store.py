@@ -12,7 +12,6 @@ choose the machine store for a brand-new installation.
 
 from __future__ import annotations
 
-import getpass
 import hashlib
 import os
 from copy import deepcopy
@@ -28,6 +27,7 @@ from .config_store import (
     PrincipalEntry,
     Store,
     find_principal_for_host,
+    find_principal_for_host_identity,
     load_store,
     materialize_vm_cfg,
     save_store_split,
@@ -37,6 +37,7 @@ from .config_store import (
     upsert_vm_with_network,
 )
 from .errors import AIVMError
+from .host_identity import HostIdentity, current_host_identity
 from .legacy.pre_0_6_0 import compatibility_surface
 from .legacy.pre_0_6_0.selection import selected_store_path
 from .machine_store import (
@@ -213,20 +214,18 @@ def stable_principal_id(vm_name: str, host_user: str) -> str:
 
 
 def _current_host_user() -> str:
-    """Return the invoking host login through a patchable test seam."""
-    return getpass.getuser()
+    """Return the kernel-derived host login through a patchable test seam."""
+    return current_host_identity().username
 
 
 def _current_host_uid() -> int:
-    """Return the invoking host UID, or -1 on platforms without POSIX UIDs."""
-    getter = getattr(os, 'getuid', None)
-    return int(getter()) if getter is not None else -1
+    """Return the invoking kernel UID through a patchable test seam."""
+    return current_host_identity().uid
 
 
 def _current_host_gid() -> int:
-    """Return the invoking host GID, or -1 on platforms without POSIX GIDs."""
-    getter = getattr(os, 'getgid', None)
-    return int(getter()) if getter is not None else -1
+    """Return the invoking kernel GID through a patchable test seam."""
+    return current_host_identity().gid
 
 
 def current_principal_entry(
@@ -290,20 +289,20 @@ def resolve_machine_context(
     vm_name: str,
     *,
     profile: UserProfileStore,
-    host_user: str | None = None,
+    identity: HostIdentity | None = None,
 ) -> ResolvedVMContext:
-    """Resolve the current host user to one active persisted principal."""
-    user = host_user or _current_host_user()
-    principal = find_principal_for_host(
-        reg,
-        vm_name=vm_name,
-        host_user=user,
+    """Resolve the kernel caller identity to one active persisted principal."""
+    if identity is None:
+        identity = current_host_identity()
+    principal = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=identity
     )
     if principal is None:
         raise AIVMError(
-            f'Host user {user!r} is not enrolled for managed VM {vm_name!r}. '
-            f'Run `aivm vm access reconcile --vm {vm_name}` after creating '
-            'this user\'s AIVM SSH identity.'
+            f'Host user {identity.username!r} (uid {identity.uid}) is not '
+            f'enrolled for managed VM {vm_name!r}. Run '
+            f'`aivm vm access reconcile --vm {vm_name}` after creating this '
+            'user\'s AIVM SSH identity.'
         )
     if principal.state not in {'active', 'legacy'}:
         raise AIVMError(

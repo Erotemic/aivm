@@ -6,9 +6,7 @@ import shlex
 
 from ..commands import CommandHandle, CommandManager, CommandResult
 from ..config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..config_store import CredentialEntry
 from ..runtime import require_ssh_identity, ssh_base_args
 from .models import GitRepository
@@ -60,8 +58,8 @@ def _validated_entry_repository(cred: CredentialEntry) -> GitRepository:
 
 
 def _ssh_command(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     return [
         'ssh',
         *ssh_base_args(

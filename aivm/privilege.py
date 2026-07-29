@@ -61,6 +61,7 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandManager
+from .host_identity import current_host_identity
 from .errors import SudoRequiredError
 from .modes import (
     PRIVILEGE_MODES,
@@ -336,7 +337,7 @@ def user_in_libvirt_group() -> bool:
     if group.gr_gid in os.getgroups():
         return True
     try:
-        return getpass.getuser() in (group.gr_mem or [])
+        return current_host_identity().username in (group.gr_mem or [])
     except Exception:
         return False
 

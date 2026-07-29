@@ -20,6 +20,7 @@ from aivm.config_store import (
 )
 from aivm.enrollment import EnrollmentReport
 from aivm.errors import AIVMError
+from aivm.host_identity import HostIdentity
 from aivm.profile_store import (
     UserProfileStore,
     load_user_profile,
@@ -50,7 +51,8 @@ def _managed_machine(
         'aivm.cli.config.init.domain_is_defined', lambda name: False
     )
     monkeypatch.setattr(
-        'aivm.cli.config.init.getpass.getuser', lambda: 'bob'
+        'aivm.cli.config.init.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='bob'),
     )
     monkeypatch.setattr(
         'aivm.cli.config.init.hydrate_ssh_identity_defaults',

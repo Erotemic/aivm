@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, cast
 
+from ...fs_identity import directory_identity
 from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...config_store import (
@@ -895,6 +896,26 @@ def build_migration_plan(
         for attachment in reg.attachments:
             if attachment.vm_name != vm_name:
                 continue
+            source_dev = 0
+            source_ino = 0
+            if attachment.mode == 'persistent':
+                try:
+                    source_identity = directory_identity(attachment.host_path)
+                except OSError as ex:
+                    conflicts.append(
+                        MigrationIssue(
+                            code='persistent-source-unavailable',
+                            message=(
+                                f'Cannot pin persistent attachment source '
+                                f'{attachment.host_path!r}: {ex}'
+                            ),
+                            vm_name=vm_name,
+                            sources=(str(source.path),),
+                        )
+                    )
+                else:
+                    source_dev = source_identity.dev
+                    source_ino = source_identity.ino
             upsert_attachment(
                 target,
                 host_path=attachment.host_path,
@@ -904,6 +925,8 @@ def build_migration_plan(
                 access=attachment.access,
                 guest_dst=attachment.guest_dst,
                 tag=attachment.tag,
+                source_dev=source_dev,
+                source_ino=source_ino,
                 host_lexical_paths=attachment.host_lexical_paths,
             )
 

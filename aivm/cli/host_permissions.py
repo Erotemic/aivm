@@ -18,8 +18,8 @@ ACLs are granted on), and writes nothing else.
 
 from __future__ import annotations
 
-import getpass
 import os
+import pwd
 import shlex
 import textwrap
 from pathlib import Path
@@ -31,6 +31,7 @@ from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
+from ..host_identity import current_host_identity
 from ..machine_store import (
     MACHINE_STORE_ROOT_ENV,
     current_machine_group_name,
@@ -550,7 +551,7 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 f'{LIBVIRT_GROUP} group membership',
                 'grants direct qemu:///system access without sudo'
                 if in_group
-                else f'run `sudo usermod -aG {LIBVIRT_GROUP} {getpass.getuser()}` '
+                else f'run `sudo usermod -aG {LIBVIRT_GROUP} {current_host_identity().username}` '
                 'or `aivm host permissions setup`',
                 'libvirt access (virsh)',
             )
@@ -810,6 +811,34 @@ def _prepare_machine_store_access(
     return membership_added
 
 
+def _resolve_setup_target_user(requested: str) -> str:
+    """Resolve host setup ownership without trusting sudo environment text."""
+    explicit = str(requested or '').strip()
+    caller = current_host_identity()
+    if os.geteuid() == 0:
+        if not explicit:
+            raise AIVMError(
+                'Whole-command root/sudo execution requires an explicit '
+                '`--user <login>` target. Prefer running `aivm host '
+                'permissions setup` as that user and allowing AIVM to '
+                'escalate only the required steps.'
+            )
+        target = explicit
+    else:
+        if explicit and explicit != caller.username:
+            raise AIVMError(
+                f'Only root may prepare permissions for another account; '
+                f'current kernel identity is {caller.username!r} '
+                f'(uid={caller.uid}).'
+            )
+        target = caller.username
+    try:
+        pwd.getpwnam(target)
+    except KeyError as ex:
+        raise AIVMError(f'Host account does not exist: {target!r}') from ex
+    return target
+
+
 class HostPermissionsSetupCLI(_BaseCommand):
     """Prepare host permissions for routine aivm operation.
 
@@ -820,6 +849,14 @@ class HostPermissionsSetupCLI(_BaseCommand):
     ``defaults.paths.base_dir`` is written.
     """
 
+    user: str = kwconf.Value(
+        '',
+        help=(
+            'Host login whose memberships and storage access should be '
+            'prepared. Required for whole-command root/sudo execution; '
+            'ordinary users may omit it.'
+        ),
+    )
     base_dir: str = kwconf.Value(
         '',
         help=(
@@ -851,7 +888,7 @@ class HostPermissionsSetupCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
-        user = os.environ.get('SUDO_USER') or getpass.getuser()
+        user = _resolve_setup_target_user(str(args.user or ''))
         _prepare_machine_store_access(args, mgr, user=user)
 
         group_added = False

@@ -315,6 +315,19 @@ def _atomic_text(path: Path, text: str, mode: int) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _public_key_identity(line: str) -> tuple[str, str] | None:
+    """Return OpenSSH algorithm/blob while ignoring optional comments."""
+    parts = str(line or '').strip().split()
+    if len(parts) < 2:
+        return None
+    return parts[0], parts[1]
+
+
+def _same_public_key(left: str, right: str) -> bool:
+    identity = _public_key_identity(left)
+    return identity is not None and identity == _public_key_identity(right)
+
+
 def _ensure_authorized_key(
     request: GuestEnrollmentRequest,
     *,
@@ -328,8 +341,20 @@ def _ensure_authorized_key(
     lines = []
     if authorized.exists():
         lines = authorized.read_text(encoding='utf-8').splitlines()
-    if request.public_key not in lines:
+    matching = [line for line in lines if _same_public_key(line, request.public_key)]
+    if not matching:
         lines.append(request.public_key)
+    elif len(matching) > 1:
+        # Collapse duplicates while preserving the first enrolled spelling.
+        kept = False
+        deduped = []
+        for line in lines:
+            if _same_public_key(line, request.public_key):
+                if kept:
+                    continue
+                kept = True
+            deduped.append(line)
+        lines = deduped
     _atomic_text(authorized, '\n'.join(lines).rstrip() + '\n', 0o600)
     chown(ssh_dir, request.uid, request.gid)
     chown(authorized, request.uid, request.gid)
@@ -422,7 +447,11 @@ def disable_guest_principal(
         authorized = home / '.ssh' / 'authorized_keys'
         if authorized.exists():
             original = authorized.read_text(encoding='utf-8').splitlines()
-            retained = [line for line in original if line != request.public_key]
+            retained = [
+                line
+                for line in original
+                if not _same_public_key(line, request.public_key)
+            ]
             removed_key = retained != original
             _atomic_text(
                 authorized,
@@ -434,6 +463,24 @@ def disable_guest_principal(
     sudoers = sudoers_root / f'aivm-principal-{request.guest_user}'
     removed_sudoers = sudoers.exists()
     sudoers.unlink(missing_ok=True)
+    if sudoers.exists():
+        raise GuestEnrollmentError(
+            f'could not remove AIVM sudoers fragment for {request.guest_user!r}'
+        )
+    if passwd is not None:
+        fields = passwd.split(':')
+        home = (
+            Path(fields[5])
+            if len(fields) > 5 and fields[5]
+            else home_root / request.guest_user
+        )
+        authorized = home / '.ssh' / 'authorized_keys'
+        if authorized.exists():
+            remaining = authorized.read_text(encoding='utf-8').splitlines()
+            if any(_same_public_key(line, request.public_key) for line in remaining):
+                raise GuestEnrollmentError(
+                    f'could not verify SSH key revocation for {request.guest_user!r}'
+                )
     return {
         'status': 'ok',
         'operation': request.operation,

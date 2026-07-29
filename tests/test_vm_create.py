@@ -18,8 +18,10 @@ from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
+from aivm.errors import AIVMError
 from aivm.util import CmdError, CmdResult
 from aivm.vm import create_or_start_vm
+from aivm.vm.domain import DomainRemovalReport
 from tests.helpers import (
     FakeProc,
     activate_manager,
@@ -321,3 +323,37 @@ def test_create_vm_raises_clear_error(
 
     with pytest.raises(RuntimeError, match=match):
         create_or_start_vm(cfg, dry_run=False, recreate=False, **create_kwargs)
+
+
+def test_recreate_refuses_to_continue_when_old_storage_remains(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Recreate never provisions over an incompletely deleted old VM."""
+    cfg = make_cfg(None, **{'vm.name': 'vm-retained-storage'})
+    retained = tmp_path / 'vm-retained-storage.qcow2'
+    cfg_path = tmp_path / 'config.toml'
+    from aivm.config_store import Store, save_store
+
+    save_store(Store(), cfg_path)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+    activate_manager(monkeypatch)
+    command_recorder(
+        monkeypatch, {'virsh domstate': FakeProc(0, 'shut off\n', '')}
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create._destroy_and_undefine_vm',
+        lambda name: DomainRemovalReport((retained,), (retained,)),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create.fetch_image',
+        lambda *a, **k: pytest.fail('new image preparation must not begin'),
+    )
+
+    with pytest.raises(AIVMError, match='storage remains'):
+        create_or_start_vm(
+            cfg,
+            dry_run=False,
+            recreate=True,
+            config_store_path=cfg_path,
+        )

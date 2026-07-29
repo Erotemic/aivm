@@ -8,12 +8,18 @@ that libvirt failures surface as clear ``RuntimeError`` messages.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 import pytest
 from pytest import MonkeyPatch
 
+from aivm.errors import AIVMError
 from aivm.vm import restart_vm, shutdown_vm
+from aivm.vm.domain import (
+    _destroy_and_undefine_vm,
+    domain_file_storage_paths,
+)
 from tests.helpers import (
     FakeProc,
     activate_manager,
@@ -275,3 +281,52 @@ def test_restart_vm_error(
 
     with pytest.raises(RuntimeError, match=match):
         restart_vm(cfg, dry_run=False)
+
+
+def test_domain_storage_capture_rejects_non_file_disk(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Deletion must not proceed when libvirt storage cannot be enumerated."""
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    xml = '''
+    <domain>
+      <devices>
+        <disk type="block" device="disk">
+          <source dev="/dev/vg0/vm-disk"/>
+        </disk>
+      </devices>
+    </domain>
+    '''
+    command_recorder(
+        monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')}
+    )
+
+    with pytest.raises(AIVMError, match='non-file or otherwise unverifiable'):
+        domain_file_storage_paths('vm-block-storage')
+
+
+def test_domain_undefine_never_retries_without_storage_removal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Every undefine attempt preserves the remove-all-storage contract."""
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh destroy': FakeProc(0, '', ''),
+            'virsh undefine': FakeProc(1, '', 'metadata flag rejected'),
+        },
+    )
+
+    with pytest.raises(AIVMError, match='domain is still present'):
+        _destroy_and_undefine_vm(
+            'vm-storage-contract', storage_paths=(Path('/tmp/vm.qcow2'),)
+        )
+
+    undefines = [
+        cmd for cmd in rec.normalized if cmd[:2] == ['virsh', 'undefine']
+    ]
+    assert len(undefines) == 3
+    assert all('--remove-all-storage' in cmd for cmd in undefines)

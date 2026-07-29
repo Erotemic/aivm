@@ -455,3 +455,39 @@ boundary. Schema versions now validate as integer-compatible scalar values
 before conversion, and behavior keys validate as strings before dynamic
 attribute lookup. This preserves the released TOML behavior while making the
 versioned adapter acceptable to both ty and mypy without casts or ignores.
+
+## 2026-07-28 21:10:27 -0400
+
+Addressed the external source review as one release-hardening pass rather than
+as isolated patches. Caller authorization now comes from kernel UID/GID and the
+passwd database, with explicit host-account repair and an explicit target for
+whole-command sudo setup. Access disable/remove is serialized under the
+machine-store and VM locks and always verifies guest revocation; enrollment
+rejects implicit key or guest-account rotation and treats SSH comments as
+non-authoritative.
+
+Persistent attachment approval is bound to the source directory device/inode,
+and both immediate attachment and reboot replay use one descriptor-pinned
+privileged bind primitive that walks source and target path components without
+following symlinks. Persistent detach retains a durable `detaching` record,
+prunes host exposure immediately, reconciles a live guest, and can select the
+stored record even after its original source disappears.
+
+VM deletion now uses a durable, idempotent phase journal. It removes the VM
+record only after attachment, credential, libvirt/storage, replay/bootstrap,
+machine-state, and profile cleanup succeeds; retries skip completed phases and
+repair the crash window after the final atomic store write. All storage paths
+are preflighted against the AIVM-managed tree before the first destructive
+phase, every libvirt undefine attempt retains `--remove-all-storage`, and
+unverifiable or retained storage fails closed with a recoverable journal.
+Canonical 0.6 runtime code now consumes real or narrow transport contexts
+instead of synthesizing pre-0.6 identities; a static boundary test enforces the
+remaining compatibility bridge.
+
+Focused adversarial tests cover source/target replacement, missing-source
+detach, comment-only keys, forbidden rotation, concurrent last-access changes,
+interruption/retry boundaries, external storage, retained storage, and final
+store-write recovery. The complete non-E2E suite passes with 970 tests and 8
+skips. Real-system E2E and local ty/mypy execution remain for the consumer
+environment because the required host/libvirt setup and checker executables are
+not available in this artifact environment.

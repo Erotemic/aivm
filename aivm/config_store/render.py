@@ -38,6 +38,12 @@ def _emit_attachment(
     lines.append(f'access = "{_toml_escape(att.access)}"')
     lines.append(f'guest_dst = "{_toml_escape(att.guest_dst)}"')
     lines.append(f'tag = "{_toml_escape(att.tag)}"')
+    if att.state != 'active':
+        lines.append(f'state = "{_toml_escape(att.state)}"')
+    if att.source_dev:
+        lines.append(f'source_dev = {att.source_dev}')
+    if att.source_ino:
+        lines.append(f'source_ino = {att.source_ino}')
     if att.host_lexical_paths:
         parts = [
             f'"{_toml_escape(p)}"' for p in att.host_lexical_paths

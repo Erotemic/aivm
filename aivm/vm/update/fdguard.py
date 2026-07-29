@@ -16,9 +16,7 @@ import shlex
 
 from ...commands import CommandManager, Elided
 from ...config import AgentVMConfig
-from aivm.legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
+from aivm.config_scopes import guest_transport_from_effective_cfg
 from ...errors import AIVMError
 from ...fdguard import (
     FDGUARD_TIMER,
@@ -43,8 +41,8 @@ def _guest_ssh_cmd(
     base64 file payloads and run to several kilobytes on one line, which is
     unreadable in a log, so the caller says what the script does instead.
     """
-    context = resolve_pre_0_6_0_vm_context(cfg)
-    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     return [
         'ssh',
         *ssh_base_args(

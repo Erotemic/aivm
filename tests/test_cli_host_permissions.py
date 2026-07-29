@@ -561,3 +561,51 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
     assert 'sudo groupadd --system aivm' in out
     assert 'sudo usermod -aG aivm' in out
     assert 'sudo install -d -o root -g aivm -m 2775 /var/lib/aivm' in out
+
+
+def test_setup_target_user_ignores_sudo_environment(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from aivm.cli.host_permissions import _resolve_setup_target_user
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setenv('SUDO_USER', 'mallory')
+    monkeypatch.setattr('aivm.cli.host_permissions.os.geteuid', lambda: 1001)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1001, username='alice'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+
+    assert _resolve_setup_target_user('') == 'alice'
+
+
+def test_root_setup_requires_explicit_target_user(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aivm.cli.host_permissions import _resolve_setup_target_user
+    from aivm.errors import AIVMError
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr('aivm.cli.host_permissions.os.geteuid', lambda: 0)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=0, gid=0, username='root'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+
+    with pytest.raises(AIVMError, match='requires an explicit'):
+        _resolve_setup_target_user('')
+    assert _resolve_setup_target_user('alice') == 'alice'

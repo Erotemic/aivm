@@ -39,8 +39,15 @@ Guidance for contributors (human or AI agents) working in this repository.
     records refer to it. Never silently transfer ownership or delete those
     records as a side effect.
   - VM/network lifecycle commands on a machine store must make their global
-    effect visible. The current trust mode assumes mutually trusted host users;
-    ownership fields are not a hostile-user isolation boundary.
+    effect visible. Ownership fields guard ordinary operation, but unrestricted
+    root and system-libvirt administrators are outside AIVM's enforcement
+    boundary.
+  - Authorization identities come from kernel UID/GID plus the passwd database;
+    never use `USER`, `LOGNAME`, or `SUDO_USER` to select an access identity.
+  - Privileged persistent mounts must operate on held, no-symlink directory
+    descriptors and verify the approved filesystem identity.
+  - Destructive lifecycle operations must retain durable recovery coordinates
+    until all external cleanup and final state persistence succeed.
   - Optional per-directory metadata: `.aivm-dir.toml`
 
 ## Core CLI UX Principles
