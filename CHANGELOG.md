@@ -232,6 +232,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   under a header that called a read-only probe a hypervisor mutation.
 
 ### Fixed
+* Fixed persistent host replay pruning on real Linux hosts. The export root is
+  intentionally held with `O_PATH` to pin the approved directory, but Python
+  cannot enumerate an `O_PATH` descriptor directly. Stale-token discovery now
+  reopens that same pinned object through `/proc/self/fd` instead of failing
+  with `EBADF` or falling back to the mutable original pathname.
 * Fixed two recovery holes in the new destructive lifecycle machinery. A
   persistent attachment left in `detaching` state can now rebuild an approved
   disabled replay manifest after its per-VM replay artifacts were removed, so

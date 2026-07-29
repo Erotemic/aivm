@@ -520,3 +520,20 @@ these paths passes (72 tests); the full locked environment could not be
 recreated here because the configured package source lacks `kwconf`, `ty`,
 `mypy`, and `ruff`, so the consumer environment should rerun the repository's
 normal checker and non-E2E commands.
+
+## 2026-07-28 22:05:00 -0400
+
+The real-system E2E run caught a Linux descriptor-semantics mistake that the
+unit tests had not exercised. The persistent replay helper deliberately opens
+the export root with `O_PATH` so the validated directory object remains pinned,
+but `os.listdir(fd)` requires a readable directory descriptor and fails with
+`EBADF` for `O_PATH`. I retained the stronger pinning model and enumerate the
+same object through `/proc/self/fd/<fd>` rather than reopening the mutable
+original pathname.
+
+Added a regression test that loads the generated helper and calls stale pruning
+with the actual path-only descriptor returned by `open_absolute_directory`. The
+remaining uncertainty is environmental rather than conceptual: the full host
+E2E must be rerun to exercise the installed helper under sudo, mount, libvirt,
+and systemd. The focused generated-helper test is expected to reproduce the
+exact failed syscall boundary without requiring privileged mounts.

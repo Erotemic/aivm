@@ -1111,6 +1111,22 @@ def test_host_replay_mounts_only_through_held_descriptors() -> None:
     assert 'expected_dev' in source and 'expected_ino' in source
 
 
+def test_host_replay_prunes_with_path_only_export_root_descriptor(
+    tmp_path: Path,
+) -> None:
+    """O_PATH pins the root, while procfs provides an enumerable view."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    try:
+        helper.prune_stale_mounts(root_fd, set())
+    finally:
+        helper.os.close(root_fd)
+
+
 def test_held_export_root_descriptor_survives_path_replacement(
     tmp_path: Path,
 ) -> None:

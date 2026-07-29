@@ -557,7 +557,10 @@ def persistent_host_replay_python() -> str:
                 os.close(source_fd)
 
         def prune_stale_mounts(export_root_fd, desired_tokens):
-            for child in os.listdir(export_root_fd):
+            # O_PATH descriptors pin the approved directory but cannot be
+            # enumerated directly. Re-open that exact object through procfs
+            # rather than falling back to its mutable pathname.
+            for child in os.listdir(fd_path(export_root_fd)):
                 if child in desired_tokens or not TOKEN_RE.fullmatch(child):
                     continue
                 try:
