@@ -308,6 +308,83 @@ def test_apply_rejects_new_data_source_absent_during_planning(
     assert not layout.root.exists()
 
 
+@pytest.mark.parametrize('source_name', ['credential', 'persistent'])
+def test_apply_rejects_stale_destination_for_missing_reviewed_source(
+    tmp_path: Path, source_name: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    selected = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    shutil.rmtree(selected)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    moves = (
+        plan.credential_material_moves
+        if source_name == 'credential'
+        else plan.persistent_state_moves
+    )
+    target = Path(str(moves[0]['target']))
+    target.mkdir(parents=True)
+    (target / 'stale-material').write_text('not reviewed\n')
+
+    with pytest.raises(
+        MigrationExecutionError,
+        match='destination exists even though its source was reviewed as missing',
+    ):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not layout.config_path.exists()
+    assert not (layout.state_dir / 'migrations').exists()
+    assert (target / 'stale-material').read_text() == 'not reviewed\n'
+
+
+@pytest.mark.parametrize('source_name', ['credential', 'persistent'])
+def test_verify_rejects_destination_created_for_missing_reviewed_source(
+    tmp_path: Path, source_name: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    selected = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    shutil.rmtree(selected)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    moves = (
+        plan.credential_material_moves
+        if source_name == 'credential'
+        else plan.persistent_state_moves
+    )
+    target = Path(str(moves[0]['target']))
+    target.mkdir(parents=True)
+    (target / 'stale-material').write_text('appeared after migration\n')
+
+    with pytest.raises(
+        MigrationExecutionError,
+        match='destination exists even though its source was reviewed as missing',
+    ):
+        verify_applied_migration(
+            result.journal.migration_id,
+            layout=layout,
+            runtime_verifier=_runtime_ok,
+        )
+
+
 @pytest.mark.parametrize(
     ('source_name', 'expected_message'),
     [

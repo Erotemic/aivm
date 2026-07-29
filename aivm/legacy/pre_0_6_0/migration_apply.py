@@ -495,11 +495,33 @@ def _verify_planned_move_source(
     return expected
 
 
+def _verify_missing_source_destination(
+    move: dict[str, object],
+    expected: MigrationPathFingerprint,
+    *,
+    role: str,
+) -> None:
+    if expected.exists:
+        return
+    target = Path(str(move.get('target', ''))).expanduser()
+    if os.path.lexists(target):
+        raise MigrationExecutionError(
+            f'{role} destination exists even though its source was reviewed '
+            f'as missing: {target}'
+        )
+
+
 def _verify_planned_data_sources(plan: MigrationPlan) -> None:
     for move in plan.credential_material_moves:
-        _verify_planned_move_source(move, role='Credential material')
+        expected = _verify_planned_move_source(move, role='Credential material')
+        _verify_missing_source_destination(
+            move, expected, role='Credential material'
+        )
     for move in plan.persistent_state_moves:
-        _verify_planned_move_source(move, role='Persistent state')
+        expected = _verify_planned_move_source(move, role='Persistent state')
+        _verify_missing_source_destination(
+            move, expected, role='Persistent state'
+        )
 
 
 def _plan_fingerprint_payload(plan: MigrationPlan) -> dict[str, object]:
@@ -1026,6 +1048,9 @@ def _copy_tree_if_needed(move: dict[str, object]) -> None:
     target = Path(str(move.get('target', ''))).expanduser()
     expected = _verify_planned_move_source(move, role='Credential material')
     if not expected.exists:
+        _verify_missing_source_destination(
+            move, expected, role='Credential material'
+        )
         return
     if target.is_symlink():
         raise MigrationExecutionError(
@@ -1080,6 +1105,9 @@ def _copy_persistent_state(
         target = Path(str(move.get('target', ''))).expanduser()
         expected = _verify_planned_move_source(move, role='Persistent state')
         if not expected.exists:
+            _verify_missing_source_destination(
+                move, expected, role='Persistent state'
+            )
             continue
         if target.is_symlink():
             raise MigrationExecutionError(
@@ -1230,29 +1258,31 @@ def verify_migration_local(
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
         expected = _planned_move_fingerprint(move)
-        if expected.exists:
-            if (
-                not target.exists()
-                or _path_content_fingerprint(target) != expected
-            ):
-                raise MigrationExecutionError(
-                    f'Credential material verification failed: {source} -> {target}'
-                )
-            copied_credentials += 1
+        if not expected.exists:
+            _verify_missing_source_destination(
+                move, expected, role='Credential material'
+            )
+            continue
+        if not target.exists() or _path_content_fingerprint(target) != expected:
+            raise MigrationExecutionError(
+                f'Credential material verification failed: {source} -> {target}'
+            )
+        copied_credentials += 1
     copied_state = 0
     for move in plan.persistent_state_moves:
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
         expected = _planned_move_fingerprint(move)
-        if expected.exists:
-            if (
-                not target.exists()
-                or _path_content_fingerprint(target) != expected
-            ):
-                raise MigrationExecutionError(
-                    f'Persistent state verification failed: {source} -> {target}'
-                )
-            copied_state += 1
+        if not expected.exists:
+            _verify_missing_source_destination(
+                move, expected, role='Persistent state'
+            )
+            continue
+        if not target.exists() or _path_content_fingerprint(target) != expected:
+            raise MigrationExecutionError(
+                f'Persistent state verification failed: {source} -> {target}'
+            )
+        copied_state += 1
     return {
         'status': 'passed',
         'source_files': sum(

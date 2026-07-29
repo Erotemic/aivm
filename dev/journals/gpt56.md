@@ -693,3 +693,27 @@ is deliberately limited to the compatibility facade, migration planner/apply
 logic, and focused tests. Static checker execution still depends on the
 consumer environment, so the repository lint and type-check scripts remain a
 required pre-commit gate.
+
+## 2026-07-29 14:22:00 -0400
+
+Addressed the remaining migration-integrity review finding for data sources
+that were explicitly reviewed as missing. The earlier source fingerprinting
+correctly prevented a missing source from appearing or changing after plan
+review, but it did not constrain the corresponding destination. That allowed
+stale credential material or persistent VM state already present at the target
+path to be silently adopted by newly migrated records.
+
+A single invariant now covers both data classes: when the reviewed source
+fingerprint is missing, the destination must be lexically absent. The check
+uses `lexists` so dangling symlinks also count as unreviewed destination state.
+It runs during the pre-write source validation, again at the copy boundary to
+close the race between preflight and copy, and during final or later migration
+verification so material that appears after apply cannot be accepted.
+
+The focused regressions cover pre-existing credential and persistent-state
+destinations, verify that rejection happens before machine-store or journal
+writes, and verify that either destination appearing after a successful
+migration is detected later. The focused migration suite passes 31 tests. The
+change is intentionally limited to migration apply/verification, its tests,
+and this journal entry; no plan-schema change is needed because the required
+absence follows directly from the already reviewed missing-source fingerprint.
