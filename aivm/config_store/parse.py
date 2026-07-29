@@ -25,6 +25,14 @@ from ..credentials.validation import (
     validate_metadata_text,
     validate_provider_key_id,
 )
+from ..legacy.pre_0_6_0 import compatibility_surface
+from ..legacy.pre_0_6_0.schema import (
+    apply_mirror_home_to_defaults,
+    apply_mirror_home_to_vm,
+    finalize_schema_version as finalize_pre_0_6_0_schema_version,
+    parse_host_lexical_paths,
+    parse_store_header as parse_pre_0_6_0_store_header,
+)
 from .models import (
     AttachmentEntry,
     CredentialEntry,
@@ -35,7 +43,6 @@ from .models import (
 )
 
 
-_VALID_STORE_KINDS = {'legacy', 'machine'}
 _VALID_PRINCIPAL_STATES = {'pending', 'active', 'disabled', 'error', 'legacy'}
 
 
@@ -105,7 +112,7 @@ def _attachment_from_dict(
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
-        host_lexical_paths=_parse_host_lexical_paths(item),
+        host_lexical_paths=parse_host_lexical_paths(item),
     )
 
 
@@ -256,79 +263,18 @@ def _principal_from_dict(
     )
 
 
-def _parse_host_lexical_paths(item: dict) -> list[str]:
-    """Read the lexical-alias list, accepting both new and legacy field names.
 
-    The new schema (>= 7) stores ``host_lexical_paths`` as a TOML array. The
-    legacy form ``host_lexical_path`` (a single string from schema 6 / earlier
-    schema-6 attach records) is still accepted but produces a deprecation
-    warning. If both keys are present the new list-form wins and the singular
-    value is folded into it for forward-compat.
-    """
-    out: list[str] = []
-    seen: set[str] = set()
-    plural_raw = item.get('host_lexical_paths', None)
-    if isinstance(plural_raw, (list, tuple)):
-        for v in plural_raw:
-            s = str(v).strip()
-            if s and s not in seen:
-                seen.add(s)
-                out.append(s)
-    legacy_raw = item.get('host_lexical_path', None)
-    if legacy_raw is not None:
-        legacy_str = str(legacy_raw).strip()
-        if legacy_str:
-            from loguru import logger as _log
-
-            _log.warning(
-                'Attachment field "host_lexical_path" is deprecated; '
-                'use "host_lexical_paths = [...]" (schema 7+). '
-                'Migrated value: {}',
-                legacy_str,
-            )
-            if legacy_str not in seen:
-                seen.add(legacy_str)
-                out.append(legacy_str)
-    return out
-
-
+@compatibility_surface
 def parse_store_toml(text: str) -> Store:
     """Parse a canonical AIVM desired-state TOML document."""
     raw = tomllib.loads(text)
     reg = Store()
-    parsed_schema_version = int(raw.get('schema_version', 5))
-    reg.schema_version = parsed_schema_version
-    store_kind = str(raw.get('store_kind', 'legacy') or 'legacy').strip()
-    if store_kind not in _VALID_STORE_KINDS:
-        allowed = ', '.join(sorted(_VALID_STORE_KINDS))
-        raise ValueError(
-            f'Invalid store_kind {store_kind!r}; expected one of: {allowed}'
-        )
-    reg.store_kind = store_kind
-    reg.active_vm = str(raw.get('active_vm', '')).strip()
-    # Legacy (schema_version < 6) stored mirror_shared_home_folders under
-    # [behavior]. Newer schemas store it per-VM under [vms.vm]. Capture
-    # the legacy value so we can lift it onto defaults.vm and each
-    # [[vms]].vm below; do not preserve it on reg.behavior.
-    legacy_mirror_home: bool | None = None
-    behavior_raw = raw.get('behavior', None)
-    if isinstance(behavior_raw, dict):
-        for k, v in behavior_raw.items():
-            if k == 'mirror_shared_home_folders':
-                legacy_mirror_home = bool(v)
-                continue
-            if hasattr(reg.behavior, k):
-                setattr(reg.behavior, k, v)
+    compatibility = parse_pre_0_6_0_store_header(raw, reg)
+    legacy_mirror_home = compatibility.mirror_shared_home_folders
     defaults_raw = raw.get('defaults', None)
     if isinstance(defaults_raw, dict):
         reg.defaults = _cfg_from_dict(defaults_raw).expanded_paths()
-        if legacy_mirror_home is not None:
-            reg.defaults.vm.mirror_shared_home_folders = legacy_mirror_home
-    elif legacy_mirror_home is not None:
-        # No [defaults] section: synthesize one so the migrated value is
-        # not silently dropped on round-trip.
-        reg.defaults = AgentVMConfig()
-        reg.defaults.vm.mirror_shared_home_folders = legacy_mirror_home
+    apply_mirror_home_to_defaults(reg, legacy_mirror_home)
 
     for item in raw.get('networks', []):
         if not isinstance(item, dict):
@@ -361,17 +307,7 @@ def parse_store_toml(text: str) -> Store:
             continue
         cfg = _cfg_from_dict(item).expanded_paths()
         cfg.vm.name = name
-        if legacy_mirror_home is not None:
-            # Honor the legacy [behavior] value unless the per-VM block
-            # already overrides it. A schema_version<6 document cannot
-            # have set the per-VM key intentionally, but a hand-edited
-            # mixed file might; respect any explicit override.
-            vm_block = item.get('vm', {})
-            if not (
-                isinstance(vm_block, dict)
-                and 'mirror_shared_home_folders' in vm_block
-            ):
-                cfg.vm.mirror_shared_home_folders = legacy_mirror_home
+        apply_mirror_home_to_vm(cfg, item, legacy_mirror_home)
         network_name = str(item.get('network_name', '')).strip()
         if not network_name:
             network_name = str(cfg.network.name or '').strip()
@@ -442,17 +378,7 @@ def parse_store_toml(text: str) -> Store:
         att = _attachment_from_dict(item)
         if att is not None:
             reg.attachments.append(att)
-    # If we migrated legacy fields, upgrade the on-disk schema_version so
-    # the next write reflects the new layout.
-    if legacy_mirror_home is not None:
-        reg.schema_version = max(reg.schema_version, 6)
-    # Schema 7 introduced host_lexical_paths (list). If any attachment was
-    # parsed via the legacy singular form and the file's schema is below 7,
-    # bump it so the next save uses the new shape.
-    if reg.schema_version < 7 and any(
-        att.host_lexical_paths for att in reg.attachments
-    ):
-        reg.schema_version = 7
+    finalize_pre_0_6_0_schema_version(reg, compatibility)
     if reg.credentials:
         reg.schema_version = max(reg.schema_version, 8)
     if reg.principals or reg.store_kind == 'machine':

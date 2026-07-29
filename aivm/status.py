@@ -16,7 +16,9 @@ from .access_control import TRUST_MODE, access_ownership_summary
 from .attachments.ownership import attachment_owner_label
 from .commands import CommandManager
 from .config import AgentVMConfig
-from .config_scopes import resolve_legacy_vm_context
+from aivm.legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from .config_store import (
     AttachmentEntry,
     find_principals_for_vm,
@@ -477,7 +479,7 @@ def probe_vm_state(
 
 def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Best-effort SSH readiness probe to the guest."""
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     try:
         ident = require_ssh_identity(context.profile.ssh_identity_file)
     except Exception as ex:
@@ -527,7 +529,7 @@ def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
 
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Check whether configured guest packages appear to be installed."""
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     if not cfg.provision.enabled:
         return ProbeOutcome(None, 'disabled in config', '')
     try:
@@ -633,7 +635,7 @@ def render_status(
     sudo-only checks as inconclusive instead of failing hard.
     """
     privilege_mode = CommandManager.current().privilege_mode
-    selected_guest_user = resolve_legacy_vm_context(cfg).guest_user
+    selected_guest_user = resolve_pre_0_6_0_vm_context(cfg).guest_user
     lines: list[str] = [
         '🧭 AgentVM Status',
         f'📄 Config: {path}',

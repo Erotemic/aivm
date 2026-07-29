@@ -53,6 +53,7 @@ from tests.helpers import (
     domain_xml_with_shares,
     make_cfg,
     noop,
+    resolved_test_context,
 )
 
 
@@ -140,8 +141,7 @@ def attached_session_harness(
                 f'No VM definitions found in config store: {cfg_path}. '
                 'Run `aivm config init` then `aivm vm create` first.'
             )
-        from aivm.config_scopes import resolve_legacy_vm_context
-        return resolve_legacy_vm_context(harness.cfg), cfg_path
+        return resolved_test_context(harness.cfg), cfg_path
 
     def fake_vm_create(*args: Any, **kwargs: Any) -> int:
         del args, kwargs

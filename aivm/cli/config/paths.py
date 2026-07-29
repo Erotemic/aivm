@@ -13,10 +13,10 @@ from ...config_store import (
     find_vm,
     load_config_document,
     materialize_vm_cfg,
-    persistent_host_state_dir,
     require_vm,
     split_fragment_paths,
 )
+from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...errors import AIVMError
 from ...machine_store import machine_store_layout
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME

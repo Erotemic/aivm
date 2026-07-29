@@ -104,14 +104,3 @@ def test_machine_impact_output_names_trust_mode(
     assert "Machine-wide action: restart VM 'aivm-2404-shared-host'" in output
     assert '2 access identity record(s)' in output
     assert 'trust_mode=trusted-host-users' in output
-
-
-def test_legacy_store_has_no_machine_impact_output(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    path = tmp_path / 'legacy.toml'
-    save_store(Store(), path, reason='test legacy impact')
-
-    assert vm_machine_impact(path, 'legacy-vm') is None
-    announce_vm_machine_impact(path, 'legacy-vm', action='restart')
-    assert capsys.readouterr().out == ''

@@ -11,6 +11,7 @@ from ..config_store import (
     Store,
     find_principal,
 )
+from ..legacy.pre_0_6_0 import compatibility_surface
 from ..errors import AIVMError
 from ..scoped_store import resolve_store_scope
 
@@ -18,6 +19,7 @@ SYSTEM_ATTACHMENT_OWNER = ATTACHMENT_SYSTEM_OWNER
 LEGACY_ATTACHMENT_OWNER = ''
 
 
+@compatibility_surface
 def attachment_owner_for_context(
     context: ResolvedVMContext, store_path: Path
 ) -> str:
@@ -28,6 +30,7 @@ def attachment_owner_for_context(
     return context.principal.id
 
 
+@compatibility_surface
 def attachment_owner_label(reg: Store, owner_principal_id: str) -> str:
     """Return a stable human-readable attachment owner label."""
     owner = str(owner_principal_id or '').strip()
@@ -41,6 +44,7 @@ def attachment_owner_label(reg: Store, owner_principal_id: str) -> str:
     return owner
 
 
+@compatibility_surface
 def require_attachment_mutation_permission(
     reg: Store,
     attachment: AttachmentEntry,
@@ -66,6 +70,7 @@ def require_attachment_mutation_permission(
     )
 
 
+@compatibility_surface
 def validate_attachment_owner(reg: Store, attachment: AttachmentEntry) -> None:
     """Reject dangling owners in machine stores while accepting legacy input."""
     owner = str(attachment.owner_principal_id or '').strip()

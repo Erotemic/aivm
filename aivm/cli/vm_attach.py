@@ -362,7 +362,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     host_src = logical_absolute_path(request.host_src)
     _validate_host_directory(host_src)
     context, cfg_path = _resolve_attach_context(request, host_src)
-    cfg = context.legacy_cfg
+    cfg = context.effective_cfg
     owner_principal_id = attachment_owner_for_context(context, cfg_path)
     attachment = _resolve_attachment(
         cfg,
@@ -654,7 +654,7 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         vm_opt=request.vm_opt,
         host_src=host_src,
     )
-    cfg = context.legacy_cfg
+    cfg = context.effective_cfg
     current_owner = attachment_owner_for_context(context, cfg_path)
     reg = load_store(cfg_path)
     requested_owner = str(request.owner_principal or '').strip()

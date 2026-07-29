@@ -62,6 +62,14 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Treat the latest released CLI and on-disk config format as the
   backwards-compatibility surface. Unreleased feature-branch internals do
   not need compatibility shims.
+- Put compatibility for released versions before 0.6.0 under
+  `aivm.legacy.pre_0_6_0`. Production imports from that namespace must make
+  the supported version boundary obvious. Move substantial compatibility
+  logic there; use its `@compatibility_surface` marker only for mixed core
+  functions/classes that are genuinely impractical to extract.
+- Put tests and frozen fixtures that exist only for that support window under
+  `tests/legacy/pre_0_6_0`. Ordinary tests must build canonical contexts and
+  must not import the versioned compatibility package as generic scaffolding.
 - Preserve non-interactive usability (`--yes`, `--dry_run`).
 - Keep docs updated when CLI behavior or command tree changes.
 - Write code first for correctness/clarity, then do a short second pass to add

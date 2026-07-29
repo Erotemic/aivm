@@ -16,6 +16,7 @@ from loguru import logger
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .errors import AIVMError
+from .legacy.pre_0_6_0.firewall import table_to_remove
 from .privilege import require_sudo_allowed, sudo_allowed
 from .runtime import virsh_cmd
 from .xmlutil import parse_domain_xml
@@ -49,19 +50,6 @@ def effective_firewall_table(cfg: AgentVMConfig) -> str:
     max_base = max(1, 127 - len(suffix) - 1)
     return f'{base[:max_base]}_{suffix}'
 
-
-def _legacy_firewall_table(cfg: AgentVMConfig) -> str | None:
-    """The pre-namespacing table name, when it differs from the derived one.
-
-    Before tables were namespaced per network, the managed table was
-    exactly ``cfg.firewall.table``. An upgraded host can still carry that
-    table with active drop rules, silently filtering alongside (and
-    shadowing) the new one, so apply/remove must clean it up.
-    """
-    legacy = str(cfg.firewall.table or '').strip()
-    if legacy and legacy != effective_firewall_table(cfg):
-        return legacy
-    return None
 
 
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
@@ -260,7 +248,7 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove previous nftables table inet {table} if present',
             )
-            legacy = _legacy_firewall_table(cfg)
+            legacy = table_to_remove(cfg, current_table=table)
             if legacy:
                 mgr.submit(
                     ['nft', 'delete', 'table', 'inet', legacy],
@@ -522,7 +510,7 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 capture=True,
                 summary=f'Remove nftables table inet {table}',
             )
-            legacy = _legacy_firewall_table(cfg)
+            legacy = table_to_remove(cfg, current_table=table)
             if legacy:
                 mgr.submit(
                     ['nft', 'delete', 'table', 'inet', legacy],

@@ -28,7 +28,7 @@ from aivm.config_store import (
 )
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-from tests.helpers import patch_ns, returns
+from tests.helpers import patch_ns, resolved_test_context, returns
 
 AttachEnv = tuple[AgentVMConfig, Path, Path, ResolvedAttachment]
 
@@ -95,11 +95,10 @@ def patch_vm_attach_env(
     unconditionally; ``probe_vm_state`` reports ``running`` unless it is
     ``None`` (the caller installs its own probe to inspect kwargs).
     """
-    from aivm.config_scopes import resolve_legacy_vm_context
 
     mapping: dict[str, Any] = {
         '_resolve_attach_context': returns(
-            (resolve_legacy_vm_context(cfg), cfg_path)
+            (resolved_test_context(cfg), cfg_path)
         ),
         'record_vm': returns(cfg_path),
         '_resolve_attachment': returns(attachment),
@@ -117,13 +116,12 @@ def _fake_prepare_session(
     captured: list,
 ) -> Any:
     """Return a fake _prepare_attached_session callable that records its kwargs."""
-    from aivm.config_scopes import resolve_legacy_vm_context
     from aivm.services import PreparedSession
 
     def fake_prepare(**kw: Any) -> PreparedSession:
         captured.append(kw)
         return PreparedSession(
-            context=resolve_legacy_vm_context(cfg),
+            context=resolved_test_context(cfg),
             cfg_path=cfg_path,
             host_src=kw['host_src'],
             attachment_mode=attachment.mode,

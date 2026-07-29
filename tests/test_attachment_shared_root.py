@@ -22,6 +22,7 @@ from tests.helpers import (
     FakeProc,
     activate_manager,
     command_recorder,
+    resolved_test_context,
 )
 
 
@@ -94,11 +95,10 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
     cfg_path = tmp_path / 'config.toml'
 
-    from aivm.config_scopes import resolve_legacy_vm_context
 
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attach_context',
-        lambda *a, **k: (resolve_legacy_vm_context(cfg), cfg_path),
+        lambda *a, **k: (resolved_test_context(cfg), cfg_path),
     )
     monkeypatch.setattr(
         'aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path
@@ -522,52 +522,6 @@ def test_shared_root_host_bind_creates_export_dirs_without_sudo(
     assert 'findmnt' in plain, raw
     assert 'mkdir' not in sudoed, raw
     assert sudoed == {'mount'}, raw
-
-
-def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A pre-existing root-owned export root still escalates the child mkdir.
-
-    Hosts created before storage moved under the user keep a root-owned
-    ``<base_dir>/<vm>/shared-root``. The decision is per-path, so the export
-    root is skipped (it exists) and the per-project target below it still
-    escalates. Simulated with a directory the invoking user owns but cannot
-    write, which is what ``os.access(W_OK)`` reports for a root-owned one.
-    """
-    if os.geteuid() == 0:
-        pytest.skip('root can write through any mode bits')
-
-    cfg, source_dir, attachment = _shared_root_attachment(
-        tmp_path, name='vm-legacy'
-    )
-    export_root = Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
-    export_root.mkdir(parents=True)
-    export_root.chmod(0o555)
-
-    activate_manager(monkeypatch, yes_sudo=True, yes=True)
-    rec = command_recorder(
-        monkeypatch,
-        {'findmnt -P -n': FakeProc(1)},
-        default=FakeProc(0),
-    )
-    try:
-        _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
-    finally:
-        export_root.chmod(0o755)
-
-    joined = [' '.join(p) for p in rec.calls]
-    # The export root already exists, so no mkdir is issued for it at all.
-    assert not any(
-        line.endswith(str(export_root)) for line in joined if 'mkdir' in line
-    )
-    # The project target below it is unwritable, so its mkdir escalates.
-    assert any(
-        line.startswith('sudo')
-        and 'mkdir -p' in line
-        and 'hostcode-source' in line
-        for line in joined
-    ), rec.calls
 
 
 def test_shared_root_host_bind_probes_a_read_only_target_without_sudo(

@@ -433,6 +433,14 @@ The lifecycle, trust, and removal rules are recorded in
 roadmap is complete; the remaining work is real-system migration/shared-user
 validation and release review.
 
+
+### Compatibility quarantine
+
+Pre-0.6 migration and runtime compatibility is isolated under
+`aivm.legacy.pre_0_6_0`; mixed canonical surfaces are explicitly marked. The
+removal boundary and retirement procedure are recorded in
+[`pre-0.6-compatibility-boundary.md`](pre-0.6-compatibility-boundary.md).
+
 ## Work package 1: Separate models without moving storage
 
 ### Goals

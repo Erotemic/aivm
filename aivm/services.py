@@ -22,7 +22,10 @@ from loguru import logger as log
 
 from .commands import CommandManager
 from .config import AgentVMConfig
-from .config_scopes import ResolvedVMContext, resolve_legacy_vm_context
+from .config_scopes import ResolvedVMContext
+from .legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from .config_store import (
     AttachmentEntry,
     find_attachments,
@@ -352,12 +355,12 @@ def _load_context_with_path(
     if scope.is_machine:
         profile = load_scope_profile(scope)
         context = resolve_machine_context(reg, vm_name, profile=profile)
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
     else:
         from .config_store import materialize_vm_cfg
 
         cfg = materialize_vm_cfg(reg, vm_name)
-        context = resolve_legacy_vm_context(cfg)
+        context = resolve_pre_0_6_0_vm_context(cfg)
     changed = (
         hydrate_ssh_identity_defaults(cfg)
         if hydrate_runtime_defaults
@@ -380,7 +383,7 @@ def _load_context_with_path(
                     f'loading VM {cfg.vm.name}.'
                 ),
             )
-            context = resolve_legacy_vm_context(cfg)
+            context = resolve_pre_0_6_0_vm_context(cfg)
     return context, store_path
 
 
@@ -399,7 +402,7 @@ def load_cfg_with_path(
         hydrate_runtime_defaults=hydrate_runtime_defaults,
         persist_runtime_defaults=persist_runtime_defaults,
     )
-    return context.legacy_cfg, path
+    return context.effective_cfg, path
 
 
 def load_vm_context_with_path(
@@ -523,7 +526,7 @@ class PreparedSession:
     @property
     def cfg(self) -> AgentVMConfig:
         """Legacy machine config view for call sites not yet context-native."""
-        return self.context.legacy_cfg
+        return self.context.effective_cfg
 
 
 def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:

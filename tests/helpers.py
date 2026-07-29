@@ -415,92 +415,6 @@ def records(sink: list[Any], value: Any = None) -> Callable[..., Any]:
 
 
 # ---------------------------------------------------------------------------
-# Shared-host scope scaffolding
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class SyntheticPrincipal:
-    """One host user's test identity and legacy compatibility store."""
-
-    host_user: str
-    host_uid: int
-    host_gid: int
-    guest_user: str
-    home: Path
-    config_path: Path
-    host_src: Path
-
-
-@dataclass(frozen=True)
-class SharedMachineScenario:
-    """Two host principals selecting one synthetic global VM identity."""
-
-    vm_name: str
-    machine_root: Path
-    alice: SyntheticPrincipal
-    bob: SyntheticPrincipal
-
-
-def make_shared_machine_scenario(tmp_path: Path) -> SharedMachineScenario:
-    """Create isolated Alice/Bob stores that describe the same legacy VM.
-
-    Stage 0 deliberately models the inconsistent released persistence shape:
-    each user has a private store, but machine-owned fields are byte-for-byte
-    equivalent.  Stage 1 then proves the runtime resolver selects distinct
-    principals without changing machine identity.
-    """
-    vm_name = 'aivm-2404-shared-host'
-    machine_root = tmp_path / 'machine'
-    base_dir = machine_root / 'libvirt'
-
-    principals: dict[str, SyntheticPrincipal] = {}
-    for username, uid, guest_user in (
-        ('alice', 1001, 'alice-agent'),
-        ('bob', 1002, 'bob-agent'),
-    ):
-        home = tmp_path / 'users' / username
-        ssh_dir = home / '.ssh'
-        config_path = home / '.config' / 'aivm' / 'config.toml'
-        host_src = home / 'code' / 'project'
-        ssh_dir.mkdir(parents=True)
-        host_src.mkdir(parents=True)
-        private_key = ssh_dir / 'id_aivm_ed25519'
-        public_key = Path(str(private_key) + '.pub')
-        private_key.write_text(f'PRIVATE-{username}\n', encoding='utf-8')
-        public_key.write_text(f'ssh-ed25519 PUBLIC-{username}\n', encoding='utf-8')
-
-        cfg = make_cfg(
-            None,
-            **{
-                'vm.name': vm_name,
-                'vm.user': guest_user,
-                'paths.base_dir': str(base_dir),
-                'paths.state_dir': str(home / '.local' / 'state' / 'aivm'),
-                'paths.ssh_identity_file': str(private_key),
-                'paths.ssh_pubkey_path': str(public_key),
-            },
-        )
-        write_store(config_path, cfg, active_vm=vm_name)
-        principals[username] = SyntheticPrincipal(
-            host_user=username,
-            host_uid=uid,
-            host_gid=uid,
-            guest_user=guest_user,
-            home=home,
-            config_path=config_path,
-            host_src=host_src,
-        )
-
-    return SharedMachineScenario(
-        vm_name=vm_name,
-        machine_root=machine_root,
-        alice=principals['alice'],
-        bob=principals['bob'],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Config / store / CLI scaffolding
 # ---------------------------------------------------------------------------
 
@@ -529,6 +443,49 @@ def make_cfg(tmp_path: Path | None = None, **overrides: Any) -> Any:
             target = getattr(target, section)
         setattr(target, leaf, value)
     return cfg
+
+
+def resolved_test_context(
+    cfg: Any,
+    *,
+    host_user: str = 'test-user',
+    host_uid: int = 1000,
+    host_gid: int = 1000,
+    guest_user: str | None = None,
+    principal_id: str | None = None,
+    state: str = 'active',
+) -> Any:
+    """Build a canonical persisted-user runtime context for ordinary tests.
+
+    Tests outside ``tests/legacy`` should use this helper instead of importing
+    a versioned compatibility adapter merely to obtain a ``ResolvedVMContext``.
+    """
+    from aivm.config_scopes import resolve_persisted_vm_context
+    from aivm.config_store import PrincipalEntry
+    from aivm.profile_store import UserProfileStore
+
+    selected_guest_user = guest_user or cfg.vm.user or 'agent'
+    principal = PrincipalEntry(
+        id=principal_id or f'principal-test-{host_user}',
+        vm_name=cfg.vm.name,
+        host_user=host_user,
+        host_uid=host_uid,
+        host_gid=host_gid,
+        guest_user=selected_guest_user,
+        state=state,
+    )
+    profile = UserProfileStore(
+        active_vm=cfg.vm.name,
+        ssh_identity_file=cfg.paths.ssh_identity_file,
+        ssh_pubkey_path=cfg.paths.ssh_pubkey_path,
+        state_dir=cfg.paths.state_dir,
+        default_guest_user=selected_guest_user,
+    )
+    return resolve_persisted_vm_context(
+        cfg,
+        principal_entry=principal,
+        profile_store=profile,
+    )
 
 
 def write_store(

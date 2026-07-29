@@ -13,11 +13,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
-from tests.helpers import (
-    SharedMachineScenario,
-    make_shared_machine_scenario,
-    written_cfg,
-)
+from tests.helpers import written_cfg
 
 
 @pytest.fixture(autouse=True)
@@ -49,12 +45,6 @@ def isolated_user_state(
     monkeypatch.setenv('XDG_STATE_HOME', str(paths['state']))
     monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(paths['machine']))
     return paths
-
-
-@pytest.fixture
-def shared_machine_scenario(tmp_path: Path) -> SharedMachineScenario:
-    """Two isolated host users backed by one synthetic machine identity."""
-    return make_shared_machine_scenario(tmp_path)
 
 
 @pytest.fixture(autouse=True)

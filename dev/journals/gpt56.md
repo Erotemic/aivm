@@ -414,3 +414,44 @@ Corrected the persistent-manifest lock scope to expose the same `bool | None`
 replay-state decision's final return outside the `with` block so mypy can prove
 that the function returns on every normal path. Neither change alters locking,
 exception propagation, or replay-state selection.
+## 2026-07-28 19:37:16 -0400
+
+Quarantined released pre-0.6 compatibility behind the explicit
+`aivm.legacy.pre_0_6_0` package. The migration planner/executor and CLI,
+released paths and scope selection, synthetic runtime adapter, old schema
+normalization, firewall cleanup, and historical virtiofsd-wrapper recognition
+now live there. Canonical store/parser/render/ownership surfaces that still
+must accept both generations carry a searchable no-op marker rather than
+hiding their compatibility obligation.
+
+The main risk was creating circular imports while moving schema and scope
+helpers beneath the canonical config model. Keeping the marker module
+dependency-free and making the selection helper return only paths avoided that.
+I also renamed `ResolvedVMContext.legacy_cfg` to `effective_cfg`; it was used by
+both machine and released stores, so the old name falsely made canonical code
+look like compatibility code. I am confident the new boundary is materially
+easier to delete, but full-suite and checker validation remain important
+because many imports moved even where behavior did not.
+
+## 2026-07-28 19:55:00 -0400
+
+Moved every test and frozen fixture whose purpose is support for released
+pre-0.6 installations into `tests/legacy/pre_0_6_0`. This includes migration,
+old schema parsing, old per-user paths, firewall-table cleanup, historical
+virtiofsd wrappers, and old shared-root ownership repair. Ordinary runtime
+tests now construct canonical persisted contexts through `tests.helpers` rather
+than importing the legacy adapter as convenient scaffolding.
+
+The boundary test now rejects versioned compatibility imports outside the
+legacy test subtree and confirms that the released fixtures move with it. This
+makes retirement mechanically clear: delete the production compatibility
+subtree, delete the matching test subtree, then remove the explicitly marked
+mixed surfaces.
+
+## 2026-07-28 20:18:00 -0400
+
+Narrowed the dynamic pre-0.6 schema header values at the compatibility
+boundary. Schema versions now validate as integer-compatible scalar values
+before conversion, and behavior keys validate as strings before dynamic
+attribute lookup. This preserves the released TOML behavior while making the
+versioned adapter acceptable to both ty and mypy without casts or ignores.

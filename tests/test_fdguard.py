@@ -17,7 +17,6 @@ import pytest
 from aivm.cli.vm_guard import VMFdGuardCLI
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
-from aivm.config_scopes import resolve_legacy_vm_context
 from aivm.fdguard import (
     FDGUARD_BIN,
     FDGUARD_TIMER,
@@ -34,7 +33,7 @@ from aivm.fdguard import (
 from aivm.vm.cloudinit import _render_user_data_text
 from aivm.vm.update import FdGuardDrift, VMUpdateDrift
 from aivm.vm.update.fdguard import _apply_fdguard_drift, _fdguard_drift
-from tests.helpers import run_cli
+from tests.helpers import resolved_test_context, run_cli
 
 STOCK_UPDATEDB_CONF = (
     'PRUNE_BIND_MOUNTS="yes"\n'
@@ -640,7 +639,7 @@ def test_vm_fdguard_install_runs_quoted_remote_command(
 
     monkeypatch.setattr(
         'aivm.cli.vm_guard.load_vm_context',
-        lambda *a, **k: resolve_legacy_vm_context(cfg),
+        lambda *a, **k: resolved_test_context(cfg),
     )
     monkeypatch.setattr(
         'aivm.cli.vm_guard._resolve_ip_for_ssh_ops',

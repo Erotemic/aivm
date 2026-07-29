@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from ..config_store import CredentialEntry, Store, find_principal
+from ..legacy.pre_0_6_0 import compatibility_surface
 from ..errors import AIVMError
+
+
+@compatibility_surface
 def credential_principal_label(reg: Store, principal_id: str) -> str:
     """Return a stable human-readable credential owner label."""
     principal = str(principal_id or '').strip()
@@ -15,6 +19,7 @@ def credential_principal_label(reg: Store, principal_id: str) -> str:
     return principal
 
 
+@compatibility_surface
 def validate_credential_principal(
     reg: Store, credential: CredentialEntry
 ) -> None:
@@ -41,6 +46,7 @@ def validate_credential_principal(
         )
 
 
+@compatibility_surface
 def require_credential_owner(
     reg: Store,
     credential: CredentialEntry,

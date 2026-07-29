@@ -38,6 +38,7 @@ from tests.helpers import (
     capture_logs,
     command_recorder,
     domain_xml_with_shares,
+    resolved_test_context,
 )
 
 
@@ -741,37 +742,6 @@ def test_record_attachment_no_lexical_path_for_non_symlink(
     assert entries[0].host_lexical_paths == []
 
 
-def test_store_backward_compat_missing_lexical_path(
-    tmp_path: Path,
-) -> None:
-    """Store loads cleanly from old TOML files that have no host_lexical_path field."""
-    cfg_path = tmp_path / 'config.toml'
-    # Minimal old-format store with no host_lexical_path
-    cfg_path.write_text(
-        'schema_version = 5\n'
-        'active_vm = ""\n'
-        '[behavior]\n'
-        'yes_sudo = false\n'
-        'auto_approve_readonly_sudo = true\n'
-        'verbose = 1\n'
-        'mirror_shared_home_folders = false\n'
-        '[[attachments]]\n'
-        'host_path = "/some/real/path"\n'
-        'vm_name = "oldvm"\n'
-        'mode = "shared"\n'
-        'access = "rw"\n'
-        'guest_dst = "/some/real/path"\n'
-        'tag = "hostcode-path-abcd1234"\n',
-        encoding='utf-8',
-    )
-
-    reg = load_store(cfg_path)
-    assert len(reg.attachments) == 1
-    att = reg.attachments[0]
-    assert att.host_path == '/some/real/path'
-    assert att.host_lexical_paths == []  # graceful default
-
-
 def test_restore_uses_lexical_path_for_companion_symlink(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -980,8 +950,7 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
                 f'No VM definitions found in config store: {cfg_path}. '
                 'Run `aivm config init` then `aivm vm create` first.'
             )
-        from aivm.config_scopes import resolve_legacy_vm_context
-        return resolve_legacy_vm_context(cfg), cfg_path
+        return resolved_test_context(cfg), cfg_path
 
     create_calls: list[dict] = []
 

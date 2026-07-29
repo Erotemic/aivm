@@ -36,8 +36,9 @@ from .config_store import (
     upsert_principal,
     upsert_vm_with_network,
 )
-from .config_store.paths import store_path as legacy_store_path
 from .errors import AIVMError
+from .legacy.pre_0_6_0 import compatibility_surface
+from .legacy.pre_0_6_0.selection import selected_store_path
 from .machine_store import (
     MachineStoreLayout,
     current_machine_group_gid,
@@ -67,36 +68,29 @@ class StoreScope:
         return self.mode == 'machine'
 
 
-def _store_exists(path: Path) -> bool:
-    return bool(split_source_paths(path))
-
-
+@compatibility_surface
 def resolve_store_scope(
     config_opt: str | None,
     *,
     for_init: bool = False,
 ) -> StoreScope:
     """Choose legacy or machine persistence without silently migrating data."""
+    layout = machine_store_layout()
+    legacy_path = selected_store_path(
+        config_opt,
+        machine_store_path=layout.config_path,
+    )
+    if config_opt and legacy_path is not None:
+        return StoreScope(mode='legacy', store_path=legacy_path)
     if config_opt:
-        explicit = Path(config_opt).expanduser().resolve()
-        layout = machine_store_layout()
-        if explicit == layout.config_path:
-            return StoreScope(
-                mode='machine',
-                store_path=layout.config_path,
-                profile_path=profile_store_path(),
-                machine_layout=layout,
-            )
         return StoreScope(
-            mode='legacy',
-            store_path=explicit,
+            mode='machine',
+            store_path=layout.config_path,
+            profile_path=profile_store_path(),
+            machine_layout=layout,
         )
 
-    layout = machine_store_layout()
-    machine_exists = _store_exists(layout.config_path)
-    legacy_path = legacy_store_path().expanduser().resolve()
-    legacy_exists = _store_exists(legacy_path)
-
+    machine_exists = bool(split_source_paths(layout.config_path))
     if machine_exists:
         return StoreScope(
             mode='machine',
@@ -104,7 +98,7 @@ def resolve_store_scope(
             profile_path=profile_store_path(),
             machine_layout=layout,
         )
-    if legacy_exists:
+    if legacy_path is not None:
         return StoreScope(mode='legacy', store_path=legacy_path)
 
     # A brand-new implicit install starts in the new architecture. ``for_init``
@@ -141,6 +135,7 @@ def ensure_machine_scope_ready(scope: StoreScope) -> None:
         ) from ex
 
 
+@compatibility_surface
 def load_scope_store(scope: StoreScope) -> Store:
     """Load the selected machine or legacy desired-state document."""
     if scope.is_machine:
@@ -150,7 +145,9 @@ def load_scope_store(scope: StoreScope) -> Store:
             raise AIVMError(
                 f'Unsupported machine store kind: {reg.store_kind!r}'
             )
-        if reg.store_kind == 'legacy' and _store_exists(scope.store_path):
+        if reg.store_kind == 'legacy' and bool(
+            split_source_paths(scope.store_path)
+        ):
             raise AIVMError(
                 f'The machine-store path {scope.store_path} contains a legacy '
                 'per-user document. Move it aside or run the future migration '
@@ -163,6 +160,7 @@ def load_scope_store(scope: StoreScope) -> Store:
     return load_store(scope.store_path)
 
 
+@compatibility_surface
 def save_scope_store(
     scope: StoreScope,
     reg: Store,

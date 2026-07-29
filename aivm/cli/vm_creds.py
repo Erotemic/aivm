@@ -140,7 +140,7 @@ class VMCredsAddCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=not bool(args.dry_run),
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         mgr = CommandManager.current()
         requested_provider = providers.normalize_provider(args.provider)
         default_host = (
@@ -525,7 +525,7 @@ class VMCredsListCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=False,
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         selected_principal = None if args.all_principals else principal_id
         entries = find_credentials_for_vm(
             store, cfg.vm.name, principal_id=selected_principal
@@ -591,7 +591,7 @@ class VMCredsStatusCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=False,
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         selector_principal = None if args.all_principals else principal_id
         entry = _resolve_credential_selector(
             store,
@@ -713,7 +713,7 @@ class VMCredsRevokeCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=not bool(args.dry_run),
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,
@@ -791,7 +791,7 @@ class VMCredsAbandonCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=not bool(args.dry_run),
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         entry = _resolve_credential_selector(
             store,
             vm_name=cfg.vm.name,

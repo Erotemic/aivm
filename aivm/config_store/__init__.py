@@ -39,12 +39,7 @@ from .mutate import (
     upsert_vm_with_network,
 )
 from .parse import parse_store_toml
-from .paths import (
-    app_data_dir,
-    app_data_path,
-    persistent_host_state_dir,
-    store_path,
-)
+from .paths import app_data_dir, app_data_path
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,
@@ -110,7 +105,6 @@ __all__ = [
     'unknown_name_message',
     'network_users',
     'parse_store_toml',
-    'persistent_host_state_dir',
     'remove_attachment',
     'remove_credential',
     'remove_network',
@@ -127,7 +121,6 @@ __all__ = [
     'render_store_toml',
     'save_store',
     'update_store',
-    'store_path',
     'upsert_attachment',
     'upsert_credential',
     'upsert_network',

@@ -25,7 +25,9 @@ from ...commands import (
     CommandRole,
 )
 from ...config import AgentVMConfig
-from ...config_scopes import resolve_legacy_vm_context
+from aivm.legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from ...privilege import path_needs_sudo
 from ...runtime import require_ssh_identity, ssh_base_args
 
@@ -256,7 +258,7 @@ def _run_guest_ssh_script_with_retry(
     connect_timeout_s: int = 15,
     retries: int = 3,
 ) -> CommandResult | None:
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',

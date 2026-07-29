@@ -18,7 +18,6 @@ from aivm.attachments.resolve import _resolve_attachment
 from aivm.attachments.session import _saved_vm_attachments
 from aivm.cli.vm_attach import VMDetachRequest, run_vm_detach
 from aivm.config import AgentVMConfig
-from aivm.config_scopes import resolve_legacy_vm_context
 from aivm.config_store import (
     AttachmentEntry,
     PrincipalEntry,
@@ -34,6 +33,7 @@ from aivm.config_store import (
 from aivm.errors import AIVMError
 from aivm.machine_store import machine_store_layout
 from aivm.services import resolve_vm_name
+from tests.helpers import resolved_test_context
 from aivm.status import ProbeOutcome, render_global_status
 
 
@@ -163,7 +163,7 @@ def test_detach_blocks_foreign_owner_without_override(
     from aivm.config_store import save_store
 
     save_store(reg, path)
-    context = resolve_legacy_vm_context(cfg, host_user='alice')
+    context = resolved_test_context(cfg, host_user='alice')
     monkeypatch.setattr(
         'aivm.cli.vm_attach.resolve_context_for_code',
         lambda **kwargs: (context, path),

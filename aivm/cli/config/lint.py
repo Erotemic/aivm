@@ -8,6 +8,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any, cast
 
+from ...legacy.pre_0_6_0 import compatibility_surface
 from ...config import (
     FirewallConfig,
     ImageConfig,
@@ -66,6 +67,7 @@ def _lint_store_file(path: Path) -> list[str]:
     return _lint_store_text(path.read_text(encoding='utf-8'))
 
 
+@compatibility_surface
 def _lint_store_text(text: str) -> list[str]:
     """Return schema/shape problems for a canonical config document.
 

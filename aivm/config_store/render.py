@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import AttachmentEntry, CredentialEntry, PrincipalEntry, Store
 
 
@@ -129,6 +130,7 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
 
 
 
+@compatibility_surface
 def render_store_toml(
     reg: Store, *, attachment_style: str = 'legacy'
 ) -> str:

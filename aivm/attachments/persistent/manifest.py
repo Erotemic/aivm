@@ -18,12 +18,14 @@ from types import TracebackType
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
-from ...config_scopes import resolve_legacy_vm_context
+from aivm.legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from ...config_store import (
     find_attachments_for_vm,
     load_store,
-    persistent_host_state_dir,
 )
+from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...config_store.io import _atomic_write_text
 from ...machine_store import (
     current_machine_group_gid,
@@ -323,7 +325,7 @@ def _sync_persistent_attachment_manifest_to_guest(
     dry_run: bool,
     check: bool = True,
 ) -> bool:
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     manifest_path = _persistent_host_manifest_path(cfg, cfg_path)
     remote_target = (
         f'{context.ssh_target(ip)}:{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}'

@@ -263,7 +263,7 @@ def _print_remote_session_recipe(
     reason: str,
 ) -> None:
     """Print a connect-from-workstation recipe in lieu of launching code."""
-    cfg = context.legacy_cfg
+    cfg = context.effective_cfg
     vm_name = context.machine.vm.name
     guest_path = session.share_guest_dst
     tunnel_name = _remote_tunnel_name(cfg)
@@ -407,7 +407,7 @@ class VMCodeCLI(_BaseCommand):
             log.error(str(ex))
             return 1
         context = session.context
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         if args.dry_run:
             if args.tunnel:
                 print(
@@ -551,7 +551,7 @@ class VMSSHCLI(_BaseCommand):
             log.error(str(ex))
             return 1
         context = session.context
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         if args.dry_run:
             print(
                 f'DRYRUN: would SSH to {context.guest_user}@<ip> and cd {session.share_guest_dst}'

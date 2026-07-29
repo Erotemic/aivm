@@ -10,6 +10,7 @@ from ..config import (
     FirewallConfig,
     NetworkConfig,
 )
+from ..legacy.pre_0_6_0 import compatibility_surface
 from ..credentials.schema import (
     CREDENTIAL_ACCESS_READ,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
@@ -85,6 +86,7 @@ class PrincipalEntry:
     state: str = 'pending'
 
 
+@compatibility_surface
 @dataclass
 class Store:
     schema_version: int = 8

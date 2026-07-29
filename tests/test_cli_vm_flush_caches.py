@@ -14,8 +14,7 @@ from aivm.cli.vm_cache import (
 )
 from aivm.commands import CommandResult
 from aivm.config import AgentVMConfig
-from aivm.config_scopes import resolve_legacy_vm_context
-from tests.helpers import run_cli
+from tests.helpers import resolved_test_context, run_cli
 
 
 def test_parse_drop_cache_levels() -> None:
@@ -73,7 +72,7 @@ def test_vm_flush_caches_runs_guest_command(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(
         'aivm.cli.vm_cache.load_vm_context',
-        lambda *a, **k: resolve_legacy_vm_context(cfg),
+        lambda *a, **k: resolved_test_context(cfg),
     )
     monkeypatch.setattr(
         'aivm.cli.vm_cache._resolve_ip_for_ssh_ops',

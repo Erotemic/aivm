@@ -9,7 +9,9 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..config_scopes import resolve_legacy_vm_context
+from aivm.legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
@@ -73,7 +75,7 @@ def wait_for_ip(
     cfg: AgentVMConfig, *, timeout_s: int = 360, dry_run: bool = False
 ) -> str:
     log.debug('Waiting for VM IP via DHCP lease')
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     p = _paths(cfg, dry_run=dry_run)
     ip_file = p['ip_file']
     if dry_run:
@@ -232,7 +234,7 @@ def wait_for_ip(
 
 def ssh_config(cfg: AgentVMConfig) -> str:
     cfg = cfg.expanded_paths()
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     ident = context.profile.ssh_identity_file or '~/.ssh/id_ed25519'
     host = cfg.vm.name
     ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
@@ -277,7 +279,7 @@ def wait_for_ssh(
     dry_run: bool = False,
 ) -> None:
     cfg = cfg.expanded_paths()
-    context = resolve_legacy_vm_context(cfg)
+    context = resolve_pre_0_6_0_vm_context(cfg)
     ident = require_ssh_identity(context.profile.ssh_identity_file)
     if dry_run:
         log.info('DRYRUN: wait for SSH on {}', context.ssh_target(ip))

@@ -233,37 +233,6 @@ def test_persistent_manifest_write_is_byte_for_byte_noop(
     assert path.read_bytes() == before
 
 
-def test_persistent_host_manifest_path_uses_app_data_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-app-data'
-    cfg.paths.base_dir = '/var/lib/libvirt/aivm/aivm-2404'
-
-    calls: list[tuple[str, str, int]] = []
-
-    def fake_appdir(
-        appname: str, kind: str, *, mode: int = 0o777
-    ) -> Path:
-        calls.append((appname, kind, mode))
-        return tmp_path / kind
-
-    monkeypatch.setattr('aivm.config_store.paths._appdir', fake_appdir)
-
-    path = _persistent_host_manifest_path(cfg)
-
-    assert calls == [('aivm', 'data', 0o700)]
-    assert (
-        path
-        == tmp_path
-        / 'data'
-        / cfg.vm.name
-        / 'state'
-        / 'persistent-attachments.json'
-    )
-    assert str(cfg.paths.base_dir) not in str(path)
-
-
 def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
     """The replay manifest lives in root-owned storage, VM name flattened."""
     from aivm.attachments.persistent import (

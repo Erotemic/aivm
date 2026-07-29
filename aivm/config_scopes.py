@@ -1,20 +1,13 @@
-"""Runtime configuration boundaries for the shared-machine architecture.
+"""Canonical runtime configuration boundaries for shared-machine AIVM.
 
-The released on-disk schema still stores machine settings, the original guest
-login, and caller-owned SSH paths in one :class:`AgentVMConfig`.  Version 0.6
-starts separating those concepts in runtime code before changing persistence.
-This module is the compatibility seam: callers resolve one
-:class:`ResolvedVMContext` and stop treating ``vm.user`` as a machine field.
-
-The types intentionally snapshot the legacy config instead of mutating it.
-Later work can populate the same context from a machine-global store plus a
-per-user profile without another application-wide SSH/guest refactor.
+Persistence adapters resolve one :class:`ResolvedVMContext` so ordinary
+runtime code consumes machine state, one access identity, one user profile,
+and an effective aggregate config without knowing which on-disk generation
+produced them.
 """
 
 from __future__ import annotations
 
-import getpass
-import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -47,7 +40,7 @@ class MachineVMConfig:
 
 @dataclass(frozen=True)
 class MachineConfig:
-    """Machine-global desired state represented by the legacy schema."""
+    """Machine-global desired state for one effective VM."""
 
     vm: MachineVMConfig
     network: NetworkConfig
@@ -69,7 +62,7 @@ class VMPrincipal:
     host_gid: int
     guest_user: str
     ssh_public_key: str = ''
-    state: str = 'legacy'
+    state: str = 'active'
 
 
 @dataclass(frozen=True)
@@ -90,10 +83,10 @@ class ResolvedVMContext:
     machine: MachineConfig
     principal: VMPrincipal
     profile: UserProfile
-    # Transitional escape hatch for machine operations not migrated yet.  It is
-    # excluded from equality so caller-specific legacy fields cannot make two
-    # views of the same machine compare unequal.
-    legacy_cfg: AgentVMConfig = field(repr=False, compare=False)
+    # Effective aggregate config used by runtime code that still consumes the
+    # historical AgentVMConfig shape. It is excluded from equality because
+    # caller-owned profile fields do not redefine machine identity.
+    effective_cfg: AgentVMConfig = field(repr=False, compare=False)
 
     @property
     def guest_user(self) -> str:
@@ -106,15 +99,6 @@ class ResolvedVMContext:
     def ssh_target(self, host: str) -> str:
         return f'{self.guest_user}@{host}'
 
-
-def _host_uid() -> int:
-    getter = getattr(os, 'getuid', None)
-    return int(getter()) if getter is not None else -1
-
-
-def _host_gid() -> int:
-    getter = getattr(os, 'getgid', None)
-    return int(getter()) if getter is not None else -1
 
 
 def machine_config_from_effective(cfg: AgentVMConfig) -> MachineConfig:
@@ -165,47 +149,5 @@ def resolve_persisted_vm_context(
         machine=machine_config_from_effective(cfg),
         principal=principal,
         profile=profile,
-        legacy_cfg=cfg,
-    )
-
-
-def resolve_legacy_vm_context(
-    cfg: AgentVMConfig,
-    *,
-    host_user: str | None = None,
-    host_uid: int | None = None,
-    host_gid: int | None = None,
-) -> ResolvedVMContext:
-    """Translate one legacy config into the new runtime scope model.
-
-    This is intentionally serialization-neutral.  ``cfg.vm.user`` becomes a
-    synthetic compatibility principal and the caller-owned paths become a
-    synthetic profile.  The machine snapshot excludes those values, proving
-    that two users may select different principals without redefining the VM.
-    """
-    resolved_host_user = host_user or getpass.getuser()
-    resolved_uid = _host_uid() if host_uid is None else int(host_uid)
-    resolved_gid = _host_gid() if host_gid is None else int(host_gid)
-
-    machine = machine_config_from_effective(cfg)
-    principal = VMPrincipal(
-        id=f'legacy:{cfg.vm.name}:{resolved_host_user}',
-        host_user=resolved_host_user,
-        host_uid=resolved_uid,
-        host_gid=resolved_gid,
-        guest_user=cfg.vm.user,
-    )
-    behavior = BehaviorConfig(verbose=cfg.verbosity)
-    profile = UserProfile(
-        active_vm=cfg.vm.name,
-        behavior=behavior,
-        ssh_identity_file=cfg.paths.ssh_identity_file,
-        ssh_pubkey_path=cfg.paths.ssh_pubkey_path,
-        state_dir=cfg.paths.state_dir,
-    )
-    return ResolvedVMContext(
-        machine=machine,
-        principal=principal,
-        profile=profile,
-        legacy_cfg=cfg,
+        effective_cfg=cfg,
     )

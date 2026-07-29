@@ -11,22 +11,26 @@ from pathlib import Path
 
 import pytest
 
-import aivm.config_scopes as scopes_mod
+import aivm.legacy.pre_0_6_0.context as legacy_context_mod
 from aivm.attachments.session import (
     ReconcileResult,
     _prepare_attached_session,
 )
 from aivm.config_store import load_store, save_store, upsert_attachment
 from aivm.services import load_vm_context_with_path
-from tests.helpers import SharedMachineScenario, SyntheticPrincipal
+from .scenario import SharedMachineScenario, SyntheticPrincipal
 
 
 def _select_host_principal(
     monkeypatch: pytest.MonkeyPatch, principal: SyntheticPrincipal
 ) -> None:
-    monkeypatch.setattr(scopes_mod.getpass, 'getuser', lambda: principal.host_user)
-    monkeypatch.setattr(scopes_mod, '_host_uid', lambda: principal.host_uid)
-    monkeypatch.setattr(scopes_mod, '_host_gid', lambda: principal.host_gid)
+    monkeypatch.setattr(
+        legacy_context_mod.getpass,
+        'getuser',
+        lambda: principal.host_user,
+    )
+    monkeypatch.setattr(legacy_context_mod, '_host_uid', lambda: principal.host_uid)
+    monkeypatch.setattr(legacy_context_mod, '_host_gid', lambda: principal.host_gid)
 
 
 def test_two_user_stores_resolve_one_machine_and_distinct_principals(
@@ -112,7 +116,7 @@ def test_prepared_sessions_keep_selected_principal_end_to_end(
         )
         # Transitional compatibility remains available, but identity is carried
         # by the context rather than reconstructed by the caller.
-        assert session.cfg is session.context.legacy_cfg
+        assert session.cfg is session.context.effective_cfg
 
     assert sessions['alice'].context.machine == sessions['bob'].context.machine
     assert sessions['alice'].context.principal != sessions['bob'].context.principal

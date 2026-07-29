@@ -131,6 +131,15 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the policy note in `aivm/credentials/__init__.py`.
 
 ### Changed
+* Quarantined compatibility for released pre-0.6 installations under the
+  explicit `aivm.legacy.pre_0_6_0` namespace. Migration planning/execution,
+  legacy context materialization, store selection and paths, schema upgrades,
+  old firewall cleanup, and historical virtiofsd-wrapper recognition now live
+  behind that versioned boundary. Mixed parser/render/store surfaces carry a
+  searchable no-op compatibility marker, making the eventual removal scope
+  explicit. Tests and released fixtures for the same support window live under
+  `tests/legacy/pre_0_6_0`, so retiring compatibility removes one production
+  subtree and one matching test subtree.
 * Added the inactive machine-store filesystem foundation for the shared-host
   architecture. AIVM now has an injectable `/var/lib/aivm` layout, explicit
   `root:aivm`-style directory and file modes, metadata-preserving atomic

@@ -947,7 +947,7 @@ def _prepare_attached_session(
             vm_opt=vm_opt,
             host_src=host_src,
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
     except RuntimeError as ex:
         if (
             'No VM definitions found in config store' not in str(ex)
@@ -960,7 +960,7 @@ def _prepare_attached_session(
             vm_opt=vm_opt,
             host_src=host_src,
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
 
     owner_principal_id = attachment_owner_for_context(context, cfg_path)
     existing_store = load_store(cfg_path)
@@ -1039,7 +1039,7 @@ def _prepare_attached_session(
         context, _ = load_vm_context_with_path(
             str(cfg_path), vm_opt=cfg.vm.name, host_src=host_src
         )
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         owner_principal_id = attachment_owner_for_context(context, cfg_path)
 
     if dry_run:

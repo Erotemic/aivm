@@ -6,17 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from aivm.config_store.paths import app_data_dir, store_path
+from aivm.config_store.paths import app_data_dir
 from aivm.terminal import highlight_code
 from aivm.user_paths import user_app_dir
 
 
-def test_implicit_user_paths_are_confined_to_test_xdg_roots(
+def test_implicit_app_data_path_is_confined_to_test_xdg_root(
     isolated_user_state: dict[str, Path],
 ) -> None:
-    assert store_path() == isolated_user_state['config'] / 'aivm' / 'config.toml'
     assert app_data_dir() == isolated_user_state['data'] / 'aivm'
-    assert store_path().parent.is_dir()
     assert app_data_dir().is_dir()
 
 

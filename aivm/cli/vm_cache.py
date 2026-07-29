@@ -116,7 +116,7 @@ class VMFlushCachesCLI(_BaseCommand):
             raise AIVMError(str(ex)) from ex
 
         context = load_vm_context(args.config, vm_opt=str(args.vm or ''))
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         vm_name = cfg.vm.name
         # Quote the guest script so the remote login shell hands it to
         # `sh -c` as one argument. Without this the remote shell executed

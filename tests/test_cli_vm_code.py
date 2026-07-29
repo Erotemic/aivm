@@ -20,6 +20,8 @@ from aivm.cli.vm_connect import (
     _vscode_can_open_locally,
 )
 
+from tests.helpers import resolved_test_context
+
 
 def _scrub_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ('SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'VSCODE_IPC_HOOK_CLI'):
@@ -107,12 +109,11 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from aivm.config import AgentVMConfig
-    from aivm.config_scopes import resolve_legacy_vm_context
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'aivm-2404'
     cfg.vm.user = 'agent'
-    context = resolve_legacy_vm_context(
+    context = resolved_test_context(
         cfg, host_user='joncrall', host_uid=1001, host_gid=1001
     )
     session = SimpleNamespace(

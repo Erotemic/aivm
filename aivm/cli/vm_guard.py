@@ -127,7 +127,7 @@ class VMFdGuardCLI(_BaseCommand):
             )
 
         context = load_vm_context(args.config, vm_opt=str(args.vm or ''))
-        cfg = context.legacy_cfg
+        cfg = context.effective_cfg
         vm_name = cfg.vm.name
         threshold = int(args.threshold or 0) or int(
             cfg.virtiofs.fd_guard_threshold

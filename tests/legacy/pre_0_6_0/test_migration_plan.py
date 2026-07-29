@@ -23,7 +23,7 @@ from aivm.config_store import (
 )
 from aivm.credentials.validation import credential_id
 from aivm.machine_store import MachineStoreLayout
-from aivm.migration import (
+from aivm.legacy.pre_0_6_0.migration import (
     LegacyStoreSource,
     RuntimeInventory,
     build_migration_plan,
@@ -174,7 +174,7 @@ def test_single_store_plan_attributes_user_owned_records_without_writes(
     assert plan.persistent_state_moves[0]['source_exists'] is True
     assert plan.credential_material_moves[0]['source_exists'] is True
     assert plan.credential_material_moves[0]['action'] == (
-        'rename-within-user-owned-data'
+        'copy-and-retain-legacy-for-rollback'
     )
     assert plan.runtime.unmanaged_domains == ['unmanaged-domain']
 

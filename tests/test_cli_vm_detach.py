@@ -8,11 +8,16 @@ from typing import Any, Callable
 from pytest import MonkeyPatch
 
 from aivm.cli.vm_attach import VMDetachCLI
-from aivm.config_scopes import resolve_legacy_vm_context
 from aivm.config_store import AttachmentEntry, Store, find_attachment_for_vm
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentMode
-from tests.helpers import make_cfg, patch_ns, records, returns
+from tests.helpers import (
+    make_cfg,
+    patch_ns,
+    records,
+    resolved_test_context,
+    returns,
+)
 
 
 def _forbidden(message: str) -> Callable[..., Any]:
@@ -64,7 +69,7 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             'detach_vm_share': records(detached, True),
@@ -108,7 +113,7 @@ def test_vm_detach_git_only_updates_store(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(False, 'shut off'), True)),
             'detach_vm_share': _forbidden(
@@ -155,7 +160,7 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             '_resolve_ip_for_ssh_ops': returns('10.77.0.42'),
@@ -208,7 +213,7 @@ def test_vm_detach_persistent_updates_manifest_without_host_unbind(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolve_legacy_vm_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
             'probe_vm_state': returns(
                 (
                     ProbeOutcome(True, 'vm-persistent-detach state=running'),

@@ -14,7 +14,8 @@ import pytest
 
 from aivm import config
 from aivm import config_store as store
-from aivm.vm import update, virtiofsd_wrapper
+from aivm.legacy.pre_0_6_0 import virtiofsd_wrapper
+from aivm.vm import update
 
 BASE = '/var/lib/libvirt/aivm'
 PREFER_PATH = f'{BASE}/virtiofsd-wrapper-prefer.sh'

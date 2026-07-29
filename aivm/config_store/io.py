@@ -36,7 +36,8 @@ from .fs_policy import (
 )
 from .models import Store
 from .parse import parse_store_toml
-from .paths import store_path
+from ..legacy.pre_0_6_0 import compatibility_surface
+from ..legacy.pre_0_6_0.paths import store_path
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,
@@ -299,6 +300,7 @@ def config_dir_from_path(path: Path | None = None) -> Path:
     return fpath.expanduser().resolve().parent
 
 
+@compatibility_surface
 def split_source_paths(path: Path | None = None) -> list[ConfigSource]:
     """Return existing split/monolith config sources in load order.
 
@@ -434,6 +436,7 @@ def _load_config_document_unlocked(
     )
 
 
+@compatibility_surface
 def load_config_document(
     path: Path | None = None,
     *,
@@ -450,6 +453,7 @@ def load_config_document(
         return loaded
 
 
+@compatibility_surface
 def load_store(
     path: Path | None = None,
     *,
@@ -705,6 +709,7 @@ def _save_store_unlocked(
     return fpath
 
 
+@compatibility_surface
 def save_store(
     reg: Store,
     path: Path | None = None,
