@@ -32,6 +32,7 @@ from ...credentials.validation import (
     validate_provider_key_id,
 )
 from ...services import cfg_path
+from ...vm.guest_tools import GUEST_TOOL_REGISTRY
 from .._common import _BaseCommand
 
 
@@ -98,6 +99,7 @@ def _lint_store_text(text: str) -> list[str]:
         'vm',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
         'attachments',
@@ -110,6 +112,7 @@ def _lint_store_text(text: str) -> list[str]:
         'firewall': _field_names(FirewallConfig),
         'image': _field_names(ImageConfig),
         'provision': _field_names(ProvisionConfig),
+        'tools': {*GUEST_TOOL_REGISTRY.names(), 'bin_dir'},
         'paths': _field_names(PathsConfig),
         'virtiofs': _field_names(VirtiofsConfig),
     }
@@ -145,6 +148,7 @@ def _lint_store_text(text: str) -> list[str]:
                 'firewall',
                 'image',
                 'provision',
+                'tools',
                 'paths',
                 'virtiofs',
             }

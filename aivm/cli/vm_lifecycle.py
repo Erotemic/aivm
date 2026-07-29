@@ -36,6 +36,10 @@ from ..vm import (
 )
 from ..vm.create_ops import create_vm_from_defaults
 from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
+from ..vm.guest_tools import (
+    GUEST_TOOL_REGISTRY,
+    UnknownGuestToolError,
+)
 from ._common import _BaseCommand
 
 
@@ -242,22 +246,12 @@ class VMDeleteCLI(_BaseCommand):
         return 0
 
 
-_TOOL_OVERRIDE_DEFAULTS: dict[str, str] = {
-    'uv': 'latest',
-    'rust': 'stable',
-    'code': 'latest',
-}
-
-
 class VMProvisionCLI(_BaseCommand):
-    """Provision the VM with optional developer packages.
+    """Provision the VM with configured or one-shot optional guest tools.
 
-    Positional ``tools`` arguments are tool names to enable for this
-    invocation in addition to whatever is already enabled in
-    ``[tools]`` config. Known tools: ``uv``, ``rust``, ``code``. Each
-    enables the tool at its sensible default (``latest`` for ``uv`` and
-    ``code``, ``stable`` for ``rust``). To pin a version, set the value
-    in config.toml instead.
+    Positional tool names enable registry-defined tools for this invocation in
+    addition to persistent ``[tools]`` configuration. Version or channel pins
+    remain config values; the registry supplies each one-shot default.
     """
 
     tools: list[str] = kwconf.Value(
@@ -265,8 +259,9 @@ class VMProvisionCLI(_BaseCommand):
         position=1,
         nargs='*',
         help=(
-            'Names of additional tools to install for this run (e.g. '
-            '`aivm vm provision code`). Known tools: uv, rust, code.'
+            'Names of additional tools to install for this run. Known tools: '
+            + ', '.join(GUEST_TOOL_REGISTRY.names())
+            + '.'
         ),
     )
     vm: str = kwconf.Value(
@@ -289,17 +284,11 @@ class VMProvisionCLI(_BaseCommand):
                 host_src=Path.cwd(),
             )
         requested = list(args.tools or [])
-        unknown = [t for t in requested if t not in _TOOL_OVERRIDE_DEFAULTS]
-        if unknown:
-            known = ', '.join(sorted(_TOOL_OVERRIDE_DEFAULTS))
-            log.error(
-                'Unknown tool name(s): {}. Known tools: {}.',
-                ', '.join(unknown),
-                known,
-            )
+        try:
+            GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, requested)
+        except UnknownGuestToolError as ex:
+            log.error(str(ex))
             return 2
-        for name in requested:
-            setattr(cfg.tools, name, _TOOL_OVERRIDE_DEFAULTS[name])
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,

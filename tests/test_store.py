@@ -60,6 +60,30 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     assert find_vm(loaded, 'missing') is None
 
 
+def test_store_roundtrips_registry_backed_tools(tmp_path: Path) -> None:
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.tools.rust = 'stable'
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-tools'
+    cfg.tools.uv = '0.11.11'
+    cfg.tools.code = 'latest'
+    upsert_vm(store, cfg)
+
+    fpath = tmp_path / 'config.toml'
+    save_store(store, fpath)
+    text = fpath.read_text(encoding='utf-8')
+    assert '[defaults.tools]' in text
+    assert '[vms.tools]' in text
+
+    loaded = load_store(fpath)
+    assert loaded.defaults is not None
+    assert loaded.defaults.tools.rust == 'stable'
+    vm = require_vm(loaded, 'vm-tools')
+    assert vm.cfg.tools.uv == '0.11.11'
+    assert vm.cfg.tools.code == 'latest'
+
+
 def test_save_store_logs_reason(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

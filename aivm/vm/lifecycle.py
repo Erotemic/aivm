@@ -59,20 +59,6 @@ from .domain import (
     vm_exists,
     vm_status,
 )
-from .guest_tools import (
-    _guest_ensure_code_script,
-    _guest_ensure_rust_script,
-    _guest_ensure_uv_script,
-    _guest_tool_code_enabled,
-    _guest_tool_code_spec,
-    _guest_tool_enabled,
-    _guest_tool_rust_enabled,
-    _guest_tool_rust_spec,
-    _guest_tool_spec,
-    _guest_tool_uv_enabled,
-    _guest_tool_uv_spec,
-    _uv_installer_url,
-)
 from .host_access import (
     _ensure_qemu_access,
     _submit_qemu_dir_prepare,

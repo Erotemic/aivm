@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from aivm.config import AgentVMConfig, dump_toml, load
-from aivm.vm.lifecycle import (
+from aivm.status import probe_provisioned
+from aivm.util import CmdResult
+from aivm.vm.guest_tools import (
+    GUEST_TOOL_REGISTRY,
+    GuestToolRegistry,
+    UnknownGuestToolError,
     _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
@@ -19,6 +24,63 @@ from aivm.vm.lifecycle import (
     _guest_tool_uv_enabled,
     _uv_installer_url,
 )
+
+
+def test_guest_tool_registry_is_canonical_and_ordered() -> None:
+    assert GUEST_TOOL_REGISTRY.names() == ('uv', 'rust', 'code')
+    assert [tool.name for tool in GUEST_TOOL_REGISTRY] == [
+        'uv',
+        'rust',
+        'code',
+    ]
+    assert GUEST_TOOL_REGISTRY.require('rust').enable_default == 'stable'
+    with pytest.raises(UnknownGuestToolError, match='Known tools: uv, rust, code'):
+        GUEST_TOOL_REGISTRY.require('kubernetes')
+
+
+def test_guest_tool_registry_rejects_duplicate_names() -> None:
+    definition = GUEST_TOOL_REGISTRY.require('uv')
+    with pytest.raises(ValueError, match='duplicate guest tool definition'):
+        GuestToolRegistry((definition, definition))
+
+
+def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
+    cfg = AgentVMConfig()
+    resolved = {tool.name: tool for tool in GUEST_TOOL_REGISTRY.resolve_all(cfg.tools)}
+    assert resolved['uv'].enabled is True
+    assert resolved['uv'].effective_spec == 'latest'
+    assert resolved['rust'].enabled is False
+    assert resolved['code'].enabled is False
+
+    cfg.tools.rust = True
+    assert GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'rust').effective_spec == 'stable'
+    GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, ['code'])
+    assert cfg.tools.code == 'latest'
+
+
+def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.packages = []
+    cfg.tools.rust = 'stable'
+    cfg.tools.code = 'latest'
+    packages = GUEST_TOOL_REGISTRY.required_packages(cfg.tools)
+    assert packages == (
+        'ca-certificates',
+        'curl',
+        'build-essential',
+        'pkg-config',
+        'libssl-dev',
+        'wget',
+        'gpg',
+        'apt-transport-https',
+    )
+    assert GUEST_TOOL_REGISTRY.command_requirements(cfg.tools) == (
+        ('uv', 'uv'),
+        ('rust', 'rustup'),
+        ('rust', 'cargo'),
+        ('rust', 'rustc'),
+        ('code', 'code'),
+    )
 
 
 def test_uv_installer_url_latest_and_versioned() -> None:
@@ -175,3 +237,41 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     fpath = tmp_path / 'config.toml'
     fpath.write_text(text, encoding='utf-8')
     assert load(fpath).tools.code == 'off'
+
+
+def test_tools_config_rejects_unknown_registry_name(tmp_path: Path) -> None:
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text(
+        '[tools]\nuv = "latest"\nkubernetes = "latest"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(UnknownGuestToolError, match='kubernetes'):
+        load(fpath)
+
+
+def test_probe_provisioned_uses_registry_command_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.packages = []
+    cfg.provision.install_docker = False
+    cfg.tools.code = 'latest'
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        'aivm.status.require_ssh_identity', lambda path: Path(path)
+    )
+
+    def fake_run(self: object, cmd: list[str], **kwargs: object) -> CmdResult:
+        del self, kwargs
+        captured['remote'] = cmd[-1]
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.status.CommandManager.run', fake_run)
+    outcome = probe_provisioned(cfg, '10.77.0.100')
+
+    assert outcome.ok is True
+    assert 'command -v uv' in captured['remote']
+    assert 'command -v code' in captured['remote']
+    assert 'command -v rustup' not in captured['remote']

@@ -35,6 +35,7 @@ from .runtime import (
 from .util import which
 from .vm import get_ip_cached, vm_share_mappings
 from .vm.drift import saved_vm_drift_report
+from .vm.guest_tools import GUEST_TOOL_REGISTRY
 from .vm.host_access import _local_stat_answer
 
 
@@ -502,29 +503,6 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     return ProbeOutcome(res.code == 0, detail, diag)
 
 
-_TOOL_DISABLED_SPECS = {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
-
-
-def _guest_tool_enabled(cfg: AgentVMConfig, name: str, *, default: str) -> bool:
-    """Return whether status should expect a managed guest tool."""
-    tools = getattr(cfg, 'tools', None)
-    raw = getattr(tools, name, default)
-    if isinstance(raw, bool):
-        return raw
-    spec = str(raw or '').strip().lower()
-    return spec not in _TOOL_DISABLED_SPECS
-
-
-def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
-    """Return whether status should expect uv in the guest."""
-    return _guest_tool_enabled(cfg, 'uv', default='latest')
-
-
-def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
-    """Return whether status should expect Rust in the guest."""
-    return _guest_tool_enabled(cfg, 'rust', default='off')
-
-
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Check whether configured guest packages appear to be installed."""
     context = guest_transport_from_effective_cfg(cfg)
@@ -545,13 +523,15 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             "dpkg-query -W -f='${Status}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || exit 10; "
             'done'
         )
-    if _guest_tool_uv_enabled(cfg):
-        checks.append('command -v uv >/dev/null 2>&1 || exit 11')
-    if _guest_tool_rust_enabled(cfg):
+    for tool_name, command in GUEST_TOOL_REGISTRY.command_requirements(
+        cfg.tools
+    ):
+        message = shlex.quote(
+            f'missing configured guest tool command: {tool_name}:{command}'
+        )
         checks.append(
-            'command -v rustup >/dev/null 2>&1 || exit 12; '
-            'command -v cargo >/dev/null 2>&1 || exit 13; '
-            'command -v rustc >/dev/null 2>&1 || exit 14'
+            f'command -v {shlex.quote(command)} >/dev/null 2>&1 '
+            f'|| {{ echo {message} >&2; exit 11; }}'
         )
     remote = '; '.join(checks)
     cmd = [

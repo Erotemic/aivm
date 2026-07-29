@@ -62,12 +62,16 @@ def _cfg_from_dict(raw: dict[str, object]) -> AgentVMConfig:
         'firewall',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
     ):
         body = raw.get(section, None)
         if isinstance(body, dict):
             obj = getattr(cfg, section)
+            if section == 'tools':
+                obj.update(body)
+                continue
             for k, v in body.items():
                 if hasattr(obj, str(k)):
                     setattr(obj, str(k), v)

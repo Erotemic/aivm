@@ -53,6 +53,7 @@ from ...services import (
     maybe_offer_create_ssh_identity,
 )
 from ...vm.domain import domain_is_defined
+from ...vm.guest_tools import GUEST_TOOL_REGISTRY
 from .._common import _BaseCommand
 from .editor import edit_path, select_editor_command
 
@@ -64,6 +65,7 @@ _EDITABLE_SECTIONS = (
     'firewall',
     'image',
     'provision',
+    'tools',
     'paths',
     'virtiofs',
 )
@@ -516,7 +518,12 @@ def _validate_editor_document(
         if not isinstance(body, dict):
             raise ValueError(f'defaults.{section} must be a TOML table')
         body = cast(dict[str, object], body)
-        valid = {field.name for field in fields(getattr(template, section))}
+        if section == 'tools':
+            valid = {*GUEST_TOOL_REGISTRY.names(), 'bin_dir'}
+        else:
+            valid = {
+                field.name for field in fields(getattr(template, section))
+            }
         unknown = sorted(str(key) for key in set(body) - valid)
         if unknown:
             raise ValueError(

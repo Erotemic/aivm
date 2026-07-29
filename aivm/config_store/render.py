@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import cast
 
+from ..config import agent_vm_config_asdict
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import AttachmentEntry, CredentialEntry, PrincipalEntry, Store
 
@@ -88,6 +90,28 @@ def _emit_principal(lines: list[str], principal: PrincipalEntry) -> None:
         _emit_toml_kv(lines, key, getattr(principal, key))
 
 
+def _config_verbosity(data: dict[str, object]) -> int:
+    """Return the statically typed top-level config verbosity."""
+    value = data.get('verbosity', 1)
+    if not isinstance(value, int):
+        raise TypeError(
+            f'config verbosity must be an integer, not {type(value).__name__}'
+        )
+    return value
+
+
+def _config_section(
+    data: dict[str, object], section: str
+) -> dict[str, object] | None:
+    """Return one serialized config section with its key type narrowed."""
+    body = data.get(section)
+    if not isinstance(body, dict):
+        return None
+    if not all(isinstance(key, str) for key in body):
+        raise TypeError(f'config section {section!r} contains a non-string key')
+    return cast(dict[str, object], body)
+
+
 def _section_items(
     reg: Store, section: str, body: dict[str, object]
 ) -> list[tuple[str, object]]:
@@ -111,8 +135,8 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
     """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""
     if reg.defaults is None:
         return
-    d = asdict(reg.defaults)
-    verbosity = int(d.get('verbosity', 1))
+    d = agent_vm_config_asdict(reg.defaults)
+    verbosity = _config_verbosity(d)
     if verbosity != 1:
         lines.append('[defaults]')
         lines.append(f'verbosity = {verbosity}')
@@ -123,11 +147,12 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
         'firewall',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
     ):
-        body = d.get(section, {})
-        if not isinstance(body, dict):
+        body = _config_section(d, section)
+        if body is None:
             continue
         lines.append(f'[defaults.{section}]')
         for k, v in _section_items(reg, section, body):
@@ -204,13 +229,15 @@ def render_store_toml(
         lines.append('[[vms]]')
         lines.append(f'name = "{_toml_escape(vm.name)}"')
         lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
-        d = asdict(vm.cfg)
-        verbosity = int(d.get('verbosity', 1))
+        d = agent_vm_config_asdict(vm.cfg)
+        verbosity = _config_verbosity(d)
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
-        for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
-            body = d.get(section, {})
-            if not isinstance(body, dict):
+        for section in (
+            'vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'
+        ):
+            body = _config_section(d, section)
+            if body is None:
                 continue
             lines.append(f'[vms.{section}]')
             for k, v in _section_items(reg, section, body):
@@ -321,13 +348,15 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     lines.append('[[vms]]')
     lines.append(f'name = "{_toml_escape(vm.name)}"')
     lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
-    d = asdict(vm.cfg)
-    verbosity = int(d.get('verbosity', 1))
+    d = agent_vm_config_asdict(vm.cfg)
+    verbosity = _config_verbosity(d)
     if verbosity != 1:
         lines.append(f'verbosity = {verbosity}')
-    for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
-        body = d.get(section, {})
-        if not isinstance(body, dict):
+    for section in (
+        'vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'
+    ):
+        body = _config_section(d, section)
+        if body is None:
             continue
         lines.append(f'[vms.{section}]')
         for k, v in _section_items(reg, section, body):

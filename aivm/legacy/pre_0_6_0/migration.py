@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable, cast
 
 from ...fs_identity import directory_identity
 from ...commands import CommandManager
-from ...config import AgentVMConfig
+from ...config import AgentVMConfig, agent_vm_config_asdict
 from ...config_store import (
     AttachmentEntry,
     NetworkEntry,
@@ -424,7 +424,7 @@ def _read_public_key(path: str) -> tuple[str, str]:
 
 
 def _machine_cfg_dict(cfg: AgentVMConfig) -> dict[str, object]:
-    data = asdict(cfg)
+    data = agent_vm_config_asdict(cfg)
     data.pop('network', None)
     data.pop('firewall', None)
     vm = data.get('vm')

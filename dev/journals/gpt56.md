@@ -591,3 +591,43 @@ the complete non-E2E suite as an ordinary host user with the supplied kwconf
 source passes 989 tests with 8 skips. The remaining validation risk is static
 checking (`ty`/mypy), whose executables are not available here, so the overlay
 consumer should run the normal checker commands before committing.
+
+## 2026-07-29 11:28:14 -0400
+
+Refactored optional guest-tool support around one ordered registry without
+adding Claude yet. The motivating problem was extension fan-out: tool names,
+defaults, apt prerequisites, installer selection, CLI validation, and status
+checks were each duplicated in separate modules. `aivm.vm.guest_tools` now
+owns definitions for the existing uv, Rust, and VS Code tools, while CLI,
+provisioning, status, config lint/editor validation, and TOML serialization
+consume fixed registry APIs. `ToolsConfig` stores dynamic overrides but keeps
+the released flat `[tools]` syntax and compatibility attribute access such as
+`cfg.tools.rust`.
+
+The most important unexpected finding was that the canonical machine-store
+parser and renderer omitted tools even though resolved configuration treats
+them as machine-owned state. The refactor now round-trips `[defaults.tools]`
+and `[vms.tools]`; legacy files without those sections retain the same effective
+defaults, including equality after save/reload. This widened the legitimate
+refactor surface into config-store lint and editor validation, but those sites
+now query the registry rather than becoming new lists to update for every tool.
+
+I deliberately retained the individual installer helper functions inside the
+registry module as narrow test/compatibility surfaces, but no runtime consumer
+branches on uv/rust/code anymore. A future tool should need an installer builder
+and one registry definition, plus focused tests; it should not require edits to
+CLI, provisioning, status, config schema fields, lifecycle exports, or store
+allow-lists. The remaining architectural tradeoff is that `ToolsConfig` uses
+late imports to query the VM-owned registry, avoiding an import-time cycle but
+leaving a lower-level config object aware of the registry's module location. A
+future plugin system may justify splitting pure metadata into a lower-level
+module, but doing so now would add indirection without reducing the extension
+surface.
+
+Focused config, status, migration, CLI, and registry coverage passes 116 tests;
+generated uv/Rust/code scripts pass `bash -n`. The complete non-E2E run passes
+985 tests with 14 skips and has the same five sandbox-sensitive failures seen
+on the clean base: two shared command-approval log tests and three root
+writability/sudo-decision tests. Ruff, ty, and mypy are unavailable in this
+offline environment, so the consumer should run the repository's normal lint
+and type-check commands before committing.

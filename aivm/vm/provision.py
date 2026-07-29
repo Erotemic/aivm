@@ -11,14 +11,7 @@ from ..config import AgentVMConfig
 from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
-from .guest_tools import (
-    _guest_ensure_code_script,
-    _guest_ensure_rust_script,
-    _guest_ensure_uv_script,
-    _guest_tool_code_enabled,
-    _guest_tool_rust_enabled,
-    _guest_tool_uv_enabled,
-)
+from .guest_tools import GUEST_TOOL_REGISTRY
 
 log = logger
 
@@ -43,11 +36,9 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         else []
     )
     install_pkgs = docker_pkgs + pkgs
-    if _guest_tool_rust_enabled(cfg):
-        # Keep the rustup-managed toolchain usable for native crate builds.
-        for pkg in ['build-essential', 'pkg-config', 'libssl-dev']:
-            if pkg not in install_pkgs:
-                install_pkgs.append(pkg)
+    for pkg in GUEST_TOOL_REGISTRY.required_packages(cfg.tools):
+        if pkg not in install_pkgs:
+            install_pkgs.append(pkg)
     install_cmd = ':'
     if install_pkgs:
         quoted_pkgs = ' '.join(shlex.quote(pkg) for pkg in install_pkgs)
@@ -63,12 +54,9 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         'sudo apt-get update -y',
         install_cmd,
     ]
-    if _guest_tool_uv_enabled(cfg):
-        remote_parts.append(_guest_ensure_uv_script(cfg, ensure_transport=False))
-    if _guest_tool_rust_enabled(cfg):
-        remote_parts.append(_guest_ensure_rust_script(cfg, ensure_transport=False))
-    if _guest_tool_code_enabled(cfg):
-        remote_parts.append(_guest_ensure_code_script(cfg, ensure_transport=False))
+    remote_parts.extend(
+        GUEST_TOOL_REGISTRY.install_scripts(cfg, ensure_transport=False)
+    )
     remote = '\n'.join(remote_parts)
     cmd = [
         'ssh',
