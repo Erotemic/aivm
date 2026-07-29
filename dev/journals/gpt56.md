@@ -631,3 +631,40 @@ on the clean base: two shared command-approval log tests and three root
 writability/sudo-decision tests. Ruff, ty, and mypy are unavailable in this
 offline environment, so the consumer should run the repository's normal lint
 and type-check commands before committing.
+
+## 2026-07-29 12:05:00 -0400
+
+I addressed the GPT-5.6 review of commit `07a9c14`. First, I restored the
+historical guest-tool imports in `aivm.vm.lifecycle` so every name retained in
+`__all__` is actually bound again. I added a regression that checks the whole
+compatibility export list rather than only the twelve names implicated by the
+current failure.
+
+The migration integrity issue required a stronger model than checking whether
+a source still happens to exist at copy time. Each credential-material and
+persistent-state move now carries a reviewed fingerprint consisting of
+existence, path type, and a deterministic content-tree SHA-256. The plan schema
+is bumped because these fields are part of the operator-reviewed JSON/text
+contract and the migration-id payload. Apply validates all such fingerprints
+before creating the machine-store layout, validates each source again at the
+copy boundary, and verifies outputs against the reviewed fingerprint rather
+than the source's mutable current state. Missing planned inputs are no longer
+silently skipped, and inputs absent during planning cannot appear later without
+invalidating the plan.
+
+The main tradeoff is that content fingerprints intentionally exclude ownership
+and modes so persistent-state targets may receive machine-store policy without
+changing their reviewed content identity. Credential copies retain the existing
+stronger metadata-preserving `_tree_sha256` check in addition to the reviewed
+content fingerprint. Symlinks and unsupported node types fail planning rather
+than becoming unverifiable inputs.
+
+Focused lifecycle and migration tests pass 47 tests. The full non-E2E suite
+passes 994 tests with 14 skips and the same five environment-sensitive failures
+seen previously: two shared command-approval-state tests and three tests whose
+root-writability assumptions do not hold in this sandbox. Ruff, flake8, ty, and
+mypy are unavailable offline here, but `git diff --check`, compileall, direct
+`import *` validation, and the focused regression suite all pass. The highest
+remaining risk is static-checker interpretation of the new typed fingerprint
+parser, so the normal repository lint and type-check scripts should remain part
+of the consumer-side verification.

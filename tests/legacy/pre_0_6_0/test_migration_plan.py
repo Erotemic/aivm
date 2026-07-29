@@ -171,9 +171,15 @@ def test_single_store_plan_attributes_user_owned_records_without_writes(
     assert credentials[0]['provider_key_id'] == '1234'
 
     assert plan.profiles[0]['active_vm'] == 'aivm-2404-shared'
-    assert plan.persistent_state_moves[0]['source_exists'] is True
-    assert plan.credential_material_moves[0]['source_exists'] is True
-    assert plan.credential_material_moves[0]['action'] == (
+    persistent_move = plan.persistent_state_moves[0]
+    credential_move = plan.credential_material_moves[0]
+    assert persistent_move['source_exists'] is True
+    assert persistent_move['source_kind'] == 'directory'
+    assert len(str(persistent_move['source_sha256'])) == 64
+    assert credential_move['source_exists'] is True
+    assert credential_move['source_kind'] == 'directory'
+    assert len(str(credential_move['source_sha256'])) == 64
+    assert credential_move['action'] == (
         'copy-and-retain-legacy-for-rollback'
     )
     assert plan.runtime.unmanaged_domains == ['unmanaged-domain']

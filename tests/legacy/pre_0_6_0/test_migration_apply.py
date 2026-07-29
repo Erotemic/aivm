@@ -211,6 +211,102 @@ def test_apply_is_verified_resumable_and_retains_legacy_inputs(
     assert guest_calls == [vm_name]
 
 
+@pytest.mark.parametrize(
+    ('source_name', 'expected_message'),
+    [
+        ('credential', 'Credential material source changed after planning'),
+        ('persistent', 'Persistent state source changed after planning'),
+    ],
+)
+def test_apply_rejects_deleted_planned_data_source_before_writing(
+    tmp_path: Path, source_name: str, expected_message: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    selected = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    shutil.rmtree(selected)
+
+    with pytest.raises(MigrationExecutionError, match=expected_message):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not layout.root.exists()
+
+
+@pytest.mark.parametrize(
+    ('source_name', 'expected_message'),
+    [
+        ('credential', 'Credential material source changed after planning'),
+        ('persistent', 'Persistent state source changed after planning'),
+    ],
+)
+def test_apply_rejects_new_data_source_absent_during_planning(
+    tmp_path: Path, source_name: str, expected_message: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    selected = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    shutil.rmtree(selected)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    selected.mkdir(parents=True)
+    (selected / 'appeared-after-review').write_text('new data\n')
+
+    with pytest.raises(MigrationExecutionError, match=expected_message):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not layout.root.exists()
+
+
+@pytest.mark.parametrize(
+    ('source_name', 'expected_message'),
+    [
+        ('credential', 'Credential material source changed after planning'),
+        ('persistent', 'Persistent state source changed after planning'),
+    ],
+)
+def test_apply_rejects_modified_planned_data_source_before_writing(
+    tmp_path: Path, source_name: str, expected_message: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    if source_name == 'credential':
+        changed = credential_source / 'id_ed25519'
+    else:
+        changed = persistent_source / 'persistent-attachments.json'
+    changed.write_text(changed.read_text(encoding='utf-8') + 'changed\n')
+
+    with pytest.raises(MigrationExecutionError, match=expected_message):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not layout.root.exists()
+
+
 def test_interrupted_apply_resumes_from_journal(tmp_path: Path) -> None:
     source, _vm_name, _cred, _state = _legacy_source(tmp_path)
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')

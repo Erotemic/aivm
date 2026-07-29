@@ -323,3 +323,12 @@ def test_probe_provisioned_uses_registry_command_requirements(
     assert 'command -v uv' in captured['remote']
     assert 'command -v code' in captured['remote']
     assert 'command -v rustup' not in captured['remote']
+
+
+def test_lifecycle_compatibility_exports_are_bound() -> None:
+    from aivm.vm import lifecycle
+
+    missing = [
+        name for name in lifecycle.__all__ if not hasattr(lifecycle, name)
+    ]
+    assert missing == []

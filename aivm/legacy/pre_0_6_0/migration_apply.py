@@ -51,10 +51,12 @@ from ...machine_store import (
 )
 from .migration import (
     LegacyStoreSource,
+    MigrationPathFingerprint,
     MigrationPlan,
     RuntimeInventory,
     build_migration_plan,
     collect_runtime_inventory,
+    fingerprint_migration_path,
 )
 from ...profile_store import (
     load_user_profile,
@@ -427,22 +429,64 @@ def _tree_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _tree_content_sha256(path: Path) -> str:
-    """Hash relative paths and bytes while allowing destination mode policy."""
-    if path.is_file():
-        return _file_sha256(path)
-    digest = hashlib.sha256()
-    for item in sorted(path.rglob('*')):
-        if item.is_symlink():
-            raise MigrationExecutionError(
-                f'Migration refuses symlinked input or target: {item}'
-            )
-        rel = item.relative_to(path).as_posix()
-        digest.update(rel.encode('utf-8') + b'\0')
-        digest.update(b'd' if item.is_dir() else b'f')
-        if item.is_file():
-            digest.update(_file_sha256(item).encode('ascii'))
-    return digest.hexdigest()
+def _path_content_fingerprint(path: Path) -> MigrationPathFingerprint:
+    try:
+        return fingerprint_migration_path(path)
+    except (OSError, ValueError) as ex:
+        raise MigrationExecutionError(
+            f'Could not fingerprint migration path {path}: {ex}'
+        ) from ex
+
+
+def _planned_move_fingerprint(
+    move: dict[str, object],
+) -> MigrationPathFingerprint:
+    exists = move.get('source_exists')
+    kind = str(move.get('source_kind', ''))
+    sha256 = str(move.get('source_sha256', ''))
+    if not isinstance(exists, bool):
+        raise MigrationExecutionError(
+            'Migration plan lacks a valid source_exists fingerprint field.'
+        )
+    if kind not in {'missing', 'file', 'directory'}:
+        raise MigrationExecutionError(
+            f'Migration plan has an invalid source kind: {kind!r}'
+        )
+    if exists != (kind != 'missing'):
+        raise MigrationExecutionError(
+            'Migration plan source existence and type disagree.'
+        )
+    if exists and not sha256:
+        raise MigrationExecutionError(
+            'Migration plan lacks a source content digest.'
+        )
+    if not exists and sha256:
+        raise MigrationExecutionError(
+            'Migration plan records a digest for a missing source.'
+        )
+    source_kind = kind
+    return MigrationPathFingerprint(exists, source_kind, sha256)
+
+
+def _verify_planned_move_source(
+    move: dict[str, object], *, role: str
+) -> MigrationPathFingerprint:
+    source = Path(str(move.get('source', ''))).expanduser().resolve()
+    expected = _planned_move_fingerprint(move)
+    actual = _path_content_fingerprint(source)
+    if actual != expected:
+        raise MigrationExecutionError(
+            f'{role} source changed after planning; rebuild and review the '
+            f'plan before applying: {source}'
+        )
+    return expected
+
+
+def _verify_planned_data_sources(plan: MigrationPlan) -> None:
+    for move in plan.credential_material_moves:
+        _verify_planned_move_source(move, role='Credential material')
+    for move in plan.persistent_state_moves:
+        _verify_planned_move_source(move, role='Persistent state')
 
 
 def _plan_fingerprint_payload(plan: MigrationPlan) -> dict[str, object]:
@@ -964,22 +1008,31 @@ def _write_profiles(plan: MigrationPlan) -> None:
             os.chown(target, uid, gid)
 
 
-def _copy_tree_if_needed(source: Path, target: Path) -> None:
-    if not source.exists():
+def _copy_tree_if_needed(move: dict[str, object]) -> None:
+    source = Path(str(move.get('source', ''))).expanduser().resolve()
+    target = Path(str(move.get('target', ''))).expanduser().resolve()
+    expected = _verify_planned_move_source(move, role='Credential material')
+    if not expected.exists:
         return
-    if source.is_symlink() or target.is_symlink():
+    if target.is_symlink():
         raise MigrationExecutionError(
-            f'Refusing symlinked migration source or target: {source} -> {target}'
+            f'Refusing symlinked migration target: {target}'
         )
     source_digest = _tree_sha256(source)
     if target.exists():
-        if _tree_sha256(target) == source_digest:
+        if (
+            _tree_sha256(target) == source_digest
+            and _path_content_fingerprint(target) == expected
+        ):
             return
         raise MigrationExecutionError(
             f'Migration target already exists with different content: {target}'
         )
     _copy_path(source, target)
-    if _tree_sha256(target) != source_digest:
+    if (
+        _tree_sha256(target) != source_digest
+        or _path_content_fingerprint(target) != expected
+    ):
         raise MigrationExecutionError(
             f'Copied migration data failed verification: {source} -> {target}'
         )
@@ -987,10 +1040,7 @@ def _copy_tree_if_needed(source: Path, target: Path) -> None:
 
 def _copy_credential_material(plan: MigrationPlan) -> None:
     for move in plan.credential_material_moves:
-        _copy_tree_if_needed(
-            Path(str(move.get('source', ''))),
-            Path(str(move.get('target', ''))),
-        )
+        _copy_tree_if_needed(move)
 
 
 def _apply_machine_state_policy(
@@ -1013,19 +1063,20 @@ def _copy_persistent_state(
     plan: MigrationPlan, layout: MachineStoreLayout
 ) -> None:
     for move in plan.persistent_state_moves:
-        source = Path(str(move.get('source', '')))
-        target = Path(str(move.get('target', '')))
-        if not source.exists():
+        source = Path(str(move.get('source', ''))).expanduser().resolve()
+        target = Path(str(move.get('target', ''))).expanduser().resolve()
+        expected = _verify_planned_move_source(move, role='Persistent state')
+        if not expected.exists:
             continue
         if target.exists():
-            if _tree_content_sha256(target) != _tree_content_sha256(source):
+            if _path_content_fingerprint(target) != expected:
                 raise MigrationExecutionError(
                     f'Migration target already exists with different content: {target}'
                 )
         else:
             _copy_path(source, target)
         _apply_machine_state_policy(target, layout)
-        if _tree_content_sha256(target) != _tree_content_sha256(source):
+        if _path_content_fingerprint(target) != expected:
             raise MigrationExecutionError(
                 f'Copied migration data failed verification: {source} -> {target}'
             )
@@ -1130,6 +1181,7 @@ def verify_migration_local(
 ) -> dict[str, object]:
     """Verify source immutability and every host-side migrated artifact."""
     _verify_source_hashes(plan)
+    _verify_planned_data_sources(plan)
     expected_store = plan.proposed_store
     if expected_store is None:
         raise MigrationExecutionError(
@@ -1160,9 +1212,11 @@ def verify_migration_local(
     for move in plan.credential_material_moves:
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
-        if source.exists():
-            if not target.exists() or _tree_sha256(source) != _tree_sha256(
-                target
+        expected = _planned_move_fingerprint(move)
+        if expected.exists:
+            if (
+                not target.exists()
+                or _path_content_fingerprint(target) != expected
             ):
                 raise MigrationExecutionError(
                     f'Credential material verification failed: {source} -> {target}'
@@ -1172,10 +1226,12 @@ def verify_migration_local(
     for move in plan.persistent_state_moves:
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
-        if source.exists():
-            if not target.exists() or _tree_content_sha256(
-                source
-            ) != _tree_content_sha256(target):
+        expected = _planned_move_fingerprint(move)
+        if expected.exists:
+            if (
+                not target.exists()
+                or _path_content_fingerprint(target) != expected
+            ):
                 raise MigrationExecutionError(
                     f'Persistent state verification failed: {source} -> {target}'
                 )
@@ -1277,6 +1333,7 @@ def apply_migration(
             'rebuild it from the released sources.'
         )
     _verify_source_hashes(plan)
+    _verify_planned_data_sources(plan)
     ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
     migration_id = migration_id_for_plan(plan)
     tx = migration_transaction_dir(migration_id, layout)

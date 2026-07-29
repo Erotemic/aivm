@@ -16,7 +16,7 @@ import pwd
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, cast
+from typing import Any, Callable, Iterable, Literal, cast
 
 from ...fs_identity import directory_identity
 from ...commands import CommandManager
@@ -47,7 +47,7 @@ from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
 from ...scoped_store import stable_principal_id
 
-MIGRATION_PLAN_SCHEMA_VERSION = 1
+MIGRATION_PLAN_SCHEMA_VERSION = 2
 TARGET_MACHINE_SCHEMA_VERSION = 11
 
 
@@ -107,6 +107,25 @@ class RuntimeInventory:
             'unmanaged_networks': self.unmanaged_networks,
             'missing_domains': self.missing_domains,
             'error': self.error,
+        }
+
+
+MigrationPathKind = Literal['missing', 'file', 'directory']
+
+
+@dataclass(frozen=True)
+class MigrationPathFingerprint:
+    """Reviewed existence, type, and content identity for one data source."""
+
+    exists: bool
+    kind: MigrationPathKind
+    sha256: str
+
+    def to_source_fields(self) -> dict[str, object]:
+        return {
+            'source_exists': self.exists,
+            'source_kind': self.kind,
+            'source_sha256': self.sha256,
         }
 
 
@@ -250,7 +269,9 @@ class MigrationPlan:
             lines.append(
                 f'  - {move.get("source", "")} -> '
                 f'{move.get("target", "")} | '
-                f'exists={move.get("source_exists", False)}'
+                f'exists={move.get("source_exists", False)} | '
+                f'kind={move.get("source_kind", "missing")} | '
+                f'sha256={move.get("source_sha256", "")}'
             )
         lines.append(
             f'Credential-material moves: {len(self.credential_material_moves)}'
@@ -260,7 +281,9 @@ class MigrationPlan:
                 f'  - {move.get("legacy_credential_id", "")} -> '
                 f'{move.get("credential_id", "")} | '
                 f'{move.get("source", "")} -> {move.get("target", "")} | '
-                f'exists={move.get("source_exists", False)}'
+                f'exists={move.get("source_exists", False)} | '
+                f'kind={move.get("source_kind", "missing")} | '
+                f'sha256={move.get("source_sha256", "")}'
             )
         lines.extend(['', 'Runtime inventory:'])
         if not self.runtime.checked:
@@ -402,6 +425,64 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: file.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def fingerprint_migration_path(path: Path) -> MigrationPathFingerprint:
+    """Fingerprint a file or directory without following symlinks."""
+    if path.is_symlink():
+        raise ValueError(f'migration source is a symlink: {path}')
+    if not path.exists():
+        return MigrationPathFingerprint(False, 'missing', '')
+    if path.is_file():
+        return MigrationPathFingerprint(True, 'file', _file_sha256(path))
+    if not path.is_dir():
+        raise ValueError(f'migration source has unsupported type: {path}')
+
+    digest = hashlib.sha256()
+    digest.update(b'directory\0')
+    for item in sorted(
+        path.rglob('*'),
+        key=lambda candidate: candidate.relative_to(path).as_posix(),
+    ):
+        if item.is_symlink():
+            raise ValueError(f'migration source contains a symlink: {item}')
+        rel = item.relative_to(path).as_posix()
+        digest.update(rel.encode('utf-8') + b'\0')
+        if item.is_dir():
+            digest.update(b'd')
+        elif item.is_file():
+            digest.update(b'f')
+            digest.update(_file_sha256(item).encode('ascii'))
+        else:
+            raise ValueError(
+                f'migration source contains an unsupported path type: {item}'
+            )
+    return MigrationPathFingerprint(True, 'directory', digest.hexdigest())
+
+
+def _migration_move_source_fields(
+    path: Path,
+    *,
+    conflicts: list[MigrationIssue],
+    vm_name: str,
+    store_path: Path,
+) -> dict[str, object]:
+    try:
+        return fingerprint_migration_path(path).to_source_fields()
+    except (OSError, ValueError) as ex:
+        conflicts.append(
+            MigrationIssue(
+                code='migration-data-source-unreadable',
+                message=f'Cannot fingerprint migration data source {path}: {ex}',
+                vm_name=vm_name,
+                sources=(str(store_path),),
+            )
+        )
+        return {
+            'source_exists': path.exists(),
+            'source_kind': 'invalid',
+            'source_sha256': '',
+        }
 
 
 def _public_key_fingerprint(text: str) -> str:
@@ -978,7 +1059,12 @@ def build_migration_plan(
                     'legacy_credential_id': credential.id,
                     'credential_id': migrated.id,
                     'source': str(old_material),
-                    'source_exists': old_material.exists(),
+                    **_migration_move_source_fields(
+                        old_material,
+                        conflicts=conflicts,
+                        vm_name=vm_name,
+                        store_path=source.path,
+                    ),
                     'target': str(new_material),
                     'action': 'copy-and-retain-legacy-for-rollback',
                 }
@@ -990,7 +1076,12 @@ def build_migration_plan(
                 'host_user': source.host_user,
                 'vm_name': vm_name,
                 'source': str(legacy_state),
-                'source_exists': legacy_state.exists(),
+                **_migration_move_source_fields(
+                    legacy_state,
+                    conflicts=conflicts,
+                    vm_name=vm_name,
+                    store_path=source.path,
+                ),
                 'target': str(layout.vm_state_dir(vm_name) / 'persistent'),
                 'action': 'copy-and-retain-legacy-for-rollback',
             }
