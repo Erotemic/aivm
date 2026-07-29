@@ -365,15 +365,29 @@ def _cleanup_attachment_artifacts(
 
 
 def _path_exists(path: Path) -> bool:
+    """Return a definitive deletion-path presence answer or fail closed."""
     result = CommandManager.current().run(
-        ['test', '-e', str(path)],
+        ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
         sudo=path_needs_sudo(path),
         role='read',
         check=False,
         capture=True,
         summary=f'Verify deletion path {path}',
     )
-    return result.code == 0
+    if result.code == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    confirmed_absent = (
+        result.code == 1
+        and detail.startswith('stat: cannot stat')
+        and detail.endswith('No such file or directory')
+    )
+    if confirmed_absent:
+        return False
+    raise AIVMError(
+        f'Could not determine whether deletion path exists: {path}: '
+        f'{detail or f"stat exited with status {result.code}"}'
+    )
 
 
 def _require_managed_storage_path(cfg: AgentVMConfig, path: Path) -> None:
@@ -505,6 +519,11 @@ def _revalidate_domain_storage_paths(
         return recorded
 
     current = tuple(domain_file_storage_paths(cfg.vm.name))
+    # Validate every live path before comparing inventories. A newly attached
+    # unmanaged disk is a containment violation, not merely an inventory
+    # mismatch, and must be rejected before any destructive phase.
+    for path in current:
+        _require_managed_storage_path(cfg, path)
     recorded_by_text = {
         os.path.abspath(os.fspath(path)): path for path in recorded
     }
@@ -534,21 +553,35 @@ def _revalidate_domain_storage_paths(
             + '\n'.join(details)
         )
 
-    for path in current:
-        _require_managed_storage_path(cfg, path)
     return current
 
 
 def _cleanup_owned_trees(journal: VMDeletionJournal) -> None:
+    """Preflight every owned tree before beginning recursive cleanup."""
+    candidates: list[tuple[Path, str]] = []
     if journal.bootstrap_dir:
-        _remove_tree(Path(journal.bootstrap_dir), label='bootstrap identity')
+        candidates.append((Path(journal.bootstrap_dir), 'bootstrap identity'))
     if journal.machine_state_dir:
-        _remove_tree(
-            Path(journal.machine_state_dir), label='per-VM machine state'
+        candidates.append(
+            (Path(journal.machine_state_dir), 'per-VM machine state')
         )
-    vm_base = Path(journal.vm_base_dir)
-    _assert_no_mounts_below(vm_base)
-    _remove_tree(vm_base, label='AIVM-managed VM directory')
+    candidates.append(
+        (Path(journal.vm_base_dir), 'AIVM-managed VM directory')
+    )
+
+    # Mount enumeration is an authorization check for recursive deletion.  Run
+    # every required inspection before removing any tree so one late probe
+    # failure cannot leave a partially completed cleanup.
+    seen: set[Path] = set()
+    for path, _label in candidates:
+        normalized = Path(os.path.abspath(os.fspath(path)))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        _assert_no_mounts_below(normalized)
+
+    for path, label in candidates:
+        _remove_tree(path, label=label)
 
 
 def _clear_current_profile(scope: StoreScope, vm_name: str, reg: Store) -> None:
@@ -668,6 +701,14 @@ def delete_managed_vm(
             raise AIVMError(f'Deletion journal target mismatch: {journal_path}')
 
         try:
+            # Complete every domain and storage inspection before the first
+            # destructive phase. A failed libvirt query or filesystem probe
+            # must not leave attachments, credentials, or trees half-cleaned.
+            preflight_storage = _revalidate_domain_storage_paths(cfg, journal)
+            for storage_path in preflight_storage:
+                _require_managed_storage_path(cfg, storage_path)
+                _path_exists(storage_path)
+
             # Refuse unmanaged or symlink-escaped storage before the first
             # destructive phase. Libvirt's --remove-all-storage must never be
             # allowed to delete a file outside the VM's AIVM-owned tree.
@@ -695,11 +736,13 @@ def delete_managed_vm(
                 report = _destroy_and_undefine_vm(
                     cfg.vm.name, storage_paths=storage_paths
                 )
-                _remove_retained_storage(cfg, report.retained_storage_paths)
+                # Direct filesystem removal is authorized only after a
+                # successful libvirt query proves the domain is absent.
                 if domain_is_defined(cfg.vm.name):
                     raise AIVMError(
                         f'VM domain still exists after deletion: {cfg.vm.name}'
                     )
+                _remove_retained_storage(cfg, report.retained_storage_paths)
                 remaining = [p for p in storage_paths if _path_exists(p)]
                 if remaining:
                     rendered = '\n'.join(f'  - {p}' for p in remaining)

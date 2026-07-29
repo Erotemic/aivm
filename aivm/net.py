@@ -198,26 +198,91 @@ def network_status(cfg: AgentVMConfig) -> str:
     return info.stdout + '\n' + dump.stdout
 
 
+def _network_missing_error(detail: str) -> bool:
+    lowered = detail.lower()
+    return (
+        'failed to get network' in lowered
+        or 'network not found' in lowered
+        or 'no network with matching name' in lowered
+    )
+
+
+def _network_inactive_error(detail: str) -> bool:
+    lowered = detail.lower()
+    return (
+        'network is not active' in lowered
+        or ("network '" in lowered and ' is not active' in lowered)
+    )
+
+
+def _network_defined(name: str) -> bool:
+    """Return a definitive libvirt-network presence answer or fail closed."""
+    result = CommandManager.current().run(
+        virsh_cmd('net-info', name),
+        sudo=virsh_needs_sudo(),
+        role='read',
+        check=False,
+        capture=True,
+        summary=f'Inspect libvirt network {name}',
+    )
+    if result.code == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    if _network_missing_error(detail):
+        return False
+    raise AIVMError(
+        f'Could not determine whether libvirt network {name!r} exists: '
+        f'{detail or f"virsh net-info exited with status {result.code}"}'
+    )
+
+
 def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    """Idempotently remove a network, accepting only recognized absence states."""
     name = cfg.network.name
     if dry_run:
         log.info(
             'DRYRUN: virsh net-destroy {}; virsh net-undefine {}', name, name
         )
         return
+    if not _network_defined(name):
+        log.info('Network already absent: {}', name)
+        return
+
     mgr = CommandManager.current()
-    mgr.run(
+    stopped = mgr.run(
         virsh_cmd('net-destroy', name),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
     )
-    mgr.run(
+    if stopped.code != 0:
+        detail = (stopped.stderr or stopped.stdout or '').strip()
+        if not (
+            _network_inactive_error(detail) or _network_missing_error(detail)
+        ):
+            raise AIVMError(
+                f'Could not stop libvirt network {name!r}: '
+                f'{detail or f"virsh net-destroy exited with status {stopped.code}"}'
+            )
+
+    undefined = mgr.run(
         virsh_cmd('net-undefine', name),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
     )
+    if undefined.code != 0:
+        detail = (undefined.stderr or undefined.stdout or '').strip()
+        if not _network_missing_error(detail):
+            raise AIVMError(
+                f'Could not undefine libvirt network {name!r}: '
+                f'{detail or f"virsh net-undefine exited with status {undefined.code}"}'
+            )
+
+    if _network_defined(name):
+        raise AIVMError(
+            f'Libvirt network {name!r} is still defined after teardown.'
+        )
     log.info('Network removed: {}', name)

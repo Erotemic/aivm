@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
@@ -37,6 +39,7 @@ from aivm.legacy.pre_0_6_0.migration_apply import (
     apply_migration,
     latest_migration_id,
     load_migration_journal,
+    migration_plan_sha256,
     migration_transaction_dir,
     rebuild_plan_from_journal,
     rollback_migration,
@@ -192,10 +195,10 @@ def test_apply_is_verified_resumable_and_retains_legacy_inputs(
     assert (
         persistent_target / 'persistent-attachments.json'
     ).stat().st_mode & 0o7777 == 0o664
-    assert (result.transaction_dir.stat().st_mode & 0o7777) == 0o2775
+    assert (result.transaction_dir.stat().st_mode & 0o7777) == 0o750
     assert (
         result.transaction_dir / 'state.json'
-    ).stat().st_mode & 0o7777 == 0o664
+    ).stat().st_mode & 0o7777 == 0o640
     assert (
         result.transaction_dir / 'backups-private'
     ).stat().st_mode & 0o7777 == 0o700
@@ -209,6 +212,137 @@ def test_apply_is_verified_resumable_and_retains_legacy_inputs(
     assert repeated.resumed
     assert repeated.journal.status == 'complete'
     assert guest_calls == [vm_name]
+
+
+@pytest.mark.parametrize(
+    ('source_name', 'failure_path', 'error'),
+    [
+        ('credential', 'target', PermissionError(13, 'permission denied')),
+        ('persistent', 'target', OSError(errno.EIO, 'I/O error')),
+        ('persistent', 'parent', PermissionError(13, 'permission denied')),
+    ],
+)
+def test_missing_source_destination_inspection_errors_fail_before_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_name: str,
+    failure_path: str,
+    error: OSError,
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    selected_source = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    shutil.rmtree(selected_source)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    moves = (
+        plan.credential_material_moves
+        if source_name == 'credential'
+        else plan.persistent_state_moves
+    )
+    target = Path(str(moves[0]['target']))
+    failing = target if failure_path == 'target' else target.parent
+    if source_name == 'persistent':
+        ancestor = target.parent if failure_path == 'target' else target.parent.parent
+        ancestor.mkdir(parents=True, exist_ok=True)
+    profile_path = Path(str(plan.profiles[0]['path']))
+    transaction = migration_transaction_dir(
+        'migration-' + migration_plan_sha256(plan)[:16],
+        layout,
+    )
+    real_lstat = os.lstat
+
+    def failing_lstat(
+        path: os.PathLike[str] | str,
+        *,
+        dir_fd: int | None = None,
+    ) -> os.stat_result:
+        if Path(path) == failing:
+            raise error
+        return real_lstat(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(
+        'aivm.legacy.pre_0_6_0.migration_apply.os.lstat', failing_lstat
+    )
+    with pytest.raises(
+        MigrationExecutionError,
+        match='Could not prove migration destination is absent',
+    ):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not transaction.exists()
+    assert not layout.config_path.exists()
+    assert not profile_path.exists()
+    assert not target.exists()
+
+
+def test_missing_source_dangling_destination_symlink_fails_before_writes(
+    tmp_path: Path,
+) -> None:
+    source, _vm_name, _credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    shutil.rmtree(persistent_source)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    target = Path(str(plan.persistent_state_moves[0]['target']))
+    target.parent.mkdir(parents=True)
+    target.symlink_to(tmp_path / 'missing-target', target_is_directory=True)
+    profile_path = Path(str(plan.profiles[0]['path']))
+
+    with pytest.raises(MigrationExecutionError, match='destination is a symlink'):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert target.is_symlink()
+    assert not layout.config_path.exists()
+    assert not (layout.state_dir / 'migrations').exists()
+    assert not profile_path.exists()
+
+
+def test_missing_source_intermediate_symlink_fails_before_writes(
+    tmp_path: Path,
+) -> None:
+    source, _vm_name, _credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    shutil.rmtree(persistent_source)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    outside = tmp_path / 'outside-state'
+    outside.mkdir()
+    layout.root.mkdir()
+    layout.state_dir.symlink_to(outside, target_is_directory=True)
+    target = Path(str(plan.persistent_state_moves[0]['target']))
+    profile_path = Path(str(plan.profiles[0]['path']))
+
+    with pytest.raises(
+        MigrationExecutionError, match='intermediate component is a symlink'
+    ):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert layout.state_dir.is_symlink()
+    assert list(outside.iterdir()) == []
+    assert not layout.config_path.exists()
+    assert not profile_path.exists()
+    assert not target.exists()
 
 
 @pytest.mark.parametrize(
@@ -589,6 +723,236 @@ def test_preexisting_private_target_uses_private_verified_backup(
     rollback_migration(result.journal.migration_id, layout=layout)
     assert credential_target.is_dir()
     assert _digest(credential_target / 'id_ed25519') == before
+
+
+def _applied_migration_for_rollback(
+    tmp_path: Path,
+):
+    source, _vm_name, _credential_source, _persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    return layout, plan, result
+
+
+def test_rollback_rejects_tampered_state_coordinates(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    state_path = result.transaction_dir / 'state.json'
+    payload = json.loads(state_path.read_text(encoding='utf-8'))
+    outside = tmp_path / 'outside-do-not-touch'
+    outside.write_text('safe\n', encoding='utf-8')
+    payload['backups'][0]['original'] = str(outside)
+    state_path.write_text(json.dumps(payload), encoding='utf-8')
+    os.chmod(state_path, 0o640)
+
+    with pytest.raises(
+        MigrationExecutionError, match='does not match protected state'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert outside.read_text(encoding='utf-8') == 'safe\n'
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_group_writable_control_state(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    state_path = result.transaction_dir / 'state.json'
+    os.chmod(state_path, 0o660)
+
+    with pytest.raises(
+        MigrationExecutionError, match='group/other writable'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert layout.config_path.exists()
+
+
+def test_rollback_does_not_trust_journal_output_digest(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    state_path = result.transaction_dir / 'state.json'
+    payload = json.loads(state_path.read_text(encoding='utf-8'))
+    selected = next(
+        row
+        for row in payload['backups']
+        if row.get('applied_existed') is True
+    )
+    selected['applied_sha256'] = '0' * 64
+    state_path.write_text(json.dumps(payload), encoding='utf-8')
+    os.chmod(state_path, 0o640)
+
+    with pytest.raises(
+        MigrationExecutionError, match='output digest disagrees with protected'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_tampered_frozen_plan(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    plan_path = result.transaction_dir / 'plan.json'
+    payload = json.loads(plan_path.read_text(encoding='utf-8'))
+    outside = tmp_path / 'outside-config.toml'
+    payload['target_machine_store'] = str(outside)
+    plan_path.write_text(json.dumps(payload), encoding='utf-8')
+    os.chmod(plan_path, 0o640)
+
+    with pytest.raises(
+        MigrationExecutionError, match='does not match its protected digest'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert not outside.exists()
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_replaced_transaction_directory(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    transaction = result.transaction_dir
+    original = transaction.with_name(transaction.name + '-saved')
+    transaction.rename(original)
+    transaction.symlink_to(original, target_is_directory=True)
+
+    with pytest.raises(
+        MigrationExecutionError, match='symlinked migration transaction path'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert transaction.is_symlink()
+    assert (original / 'state.json').exists()
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_symlinked_transaction_parent(tmp_path: Path) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    migration_dir = result.transaction_dir.parent
+    saved = migration_dir.with_name(migration_dir.name + '-saved')
+    migration_dir.rename(saved)
+    migration_dir.symlink_to(saved, target_is_directory=True)
+
+    with pytest.raises(
+        MigrationExecutionError, match='symlinked migration transaction path'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert migration_dir.is_symlink()
+    assert (saved / result.transaction_dir.name / 'state.json').exists()
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_symlinked_original_target(tmp_path: Path) -> None:
+    layout, plan, result = _applied_migration_for_rollback(tmp_path)
+    target = Path(str(plan.persistent_state_moves[0]['target']))
+    saved = target.with_name(target.name + '-saved')
+    target.rename(saved)
+    outside = tmp_path / 'outside-original'
+    outside.mkdir()
+    marker = outside / 'marker'
+    marker.write_text('safe\n', encoding='utf-8')
+    target.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(MigrationExecutionError, match='symlinked rollback target'):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert marker.read_text(encoding='utf-8') == 'safe\n'
+    assert target.is_symlink()
+    assert saved.exists()
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_journal_backup_path_substitution(
+    tmp_path: Path,
+) -> None:
+    layout, _plan, result = _applied_migration_for_rollback(tmp_path)
+    state_path = result.transaction_dir / 'state.json'
+    payload = json.loads(state_path.read_text(encoding='utf-8'))
+    outside = tmp_path / 'outside-backup'
+    outside.write_text('safe\n', encoding='utf-8')
+    payload['backups'][0]['backup'] = str(outside)
+    state_path.write_text(json.dumps(payload), encoding='utf-8')
+    os.chmod(state_path, 0o640)
+
+    with pytest.raises(
+        MigrationExecutionError, match='metadata disagrees with protected state'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert outside.read_text(encoding='utf-8') == 'safe\n'
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_symlinked_backup_path(tmp_path: Path) -> None:
+    source, _vm_name, credential_source, _persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    credential_target = Path(str(plan.credential_material_moves[0]['target']))
+    shutil.copytree(
+        credential_source, credential_target, copy_function=shutil.copy2
+    )
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    private_record = next(
+        item
+        for item in result.journal.backups
+        if item.role == 'private-credential-target'
+    )
+    backup = Path(private_record.backup)
+    saved = backup.with_name(backup.name + '-saved')
+    backup.rename(saved)
+    backup.symlink_to(saved, target_is_directory=True)
+
+    with pytest.raises(
+        MigrationExecutionError, match='symlinked migration backup'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert backup.is_symlink()
+    assert credential_target.exists()
+    assert layout.config_path.exists()
+
+
+def test_rollback_rejects_modified_backup_contents(tmp_path: Path) -> None:
+    source, _vm_name, credential_source, _persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    credential_target = Path(str(plan.credential_material_moves[0]['target']))
+    shutil.copytree(credential_source, credential_target, copy_function=shutil.copy2)
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    private_record = next(
+        item
+        for item in result.journal.backups
+        if item.role == 'private-credential-target'
+    )
+    backup = Path(private_record.backup)
+    (backup / 'id_ed25519').write_text('attacker replacement\n', encoding='utf-8')
+
+    with pytest.raises(
+        MigrationExecutionError, match='backup changed after creation'
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert credential_target.exists()
+    assert layout.config_path.exists()
 
 
 def test_verify_detects_source_mutation_after_apply(tmp_path: Path) -> None:

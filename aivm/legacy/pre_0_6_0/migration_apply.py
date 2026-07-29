@@ -14,11 +14,14 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import tempfile
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Callable, Iterator, Literal, cast
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
@@ -33,6 +36,7 @@ from ...config_store.fs_policy import (
     StoreFilesystemPolicy,
     apply_store_file_policy,
     ensure_store_directory,
+    exclusive_file_lock,
 )
 from ...errors import AIVMError
 from ...guestctl import (
@@ -47,6 +51,7 @@ from ...machine_store import (
     current_machine_group_gid,
     current_machine_store_policy,
     ensure_machine_store_layout,
+    machine_resource_locks,
     machine_store_layout,
 )
 from .migration import (
@@ -65,7 +70,7 @@ from ...profile_store import (
     save_user_profile,
 )
 from ...runtime import require_ssh_identity, ssh_base_args
-from ...enrollment import ensure_bootstrap_identity
+from ...enrollment import bootstrap_identity_paths, ensure_bootstrap_identity
 from ...vm.connectivity import wait_for_ip
 
 MIGRATION_JOURNAL_SCHEMA_VERSION = 1
@@ -326,10 +331,19 @@ def _object_dict_list(value: object) -> list[dict[str, object]]:
 def _atomic_write_text(
     path: Path,
     text: str,
-    mode: int = 0o664,
+    mode: int | None = None,
     *,
     policy: StoreFilesystemPolicy | None = None,
 ) -> None:
+    effective_mode: int
+    if mode is None:
+        effective_mode = (
+            policy.file_mode
+            if policy is not None and policy.file_mode is not None
+            else 0o664
+        )
+    else:
+        effective_mode = mode
     if policy is None:
         path.parent.mkdir(parents=True, exist_ok=True)
     else:
@@ -346,19 +360,19 @@ def _atomic_write_text(
         os.fsync(file.fileno())
         tmp = Path(file.name)
     try:
-        os.chmod(tmp, mode)
+        os.chmod(tmp, effective_mode)
         if policy is not None and policy.group_gid is not None:
             os.chown(tmp, -1, policy.group_gid)
         os.replace(tmp, path)
         if policy is None:
-            os.chmod(path, mode)
+            os.chmod(path, effective_mode)
         else:
             apply_store_file_policy(
                 path,
                 StoreFilesystemPolicy(
                     managed_root=policy.managed_root,
                     directory_mode=policy.directory_mode,
-                    file_mode=mode,
+                    file_mode=effective_mode,
                     group_gid=policy.group_gid,
                     reject_symlinks=policy.reject_symlinks,
                 ),
@@ -370,7 +384,7 @@ def _atomic_write_text(
 def _write_json(
     path: Path,
     payload: dict[str, object],
-    mode: int = 0o664,
+    mode: int | None = None,
     *,
     policy: StoreFilesystemPolicy | None = None,
 ) -> None:
@@ -495,32 +509,102 @@ def _verify_planned_move_source(
     return expected
 
 
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def _credential_destination_root(move: dict[str, object]) -> Path:
+    target = _lexical_absolute(Path(str(move.get('target', ''))))
+    if len(target.parents) < 3:
+        raise MigrationExecutionError(
+            f'Invalid credential migration destination: {target}'
+        )
+    # <legacy-data-root>/<vm>/credentials/<credential-id>
+    return target.parents[2]
+
+
+def _inspect_absent_path_under_root(
+    target: Path,
+    managed_root: Path,
+    *,
+    role: str,
+) -> None:
+    """Prove absence without following unsafe managed-path symlinks."""
+    selected = _lexical_absolute(target)
+    root = _lexical_absolute(managed_root)
+    try:
+        relative = selected.relative_to(root)
+    except ValueError as ex:
+        raise MigrationExecutionError(
+            f'{role} destination is outside its AIVM-managed root: '
+            f'{selected} (root {root})'
+        ) from ex
+
+    chain = [root]
+    cursor = root
+    for part in relative.parts:
+        cursor = cursor / part
+        chain.append(cursor)
+    for index, current in enumerate(chain):
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            return
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not prove migration destination is absent: '
+                f'{selected}: {ex}'
+            ) from ex
+        is_target = index == len(chain) - 1
+        if stat.S_ISLNK(info.st_mode):
+            label = 'destination' if is_target else 'intermediate component'
+            raise MigrationExecutionError(
+                f'{role} {label} is a symlink: {current}'
+            )
+        if not is_target and not stat.S_ISDIR(info.st_mode):
+            raise MigrationExecutionError(
+                f'Could not prove migration destination is absent because '
+                f'an intermediate component is not a directory: {current}'
+            )
+        if is_target:
+            raise MigrationExecutionError(
+                f'{role} destination exists even though its source was '
+                f'reviewed as missing: {selected}'
+            )
+
+
 def _verify_missing_source_destination(
     move: dict[str, object],
     expected: MigrationPathFingerprint,
     *,
     role: str,
+    managed_root: Path,
 ) -> None:
     if expected.exists:
         return
     target = Path(str(move.get('target', ''))).expanduser()
-    if os.path.lexists(target):
-        raise MigrationExecutionError(
-            f'{role} destination exists even though its source was reviewed '
-            f'as missing: {target}'
-        )
+    _inspect_absent_path_under_root(target, managed_root, role=role)
 
 
 def _verify_planned_data_sources(plan: MigrationPlan) -> None:
+    machine_root = plan.target_machine_store.expanduser().parent
     for move in plan.credential_material_moves:
-        expected = _verify_planned_move_source(move, role='Credential material')
+        expected = _verify_planned_move_source(
+            move, role='Credential material'
+        )
         _verify_missing_source_destination(
-            move, expected, role='Credential material'
+            move,
+            expected,
+            role='Credential material',
+            managed_root=_credential_destination_root(move),
         )
     for move in plan.persistent_state_moves:
         expected = _verify_planned_move_source(move, role='Persistent state')
         _verify_missing_source_destination(
-            move, expected, role='Persistent state'
+            move,
+            expected,
+            role='Persistent state',
+            managed_root=machine_root,
         )
 
 
@@ -574,6 +658,18 @@ def _plan_path(transaction_dir: Path) -> Path:
     return transaction_dir / 'plan.json'
 
 
+def _plan_digest_path(transaction_dir: Path) -> Path:
+    return transaction_dir / 'plan.sha256'
+
+
+def _backup_manifest_path(transaction_dir: Path) -> Path:
+    return transaction_dir / 'backup-manifest.json'
+
+
+def _output_manifest_path(transaction_dir: Path) -> Path:
+    return transaction_dir / 'outputs.json'
+
+
 def _expected_dir(transaction_dir: Path) -> Path:
     return transaction_dir / 'expected'
 
@@ -589,7 +685,30 @@ def _transaction_layout(transaction_dir: Path) -> MachineStoreLayout:
 
 
 def _transaction_policy(transaction_dir: Path) -> StoreFilesystemPolicy:
-    return current_machine_store_policy(_transaction_layout(transaction_dir))
+    """Return non-group-writable policy for migration recovery state."""
+    return StoreFilesystemPolicy(
+        managed_root=_lexical_absolute(transaction_dir),
+        directory_mode=0o750,
+        file_mode=0o640,
+        group_gid=current_machine_group_gid(),
+        reject_symlinks=True,
+    )
+
+
+def _ensure_transaction_directory(
+    transaction_dir: Path, layout: MachineStoreLayout
+) -> None:
+    """Create protected recovery coordinates beneath the machine store."""
+    root = migration_root(layout)
+    root_policy = StoreFilesystemPolicy(
+        managed_root=_lexical_absolute(root),
+        directory_mode=0o750,
+        file_mode=0o640,
+        group_gid=current_machine_group_gid(),
+        reject_symlinks=True,
+    )
+    ensure_store_directory(root, root_policy)
+    ensure_store_directory(transaction_dir, _transaction_policy(transaction_dir))
 
 
 def _save_journal(transaction_dir: Path, journal: MigrationJournal) -> None:
@@ -597,6 +716,49 @@ def _save_journal(transaction_dir: Path, journal: MigrationJournal) -> None:
     _write_json(
         _journal_path(transaction_dir),
         journal.to_dict(),
+        policy=_transaction_policy(transaction_dir),
+    )
+
+
+def _backup_record_control_dict(record: BackupRecord) -> dict[str, object]:
+    return {
+        'original': record.original,
+        'backup': record.backup,
+        'role': record.role,
+        'existed': record.existed,
+        'kind': record.kind,
+        'sha256': record.sha256,
+        'disposition': record.disposition,
+    }
+
+
+def _save_backup_manifest(
+    transaction_dir: Path, records: list[BackupRecord]
+) -> None:
+    _write_json(
+        _backup_manifest_path(transaction_dir),
+        {'backups': [_backup_record_control_dict(item) for item in records]},
+        policy=_transaction_policy(transaction_dir),
+    )
+
+
+def _save_output_manifest(
+    transaction_dir: Path, records: list[BackupRecord]
+) -> None:
+    outputs: list[dict[str, object]] = []
+    for item in records:
+        if item.applied_existed is None:
+            continue
+        outputs.append(
+            {
+                'original': item.original,
+                'applied_existed': item.applied_existed,
+                'applied_sha256': item.applied_sha256,
+            }
+        )
+    _write_json(
+        _output_manifest_path(transaction_dir),
+        {'outputs': outputs},
         policy=_transaction_policy(transaction_dir),
     )
 
@@ -879,8 +1041,10 @@ def _create_backups(
 ) -> list[BackupRecord]:
     policy = _transaction_policy(transaction_dir)
     root = ensure_store_directory(transaction_dir / 'backups', policy)
-    private_root = transaction_dir / 'backups-private'
-    private_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(root, 0o700)
+    private_root = ensure_store_directory(
+        transaction_dir / 'backups-private', policy
+    )
     os.chmod(private_root, 0o700)
     return [
         _backup_one(
@@ -1043,13 +1207,18 @@ def _write_profiles(plan: MigrationPlan) -> None:
             os.chown(target, uid, gid)
 
 
-def _copy_tree_if_needed(move: dict[str, object]) -> None:
+def _copy_tree_if_needed(
+    move: dict[str, object], *, managed_root: Path
+) -> None:
     source = Path(str(move.get('source', ''))).expanduser()
     target = Path(str(move.get('target', ''))).expanduser()
     expected = _verify_planned_move_source(move, role='Credential material')
     if not expected.exists:
         _verify_missing_source_destination(
-            move, expected, role='Credential material'
+            move,
+            expected,
+            role='Credential material',
+            managed_root=managed_root,
         )
         return
     if target.is_symlink():
@@ -1078,7 +1247,9 @@ def _copy_tree_if_needed(move: dict[str, object]) -> None:
 
 def _copy_credential_material(plan: MigrationPlan) -> None:
     for move in plan.credential_material_moves:
-        _copy_tree_if_needed(move)
+        _copy_tree_if_needed(
+            move, managed_root=_credential_destination_root(move)
+        )
 
 
 def _apply_machine_state_policy(
@@ -1106,7 +1277,10 @@ def _copy_persistent_state(
         expected = _verify_planned_move_source(move, role='Persistent state')
         if not expected.exists:
             _verify_missing_source_destination(
-                move, expected, role='Persistent state'
+                move,
+                expected,
+                role='Persistent state',
+                managed_root=layout.root,
             )
             continue
         if target.is_symlink():
@@ -1260,10 +1434,16 @@ def verify_migration_local(
         expected = _planned_move_fingerprint(move)
         if not expected.exists:
             _verify_missing_source_destination(
-                move, expected, role='Credential material'
+                move,
+                expected,
+                role='Credential material',
+                managed_root=_credential_destination_root(move),
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected:
+        if (
+            not target.exists()
+            or _path_content_fingerprint(target) != expected
+        ):
             raise MigrationExecutionError(
                 f'Credential material verification failed: {source} -> {target}'
             )
@@ -1275,10 +1455,16 @@ def verify_migration_local(
         expected = _planned_move_fingerprint(move)
         if not expected.exists:
             _verify_missing_source_destination(
-                move, expected, role='Persistent state'
+                move,
+                expected,
+                role='Persistent state',
+                managed_root=layout.root,
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected:
+        if (
+            not target.exists()
+            or _path_content_fingerprint(target) != expected
+        ):
             raise MigrationExecutionError(
                 f'Persistent state verification failed: {source} -> {target}'
             )
@@ -1384,8 +1570,8 @@ def apply_migration(
     ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
     migration_id = migration_id_for_plan(plan)
     tx = migration_transaction_dir(migration_id, layout)
-    policy = current_machine_store_policy(layout)
-    ensure_store_directory(tx, policy)
+    _ensure_transaction_directory(tx, layout)
+    policy = _transaction_policy(tx)
     state_path = _journal_path(tx)
     resumed = state_path.exists()
     plan_sha = migration_plan_sha256(plan)
@@ -1418,6 +1604,11 @@ def apply_migration(
             sources=plan.sources,
         )
         _write_json(_plan_path(tx), plan.to_dict(), policy=policy)
+        _atomic_write_text(
+            _plan_digest_path(tx),
+            plan_sha + '\n',
+            policy=policy,
+        )
         _freeze_expected(plan, tx)
         _save_journal(tx, journal)
 
@@ -1432,6 +1623,7 @@ def apply_migration(
         action()
         if output_roles:
             _capture_migration_outputs(journal, output_roles)
+            _save_output_manifest(tx, journal.backups)
             _save_journal(tx, journal)
         _mark_step(tx, journal, name)
         if fail_after_step == name:
@@ -1443,6 +1635,8 @@ def apply_migration(
 
         def backups_action() -> None:
             journal.backups = _create_backups(plan, tx, layout)
+            _save_backup_manifest(tx, journal.backups)
+            _save_output_manifest(tx, journal.backups)
             _save_journal(tx, journal)
 
         run_step('backups-created', backups_action)
@@ -1571,6 +1765,709 @@ def verify_applied_migration(
     )
 
 
+def _plan_report_fingerprint_payload(
+    report: dict[str, object],
+) -> dict[str, object]:
+    return {
+        'plan_schema_version': report.get('plan_schema_version', 0),
+        'target_machine_store': report.get('target_machine_store', ''),
+        'sources': report.get('sources', []),
+        'proposed': report.get('proposed', {}),
+    }
+
+
+def _frozen_plan_sha256(report: dict[str, object]) -> str:
+    payload = json.dumps(
+        _plan_report_fingerprint_payload(report),
+        sort_keys=True,
+        separators=(',', ':'),
+    ).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _secure_lstat(
+    path: Path,
+    *,
+    expected: Literal['file', 'directory'],
+    owner_uid: int,
+) -> os.stat_result:
+    try:
+        info = os.lstat(path)
+    except OSError as ex:
+        raise MigrationExecutionError(
+            f'Could not inspect protected migration path {path}: {ex}'
+        ) from ex
+    if stat.S_ISLNK(info.st_mode):
+        raise MigrationExecutionError(
+            f'Refusing symlinked migration transaction path: {path}'
+        )
+    if expected == 'file' and not stat.S_ISREG(info.st_mode):
+        raise MigrationExecutionError(
+            f'Migration transaction path is not a regular file: {path}'
+        )
+    if expected == 'directory' and not stat.S_ISDIR(info.st_mode):
+        raise MigrationExecutionError(
+            f'Migration transaction path is not a directory: {path}'
+        )
+    if info.st_uid != owner_uid:
+        raise MigrationExecutionError(
+            f'Migration transaction path has unexpected owner: {path}; '
+            f'expected uid {owner_uid}, found {info.st_uid}'
+        )
+    if stat.S_IMODE(info.st_mode) & 0o022:
+        raise MigrationExecutionError(
+            f'Migration transaction path is group/other writable: {path}'
+        )
+    return info
+
+
+def _absolute_component_chain(path: Path) -> list[Path]:
+    selected = _lexical_absolute(path)
+    anchor = Path(selected.anchor)
+    chain = [anchor]
+    cursor = anchor
+    for part in selected.parts[1:]:
+        cursor = cursor / part
+        chain.append(cursor)
+    return chain
+
+
+def _validate_transaction_control_paths(transaction_dir: Path) -> None:
+    """Validate protected recovery coordinates before reading their content."""
+    owner_uid = os.geteuid()
+    layout = _transaction_layout(transaction_dir)
+    root = migration_root(layout)
+
+    # The machine store itself is intentionally group writable, but every
+    # lexical path component from the filesystem root to the transaction must
+    # still be a real directory rather than a symlink or special file. From
+    # ``migrations`` downward, ownership and non-group-writability are security
+    # invariants. A root rollback therefore rejects control state created by an
+    # unprivileged owner rather than trusting it across the privilege boundary.
+    for component in _absolute_component_chain(transaction_dir):
+        try:
+            info = os.lstat(component)
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect migration path component {component}: {ex}'
+            ) from ex
+        if stat.S_ISLNK(info.st_mode):
+            raise MigrationExecutionError(
+                f'Refusing symlinked migration transaction path component: '
+                f'{component}'
+            )
+        if not stat.S_ISDIR(info.st_mode):
+            raise MigrationExecutionError(
+                f'Unsafe migration path component: {component}'
+            )
+
+    _secure_lstat(root, expected='directory', owner_uid=owner_uid)
+    _secure_lstat(
+        transaction_dir, expected='directory', owner_uid=owner_uid
+    )
+    _secure_lstat(
+        _journal_path(transaction_dir), expected='file', owner_uid=owner_uid
+    )
+    _secure_lstat(
+        _plan_path(transaction_dir), expected='file', owner_uid=owner_uid
+    )
+    _secure_lstat(
+        _plan_digest_path(transaction_dir),
+        expected='file',
+        owner_uid=owner_uid,
+    )
+    for name in (
+        'backup-manifest.json',
+        'outputs.json',
+    ):
+        selected = transaction_dir / name
+        try:
+            os.lstat(selected)
+        except FileNotFoundError:
+            continue
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect protected migration path {selected}: {ex}'
+            ) from ex
+        _secure_lstat(selected, expected='file', owner_uid=owner_uid)
+    for name in ('backups', 'backups-private', 'expected'):
+        selected = transaction_dir / name
+        try:
+            os.lstat(selected)
+        except FileNotFoundError:
+            continue
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect protected migration path {selected}: {ex}'
+            ) from ex
+        _secure_lstat(selected, expected='directory', owner_uid=owner_uid)
+
+
+def _frozen_plan_objects(report: dict[str, object]) -> tuple[
+    list[dict[str, object]], dict[str, object]
+]:
+    sources = _object_dict_list(report.get('sources', []))
+    proposed_value = report.get('proposed', {})
+    proposed = _json_object(proposed_value)
+    return sources, proposed
+
+
+@dataclass(frozen=True)
+class _AuthorizedBackup:
+    original: Path
+    role: str
+    disposition: BackupDisposition
+    managed_root: Path
+
+
+def _frozen_backup_candidates(
+    report: dict[str, object], layout: MachineStoreLayout
+) -> list[_AuthorizedBackup]:
+    sources, proposed = _frozen_plan_objects(report)
+    result: list[_AuthorizedBackup] = []
+
+    homes: dict[str, Path] = {}
+    for source in sources:
+        host_user = str(source.get('host_user', ''))
+        home = _lexical_absolute(Path(str(source.get('home', ''))))
+        homes[host_user] = home
+        for item in _object_dict_list(source.get('files', [])):
+            path = _lexical_absolute(Path(str(item.get('path', ''))))
+            result.append(
+                _AuthorizedBackup(
+                    path,
+                    'legacy-store-input',
+                    'evidence_only',
+                    home,
+                )
+            )
+
+    config_path = _lexical_absolute(
+        Path(str(report.get('target_machine_store', '')))
+    )
+    machine_targets = (
+        (config_path, 'target-machine-root'),
+        (config_path.parent / 'defaults.toml', 'target-machine-defaults'),
+        (config_path.parent / 'networks.toml', 'target-machine-networks'),
+        (config_path.parent / 'vms', 'target-machine-vms'),
+    )
+    for path, role in machine_targets:
+        result.append(
+            _AuthorizedBackup(
+                _lexical_absolute(path),
+                role,
+                'restore_on_rollback',
+                layout.root,
+            )
+        )
+
+    for profile in _object_dict_list(proposed.get('profiles', [])):
+        target = _lexical_absolute(Path(str(profile.get('path', ''))))
+        host_user = str(profile.get('host_user', ''))
+        root = homes.get(host_user, target.parent)
+        result.append(
+            _AuthorizedBackup(
+                target, 'profile-target', 'restore_on_rollback', root
+            )
+        )
+
+    for move in _object_dict_list(
+        proposed.get('credential_material_moves', [])
+    ):
+        target = _lexical_absolute(Path(str(move.get('target', ''))))
+        result.append(
+            _AuthorizedBackup(
+                target,
+                'private-credential-target',
+                'restore_on_rollback',
+                _credential_destination_root(move),
+            )
+        )
+
+    for move in _object_dict_list(proposed.get('persistent_state_moves', [])):
+        source = _lexical_absolute(Path(str(move.get('source', ''))))
+        target = _lexical_absolute(Path(str(move.get('target', ''))))
+        host_user = str(move.get('host_user', ''))
+        result.append(
+            _AuthorizedBackup(
+                source,
+                'persistent-input',
+                'evidence_only',
+                homes.get(host_user, source.parent),
+            )
+        )
+        result.append(
+            _AuthorizedBackup(
+                target,
+                'persistent-target',
+                'restore_on_rollback',
+                layout.root,
+            )
+        )
+
+    machine = _json_object(proposed.get('machine', {}))
+    for vm in _object_dict_list(machine.get('vms', [])):
+        vm_name = str(vm.get('name', ''))
+        if not vm_name:
+            raise MigrationExecutionError(
+                'Frozen migration plan contains a VM without a name.'
+            )
+        result.append(
+            _AuthorizedBackup(
+                _lexical_absolute(
+                    bootstrap_identity_paths(vm_name, layout=layout).directory
+                ),
+                'private-bootstrap-target',
+                'restore_on_rollback',
+                layout.root,
+            )
+        )
+
+    deduplicated: list[_AuthorizedBackup] = []
+    seen: set[Path] = set()
+    for item in result:
+        if item.original in seen:
+            continue
+        seen.add(item.original)
+        deduplicated.append(item)
+    return deduplicated
+
+
+def _load_and_validate_frozen_plan(
+    transaction_dir: Path,
+    journal: MigrationJournal,
+    layout: MachineStoreLayout,
+) -> tuple[dict[str, object], dict[Path, _AuthorizedBackup]]:
+    report = _read_json(_plan_path(transaction_dir))
+    digest = _frozen_plan_sha256(report)
+    try:
+        anchored_digest = _plan_digest_path(transaction_dir).read_text(
+            encoding='ascii'
+        ).strip()
+    except OSError as ex:
+        raise MigrationExecutionError(
+            f'Could not read protected migration plan digest: {ex}'
+        ) from ex
+    if digest != anchored_digest:
+        raise MigrationExecutionError(
+            'Protected frozen migration plan does not match its protected digest.'
+        )
+    if journal.plan_sha256 != anchored_digest:
+        raise MigrationExecutionError(
+            'Migration journal plan digest disagrees with protected plan state.'
+        )
+    expected_id = 'migration-' + anchored_digest[:16]
+    if expected_id != journal.migration_id:
+        raise MigrationExecutionError(
+            'Migration journal id does not match the protected frozen plan.'
+        )
+    target = _lexical_absolute(
+        Path(str(report.get('target_machine_store', '')))
+    )
+    if target != _lexical_absolute(layout.config_path):
+        raise MigrationExecutionError(
+            'Protected frozen plan targets a different machine store.'
+        )
+    candidates = _frozen_backup_candidates(report, layout)
+    return report, {item.original: item for item in candidates}
+
+
+def _validate_backup_path(
+    path: Path,
+    *,
+    root: Path,
+    record: BackupRecord,
+) -> None:
+    selected = _lexical_absolute(path)
+    selected_root = _lexical_absolute(root)
+    try:
+        relative = selected.relative_to(selected_root)
+    except ValueError as ex:
+        raise MigrationExecutionError(
+            f'Migration backup escapes its transaction root: {selected}'
+        ) from ex
+    if len(relative.parts) != 1:
+        raise MigrationExecutionError(
+            f'Migration backup is not a deterministic direct descendant: '
+            f'{selected}'
+        )
+    if not record.existed:
+        try:
+            os.lstat(selected)
+        except FileNotFoundError:
+            return
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect migration backup {selected}: {ex}'
+            ) from ex
+        raise MigrationExecutionError(
+            f'Unexpected backup exists for a previously missing target: '
+            f'{selected}'
+        )
+    try:
+        info = os.lstat(selected)
+    except OSError as ex:
+        raise MigrationExecutionError(
+            f'Migration backup is missing or unreadable: {selected}: {ex}'
+        ) from ex
+    if stat.S_ISLNK(info.st_mode):
+        raise MigrationExecutionError(
+            f'Refusing symlinked migration backup: {selected}'
+        )
+    actual_kind = 'directory' if stat.S_ISDIR(info.st_mode) else 'file'
+    if actual_kind != record.kind:
+        raise MigrationExecutionError(
+            f'Migration backup type changed: {selected}'
+        )
+    if not record.sha256 or _tree_sha256(selected) != record.sha256:
+        raise MigrationExecutionError(
+            f'Migration backup changed after creation: {selected}'
+        )
+
+
+def _load_backup_manifest(transaction_dir: Path) -> list[BackupRecord]:
+    payload = _read_json(_backup_manifest_path(transaction_dir))
+    rows = _object_dict_list(payload.get('backups', []))
+    return [BackupRecord.from_dict(row) for row in rows]
+
+
+def _load_output_manifest(
+    transaction_dir: Path,
+) -> dict[Path, tuple[bool, str]]:
+    path = _output_manifest_path(transaction_dir)
+    try:
+        payload = _read_json(path)
+    except MigrationExecutionError:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return {}
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect protected output manifest {path}: {ex}'
+            ) from ex
+        raise
+    result: dict[Path, tuple[bool, str]] = {}
+    for row in _object_dict_list(payload.get('outputs', [])):
+        original = _lexical_absolute(Path(str(row.get('original', ''))))
+        existed = row.get('applied_existed')
+        sha256 = str(row.get('applied_sha256', ''))
+        if not isinstance(existed, bool):
+            raise MigrationExecutionError(
+                f'Protected output manifest has invalid state for {original}'
+            )
+        if existed != bool(sha256):
+            raise MigrationExecutionError(
+                f'Protected output manifest has inconsistent digest for '
+                f'{original}'
+            )
+        if original in result:
+            raise MigrationExecutionError(
+                f'Protected output manifest duplicates {original}'
+            )
+        result[original] = (existed, sha256)
+    return result
+
+
+def _validate_journal_backups(
+    journal: MigrationJournal,
+    transaction_dir: Path,
+    authorized: dict[Path, _AuthorizedBackup],
+) -> list[BackupRecord]:
+    protected = _load_backup_manifest(transaction_dir)
+    if len(protected) != len(authorized):
+        raise MigrationExecutionError(
+            'Protected backup manifest does not match the frozen plan.'
+        )
+    protected_by_original: dict[Path, BackupRecord] = {}
+    backup_root = transaction_dir / 'backups'
+    private_root = transaction_dir / 'backups-private'
+    for record in protected:
+        original = _lexical_absolute(Path(record.original))
+        if original in protected_by_original:
+            raise MigrationExecutionError(
+                f'Protected backup manifest duplicates {original}'
+            )
+        expected = authorized.get(original)
+        if expected is None:
+            raise MigrationExecutionError(
+                f'Protected backup manifest names an unauthorized target: '
+                f'{original}'
+            )
+        if (
+            record.role != expected.role
+            or record.disposition != expected.disposition
+        ):
+            raise MigrationExecutionError(
+                f'Protected backup metadata disagrees with the frozen plan '
+                f'for {original}'
+            )
+        selected_root = (
+            private_root if expected.role.startswith('private-') else backup_root
+        )
+        deterministic = _backup_path_for(original, selected_root)
+        backup = _lexical_absolute(Path(record.backup))
+        if backup != _lexical_absolute(deterministic):
+            raise MigrationExecutionError(
+                f'Protected manifest names a non-deterministic backup path '
+                f'for {original}: {backup}'
+            )
+        _validate_backup_path(backup, root=selected_root, record=record)
+        protected_by_original[original] = record
+    if set(protected_by_original) != set(authorized):
+        raise MigrationExecutionError(
+            'Protected backup manifest omits frozen-plan rollback targets.'
+        )
+
+    journal_by_original: dict[Path, BackupRecord] = {}
+    for record in journal.backups:
+        original = _lexical_absolute(Path(record.original))
+        if original in journal_by_original:
+            raise MigrationExecutionError(
+                f'Duplicate migration journal rollback target: {original}'
+            )
+        journal_by_original[original] = record
+    if set(journal_by_original) != set(protected_by_original):
+        raise MigrationExecutionError(
+            'Migration journal backup set does not match protected state.'
+        )
+
+    outputs = _load_output_manifest(transaction_dir)
+    unknown_outputs = set(outputs) - set(protected_by_original)
+    if unknown_outputs:
+        rendered = ', '.join(str(path) for path in sorted(unknown_outputs))
+        raise MigrationExecutionError(
+            f'Protected output manifest names unauthorized targets: {rendered}'
+        )
+    canonical: list[BackupRecord] = []
+    for original, protected_record in protected_by_original.items():
+        journal_record = journal_by_original[original]
+        if _backup_record_control_dict(journal_record) != (
+            _backup_record_control_dict(protected_record)
+        ):
+            raise MigrationExecutionError(
+                f'Migration journal backup metadata disagrees with protected '
+                f'state for {original}'
+            )
+        output = outputs.get(original)
+        if output is None:
+            applied_existed: bool | None = None
+            applied_sha256 = ''
+        else:
+            applied_existed, applied_sha256 = output
+        if (
+            journal_record.applied_existed != applied_existed
+            or journal_record.applied_sha256 != applied_sha256
+        ):
+            raise MigrationExecutionError(
+                f'Migration journal output digest disagrees with protected '
+                f'state for {original}'
+            )
+        canonical.append(
+            replace(
+                protected_record,
+                applied_existed=applied_existed,
+                applied_sha256=applied_sha256,
+            )
+        )
+    return canonical
+
+
+def _assert_safe_restore_path(path: Path, managed_root: Path) -> None:
+    selected = _lexical_absolute(path)
+    root = _lexical_absolute(managed_root)
+    try:
+        relative = selected.relative_to(root)
+    except ValueError as ex:
+        raise MigrationExecutionError(
+            f'Rollback target is outside its authorized root: {selected}'
+        ) from ex
+    cursor = root
+    chain = [root]
+    for part in relative.parts[:-1]:
+        cursor = cursor / part
+        chain.append(cursor)
+    for current in chain:
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            continue
+        except OSError as ex:
+            raise MigrationExecutionError(
+                f'Could not inspect rollback path component {current}: {ex}'
+            ) from ex
+        if stat.S_ISLNK(info.st_mode):
+            raise MigrationExecutionError(
+                f'Refusing rollback through symlinked path component: '
+                f'{current}'
+            )
+        if not stat.S_ISDIR(info.st_mode):
+            raise MigrationExecutionError(
+                f'Rollback path component is not a directory: {current}'
+            )
+
+
+@contextmanager
+def _open_authorized_parent(
+    path: Path, managed_root: Path
+) -> Iterator[tuple[int, Path]]:
+    """Open a target parent one component at a time without following links."""
+    selected = _lexical_absolute(path)
+    root = _lexical_absolute(managed_root)
+    try:
+        relative_parent = selected.parent.relative_to(root)
+    except ValueError as ex:
+        raise MigrationExecutionError(
+            f'Rollback target is outside its authorized root: {selected}'
+        ) from ex
+
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        current_fd = os.open(root, flags)
+    except OSError as ex:
+        raise MigrationExecutionError(
+            f'Could not open authorized rollback root {root}: {ex}'
+        ) from ex
+    try:
+        for part in relative_parent.parts:
+            try:
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current_fd)
+                    next_fd = os.open(part, flags, dir_fd=current_fd)
+                except OSError as ex:
+                    raise MigrationExecutionError(
+                        f'Could not create rollback path component {part!r} '
+                        f'below {selected.parent}: {ex}'
+                    ) from ex
+            except OSError as ex:
+                raise MigrationExecutionError(
+                    f'Could not safely open rollback path component {part!r} '
+                    f'below {selected.parent}: {ex}'
+                ) from ex
+            os.close(current_fd)
+            current_fd = next_fd
+        yield current_fd, Path(f'/proc/self/fd/{current_fd}')
+    finally:
+        os.close(current_fd)
+
+
+def _dirfd_entry_exists(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as ex:
+        raise MigrationExecutionError(
+            f'Could not inspect rollback target entry {name!r}: {ex}'
+        ) from ex
+    return True
+
+
+def _atomic_restore_backup(
+    record: BackupRecord, authorized: _AuthorizedBackup
+) -> None:
+    """Restore through an opened parent directory to resist path-swap races."""
+    original = authorized.original
+    _assert_safe_restore_path(original, authorized.managed_root)
+    token = uuid.uuid4().hex
+    staged_name = f'.aivm-rollback-stage-{token}'
+    displaced_name = f'.aivm-rollback-old-{token}'
+    moved_original = False
+    with _open_authorized_parent(
+        original, authorized.managed_root
+    ) as (parent_fd, parent_view):
+        staged = parent_view / staged_name
+        displaced = parent_view / displaced_name
+        restored = parent_view / original.name
+        try:
+            # Repeat the concurrency check through the opened parent. The
+            # preflight protects all targets as a set; this second check closes
+            # the path-swap window immediately before replacement.
+            action = _classify_rollback_state(
+                record,
+                _current_backup_path_state(restored),
+                display_path=original,
+            )
+            if action == 'noop':
+                return
+            if record.existed:
+                _copy_path(Path(record.backup), staged)
+                if record.sha256 and _tree_sha256(staged) != record.sha256:
+                    raise MigrationExecutionError(
+                        f'Staged rollback backup failed verification for '
+                        f'{original}'
+                    )
+            if _dirfd_entry_exists(parent_fd, original.name):
+                current = os.stat(
+                    original.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if stat.S_ISLNK(current.st_mode):
+                    raise MigrationExecutionError(
+                        f'Refusing symlinked rollback target: {original}'
+                    )
+                os.replace(
+                    original.name,
+                    displaced_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                moved_original = True
+            if record.existed:
+                os.replace(
+                    staged_name,
+                    original.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                if record.sha256 and _tree_sha256(restored) != record.sha256:
+                    raise MigrationExecutionError(
+                        f'Rollback verification failed for {original}'
+                    )
+            if moved_original:
+                _remove_path(displaced)
+                moved_original = False
+        except BaseException:
+            if moved_original:
+                try:
+                    _remove_path(restored)
+                    os.replace(
+                        displaced_name,
+                        original.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    moved_original = False
+                except BaseException as recovery_ex:
+                    raise MigrationExecutionError(
+                        f'Rollback replacement failed and the displaced '
+                        f'original remains at {displaced}: {recovery_ex}'
+                    ) from recovery_ex
+            raise
+        finally:
+            _remove_path(staged)
+            if not moved_original:
+                _remove_path(displaced)
+
+
+@contextmanager
+def _migration_rollback_locks(
+    layout: MachineStoreLayout,
+) -> Iterator[None]:
+    policy = current_machine_store_policy(layout)
+    migration_lock = layout.locks_dir / 'migration.lock'
+    with exclusive_file_lock(migration_lock, policy):
+        with machine_resource_locks(
+            layout,
+            group_gid=current_machine_group_gid(),
+            include_store=True,
+        ):
+            yield
+
+
 RollbackAction = Literal['noop', 'restore']
 
 
@@ -1596,10 +2493,12 @@ def _state_matches(
     return not existed or current_sha256 == sha256
 
 
-def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
-    """Prove whether one target is untouched or still migration-produced."""
-    original = Path(record.original)
-    current = _current_backup_path_state(original)
+def _classify_rollback_state(
+    record: BackupRecord,
+    current: tuple[bool, str],
+    *,
+    display_path: Path,
+) -> RollbackAction:
     if _state_matches(
         current,
         existed=record.existed,
@@ -1608,9 +2507,10 @@ def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
         return 'noop'
     if record.applied_existed is None:
         raise MigrationExecutionError(
-            f'Rollback cannot prove that the current contents of {original} '
-            'were produced by migration. The apply phase may have failed '
-            'partway through this target; preserve it for manual recovery.'
+            f'Rollback cannot prove that the current contents of '
+            f'{display_path} were produced by migration. The apply phase may '
+            'have failed partway through this target; preserve it for manual '
+            'recovery.'
         )
     if not _state_matches(
         current,
@@ -1618,8 +2518,9 @@ def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
         sha256=record.applied_sha256,
     ):
         raise MigrationExecutionError(
-            f'Rollback target changed after migration wrote it: {original}. '
-            'Refusing to overwrite concurrent or operator changes.'
+            f'Rollback target changed after migration wrote it: '
+            f'{display_path}. Refusing to overwrite concurrent or operator '
+            'changes.'
         )
     if record.existed:
         backup = Path(record.backup)
@@ -1634,57 +2535,72 @@ def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
     return 'restore'
 
 
+def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
+    """Prove whether one target is untouched or still migration-produced."""
+    original = Path(record.original)
+    return _classify_rollback_state(
+        record,
+        _current_backup_path_state(original),
+        display_path=original,
+    )
+
+
 def rollback_migration(
     migration_id: str,
     *,
     layout: MachineStoreLayout | None = None,
 ) -> MigrationApplyResult:
-    """Restore migration-owned targets without rewriting retained inputs."""
+    """Restore only targets authorized by protected frozen migration state."""
     layout = layout or machine_store_layout()
-    loaded = load_migration_journal(migration_id, layout=layout)
-    journal = loaded.journal
-    if journal.status == 'rolled-back':
-        return loaded
-    try:
-        # Preflight every target before mutating any of them. This avoids a
-        # partially completed rollback merely because a later target contains
-        # concurrent or operator changes.
-        actions: list[tuple[BackupRecord, RollbackAction]] = []
-        for record in reversed(journal.backups):
-            if record.disposition == 'evidence_only':
-                continue
-            actions.append((record, _classify_rollback_target(record)))
+    transaction_dir = migration_transaction_dir(migration_id, layout)
+    with _migration_rollback_locks(layout):
+        _validate_transaction_control_paths(transaction_dir)
+        journal = MigrationJournal.from_dict(
+            _read_json(_journal_path(transaction_dir))
+        )
+        if journal.migration_id != migration_id:
+            raise MigrationExecutionError(
+                'Migration journal id does not match the requested transaction.'
+            )
+        if journal.status == 'rolled-back':
+            return MigrationApplyResult(
+                journal=journal,
+                transaction_dir=transaction_dir,
+                resumed=True,
+            )
+        _report, authorized = _load_and_validate_frozen_plan(
+            transaction_dir, journal, layout
+        )
+        canonical_backups = _validate_journal_backups(
+            journal, transaction_dir, authorized
+        )
+        try:
+            actions: list[tuple[BackupRecord, RollbackAction]] = []
+            for record in reversed(canonical_backups):
+                expected = authorized[_lexical_absolute(Path(record.original))]
+                if expected.disposition == 'evidence_only':
+                    continue
+                actions.append((record, _classify_rollback_target(record)))
 
-        for record, action in actions:
-            if action == 'noop':
-                continue
-            # Close the preflight-to-write window as much as practical. If the
-            # target changed after global preflight, stop before replacing it.
-            if _classify_rollback_target(record) == 'noop':
-                continue
-            original = Path(record.original)
-            backup = Path(record.backup)
-            _remove_path(original)
-            if record.existed:
-                _copy_path(backup, original)
-                if record.sha256 and _tree_sha256(original) != record.sha256:
-                    raise MigrationExecutionError(
-                        f'Rollback verification failed for {original}'
-                    )
-        journal.status = 'rolled-back'
-        journal.error = ''
-        journal.verification = {'status': 'rolled-back'}
-        _save_journal(loaded.transaction_dir, journal)
-    except Exception as ex:
-        journal.status = 'rollback-failed'
-        journal.error = str(ex)
-        _save_journal(loaded.transaction_dir, journal)
-        if isinstance(ex, MigrationExecutionError):
-            raise
-        raise MigrationExecutionError(str(ex)) from ex
+            for record, action in actions:
+                if action == 'noop':
+                    continue
+                expected = authorized[_lexical_absolute(Path(record.original))]
+                _atomic_restore_backup(record, expected)
+            journal.status = 'rolled-back'
+            journal.error = ''
+            journal.verification = {'status': 'rolled-back'}
+            _save_journal(transaction_dir, journal)
+        except Exception as ex:
+            journal.status = 'rollback-failed'
+            journal.error = str(ex)
+            _save_journal(transaction_dir, journal)
+            if isinstance(ex, MigrationExecutionError):
+                raise
+            raise MigrationExecutionError(str(ex)) from ex
     return MigrationApplyResult(
         journal=journal,
-        transaction_dir=loaded.transaction_dir,
+        transaction_dir=transaction_dir,
         resumed=True,
     )
 

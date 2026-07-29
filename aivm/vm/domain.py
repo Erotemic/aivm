@@ -14,13 +14,20 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
-from ..runtime import virsh_cmd
+from ..runtime import virsh_cmd, virsh_domain_missing
 from .connectivity import get_ip_cached
 
 log = logger
 
 
 def _vm_defined(name: str) -> bool:
+    """Return a definitive domain-presence answer or fail closed.
+
+    ``virsh dominfo`` uses a nonzero exit status for both a genuinely missing
+    domain and inspection failures such as a broken libvirt connection or a
+    permission denial.  Only the recognized no-domain diagnostic is absence;
+    every other failure aborts the caller before destructive work can begin.
+    """
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
         with mgr.step(
@@ -49,7 +56,15 @@ def _vm_defined(name: str) -> bool:
             capture=True,
             summary=f'Inspect VM definition {name}',
         )
-    return res.code == 0
+    if res.code == 0:
+        return True
+    detail = (res.stderr or res.stdout or '').strip()
+    if virsh_domain_missing(detail):
+        return False
+    raise AIVMError(
+        f'Could not determine whether VM {name!r} is defined: '
+        f'{detail or f"virsh dominfo exited with status {res.code}"}'
+    )
 
 
 def domain_is_defined(name: str) -> bool:
@@ -132,15 +147,29 @@ def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
 
 
 def _host_path_exists(path: Path) -> bool:
+    """Return a definitive storage-path presence answer or fail closed."""
     result = CommandManager.current().run(
-        ['test', '-e', str(path)],
+        ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
         sudo=virsh_needs_sudo(),
         role='read',
         check=False,
         capture=True,
         summary=f'Verify managed VM storage removal: {path}',
     )
-    return result.code == 0
+    if result.code == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    confirmed_absent = (
+        result.code == 1
+        and detail.startswith('stat: cannot stat')
+        and detail.endswith('No such file or directory')
+    )
+    if confirmed_absent:
+        return False
+    raise AIVMError(
+        f'Could not determine whether managed VM storage exists: {path}: '
+        f'{detail or f"stat exited with status {result.code}"}'
+    )
 
 
 def _destroy_and_undefine_vm(

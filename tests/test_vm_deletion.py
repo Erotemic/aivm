@@ -29,6 +29,7 @@ from aivm.vm.deletion import (
     _assert_no_mounts_below,
     _cleanup_owned_trees,
     _journal_path,
+    _load_journal,
     _new_journal,
     _save_journal,
     delete_managed_vm,
@@ -198,7 +199,11 @@ def test_vm_tree_cleanup_fails_closed_when_findmnt_fails(
     tmp_path: Path,
 ) -> None:
     vm_base = tmp_path / 'vm-base'
-    vm_base.mkdir()
+    machine_state = tmp_path / 'machine-state'
+    bootstrap = tmp_path / 'bootstrap'
+    for path in (vm_base, machine_state, bootstrap):
+        path.mkdir()
+        (path / 'keep.txt').write_text('keep\n', encoding='utf-8')
     commands: list[list[str]] = []
 
     def fake_run(
@@ -221,15 +226,16 @@ def test_vm_tree_cleanup_fails_closed_when_findmnt_fails(
         config_path=str(tmp_path / 'config.toml'),
         storage_paths=[],
         vm_base_dir=str(vm_base),
-        machine_state_dir='',
-        bootstrap_dir='',
+        machine_state_dir=str(machine_state),
+        bootstrap_dir=str(bootstrap),
     )
 
     with pytest.raises(AIVMError, match='Could not verify'):
         _cleanup_owned_trees(journal)
 
     assert all(cmd[0] != 'bash' for cmd in commands)
-    assert vm_base.exists()
+    for path in (vm_base, machine_state, bootstrap):
+        assert (path / 'keep.txt').read_text(encoding='utf-8') == 'keep\n'
 
 
 def test_vm_tree_cleanup_allows_confirmed_absent_root(
@@ -478,3 +484,181 @@ def test_vm_creation_is_blocked_by_unfinished_deletion_journal(
     journal.status = 'complete'
     _save_journal(_journal_path(scope, cfg), journal, scope)
     require_vm_creation_not_blocked(scope, cfg, cfg_path)
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'failed to connect to the hypervisor',
+        'permission denied while inspecting libvirt',
+    ],
+)
+def test_vm_deletion_domain_inspection_failure_stops_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    detail: str,
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_is_defined', lambda _name: False
+    )
+    journal = _new_journal(scope, cfg, cfg_path)
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_is_defined',
+        lambda _name: (_ for _ in ()).throw(AIVMError(detail)),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts',
+        lambda *args, **kwargs: calls.append('attachments'),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion.discard_released_credential_material',
+        lambda *args, **kwargs: calls.append('credentials'),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_owned_trees',
+        lambda *args, **kwargs: calls.append('trees'),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._remove_retained_storage',
+        lambda *args, **kwargs: calls.append('storage'),
+    )
+
+    with pytest.raises(AIVMError, match=detail):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert calls == []
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is not None
+    persisted = _load_journal(_journal_path(scope, cfg))
+    assert persisted is not None
+    assert persisted.completed_phases == []
+    assert persisted.status == 'active'
+
+
+def test_vm_deletion_dumpxml_failure_stops_before_journal_or_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_is_defined', lambda _name: True
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_file_storage_paths',
+        lambda _name: (_ for _ in ()).throw(AIVMError('dumpxml failed')),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts',
+        lambda *args, **kwargs: calls.append('attachments'),
+    )
+
+    with pytest.raises(AIVMError, match='dumpxml failed'):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert calls == []
+    assert not _journal_path(scope, cfg).exists()
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is not None
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'storage stat command failed',
+        'storage permission denied',
+    ],
+)
+def test_vm_deletion_storage_probe_failure_stops_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    detail: str,
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_is_defined', lambda _name: False
+    )
+    journal = _new_journal(scope, cfg, cfg_path)
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        'aivm.vm.deletion._path_exists',
+        lambda _path: (_ for _ in ()).throw(AIVMError(detail)),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts',
+        lambda *args, **kwargs: calls.append('attachments'),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_owned_trees',
+        lambda *args, **kwargs: calls.append('trees'),
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._remove_retained_storage',
+        lambda *args, **kwargs: calls.append('storage'),
+    )
+
+    with pytest.raises(AIVMError, match=detail):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert calls == []
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is not None
+    persisted = _load_journal(_journal_path(scope, cfg))
+    assert persisted is not None
+    assert persisted.completed_phases == []
+    assert persisted.status == 'active'
+
+
+def test_vm_deletion_does_not_remove_retained_disk_without_absence_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    disk = (
+        Path(cfg.paths.base_dir)
+        / cfg.vm.name
+        / 'images'
+        / f'{cfg.vm.name}.qcow2'
+    )
+    state = {'checks': 0}
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_file_storage_paths', lambda _name: (disk,)
+    )
+
+    def defined(_name: str) -> bool:
+        state['checks'] += 1
+        # Journal creation and both preflight recaptures see the domain. The
+        # post-undefine proof fails closed instead of authorizing direct rm.
+        if state['checks'] >= 4:
+            raise AIVMError('post-undefine inspection failed')
+        return True
+
+    monkeypatch.setattr('aivm.vm.deletion.domain_is_defined', defined)
+    monkeypatch.setattr('aivm.vm.deletion._path_exists', lambda _path: True)
+    monkeypatch.setattr(
+        'aivm.vm.deletion._cleanup_attachment_artifacts', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion.discard_released_credential_material',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion._destroy_and_undefine_vm',
+        lambda *a, **k: DomainRemovalReport((disk,), (disk,)),
+    )
+    removed: list[Path] = []
+    monkeypatch.setattr(
+        'aivm.vm.deletion._remove_retained_storage',
+        lambda _cfg, paths: removed.extend(paths),
+    )
+
+    with pytest.raises(AIVMError, match='post-undefine inspection failed'):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert removed == []
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is not None
+    persisted = _load_journal(_journal_path(scope, cfg))
+    assert persisted is not None
+    assert 'domain-and-storage-removed' not in persisted.completed_phases
+    assert 'store-finalized' not in persisted.completed_phases

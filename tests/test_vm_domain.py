@@ -18,6 +18,8 @@ from aivm.errors import AIVMError
 from aivm.vm import restart_vm, shutdown_vm
 from aivm.vm.domain import (
     _destroy_and_undefine_vm,
+    _host_path_exists,
+    _vm_defined,
     domain_file_storage_paths,
 )
 from tests.helpers import (
@@ -355,3 +357,89 @@ def test_domain_undefine_refuses_changed_explicit_storage_inventory(
 
     assert not any(cmd[:2] == ['virsh', 'destroy'] for cmd in rec.normalized)
     assert not any(cmd[:2] == ['virsh', 'undefine'] for cmd in rec.normalized)
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'error: failed to connect to the hypervisor',
+        'error: authentication unavailable: permission denied',
+    ],
+)
+def test_vm_defined_fails_closed_on_libvirt_inspection_errors(
+    monkeypatch: MonkeyPatch, detail: str
+) -> None:
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch, {'virsh dominfo': FakeProc(1, '', detail)}
+    )
+
+    with pytest.raises(AIVMError, match='Could not determine whether VM'):
+        _vm_defined('inspect-me')
+
+    assert ['virsh', 'dominfo', 'inspect-me'] in rec.normalized
+
+
+def test_vm_defined_accepts_only_recognized_missing_domain(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    command_recorder(
+        monkeypatch,
+        {'virsh dominfo': FakeProc(1, '', 'error: failed to get domain')},
+    )
+    assert _vm_defined('missing-vm') is False
+
+
+def test_domain_storage_capture_fails_closed_on_dumpxml_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda _name: True)
+    command_recorder(
+        monkeypatch,
+        {'virsh dumpxml': FakeProc(1, '', 'error: permission denied')},
+    )
+
+    with pytest.raises(AIVMError, match='Could not capture storage paths'):
+        domain_file_storage_paths('inspect-me')
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'stat: cannot statx /managed/disk: Permission denied',
+        'stat: cannot statx /managed/disk: Input/output error',
+        'env: stat: command execution failed',
+    ],
+)
+def test_host_storage_probe_fails_closed(
+    monkeypatch: MonkeyPatch, detail: str
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.vm.domain.CommandManager.run',
+        lambda self, *args, **kwargs: CommandResult(1, '', detail),
+    )
+
+    with pytest.raises(AIVMError, match='Could not determine whether managed'):
+        _host_path_exists(Path('/managed/disk'))
+
+
+def test_host_storage_probe_accepts_confirmed_enoent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.vm.domain.CommandManager.run',
+        lambda self, *args, **kwargs: CommandResult(
+            1,
+            '',
+            "stat: cannot statx '/managed/disk': No such file or directory",
+        ),
+    )
+    assert _host_path_exists(Path('/managed/disk')) is False

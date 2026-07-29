@@ -15,13 +15,18 @@ from ..config_store import (
     network_users,
     remove_network,
     require_network,
-    save_store,
 )
 from ..errors import AIVMError
+from ..machine_store import current_machine_group_gid, machine_resource_locks
 from ..net import destroy_network, ensure_network, network_status
 from ..operational_scope import announce_network_machine_impact
 from ..services import cfg_path
-from ..scoped_store import load_scope_profile, resolve_store_scope
+from ..scoped_store import (
+    load_scope_profile,
+    load_scope_store,
+    resolve_store_scope,
+    save_scope_store,
+)
 from ._common import _BaseCommand
 
 
@@ -96,31 +101,59 @@ class NetDestroyCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        store_fpath = cfg_path(args.config)
-        reg = load_store(store_fpath)
-        cfg = _resolve_network_cfg(
-            args.config, network_opt=args.network, reg=reg
+        scope = resolve_store_scope(args.config)
+        initial = load_scope_store(scope)
+        initial_cfg = _resolve_network_cfg(
+            args.config, network_opt=args.network, reg=initial
         )
-        users = network_users(reg, cfg.network.name)
-        if users and not args.force and not args.dry_run:
-            names = ', '.join(users)
-            raise AIVMError(
-                f"Network '{cfg.network.name}' is referenced by managed VMs: {names}. "
-                'Detach or destroy those VMs first, or use --force.'
-            )
+        network_name = initial_cfg.network.name
         announce_network_machine_impact(
-            store_fpath, cfg.network.name, action='destroy'
+            scope.store_path, network_name, action='destroy'
         )
+
+        def execute() -> None:
+            # Reload beneath the authoritative lock.  The initial read above is
+            # only for selecting which network lock to acquire.
+            reg = load_scope_store(scope)
+            cfg = _resolve_network_cfg(
+                args.config, network_opt=network_name, reg=reg
+            )
+            users = network_users(reg, network_name)
+            if users and not args.force and not args.dry_run:
+                names = ', '.join(users)
+                raise AIVMError(
+                    f"Network '{network_name}' is referenced by managed VMs: "
+                    f'{names}. Detach or destroy those VMs first, or use --force.'
+                )
+            destroy_network(cfg, dry_run=args.dry_run)
+            if args.dry_run:
+                return
+            remove_network(reg, network_name)
+            save_scope_store(
+                scope,
+                reg,
+                reason=(
+                    f'Remove network {network_name} after verified libvirt teardown.'
+                ),
+            )
+
         mgr = CommandManager.current()
         with mgr.intent(
-            f'Destroy network {cfg.network.name}',
+            f'Destroy network {network_name}',
             why='Remove the managed libvirt network when it is no longer needed.',
             role='modify',
         ):
-            destroy_network(cfg, dry_run=args.dry_run)
-        if not args.dry_run:
-            remove_network(reg, cfg.network.name)
-            save_store(reg, cfg_path(args.config))
+            if scope.is_machine and not args.dry_run:
+                assert scope.machine_layout is not None
+                with machine_resource_locks(
+                    scope.machine_layout,
+                    group_gid=current_machine_group_gid(),
+                    include_store=True,
+                    networks=(network_name,),
+                ):
+                    execute()
+            else:
+                execute()
         return 0
 
 
