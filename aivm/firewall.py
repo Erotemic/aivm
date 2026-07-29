@@ -51,7 +51,6 @@ def effective_firewall_table(cfg: AgentVMConfig) -> str:
     return f'{base[:max_base]}_{suffix}'
 
 
-
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
     return isinstance(value, Mapping)
 
@@ -322,7 +321,8 @@ def read_firewall_tcp_ports(
         return None, 'firewall checks need privileges (privilege_mode = never)'
 
     res = CommandManager.current().run(
-        ['nft', '--json', 'list', 'table', 'inet', table], role='read',
+        ['nft', '--json', 'list', 'table', 'inet', table],
+        role='read',
         sudo=use_sudo,
         check=False,
         capture=True,

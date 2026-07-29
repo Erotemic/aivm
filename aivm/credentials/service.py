@@ -155,9 +155,7 @@ def select_credential(
                 f'VM {vm_name!r}: {owners}. Use an exact credential id or '
                 'the owning host login.'
             )
-    raise AIVMError(
-        f'Credential not found for VM {vm_name!r}: {selector!r}'
-    )
+    raise AIVMError(f'Credential not found for VM {vm_name!r}: {selector!r}')
 
 
 def _require_tools(*names: str, manager: CommandManager) -> None:
@@ -194,9 +192,9 @@ def _install_and_activate(
         yes=manager.yes,
         purpose='Install the repository-scoped private key in the VM.',
     )
-    private_text = keys.host_private_key_path(entry.vm_name, entry.id).read_text(
-        encoding='utf-8'
-    )
+    private_text = keys.host_private_key_path(
+        entry.vm_name, entry.id
+    ).read_text(encoding='utf-8')
     guest_entries = [
         item
         for item in find_credentials_for_vm(
@@ -439,7 +437,9 @@ def grant_repository_credential(
             remote = providers.add_deploy_key(
                 kind,
                 repo,
-                public_key_path=keys.host_public_key_path(entry.vm_name, entry.id),
+                public_key_path=keys.host_public_key_path(
+                    entry.vm_name, entry.id
+                ),
                 title=entry.provider_key_title,
                 write=write,
                 manager=manager,
@@ -546,15 +546,12 @@ def inspect_credential(
     guest_detail = ''
     ip = get_ip_cached(cfg)
     if ip and host_ok:
-        key_result = read_guest_public_key(
-            cfg, ip, entry.id, manager=manager
-        )
+        key_result = read_guest_public_key(cfg, ip, entry.id, manager=manager)
         if key_result.code == 0:
             try:
-                guest_key_ok = (
-                    keys.normalized_public_key(key_result.stdout)
-                    == keys.normalized_public_key(public_text)
-                )
+                guest_key_ok = keys.normalized_public_key(
+                    key_result.stdout
+                ) == keys.normalized_public_key(public_text)
             except AIVMError:
                 guest_key_ok = False
             access_result = verify_guest_repository(
@@ -564,7 +561,9 @@ def inspect_credential(
                 entry.id,
                 manager=manager,
             )
-            guest = 'ok' if guest_key_ok and access_result.code == 0 else 'drift'
+            guest = (
+                'ok' if guest_key_ok and access_result.code == 0 else 'drift'
+            )
             guest_detail = (access_result.stderr or '').strip()
         else:
             guest = 'unavailable'
@@ -653,8 +652,7 @@ def revoke_repository_credential(
             cfg.vm.name,
             principal_id=entry.principal_id,
         )
-        if item.id != entry.id
-        and credential_is_guest_usable(item)
+        if item.id != entry.id and credential_is_guest_usable(item)
     ]
     reconcile_guest_credentials(
         cfg,
@@ -759,8 +757,7 @@ def abandon_repository_credential(
                 cfg.vm.name,
                 principal_id=entry.principal_id,
             )
-            if item.id != entry.id
-            and credential_is_guest_usable(item)
+            if item.id != entry.id and credential_is_guest_usable(item)
         ]
         reconcile_guest_credentials(
             cfg,

@@ -227,7 +227,9 @@ def _load_journal(path: Path) -> VMDeletionJournal | None:
     except FileNotFoundError:
         return None
     except (OSError, UnicodeError, json.JSONDecodeError) as ex:
-        raise AIVMError(f'Could not read VM deletion journal {path}: {ex}') from ex
+        raise AIVMError(
+            f'Could not read VM deletion journal {path}: {ex}'
+        ) from ex
     if not isinstance(decoded, dict):
         raise AIVMError(f'VM deletion journal is not an object: {path}')
     raw: dict[object, object] = decoded
@@ -247,9 +249,7 @@ def _load_journal(path: Path) -> VMDeletionJournal | None:
             raw, 'machine_state_dir', path=path
         ),
         bootstrap_dir=_journal_optional_text(raw, 'bootstrap_dir', path=path),
-        completed_phases=_journal_text_list(
-            raw, 'completed_phases', path=path
-        ),
+        completed_phases=_journal_text_list(raw, 'completed_phases', path=path),
         status=_journal_optional_text(
             raw, 'status', default='active', path=path
         ),
@@ -349,9 +349,7 @@ def _cleanup_attachment_artifacts(
         )
     # An empty/disabled approved manifest is installed before pruning, so the
     # privileged helper cannot recreate a bind after it has been removed.
-    _sync_persistent_attachment_manifest_on_host(
-        cfg, cfg_path, dry_run=False
-    )
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
     _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
     _reconcile_persistent_host_binds(
         cfg, cfg_path, dry_run=False, vm_running=False
@@ -396,9 +394,7 @@ def _require_managed_storage_path(cfg: AgentVMConfig, path: Path) -> None:
         ) from ex
 
 
-def _remove_retained_storage(
-    cfg: AgentVMConfig, paths: Iterable[Path]
-) -> None:
+def _remove_retained_storage(cfg: AgentVMConfig, paths: Iterable[Path]) -> None:
     mgr = CommandManager.current()
     for path in paths:
         _require_managed_storage_path(cfg, path)
@@ -479,7 +475,9 @@ def _assert_no_mounts_below(path: Path) -> None:
             f'{detail or f"findmnt exited with status {result.code}"}. '
             'Refusing to remove the VM directory.'
         )
-    targets = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    targets = [
+        line.strip() for line in result.stdout.splitlines() if line.strip()
+    ]
     root = Path(os.path.abspath(os.fspath(path)))
     nested = []
     for raw in targets:
@@ -545,7 +543,9 @@ def _cleanup_owned_trees(journal: VMDeletionJournal) -> None:
     if journal.bootstrap_dir:
         _remove_tree(Path(journal.bootstrap_dir), label='bootstrap identity')
     if journal.machine_state_dir:
-        _remove_tree(Path(journal.machine_state_dir), label='per-VM machine state')
+        _remove_tree(
+            Path(journal.machine_state_dir), label='per-VM machine state'
+        )
     vm_base = Path(journal.vm_base_dir)
     _assert_no_mounts_below(vm_base)
     _remove_tree(vm_base, label='AIVM-managed VM directory')
@@ -564,7 +564,6 @@ def _clear_current_profile(scope: StoreScope, vm_name: str, reg: Store) -> None:
     )
     assert scope.profile_path is not None
     save_user_profile(profile, scope.profile_path)
-
 
 
 _FINALIZATION_PREREQUISITES = (
@@ -601,9 +600,7 @@ def complete_missing_vm_deletion(
         if journal is None:
             return None
         if journal.vm_name != vm_name or journal.config_path != str(cfg_path):
-            raise AIVMError(
-                f'Deletion journal target mismatch: {journal_path}'
-            )
+            raise AIVMError(f'Deletion journal target mismatch: {journal_path}')
         missing = [
             phase
             for phase in _FINALIZATION_PREREQUISITES
@@ -621,7 +618,6 @@ def complete_missing_vm_deletion(
         journal.last_error = ''
         _save_journal(journal_path, journal, scope)
         return journal
-
 
 
 def delete_managed_vm(
@@ -666,10 +662,10 @@ def delete_managed_vm(
         if journal is None:
             journal = _new_journal(scope, cfg, cfg_path)
             _save_journal(journal_path, journal, scope)
-        if journal.vm_name != cfg.vm.name or journal.config_path != str(cfg_path):
-            raise AIVMError(
-                f'Deletion journal target mismatch: {journal_path}'
-            )
+        if journal.vm_name != cfg.vm.name or journal.config_path != str(
+            cfg_path
+        ):
+            raise AIVMError(f'Deletion journal target mismatch: {journal_path}')
 
         try:
             # Refuse unmanaged or symlink-escaped storage before the first
@@ -699,9 +695,7 @@ def delete_managed_vm(
                 report = _destroy_and_undefine_vm(
                     cfg.vm.name, storage_paths=storage_paths
                 )
-                _remove_retained_storage(
-                    cfg, report.retained_storage_paths
-                )
+                _remove_retained_storage(cfg, report.retained_storage_paths)
                 if domain_is_defined(cfg.vm.name):
                     raise AIVMError(
                         f'VM domain still exists after deletion: {cfg.vm.name}'
@@ -728,9 +722,7 @@ def delete_managed_vm(
             reg = load_store(cfg_path)
             if not journal.completed('profile-cleared'):
                 _clear_current_profile(scope, cfg.vm.name, reg)
-                _persist_phase(
-                    journal_path, journal, scope, 'profile-cleared'
-                )
+                _persist_phase(journal_path, journal, scope, 'profile-cleared')
 
             if not journal.completed('store-finalized'):
                 remove_vm(reg, cfg.vm.name, remove_attachments=True)
@@ -742,9 +734,7 @@ def delete_managed_vm(
                         'after all external cleanup succeeded.'
                     ),
                 )
-                _persist_phase(
-                    journal_path, journal, scope, 'store-finalized'
-                )
+                _persist_phase(journal_path, journal, scope, 'store-finalized')
 
             journal.status = 'complete'
             journal.last_error = ''

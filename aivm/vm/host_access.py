@@ -21,6 +21,7 @@ from ..util import which
 
 log = logger
 
+
 def _local_stat_answer(path: Path, *, want_file: bool) -> bool | None:
     """Try to answer an existence check without privileges.
 
@@ -39,6 +40,7 @@ def _local_stat_answer(path: Path, *, want_file: bool) -> bool | None:
         return stat_mod.S_ISREG(st.st_mode)
     return True
 
+
 def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
     """Build the error raised when an existence check cannot be answered."""
     return SudoRequiredError(
@@ -52,6 +54,7 @@ def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
         '(`aivm host permissions setup`).'
     )
 
+
 # The privileged probe reports its answer on stdout because the exit status
 # cannot carry one: `test -e` exits 1 for "absent", and `sudo` also exits 1
 # when authentication fails or the sudoers policy refuses the command. Only a
@@ -59,6 +62,7 @@ def _undetermined_existence_error(path: Path, what: str) -> SudoRequiredError:
 # "the probe answered" from "the probe never ran".
 _PROBE_PRESENT = 'AIVM_PROBE_PRESENT'
 _PROBE_ABSENT = 'AIVM_PROBE_ABSENT'
+
 
 def _existence_probe_argv(path: Path, *, want_file: bool) -> list[str]:
     """Build the privileged existence probe command for ``path``.
@@ -72,6 +76,7 @@ def _existence_probe_argv(path: Path, *, want_file: bool) -> list[str]:
         f'else printf %s {_PROBE_ABSENT}; fi'
     )
     return ['sh', '-c', script, 'sh', str(path)]
+
 
 def _sudo_existence_probe(path: Path, *, want_file: bool) -> bool | None:
     """Answer an existence check with sudo, or None if sudo could not answer."""
@@ -89,6 +94,7 @@ def _sudo_existence_probe(path: Path, *, want_file: bool) -> bool | None:
         return False
     return None
 
+
 def _sudo_path_exists(path: Path) -> bool | None:
     """Return whether ``path`` exists, or None when that cannot be determined.
 
@@ -105,6 +111,7 @@ def _sudo_path_exists(path: Path) -> bool | None:
         return None
     return _sudo_existence_probe(path, want_file=False)
 
+
 def _sudo_file_exists(path: Path) -> bool | None:
     """Return whether ``path`` is a regular file, or None when undeterminable.
 
@@ -117,6 +124,7 @@ def _sudo_file_exists(path: Path) -> bool | None:
         return None
     return _sudo_existence_probe(path, want_file=True)
 
+
 def _submit_qemu_dir_prepare(
     mgr: CommandManager,
     path: Path,
@@ -127,7 +135,8 @@ def _submit_qemu_dir_prepare(
     recursive: bool,
 ) -> None:
     mgr.submit(
-        ['mkdir', '-p', str(path)], ownership='tool',
+        ['mkdir', '-p', str(path)],
+        ownership='tool',
         sudo=True,
         role='modify',
         check=True,
@@ -150,6 +159,7 @@ def _submit_qemu_dir_prepare(
         capture=True,
         summary=f'Set permissions for {summary_prefix}',
     )
+
 
 def _ensure_qemu_access_unprivileged(
     base_root: Path, *, dry_run: bool = False
@@ -189,7 +199,8 @@ def _ensure_qemu_access_unprivileged(
         ):
             for d in subdirs:
                 mgr.submit(
-                    ['mkdir', '-p', str(d)], ownership='tool',
+                    ['mkdir', '-p', str(d)],
+                    ownership='tool',
                     sudo=False,
                     role='modify',
                     check=True,
@@ -257,7 +268,7 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             raise SudoRequiredError(
                 'Sudo-free VM storage preparation needs `setfacl` to grant '
                 'libvirt-qemu traversal, but it is not installed. Install '
-                "the `acl` package, or set behavior.privilege_mode to "
+                'the `acl` package, or set behavior.privilege_mode to '
                 "'as-needed'."
             )
         log.warning(
@@ -269,7 +280,12 @@ def _ensure_qemu_access(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     grp = 'libvirt-qemu'
     if (
         CommandManager.current()
-        .run(['getent', 'group', 'libvirt-qemu'], role='read', check=False, capture=True)
+        .run(
+            ['getent', 'group', 'libvirt-qemu'],
+            role='read',
+            check=False,
+            capture=True,
+        )
         .code
         != 0
     ):

@@ -74,7 +74,9 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns(
+                (resolved_test_context(cfg), cfg_path)
+            ),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             'detach_vm_share': records(detached, True),
@@ -118,7 +120,9 @@ def test_vm_detach_git_only_updates_store(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns(
+                (resolved_test_context(cfg), cfg_path)
+            ),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(False, 'shut off'), True)),
             'detach_vm_share': _forbidden(
@@ -165,7 +169,9 @@ def test_vm_detach_shared_root_unbinds_guest_and_host(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns(
+                (resolved_test_context(cfg), cfg_path)
+            ),
             'load_store': returns(store),
             'probe_vm_state': returns((ProbeOutcome(True, 'running'), True)),
             '_resolve_ip_for_ssh_ops': returns('10.77.0.42'),
@@ -230,7 +236,9 @@ def test_vm_detach_persistent_prunes_host_and_guest_before_record_removal(
         monkeypatch,
         'aivm.cli.vm_attach',
         {
-            'resolve_context_for_code': returns((resolved_test_context(cfg), cfg_path)),
+            'resolve_context_for_code': returns(
+                (resolved_test_context(cfg), cfg_path)
+            ),
             'probe_vm_state': returns(
                 (
                     ProbeOutcome(True, 'vm-persistent-detach state=running'),
@@ -275,9 +283,10 @@ def test_vm_detach_persistent_prunes_host_and_guest_before_record_removal(
     assert replay_order == ['guest', 'host']
     assert guest_replays[0][1]['reconcile_host'] is False
     assert len(artifact_cleanups) == 1
-    assert find_attachment_for_vm(
-        load_store(cfg_path), host_src, cfg.vm.name
-    ) is None
+    assert (
+        find_attachment_for_vm(load_store(cfg_path), host_src, cfg.vm.name)
+        is None
+    )
 
 
 def test_persistent_detach_retains_detaching_record_when_host_prune_fails(
@@ -311,11 +320,13 @@ def test_persistent_detach_retains_detaching_record_when_host_prune_fails(
                 (resolved_test_context(cfg), cfg_path)
             ),
             'probe_vm_state': returns((ProbeOutcome(False, 'shut off'), True)),
-            '_sync_persistent_attachment_manifest_on_host': records([], cfg_path),
-            '_sync_persistent_host_replay_manifest': records([], cfg_path),
-            '_reconcile_persistent_host_binds': lambda *a, **k: (_ for _ in ()).throw(
-                RuntimeError('simulated busy host bind')
+            '_sync_persistent_attachment_manifest_on_host': records(
+                [], cfg_path
             ),
+            '_sync_persistent_host_replay_manifest': records([], cfg_path),
+            '_reconcile_persistent_host_binds': lambda *a, **k: (
+                _ for _ in ()
+            ).throw(RuntimeError('simulated busy host bind')),
         },
     )
 
@@ -371,6 +382,7 @@ def test_detach_matches_deleted_source_lexically(
         yes=True,
     )
     assert rc == 0
-    assert find_attachment_for_vm(
-        load_store(cfg_path), host_src, cfg.vm.name
-    ) is None
+    assert (
+        find_attachment_for_vm(load_store(cfg_path), host_src, cfg.vm.name)
+        is None
+    )

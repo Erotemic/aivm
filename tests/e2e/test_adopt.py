@@ -31,7 +31,9 @@ def _require_host_identities() -> None:
         grp.getgrnam('libvirt')
         pwd.getpwnam('libvirt-qemu')
     except KeyError:
-        pytest.skip('Adoption e2e needs the libvirt group and libvirt-qemu user.')
+        pytest.skip(
+            'Adoption e2e needs the libvirt group and libvirt-qemu user.'
+        )
     import shutil
 
     if shutil.which('setfacl') is None or shutil.which('getfacl') is None:

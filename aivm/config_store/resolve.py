@@ -68,7 +68,6 @@ def find_principal_for_host(
     return matches[0] if matches else None
 
 
-
 def find_principal_for_host_identity(
     reg: Store, *, vm_name: str, identity: HostIdentity
 ) -> PrincipalEntry | None:
@@ -136,7 +135,8 @@ def _near_misses(name: str, known: Sequence[str]) -> list[str]:
     contained = [
         candidate
         for candidate in known
-        if lowered and (lowered in candidate.lower() or candidate.lower() in lowered)
+        if lowered
+        and (lowered in candidate.lower() or candidate.lower() in lowered)
     ]
     close = difflib.get_close_matches(
         name, known, n=_MAX_SUGGESTIONS, cutoff=0.75
@@ -400,6 +400,7 @@ def find_attachment_by_guest_dst(
             f'{target!r}: {owners}.'
         )
     return matches[0] if matches else None
+
 
 def find_attachment(
     reg: Store, host_path: str | Path

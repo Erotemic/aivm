@@ -107,9 +107,13 @@ def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
             )
         raw = str(source.attrib.get('file', '')).strip()
         if not raw:
-            source_kind = ', '.join(
-                f'{key}={value!r}' for key, value in sorted(source.attrib.items())
-            ) or '(no source attributes)'
+            source_kind = (
+                ', '.join(
+                    f'{key}={value!r}'
+                    for key, value in sorted(source.attrib.items())
+                )
+                or '(no source attributes)'
+            )
             raise AIVMError(
                 f'VM {name!r} uses non-file or otherwise unverifiable disk '
                 f'storage ({source_kind}). Refusing deletion because AIVM '
@@ -146,22 +150,14 @@ def _destroy_and_undefine_vm(
 ) -> DomainRemovalReport:
     """Remove one domain without ever falling back to retained storage."""
     expected = None if storage_paths is None else tuple(storage_paths)
-    captured = (
-        domain_file_storage_paths(name)
-        if expected is None
-        else expected
-    )
+    captured = domain_file_storage_paths(name) if expected is None else expected
 
     def require_expected_inventory() -> None:
         if expected is None:
             return
         current = domain_file_storage_paths(name)
-        expected_names = {
-            os.path.abspath(os.fspath(path)) for path in expected
-        }
-        current_names = {
-            os.path.abspath(os.fspath(path)) for path in current
-        }
+        expected_names = {os.path.abspath(os.fspath(path)) for path in expected}
+        current_names = {os.path.abspath(os.fspath(path)) for path in current}
         if current_names != expected_names:
             added = sorted(current_names - expected_names)
             removed = sorted(expected_names - current_names)
@@ -178,8 +174,7 @@ def _destroy_and_undefine_vm(
                 )
             raise AIVMError(
                 f'VM {name!r} storage inventory changed before undefine. '
-                'Refusing --remove-all-storage.\n'
-                + '\n'.join(details)
+                'Refusing --remove-all-storage.\n' + '\n'.join(details)
             )
 
     mgr = CommandManager.current()
@@ -209,9 +204,7 @@ def _destroy_and_undefine_vm(
                 '--nvram',
                 '--remove-all-storage',
             ),
-            virsh_cmd(
-                'undefine', name, '--nvram', '--remove-all-storage'
-            ),
+            virsh_cmd('undefine', name, '--nvram', '--remove-all-storage'),
             virsh_cmd('undefine', name, '--remove-all-storage'),
         ]
         errs: list[str] = []
@@ -240,10 +233,12 @@ def _destroy_and_undefine_vm(
         storage_paths=captured, retained_storage_paths=retained
     )
 
+
 def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
     if dry_run:
         return False
     return _vm_defined(cfg.vm.name)
+
 
 def _is_vm_active(state: str) -> bool:
     """Return True if the libvirt state indicates an active domain.
@@ -265,6 +260,7 @@ def _is_vm_active(state: str) -> bool:
     ]
     return any(s in state for s in active_states)
 
+
 def _get_vm_state(name: str) -> tuple[int, str, str]:
     """Get the current state of a VM.
 
@@ -285,6 +281,7 @@ def _get_vm_state(name: str) -> tuple[int, str, str]:
     state = (res.stdout or '').strip().lower()
     error = (res.stderr or '').strip().lower()
     return (res.code, state, error)
+
 
 def _wait_for_vm_state(
     name: str,
@@ -322,6 +319,7 @@ def _wait_for_vm_state(
         f'(current state: {last_state!r}) after {timeout_s}s.'
     )
 
+
 def _wait_for_vm_not_state(
     name: str,
     exclude_state: str,
@@ -358,6 +356,7 @@ def _wait_for_vm_not_state(
         f'Timeout waiting for VM {name} to leave state {exclude_state!r} '
         f'(still in state: {last_state!r}) after {timeout_s}s.'
     )
+
 
 def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Gracefully shut down the VM using ACPI shutdown signal.
@@ -440,6 +439,7 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 f'Failed to send shutdown signal to VM {name}.\n{msg}'
             )
         log.info('Shutdown signal sent to VM {}', name)
+
 
 def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Gracefully restart the VM (shutdown then start).
@@ -547,6 +547,7 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         _start_vm(name)
         log.info('VM {} restarted', name)
 
+
 def _start_vm(name: str) -> None:
     """Start a defined VM by name.
 
@@ -561,6 +562,7 @@ def _start_vm(name: str) -> None:
         check=True,
         summary=f'Start VM {name}',
     )
+
 
 def destroy_vm(
     cfg: AgentVMConfig, *, dry_run: bool = False
@@ -585,6 +587,7 @@ def destroy_vm(
         )
     log.info('VM removed with storage verified absent: {}', name)
     return report
+
 
 def vm_status(cfg: AgentVMConfig) -> str:
     name = cfg.vm.name

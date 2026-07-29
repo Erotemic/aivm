@@ -38,7 +38,6 @@ def _held_locks() -> dict[str, int]:
     return held
 
 
-
 @dataclass(frozen=True)
 class StoreFilesystemPolicy:
     """Ownership and mode rules for one physical config store.

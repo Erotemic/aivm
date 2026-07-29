@@ -95,7 +95,6 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     )
     cfg_path = tmp_path / 'config.toml'
 
-
     monkeypatch.setattr(
         'aivm.cli.vm_attach._resolve_attach_context',
         lambda *a, **k: (resolved_test_context(cfg), cfg_path),
@@ -180,7 +179,12 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert rec.ran('mount', '--bind')
     assert not rec.ran('umount')
@@ -200,7 +204,8 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"'
+                0,
+                f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"',
             ),
         },
     )
@@ -213,7 +218,12 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -245,7 +255,12 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -315,7 +330,12 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')

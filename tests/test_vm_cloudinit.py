@@ -99,16 +99,14 @@ def test_write_cloud_init_installs_restricted_enrollment_bootstrap(
     assert 'no-pty' in user_data_script
     assert (
         'command=\\"/usr/bin/sudo -n '
-        '/usr/local/sbin/aivm-guestctl --forced\\"'
-        in user_data_script
+        '/usr/local/sbin/aivm-guestctl --forced\\"' in user_data_script
     )
     assert 'path: /usr/local/sbin/aivm-guestctl' in user_data_script
     assert '#!/usr/bin/env python3' in user_data_script
     assert 'path: /etc/sudoers.d/aivm-bootstrap' in user_data_script
     assert (
         'aivm-bootstrap ALL=(root) NOPASSWD: '
-        '/usr/local/sbin/aivm-guestctl --forced'
-        in user_data_script
+        '/usr/local/sbin/aivm-guestctl --forced' in user_data_script
     )
 
 

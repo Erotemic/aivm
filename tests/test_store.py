@@ -723,14 +723,19 @@ def test_unknown_name_offers_nothing_when_nothing_is_close() -> None:
 
 def test_unknown_name_lists_what_the_store_actually_has() -> None:
     """The listing is what tells a user they are on the wrong host."""
-    message = unknown_name_message('VM', 'aivm-2404', ['scratch', 'yardrat-dev'])
+    message = unknown_name_message(
+        'VM', 'aivm-2404', ['scratch', 'yardrat-dev']
+    )
     assert 'Known VMs: scratch, yardrat-dev.' in message
 
 
 def test_unknown_name_in_an_empty_store_says_so_and_points_forward() -> None:
     """'No VMs are defined' is a different problem from 'wrong name'."""
     message = unknown_name_message(
-        'VM', 'aivm-2404', [], empty_hint='Run `aivm config init` to define one.'
+        'VM',
+        'aivm-2404',
+        [],
+        empty_hint='Run `aivm config init` to define one.',
     )
     assert 'No VMs are defined in this config store.' in message
     assert 'aivm config init' in message

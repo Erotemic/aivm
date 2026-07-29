@@ -138,7 +138,7 @@ def test_help_raw_outputs_direct_system_commands(
                 'vm.name': 'vm-raw',
                 'network.name': 'net-raw',
                 'firewall.table': 'fw-raw',
-            }
+            },
         ),
     )
     monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)

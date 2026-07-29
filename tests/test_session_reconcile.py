@@ -81,10 +81,10 @@ def _domain_xml(
     ``vm_has_virtiofs_shared_memory`` requires.
     """
     mem = (
-        "  <memoryBacking>\n"
+        '  <memoryBacking>\n'
         "    <source type='memfd'/>\n"
         "    <access mode='shared'/>\n"
-        "  </memoryBacking>\n"
+        '  </memoryBacking>\n'
         if shared_memory
         else ''
     )
@@ -93,16 +93,16 @@ def _domain_xml(
         "      <driver type='virtiofs'/>\n"
         f"      <source dir='{src}'/>\n"
         f"      <target dir='{tag}'/>\n"
-        "    </filesystem>\n"
+        '    </filesystem>\n'
         for src, tag in filesystems
     )
     return (
         "<domain type='kvm'>\n"
-        f"{mem}"
-        "  <devices>\n"
-        f"{devices}"
-        "  </devices>\n"
-        "</domain>\n"
+        f'{mem}'
+        '  <devices>\n'
+        f'{devices}'
+        '  </devices>\n'
+        '</domain>\n'
     )
 
 
@@ -196,9 +196,7 @@ def test_running_vm_with_present_share_makes_no_changes(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert result.attachment.tag == PROJ_TAG
     assert result.cached_ip is None
@@ -240,9 +238,7 @@ def test_stopped_vm_is_started_before_confirming_share(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert rec.only('virsh', 'start', VM_NAME) == ['virsh', 'start', VM_NAME]
     assert not rec.ran('virsh', 'attach-device')
@@ -271,9 +267,7 @@ def test_running_vm_attaches_missing_share_live(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     attach = rec.only('virsh', 'attach-device', VM_NAME)
     assert '--live' in attach
@@ -411,7 +405,7 @@ def test_stale_virtiofs_source_recreates_vm(
         calls.append(k)
         if len(calls) == 1:
             raise RuntimeError(
-                "internal error: virtiofs export directory "
+                'internal error: virtiofs export directory '
                 "'/stale/export' does not exist"
             )
 
@@ -420,9 +414,7 @@ def test_stale_virtiofs_source_recreates_vm(
     )
     warnings = capture_logs(monkeypatch, 'aivm.attachments.session.log')
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert len(calls) == 2
     assert calls[0]['recreate'] is False
@@ -589,9 +581,7 @@ def test_inactive_network_is_defined_and_started(
         },
     )
 
-    _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert rec.ran('virsh', 'net-define')
     assert rec.only('virsh', 'net-start', cfg.network.name) == [
@@ -635,9 +625,7 @@ def test_permission_denied_probe_falls_back_to_ssh_readiness(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert result.cached_ip == '10.0.0.9'
     assert result.cached_ssh_ok is True
@@ -677,9 +665,7 @@ def test_shared_root_missing_mapping_binds_host_and_attaches(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     target = str(_shared_root_host_target(cfg, 'token-proj'))
     assert rec.only('mount', '--bind') == [

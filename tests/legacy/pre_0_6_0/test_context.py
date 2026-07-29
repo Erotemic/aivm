@@ -33,9 +33,7 @@ def test_machine_scope_ignores_principal_and_user_paths() -> None:
     assert alice_ctx.machine == bob_ctx.machine
     assert alice_ctx.principal != bob_ctx.principal
     assert alice_ctx.profile != bob_ctx.profile
-    assert alice_ctx.ssh_target('10.77.0.119') == (
-        'alice-agent@10.77.0.119'
-    )
+    assert alice_ctx.ssh_target('10.77.0.119') == ('alice-agent@10.77.0.119')
     assert str(bob_ctx.guest_home) == '/home/bob-agent'
 
 

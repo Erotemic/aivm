@@ -389,7 +389,11 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     warn_shared_home_attachment(
         host_src,
         shared_vm=(
-            sum(1 for item in existing_reg.principals if item.vm_name == cfg.vm.name)
+            sum(
+                1
+                for item in existing_reg.principals
+                if item.vm_name == cfg.vm.name
+            )
             > 1
         ),
     )
@@ -664,9 +668,7 @@ def _detach_persistent_attachment(
     # Root replay artifacts were already removed while the detaching record
     # still made this operation resumable. If other active records remain,
     # keep their approved manifest and binds converged.
-    _sync_persistent_attachment_manifest_on_host(
-        cfg, cfg_path, dry_run=False
-    )
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
     remaining = _persistent_attachment_records_for_vm(cfg, cfg_path)
     if any(record.enabled for record in remaining):
         _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
@@ -765,9 +767,7 @@ def _run_vm_detach_locked(
     if requested_owner:
         targeted = [
             item
-            for item in find_attachments_for_vm_path(
-                reg, host_src, cfg.vm.name
-            )
+            for item in find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
             if item.owner_principal_id == requested_owner
         ]
         if len(targeted) != 1:
@@ -892,7 +892,6 @@ def _run_vm_detach_locked(
         detached_shared_root_guest_bind=detached_shared_root_guest_bind,
     )
     return 0
-
 
 
 def run_vm_detach(request: VMDetachRequest) -> int:

@@ -36,9 +36,7 @@ class NetCreateCLI(_BaseCommand):
     recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -93,9 +91,7 @@ class NetDestroyCLI(_BaseCommand):
         False,
         help='Allow destroying network even if referenced by managed VMs.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

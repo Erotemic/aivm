@@ -134,7 +134,6 @@ class ResolvedVMContext:
         return f'{self.guest_user}@{host}'
 
 
-
 def machine_config_from_effective(cfg: AgentVMConfig) -> MachineConfig:
     """Snapshot only the machine-owned portion of an effective config."""
     return MachineConfig(

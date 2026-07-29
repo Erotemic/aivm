@@ -225,7 +225,9 @@ def _print_data_paths(loaded: Any, *, vm_name: str) -> None:
     names = (
         [vm_name]
         if vm_name
-        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+        else [
+            rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)
+        ]
     )
     for name in names:
         if not name:
@@ -247,7 +249,9 @@ def _print_libvirt_paths(
     names = (
         [vm_name]
         if vm_name
-        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+        else [
+            rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)
+        ]
     )
     cfgs = []
     for name in names:

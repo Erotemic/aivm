@@ -91,11 +91,17 @@ def test_network_status_and_destroy(
     assert 'INFO' in out
     assert '<network/>' in out
     destroy_network(cfg, dry_run=False)
-    assert (
-        ['virsh', '-c', 'qemu:///system', 'net-destroy', cfg.network.name]
-        in calls
-    )
-    assert (
-        ['virsh', '-c', 'qemu:///system', 'net-undefine', cfg.network.name]
-        in calls
-    )
+    assert [
+        'virsh',
+        '-c',
+        'qemu:///system',
+        'net-destroy',
+        cfg.network.name,
+    ] in calls
+    assert [
+        'virsh',
+        '-c',
+        'qemu:///system',
+        'net-undefine',
+        cfg.network.name,
+    ] in calls

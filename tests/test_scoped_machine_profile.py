@@ -120,9 +120,7 @@ def test_brand_new_init_splits_machine_and_profile(
     )
     assert root_raw == {'schema_version': 9, 'store_kind': 'machine'}
     assert 'user' not in defaults_raw['defaults']['vm']
-    assert defaults_raw['defaults']['paths'] == {
-        'base_dir': cfg.paths.base_dir
-    }
+    assert defaults_raw['defaults']['paths'] == {'base_dir': cfg.paths.base_dir}
 
 
 def test_machine_create_persists_creator_and_resolves_context(
@@ -274,10 +272,13 @@ def test_config_paths_and_edit_expose_private_profile(
     assert f'active_vm: {cfg.vm.name}' in out
     assert f'profile (file, exists): {profile_store_path()}' in out
 
-    assert _resolve_config_edit_target(
-        config_opt=None,
-        target='profile',
-    ) == profile_store_path()
+    assert (
+        _resolve_config_edit_target(
+            config_opt=None,
+            target='profile',
+        )
+        == profile_store_path()
+    )
 
 
 def test_machine_config_show_creates_machine_document_not_legacy(

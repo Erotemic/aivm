@@ -457,9 +457,13 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
         print("  nothing until you switch to 'as-needed'.")
     else:
         print(f"behavior.privilege_mode = '{mode}', unchanged and correct:")
-        print('  once the libvirt group is active, aivm stops invoking sudo for')
+        print(
+            '  once the libvirt group is active, aivm stops invoking sudo for'
+        )
         print('  libvirt and image operations on its own. Sudo remains for')
-        print('  managed nftables, apt-get, and establishing a new host bind mount.')
+        print(
+            '  managed nftables, apt-get, and establishing a new host bind mount.'
+        )
     if group_added:
         print(
             f'👉 Group membership added. Log out and back in (or run `newgrp '
@@ -506,21 +510,18 @@ class HostPermissionsCheckCLI(_BaseCommand):
         broken: list[str] = []  # breaks VMs regardless of privilege mode
         sudo_needs: list[str] = []
 
-        def friction_line(
-            ok: bool, label: str, detail: str, need: str
-        ) -> str:
+        def friction_line(ok: bool, label: str, detail: str, need: str) -> str:
             """Render an operation that still costs sudo as a warning."""
             if not ok:
                 sudo_needs.append(need)
             return status_line(ok, label, detail, warn_only=True)
 
         machine_group = current_machine_group_name()
-        machine_group_ok = (
-            bool(os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip())
-            or (
-                machine_group_exists(machine_group)
-                and user_in_machine_group(group_name=machine_group)
-            )
+        machine_group_ok = bool(
+            os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+        ) or (
+            machine_group_exists(machine_group)
+            and user_in_machine_group(group_name=machine_group)
         )
         lines.append(
             friction_line(
@@ -560,14 +561,11 @@ class HostPermissionsCheckCLI(_BaseCommand):
         live_access = libvirt_without_sudo_ok()
         live_detail = 'virsh reaches qemu:///system without sudo'
         if not live_access:
-            live_detail = (
-                'virsh cannot reach qemu:///system without sudo'
-                + (
-                    ' (group added but not active in this session; log out/in '
-                    f'or use `newgrp {LIBVIRT_GROUP}`)'
-                    if in_group
-                    else ''
-                )
+            live_detail = 'virsh cannot reach qemu:///system without sudo' + (
+                ' (group added but not active in this session; log out/in '
+                f'or use `newgrp {LIBVIRT_GROUP}`)'
+                if in_group
+                else ''
             )
         lines.append(
             friction_line(
@@ -725,9 +723,7 @@ def _prepare_machine_store_access(
 
     group_name = current_machine_group_name()
     group_exists = machine_group_exists(group_name)
-    listed = group_exists and user_in_machine_group(
-        user, group_name=group_name
-    )
+    listed = group_exists and user_in_machine_group(user, group_name=group_name)
     if args.dry_run:
         if not group_exists:
             print(f'DRYRUN: sudo groupadd --system {group_name}')
@@ -955,7 +951,9 @@ class HostPermissionsSetupCLI(_BaseCommand):
         config_gap = base_dir != resolved_default
 
         if args.dry_run:
-            print(f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs')
+            print(
+                f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs'
+            )
         else:
             with mgr.intent(
                 'Prepare VM storage permissions',
@@ -975,7 +973,8 @@ class HostPermissionsSetupCLI(_BaseCommand):
                     approval_scope=f'host-permissions-setup-storage:{base_dir}',
                 ):
                     mgr.submit(
-                        ['mkdir', '-p', str(base_dir)], ownership='tool',
+                        ['mkdir', '-p', str(base_dir)],
+                        ownership='tool',
                         sudo=False,
                         role='modify',
                         check=True,
@@ -984,7 +983,12 @@ class HostPermissionsSetupCLI(_BaseCommand):
                         detail=f'target={base_dir}',
                     )
                     mgr.submit(
-                        ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
+                        [
+                            'setfacl',
+                            '-m',
+                            f'u:{LIBVIRT_QEMU_USER}:x',
+                            str(base_dir),
+                        ],
                         sudo=False,
                         role='modify',
                         check=True,

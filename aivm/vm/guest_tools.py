@@ -121,11 +121,7 @@ class GuestToolRegistry:
         else:
             requested = str(raw or '').strip()
         enabled = requested.lower() not in _TOOL_DISABLED_SPECS
-        effective = (
-            definition.normalize_spec(requested)
-            if enabled
-            else 'off'
-        )
+        effective = definition.normalize_spec(requested) if enabled else 'off'
         if enabled and not effective.strip():
             effective = definition.normalize_spec(definition.enable_default)
         return ResolvedGuestTool(
@@ -481,7 +477,9 @@ GUEST_TOOL_REGISTRY = GuestToolRegistry(
 
 # Narrow compatibility helpers for callers that still need individual script
 # builders. Runtime consumers should query GUEST_TOOL_REGISTRY instead.
-def _guest_tool_spec(cfg: AgentVMConfig, name: str, *, default: str = '') -> str:
+def _guest_tool_spec(
+    cfg: AgentVMConfig, name: str, *, default: str = ''
+) -> str:
     definition = GUEST_TOOL_REGISTRY.get(name)
     if definition is None:
         raw = cfg.tools.get(name, default)
@@ -524,9 +522,7 @@ def _guest_ensure_uv_script(
     cfg: AgentVMConfig, *, ensure_transport: bool = False
 ) -> str:
     tool = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'uv')
-    return _build_uv_install_script(
-        cfg, tool.effective_spec, ensure_transport
-    )
+    return _build_uv_install_script(cfg, tool.effective_spec, ensure_transport)
 
 
 def _guest_ensure_rust_script(

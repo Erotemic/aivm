@@ -47,8 +47,14 @@ class ConfigLintCLI(_BaseCommand):
         if not loaded.sources:
             print(f'Config store not found: {path}', file=sys.stderr)
             return 2
-        problems = _lint_store_text(loaded.source_text or path.read_text(encoding='utf-8'))
-        label = path if loaded.layout != 'split' else f'{path.parent} (split layout)'
+        problems = _lint_store_text(
+            loaded.source_text or path.read_text(encoding='utf-8')
+        )
+        label = (
+            path
+            if loaded.layout != 'split'
+            else f'{path.parent} (split layout)'
+        )
         if not problems:
             print(f'✅ Config lint passed: {label}')
             return 0
@@ -385,7 +391,9 @@ def _lint_store_text(text: str) -> list[str]:
                         if scope in seen_cred_scopes:
                             problems.append(
                                 f'{label} duplicate credential scope: '
-                                + ':'.join((scope[0] or 'legacy', '/'.join(scope[1:])))
+                                + ':'.join(
+                                    (scope[0] or 'legacy', '/'.join(scope[1:]))
+                                )
                             )
                         seen_cred_scopes.add(scope)
                     if not missing:

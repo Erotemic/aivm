@@ -153,17 +153,11 @@ def _credential_from_dict(
         ).strip(),
         'owner': str(item.get('owner', '')).strip(),
         'repository': str(item.get('repository', '')).strip(),
-        'access': str(
-            item.get('access', CREDENTIAL_ACCESS_READ) or ''
-        ).strip(),
+        'access': str(item.get('access', CREDENTIAL_ACCESS_READ) or '').strip(),
         'provider_key_id': str(item.get('provider_key_id', '')).strip(),
-        'provider_key_title': str(
-            item.get('provider_key_title', '')
-        ).strip(),
+        'provider_key_title': str(item.get('provider_key_title', '')).strip(),
         'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
-        'state': str(
-            item.get('state', CREDENTIAL_STATE_PENDING) or ''
-        ).strip(),
+        'state': str(item.get('state', CREDENTIAL_STATE_PENDING) or '').strip(),
     }
     required = (
         'id',
@@ -286,7 +280,6 @@ def _principal_from_dict(
     )
 
 
-
 @compatibility_surface
 def parse_store_toml(text: str) -> Store:
     """Parse a canonical AIVM desired-state TOML document."""
@@ -383,8 +376,7 @@ def parse_store_toml(text: str) -> Store:
             principal = _principal_from_dict(principal_raw, vm_name=name)
             if principal.id in seen_principal_ids:
                 raise ValueError(
-                    f'VM {name!r} has duplicate principal id '
-                    f'{principal.id!r}'
+                    f'VM {name!r} has duplicate principal id {principal.id!r}'
                 )
             if principal.host_user in seen_host_users:
                 raise ValueError(

@@ -11,10 +11,10 @@ from aivm.cli.vm_lifecycle import VMProvisionCLI
 from aivm.config import AgentVMConfig
 
 
-def _stub_cfg_loader(monkeypatch: pytest.MonkeyPatch, cfg: AgentVMConfig) -> None:
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.load_cfg', lambda *a, **k: cfg
-    )
+def _stub_cfg_loader(
+    monkeypatch: pytest.MonkeyPatch, cfg: AgentVMConfig
+) -> None:
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.load_cfg', lambda *a, **k: cfg)
     monkeypatch.setattr(
         'aivm.cli.vm_lifecycle.cfg_path',
         lambda *a, **k: Path('/tmp/aivm-test-config.toml'),
@@ -86,7 +86,9 @@ def test_provision_rejects_unknown_tool_name(
 
     called = {'n': 0}
 
-    def fake_provision(*a: Any, **k: Any) -> None:  # pragma: no cover - should not run
+    def fake_provision(
+        *a: Any, **k: Any
+    ) -> None:  # pragma: no cover - should not run
         called['n'] += 1
 
     monkeypatch.setattr('aivm.cli.vm_lifecycle.provision', fake_provision)

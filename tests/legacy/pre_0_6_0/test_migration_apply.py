@@ -26,7 +26,11 @@ from aivm.credentials.validation import credential_id
 from aivm.enrollment import BootstrapIdentity
 from aivm.guestctl import restricted_bootstrap_authorized_key
 from aivm.machine_store import MachineStoreLayout
-from aivm.legacy.pre_0_6_0.migration import LegacyStoreSource, MigrationPlan, build_migration_plan
+from aivm.legacy.pre_0_6_0.migration import (
+    LegacyStoreSource,
+    MigrationPlan,
+    build_migration_plan,
+)
 from aivm.legacy.pre_0_6_0.migration_apply import (
     GuestInstaller,
     MigrationExecutionError,
@@ -143,7 +147,9 @@ def _digest(path: Path) -> str:
 def test_apply_is_verified_resumable_and_retains_legacy_inputs(
     tmp_path: Path,
 ) -> None:
-    source, vm_name, credential_source, persistent_source = _legacy_source(tmp_path)
+    source, vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     before = _digest(source.path)
     plan = build_migration_plan([source], layout=layout, check_runtime=False)
@@ -211,7 +217,9 @@ def test_interrupted_apply_resumes_from_journal(tmp_path: Path) -> None:
     plan = build_migration_plan([source], layout=layout, check_runtime=False)
     guest_calls: list[str] = []
 
-    with pytest.raises(MigrationExecutionError, match='Injected migration interruption'):
+    with pytest.raises(
+        MigrationExecutionError, match='Injected migration interruption'
+    ):
         apply_migration(
             plan,
             layout=layout,
@@ -343,17 +351,16 @@ def test_rollback_refuses_changed_target_before_mutating_any_target(
     assert failed.journal.status == 'rollback-failed'
 
 
-
 def test_preexisting_private_target_uses_private_verified_backup(
     tmp_path: Path,
 ) -> None:
     source, _vm_name, credential_source, _state = _legacy_source(tmp_path)
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     plan = build_migration_plan([source], layout=layout, check_runtime=False)
-    credential_target = Path(
-        str(plan.credential_material_moves[0]['target'])
+    credential_target = Path(str(plan.credential_material_moves[0]['target']))
+    shutil.copytree(
+        credential_source, credential_target, copy_function=shutil.copy2
     )
-    shutil.copytree(credential_source, credential_target, copy_function=shutil.copy2)
     before = _digest(credential_target / 'id_ed25519')
 
     result = apply_migration(
@@ -377,6 +384,7 @@ def test_preexisting_private_target_uses_private_verified_backup(
     assert credential_target.is_dir()
     assert _digest(credential_target / 'id_ed25519') == before
 
+
 def test_verify_detects_source_mutation_after_apply(tmp_path: Path) -> None:
     source, _vm_name, _cred, _state = _legacy_source(tmp_path)
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
@@ -389,7 +397,9 @@ def test_verify_detects_source_mutation_after_apply(tmp_path: Path) -> None:
     )
     source.path.write_text(source.path.read_text() + '\n# changed\n')
 
-    with pytest.raises(MigrationExecutionError, match='changed since the migration journal'):
+    with pytest.raises(
+        MigrationExecutionError, match='changed since the migration journal'
+    ):
         verify_applied_migration(
             result.journal.migration_id,
             layout=layout,
@@ -397,9 +407,9 @@ def test_verify_detects_source_mutation_after_apply(tmp_path: Path) -> None:
         )
 
 
-
-
-def test_migration_id_validation_rejects_malformed_values(tmp_path: Path) -> None:
+def test_migration_id_validation_rejects_malformed_values(
+    tmp_path: Path,
+) -> None:
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     for value in [
         'migration-',
@@ -408,7 +418,9 @@ def test_migration_id_validation_rejects_malformed_values(tmp_path: Path) -> Non
         'migration-0123456789abcdeg',
         '../migration-0123456789abcdef',
     ]:
-        with pytest.raises(MigrationExecutionError, match='Invalid migration id'):
+        with pytest.raises(
+            MigrationExecutionError, match='Invalid migration id'
+        ):
             migration_transaction_dir(value, layout)
 
 
@@ -416,7 +428,9 @@ def test_apply_rejects_layout_different_from_reviewed_target(
     tmp_path: Path,
 ) -> None:
     source, _vm_name, _cred, _state = _legacy_source(tmp_path)
-    reviewed_layout = MachineStoreLayout.from_root(tmp_path / 'reviewed-machine')
+    reviewed_layout = MachineStoreLayout.from_root(
+        tmp_path / 'reviewed-machine'
+    )
     other_layout = MachineStoreLayout.from_root(tmp_path / 'other-machine')
     plan = build_migration_plan(
         [source], layout=reviewed_layout, check_runtime=False
@@ -431,6 +445,7 @@ def test_apply_rejects_layout_different_from_reviewed_target(
         )
 
     assert not other_layout.config_path.exists()
+
 
 def test_guest_bootstrap_script_is_forced_and_self_validating() -> None:
     public_key = _public_key()

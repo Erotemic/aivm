@@ -32,7 +32,8 @@ def _resolve_vm_disk_path(
         / f'{cfg.vm.name}.qcow2'
     )
     res = CommandManager.current().run(
-        virsh_cmd('dumpxml', cfg.vm.name), role='read',
+        virsh_cmd('dumpxml', cfg.vm.name),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -72,7 +73,8 @@ def _virsh_domblk_capacity_bytes(
     cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
 ) -> int | None:
     res = CommandManager.current().run(
-        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target), role='read',
+        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -162,7 +164,9 @@ def _vm_update_drift(
             and not sudo_confirmed
         ):
             sudo_confirmed = True
-            disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=virsh_needs_sudo())
+            disk_path, disk_notes = _resolve_vm_disk_path(
+                cfg, use_sudo=virsh_needs_sudo()
+            )
         notes.extend(disk_notes)
         cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
             disk_path, use_sudo=False

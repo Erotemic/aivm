@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.access_control import mutate_access_identity, repair_current_host_identity
+from aivm.access_control import (
+    mutate_access_identity,
+    repair_current_host_identity,
+)
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     CredentialEntry,
@@ -24,7 +27,11 @@ from aivm.config_store import (
 from aivm.credentials.validation import credential_id
 from aivm.errors import AIVMError
 from aivm.host_identity import HostIdentity
-from aivm.profile_store import UserProfileStore, load_user_profile, save_user_profile
+from aivm.profile_store import (
+    UserProfileStore,
+    load_user_profile,
+    save_user_profile,
+)
 from aivm.scoped_store import StoreScope, resolve_store_scope, save_scope_store
 
 
@@ -183,12 +190,14 @@ def test_cross_user_remove_requires_explicit_admin_override(
     )
     assert report.changed is True
     loaded = load_store(scope.store_path)
-    assert find_principal(
-        loaded, vm_name=vm_name, principal_id='principal-bob'
-    ) is None
-    assert find_principal(
-        loaded, vm_name=vm_name, principal_id='principal-alice'
-    ) is not None
+    assert (
+        find_principal(loaded, vm_name=vm_name, principal_id='principal-bob')
+        is None
+    )
+    assert (
+        find_principal(loaded, vm_name=vm_name, principal_id='principal-alice')
+        is not None
+    )
 
 
 def test_last_active_identity_requires_explicit_override(
@@ -230,9 +239,7 @@ def test_repeated_disable_reconciles_guest_transport(
 
     scope, vm_name = _machine_scope(tmp_path, with_owned_records=False)
     reg = load_store(scope.store_path)
-    alice = find_principal(
-        reg, vm_name=vm_name, principal_id='principal-alice'
-    )
+    alice = find_principal(reg, vm_name=vm_name, principal_id='principal-alice')
     assert alice is not None
     upsert_principal(reg, replace(alice, state='disabled'))
     save_scope_store(scope, reg, reason='pre-disable alice')
@@ -355,9 +362,7 @@ def test_simultaneous_disables_cannot_remove_last_access(
             outcomes.append((selector, 'ok'))
 
     threads = [
-        threading.Thread(
-            target=worker, args=('alice',), name='disable-alice'
-        ),
+        threading.Thread(target=worker, args=('alice',), name='disable-alice'),
         threading.Thread(target=worker, args=('bob',), name='disable-bob'),
     ]
     for thread in threads:
@@ -368,7 +373,10 @@ def test_simultaneous_disables_cannot_remove_last_access(
         assert not thread.is_alive()
 
     assert sorted(value for _, value in outcomes).count('ok') == 1
-    assert sum('last active access identity' in value for _, value in outcomes) == 1
+    assert (
+        sum('last active access identity' in value for _, value in outcomes)
+        == 1
+    )
     loaded = load_store(scope.store_path)
     active = [p for p in loaded.principals if p.state == 'active']
     disabled = [p for p in loaded.principals if p.state == 'disabled']

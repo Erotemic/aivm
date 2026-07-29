@@ -194,7 +194,9 @@ def test_multiple_released_stores_claiming_one_vm_blocks_silent_merge(
     codes = {item.code for item in plan.conflicts}
     assert 'multiple-store-vm-claim' in codes
     issue = next(
-        item for item in plan.conflicts if item.code == 'multiple-store-vm-claim'
+        item
+        for item in plan.conflicts
+        if item.code == 'multiple-store-vm-claim'
     )
     fields = _as_object_dict(issue.details['differing_machine_fields'])
     field_lists: list[list[object]] = []
@@ -290,7 +292,9 @@ def test_runtime_missing_domain_blocks_apply_readiness(tmp_path: Path) -> None:
     assert 'runtime-domain-missing' in {item.code for item in plan.conflicts}
 
 
-def test_existing_machine_store_is_reported_as_merge_conflict(tmp_path: Path) -> None:
+def test_existing_machine_store_is_reported_as_merge_conflict(
+    tmp_path: Path,
+) -> None:
     source, _ = _legacy_store(tmp_path, host_user='alice')
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     existing_cfg = AgentVMConfig().expanded_paths()
@@ -304,9 +308,7 @@ def test_existing_machine_store_is_reported_as_merge_conflict(tmp_path: Path) ->
     )
     save_store(existing, layout.config_path)
 
-    plan = build_migration_plan(
-        [source], layout=layout, check_runtime=False
-    )
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
 
     assert 'target-store-not-empty' in {item.code for item in plan.conflicts}
 
@@ -339,7 +341,9 @@ def test_frozen_monolith_and_split_produce_same_migration_records(
         plans.append(
             build_migration_plan(
                 [source],
-                layout=MachineStoreLayout.from_root(tmp_path / f'machine-{name}'),
+                layout=MachineStoreLayout.from_root(
+                    tmp_path / f'machine-{name}'
+                ),
                 check_runtime=False,
             )
         )

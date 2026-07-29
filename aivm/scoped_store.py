@@ -302,7 +302,7 @@ def resolve_machine_context(
             f'Host user {identity.username!r} (uid {identity.uid}) is not '
             f'enrolled for managed VM {vm_name!r}. Run '
             f'`aivm vm access reconcile --vm {vm_name}` after creating this '
-            'user\'s AIVM SSH identity.'
+            "user's AIVM SSH identity."
         )
     if principal.state not in {'active', 'legacy'}:
         raise AIVMError(

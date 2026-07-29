@@ -32,7 +32,9 @@ from aivm.errors import AIVMError
 from aivm.profile_store import UserProfileStore
 
 
-def _principal(vm_name: str, host_user: str, principal_id: str) -> PrincipalEntry:
+def _principal(
+    vm_name: str, host_user: str, principal_id: str
+) -> PrincipalEntry:
     host_id = 1001 if host_user == 'alice' else 1002
     return PrincipalEntry(
         id=principal_id,
@@ -73,7 +75,11 @@ def _credential(
         access='read',
         provider_key_id='1001' if principal_id.endswith('alice') else '1002',
         provider_key_title=f'aivm:test:{vm_name}:{repo.owner}/{repo.name}:{cred_id}',
-        key_fingerprint=('SHA256:YWxpY2U' if principal_id.endswith('alice') else 'SHA256:Ym9i'),
+        key_fingerprint=(
+            'SHA256:YWxpY2U'
+            if principal_id.endswith('alice')
+            else 'SHA256:Ym9i'
+        ),
         state='active',
     )
 
@@ -145,7 +151,9 @@ def test_disabled_principal_preserves_provider_metadata(tmp_path: Path) -> None:
     reg = _machine_store()
     entry = _credential(principal_id='principal-alice')
     upsert_credential(reg, entry)
-    alice = next(item for item in reg.principals if item.id == 'principal-alice')
+    alice = next(
+        item for item in reg.principals if item.id == 'principal-alice'
+    )
     upsert_principal(reg, replace(alice, state='disabled'))
 
     path = tmp_path / 'config.toml'
@@ -277,7 +285,9 @@ def test_cli_defaults_to_current_principal_and_supports_metadata_view(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shared'
     cfg.vm.user = 'alice-agent'
-    principal = next(item for item in reg.principals if item.id == 'principal-alice')
+    principal = next(
+        item for item in reg.principals if item.id == 'principal-alice'
+    )
     context = _context_for(cfg, principal, tmp_path)
     store_path = tmp_path / 'config.toml'
 
@@ -309,7 +319,9 @@ def test_foreign_status_is_metadata_only(
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-shared'
     cfg.vm.user = 'alice-agent'
-    principal = next(item for item in reg.principals if item.id == 'principal-alice')
+    principal = next(
+        item for item in reg.principals if item.id == 'principal-alice'
+    )
     context = _context_for(cfg, principal, tmp_path)
 
     monkeypatch.setattr(

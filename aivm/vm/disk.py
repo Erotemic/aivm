@@ -14,6 +14,7 @@ from .paths import _paths
 
 log = logger
 
+
 def _ensure_disk(
     cfg: AgentVMConfig,
     base_img: Path,
@@ -33,7 +34,10 @@ def _ensure_disk(
             log.info('DRYRUN: rm -f {}', vm_disk)
         else:
             mgr.run(
-                ['rm', '-f', str(vm_disk)], sudo=use_sudo, check=True, capture=True
+                ['rm', '-f', str(vm_disk)],
+                sudo=use_sudo,
+                check=True,
+                capture=True,
             )
             disk_exists = False
     if disk_exists:

@@ -555,7 +555,8 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
     from ..runtime import virsh_cmd
 
     res = CommandManager.current().run(
-        virsh_cmd('domstate', vm_name), role='read',
+        virsh_cmd('domstate', vm_name),
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -976,7 +977,11 @@ def _prepare_attached_session(
     warn_shared_home_attachment(
         host_src,
         shared_vm=(
-            sum(1 for item in existing_store.principals if item.vm_name == cfg.vm.name)
+            sum(
+                1
+                for item in existing_store.principals
+                if item.vm_name == cfg.vm.name
+            )
             > 1
         ),
     )

@@ -47,18 +47,14 @@ def _emit_attachment(
     if att.source_ino:
         lines.append(f'source_ino = {att.source_ino}')
     if att.host_lexical_paths:
-        parts = [
-            f'"{_toml_escape(p)}"' for p in att.host_lexical_paths
-        ]
+        parts = [f'"{_toml_escape(p)}"' for p in att.host_lexical_paths]
         lines.append(f'host_lexical_paths = [{", ".join(parts)}]')
 
 
 def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
     lines.append(f'id = "{_toml_escape(cred.id)}"')
     if cred.principal_id:
-        lines.append(
-            f'principal_id = "{_toml_escape(cred.principal_id)}"'
-        )
+        lines.append(f'principal_id = "{_toml_escape(cred.principal_id)}"')
     for key in (
         'kind',
         'provider_host',
@@ -160,11 +156,8 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
         lines.append('')
 
 
-
 @compatibility_surface
-def render_store_toml(
-    reg: Store, *, attachment_style: str = 'legacy'
-) -> str:
+def render_store_toml(reg: Store, *, attachment_style: str = 'legacy') -> str:
     """Render a Store as TOML.
 
     ``attachment_style='legacy'`` preserves the current top-level
@@ -234,7 +227,12 @@ def render_store_toml(
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
         for section in (
-            'vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'
+            'vm',
+            'image',
+            'provision',
+            'tools',
+            'paths',
+            'virtiofs',
         ):
             body = _config_section(d, section)
             if body is None:
@@ -352,9 +350,7 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     verbosity = _config_verbosity(d)
     if verbosity != 1:
         lines.append(f'verbosity = {verbosity}')
-    for section in (
-        'vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'
-    ):
+    for section in ('vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'):
         body = _config_section(d, section)
         if body is None:
             continue

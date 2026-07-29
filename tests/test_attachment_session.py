@@ -640,9 +640,7 @@ def test_vm_ssh_reports_only_transport_failures(
         'aivm.cli.vm_connect._upsert_ssh_config_entry',
         lambda *a, **k: (tmp_path / 'ssh_config', False),
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_connect.require_ssh_identity', lambda p: p
-    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
     errors = capture_logs(
         monkeypatch, 'aivm.cli.vm_connect.log', levels=('error',)
     )

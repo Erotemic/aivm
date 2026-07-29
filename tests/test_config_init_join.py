@@ -44,9 +44,7 @@ def _managed_machine(
     principal: PrincipalEntry | None = None,
 ) -> StoreScope:
     """Write one managed VM and Bob's private profile into isolated stores."""
-    monkeypatch.setattr(
-        'aivm.cli.config.init.default_vm_name', lambda: VM_NAME
-    )
+    monkeypatch.setattr('aivm.cli.config.init.default_vm_name', lambda: VM_NAME)
     monkeypatch.setattr(
         'aivm.cli.config.init.domain_is_defined', lambda name: False
     )
@@ -336,9 +334,7 @@ def test_config_init_failed_verification_does_not_select_machine(
 def test_config_init_refuses_unmanaged_hostname_collision_even_with_yes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        'aivm.cli.config.init.default_vm_name', lambda: VM_NAME
-    )
+    monkeypatch.setattr('aivm.cli.config.init.default_vm_name', lambda: VM_NAME)
     monkeypatch.setattr(
         'aivm.cli.config.init.domain_is_defined', lambda name: True
     )
@@ -364,9 +360,7 @@ def test_config_init_join_requires_confirmation_noninteractive(
     monkeypatch.setattr(
         'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
     )
-    monkeypatch.setattr(
-        'aivm.cli.config.init.sys.stdin.isatty', lambda: False
-    )
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: False)
 
     with pytest.raises(AIVMError, match='requires confirmation'):
         initialize_config_defaults(

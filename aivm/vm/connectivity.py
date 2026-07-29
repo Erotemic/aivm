@@ -22,6 +22,7 @@ from .paths import _paths
 
 log = logger
 
+
 def _mac_for_vm(cfg: AgentVMConfig) -> str:
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
@@ -62,12 +63,14 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
                 return parts[-1].strip()
     return ''
 
+
 def get_ip_cached(cfg: AgentVMConfig) -> str | None:
     p = _paths(cfg, dry_run=False)
     ip_file = p['ip_file']
     if ip_file.exists():
         return ip_file.read_text(encoding='utf-8').strip() or None
     return None
+
 
 def wait_for_ip(
     cfg: AgentVMConfig, *, timeout_s: int = 360, dry_run: bool = False
@@ -230,6 +233,7 @@ def wait_for_ip(
         f'Try: sudo virsh net-dhcp-leases {cfg.network.name}'
     )
 
+
 def ssh_config(cfg: AgentVMConfig) -> str:
     cfg = cfg.expanded_paths()
     context = guest_transport_from_effective_cfg(cfg)
@@ -243,6 +247,7 @@ def ssh_config(cfg: AgentVMConfig) -> str:
   IdentitiesOnly yes
   StrictHostKeyChecking accept-new
 """
+
 
 def _is_ssh_host_key_mismatch(stderr: str) -> bool:
     text = stderr.lower()
@@ -258,6 +263,7 @@ def _is_ssh_host_key_mismatch(stderr: str) -> bool:
     ]
     return any(pattern in text for pattern in patterns)
 
+
 def _ssh_host_key_mismatch_message(cfg: AgentVMConfig, ip: str) -> str:
     return textwrap.dedent(
         f"""
@@ -268,6 +274,7 @@ def _ssh_host_key_mismatch_message(cfg: AgentVMConfig, ip: str) -> str:
           ssh-keygen -f ~/.ssh/known_hosts -R {ip}
         """
     ).strip()
+
 
 def wait_for_ssh(
     cfg: AgentVMConfig,

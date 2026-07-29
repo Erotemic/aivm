@@ -118,9 +118,7 @@ class BackupRecord:
         elif kind_raw == 'directory':
             kind = 'directory'
         else:
-            raise MigrationExecutionError(
-                f'Invalid backup kind: {kind_raw!r}'
-            )
+            raise MigrationExecutionError(f'Invalid backup kind: {kind_raw!r}')
         role = str(raw.get('role', ''))
         disposition_raw = str(raw.get('disposition', ''))
         if not disposition_raw:
@@ -280,7 +278,9 @@ class MigrationApplyResult:
 
 
 GuestInstaller = Callable[[str, AgentVMConfig, MachineStoreLayout], None]
-RuntimeVerifier = Callable[[MigrationPlan, MachineStoreLayout], dict[str, object]]
+RuntimeVerifier = Callable[
+    [MigrationPlan, MachineStoreLayout], dict[str, object]
+]
 
 
 def _utc_now() -> str:
@@ -544,16 +544,16 @@ def list_migration_ids(
     return [name for _mtime, name in sorted(rows, reverse=True)]
 
 
-def latest_migration_id(
-    *, layout: MachineStoreLayout | None = None
-) -> str:
+def latest_migration_id(*, layout: MachineStoreLayout | None = None) -> str:
     ids = list_migration_ids(layout=layout)
     if not ids:
         raise MigrationExecutionError('No migration journal exists.')
     return ids[0]
 
 
-def _source_rows_to_objects(rows: list[dict[str, object]]) -> list[LegacyStoreSource]:
+def _source_rows_to_objects(
+    rows: list[dict[str, object]],
+) -> list[LegacyStoreSource]:
     return [
         LegacyStoreSource(
             path=Path(str(row.get('path', ''))).expanduser().resolve(),
@@ -621,7 +621,9 @@ def _preserve_tree_owners(source: Path, target: Path) -> None:
 
 def _copy_path(source: Path, target: Path) -> None:
     if source.is_symlink():
-        raise MigrationExecutionError(f'Refusing symlinked migration path: {source}')
+        raise MigrationExecutionError(
+            f'Refusing symlinked migration path: {source}'
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
         if target.exists():
@@ -664,14 +666,18 @@ def _backup_one(
             disposition=disposition,
         )
     if original.is_symlink():
-        raise MigrationExecutionError(f'Refusing symlinked migration path: {original}')
+        raise MigrationExecutionError(
+            f'Refusing symlinked migration path: {original}'
+        )
     kind: Literal['file', 'directory'] = (
         'directory' if original.is_dir() else 'file'
     )
     digest = _tree_sha256(original)
     _copy_path(original, backup)
     if _tree_sha256(backup) != digest:
-        raise MigrationExecutionError(f'Backup verification failed for {original}')
+        raise MigrationExecutionError(
+            f'Backup verification failed for {original}'
+        )
     return BackupRecord(
         original=str(original),
         backup=str(backup),
@@ -688,7 +694,9 @@ def _machine_target_paths(
 ) -> list[tuple[Path, str, BackupDisposition]]:
     store = plan.proposed_store
     if store is None:
-        raise MigrationExecutionError('Migration plan lacks apply-phase machine data.')
+        raise MigrationExecutionError(
+            'Migration plan lacks apply-phase machine data.'
+        )
     targets = split_fragment_paths(store, plan.target_machine_store)
     paths: list[tuple[Path, str, BackupDisposition]] = [
         (targets['root'], 'target-machine-root', 'restore_on_rollback'),
@@ -806,12 +814,12 @@ def _create_backups(
     ]
 
 
-def _freeze_expected(
-    plan: MigrationPlan, transaction_dir: Path
-) -> None:
+def _freeze_expected(plan: MigrationPlan, transaction_dir: Path) -> None:
     store = plan.proposed_store
     if store is None:
-        raise MigrationExecutionError('Migration plan lacks proposed machine store.')
+        raise MigrationExecutionError(
+            'Migration plan lacks proposed machine store.'
+        )
     policy = _transaction_policy(transaction_dir)
     expected = ensure_store_directory(_expected_dir(transaction_dir), policy)
     _atomic_write_text(
@@ -828,7 +836,9 @@ def _freeze_expected(
             raise MigrationExecutionError(
                 f'Migration plan lacks profile material for {host_user!r}'
             )
-        name = hashlib.sha256(host_user.encode('utf-8')).hexdigest()[:16] + '.toml'
+        name = (
+            hashlib.sha256(host_user.encode('utf-8')).hexdigest()[:16] + '.toml'
+        )
         _atomic_write_text(
             profile_dir / name,
             render_user_profile(profile),
@@ -866,7 +876,9 @@ def _step_complete(journal: MigrationJournal, step: str) -> bool:
     return step in journal.completed_steps
 
 
-def _mark_step(transaction_dir: Path, journal: MigrationJournal, step: str) -> None:
+def _mark_step(
+    transaction_dir: Path, journal: MigrationJournal, step: str
+) -> None:
     if step not in journal.completed_steps:
         journal.completed_steps.append(step)
     journal.status = 'applying'
@@ -908,10 +920,14 @@ def _capture_migration_outputs(
     journal.backups = updated
 
 
-def _write_machine_store(plan: MigrationPlan, layout: MachineStoreLayout) -> None:
+def _write_machine_store(
+    plan: MigrationPlan, layout: MachineStoreLayout
+) -> None:
     store = plan.proposed_store
     if store is None:
-        raise MigrationExecutionError('Migration plan lacks proposed machine store.')
+        raise MigrationExecutionError(
+            'Migration plan lacks proposed machine store.'
+        )
     ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
     save_store_split(
         store,
@@ -1017,8 +1033,12 @@ def _copy_persistent_state(
 
 def _guest_install_script(public_key: str) -> str:
     restricted = restricted_bootstrap_authorized_key(public_key)
-    guestctl_b64 = base64.b64encode(guestctl_source().encode('utf-8')).decode('ascii')
-    key_b64 = base64.b64encode((restricted + '\n').encode('utf-8')).decode('ascii')
+    guestctl_b64 = base64.b64encode(guestctl_source().encode('utf-8')).decode(
+        'ascii'
+    )
+    key_b64 = base64.b64encode((restricted + '\n').encode('utf-8')).decode(
+        'ascii'
+    )
     sudoers = (
         f'{BOOTSTRAP_GUEST_USER} ALL=(root) NOPASSWD: '
         f'{GUESTCTL_PATH} --forced\n'
@@ -1087,7 +1107,9 @@ def install_bootstrap_through_legacy_access(
         detail='Uses the already-working legacy guest identity; no VM is recreated.',
     )
     if result.code != 0:
-        detail = (result.stderr or result.stdout or 'guest installation failed').strip()
+        detail = (
+            result.stderr or result.stdout or 'guest installation failed'
+        ).strip()
         raise MigrationExecutionError(
             f'Could not install bootstrap helper in {vm_name!r}: {detail}'
         )
@@ -1110,7 +1132,9 @@ def verify_migration_local(
     _verify_source_hashes(plan)
     expected_store = plan.proposed_store
     if expected_store is None:
-        raise MigrationExecutionError('Migration plan lacks proposed machine store.')
+        raise MigrationExecutionError(
+            'Migration plan lacks proposed machine store.'
+        )
     actual_store = load_store(
         layout.config_path,
         io_policy=current_machine_store_policy(layout),
@@ -1137,7 +1161,9 @@ def verify_migration_local(
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
         if source.exists():
-            if not target.exists() or _tree_sha256(source) != _tree_sha256(target):
+            if not target.exists() or _tree_sha256(source) != _tree_sha256(
+                target
+            ):
                 raise MigrationExecutionError(
                     f'Credential material verification failed: {source} -> {target}'
                 )
@@ -1147,11 +1173,9 @@ def verify_migration_local(
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
         if source.exists():
-            if (
-                not target.exists()
-                or _tree_content_sha256(source)
-                != _tree_content_sha256(target)
-            ):
+            if not target.exists() or _tree_content_sha256(
+                source
+            ) != _tree_content_sha256(target):
                 raise MigrationExecutionError(
                     f'Persistent state verification failed: {source} -> {target}'
                 )
@@ -1202,7 +1226,9 @@ def verify_migration_runtime(
         result = CommandManager.current().run(
             [
                 'ssh',
-                *ssh_base_args(private_key, strict_host_key_checking='accept-new'),
+                *ssh_base_args(
+                    private_key, strict_host_key_checking='accept-new'
+                ),
                 f'{cfg.vm.user}@{ip}',
                 'true',
             ],
@@ -1270,7 +1296,9 @@ def apply_migration(
             verification['runtime'] = runtime_verifier(plan, layout)
             journal.verification = verification
             _save_journal(tx, journal)
-            return MigrationApplyResult(journal=journal, transaction_dir=tx, resumed=True)
+            return MigrationApplyResult(
+                journal=journal, transaction_dir=tx, resumed=True
+            )
         if journal.status == 'rolled-back':
             raise MigrationExecutionError(
                 f'Migration {migration_id} was rolled back; create and review a '
@@ -1308,6 +1336,7 @@ def apply_migration(
             )
 
     try:
+
         def backups_action() -> None:
             journal.backups = _create_backups(plan, tx, layout)
             _save_journal(tx, journal)
@@ -1361,7 +1390,9 @@ def apply_migration(
         if isinstance(ex, MigrationExecutionError):
             raise
         raise MigrationExecutionError(str(ex)) from ex
-    return MigrationApplyResult(journal=journal, transaction_dir=tx, resumed=resumed)
+    return MigrationApplyResult(
+        journal=journal, transaction_dir=tx, resumed=resumed
+    )
 
 
 def rebuild_plan_from_journal(
@@ -1380,7 +1411,9 @@ def rebuild_plan_from_journal(
     # A resumed migration is expected to find the machine store written by an
     # earlier phase. Suppress only the generic non-empty-target conflict when
     # the actual logical store is byte-for-byte the reviewed proposal.
-    if plan.proposed_store is not None and split_source_paths(layout.config_path):
+    if plan.proposed_store is not None and split_source_paths(
+        layout.config_path
+    ):
         try:
             actual = load_store(
                 layout.config_path,
@@ -1389,7 +1422,9 @@ def rebuild_plan_from_journal(
         except Exception:
             pass
         else:
-            if render_store_toml(actual) == render_store_toml(plan.proposed_store):
+            if render_store_toml(actual) == render_store_toml(
+                plan.proposed_store
+            ):
                 plan.conflicts = [
                     item
                     for item in plan.conflicts
@@ -1417,7 +1452,9 @@ def verify_applied_migration(
         raise MigrationExecutionError(
             f'Migration {migration_id} is {journal.status!r}, not applied.'
         )
-    plan = rebuild_plan_from_journal(journal, layout=layout, check_runtime=False)
+    plan = rebuild_plan_from_journal(
+        journal, layout=layout, check_runtime=False
+    )
     verification = verify_migration_local(plan, layout)
     verification['runtime'] = runtime_verifier(plan, layout)
     journal.verification = verification
@@ -1425,7 +1462,9 @@ def verify_applied_migration(
         journal.status = 'complete'
         journal.error = ''
     _save_journal(loaded.transaction_dir, journal)
-    return MigrationApplyResult(journal=journal, transaction_dir=loaded.transaction_dir, resumed=True)
+    return MigrationApplyResult(
+        journal=journal, transaction_dir=loaded.transaction_dir, resumed=True
+    )
 
 
 RollbackAction = Literal['noop', 'restore']

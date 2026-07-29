@@ -375,7 +375,8 @@ def _ensure_attachment_available_in_guest(
 
 def _git_repo_context(host_src: Path) -> tuple[Path, Path]:
     probe = CommandManager.current().run(
-        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'], role='read',
+        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'],
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -427,7 +428,8 @@ def _upsert_host_git_remote(
             'rev-parse',
             '--path-format=absolute',
             '--git-common-dir',
-        ], role='read',
+        ],
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -441,7 +443,8 @@ def _upsert_host_git_remote(
         )
     git_cfg = Path((git_dir_probe.stdout or '').strip()) / 'config'
     probe = mgr.run(
-        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name], role='read',
+        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name],
+        role='read',
         sudo=False,
         check=False,
         capture=True,

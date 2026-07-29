@@ -166,7 +166,11 @@ def machine_store_policy(
 ) -> StoreFilesystemPolicy:
     """Return group-safe filesystem rules for the global config store."""
     layout = layout or machine_store_layout()
-    gid = resolve_machine_group_gid(group_name) if group_gid is None else group_gid
+    gid = (
+        resolve_machine_group_gid(group_name)
+        if group_gid is None
+        else group_gid
+    )
     return StoreFilesystemPolicy(
         managed_root=layout.root,
         directory_mode=MACHINE_DIRECTORY_MODE,
@@ -256,7 +260,9 @@ def ordered_machine_locks(
         specs.add(MachineLockSpec(0, 'store', layout.store_lock_path))
     for name in networks:
         specs.add(
-            MachineLockSpec(1, f'network:{name}', layout.network_lock_path(name))
+            MachineLockSpec(
+                1, f'network:{name}', layout.network_lock_path(name)
+            )
         )
     for name in vms:
         specs.add(MachineLockSpec(2, f'vm:{name}', layout.vm_lock_path(name)))

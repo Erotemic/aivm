@@ -27,9 +27,7 @@ def parse_store_header(
 ) -> ParsedHeaderCompatibility:
     """Parse fields whose old and 0.6 locations differ."""
     schema_version_raw = raw.get('schema_version', 5)
-    if not isinstance(
-        schema_version_raw, (str, bytes, bytearray, int, float)
-    ):
+    if not isinstance(schema_version_raw, (str, bytes, bytearray, int, float)):
         raise TypeError(
             'schema_version must be an integer-compatible scalar, '
             f'not {type(schema_version_raw).__name__}'
@@ -86,8 +84,7 @@ def apply_mirror_home_to_vm(
         return
     vm_block = vm_raw.get('vm', {})
     if not (
-        isinstance(vm_block, dict)
-        and 'mirror_shared_home_folders' in vm_block
+        isinstance(vm_block, dict) and 'mirror_shared_home_folders' in vm_block
     ):
         cfg.vm.mirror_shared_home_folders = mirror_home
 

@@ -323,9 +323,7 @@ def vm_share_mappings_detailed(
         src_dir = src.attrib.get('dir', '') if src is not None else ''
         tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir or tgt_dir:
-            mappings.append(
-                (src_dir, tgt_dir, fs.find('readonly') is not None)
-            )
+            mappings.append((src_dir, tgt_dir, fs.find('readonly') is not None))
     return mappings
 
 
@@ -335,9 +333,7 @@ def vm_share_mappings(
     """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
     return [
         (src, tag)
-        for src, tag, _ro in vm_share_mappings_detailed(
-            cfg, use_sudo=use_sudo
-        )
+        for src, tag, _ro in vm_share_mappings_detailed(cfg, use_sudo=use_sudo)
     ]
 
 

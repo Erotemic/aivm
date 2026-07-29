@@ -6,12 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from aivm.config_store import PrincipalEntry, Store, find_principal_for_host_identity
+from aivm.config_store import (
+    PrincipalEntry,
+    Store,
+    find_principal_for_host_identity,
+)
 from aivm.errors import AIVMError
 from aivm.host_identity import HostIdentity, current_host_identity
 
 
-def test_current_host_identity_ignores_login_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_current_host_identity_ignores_login_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv('LOGNAME', 'mallory')
     monkeypatch.setenv('USER', 'mallory')
     monkeypatch.setenv('SUDO_USER', 'mallory')

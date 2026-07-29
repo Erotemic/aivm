@@ -232,9 +232,7 @@ class TestAttachmentHasMapping:
 </domain>
 """
         activate_manager(monkeypatch)
-        command_recorder(
-            monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')}
-        )
+        command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
         return cfg
 
     def test_mapping_exists_shared_mode(

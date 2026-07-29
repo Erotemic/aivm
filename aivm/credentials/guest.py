@@ -306,9 +306,7 @@ def verify_guest_repository(
 ) -> CommandResult:
     safe_id = _safe_credential_id(credential_id)
     source_url = repo.verification_url
-    expected_url = (
-        f'git@aivm-cred-{safe_id}:{repo.owner}/{repo.name}.git'
-    )
+    expected_url = f'git@aivm-cred-{safe_id}:{repo.owner}/{repo.name}.git'
     source_q = shlex.quote(source_url)
     expected_q = shlex.quote(expected_url)
     command = (

@@ -69,7 +69,9 @@ class ListCLI(_BaseCommand):
                         else False
                     )
                     identities = [
-                        item for item in reg.principals if item.vm_name == vm.name
+                        item
+                        for item in reg.principals
+                        if item.vm_name == vm.name
                     ]
                     active_identities = sum(
                         1
@@ -109,7 +111,9 @@ class ListCLI(_BaseCommand):
                 for att in sorted(
                     reg.attachments,
                     key=lambda x: (
-                        x.vm_name, x.owner_principal_id, x.host_path
+                        x.vm_name,
+                        x.owner_principal_id,
+                        x.host_path,
                     ),
                 ):
                     print(

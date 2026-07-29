@@ -119,9 +119,9 @@ def resolve_access_principal(
         for item in find_principals_for_vm(reg, vm_name)
         if item.host_user == selected
     ]
-    matches: list[PrincipalEntry] = (
-        [by_id] if by_id is not None else []
-    ) + [item for item in by_host if item is not by_id]
+    matches: list[PrincipalEntry] = ([by_id] if by_id is not None else []) + [
+        item for item in by_host if item is not by_id
+    ]
     if not matches:
         known = ', '.join(
             f'{item.host_user} ({item.id})'
@@ -305,7 +305,9 @@ def repair_current_host_identity(
             )
         if not uid_matches:
             name_matches = [
-                item for item in principals if item.host_user == identity.username
+                item
+                for item in principals
+                if item.host_user == identity.username
             ]
             if name_matches:
                 recorded = ', '.join(
@@ -325,8 +327,7 @@ def repair_current_host_identity(
         conflicts = [
             item
             for item in principals
-            if item.id != existing.id
-            and item.host_user == identity.username
+            if item.id != existing.id and item.host_user == identity.username
         ]
         if conflicts:
             ids = ', '.join(sorted(item.id for item in conflicts))
@@ -377,7 +378,6 @@ def repair_current_host_identity(
         previous_host_gid=previous.host_gid,
         changed=changed,
     )
-
 
 
 def mutate_access_identity(

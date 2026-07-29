@@ -160,7 +160,9 @@ class VMFdGuardCLI(_BaseCommand):
             print('Guest script:')
             print(script)
             print('SSH shape:')
-            print(f'ssh <ssh-options> {context.guest_user}@<vm-ip> {remote_command}')
+            print(
+                f'ssh <ssh-options> {context.guest_user}@<vm-ip> {remote_command}'
+            )
             return 0
 
         intent_why = {

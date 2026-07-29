@@ -187,7 +187,8 @@ class _VMAccessMutationCLI(_BaseCommand):
         ),
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Describe the operation without changing guest or host state.'
+        False,
+        help='Describe the operation without changing guest or host state.',
     )
 
     @classmethod

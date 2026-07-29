@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 
-
 def test_guest_runtime_modules_use_scope_boundary() -> None:
     """Keep legacy principal/path reads at persistence and creation seams."""
     root = Path(__file__).parents[1]
@@ -45,9 +44,7 @@ def test_session_entrypoints_keep_the_resolved_context() -> None:
     session_text = (root / 'aivm/attachments/session.py').read_text(
         encoding='utf-8'
     )
-    connect_text = (root / 'aivm/cli/vm_connect.py').read_text(
-        encoding='utf-8'
-    )
+    connect_text = (root / 'aivm/cli/vm_connect.py').read_text(encoding='utf-8')
     services_text = (root / 'aivm/services.py').read_text(encoding='utf-8')
 
     assert 'def load_vm_context_with_path(' in services_text

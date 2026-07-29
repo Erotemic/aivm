@@ -70,8 +70,7 @@ def _machine_with_profile(tmp_path: Path) -> tuple[AgentVMConfig, StoreScope]:
 def test_normalized_guest_username() -> None:
     assert normalized_guest_username('edward.wang') == 'edward-wang-agent'
     assert (
-        normalized_guest_username('KHQ\\Alice.User')
-        == 'khq-alice-user-agent'
+        normalized_guest_username('KHQ\\Alice.User') == 'khq-alice-user-agent'
     )
     assert len(normalized_guest_username('x' * 100)) <= 32
 

@@ -41,7 +41,9 @@ def user_app_dir(
         env_name, home_suffix = _XDG_ENV_BY_KIND[kind]
     except KeyError as ex:
         choices = ', '.join(sorted(_XDG_ENV_BY_KIND))
-        raise KeyError(f'Unknown user app directory kind {kind!r}; choose {choices}') from ex
+        raise KeyError(
+            f'Unknown user app directory kind {kind!r}; choose {choices}'
+        ) from ex
 
     configured_root = os.environ.get(env_name, '').strip()
     if configured_root:

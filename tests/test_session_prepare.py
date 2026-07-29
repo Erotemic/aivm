@@ -42,7 +42,9 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.errors import AIVMError
-from aivm.services import resolve_context_for_code as real_resolve_context_for_code
+from aivm.services import (
+    resolve_context_for_code as real_resolve_context_for_code,
+)
 from aivm.status import ProbeOutcome
 from aivm.vm.paths import _paths
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
@@ -134,7 +136,9 @@ def attached_session_harness(
         probe=probe,
     )
 
-    def fake_resolve_context_for_code(**kwargs: Any) -> tuple[ResolvedVMContext, Path]:
+    def fake_resolve_context_for_code(
+        **kwargs: Any,
+    ) -> tuple[ResolvedVMContext, Path]:
         del kwargs
         if not harness.state['ready']:
             raise RuntimeError(

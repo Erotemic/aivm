@@ -93,9 +93,7 @@ class VMUpdateCLI(_BaseCommand):
         'auto',
         help='Restart policy when changes require reboot to take effect: auto, always, never.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

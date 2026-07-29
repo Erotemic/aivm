@@ -50,7 +50,9 @@ def test_guest_tool_registry_rejects_duplicate_names() -> None:
 
 def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
     cfg = AgentVMConfig()
-    resolved = {tool.name: tool for tool in GUEST_TOOL_REGISTRY.resolve_all(cfg.tools)}
+    resolved = {
+        tool.name: tool for tool in GUEST_TOOL_REGISTRY.resolve_all(cfg.tools)
+    }
     assert resolved['uv'].enabled is True
     assert resolved['uv'].effective_spec == 'latest'
     assert resolved['rust'].enabled is False
@@ -58,7 +60,10 @@ def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
     assert resolved['claude'].enabled is False
 
     cfg.tools.rust = True
-    assert GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'rust').effective_spec == 'stable'
+    assert (
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'rust').effective_spec
+        == 'stable'
+    )
     GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, ['code', 'claude'])
     assert cfg.tools.code == 'latest'
     assert cfg.tools.claude == 'latest'

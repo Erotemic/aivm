@@ -38,7 +38,10 @@ from ...config_store import (
     upsert_principal,
     upsert_vm_with_network,
 )
-from ...credentials.validation import credential_id, validate_repository_identity
+from ...credentials.validation import (
+    credential_id,
+    validate_repository_identity,
+)
 from ...machine_store import MachineStoreLayout, machine_store_layout
 from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
@@ -122,7 +125,9 @@ class MigrationPlan:
     warnings: list[MigrationIssue] = field(default_factory=list)
     # Internal apply-phase material. These fields are intentionally omitted
     # from reports so the dry-run JSON remains a stable, non-secret contract.
-    proposed_store: Store | None = field(default=None, repr=False, compare=False)
+    proposed_store: Store | None = field(
+        default=None, repr=False, compare=False
+    )
     proposed_profiles: dict[str, UserProfileStore] = field(
         default_factory=dict, repr=False, compare=False
     )
@@ -248,8 +253,7 @@ class MigrationPlan:
                 f'exists={move.get("source_exists", False)}'
             )
         lines.append(
-            f'Credential-material moves: '
-            f'{len(self.credential_material_moves)}'
+            f'Credential-material moves: {len(self.credential_material_moves)}'
         )
         for move in self.credential_material_moves:
             lines.append(
@@ -468,7 +472,11 @@ def _profile_target_path(source: LegacyStoreSource) -> Path:
     if source.home.resolve() == Path.home().resolve():
         configured = os.environ.get('XDG_CONFIG_HOME', '').strip()
         if configured:
-            return Path(configured).expanduser().resolve() / 'aivm' / 'profile.toml'
+            return (
+                Path(configured).expanduser().resolve()
+                / 'aivm'
+                / 'profile.toml'
+            )
     return source.home / '.config' / 'aivm' / 'profile.toml'
 
 
@@ -553,9 +561,7 @@ def _legacy_data_root(source: LegacyStoreSource) -> Path:
     return source.home / '.local' / 'share' / 'aivm'
 
 
-def _runtime_names(
-    command: list[str], *, sudo: bool
-) -> tuple[list[str], str]:
+def _runtime_names(command: list[str], *, sudo: bool) -> tuple[list[str], str]:
     result = CommandManager.current().run(
         command,
         role='read',
@@ -567,9 +573,7 @@ def _runtime_names(
         raw = (result.stderr or result.stdout or 'command failed').strip()
         return [], raw
     names = {
-        line.strip()
-        for line in result.stdout.splitlines()
-        if line.strip()
+        line.strip() for line in result.stdout.splitlines() if line.strip()
     }
     return sorted(names), ''
 
@@ -594,9 +598,7 @@ def collect_runtime_inventory(
         unmanaged_domains=sorted(set(domains) - managed_vm_set),
         unmanaged_networks=sorted(set(networks) - managed_network_set),
         missing_domains=(
-            sorted(managed_vm_set - set(domains))
-            if not domain_error
-            else []
+            sorted(managed_vm_set - set(domains)) if not domain_error else []
         ),
         error=error,
     )
@@ -634,7 +636,9 @@ def build_migration_plan(
     layout: MachineStoreLayout | None = None,
     check_runtime: bool = True,
     runtime_sudo: bool = False,
-    runtime_collector: Callable[..., RuntimeInventory] = collect_runtime_inventory,
+    runtime_collector: Callable[
+        ..., RuntimeInventory
+    ] = collect_runtime_inventory,
 ) -> MigrationPlan:
     """Build a deterministic migration proposal without writing anything."""
     layout = layout or machine_store_layout()
@@ -656,7 +660,9 @@ def build_migration_plan(
         )
 
     seen_paths: set[Path] = set()
-    for source in sorted(sources, key=lambda item: (item.host_user, str(item.path))):
+    for source in sorted(
+        sources, key=lambda item: (item.host_user, str(item.path))
+    ):
         if source.path in seen_paths:
             conflicts.append(
                 MigrationIssue(
@@ -720,7 +726,9 @@ def build_migration_plan(
                     sources=(str(source.path),),
                 )
             )
-        if reg.active_vm and not any(item.name == reg.active_vm for item in reg.vms):
+        if reg.active_vm and not any(
+            item.name == reg.active_vm for item in reg.vms
+        ):
             conflicts.append(
                 MigrationIssue(
                     code='active-vm-missing',
@@ -788,7 +796,9 @@ def build_migration_plan(
     vm_claims: dict[str, list[tuple[LegacyStoreSource, VMEntry, Store]]] = {}
     for source, reg in loaded_sources:
         for network in reg.networks:
-            network_claims.setdefault(network.name, []).append((source, network))
+            network_claims.setdefault(network.name, []).append(
+                (source, network)
+            )
         for vm in reg.vms:
             vm_claims.setdefault(vm.name, []).append((source, vm, reg))
 
@@ -1006,7 +1016,9 @@ def build_migration_plan(
                         'owners': sorted(
                             item.owner_principal_id for item in records
                         ),
-                        'host_paths': sorted(item.host_path for item in records),
+                        'host_paths': sorted(
+                            item.host_path for item in records
+                        ),
                     },
                 )
             )
@@ -1034,7 +1046,9 @@ def build_migration_plan(
                         ),
                         sources=(str(layout.config_path),),
                         details={
-                            'vms': sorted(item.name for item in existing_machine.vms),
+                            'vms': sorted(
+                                item.name for item in existing_machine.vms
+                            ),
                             'networks': sorted(
                                 item.name for item in existing_machine.networks
                             ),
@@ -1169,8 +1183,7 @@ def build_migration_plan(
         ),
         proposed_store=deepcopy(target),
         proposed_profiles={
-            str(item['host_user']): _profile_object(item)
-            for item in profiles
+            str(item['host_user']): _profile_object(item) for item in profiles
         },
         legacy_vm_cfgs=legacy_vm_cfgs,
     )

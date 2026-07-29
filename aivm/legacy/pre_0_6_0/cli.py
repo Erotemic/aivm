@@ -124,7 +124,12 @@ class ConfigMigrateApplyCLI(_MigrationSourcesCLI):
             runtime_sudo=bool(args.sudo),
         )
         if plan.blocked:
-            print(plan.render_json() if args.output == 'json' else plan.render_text(), end='')
+            print(
+                plan.render_json()
+                if args.output == 'json'
+                else plan.render_text(),
+                end='',
+            )
             return 2
         purpose = (
             'Migrate released AIVM stores into the shared machine store. '
@@ -144,7 +149,9 @@ class ConfigMigrateApplyCLI(_MigrationSourcesCLI):
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':
-            print(json.dumps(result.journal.to_dict(), indent=2, sort_keys=True))
+            print(
+                json.dumps(result.journal.to_dict(), indent=2, sort_keys=True)
+            )
         else:
             prefix = 'Resumed' if result.resumed else 'Completed'
             print(f'{prefix} migration {result.journal.migration_id}.')
@@ -190,7 +197,9 @@ class ConfigMigrateStatusCLI(_MigrationJournalCLI):
         migration_id = _selected_migration_id(args.migration)
         result = load_migration_journal(migration_id)
         if args.output == 'json':
-            print(json.dumps(result.journal.to_dict(), indent=2, sort_keys=True))
+            print(
+                json.dumps(result.journal.to_dict(), indent=2, sort_keys=True)
+            )
         else:
             print(result.journal.render_text(), end='')
         return 0
@@ -229,7 +238,9 @@ class ConfigMigrateResumeCLI(_MigrationJournalCLI):
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':
-            print(json.dumps(result.journal.to_dict(), indent=2, sort_keys=True))
+            print(
+                json.dumps(result.journal.to_dict(), indent=2, sort_keys=True)
+            )
         else:
             print(result.journal.render_text(), end='')
         return 0
@@ -255,7 +266,9 @@ class ConfigMigrateVerifyCLI(_MigrationJournalCLI):
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':
-            print(json.dumps(result.journal.to_dict(), indent=2, sort_keys=True))
+            print(
+                json.dumps(result.journal.to_dict(), indent=2, sort_keys=True)
+            )
         else:
             print(result.journal.render_text(), end='')
         return 0
@@ -280,7 +293,9 @@ class ConfigMigrateRollbackCLI(_MigrationJournalCLI):
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':
-            print(json.dumps(result.journal.to_dict(), indent=2, sort_keys=True))
+            print(
+                json.dumps(result.journal.to_dict(), indent=2, sort_keys=True)
+            )
         else:
             print(result.journal.render_text(), end='')
         return 0

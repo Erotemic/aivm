@@ -300,7 +300,9 @@ def _persistent_attachment_records_for_vm(
     return sorted(
         records,
         key=lambda rec: (
-            rec.owner_principal_id, rec.guest_dst, rec.shared_root_token
+            rec.owner_principal_id,
+            rec.guest_dst,
+            rec.shared_root_token,
         ),
     )
 
@@ -335,7 +337,10 @@ def _sync_persistent_attachment_manifest_on_host(
             return manifest_path
         if is_machine_store_path(cfg_path):
             new_bytes = manifest_text.encode('utf-8')
-            if not manifest_path.exists() or manifest_path.read_bytes() != new_bytes:
+            if (
+                not manifest_path.exists()
+                or manifest_path.read_bytes() != new_bytes
+            ):
                 _atomic_write_text(
                     manifest_path,
                     manifest_text,

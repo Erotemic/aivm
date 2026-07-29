@@ -75,6 +75,7 @@ from .provision import provision
 
 log = logger
 
+
 def detect_host_timezone() -> str:
     """Return the host timezone via the cloud-init module compatibility path.
 

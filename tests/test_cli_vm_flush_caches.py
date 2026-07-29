@@ -64,7 +64,9 @@ def test_vm_flush_caches_dry_run(
     assert 'echo 3 > /proc/sys/vm/drop_caches' in out
 
 
-def test_vm_flush_caches_runs_guest_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_vm_flush_caches_runs_guest_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-cache'
     cfg.vm.user = 'agent'

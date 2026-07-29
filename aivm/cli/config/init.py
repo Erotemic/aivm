@@ -317,9 +317,11 @@ def _confirm_managed_join(
             'Joining an existing managed machine requires confirmation. '
             'Re-run with --yes or --defaults.'
         )
-    answer = input(
-        f'Join managed VM {vm_name!r} as guest {guest_user!r}? [Y/n]: '
-    ).strip().lower()
+    answer = (
+        input(f'Join managed VM {vm_name!r} as guest {guest_user!r}? [Y/n]: ')
+        .strip()
+        .lower()
+    )
     if answer not in {'', 'y', 'yes'}:
         raise AIVMError('Aborted by user.')
 
@@ -521,9 +523,7 @@ def _validate_editor_document(
         if section == 'tools':
             valid = {*GUEST_TOOL_REGISTRY.names(), 'bin_dir'}
         else:
-            valid = {
-                field.name for field in fields(getattr(template, section))
-            }
+            valid = {field.name for field in fields(getattr(template, section))}
         unknown = sorted(str(key) for key in set(body) - valid)
         if unknown:
             raise ValueError(

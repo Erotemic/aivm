@@ -248,8 +248,6 @@ def _read_profile_public_key(profile: UserProfileStore) -> str:
     return key
 
 
-
-
 def _effective_cfg_for_principal(
     reg: Store,
     vm_name: str,

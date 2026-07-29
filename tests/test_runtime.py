@@ -1,7 +1,9 @@
 from aivm.runtime import ssh_base_args
 
 
-def test_ssh_base_args_restricts_auth_to_configured_identity_by_default() -> None:
+def test_ssh_base_args_restricts_auth_to_configured_identity_by_default() -> (
+    None
+):
     args = ssh_base_args('/tmp/id_ed25519')
 
     assert ['-o', 'IdentitiesOnly=yes'] == args[-4:-2]

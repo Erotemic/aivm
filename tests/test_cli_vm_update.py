@@ -190,8 +190,7 @@ def test_escalate_orders_none_soft_hard() -> None:
                     VirtiofsBinaryDrift(
                         tag='aivm-persistent-root',
                         current=(
-                            '/var/lib/libvirt/aivm/'
-                            'virtiofsd-wrapper-prefer.sh'
+                            '/var/lib/libvirt/aivm/virtiofsd-wrapper-prefer.sh'
                         ),
                         desired='',
                     ),

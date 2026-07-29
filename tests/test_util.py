@@ -39,9 +39,7 @@ def test_manager_run_success_and_failure(monkeypatch: MonkeyPatch) -> None:
     )
     assert bad.code == 7
     with pytest.raises(CmdError):
-        mgr.run(
-            ['bash', '-c', 'exit 9'], role='read', check=True, capture=True
-        )
+        mgr.run(['bash', '-c', 'exit 9'], role='read', check=True, capture=True)
 
 
 def test_nested_intent_breadcrumb_rendering(monkeypatch: MonkeyPatch) -> None:

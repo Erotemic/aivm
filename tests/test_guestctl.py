@@ -104,10 +104,7 @@ def test_restricted_bootstrap_key_forces_guestctl() -> None:
     entry = restricted_bootstrap_authorized_key(
         'ssh-ed25519 AAAATEST bootstrap@test'
     )
-    forced = (
-        'command="/usr/bin/sudo -n '
-        '/usr/local/sbin/aivm-guestctl --forced"'
-    )
+    forced = 'command="/usr/bin/sudo -n /usr/local/sbin/aivm-guestctl --forced"'
     assert forced in entry
     assert 'no-port-forwarding' in entry
     assert 'no-agent-forwarding' in entry
@@ -124,6 +121,7 @@ def test_guest_enrollment_is_idempotent(tmp_path: Path) -> None:
         gid=1201,
         public_key='ssh-ed25519 AAAAEDWARD edward@test',
     )
+
     def no_chown(path: ChownPath, uid: int, gid: int) -> None:
         del path, uid, gid
 
@@ -148,9 +146,7 @@ def test_guest_enrollment_is_idempotent(tmp_path: Path) -> None:
         tmp_path / 'home' / 'edward-wang-agent' / '.ssh' / 'authorized_keys'
     )
     assert authorized.read_text().splitlines() == [request.public_key]
-    sudoers_path = (
-        tmp_path / 'sudoers' / 'aivm-principal-edward-wang-agent'
-    )
+    sudoers_path = tmp_path / 'sudoers' / 'aivm-principal-edward-wang-agent'
     assert sudoers_path.read_text() == (
         'edward-wang-agent ALL=(ALL) NOPASSWD:ALL\n'
     )

@@ -59,6 +59,7 @@ class _BaseCommand(kwconf.Config):
         False,
         help='Auto-approve sudo confirmation prompts only.',
     )
+
     @classmethod
     def cli(cls, *args: Any, **kwargs: Any) -> Self:  # type: ignore
         parsed = cast(Self, super().cli(*args, **kwargs))
@@ -105,7 +106,6 @@ class _BaseCommand(kwconf.Config):
             privilege_mode,
         )
         return parsed
-
 
 
 def _resolve_cfg_verbosity(config_opt: str | None) -> int:
@@ -177,9 +177,7 @@ def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:
         path = scope.store_path
         if scope.is_machine:
             return bool(
-                load_scope_profile(
-                    scope
-                ).behavior.auto_approve_readonly_sudo
+                load_scope_profile(scope).behavior.auto_approve_readonly_sudo
             )
         if path.exists():
             reg = load_store(path)
@@ -219,7 +217,6 @@ def _setup_logging(args_verbose: int, cfg_verbosity: int) -> None:
         effective_verbosity,
         colorize,
     )
-
 
 
 __all__ = [

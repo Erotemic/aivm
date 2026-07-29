@@ -524,7 +524,11 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             f'does not match a configured VM: {names}'
         )
     orphaned_credentials = sorted(
-        {cred.vm_name for cred in reg.credentials if cred.vm_name not in vm_names}
+        {
+            cred.vm_name
+            for cred in reg.credentials
+            if cred.vm_name not in vm_names
+        }
     )
     if orphaned_credentials:
         names = ', '.join(orphaned_credentials)
@@ -573,8 +577,7 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
         )
         if unattributed_credentials:
             details = ', '.join(
-                f'{vm}:{cred_id}'
-                for vm, cred_id in unattributed_credentials
+                f'{vm}:{cred_id}' for vm, cred_id in unattributed_credentials
             )
             raise ValueError(
                 'Cannot write machine config with credential records that '

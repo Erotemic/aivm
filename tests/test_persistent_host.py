@@ -260,9 +260,7 @@ def test_legacy_unpinned_persistent_attachment_instructs_migration(
     save_store(store, cfg_path)
 
     with pytest.raises(RuntimeError) as exc_info:
-        persistent_manifest._persistent_attachment_records_for_vm(
-            cfg, cfg_path
-        )
+        persistent_manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
 
     message = str(exc_info.value)
     assert 'pre-0.6 legacy store' in message
@@ -298,9 +296,7 @@ def test_machine_unpinned_persistent_attachment_instructs_reattach(
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        persistent_manifest._persistent_attachment_records_for_vm(
-            cfg, cfg_path
-        )
+        persistent_manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
 
     message = str(exc_info.value)
     assert 'Detach and reattach this attachment' in message
@@ -1002,9 +998,7 @@ def test_persistent_host_replay_state_untouched_without_records(
 
     rec = command_recorder(monkeypatch, {})  # strict: any command raises
 
-    target = _sync_persistent_host_replay_manifest(
-        cfg, cfg_path, dry_run=False
-    )
+    target = _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
     installed = _install_persistent_host_bind_replay(
         cfg, cfg_path, dry_run=False
     )
@@ -1095,7 +1089,9 @@ def test_host_replay_rejects_source_replacement(
     }
     source.rename(tmp_path / 'approved-source')
     source.mkdir()
-    with pytest.raises(RuntimeError, match='approved persistent source changed'):
+    with pytest.raises(
+        RuntimeError, match='approved persistent source changed'
+    ):
         helper.open_approved_source(record)
 
 
@@ -1330,9 +1326,7 @@ def test_held_export_root_descriptor_survives_path_replacement(
     export_root = tmp_path / 'export-root'
     export_root.mkdir()
     approved = export_root.stat()
-    fd = helper.open_absolute_directory(
-        str(export_root), label='export root'
-    )
+    fd = helper.open_absolute_directory(str(export_root), label='export root')
     try:
         export_root.rename(tmp_path / 'approved-export-root')
         export_root.mkdir()

@@ -107,8 +107,10 @@ def test_firewall_status_uses_readonly_step(
     activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs))
-        or FakeProc(stdout='table inet aivm_fw {}'),
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs))
+            or FakeProc(stdout='table inet aivm_fw {}')
+        ),
     )
 
     table = effective_firewall_table(cfg)

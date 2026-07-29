@@ -58,7 +58,9 @@ def logical_absolute_path(raw: str | Path) -> Path:
     if pwd:
         try:
             pwd_path = Path(pwd)
-            if pwd_path.is_absolute() and pwd_path.resolve() == Path(os.getcwd()):
+            if pwd_path.is_absolute() and pwd_path.resolve() == Path(
+                os.getcwd()
+            ):
                 return (pwd_path / p).expanduser()
         except OSError:
             # PWD points at something we can't stat — fall through.
@@ -68,6 +70,7 @@ def logical_absolute_path(raw: str | Path) -> Path:
                 pwd,
             )
     return p.absolute()
+
 
 # Attachment mode constants (string aliases for mode values)
 ATTACHMENT_MODE_SHARED = AttachmentMode.SHARED.value

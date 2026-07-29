@@ -304,7 +304,9 @@ def test_failed_command_is_not_re_run_by_a_later_flush(
     except CommandError:
         pass
 
-    result = mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
+    result = mgr.run(
+        ['unrelated', 'thing'], role='read', check=True, capture=True
+    )
 
     assert result.code == 0
     assert attempts == [['failing', 'thing'], ['unrelated', 'thing']], (
@@ -363,7 +365,9 @@ def test_attempt_reports_success(monkeypatch: MonkeyPatch) -> None:
     mgr = CommandManager(yes=True)
 
     with mgr.attempt('Register the thing') as attempt:
-        result = mgr.run(['fine', 'thing'], role='read', check=True, capture=True)
+        result = mgr.run(
+            ['fine', 'thing'], role='read', check=True, capture=True
+        )
 
     assert attempt.ok
     assert attempt.reason == ''
@@ -391,7 +395,11 @@ def test_attempt_leaves_no_command_for_a_later_flush_to_re_run(
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         attempts.append(list(cmd))
-        return FakeProc(1, '', 'nope') if cmd[0] == 'failing' else FakeProc(0, 'ok', '')
+        return (
+            FakeProc(1, '', 'nope')
+            if cmd[0] == 'failing'
+            else FakeProc(0, 'ok', '')
+        )
 
     patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(yes=True)
@@ -434,11 +442,15 @@ def test_rereading_a_failed_loose_handle_runs_nothing_and_reraises(
     executed = _recording_runner(monkeypatch)
     mgr = CommandManager(yes=True)
 
-    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    handle = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError) as first:
         handle.result()
 
-    mgr.submit(['unrelated', 'MUTATION'], role='modify', check=True, capture=True)
+    mgr.submit(
+        ['unrelated', 'MUTATION'], role='modify', check=True, capture=True
+    )
 
     with pytest.raises(CommandError) as second:
         handle.result()
@@ -483,7 +495,9 @@ def test_rereading_a_failed_handle_with_an_empty_queue_reraises(
     _recording_runner(monkeypatch)
     mgr = CommandManager(yes=True)
 
-    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    handle = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError) as first:
         handle.result()
     with pytest.raises(CommandError) as second:
@@ -530,7 +544,9 @@ def test_every_terminal_handle_replays_instead_of_executing(
 
     good = mgr.submit(['fine', 'thing'], role='read', check=True, capture=True)
     assert good.result().stdout == 'ok'
-    bad = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    bad = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError):
         bad.result()
 
@@ -787,9 +803,7 @@ def test_a_read_that_escalates_nothing_stays_quiet_as_root(
     mgr.run(probe, sudo=True, role='read')
     assert [m for m in info if m.startswith('RUN')] == []
 
-    verbose = capture_logs(
-        monkeypatch, 'aivm.commands.log', levels=('debug',)
-    )
+    verbose = capture_logs(monkeypatch, 'aivm.commands.log', levels=('debug',))
     mgr.run(probe, sudo=True, role='read')
     assert 'RUN: qemu-img info /disk.qcow2' in verbose
 
@@ -829,7 +843,7 @@ def test_handing_the_terminal_to_the_user_is_not_a_write(
 def test_an_omission_notice_never_outlives_its_command(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """"OMITTED FROM THE COMMAND ABOVE" is a lie if the command is not above.
+    """ "OMITTED FROM THE COMMAND ABOVE" is a lie if the command is not above.
 
     An unprivileged read is held for --verbose 2, so its omission notice has
     to be held too, or the default log complains about a line it never shows.

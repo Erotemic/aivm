@@ -26,7 +26,9 @@ def directory_identity(path: str | Path) -> FilesystemIdentity:
     """Identify one absolute directory through no-symlink component walking."""
     candidate = Path(os.fspath(path))
     if not candidate.is_absolute():
-        raise ValueError(f'Directory identity path must be absolute: {candidate}')
+        raise ValueError(
+            f'Directory identity path must be absolute: {candidate}'
+        )
     parts = [part for part in candidate.parts if part not in {'', '/'}]
     if any(part in {'.', '..'} for part in parts):
         raise ValueError(f'Directory identity path is not lexical: {candidate}')

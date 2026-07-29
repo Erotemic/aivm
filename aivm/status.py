@@ -185,7 +185,11 @@ def probe_runtime_environment() -> ProbeOutcome:
     mgr = CommandManager.current()
     if which('systemd-detect-virt'):
         det = mgr.run(
-            ['systemd-detect-virt'], role='read', sudo=False, check=False, capture=True
+            ['systemd-detect-virt'],
+            role='read',
+            sudo=False,
+            check=False,
+            capture=True,
         )
         raw = (det.stdout or det.stderr).strip()
         if raw:
@@ -271,7 +275,8 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     can show it without re-running the probe.
     """
     info = CommandManager.current().run(
-        virsh_cmd('net-info', cfg.network.name), role='read',
+        virsh_cmd('net-info', cfg.network.name),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -350,7 +355,8 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             ).result()
     else:
         res = mgr.run(
-            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)], role='read',
+            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
+            role='read',
             sudo=use_sudo,
             check=False,
             capture=True,
@@ -400,7 +406,8 @@ def probe_vm_state(
     # keeps error/state string matching locale-independent.
     probe_env = {**os.environ, 'LC_ALL': 'C'}
     dom = mgr.run(
-        dominfo_cmd, role='read',
+        dominfo_cmd,
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -416,7 +423,8 @@ def probe_vm_state(
     ):
         sudo_used = True
         dom = mgr.run(
-            dominfo_cmd, role='read',
+            dominfo_cmd,
+            role='read',
             sudo=True,
             check=False,
             capture=True,
@@ -453,7 +461,8 @@ def probe_vm_state(
         return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
     domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
     state_res = mgr.run(
-        domstate_cmd, role='read',
+        domstate_cmd,
+        role='read',
         sudo=sudo_used,
         check=False,
         capture=True,
@@ -654,7 +663,8 @@ def render_status(
         img_ok = (
             CommandManager.current()
             .run(
-                ['test', '-f', str(base_img)], role='read',
+                ['test', '-f', str(base_img)],
+                role='read',
                 sudo=True,
                 check=False,
                 capture=True,
@@ -724,9 +734,7 @@ def render_status(
         report.check(True, 'Trust mode', TRUST_MODE, counted=False)
         identities = find_principals_for_vm(reg, cfg.vm.name)
         active_count = sum(
-            1
-            for item in identities
-            if item.state in {'active', 'legacy'}
+            1 for item in identities if item.state in {'active', 'legacy'}
         )
         report.check(
             bool(active_count),
@@ -738,9 +746,7 @@ def render_status(
             owned = access_ownership_summary(
                 reg, vm_name=cfg.vm.name, principal_id=identity.id
             )
-            marker = (
-                '*' if identity.guest_user == selected_guest_user else ' '
-            )
+            marker = '*' if identity.guest_user == selected_guest_user else ' '
             report.lines.append(
                 f'  {marker} {identity.host_user} -> {identity.guest_user} '
                 f'state={identity.state} attachments={owned.attachment_count} '
@@ -749,7 +755,9 @@ def render_status(
     desired_attachments = sorted(
         (item for item in reg.attachments if item.vm_name == cfg.vm.name),
         key=lambda item: (
-            item.owner_principal_id, item.guest_dst, item.host_path
+            item.owner_principal_id,
+            item.guest_dst,
+            item.host_path,
         ),
     )
     if desired_attachments:
@@ -884,7 +892,8 @@ def render_status(
         # re-running the same (often privileged) commands.
         mgr = CommandManager.current()
         net_xml = mgr.run(
-            virsh_cmd('net-dumpxml', cfg.network.name), role='read',
+            virsh_cmd('net-dumpxml', cfg.network.name),
+            role='read',
             sudo=use_sudo and virsh_needs_sudo(),
             check=False,
             capture=True,
@@ -910,7 +919,8 @@ def render_status(
 
         lines.append('Image')
         img_stat = mgr.run(
-            ['ls', '-lh', str(base_img)], role='read',
+            ['ls', '-lh', str(base_img)],
+            role='read',
             sudo=use_sudo and sudo_allowed(),
             check=False,
             capture=True,
@@ -935,7 +945,8 @@ def render_status(
         vm_detail_cmds.append(virsh_cmd('net-dhcp-leases', cfg.network.name))
         for cmd in vm_detail_cmds:
             vm_raw = mgr.run(
-                cmd, role='read',
+                cmd,
+                role='read',
                 sudo=use_sudo and virsh_needs_sudo(),
                 check=False,
                 capture=True,
@@ -1031,9 +1042,7 @@ def render_global_status(store_cfg_path: Path) -> str:
     lines.append(status_line(True, 'Config store', str(store_cfg_path)))
     if reg.store_kind == 'machine':
         active_identities = sum(
-            1
-            for item in reg.principals
-            if item.state in {'active', 'legacy'}
+            1 for item in reg.principals if item.state in {'active', 'legacy'}
         )
         lines.append(status_line(True, 'Trust mode', TRUST_MODE))
         lines.append(
@@ -1056,7 +1065,10 @@ def render_global_status(store_cfg_path: Path) -> str:
         for item in sorted(
             reg.attachments,
             key=lambda item: (
-                item.vm_name, item.owner_principal_id, item.guest_dst, item.host_path
+                item.vm_name,
+                item.owner_principal_id,
+                item.guest_dst,
+                item.host_path,
             ),
         ):
             lines.append(

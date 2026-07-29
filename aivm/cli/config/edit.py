@@ -134,9 +134,7 @@ def _resolve_config_edit_target(
 
     if target_norm in {'vm', 'vms', 'active-vm', 'active'}:
         active_vm = (
-            profile.active_vm
-            if profile is not None
-            else loaded.store.active_vm
+            profile.active_vm if profile is not None else loaded.store.active_vm
         )
         vm_name = name or active_vm
     else:

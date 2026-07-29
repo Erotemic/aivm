@@ -355,8 +355,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
     # The secondary remains recorded in the store after restore.
     saved = load_store(cfg_path)
     assert any(
-        a.host_path == str(secondary_src.resolve())
-        for a in saved.attachments
+        a.host_path == str(secondary_src.resolve()) for a in saved.attachments
     )
 
 
@@ -887,7 +886,9 @@ def test_restore_non_symlink_attachment_unchanged(
         {
             'virsh dumpxml': FakeProc(
                 0,
-                domain_xml_with_shares([(str(real_dir.resolve()), 'tag-plain')]),
+                domain_xml_with_shares(
+                    [(str(real_dir.resolve()), 'tag-plain')]
+                ),
             )
         },
     )
@@ -943,7 +944,9 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
 
     resolve_calls = {'count': 0}
 
-    def fake_resolve_context_for_code(**kwargs: Any) -> tuple[ResolvedVMContext, Path]:
+    def fake_resolve_context_for_code(
+        **kwargs: Any,
+    ) -> tuple[ResolvedVMContext, Path]:
         resolve_calls['count'] += 1
         if resolve_calls['count'] == 1:
             raise RuntimeError(

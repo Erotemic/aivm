@@ -53,9 +53,7 @@ def _write_machine_and_profile(tmp_path: Path) -> tuple[str, Path]:
     private = ssh_dir / 'id_aivm_ed25519'
     public = ssh_dir / 'id_aivm_ed25519.pub'
     private.write_text('PRIVATE\n', encoding='utf-8')
-    public.write_text(
-        'ssh-ed25519 AAAAEDWARD edward@test\n', encoding='utf-8'
-    )
+    public.write_text('ssh-ed25519 AAAAEDWARD edward@test\n', encoding='utf-8')
     assert scope.profile_path is not None
     save_user_profile(
         UserProfileStore(
@@ -311,7 +309,6 @@ def test_vm_access_remove_dry_run_states_guest_home_retention(
     assert 'Guest home retained; no guest files were deleted.' in output
 
 
-
 def test_vm_access_repair_host_identity_uses_lifecycle_service(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -354,4 +351,7 @@ def test_vm_access_repair_host_identity_uses_lifecycle_service(
     assert rc == 0
     assert captured['vm_name'] == vm_name
     assert captured['dry_run'] is True
-    assert 'Would repair access identity principal-alice' in capsys.readouterr().out
+    assert (
+        'Would repair access identity principal-alice'
+        in capsys.readouterr().out
+    )

@@ -112,7 +112,9 @@ def desired_binary_path(base_dir: str, mode: str) -> str | None:
     return None
 
 
-def wrapper_content(mode: str, real_binary: str = DEFAULT_VIRTIOFSD_BINARY) -> str:
+def wrapper_content(
+    mode: str, real_binary: str = DEFAULT_VIRTIOFSD_BINARY
+) -> str:
     """Do not generate host-side virtiofsd wrapper scripts.
 
     Kept as an explicit failure point so stale callers fail loudly instead of

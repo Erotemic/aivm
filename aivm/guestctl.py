@@ -341,7 +341,9 @@ def _ensure_authorized_key(
     lines = []
     if authorized.exists():
         lines = authorized.read_text(encoding='utf-8').splitlines()
-    matching = [line for line in lines if _same_public_key(line, request.public_key)]
+    matching = [
+        line for line in lines if _same_public_key(line, request.public_key)
+    ]
     if not matching:
         lines.append(request.public_key)
     elif len(matching) > 1:
@@ -421,7 +423,6 @@ def reconcile_guest_principal(
     }
 
 
-
 def disable_guest_principal(
     request: GuestAccessRequest,
     *,
@@ -477,7 +478,9 @@ def disable_guest_principal(
         authorized = home / '.ssh' / 'authorized_keys'
         if authorized.exists():
             remaining = authorized.read_text(encoding='utf-8').splitlines()
-            if any(_same_public_key(line, request.public_key) for line in remaining):
+            if any(
+                _same_public_key(line, request.public_key) for line in remaining
+            ):
                 raise GuestEnrollmentError(
                     f'could not verify SSH key revocation for {request.guest_user!r}'
                 )
@@ -490,6 +493,7 @@ def disable_guest_principal(
         'sudoers_removed': removed_sudoers,
         'home_retained': True,
     }
+
 
 def _forced_main() -> int:
     if os.geteuid() != 0:

@@ -195,7 +195,9 @@ def test_atomic_replacement_preserves_machine_file_metadata(
 
     assert _mode(layout.config_path) == MACHINE_FILE_MODE
     assert layout.config_path.stat().st_gid == gid
-    assert load_store(layout.config_path, io_policy=policy).behavior.verbose == 3
+    assert (
+        load_store(layout.config_path, io_policy=policy).behavior.verbose == 3
+    )
 
 
 def test_split_store_fragments_are_group_writable(tmp_path: Path) -> None:
@@ -214,7 +216,9 @@ def test_split_store_fragments_are_group_writable(tmp_path: Path) -> None:
     assert _mode(layout.root / 'vms') == MACHINE_DIRECTORY_MODE
 
 
-def test_machine_lock_order_is_global_then_network_then_vm(tmp_path: Path) -> None:
+def test_machine_lock_order_is_global_then_network_then_vm(
+    tmp_path: Path,
+) -> None:
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     specs = ordered_machine_locks(
         layout,
@@ -327,8 +331,7 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
 
     loaded = load_store(layout.config_path, io_policy=policy)
     assert {
-        (item.host_path, item.owner_principal_id)
-        for item in loaded.attachments
+        (item.host_path, item.owner_principal_id) for item in loaded.attachments
     } == {
         (str(alice_path.resolve()), 'principal-alice'),
         (str(bob_path.resolve()), 'principal-bob'),
@@ -372,6 +375,8 @@ def test_interrupted_split_recovery_preserves_unrelated_vm_fragment(
 
     assert not txn.exists()
     assert {vm.name for vm in recovered.vms} == {'vm-a', 'vm-b'}
-    assert next(vm for vm in recovered.vms if vm.name == 'vm-a').cfg.vm.cpus == 13
+    assert (
+        next(vm for vm in recovered.vms if vm.name == 'vm-a').cfg.vm.cpus == 13
+    )
     assert (layout.root / 'vms' / 'vm-b.toml').is_file()
     assert _mode(layout.root / 'vms' / 'vm-a.toml') == MACHINE_FILE_MODE

@@ -14,9 +14,7 @@ from .validation import (
     validate_repository_identity,
 )
 
-_SCP_RE = re.compile(
-    r'^(?P<user>[^@/\s]+)@(?P<host>[^:/\s]+):(?P<path>.+)$'
-)
+_SCP_RE = re.compile(r'^(?P<user>[^@/\s]+)@(?P<host>[^:/\s]+):(?P<path>.+)$')
 
 
 def _strip_repo_suffix(path: str) -> str:
@@ -54,7 +52,9 @@ def parse_repository_url(
     elif '://' in raw:
         parsed = urlparse(raw)
         if parsed.query or parsed.fragment:
-            raise AIVMError('Repository URLs may not contain a query or fragment.')
+            raise AIVMError(
+                'Repository URLs may not contain a query or fragment.'
+            )
         try:
             explicit_port = parsed.port
         except ValueError as ex:
@@ -72,7 +72,9 @@ def parse_repository_url(
                 'be proven to use the managed key.'
             )
         if parsed.password is not None:
-            raise AIVMError('Repository URLs may not embed a password or token.')
+            raise AIVMError(
+                'Repository URLs may not embed a password or token.'
+            )
         if scheme == 'https' and parsed.username is not None:
             raise AIVMError(
                 'HTTPS repository URLs may not contain userinfo. It can leak '
@@ -172,4 +174,6 @@ def resolve_repository(
             f'Could not read Git remote {remote!r} from {checkout}: '
             f'{detail or "git remote get-url failed"}'
         )
-    return parse_repository_url(result.stdout.strip(), default_host=default_host)
+    return parse_repository_url(
+        result.stdout.strip(), default_host=default_host
+    )

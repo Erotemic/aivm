@@ -230,9 +230,7 @@ def _start_remote_tunnel_session(
     )
 
 
-def _attach_remote_tunnel_session(
-    context: ResolvedVMContext, ip: str
-) -> int:
+def _attach_remote_tunnel_session(context: ResolvedVMContext, ip: str) -> int:
     """Interactively attach to the ``aivm-tunnel`` tmux session in the guest.
 
     Replaces the current process so stdio, signals, and TTY handling match

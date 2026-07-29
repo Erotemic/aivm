@@ -255,11 +255,11 @@ def _resolve_create_config(
     elif reg.vms:
         # Fallback for stores that predate/omit [defaults]: use an existing
         # managed VM definition as the template source for new VM creation.
-        selected_active = profile.active_vm if profile is not None else reg.active_vm
+        selected_active = (
+            profile.active_vm if profile is not None else reg.active_vm
+        )
         template_name = (
-            selected_active
-            if find_vm(reg, selected_active) is not None
-            else ''
+            selected_active if find_vm(reg, selected_active) is not None else ''
         )
         if not template_name:
             template_name = sorted(v.name for v in reg.vms)[0]
@@ -397,9 +397,7 @@ def create_vm_from_defaults(
         0 on success, 1 on error.
     """
     try:
-        cfg, reg, scope, profile = _resolve_create_config(
-            cfg_path, vm_override
-        )
+        cfg, reg, scope, profile = _resolve_create_config(cfg_path, vm_override)
     except RuntimeError as ex:
         if 'No config defaults found in store' in str(ex):
             return 1
@@ -487,9 +485,7 @@ def create_vm_from_defaults(
     # Persist the new VM record
     if not dry_run:
         prev_active_vm = (
-            profile.active_vm
-            if profile is not None
-            else reg.active_vm
+            profile.active_vm if profile is not None else reg.active_vm
         )
         set_active = set_default
         if not set_active and not yes and prev_active_vm != cfg.vm.name:

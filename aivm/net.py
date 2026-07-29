@@ -61,9 +61,7 @@ def ensure_network(
     prefix = subnet_net.prefixlen
 
     if len(bridge) > 15:
-        raise AIVMError(
-            f'Bridge name too long ({len(bridge)} > 15): {bridge}'
-        )
+        raise AIVMError(f'Bridge name too long ({len(bridge)} > 15): {bridge}')
 
     overlap = _route_overlap(subnet)
     if overlap:

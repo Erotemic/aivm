@@ -15,6 +15,7 @@ from .guest_tools import GUEST_TOOL_REGISTRY
 
 log = logger
 
+
 def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     log.debug('Provisioning VM with developer tools')
     if not cfg.provision.enabled:

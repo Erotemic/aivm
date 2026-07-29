@@ -601,9 +601,7 @@ class ApprovedActionScope:
 
     def __enter__(self) -> None:
         already_approved = bool(
-            self.yes
-            or self.manager.yes
-            or self.manager._approve_all_remaining
+            self.yes or self.manager.yes or self.manager._approve_all_remaining
         )
         if not already_approved:
             if not sys.stdin.isatty():
@@ -1579,10 +1577,7 @@ class CommandManager:
             if (
                 plan.approved
                 and idx >= plan.approved_command_count
-                and (
-                    item.spec.sudo
-                    or self._is_confirmable_write(item.spec)
-                )
+                and (item.spec.sudo or self._is_confirmable_write(item.spec))
             ):
                 # This command was appended after the step cleared approval
                 # (e.g. a sudo escalation fallback), so the plan prompt never
@@ -1770,9 +1765,7 @@ class CommandManager:
             # Bump before running so probe caches are invalidated even if
             # the mutation fails partway through.
             self.mutation_generation += 1
-        if not within_plan and (
-            spec.sudo or self._is_confirmable_write(spec)
-        ):
+        if not within_plan and (spec.sudo or self._is_confirmable_write(spec)):
             self._confirm_loose_command(spec, _stacklevel=_stacklevel + 1)
         # Whether privilege is actually spent, not merely offered: under
         # privilege_mode='as-needed' a caller passes sudo=True speculatively,

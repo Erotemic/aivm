@@ -24,7 +24,12 @@ from tests.helpers import resolved_test_context
 
 
 def _scrub_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ('SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'VSCODE_IPC_HOOK_CLI'):
+    for var in (
+        'SSH_CONNECTION',
+        'SSH_CLIENT',
+        'SSH_TTY',
+        'VSCODE_IPC_HOOK_CLI',
+    ):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -32,7 +37,9 @@ def test_vscode_can_open_locally_when_local_and_code_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _scrub_env(monkeypatch)
-    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.which', lambda name: '/usr/bin/code'
+    )
     can, reason = _vscode_can_open_locally()
     assert can is True
     assert reason is None
@@ -46,7 +53,9 @@ def test_vscode_skipped_when_ssh_connection_set(
     _scrub_env(monkeypatch)
     monkeypatch.setenv('SSH_CONNECTION', '10.0.0.1 22 10.0.0.2 49152')
     # `which('code')` could return either; SSH should take precedence.
-    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.which', lambda name: '/usr/bin/code'
+    )
     can, reason = _vscode_can_open_locally()
     assert can is False
     assert 'SSH_CONNECTION' in (reason or '')
@@ -65,7 +74,9 @@ def test_vscode_skipped_when_inside_vscode_terminal_over_ssh(
     _scrub_env(monkeypatch)
     monkeypatch.setenv('SSH_CONNECTION', '10.0.0.1 22 10.0.0.2 49152')
     monkeypatch.setenv('VSCODE_IPC_HOOK_CLI', '/run/user/1000/vscode-ipc.sock')
-    monkeypatch.setattr('aivm.cli.vm_connect.which', lambda name: '/usr/bin/code')
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.which', lambda name: '/usr/bin/code'
+    )
     can, reason = _vscode_can_open_locally()
     assert can is False
     assert 'SSH_CONNECTION' in (reason or '')
@@ -166,7 +177,10 @@ def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
     # New session command runs `code tunnel` in the share dir.
     assert f'tmux new-session -d -s {_TUNNEL_TMUX_SESSION}' in script
     assert 'cd /home/agent/code/aivm' in script
-    assert 'code tunnel --name aivm-2404-builder --accept-server-license-terms' in script
+    assert (
+        'code tunnel --name aivm-2404-builder --accept-server-license-terms'
+        in script
+    )
     # Tunnel session name is the constant — must not vary by VM/host name.
     assert _TUNNEL_TMUX_SESSION == 'aivm-tunnel'
 
@@ -174,7 +188,7 @@ def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
 def test_build_tunnel_remote_script_quotes_unusual_paths() -> None:
     """Spaces or shell metachars in the share path must not break the script."""
     script = _build_tunnel_remote_script(
-        guest_path="/home/agent/projects/has space; rm -rf /tmp",
+        guest_path='/home/agent/projects/has space; rm -rf /tmp',
         tunnel_name='aivm-2404-builder',
     )
     # The path appears only as a single shell-quoted argument to ``cd``.

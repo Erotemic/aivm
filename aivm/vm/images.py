@@ -82,7 +82,8 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
         out = (
             CommandManager.current()
             .run(
-                ['sha256sum', str(file_path)], role='read',
+                ['sha256sum', str(file_path)],
+                role='read',
                 check=True,
                 capture=True,
             )
@@ -139,7 +140,8 @@ def _verify_image_sha256(
     actual = out.strip().split()[0].lower() if out.strip() else ''
     if actual != expected_sha256:
         mgr.submit(
-            ['rm', '-f', str(image_path)], ownership='tool',
+            ['rm', '-f', str(image_path)],
+            ownership='tool',
             sudo=path_needs_sudo(image_path),
             role='modify',
             check=False,
@@ -261,7 +263,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                 approval_scope=f'image-fetch:{cfg.vm.name}',
             ):
                 mkdir_handle = mgr.submit(
-                    ['mkdir', '-p', str(p['img_dir'])], ownership='tool',
+                    ['mkdir', '-p', str(p['img_dir'])],
+                    ownership='tool',
                     sudo=use_sudo,
                     role='modify',
                     check=True,
@@ -270,7 +273,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     detail=f'target={p["img_dir"]}',
                 )
                 cleanup_tmp_handle = mgr.submit(
-                    ['rm', '-f', str(tmp_img)], ownership='tool',
+                    ['rm', '-f', str(tmp_img)],
+                    ownership='tool',
                     sudo=use_sudo,
                     role='modify',
                     check=False,
@@ -292,7 +296,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     ]
                 )
                 transfer_handle = mgr.submit(
-                    transfer_cmd, ownership='tool',
+                    transfer_cmd,
+                    ownership='tool',
                     sudo=use_sudo,
                     role='modify',
                     check=True,
@@ -309,7 +314,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                     ),
                 )
                 move_handle = mgr.submit(
-                    ['mv', '-f', str(tmp_img), str(base_img)], ownership='tool',
+                    ['mv', '-f', str(tmp_img), str(base_img)],
+                    ownership='tool',
                     sudo=use_sudo,
                     role='modify',
                     check=True,
@@ -346,7 +352,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         )
         if expected_sha256 and actual != expected_sha256:
             mgr.submit(
-                ['rm', '-f', str(base_img)], ownership='tool',
+                ['rm', '-f', str(base_img)],
+                ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=False,

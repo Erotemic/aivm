@@ -23,6 +23,7 @@ from .images import fetch_image
 
 log = logger
 
+
 def build_virt_install_cmd(
     cfg: AgentVMConfig,
     *,
@@ -92,16 +93,20 @@ def build_virt_install_cmd(
     cmd += ['--boot', boot_opts]
     return cmd
 
+
 def _is_missing_uefi_firmware_error(ex: Exception) -> bool:
     text = str(ex).lower()
     return "did not find any uefi binary path for arch 'x86_64'" in text
 
+
 def _is_missing_virtiofsd_error(ex: Exception) -> bool:
     return 'unable to find a satisfying virtiofsd' in str(ex).lower()
+
 
 def _is_guest_memory_allocation_error(ex: Exception) -> bool:
     text = str(ex).lower()
     return "cannot set up guest memory 'pc.ram': cannot allocate memory" in text
+
 
 def _is_missing_kvm_error(ex: Exception) -> bool:
     """Detect creates that fell back to TCG because /dev/kvm is unusable.
@@ -115,6 +120,7 @@ def _is_missing_kvm_error(ex: Exception) -> bool:
         or "cpu mode 'host-passthrough' for x86_64 qemu domain" in text
     )
 
+
 def _missing_kvm_failure_message() -> str:
     return (
         'VM creation failed because KVM hardware acceleration is not '
@@ -125,6 +131,7 @@ def _missing_kvm_failure_message() -> str:
         '`wsl --shutdown`.'
     )
 
+
 def _virtiofsd_failure_message(source_dir: str) -> str:
     return (
         'VM creation failed because virtiofsd is not available on this host, '
@@ -134,6 +141,7 @@ def _virtiofsd_failure_message(source_dir: str) -> str:
         'folder sharing for this run.'
     )
 
+
 def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
     return (
         'VM creation failed because QEMU could not allocate guest RAM on the host.\n'
@@ -141,6 +149,7 @@ def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
         'This is common on nested/low-memory hosts. Try lowering VM resources '
         '(for example ram_mb=2048 and cpus=2) and retry.'
     )
+
 
 def _failed_command_name(ex: Exception) -> str | None:
     if isinstance(ex, FileNotFoundError):
@@ -159,6 +168,7 @@ def _failed_command_name(ex: Exception) -> str | None:
         return parts[1]
     return parts[0]
 
+
 def _is_missing_command_error(ex: Exception) -> bool:
     if isinstance(ex, FileNotFoundError):
         return True
@@ -168,6 +178,7 @@ def _is_missing_command_error(ex: Exception) -> bool:
         return True
     text = f'{ex.result.stderr}\n{ex.result.stdout}'.lower()
     return 'command not found' in text
+
 
 def create_or_start_vm(
     cfg: AgentVMConfig,
@@ -208,9 +219,7 @@ def create_or_start_vm(
                 'verify that repository credentials have been revoked.'
             )
         store = load_store(config_store_path)
-        require_vm_credentials_released(
-            store, cfg.vm.name, action='recreated'
-        )
+        require_vm_credentials_released(store, cfg.vm.name, action='recreated')
     cfg = cfg.expanded_paths()
     mgr = CommandManager.current()
 
@@ -374,9 +383,7 @@ def create_or_start_vm(
         if first.code != 0:
             err = CmdError(cmd, first)
             if source_dir and _is_missing_virtiofsd_error(err):
-                raise AIVMError(
-                    _virtiofsd_failure_message(source_dir)
-                ) from err
+                raise AIVMError(_virtiofsd_failure_message(source_dir)) from err
             if _is_guest_memory_allocation_error(err):
                 raise AIVMError(
                     _memory_allocation_failure_message(cfg)
@@ -395,7 +402,10 @@ def create_or_start_vm(
                     pass
                 try:
                     CommandManager.current().run(
-                        cmd_no_uefi, sudo=virsh_needs_sudo(), check=True, capture=True
+                        cmd_no_uefi,
+                        sudo=virsh_needs_sudo(),
+                        check=True,
+                        capture=True,
                     )
                 except CmdError as ex2:
                     if source_dir and _is_missing_virtiofsd_error(ex2):

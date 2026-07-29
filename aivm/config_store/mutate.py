@@ -242,9 +242,7 @@ def upsert_principal(reg: Store, principal: PrincipalEntry) -> None:
     reg.schema_version = max(reg.schema_version, 9)
 
 
-def remove_principal(
-    reg: Store, *, vm_name: str, principal_id: str
-) -> bool:
+def remove_principal(reg: Store, *, vm_name: str, principal_id: str) -> bool:
     original = len(reg.principals)
     reg.principals = [
         item

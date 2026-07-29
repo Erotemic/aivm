@@ -99,7 +99,6 @@ def guest_ssh_env(monkeypatch: pytest.MonkeyPatch) -> None:
     activate_manager(monkeypatch)
 
 
-
 def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Answer the write-approval prompt and return what the user was shown.
 
@@ -130,6 +129,7 @@ def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         commands_mod.CommandManager, '_confirm_unprivileged_mutation', spy
     )
     return messages
+
 
 def test_upsert_host_git_remote_adds_remote(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

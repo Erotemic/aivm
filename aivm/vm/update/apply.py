@@ -13,9 +13,7 @@ from .util import _bytes_to_gib
 from .virtiofs import _apply_virtiofs_binary_drift
 
 
-def _disk_resize_error(
-    drift: VMUpdateDrift, ex: CommandError
-) -> AIVMError:
+def _disk_resize_error(drift: VMUpdateDrift, ex: CommandError) -> AIVMError:
     """Translate a raw ``qemu-img resize`` failure into a domain error.
 
     The most common failure is a ``"write" lock`` contention: qemu-img cannot
@@ -80,9 +78,7 @@ def _apply_vm_update(
     if drift.ram_mb is not None:
         _, want = drift.ram_mb
         kib = int(want) * 1024
-        max_cmd = virsh_cmd(
-            'setmaxmem', cfg.vm.name, str(kib), '--config'
-        )
+        max_cmd = virsh_cmd('setmaxmem', cfg.vm.name, str(kib), '--config')
         mem_cmd = virsh_cmd('setmem', cfg.vm.name, str(kib), '--config')
         if dry_run:
             print(f'DRYRUN: {" ".join(max_cmd)}')

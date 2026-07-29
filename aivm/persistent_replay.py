@@ -650,6 +650,7 @@ def persistent_host_replay_python() -> str:
         """
     )
 
+
 def _systemd_exec_arg(value: str) -> str:
     if '\n' in value or '\r' in value:
         raise ValueError('systemd arguments must not contain newlines')

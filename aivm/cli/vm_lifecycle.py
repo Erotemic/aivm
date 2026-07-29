@@ -49,9 +49,7 @@ class VMUpCLI(_BaseCommand):
     recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -96,17 +94,13 @@ class VMUpCLI(_BaseCommand):
 class VMDownCLI(_BaseCommand):
     """Gracefully shut down the VM."""
 
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
-        announce_vm_machine_impact(
-            cfg_path, cfg.vm.name, action='shut down'
-        )
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='shut down')
         mgr = CommandManager.current()
         with mgr.intent(
             f'Shut down VM {cfg.vm.name}',
@@ -120,17 +114,13 @@ class VMDownCLI(_BaseCommand):
 class VMRestartCLI(_BaseCommand):
     """Gracefully restart the VM (shutdown then start)."""
 
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
-        announce_vm_machine_impact(
-            cfg_path, cfg.vm.name, action='restart'
-        )
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='restart')
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',
@@ -153,9 +143,7 @@ class VMCreateCLI(_BaseCommand):
         False,
         help='Overwrite existing VM entry and recreate VM definition if present.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -204,9 +192,7 @@ class VMDeleteCLI(_BaseCommand):
         position=1,
         help='Optional VM name override (positional).',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -226,9 +212,7 @@ class VMDeleteCLI(_BaseCommand):
                 return 0
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         scope = resolve_store_scope(str(cfg_path))
-        announce_vm_machine_impact(
-            cfg_path, cfg.vm.name, action='delete'
-        )
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='delete')
         mgr = CommandManager.current()
         with mgr.approved_action(
             purpose=(
@@ -268,9 +252,7 @@ class VMProvisionCLI(_BaseCommand):
         '',
         help='Optional VM name override.',
     )
-    dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
-    )
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

@@ -177,7 +177,9 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     save_store(store, cfg_path, reason='pin base_dir')
     before = cfg_path.read_bytes()
 
-    rc = HostPermissionsSetupCLI.main(argv=False, config=str(cfg_path), yes=True)
+    rc = HostPermissionsSetupCLI.main(
+        argv=False, config=str(cfg_path), yes=True
+    )
 
     assert rc == 0
     assert cfg_path.read_bytes() == before
@@ -437,7 +439,7 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
     assert 'os.walk' in script
     assert '/proc/self/mountinfo' in script
-    assert "followlinks=False" in script
+    assert 'followlinks=False' in script
     assert str(tree) in script
     # The handoff runs escalated, between shutdown and restart.
     raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]

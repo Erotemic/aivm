@@ -78,7 +78,10 @@ def validate_attachment_owner(reg: Store, attachment: AttachmentEntry) -> None:
         return
     if owner == SYSTEM_ATTACHMENT_OWNER:
         return
-    if find_principal(reg, vm_name=attachment.vm_name, principal_id=owner) is None:
+    if (
+        find_principal(reg, vm_name=attachment.vm_name, principal_id=owner)
+        is None
+    ):
         raise AIVMError(
             f'Attachment for VM {attachment.vm_name!r} references unknown '
             f'owner principal {owner!r}.'

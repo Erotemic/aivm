@@ -289,7 +289,7 @@ def test_domain_storage_capture_rejects_non_file_disk(
     """Deletion must not proceed when libvirt storage cannot be enumerated."""
     activate_manager(monkeypatch)
     monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
-    xml = '''
+    xml = """
     <domain>
       <devices>
         <disk type="block" device="disk">
@@ -297,10 +297,8 @@ def test_domain_storage_capture_rejects_non_file_disk(
         </disk>
       </devices>
     </domain>
-    '''
-    command_recorder(
-        monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')}
-    )
+    """
+    command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
 
     with pytest.raises(AIVMError, match='non-file or otherwise unverifiable'):
         domain_file_storage_paths('vm-block-storage')
@@ -347,7 +345,9 @@ def test_domain_undefine_refuses_changed_explicit_storage_inventory(
     )
     rec = command_recorder(monkeypatch, {})
 
-    with pytest.raises(AIVMError, match='storage inventory changed before undefine'):
+    with pytest.raises(
+        AIVMError, match='storage inventory changed before undefine'
+    ):
         _destroy_and_undefine_vm(
             'vm-storage-changed',
             storage_paths=(Path('/tmp/original.qcow2'),),

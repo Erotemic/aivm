@@ -291,7 +291,9 @@ class CommandRecorder:
 
     def route(self, prefix: Any, result: Route) -> 'CommandRecorder':
         """Add or override a route; returns self so calls can chain."""
-        key = tuple(prefix.split()) if isinstance(prefix, str) else tuple(prefix)
+        key = (
+            tuple(prefix.split()) if isinstance(prefix, str) else tuple(prefix)
+        )
         self._routes = [(p, r) for (p, r) in self._routes if p != key]
         self._routes.append((key, result))
         self._routes.sort(key=lambda item: len(item[0]), reverse=True)
@@ -329,8 +331,12 @@ class CommandRecorder:
 
     def only(self, *prefix: str) -> list[str]:
         """The single normalized command starting with ``prefix``."""
-        matches = [c for c in self.normalized if c[: len(prefix)] == list(prefix)]
-        assert len(matches) == 1, f'expected exactly one {prefix!r}: {matches!r}'
+        matches = [
+            c for c in self.normalized if c[: len(prefix)] == list(prefix)
+        ]
+        assert len(matches) == 1, (
+            f'expected exactly one {prefix!r}: {matches!r}'
+        )
         return matches[0]
 
 

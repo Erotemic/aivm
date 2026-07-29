@@ -152,9 +152,7 @@ class VMCredsAddCLI(_BaseCommand):
             default_host=default_host,
             manager=mgr,
         )
-        resolved_provider = providers.resolve_provider(
-            repo, requested_provider
-        )
+        resolved_provider = providers.resolve_provider(repo, requested_provider)
         kind = providers.kind_for_provider(resolved_provider)
         access = normalize_credential_access(args.access)
         cred_id = credential_id(cfg.vm.name, repo.canonical, principal_id)
@@ -373,7 +371,8 @@ class VMCredsSetupCLI(_BaseCommand):
         'origin', help='Git remote used when resolving a local checkout.'
     )
     check: bool = kwconf.Flag(
-        False, help='Only check readiness; do not install tools or authenticate.'
+        False,
+        help='Only check readiness; do not install tools or authenticate.',
     )
     dry_run: bool = kwconf.Flag(
         False, help='Print the setup actions without changing the host.'
@@ -461,7 +460,9 @@ class VMCredsSetupCLI(_BaseCommand):
             and report.auth_ok
             and report.repository_ok is False
         ):
-            print('  Remedy:            grant repository administration access.')
+            print(
+                '  Remedy:            grant repository administration access.'
+            )
             return 2
 
         needs_gh_upgrade = bool(
@@ -481,8 +482,7 @@ class VMCredsSetupCLI(_BaseCommand):
         if refreshed.missing_tools:
             raise AIVMError(
                 'Credential tool installation completed, but command(s) are '
-                'still unavailable: '
-                + ', '.join(refreshed.missing_tools)
+                'still unavailable: ' + ', '.join(refreshed.missing_tools)
             )
         if not refreshed.gh_supported:
             raise AIVMError(refreshed.auth_detail)
@@ -499,7 +499,9 @@ class VMCredsSetupCLI(_BaseCommand):
         print()
         _print_setup_report(final)
         if not final.ready:
-            print('  Remedy:            resolve the item above and rerun setup.')
+            print(
+                '  Remedy:            resolve the item above and rerun setup.'
+            )
             return 2
         print('Host credential prerequisites are ready.')
         return 0
@@ -530,14 +532,18 @@ class VMCredsListCLI(_BaseCommand):
         entries = find_credentials_for_vm(
             store, cfg.vm.name, principal_id=selected_principal
         )
-        view = 'machine-wide metadata' if args.all_principals else (
-            principal_id or 'legacy'
+        view = (
+            'machine-wide metadata'
+            if args.all_principals
+            else (principal_id or 'legacy')
         )
         print(f'Credentials for VM {cfg.vm.name} ({view})')
         if not entries:
             print('  (none)')
             return 0
-        print('  ID                OWNER                         ACCESS  STATE                 SCOPE')
+        print(
+            '  ID                OWNER                         ACCESS  STATE                 SCOPE'
+        )
         unregistered = False
         for entry in entries:
             scope_text = (
@@ -682,9 +688,7 @@ class VMCredsStatusCLI(_BaseCommand):
         print('  Branch rules: not managed by AIVM')
         if not entry.provider_managed:
             print(
-                describe_unregistered_credential(
-                    entry, entry_repository(entry)
-                )
+                describe_unregistered_credential(entry, entry_repository(entry))
             )
         return 0
 

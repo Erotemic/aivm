@@ -18,7 +18,11 @@ from aivm.config_store import (
     upsert_vm_with_network,
 )
 from aivm.errors import AIVMError
-from aivm.profile_store import UserProfileStore, load_user_profile, save_user_profile
+from aivm.profile_store import (
+    UserProfileStore,
+    load_user_profile,
+    save_user_profile,
+)
 from aivm.scoped_store import StoreScope, resolve_store_scope
 from aivm.vm.deletion import (
     VMDeletionJournal,
@@ -66,7 +70,12 @@ def _stub_external_cleanup(
     cfg: AgentVMConfig,
     calls: list[str],
 ) -> dict[str, bool]:
-    disk = Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / f'{cfg.vm.name}.qcow2'
+    disk = (
+        Path(cfg.paths.base_dir)
+        / cfg.vm.name
+        / 'images'
+        / f'{cfg.vm.name}.qcow2'
+    )
     domain_state = {'defined': True}
     monkeypatch.setattr(
         'aivm.vm.deletion.domain_is_defined',
@@ -83,6 +92,7 @@ def _stub_external_cleanup(
         'aivm.vm.deletion.discard_released_credential_material',
         lambda *a, **k: calls.append('credentials'),
     )
+
     def remove_domain(*args: object, **kwargs: object) -> DomainRemovalReport:
         calls.append('domain')
         domain_state['defined'] = False
@@ -132,7 +142,12 @@ def test_vm_deletion_retry_skips_completed_external_phases(
         if failures:
             failures -= 1
             raise RuntimeError('simulated domain interruption')
-        disk = Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / f'{cfg.vm.name}.qcow2'
+        disk = (
+            Path(cfg.paths.base_dir)
+            / cfg.vm.name
+            / 'images'
+            / f'{cfg.vm.name}.qcow2'
+        )
         domain_state['defined'] = False
         return DomainRemovalReport((disk,), ())
 
@@ -285,17 +300,16 @@ def test_vm_deletion_resume_refuses_changed_domain_storage(
     journal.mark('credentials-cleaned')
     _save_journal(_journal_path(scope, cfg), journal, scope)
     changed_disk = (
-        Path(cfg.paths.base_dir)
-        / cfg.vm.name
-        / 'images'
-        / 'replacement.qcow2'
+        Path(cfg.paths.base_dir) / cfg.vm.name / 'images' / 'replacement.qcow2'
     )
     monkeypatch.setattr(
         'aivm.vm.deletion.domain_file_storage_paths',
         lambda name: (changed_disk,),
     )
 
-    with pytest.raises(AIVMError, match='storage changed after its deletion journal'):
+    with pytest.raises(
+        AIVMError, match='storage changed after its deletion journal'
+    ):
         delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
 
     assert calls == []
@@ -359,9 +373,7 @@ def test_vm_deletion_recovers_crash_after_final_store_write(
         delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
 
     assert find_vm(load_store(cfg_path), cfg.vm.name) is None
-    journal = module.complete_missing_vm_deletion(
-        scope, cfg_path, cfg.vm.name
-    )
+    journal = module.complete_missing_vm_deletion(scope, cfg_path, cfg.vm.name)
     assert journal is not None
     assert journal.status == 'complete'
     assert journal.completed('store-finalized')

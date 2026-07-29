@@ -71,7 +71,9 @@ def test_status_falls_back_when_store_defines_no_vms(
     store.write_text('schema_version = 7\n', encoding='utf-8')
     rc = StatusCLI.main(argv=False, config=str(store))
     assert rc == 0
-    assert 'No VM context resolved for this directory.' in capsys.readouterr().out
+    assert (
+        'No VM context resolved for this directory.' in capsys.readouterr().out
+    )
 
 
 def test_global_status_reports_the_requested_store(

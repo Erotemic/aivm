@@ -19,9 +19,7 @@ from tests.helpers import run_cli
     [
         pytest.param(['help', 'plan', '--yes'], id='help-plan'),
         pytest.param(['help', 'tree', '--yes'], id='help-tree'),
-        pytest.param(
-            ['help', 'completion', '--yes'], id='help-completion'
-        ),
+        pytest.param(['help', 'completion', '--yes'], id='help-completion'),
         pytest.param(
             ['host', 'net', 'create', '--yes', '--dry_run'],
             id='host-net-create',
@@ -38,16 +36,12 @@ from tests.helpers import run_cli
             ['host', 'fw', 'remove', '--yes', '--dry_run'],
             id='host-fw-remove',
         ),
-        pytest.param(
-            ['vm', 'wait_ip', '--yes', '--dry_run'], id='vm-wait_ip'
-        ),
+        pytest.param(['vm', 'wait_ip', '--yes', '--dry_run'], id='vm-wait_ip'),
         pytest.param(
             ['vm', 'flush_caches', '--yes', '--dry_run'],
             id='vm-flush_caches',
         ),
-        pytest.param(
-            ['vm', 'delete', '--yes', '--dry_run'], id='vm-delete'
-        ),
+        pytest.param(['vm', 'delete', '--yes', '--dry_run'], id='vm-delete'),
         pytest.param(
             ['vm', 'provision', '--yes', '--dry_run'], id='vm-provision'
         ),

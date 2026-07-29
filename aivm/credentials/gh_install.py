@@ -34,7 +34,9 @@ from ..host import (
 GH_INSTALL_DOCS = 'https://github.com/cli/cli/blob/trunk/docs/install_linux.md'
 
 _GH_APT_KEYRING = '/etc/apt/keyrings/githubcli-archive-keyring.gpg'
-_GH_APT_KEY_URL = 'https://cli.github.com/packages/githubcli-archive-keyring.gpg'
+_GH_APT_KEY_URL = (
+    'https://cli.github.com/packages/githubcli-archive-keyring.gpg'
+)
 _GH_APT_SOURCE = '/etc/apt/sources.list.d/github-cli.list'
 _GH_RPM_REPO = 'https://cli.github.com/packages/rpm/gh-cli.repo'
 

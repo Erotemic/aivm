@@ -93,9 +93,7 @@ def test_adopt_restarts_stopped_vm_after_handoff_failure(
     monkeypatch.setattr(
         'aivm.cli.host_permissions._wait_for_vm_state', lambda *a, **k: None
     )
-    monkeypatch.setattr(
-        'aivm.cli.host_permissions._start_vm', restarted.append
-    )
+    monkeypatch.setattr('aivm.cli.host_permissions._start_vm', restarted.append)
 
     class FailingManager:
         def step(

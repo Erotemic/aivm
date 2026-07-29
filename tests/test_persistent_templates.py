@@ -59,7 +59,9 @@ def test_persistent_replay_service_unit_waits_for_guest_manifest() -> None:
 
     unit = persistent_replay_service_unit()
 
-    assert f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    assert (
+        f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    )
 
 
 def test_persistent_host_replay_service_unit_renders_values() -> None:

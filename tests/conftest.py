@@ -121,6 +121,4 @@ def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     behave exactly like 'always' in tests; privilege-specific tests override this
     fixture explicitly.
     """
-    monkeypatch.setattr(
-        'aivm.privilege.libvirt_without_sudo_ok', lambda: False
-    )
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', lambda: False)

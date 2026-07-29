@@ -29,8 +29,12 @@ def _select_host_principal(
         'getuser',
         lambda: principal.host_user,
     )
-    monkeypatch.setattr(legacy_context_mod, '_host_uid', lambda: principal.host_uid)
-    monkeypatch.setattr(legacy_context_mod, '_host_gid', lambda: principal.host_gid)
+    monkeypatch.setattr(
+        legacy_context_mod, '_host_uid', lambda: principal.host_uid
+    )
+    monkeypatch.setattr(
+        legacy_context_mod, '_host_gid', lambda: principal.host_gid
+    )
 
 
 def test_two_user_stores_resolve_one_machine_and_distinct_principals(
@@ -69,7 +73,10 @@ def test_two_user_stores_resolve_one_machine_and_distinct_principals(
     assert alice.profile.ssh_identity_file != bob.profile.ssh_identity_file
 
     for principal in (scenario.alice, scenario.bob):
-        assert principal.config_path.read_bytes() == original_bytes[principal.host_user]
+        assert (
+            principal.config_path.read_bytes()
+            == original_bytes[principal.host_user]
+        )
 
 
 def test_prepared_sessions_keep_selected_principal_end_to_end(
@@ -119,7 +126,9 @@ def test_prepared_sessions_keep_selected_principal_end_to_end(
         assert session.cfg is session.context.effective_cfg
 
     assert sessions['alice'].context.machine == sessions['bob'].context.machine
-    assert sessions['alice'].context.principal != sessions['bob'].context.principal
+    assert (
+        sessions['alice'].context.principal != sessions['bob'].context.principal
+    )
 
 
 def test_released_shadow_stores_expose_partial_attachment_inventory(

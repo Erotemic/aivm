@@ -40,9 +40,7 @@ from aivm.status import ProbeOutcome, render_global_status
 
 
 def _principal(vm_name: str, owner: str, host_user: str) -> PrincipalEntry:
-    host_id = {'alice': 1001, 'bob': 1002, 'carol': 1003}.get(
-        host_user, 1099
-    )
+    host_id = {'alice': 1001, 'bob': 1002, 'carol': 1003}.get(host_user, 1099)
     return PrincipalEntry(
         id=owner,
         vm_name=vm_name,
@@ -372,9 +370,7 @@ def test_saved_session_attachments_are_principal_scoped(
     path = tmp_path / 'config.toml'
     save_store_split(reg, path)
 
-    saved = _saved_vm_attachments(
-        cfg, path, owner_principal_id=alice.id
-    )
+    saved = _saved_vm_attachments(cfg, path, owner_principal_id=alice.id)
     assert [item.source_dir for item in saved] == [str(alice_src.resolve())]
     assert saved[0].owner_principal_id == alice.id
 
