@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -144,13 +145,46 @@ def _destroy_and_undefine_vm(
     storage_paths: tuple[Path, ...] | None = None,
 ) -> DomainRemovalReport:
     """Remove one domain without ever falling back to retained storage."""
+    expected = None if storage_paths is None else tuple(storage_paths)
     captured = (
         domain_file_storage_paths(name)
-        if storage_paths is None
-        else tuple(storage_paths)
+        if expected is None
+        else expected
     )
+
+    def require_expected_inventory() -> None:
+        if expected is None:
+            return
+        current = domain_file_storage_paths(name)
+        expected_names = {
+            os.path.abspath(os.fspath(path)) for path in expected
+        }
+        current_names = {
+            os.path.abspath(os.fspath(path)) for path in current
+        }
+        if current_names != expected_names:
+            added = sorted(current_names - expected_names)
+            removed = sorted(expected_names - current_names)
+            details: list[str] = []
+            if added:
+                details.append(
+                    'new live domain disks:\n'
+                    + '\n'.join(f'  - {item}' for item in added)
+                )
+            if removed:
+                details.append(
+                    'expected disks no longer present:\n'
+                    + '\n'.join(f'  - {item}' for item in removed)
+                )
+            raise AIVMError(
+                f'VM {name!r} storage inventory changed before undefine. '
+                'Refusing --remove-all-storage.\n'
+                + '\n'.join(details)
+            )
+
     mgr = CommandManager.current()
     if _vm_defined(name):
+        require_expected_inventory()
         mgr.run(
             virsh_cmd('destroy', name),
             sudo=virsh_needs_sudo(),
@@ -158,6 +192,11 @@ def _destroy_and_undefine_vm(
             check=False,
             capture=True,
         )
+        if _vm_defined(name):
+            # The journal comparison is repeated after shutdown, immediately
+            # before storage-removing undefine attempts. This catches disks
+            # attached during an interrupted or concurrent deletion window.
+            require_expected_inventory()
         # Different libvirt states require different metadata flags, but every
         # attempt retains --remove-all-storage. Silently retrying without that
         # flag destroys the only record that identifies orphaned disks.

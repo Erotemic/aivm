@@ -563,3 +563,31 @@ privileged E2E remain for the consumer environment because this sandbox lacks
 `kwconf` and the configured checker executables. The highest-risk remaining
 uncertainty is how a live virtiofs server behaves during lazy detach; the E2E
 full-cycle detach is the authoritative validation.
+
+## 2026-07-29 10:34:00 -0400
+
+Addressed a review centered on the places where recovery code can be more
+hazardous than the original failure. The mount-tree cleanup was treating any
+nonzero `findmnt` result as an empty inventory, so it now distinguishes an
+already-absent deletion root and otherwise fails closed before `rm -rf`. I was
+initially tempted to rely only on the deletion caller for disk revalidation,
+but that would leave the lower-level explicit-storage API unsafe for future
+callers. Both the journal service and the domain helper now compare the live
+file-backed disk set immediately before storage-removing undefine work.
+
+Migration rollback required the largest conceptual change. A backup is not
+necessarily permission to restore: released stores and persistent-state
+sources are evidence retained for diagnosis, while only migration-owned
+outputs are rollback targets. Each successful apply phase now records the
+exact digest and existence state it produced. Rollback performs a global
+preflight before changing anything, skips evidence-only inputs entirely, and
+refuses targets that no longer match either their original state or the known
+migration-produced state. If an apply phase crashes after a partial write but
+before its output can be fingerprinted, rollback intentionally stops for
+manual recovery rather than guessing.
+
+Focused deletion, domain, and legacy migration suites pass (39 tests). Running
+the complete non-E2E suite as an ordinary host user with the supplied kwconf
+source passes 989 tests with 8 skips. The remaining validation risk is static
+checking (`ty`/mypy), whose executables are not available here, so the overlay
+consumer should run the normal checker commands before committing.

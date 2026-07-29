@@ -277,6 +277,72 @@ def test_rollback_restores_pre_migration_paths(tmp_path: Path) -> None:
     assert rolled.transaction_dir.joinpath('state.json').exists()
 
 
+def test_rollback_never_rewrites_evidence_only_inputs(tmp_path: Path) -> None:
+    source, _vm_name, _cred, persistent_source = _legacy_source(tmp_path)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    source.path.write_text(
+        source.path.read_text(encoding='utf-8') + '\n# operator edit\n',
+        encoding='utf-8',
+    )
+    persistent_file = persistent_source / 'persistent-attachments.json'
+    persistent_file.write_text('{"operator": true}\n', encoding='utf-8')
+
+    rolled = rollback_migration(result.journal.migration_id, layout=layout)
+
+    assert rolled.journal.status == 'rolled-back'
+    assert '# operator edit' in source.path.read_text(encoding='utf-8')
+    assert persistent_file.read_text(encoding='utf-8') == '{"operator": true}\n'
+    evidence = {
+        item.role: item.disposition
+        for item in rolled.journal.backups
+        if item.role in {'legacy-store-input', 'persistent-input'}
+    }
+    assert evidence == {
+        'legacy-store-input': 'evidence_only',
+        'persistent-input': 'evidence_only',
+    }
+
+
+def test_rollback_refuses_changed_target_before_mutating_any_target(
+    tmp_path: Path,
+) -> None:
+    source, _vm_name, _cred, _state = _legacy_source(tmp_path)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+    persistent_target = Path(str(plan.persistent_state_moves[0]['target']))
+    changed = persistent_target / 'concurrent-edit.txt'
+    changed.write_text('do not overwrite\n', encoding='utf-8')
+
+    with pytest.raises(
+        MigrationExecutionError,
+        match='changed after migration wrote it',
+    ):
+        rollback_migration(result.journal.migration_id, layout=layout)
+
+    # Global preflight must discover the conflict before removing any other
+    # machine/profile/credential target.
+    assert layout.config_path.exists()
+    assert changed.read_text(encoding='utf-8') == 'do not overwrite\n'
+    failed = load_migration_journal(
+        result.journal.migration_id,
+        layout=layout,
+    )
+    assert failed.journal.status == 'rollback-failed'
+
+
 
 def test_preexisting_private_target_uses_private_verified_backup(
     tmp_path: Path,

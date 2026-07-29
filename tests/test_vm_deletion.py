@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from aivm.commands import CommandManager, CommandResult
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     Store,
@@ -21,6 +22,8 @@ from aivm.profile_store import UserProfileStore, load_user_profile, save_user_pr
 from aivm.scoped_store import StoreScope, resolve_store_scope
 from aivm.vm.deletion import (
     VMDeletionJournal,
+    _assert_no_mounts_below,
+    _cleanup_owned_trees,
     _journal_path,
     _new_journal,
     _save_journal,
@@ -173,6 +176,133 @@ def test_vm_deletion_retains_journal_for_external_storage(
     assert str(external) in journal_text
     assert 'outside its AIVM-managed tree' in journal_text
     assert 'Refusing deletion before changing' in journal_text
+
+
+def test_vm_tree_cleanup_fails_closed_when_findmnt_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vm_base = tmp_path / 'vm-base'
+    vm_base.mkdir()
+    commands: list[list[str]] = []
+
+    def fake_run(
+        self: CommandManager,
+        cmd: list[str],
+        **kwargs: object,
+    ) -> CommandResult:
+        del self, kwargs
+        commands.append(list(cmd))
+        if cmd and cmd[0] == 'findmnt':
+            return CommandResult(2, '', 'findmnt inspection failed')
+        if cmd[:3] == ['env', 'LC_ALL=C', 'stat']:
+            return CommandResult(0, '', '')
+        raise AssertionError(f'unexpected destructive command: {cmd!r}')
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+    journal = VMDeletionJournal(
+        schema_version=1,
+        vm_name='vm-findmnt-failure',
+        config_path=str(tmp_path / 'config.toml'),
+        storage_paths=[],
+        vm_base_dir=str(vm_base),
+        machine_state_dir='',
+        bootstrap_dir='',
+    )
+
+    with pytest.raises(AIVMError, match='Could not verify'):
+        _cleanup_owned_trees(journal)
+
+    assert all(cmd[0] != 'bash' for cmd in commands)
+    assert vm_base.exists()
+
+
+def test_vm_tree_cleanup_allows_confirmed_absent_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(
+        self: CommandManager,
+        cmd: list[str],
+        **kwargs: object,
+    ) -> CommandResult:
+        del self, kwargs
+        commands.append(list(cmd))
+        if cmd and cmd[0] == 'findmnt':
+            return CommandResult(1, '', '')
+        if cmd[:3] == ['env', 'LC_ALL=C', 'stat']:
+            return CommandResult(
+                1,
+                '',
+                "stat: cannot statx '/missing': No such file or directory",
+            )
+        raise AssertionError(f'unexpected destructive command: {cmd!r}')
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+    _assert_no_mounts_below(tmp_path / 'missing')
+
+    # The absent root is a no-op; no removal command is submitted.
+    assert all(cmd[0] != 'bash' for cmd in commands)
+
+
+def test_vm_tree_cleanup_does_not_confuse_missing_stat_with_missing_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        self: CommandManager,
+        cmd: list[str],
+        **kwargs: object,
+    ) -> CommandResult:
+        del self, kwargs
+        if cmd and cmd[0] == 'findmnt':
+            return CommandResult(127, '', 'findmnt: command not found')
+        if cmd[:3] == ['env', 'LC_ALL=C', 'stat']:
+            return CommandResult(
+                127,
+                '',
+                "env: 'stat': No such file or directory",
+            )
+        raise AssertionError(f'unexpected command: {cmd!r}')
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+
+    with pytest.raises(AIVMError, match='Could not inspect deletion root'):
+        _assert_no_mounts_below(tmp_path / 'vm-root')
+
+
+def test_vm_deletion_resume_refuses_changed_domain_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls: list[str] = []
+    _stub_external_cleanup(monkeypatch, cfg, calls)
+    journal = _new_journal(scope, cfg, cfg_path)
+    journal.mark('attachments-cleaned')
+    journal.mark('credentials-cleaned')
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+    changed_disk = (
+        Path(cfg.paths.base_dir)
+        / cfg.vm.name
+        / 'images'
+        / 'replacement.qcow2'
+    )
+    monkeypatch.setattr(
+        'aivm.vm.deletion.domain_file_storage_paths',
+        lambda name: (changed_disk,),
+    )
+
+    with pytest.raises(AIVMError, match='storage changed after its deletion journal'):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert calls == []
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is not None
+    persisted = _journal_path(scope, cfg).read_text(encoding='utf-8')
+    assert str(changed_disk) in persisted
+    assert 'remove-all-storage' in persisted
 
 
 def test_vm_deletion_retries_final_store_save_without_repeating_cleanup(

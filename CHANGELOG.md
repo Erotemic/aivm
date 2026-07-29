@@ -232,6 +232,15 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   under a header that called a read-only probe a hypervisor mutation.
 
 ### Fixed
+* Hardened destructive recovery against three fail-open/data-loss paths. VM
+  directory cleanup now refuses to run when mount enumeration fails; resumed
+  deletion recaptures the live libvirt disk inventory immediately before
+  `undefine --remove-all-storage` and stops if it differs from the journal;
+  and migration rollback now treats released stores and persistent sources as
+  evidence-only inputs. Rollback preflights every migration-owned target and
+  restores it only when its current digest still matches the exact state
+  produced by migration, preserving concurrent or operator edits for manual
+  recovery instead of overwriting them.
 * Fixed persistent host-bind removal on real Linux hosts. The replay helper no
   longer tries to unmount through an open descriptor for the mountpoint itself,
   which made `umount` report `EBUSY`. It closes that child descriptor, resolves

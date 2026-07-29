@@ -312,6 +312,10 @@ def test_domain_undefine_never_retries_without_storage_removal(
     """Every undefine attempt preserves the remove-all-storage contract."""
     activate_manager(monkeypatch)
     monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.vm.domain.domain_file_storage_paths',
+        lambda name: (Path('/tmp/vm.qcow2'),),
+    )
     rec = command_recorder(
         monkeypatch,
         {
@@ -330,3 +334,24 @@ def test_domain_undefine_never_retries_without_storage_removal(
     ]
     assert len(undefines) == 3
     assert all('--remove-all-storage' in cmd for cmd in undefines)
+
+
+def test_domain_undefine_refuses_changed_explicit_storage_inventory(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.vm.domain.domain_file_storage_paths',
+        lambda name: (Path('/tmp/replacement.qcow2'),),
+    )
+    rec = command_recorder(monkeypatch, {})
+
+    with pytest.raises(AIVMError, match='storage inventory changed before undefine'):
+        _destroy_and_undefine_vm(
+            'vm-storage-changed',
+            storage_paths=(Path('/tmp/original.qcow2'),),
+        )
+
+    assert not any(cmd[:2] == ['virsh', 'destroy'] for cmd in rec.normalized)
+    assert not any(cmd[:2] == ['virsh', 'undefine'] for cmd in rec.normalized)

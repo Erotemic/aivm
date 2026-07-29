@@ -446,6 +446,39 @@ def _assert_no_mounts_below(path: Path) -> None:
         capture=True,
         summary=f'Check for mounts beneath {path}',
     )
+    if result.code != 0:
+        # ``findmnt --target`` reports an absent path as status 1 without a
+        # useful diagnostic. Confirm that exact recovery case independently;
+        # every other inspection failure must stop destructive cleanup.
+        probe = CommandManager.current().run(
+            ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
+            sudo=path_needs_sudo(path),
+            role='read',
+            check=False,
+            capture=True,
+            summary=f'Confirm whether deletion root is absent: {path}',
+        )
+        probe_detail = (probe.stderr or probe.stdout or '').strip()
+        confirmed_absent = (
+            probe.code == 1
+            and probe_detail.startswith('stat: cannot stat')
+            and probe_detail.endswith('No such file or directory')
+        )
+        if confirmed_absent:
+            return
+        if probe.code != 0:
+            raise AIVMError(
+                f'Could not inspect deletion root {path} after mount '
+                f'enumeration failed: '
+                f'{probe_detail or f"stat exited with status {probe.code}"}. '
+                'Refusing to remove the VM directory.'
+            )
+        detail = (result.stderr or result.stdout or '').strip()
+        raise AIVMError(
+            f'Could not verify that no mounts remain beneath {path}: '
+            f'{detail or f"findmnt exited with status {result.code}"}. '
+            'Refusing to remove the VM directory.'
+        )
     targets = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     root = Path(os.path.abspath(os.fspath(path)))
     nested = []
@@ -462,6 +495,50 @@ def _assert_no_mounts_below(path: Path) -> None:
             f'Refusing to remove VM directory while mounts remain beneath '
             f'{path}:\n{rendered}'
         )
+
+
+def _revalidate_domain_storage_paths(
+    cfg: AgentVMConfig,
+    journal: VMDeletionJournal,
+) -> tuple[Path, ...]:
+    """Require the live domain disk inventory to match the durable journal."""
+    recorded = tuple(Path(item) for item in journal.storage_paths)
+    if not domain_is_defined(cfg.vm.name):
+        return recorded
+
+    current = tuple(domain_file_storage_paths(cfg.vm.name))
+    recorded_by_text = {
+        os.path.abspath(os.fspath(path)): path for path in recorded
+    }
+    current_by_text = {
+        os.path.abspath(os.fspath(path)): path for path in current
+    }
+    recorded_names = set(recorded_by_text)
+    current_names = set(current_by_text)
+    if recorded_names != current_names:
+        added = sorted(current_names - recorded_names)
+        removed = sorted(recorded_names - current_names)
+        details: list[str] = []
+        if added:
+            details.append(
+                'new live domain disks:\n'
+                + '\n'.join(f'  - {item}' for item in added)
+            )
+        if removed:
+            details.append(
+                'journaled disks no longer present in the domain:\n'
+                + '\n'.join(f'  - {item}' for item in removed)
+            )
+        raise AIVMError(
+            f'VM {cfg.vm.name!r} storage changed after its deletion journal '
+            'was created. Refusing `virsh undefine --remove-all-storage` '
+            'until an operator reviews the changed inventory.\n'
+            + '\n'.join(details)
+        )
+
+    for path in current:
+        _require_managed_storage_path(cfg, path)
+    return current
 
 
 def _cleanup_owned_trees(journal: VMDeletionJournal) -> None:
@@ -615,7 +692,10 @@ def delete_managed_vm(
                 )
 
             if not journal.completed('domain-and-storage-removed'):
-                storage_paths = tuple(Path(p) for p in journal.storage_paths)
+                # Recapture immediately before the storage-removing libvirt
+                # operation.  A resumed journal must not authorize disks that
+                # were attached or replaced after its original preflight.
+                storage_paths = _revalidate_domain_storage_paths(cfg, journal)
                 report = _destroy_and_undefine_vm(
                     cfg.vm.name, storage_paths=storage_paths
                 )

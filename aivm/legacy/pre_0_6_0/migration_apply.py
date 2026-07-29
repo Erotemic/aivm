@@ -15,7 +15,7 @@ import os
 import shlex
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal, cast
@@ -73,6 +73,7 @@ MigrationStatus = Literal[
     'rolled-back',
     'rollback-failed',
 ]
+BackupDisposition = Literal['evidence_only', 'restore_on_rollback']
 
 _APPLY_STEPS = (
     'backups-created',
@@ -99,6 +100,9 @@ class BackupRecord:
     existed: bool
     kind: Literal['missing', 'file', 'directory']
     sha256: str = ''
+    disposition: BackupDisposition = 'restore_on_rollback'
+    applied_existed: bool | None = None
+    applied_sha256: str = ''
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -117,13 +121,36 @@ class BackupRecord:
             raise MigrationExecutionError(
                 f'Invalid backup kind: {kind_raw!r}'
             )
+        role = str(raw.get('role', ''))
+        disposition_raw = str(raw.get('disposition', ''))
+        if not disposition_raw:
+            disposition_raw = (
+                'evidence_only'
+                if role in {'legacy-store-input', 'persistent-input'}
+                else 'restore_on_rollback'
+            )
+        if disposition_raw == 'evidence_only':
+            disposition: BackupDisposition = 'evidence_only'
+        elif disposition_raw == 'restore_on_rollback':
+            disposition = 'restore_on_rollback'
+        else:
+            raise MigrationExecutionError(
+                f'Invalid backup disposition: {disposition_raw!r}'
+            )
+        applied_value = raw.get('applied_existed')
+        applied_existed = (
+            applied_value if isinstance(applied_value, bool) else None
+        )
         return cls(
             original=str(raw.get('original', '')),
             backup=str(raw.get('backup', '')),
-            role=str(raw.get('role', '')),
+            role=role,
             existed=bool(raw.get('existed', False)),
             kind=kind,
             sha256=str(raw.get('sha256', '')),
+            disposition=disposition,
+            applied_existed=applied_existed,
+            applied_sha256=str(raw.get('applied_sha256', '')),
         )
 
 
@@ -618,7 +645,13 @@ def _remove_path(path: Path) -> None:
         path.unlink()
 
 
-def _backup_one(path: Path, *, role: str, backup_root: Path) -> BackupRecord:
+def _backup_one(
+    path: Path,
+    *,
+    role: str,
+    disposition: BackupDisposition,
+    backup_root: Path,
+) -> BackupRecord:
     original = path.expanduser().resolve()
     backup = _backup_path_for(original, backup_root)
     if not original.exists():
@@ -628,6 +661,7 @@ def _backup_one(path: Path, *, role: str, backup_root: Path) -> BackupRecord:
             role=role,
             existed=False,
             kind='missing',
+            disposition=disposition,
         )
     if original.is_symlink():
         raise MigrationExecutionError(f'Refusing symlinked migration path: {original}')
@@ -645,46 +679,90 @@ def _backup_one(path: Path, *, role: str, backup_root: Path) -> BackupRecord:
         existed=True,
         kind=kind,
         sha256=digest,
+        disposition=disposition,
     )
 
 
-def _machine_target_paths(plan: MigrationPlan) -> list[tuple[Path, str]]:
+def _machine_target_paths(
+    plan: MigrationPlan,
+) -> list[tuple[Path, str, BackupDisposition]]:
     store = plan.proposed_store
     if store is None:
         raise MigrationExecutionError('Migration plan lacks apply-phase machine data.')
     targets = split_fragment_paths(store, plan.target_machine_store)
-    paths: list[tuple[Path, str]] = [
-        (targets['root'], 'target-machine-root'),
-        (targets['defaults'], 'target-machine-defaults'),
-        (targets['networks'], 'target-machine-networks'),
-        (plan.target_machine_store.parent / 'vms', 'target-machine-vms'),
+    paths: list[tuple[Path, str, BackupDisposition]] = [
+        (targets['root'], 'target-machine-root', 'restore_on_rollback'),
+        (
+            targets['defaults'],
+            'target-machine-defaults',
+            'restore_on_rollback',
+        ),
+        (
+            targets['networks'],
+            'target-machine-networks',
+            'restore_on_rollback',
+        ),
+        (
+            plan.target_machine_store.parent / 'vms',
+            'target-machine-vms',
+            'restore_on_rollback',
+        ),
     ]
     return paths
 
 
-def _backup_candidates(plan: MigrationPlan, layout: MachineStoreLayout) -> list[tuple[Path, str]]:
-    candidates: list[tuple[Path, str]] = []
+def _backup_candidates(
+    plan: MigrationPlan,
+    layout: MachineStoreLayout,
+) -> list[tuple[Path, str, BackupDisposition]]:
+    candidates: list[tuple[Path, str, BackupDisposition]] = []
     for source in plan.sources:
         files = source.get('files', [])
         if isinstance(files, list):
             for item in files:
                 if isinstance(item, dict):
                     candidates.append(
-                        (Path(str(item.get('path', ''))), 'legacy-store-input')
+                        (
+                            Path(str(item.get('path', ''))),
+                            'legacy-store-input',
+                            'evidence_only',
+                        )
                     )
     candidates.extend(_machine_target_paths(plan))
     for profile in plan.profiles:
-        candidates.append((Path(str(profile.get('path', ''))), 'profile-target'))
+        candidates.append(
+            (
+                Path(str(profile.get('path', ''))),
+                'profile-target',
+                'restore_on_rollback',
+            )
+        )
     for move in plan.credential_material_moves:
         # Private source material is retained in place and fingerprinted rather
         # than duplicated into the shared migration journal. Only a pre-existing
         # replacement target needs a protected rollback copy.
         candidates.append(
-            (Path(str(move.get('target', ''))), 'private-credential-target')
+            (
+                Path(str(move.get('target', ''))),
+                'private-credential-target',
+                'restore_on_rollback',
+            )
         )
     for move in plan.persistent_state_moves:
-        candidates.append((Path(str(move.get('source', ''))), 'persistent-input'))
-        candidates.append((Path(str(move.get('target', ''))), 'persistent-target'))
+        candidates.append(
+            (
+                Path(str(move.get('source', ''))),
+                'persistent-input',
+                'evidence_only',
+            )
+        )
+        candidates.append(
+            (
+                Path(str(move.get('target', ''))),
+                'persistent-target',
+                'restore_on_rollback',
+            )
+        )
     for vm_name in sorted(plan.legacy_vm_cfgs):
         from ...enrollment import bootstrap_identity_paths
 
@@ -692,17 +770,18 @@ def _backup_candidates(plan: MigrationPlan, layout: MachineStoreLayout) -> list[
             (
                 bootstrap_identity_paths(vm_name, layout=layout).directory,
                 'private-bootstrap-target',
+                'restore_on_rollback',
             )
         )
     # Deduplicate exact paths while retaining the first, most specific role.
-    result: list[tuple[Path, str]] = []
+    result: list[tuple[Path, str, BackupDisposition]] = []
     seen: set[Path] = set()
-    for path, role in candidates:
+    for path, role, disposition in candidates:
         normalized = path.expanduser().resolve()
         if normalized in seen:
             continue
         seen.add(normalized)
-        result.append((normalized, role))
+        result.append((normalized, role, disposition))
     return result
 
 
@@ -720,9 +799,10 @@ def _create_backups(
         _backup_one(
             path,
             role=role,
+            disposition=disposition,
             backup_root=(private_root if role.startswith('private-') else root),
         )
-        for path, role in _backup_candidates(plan, layout)
+        for path, role, disposition in _backup_candidates(plan, layout)
     ]
 
 
@@ -792,6 +872,40 @@ def _mark_step(transaction_dir: Path, journal: MigrationJournal, step: str) -> N
     journal.status = 'applying'
     journal.error = ''
     _save_journal(transaction_dir, journal)
+
+
+def _capture_migration_outputs(
+    journal: MigrationJournal,
+    roles: set[str],
+) -> None:
+    """Record the exact target state produced by one completed apply phase."""
+    updated: list[BackupRecord] = []
+    for record in journal.backups:
+        if record.role not in roles:
+            updated.append(record)
+            continue
+        path = Path(record.original)
+        if path.is_symlink():
+            raise MigrationExecutionError(
+                f'Refusing symlinked migration output: {path}'
+            )
+        if path.exists():
+            updated.append(
+                replace(
+                    record,
+                    applied_existed=True,
+                    applied_sha256=_tree_sha256(path),
+                )
+            )
+        else:
+            updated.append(
+                replace(
+                    record,
+                    applied_existed=False,
+                    applied_sha256='',
+                )
+            )
+    journal.backups = updated
 
 
 def _write_machine_store(plan: MigrationPlan, layout: MachineStoreLayout) -> None:
@@ -1175,10 +1289,18 @@ def apply_migration(
         _freeze_expected(plan, tx)
         _save_journal(tx, journal)
 
-    def run_step(name: str, action: Callable[[], None]) -> None:
+    def run_step(
+        name: str,
+        action: Callable[[], None],
+        *,
+        output_roles: set[str] | None = None,
+    ) -> None:
         if _step_complete(journal, name):
             return
         action()
+        if output_roles:
+            _capture_migration_outputs(journal, output_roles)
+            _save_journal(tx, journal)
         _mark_step(tx, journal, name)
         if fail_after_step == name:
             raise MigrationExecutionError(
@@ -1191,16 +1313,35 @@ def apply_migration(
             _save_journal(tx, journal)
 
         run_step('backups-created', backups_action)
-        run_step('machine-store-written', lambda: _write_machine_store(plan, layout))
-        run_step('profiles-written', lambda: _write_profiles(plan))
-        run_step('credential-material-copied', lambda: _copy_credential_material(plan))
+        run_step(
+            'machine-store-written',
+            lambda: _write_machine_store(plan, layout),
+            output_roles={
+                'target-machine-root',
+                'target-machine-defaults',
+                'target-machine-networks',
+                'target-machine-vms',
+            },
+        )
+        run_step(
+            'profiles-written',
+            lambda: _write_profiles(plan),
+            output_roles={'profile-target'},
+        )
+        run_step(
+            'credential-material-copied',
+            lambda: _copy_credential_material(plan),
+            output_roles={'private-credential-target'},
+        )
         run_step(
             'persistent-state-copied',
             lambda: _copy_persistent_state(plan, layout),
+            output_roles={'persistent-target'},
         )
         run_step(
             'bootstrap-installed',
             lambda: _install_bootstrap(plan, layout, guest_installer),
+            output_roles={'private-bootstrap-target'},
         )
 
         def verify_action() -> None:
@@ -1287,27 +1428,101 @@ def verify_applied_migration(
     return MigrationApplyResult(journal=journal, transaction_dir=loaded.transaction_dir, resumed=True)
 
 
+RollbackAction = Literal['noop', 'restore']
+
+
+def _current_backup_path_state(path: Path) -> tuple[bool, str]:
+    if path.is_symlink():
+        raise MigrationExecutionError(
+            f'Refusing symlinked rollback target: {path}'
+        )
+    if not path.exists():
+        return False, ''
+    return True, _tree_sha256(path)
+
+
+def _state_matches(
+    current: tuple[bool, str],
+    *,
+    existed: bool,
+    sha256: str,
+) -> bool:
+    current_existed, current_sha256 = current
+    if current_existed != existed:
+        return False
+    return not existed or current_sha256 == sha256
+
+
+def _classify_rollback_target(record: BackupRecord) -> RollbackAction:
+    """Prove whether one target is untouched or still migration-produced."""
+    original = Path(record.original)
+    current = _current_backup_path_state(original)
+    if _state_matches(
+        current,
+        existed=record.existed,
+        sha256=record.sha256,
+    ):
+        return 'noop'
+    if record.applied_existed is None:
+        raise MigrationExecutionError(
+            f'Rollback cannot prove that the current contents of {original} '
+            'were produced by migration. The apply phase may have failed '
+            'partway through this target; preserve it for manual recovery.'
+        )
+    if not _state_matches(
+        current,
+        existed=record.applied_existed,
+        sha256=record.applied_sha256,
+    ):
+        raise MigrationExecutionError(
+            f'Rollback target changed after migration wrote it: {original}. '
+            'Refusing to overwrite concurrent or operator changes.'
+        )
+    if record.existed:
+        backup = Path(record.backup)
+        if not backup.exists():
+            raise MigrationExecutionError(
+                f'Migration backup is missing: {backup}'
+            )
+        if record.sha256 and _tree_sha256(backup) != record.sha256:
+            raise MigrationExecutionError(
+                f'Migration backup changed after creation: {backup}'
+            )
+    return 'restore'
+
+
 def rollback_migration(
     migration_id: str,
     *,
     layout: MachineStoreLayout | None = None,
 ) -> MigrationApplyResult:
-    """Restore every backed-up path and leave the journal as evidence."""
+    """Restore migration-owned targets without rewriting retained inputs."""
     layout = layout or machine_store_layout()
     loaded = load_migration_journal(migration_id, layout=layout)
     journal = loaded.journal
     if journal.status == 'rolled-back':
         return loaded
     try:
+        # Preflight every target before mutating any of them. This avoids a
+        # partially completed rollback merely because a later target contains
+        # concurrent or operator changes.
+        actions: list[tuple[BackupRecord, RollbackAction]] = []
         for record in reversed(journal.backups):
+            if record.disposition == 'evidence_only':
+                continue
+            actions.append((record, _classify_rollback_target(record)))
+
+        for record, action in actions:
+            if action == 'noop':
+                continue
+            # Close the preflight-to-write window as much as practical. If the
+            # target changed after global preflight, stop before replacing it.
+            if _classify_rollback_target(record) == 'noop':
+                continue
             original = Path(record.original)
             backup = Path(record.backup)
             _remove_path(original)
             if record.existed:
-                if not backup.exists():
-                    raise MigrationExecutionError(
-                        f'Migration backup is missing: {backup}'
-                    )
                 _copy_path(backup, original)
                 if record.sha256 and _tree_sha256(original) != record.sha256:
                     raise MigrationExecutionError(
