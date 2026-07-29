@@ -1127,6 +1127,135 @@ def test_host_replay_prunes_with_path_only_export_root_descriptor(
         helper.os.close(root_fd)
 
 
+def test_host_replay_unmounts_through_held_parent_not_open_child(
+    tmp_path: Path,
+) -> None:
+    """Closing the child descriptor avoids making its own mount look busy."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    target = export_root / 'token'
+    target.mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    calls: list[tuple[list[str], tuple[int, ...]]] = []
+
+    class Result:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool = True,
+        capture: bool = False,
+        pass_fds: tuple[int, ...] = (),
+    ) -> Result:
+        del check, capture
+        calls.append((cmd, pass_fds))
+        return Result()
+
+    helper.run = fake_run
+    try:
+        helper.unmount_child(root_fd, 'token')
+    finally:
+        helper.os.close(root_fd)
+
+    assert calls == [
+        (
+            ['umount', f'/proc/self/fd/{root_fd}/token'],
+            (root_fd,),
+        )
+    ]
+
+
+def test_host_replay_lazily_detaches_genuinely_busy_child(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    (export_root / 'token').mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(
+            self,
+            returncode: int,
+            *,
+            stdout: str = '',
+            stderr: str = '',
+        ) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool = True,
+        capture: bool = False,
+        pass_fds: tuple[int, ...] = (),
+    ) -> Result:
+        del check, capture, pass_fds
+        calls.append(cmd)
+        if cmd[:2] == ['umount', '--lazy']:
+            return Result(0)
+        if cmd[0] == 'umount':
+            return Result(32, stderr='target is busy')
+        if cmd[0] == 'mountpoint':
+            return Result(0)
+        raise AssertionError(cmd)
+
+    helper.run = fake_run
+    try:
+        helper.unmount_child(root_fd, 'token')
+    finally:
+        helper.os.close(root_fd)
+
+    target = f'/proc/self/fd/{root_fd}/token'
+    assert calls == [
+        ['umount', target],
+        ['mountpoint', '-q', target],
+        ['umount', '--lazy', target],
+    ]
+
+
+def test_host_replay_prune_closes_child_before_unmount(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    (export_root / 'token').mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    opened_children: list[int] = []
+    real_open_child = helper.open_child_directory
+
+    def recording_open_child(*args: Any, **kwargs: Any) -> int:
+        fd = real_open_child(*args, **kwargs)
+        opened_children.append(fd)
+        return fd
+
+    def assert_closed_before_unmount(parent_fd: int, name: str) -> None:
+        assert parent_fd == root_fd
+        assert name == 'token'
+        with pytest.raises(OSError):
+            helper.os.fstat(opened_children[-1])
+
+    helper.open_child_directory = recording_open_child
+    helper.is_mountpoint_fd = lambda fd: True
+    helper.unmount_child = assert_closed_before_unmount
+    try:
+        helper.prune_stale_mounts(root_fd, set())
+    finally:
+        helper.os.close(root_fd)
+
+
 def test_held_export_root_descriptor_survives_path_replacement(
     tmp_path: Path,
 ) -> None:

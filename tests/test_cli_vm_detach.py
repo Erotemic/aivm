@@ -216,6 +216,16 @@ def test_vm_detach_persistent_prunes_host_and_guest_before_record_removal(
     host_replays: list[Any] = []
     guest_replays: list[Any] = []
     artifact_cleanups: list[Any] = []
+    replay_order: list[str] = []
+
+    def record_guest_replay(*args: Any, **kwargs: Any) -> None:
+        guest_replays.append((args, kwargs))
+        replay_order.append('guest')
+
+    def record_host_replay(*args: Any, **kwargs: Any) -> None:
+        host_replays.append((args, kwargs))
+        replay_order.append('host')
+
     patch_ns(
         monkeypatch,
         'aivm.cli.vm_attach',
@@ -242,10 +252,8 @@ def test_vm_detach_persistent_prunes_host_and_guest_before_record_removal(
             '_sync_persistent_host_replay_manifest': records(
                 replay_syncs, cfg_path
             ),
-            '_reconcile_persistent_attachments_in_guest': records(
-                guest_replays
-            ),
-            '_reconcile_persistent_host_binds': records(host_replays),
+            '_reconcile_persistent_attachments_in_guest': record_guest_replay,
+            '_reconcile_persistent_host_binds': record_host_replay,
             '_cleanup_persistent_host_replay_artifacts': records(
                 artifact_cleanups, True
             ),
@@ -264,6 +272,8 @@ def test_vm_detach_persistent_prunes_host_and_guest_before_record_removal(
     assert len(replay_syncs) == 1
     assert len(host_replays) == 1
     assert len(guest_replays) == 1
+    assert replay_order == ['guest', 'host']
+    assert guest_replays[0][1]['reconcile_host'] is False
     assert len(artifact_cleanups) == 1
     assert find_attachment_for_vm(
         load_store(cfg_path), host_src, cfg.vm.name

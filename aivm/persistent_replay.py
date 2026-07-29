@@ -503,16 +503,45 @@ def persistent_host_replay_python() -> str:
             right = os.fstat(right_fd)
             return left.st_dev == right.st_dev and left.st_ino == right.st_ino
 
-        def unmount_fd(fd):
+        def child_fd_path(parent_fd, name):
+            token = validate_token(name)
+            return f"{fd_path(parent_fd)}/{token}"
+
+        def is_mountpoint_child(parent_fd, name):
+            return run(
+                ["mountpoint", "-q", child_fd_path(parent_fd, name)],
+                check=False,
+                pass_fds=(parent_fd,),
+            ).returncode == 0
+
+        def unmount_child(parent_fd, name):
+            # Holding an O_PATH descriptor for the mountpoint itself can make
+            # a normal umount report EBUSY. Resolve the child through the held,
+            # trusted parent descriptor instead. The export root and its token
+            # directories are root-owned, so an unprivileged user cannot swap
+            # the child during this short close/unmount/reopen sequence.
+            target = child_fd_path(parent_fd, name)
             result = run(
-                ["umount", fd_path(fd)],
+                ["umount", target],
                 check=False,
                 capture=True,
-                pass_fds=(fd,),
+                pass_fds=(parent_fd,),
             )
-            if result.returncode == 0 or not is_mountpoint_fd(fd):
+            if result.returncode == 0 or not is_mountpoint_child(parent_fd, name):
                 return
             detail = (result.stderr or result.stdout or "").strip()
+            if "busy" in detail.lower():
+                lazy = run(
+                    ["umount", "--lazy", target],
+                    check=False,
+                    capture=True,
+                    pass_fds=(parent_fd,),
+                )
+                if lazy.returncode == 0 or not is_mountpoint_child(parent_fd, name):
+                    return
+                lazy_detail = (lazy.stderr or lazy.stdout or "").strip()
+                if lazy_detail:
+                    detail = f"{detail}; lazy detach also failed: {lazy_detail}"
             raise RuntimeError(f"could not unmount persistent host bind: {detail}")
 
         def enforce_access_fd(target_fd, raw_access):
@@ -542,7 +571,10 @@ def persistent_host_replay_python() -> str:
                     enforce_access_fd(target_fd, record.get("access"))
                     return
                 if is_mountpoint_fd(target_fd):
-                    unmount_fd(target_fd)
+                    os.close(target_fd)
+                    target_fd = -1
+                    unmount_child(export_root_fd, token)
+                    target_fd = open_child_directory(export_root_fd, token)
                 run(
                     ["mount", "--bind", fd_path(source_fd), fd_path(target_fd)],
                     pass_fds=(source_fd, target_fd),
@@ -553,7 +585,8 @@ def persistent_host_replay_python() -> str:
                     raise RuntimeError(f"could not verify persistent host bind for {token}")
                 enforce_access_fd(target_fd, record.get("access"))
             finally:
-                os.close(target_fd)
+                if target_fd >= 0:
+                    os.close(target_fd)
                 os.close(source_fd)
 
         def prune_stale_mounts(export_root_fd, desired_tokens):
@@ -569,9 +602,12 @@ def persistent_host_replay_python() -> str:
                     continue
                 try:
                     if is_mountpoint_fd(child_fd):
-                        unmount_fd(child_fd)
+                        os.close(child_fd)
+                        child_fd = -1
+                        unmount_child(export_root_fd, child)
                 finally:
-                    os.close(child_fd)
+                    if child_fd >= 0:
+                        os.close(child_fd)
 
         def main(argv=None):
             parser = argparse.ArgumentParser()

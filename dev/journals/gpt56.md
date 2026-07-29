@@ -537,3 +537,29 @@ remaining uncertainty is environmental rather than conceptual: the full host
 E2E must be rerun to exercise the installed helper under sudo, mount, libvirt,
 and systemd. The focused generated-helper test is expected to reproduce the
 exact failed syscall boundary without requiring privileged mounts.
+
+## 2026-07-28 22:10:11 -0400
+
+The second real-system E2E attempt got past O_PATH directory enumeration and
+then exposed the next Linux mount-lifetime detail: the helper kept an O_PATH
+handle open on the token mountpoint while invoking `umount` through that same
+handle, and util-linux correctly reported the target busy. I changed cleanup to
+close the child handle and address the token through the still-pinned,
+root-owned export-root descriptor. This retains protection against replacing
+the mutable original export-root pathname without making the mount hold itself
+busy.
+
+I also added a lazy-detach fallback for genuine active references. That is a
+tradeoff: already-open handles can outlive a lazy detach, but the mount is
+removed from namespace lookup immediately, which is the strongest revocation
+available without killing the process holding those handles. For an ordinary
+running-guest detach, the code now asks the guest replay helper to unmount first
+and only then prunes the host bind, reducing the need for the fallback and
+making the intended dependency order explicit.
+
+The generated helper compiles and focused direct tests cover parent-descriptor
+unmount addressing plus the busy-to-lazy fallback. Full pytest, ty, mypy, and
+privileged E2E remain for the consumer environment because this sandbox lacks
+`kwconf` and the configured checker executables. The highest-risk remaining
+uncertainty is how a live virtiofs server behaves during lazy detach; the E2E
+full-cycle detach is the authoritative validation.

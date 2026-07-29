@@ -621,9 +621,6 @@ def _detach_persistent_attachment(
             cfg, cfg_path, dry_run=False
         )
         _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
-        _reconcile_persistent_host_binds(
-            cfg, cfg_path, dry_run=False, vm_running=vm_running
-        )
         if vm_running:
             ip = _resolve_ip_for_ssh_ops(
                 cfg,
@@ -634,8 +631,15 @@ def _detach_persistent_attachment(
                 ),
             )
             _reconcile_persistent_attachments_in_guest(
-                cfg, cfg_path, ip, dry_run=False
+                cfg,
+                cfg_path,
+                ip,
+                dry_run=False,
+                reconcile_host=False,
             )
+        _reconcile_persistent_host_binds(
+            cfg, cfg_path, dry_run=False, vm_running=vm_running
+        )
         records = _persistent_attachment_records_for_vm(cfg, cfg_path)
         if not any(record.enabled for record in records):
             _cleanup_persistent_host_replay_artifacts(

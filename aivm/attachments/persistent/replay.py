@@ -74,6 +74,7 @@ def _reconcile_persistent_attachments_in_guest(
     dry_run: bool,
     replay_even_if_unchanged: bool = True,
     continue_on_error: bool = False,
+    reconcile_host: bool = True,
 ) -> None:
     # Host writes the canonical desired-state manifest first. The guest-local
     # manifest and helper are refreshed next. Explicit reconcile paths set
@@ -84,12 +85,13 @@ def _reconcile_persistent_attachments_in_guest(
         manifest._sync_persistent_attachment_manifest_on_host(
             cfg, cfg_path, dry_run=dry_run
         )
-        host_bind._reconcile_persistent_host_binds(
-            cfg,
-            cfg_path,
-            dry_run=dry_run,
-            vm_running=True,
-        )
+        if reconcile_host:
+            host_bind._reconcile_persistent_host_binds(
+                cfg,
+                cfg_path,
+                dry_run=dry_run,
+                vm_running=True,
+            )
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
                 cfg,

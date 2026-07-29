@@ -232,6 +232,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   under a header that called a read-only probe a hypervisor mutation.
 
 ### Fixed
+* Fixed persistent host-bind removal on real Linux hosts. The replay helper no
+  longer tries to unmount through an open descriptor for the mountpoint itself,
+  which made `umount` report `EBUSY`. It closes that child descriptor, resolves
+  the root-owned token through the held export-root descriptor, and falls back
+  to a lazy detach only when an active reference keeps the normal unmount busy.
+  Running-guest detach now removes the guest bind before pruning the host bind.
 * Fixed persistent host replay pruning on real Linux hosts. The export root is
   intentionally held with `O_PATH` to pin the approved directory, but Python
   cannot enumerate an `O_PATH` descriptor directly. Stale-token discovery now
