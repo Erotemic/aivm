@@ -7,7 +7,7 @@ That wording can change later without changing the machine/profile boundary.
 
 ## Trust mode
 
-The 0.6.0 shared-machine release uses `trusted-host-users` mode. Its
+The 0.6.0 shared-machine release uses `kernel-identity` mode. Its
 security boundary excludes unrestricted root and unrestricted system-libvirt
 administrators: either capability can bypass AIVM policy. Access identities and
 ownership records protect ordinary operation from accidental cross-user

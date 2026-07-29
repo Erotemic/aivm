@@ -18,8 +18,15 @@ from aivm.config_store import (
 )
 from aivm.errors import AIVMError
 from aivm.profile_store import UserProfileStore, load_user_profile, save_user_profile
-from aivm.scoped_store import resolve_store_scope
-from aivm.vm.deletion import _journal_path, delete_managed_vm
+from aivm.scoped_store import StoreScope, resolve_store_scope
+from aivm.vm.deletion import (
+    VMDeletionJournal,
+    _journal_path,
+    _new_journal,
+    _save_journal,
+    delete_managed_vm,
+    require_vm_creation_not_blocked,
+)
 from aivm.vm.domain import DomainRemovalReport
 
 
@@ -209,8 +216,8 @@ def test_vm_deletion_recovers_crash_after_final_store_write(
 
     def crash_after_store_write(
         path: Path,
-        journal: object,
-        journal_scope: object,
+        journal: VMDeletionJournal,
+        journal_scope: StoreScope,
         phase: str,
     ) -> None:
         if phase == 'store-finalized':
@@ -245,8 +252,8 @@ def test_vm_delete_cli_recovers_missing_record_from_journal(
 
     def crash_after_store_write(
         path: Path,
-        journal: object,
-        journal_scope: object,
+        journal: VMDeletionJournal,
+        journal_scope: StoreScope,
         phase: str,
     ) -> None:
         if phase == 'store-finalized':
@@ -266,3 +273,66 @@ def test_vm_delete_cli_recovers_missing_record_from_journal(
     assert rc == 0
     journal = module._load_journal(_journal_path(scope, cfg))
     assert journal is not None and journal.status == 'complete'
+
+
+def test_completed_deletion_journal_does_not_skip_recreated_vm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls: list[str] = []
+    _stub_external_cleanup(monkeypatch, cfg, calls)
+    stale = _new_journal(scope, cfg, cfg_path)
+    stale.completed_phases = [
+        'attachments-cleaned',
+        'credentials-cleaned',
+        'domain-and-storage-removed',
+        'owned-trees-removed',
+        'profile-cleared',
+        'store-finalized',
+    ]
+    stale.status = 'complete'
+    _save_journal(_journal_path(scope, cfg), stale, scope)
+
+    journal = delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert journal is not None and journal.status == 'complete'
+    assert calls == ['attachments', 'credentials', 'domain', 'trees']
+    assert find_vm(load_store(cfg_path), cfg.vm.name) is None
+
+
+def test_recreated_domain_restarts_stale_mid_deletion_journal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls: list[str] = []
+    _stub_external_cleanup(monkeypatch, cfg, calls)
+    stale = _new_journal(scope, cfg, cfg_path)
+    stale.completed_phases = [
+        'attachments-cleaned',
+        'credentials-cleaned',
+        'domain-and-storage-removed',
+    ]
+    _save_journal(_journal_path(scope, cfg), stale, scope)
+
+    journal = delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+
+    assert journal is not None and journal.status == 'complete'
+    assert calls == ['attachments', 'credentials', 'domain', 'trees']
+
+
+def test_vm_creation_is_blocked_by_unfinished_deletion_journal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls: list[str] = []
+    _stub_external_cleanup(monkeypatch, cfg, calls)
+    journal = _new_journal(scope, cfg, cfg_path)
+    journal.mark('attachments-cleaned')
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+
+    with pytest.raises(AIVMError, match='unfinished deletion journal'):
+        require_vm_creation_not_blocked(scope, cfg, cfg_path)
+
+    journal.status = 'complete'
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+    require_vm_creation_not_blocked(scope, cfg, cfg_path)

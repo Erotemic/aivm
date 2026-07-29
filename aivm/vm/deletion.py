@@ -148,6 +148,25 @@ def _journal_path(scope: StoreScope, cfg: AgentVMConfig) -> Path:
     )
 
 
+def require_vm_creation_not_blocked(
+    scope: StoreScope, cfg: AgentVMConfig, cfg_path: Path
+) -> None:
+    """Refuse to reuse a VM name while an earlier deletion is unfinished."""
+    journal_path = _journal_path(scope, cfg)
+    journal = _load_journal(journal_path)
+    if journal is None or journal.status == 'complete':
+        return
+    if journal.vm_name != cfg.vm.name or journal.config_path != str(cfg_path):
+        raise AIVMError(f'Deletion journal target mismatch: {journal_path}')
+    completed = ', '.join(journal.completed_phases) or 'none'
+    raise AIVMError(
+        f'VM name {cfg.vm.name!r} has an unfinished deletion journal at '
+        f'{journal_path} (completed phases: {completed}). Resume '
+        f'`aivm vm delete {cfg.vm.name}` before creating or recreating that '
+        'managed VM name.'
+    )
+
+
 def _journal_policy(scope: StoreScope) -> StoreFilesystemPolicy:
     if scope.is_machine:
         assert scope.machine_layout is not None
@@ -188,13 +207,18 @@ def _journal_text_list(
     raw: dict[object, object], key: str, *, path: Path
 ) -> list[str]:
     value = raw.get(key, [])
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) for item in value
-    ):
+    if not isinstance(value, list):
         raise AIVMError(
             f'VM deletion journal {path} has invalid {key!r}: {value!r}'
         )
-    return list(value)
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise AIVMError(
+                f'VM deletion journal {path} has invalid {key!r}: {value!r}'
+            )
+        result.append(item)
+    return result
 
 
 def _load_journal(path: Path) -> VMDeletionJournal | None:
@@ -550,6 +574,18 @@ def delete_managed_vm(
             reg, cfg.vm.name, action='deleted'
         )
         journal = _load_journal(journal_path)
+        if journal is not None and (
+            journal.status == 'complete'
+            or (
+                journal.completed('domain-and-storage-removed')
+                and domain_is_defined(cfg.vm.name)
+            )
+        ):
+            log.warning(
+                'Starting a fresh deletion journal for recreated VM {}.',
+                cfg.vm.name,
+            )
+            journal = None
         if journal is None:
             journal = _new_journal(scope, cfg, cfg_path)
             _save_journal(journal_path, journal, scope)
@@ -557,8 +593,6 @@ def delete_managed_vm(
             raise AIVMError(
                 f'Deletion journal target mismatch: {journal_path}'
             )
-        if journal.status == 'complete':
-            return journal
 
         try:
             # Refuse unmanaged or symlink-escaped storage before the first
@@ -664,4 +698,5 @@ __all__ = [
     'VMDeletionJournal',
     'complete_missing_vm_deletion',
     'delete_managed_vm',
+    'require_vm_creation_not_blocked',
 ]

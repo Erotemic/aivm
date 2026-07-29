@@ -529,7 +529,7 @@ def destroy_vm(
     name = cfg.vm.name
     if dry_run:
         log.info('DRYRUN: virsh destroy/undefine {}', name)
-        return
+        return None
     mgr = CommandManager.current()
     with mgr.intent(
         f'Destroy VM {name}',

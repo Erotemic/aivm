@@ -103,4 +103,4 @@ def test_machine_impact_output_names_trust_mode(
     output = capsys.readouterr().out
     assert "Machine-wide action: restart VM 'aivm-2404-shared-host'" in output
     assert '2 access identity record(s)' in output
-    assert 'trust_mode=trusted-host-users' in output
+    assert 'trust_mode=kernel-identity' in output

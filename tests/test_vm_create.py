@@ -19,6 +19,7 @@ from pytest import MonkeyPatch
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.errors import AIVMError
+from aivm.scoped_store import StoreScope
 from aivm.util import CmdError, CmdResult
 from aivm.vm import create_or_start_vm
 from aivm.vm.domain import DomainRemovalReport
@@ -357,3 +358,28 @@ def test_recreate_refuses_to_continue_when_old_storage_remains(
             recreate=True,
             config_store_path=cfg_path,
         )
+
+
+def test_create_or_start_refuses_unfinished_deletion_journal(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = make_cfg(None, **{'vm.name': 'vm-being-deleted'})
+    cfg_path = tmp_path / 'config.toml'
+    checked: list[Path] = []
+
+    def block_creation(
+        scope: StoreScope, checked_cfg: AgentVMConfig, path: Path
+    ) -> None:
+        assert scope.store_path == cfg_path.resolve()
+        assert checked_cfg.vm.name == cfg.vm.name
+        checked.append(path)
+        raise AIVMError('unfinished deletion journal')
+
+    monkeypatch.setattr(
+        'aivm.vm.deletion.require_vm_creation_not_blocked', block_creation
+    )
+
+    with pytest.raises(AIVMError, match='unfinished deletion journal'):
+        create_or_start_vm(cfg, config_store_path=cfg_path)
+
+    assert checked == [cfg_path.resolve()]

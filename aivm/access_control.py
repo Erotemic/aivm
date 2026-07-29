@@ -36,7 +36,7 @@ from .scoped_store import (
     save_scope_store,
 )
 
-TRUST_MODE = 'trusted-host-users'
+TRUST_MODE = 'kernel-identity'
 AccessAction = Literal['disable', 'remove']
 
 

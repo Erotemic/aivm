@@ -195,6 +195,12 @@ def create_or_start_vm(
         share_tag or '(none)',
     )
     log.debug('Creating or starting VM {}', cfg.vm.name)
+    if config_store_path is not None:
+        from ..scoped_store import resolve_store_scope
+        from .deletion import require_vm_creation_not_blocked
+
+        scope = resolve_store_scope(str(config_store_path))
+        require_vm_creation_not_blocked(scope, cfg, scope.store_path)
     if recreate:
         if config_store_path is None:
             raise AIVMError(

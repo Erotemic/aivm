@@ -32,6 +32,7 @@ from aivm.attachments.persistent import (
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_attachment_manifest_to_guest,
     _write_text_if_changed,
+    manifest as persistent_manifest,
 )
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
@@ -262,6 +263,31 @@ def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
     assert path.parent == Path('/var/lib/aivm/persistent-host')
     assert '/' not in path.name
     assert path.suffix == '.json'
+
+
+def test_detaching_record_requires_host_replay_state_for_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A retry can rebuild replay state after cleanup removed its artifacts."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-detach-retry'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    entry = _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
+    entry.state = 'detaching'
+    store = Store(attachments=[entry])
+    save_store(store, cfg_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+
+    approved = persistent_manifest._persistent_host_replay_manifest_path(cfg)
+    assert not approved.exists()
+    assert persistent_manifest._persistent_host_replay_state_needed(
+        cfg, cfg_path
+    )
+    payload = json.loads(
+        persistent_manifest._persistent_attachment_manifest_text(cfg, cfg_path)
+    )
+    assert payload['records'][0]['enabled'] is False
 
 
 def test_persistent_manifest_sync_uses_checksum_rsync(

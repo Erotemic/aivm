@@ -196,8 +196,8 @@ def _persistent_host_replay_state_needed(
 
     An installed manifest must track record changes -- including down to
     empty, so a detach of the last persistent folder still propagates.  But
-    with no enabled persistent record and nothing previously installed there
-    is no replay state to create, secure, or update: privilege gates on the
+    with no persistent record and nothing previously installed there is no
+    replay state to create, secure, or update: privilege gates on the
     command, not the feature, so a VM that never opted into persistent
     attachments must not demand root for their replay machinery (e.g.
     ``vm up`` under ``privilege_mode='never'``).
@@ -207,7 +207,10 @@ def _persistent_host_replay_state_needed(
             needed = True
         else:
             records = _persistent_attachment_records_for_vm(cfg, cfg_path)
-            needed = any(rec.enabled for rec in records)
+            # Detaching records intentionally render as disabled entries. They
+            # still need an approved empty/disabled manifest so a retry can
+            # prove stale host binds are pruned before deleting the record.
+            needed = bool(records)
     return needed
 
 

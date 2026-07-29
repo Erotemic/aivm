@@ -6,7 +6,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -23,6 +23,7 @@ from aivm.config_store import (
 from aivm.host_identity import HostIdentity
 from aivm.errors import AIVMError
 from aivm.enrollment import (
+    EnrollmentReport,
     bootstrap_identity_paths,
     ensure_bootstrap_identity,
     normalized_guest_username,
@@ -285,3 +286,70 @@ def test_reconcile_rejects_guest_account_rotation(
             guest_user='new-account',
             dry_run=True,
         )
+
+
+def test_reconcile_holds_identity_locks_through_guest_work(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg, scope = _machine_with_profile(tmp_path)
+    held = False
+
+    class FakeLockScope:
+        def __enter__(self) -> None:
+            nonlocal held
+            assert not held
+            held = True
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: object,
+        ) -> Literal[False]:
+            del exc_type, exc, tb
+            nonlocal held
+            assert held
+            held = False
+            return False
+
+    def fake_locks(*args: object, **kwargs: object) -> FakeLockScope:
+        del args, kwargs
+        return FakeLockScope()
+
+    def fake_impl(
+        call_scope: StoreScope,
+        *,
+        vm_name: str,
+        guest_user: str = '',
+        ip_override: str = '',
+        dry_run: bool = False,
+        enable_disabled: bool = False,
+    ) -> EnrollmentReport:
+        del guest_user, ip_override, enable_disabled
+        assert call_scope is scope
+        assert vm_name == cfg.vm.name
+        assert dry_run is False
+        assert held
+        return EnrollmentReport(
+            principal=PrincipalEntry(
+                id='principal-test',
+                vm_name=vm_name,
+                host_user='tester',
+                host_uid=1000,
+                host_gid=1000,
+                guest_user='tester-agent',
+                state='active',
+            ),
+            ip='192.0.2.5',
+            changed=True,
+        )
+
+    monkeypatch.setattr('aivm.enrollment.machine_resource_locks', fake_locks)
+    monkeypatch.setattr(
+        'aivm.enrollment._reconcile_current_principal_impl', fake_impl
+    )
+
+    report = reconcile_current_principal(scope, vm_name=cfg.vm.name)
+
+    assert report.changed is True
+    assert held is False

@@ -457,7 +457,7 @@ operations require ``--admin_override``, and disabling the last active identity
 requires ``--allow_last_access``. Restore a disabled caller with ``access
 reconcile --enable``.
 
-The trust mode is ``trusted-host-users``. Access ownership prevents accidental
+The trust mode is ``kernel-identity``. Access ownership prevents accidental
 cross-user changes and preserves recovery metadata, but unrestricted root and
 system-libvirt administrators can bypass AIVM policy. Caller selection uses the
 kernel UID/GID and passwd database rather than login environment variables.

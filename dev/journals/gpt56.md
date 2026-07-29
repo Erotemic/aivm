@@ -491,3 +491,32 @@ store-write recovery. The complete non-E2E suite passes with 970 tests and 8
 skips. Real-system E2E and local ty/mypy execution remain for the consumer
 environment because the required host/libvirt setup and checker executables are
 not available in this artifact environment.
+
+## 2026-07-28 21:31:15 -0400
+
+Reviewed the post-hardening source as a new implementation pass and kept the
+changes narrow to defects still present in that revision. The reported ty and
+mypy failures were annotation/narrowing issues: deletion journal string arrays
+now narrow item-by-item, the dry-run domain deletion path returns its declared
+optional result explicitly, and failure-injection wrappers carry the exact
+production call signatures.
+
+Two recovery gaps remained after the larger lifecycle patch. A persistent
+detach could successfully remove its root replay unit and approved manifest,
+then fail while deleting the durable `detaching` record; retry previously saw
+only disabled records and declined to recreate replay state, making host-prune
+verification impossible. Replay-state selection now treats any retained
+persistent record as unfinished work. Deletion journals were also keyed only by
+VM name, so a completed journal could short-circuit deletion of a later VM with
+the same name. Create/start now refuses an unfinished journal at the common VM
+entry point, and deletion replaces completed or demonstrably superseded
+journals before acting on a recreated domain.
+
+Enrollment previously locked each store write but not the guest transaction
+between them, allowing access disable/remove to interleave with a pending
+enrollment. The complete non-dry-run reconcile operation now shares the ordered
+store/VM lock with access lifecycle mutations. Focused regression coverage for
+these paths passes (72 tests); the full locked environment could not be
+recreated here because the configured package source lacks `kwconf`, `ty`,
+`mypy`, and `ruff`, so the consumer environment should rerun the repository's
+normal checker and non-E2E commands.

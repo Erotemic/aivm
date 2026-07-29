@@ -232,6 +232,15 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   under a header that called a read-only probe a hypervisor mutation.
 
 ### Fixed
+* Fixed two recovery holes in the new destructive lifecycle machinery. A
+  persistent attachment left in `detaching` state can now rebuild an approved
+  disabled replay manifest after its per-VM replay artifacts were removed, so
+  retry can prove stale host binds are pruned before deleting the final record.
+  VM creation/start paths now refuse unfinished deletion journals, while a
+  completed or superseded journal is replaced before deleting a recreated VM
+  with the same name. Enrollment is serialized with access disable/remove for
+  the full guest transaction, and the shared-host policy is reported as
+  `kernel-identity` rather than implying blanket trust of local users.
 * Reading a failed command handle no longer executes an unrelated queued
   command. A raise skipped the bookkeeping that resolves the handle, so it
   stayed pending; asking for its result again flushed the queue and ran

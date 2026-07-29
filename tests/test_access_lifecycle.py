@@ -12,6 +12,7 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import (
     CredentialEntry,
     PrincipalEntry,
+    Store,
     find_principal,
     load_store,
     upsert_attachment,
@@ -393,12 +394,14 @@ def test_disable_retry_repairs_crash_after_guest_revocation(
     real_save = module.save_scope_store
     failures = 1
 
-    def fail_once(*args: object, **kwargs: object) -> None:
+    def fail_once(
+        save_scope: StoreScope, save_reg: Store, *, reason: str
+    ) -> None:
         nonlocal failures
         if failures:
             failures -= 1
             raise OSError('simulated store persistence interruption')
-        real_save(*args, **kwargs)
+        real_save(save_scope, save_reg, reason=reason)
 
     monkeypatch.setattr(module, 'save_scope_store', fail_once)
     with pytest.raises(OSError, match='interruption'):

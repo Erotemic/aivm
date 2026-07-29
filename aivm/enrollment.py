@@ -303,7 +303,46 @@ def reconcile_current_principal(
     dry_run: bool = False,
     enable_disabled: bool = False,
 ) -> EnrollmentReport:
-    """Enroll or repair the caller through the forced bootstrap key."""
+    """Enroll or repair the caller through one serialized transaction."""
+    if not scope.is_machine or scope.machine_layout is None:
+        raise AIVMError(
+            'Principal enrollment requires the shared machine store.'
+        )
+    if dry_run:
+        return _reconcile_current_principal_impl(
+            scope,
+            vm_name=vm_name,
+            guest_user=guest_user,
+            ip_override=ip_override,
+            dry_run=True,
+            enable_disabled=enable_disabled,
+        )
+    with machine_resource_locks(
+        scope.machine_layout,
+        group_gid=current_machine_group_gid(),
+        include_store=True,
+        vms=[vm_name],
+    ):
+        return _reconcile_current_principal_impl(
+            scope,
+            vm_name=vm_name,
+            guest_user=guest_user,
+            ip_override=ip_override,
+            dry_run=False,
+            enable_disabled=enable_disabled,
+        )
+
+
+def _reconcile_current_principal_impl(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    guest_user: str = '',
+    ip_override: str = '',
+    dry_run: bool = False,
+    enable_disabled: bool = False,
+) -> EnrollmentReport:
+    """Implement enrollment while the caller holds the VM/store locks."""
     if not scope.is_machine or scope.machine_layout is None:
         raise AIVMError(
             'Principal enrollment requires the shared machine store.'
