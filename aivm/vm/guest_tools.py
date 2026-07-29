@@ -189,6 +189,15 @@ def _rust_spec(spec: str) -> str:
     return 'stable' if normalized.lower() == 'latest' else normalized
 
 
+def _claude_spec(spec: str) -> str:
+    normalized = spec.strip().lower()
+    if normalized in {'', 'latest'}:
+        return 'latest'
+    raise ValueError(
+        f"Claude only supports the specs 'latest' and 'off', not {spec!r}"
+    )
+
+
 def _uv_installer_url(spec: str) -> str:
     """Return Astral's standalone installer URL for latest or a version."""
     version = str(spec or '').strip().strip('/')
@@ -296,6 +305,49 @@ if ! command -v code >/dev/null 2>&1; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y code
 fi
 code --version
+"""
+    return textwrap.dedent(script).strip()
+
+
+def _build_claude_install_script(
+    cfg: AgentVMConfig, spec: str, ensure_transport: bool
+) -> str:
+    """Build an idempotent script using Anthropic's official installer."""
+    del cfg, spec
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    script = f"""
+set -euo pipefail
+{transport_bootstrap}
+CLAUDE_BIN_DIR="$HOME/.local/bin"
+export PATH="$CLAUDE_BIN_DIR:$PATH"
+if ! command -v claude >/dev/null 2>&1; then
+    curl -fsSL https://claude.ai/install.sh | bash
+fi
+if ! command -v claude >/dev/null 2>&1; then
+    echo 'Claude installer completed, but claude was not found in PATH.' >&2
+    exit 1
+fi
+PROFILE="$HOME/.profile"
+if ! grep -Fq '# >>> aivm claude PATH >>>' "$PROFILE" 2>/dev/null; then
+    {{
+        echo ''
+        echo '# >>> aivm claude PATH >>>'
+        printf '%s\n' "case ':\\$PATH:' in"
+        printf '%s\n' "  *':$CLAUDE_BIN_DIR:'*) ;;"
+        printf '%s\n' "  *) PATH='$CLAUDE_BIN_DIR':\\$PATH ;;"
+        printf '%s\n' 'esac'
+        printf '%s\n' 'export PATH'
+        echo '# <<< aivm claude PATH <<<'
+    }} >> "$PROFILE"
+fi
+claude --version
 """
     return textwrap.dedent(script).strip()
 
@@ -409,6 +461,19 @@ GUEST_TOOL_REGISTRY = GuestToolRegistry(
             required_commands=('code',),
             normalize_spec=_identity_spec,
             build_install_script=_build_code_install_script,
+        ),
+        GuestToolDefinition(
+            name='claude',
+            display_name='Claude Code',
+            description=(
+                "Claude Code installed with Anthropic's official installer"
+            ),
+            config_default='off',
+            enable_default='latest',
+            required_packages=('ca-certificates', 'curl'),
+            required_commands=('claude',),
+            normalize_spec=_claude_spec,
+            build_install_script=_build_claude_install_script,
         ),
     )
 )
