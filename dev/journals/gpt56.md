@@ -668,3 +668,28 @@ mypy are unavailable offline here, but `git diff --check`, compileall, direct
 remaining risk is static-checker interpretation of the new typed fingerprint
 parser, so the normal repository lint and type-check scripts should remain part
 of the consumer-side verification.
+
+## 2026-07-29 13:27:00 -0400
+
+Consolidated the review repair into one overlay and tightened the migration
+fingerprint boundary after revisiting the source-path semantics. The lifecycle
+compatibility facade restores each historical guest-tool symbol with an
+explicit named import; no wildcard import is present in library or test code.
+The regression checks that every advertised `__all__` name is bound without
+using wildcard-import syntax itself.
+
+The migration source verifier now fingerprints the reviewed lexical source
+path instead of resolving it first. Resolving before inspection could hide a
+post-review replacement of the source with a symlink to equivalent bytes,
+which is still a source-type change and must invalidate the plan. A regression
+covers symlink replacement for both credential material and persistent state,
+and persistent-state targets now reject symlinks explicitly just like
+credential targets.
+
+The intended contract remains: existence, type, and deterministic content
+identity are frozen during planning, checked before the first write, checked
+again at the copy boundary, and checked during final verification. The change
+is deliberately limited to the compatibility facade, migration planner/apply
+logic, and focused tests. Static checker execution still depends on the
+consumer environment, so the repository lint and type-check scripts remain a
+required pre-commit gate.

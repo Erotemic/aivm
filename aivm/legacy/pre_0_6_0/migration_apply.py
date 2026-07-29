@@ -52,6 +52,7 @@ from ...machine_store import (
 from .migration import (
     LegacyStoreSource,
     MigrationPathFingerprint,
+    MigrationPathKind,
     MigrationPlan,
     RuntimeInventory,
     build_migration_plan,
@@ -448,11 +449,18 @@ def _planned_move_fingerprint(
         raise MigrationExecutionError(
             'Migration plan lacks a valid source_exists fingerprint field.'
         )
-    if kind not in {'missing', 'file', 'directory'}:
+    source_kind: MigrationPathKind
+    if kind == 'missing':
+        source_kind = 'missing'
+    elif kind == 'file':
+        source_kind = 'file'
+    elif kind == 'directory':
+        source_kind = 'directory'
+    else:
         raise MigrationExecutionError(
             f'Migration plan has an invalid source kind: {kind!r}'
         )
-    if exists != (kind != 'missing'):
+    if exists != (source_kind != 'missing'):
         raise MigrationExecutionError(
             'Migration plan source existence and type disagree.'
         )
@@ -464,16 +472,21 @@ def _planned_move_fingerprint(
         raise MigrationExecutionError(
             'Migration plan records a digest for a missing source.'
         )
-    source_kind = kind
     return MigrationPathFingerprint(exists, source_kind, sha256)
 
 
 def _verify_planned_move_source(
     move: dict[str, object], *, role: str
 ) -> MigrationPathFingerprint:
-    source = Path(str(move.get('source', ''))).expanduser().resolve()
+    source = Path(str(move.get('source', ''))).expanduser()
     expected = _planned_move_fingerprint(move)
-    actual = _path_content_fingerprint(source)
+    try:
+        actual = _path_content_fingerprint(source)
+    except MigrationExecutionError as ex:
+        raise MigrationExecutionError(
+            f'{role} source changed after planning; rebuild and review the '
+            f'plan before applying: {source} ({ex})'
+        ) from ex
     if actual != expected:
         raise MigrationExecutionError(
             f'{role} source changed after planning; rebuild and review the '
@@ -1009,8 +1022,8 @@ def _write_profiles(plan: MigrationPlan) -> None:
 
 
 def _copy_tree_if_needed(move: dict[str, object]) -> None:
-    source = Path(str(move.get('source', ''))).expanduser().resolve()
-    target = Path(str(move.get('target', ''))).expanduser().resolve()
+    source = Path(str(move.get('source', ''))).expanduser()
+    target = Path(str(move.get('target', ''))).expanduser()
     expected = _verify_planned_move_source(move, role='Credential material')
     if not expected.exists:
         return
@@ -1063,11 +1076,15 @@ def _copy_persistent_state(
     plan: MigrationPlan, layout: MachineStoreLayout
 ) -> None:
     for move in plan.persistent_state_moves:
-        source = Path(str(move.get('source', ''))).expanduser().resolve()
-        target = Path(str(move.get('target', ''))).expanduser().resolve()
+        source = Path(str(move.get('source', ''))).expanduser()
+        target = Path(str(move.get('target', ''))).expanduser()
         expected = _verify_planned_move_source(move, role='Persistent state')
         if not expected.exists:
             continue
+        if target.is_symlink():
+            raise MigrationExecutionError(
+                f'Refusing symlinked migration target: {target}'
+            )
         if target.exists():
             if _path_content_fingerprint(target) != expected:
                 raise MigrationExecutionError(

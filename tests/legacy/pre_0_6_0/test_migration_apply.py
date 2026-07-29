@@ -249,6 +249,39 @@ def test_apply_rejects_deleted_planned_data_source_before_writing(
         ('persistent', 'Persistent state source changed after planning'),
     ],
 )
+def test_apply_rejects_planned_data_source_replaced_by_symlink(
+    tmp_path: Path, source_name: str, expected_message: str
+) -> None:
+    source, _vm_name, credential_source, persistent_source = _legacy_source(
+        tmp_path
+    )
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    selected = (
+        credential_source if source_name == 'credential' else persistent_source
+    )
+    replacement = selected.with_name(selected.name + '-replacement')
+    selected.rename(replacement)
+    selected.symlink_to(replacement, target_is_directory=True)
+
+    with pytest.raises(MigrationExecutionError, match=expected_message):
+        apply_migration(
+            plan,
+            layout=layout,
+            guest_installer=_guest_stub([]),
+            runtime_verifier=_runtime_ok,
+        )
+
+    assert not layout.root.exists()
+
+
+@pytest.mark.parametrize(
+    ('source_name', 'expected_message'),
+    [
+        ('credential', 'Credential material source changed after planning'),
+        ('persistent', 'Persistent state source changed after planning'),
+    ],
+)
 def test_apply_rejects_new_data_source_absent_during_planning(
     tmp_path: Path, source_name: str, expected_message: str
 ) -> None:
