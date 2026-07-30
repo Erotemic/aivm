@@ -82,6 +82,9 @@ def _legacy_store(
         reg,
         host_path=home / 'code' / 'project',
         vm_name=vm_name,
+        # A released store spells this mode 'shared'; the live CLI now calls
+        # it 'direct-virtiofs' and refuses the old name. Migration has to
+        # carry the record across that rename.
         mode='shared',
         access='rw',
         guest_dst=f'/home/{host_user}-agent/code/project',
@@ -166,6 +169,9 @@ def test_single_store_plan_attributes_user_owned_records_without_writes(
 
     attachments = _as_object_dict_list(plan.machine['attachments'])
     assert attachments[0]['owner_principal_id'] == principal_id
+    # A released 'shared' record migrates to the mode's current name rather
+    # than landing in the machine store under a spelling nothing accepts.
+    assert attachments[0]['mode'] == 'direct-virtiofs'
 
     credentials = _as_object_dict_list(plan.machine['credentials'])
     assert credentials[0]['principal_id'] == principal_id

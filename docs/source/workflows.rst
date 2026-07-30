@@ -61,15 +61,18 @@ Attachment modes:
   and per-folder host/guest bind mounts. Existing saved ``shared-root``
   attachments continue to use it; new attachments can request it explicitly
   with ``--mode shared-root``.
-* ``shared``: direct per-folder virtiofs mapping.
+* ``direct-virtiofs``: its own virtiofs device per folder. Named for its
+  cost: each one occupies a guest PCIe slot (see below). The only mode
+  needing no host bind mount, so the only one a caller without sudo can
+  create.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
 
 The ``persistent`` and ``shared-root`` backends stage host bind mounts, so
 establishing a *new* one runs ``mount --bind`` and needs root. Reconciling an
 already-established attachment issues no privileged command at all, and is
-therefore unaffected by ``privilege_mode``. Only ``shared`` never needs a
-bind mount.
+therefore unaffected by ``privilege_mode``. Only ``direct-virtiofs`` never
+needs a bind mount.
 
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
@@ -79,10 +82,11 @@ branch state into the checked-out guest repo and fetch guest commits later.
 Git-mode default guest paths match the exact host path unless ``--guest_dst``
 overrides them.
 
-Major limitation: shared folder count
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Major limitation: direct-virtiofs folder count
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each ``shared`` folder consumes a dedicated virtiofs device mapping. Large
+Each ``direct-virtiofs`` folder consumes a dedicated virtiofs device mapping,
+and each mapping occupies one of the guest's limited PCIe slots. Large
 attachment sets can exhaust VM device-slot capacity (for example PCI/PCIe
 slots), causing attach/restore failures such as
 ``No more available PCI slots``.
@@ -90,8 +94,9 @@ slots), causing attach/restore failures such as
 ``shared-root`` and ``persistent`` reduce this pressure by using a single
 persistent virtiofs mapping per VM.
 
-If this happens, prefer ``--mode git`` for some folders, detach unused shared
-folders, or split the workload across multiple VMs.
+If this happens, move folders to ``persistent`` or ``shared-root``, which
+multiplex any number of them through one device, prefer ``--mode git`` for
+some, detach unused ones, or split the workload across multiple VMs.
 
 Major limitation: long-lived virtiofs FD growth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

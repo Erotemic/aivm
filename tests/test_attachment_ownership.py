@@ -154,7 +154,7 @@ def test_detach_blocks_foreign_owner_without_override(
             host_path=str(source.resolve()),
             vm_name=cfg.vm.name,
             owner_principal_id='principal-bob',
-            mode='shared',
+            mode='direct-virtiofs',
             guest_dst='/home/bob-agent/project',
         )
     ]
@@ -355,7 +355,7 @@ def test_saved_session_attachments_are_principal_scoped(
         host_path=alice_src,
         vm_name=vm_name,
         owner_principal_id=alice.id,
-        mode='shared',
+        mode='direct-virtiofs',
         guest_dst='/home/alice-agent/project',
     )
     upsert_attachment(
@@ -363,7 +363,7 @@ def test_saved_session_attachments_are_principal_scoped(
         host_path=bob_src,
         vm_name=vm_name,
         owner_principal_id=bob.id,
-        mode='shared',
+        mode='direct-virtiofs',
         guest_dst='/home/bob-agent/project',
     )
     path = tmp_path / 'config.toml'

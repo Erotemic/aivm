@@ -16,8 +16,8 @@ from ..attachments.persistent import (
     _persistent_root_host_dir,
 )
 from ..attachments.resolve import (
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _resolve_attachment,
 )
@@ -314,7 +314,7 @@ def _initial_share_mapping_for_create(
         mode_opt,
         access_opt,
     )
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag, str(attachment.mode)
     if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
         return (

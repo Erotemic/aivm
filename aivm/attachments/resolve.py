@@ -77,7 +77,7 @@ def logical_absolute_path(raw: str | Path) -> Path:
 
 
 # Attachment mode constants (string aliases for mode values)
-ATTACHMENT_MODE_SHARED = AttachmentMode.SHARED.value
+ATTACHMENT_MODE_DIRECT_VIRTIOFS = AttachmentMode.DIRECT_VIRTIOFS.value
 ATTACHMENT_MODE_SHARED_ROOT = AttachmentMode.SHARED_ROOT.value
 ATTACHMENT_MODE_PERSISTENT = AttachmentMode.PERSISTENT.value
 ATTACHMENT_MODE_GIT = AttachmentMode.GIT.value
@@ -88,7 +88,7 @@ ATTACHMENT_ACCESS_RO = AttachmentAccess.RO.value
 
 # Attachment mode and access sets for validation
 ATTACHMENT_MODES = {
-    ATTACHMENT_MODE_SHARED,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_SHARED_ROOT,
     ATTACHMENT_MODE_PERSISTENT,
     ATTACHMENT_MODE_GIT,
@@ -190,10 +190,26 @@ def _normalize_attachment_mode(mode: str) -> AttachmentMode:
         'shared_root': ATTACHMENT_MODE_SHARED_ROOT,
         'root': ATTACHMENT_MODE_SHARED_ROOT,
         'persistent': ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED: ATTACHMENT_MODE_SHARED,
+        'direct': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        'direct_virtiofs': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        'directvirtiofs': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        ATTACHMENT_MODE_DIRECT_VIRTIOFS: ATTACHMENT_MODE_DIRECT_VIRTIOFS,
         ATTACHMENT_MODE_SHARED_ROOT: ATTACHMENT_MODE_SHARED_ROOT,
         ATTACHMENT_MODE_PERSISTENT: ATTACHMENT_MODE_PERSISTENT,
     }
+    if raw == 'shared':
+        # Deliberately not an alias. 'shared' was this mode's name before it
+        # was renamed for its cost, and silently accepting it would keep
+        # selecting a per-folder PCIe device for anyone following old notes.
+        raise AIVMError(
+            "--mode 'shared' was renamed to "
+            f"'{ATTACHMENT_MODE_DIRECT_VIRTIOFS}', because each such "
+            "attachment consumes one of the guest's limited PCIe slots. "
+            f'Use --mode {ATTACHMENT_MODE_SHARED_ROOT} or '
+            f'--mode {ATTACHMENT_MODE_PERSISTENT} unless you specifically '
+            'need a folder mapped on its own device (for example when you '
+            'have no host sudo).'
+        )
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_MODES))
@@ -385,7 +401,7 @@ def _resolve_attachment(
     if access == ATTACHMENT_ACCESS_RO and mode == ATTACHMENT_MODE_GIT:
         raise NotImplementedError(
             'Read-only attachments are currently only implemented for '
-            f"'{ATTACHMENT_MODE_SHARED}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
+            f"'{ATTACHMENT_MODE_DIRECT_VIRTIOFS}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
             f'Requested mode: {mode}'
         )
     if mode == ATTACHMENT_MODE_GIT:

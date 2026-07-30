@@ -8,6 +8,7 @@ from pathlib import Path
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
+    DEFAULT_ATTACHMENT_MODE,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -99,7 +100,7 @@ def upsert_attachment(
     host_path: str | Path,
     vm_name: str,
     owner_principal_id: str = '',
-    mode: str = 'shared',
+    mode: str = DEFAULT_ATTACHMENT_MODE,
     access: str = 'rw',
     guest_dst: str = '',
     tag: str = '',

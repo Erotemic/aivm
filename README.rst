@@ -49,8 +49,11 @@ The current attachment model is centered on explicit host-folder registration:
   virtiofs export plus host/guest bind mounts, but new attachments no longer
   choose it unless ``--mode shared-root`` is explicit or a saved attachment
   already uses that mode.
-* ``shared`` is the older direct per-folder virtiofs mode and is mostly useful
-  for simple/small attachment sets.
+* ``direct-virtiofs`` maps each folder on its own virtiofs device. It is named
+  for that cost: every such attachment occupies one of the guest's limited
+  PCIe slots. It is the only mode that needs no host bind mount, so it is the
+  right answer for a caller without host sudo and for small attachment sets --
+  but not a default.
 * ``git`` bootstraps a guest-local Git repo and host remote plumbing. It is not
   a live filesystem sync engine.
 
@@ -266,12 +269,14 @@ Attachment modes:
   bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
   guest. Existing saved ``shared-root`` attachments continue to use this mode,
   and new attachments can still request it with ``--mode shared-root``.
-* ``shared``: direct per-folder virtiofs mapping from host source to guest. This
-  is simpler but consumes one VM virtiofs device slot per folder.
+* ``direct-virtiofs``: per-folder virtiofs mapping from host source to guest.
+  Simplest, and the only mode needing no host bind mount (so the only one a
+  caller without sudo can create), but it consumes one VM virtiofs device slot
+  -- and hence one guest PCIe slot -- per folder.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing. It
   does not automatically synchronize worktree contents.
 
-In ``shared``, ``shared-root``, ``persistent``, and ``git`` modes, attached folders
+In ``direct-virtiofs``, ``shared-root``, ``persistent``, and ``git`` modes, attached folders
 mount to the same absolute path inside the guest by default unless
 ``--guest_dst`` overrides it. Running VMs are
 live-attached when possible.
@@ -305,11 +310,11 @@ exposed to a VM with multiple principals. Ownership guards ordinary operation;
 unrestricted root and system-libvirt administrators remain outside AIVM's
 enforcement boundary.
 
-Major limitation: shared-mode folder count
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Major limitation: direct-virtiofs folder count
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each ``shared`` folder uses a dedicated virtiofs device mapping in the VM
-definition. Attaching many folders can hit VM device-slot limits (for example
+Each ``direct-virtiofs`` folder uses a dedicated virtiofs device mapping in the
+VM definition. Attaching many folders can hit VM device-slot limits (for example
 PCI/PCIe capacity), which surfaces from libvirt as errors like
 ``No more available PCI slots`` during attach/restore.
 
@@ -321,7 +326,8 @@ directories and does not recursively rewrite a bind-mounted project path.
 
 Workarounds today:
 
-* detach unused shared folders
+* move folders to ``persistent`` or ``shared-root``, which share one device
+* detach unused ``direct-virtiofs`` folders
 * prefer ``--mode git`` for folders that do not need live writable host sharing
 * split large folder sets across multiple VMs
 
@@ -336,7 +342,7 @@ push or pull project contents automatically for git-mode attachments.
 
 * New folder (no saved attachment): creates/uses a git-mode attachment and
   defaults the guest destination to the exact host path.
-* Folder previously attached in any non-``git`` mode, including ``shared``,
+* Folder previously attached in any non-``git`` mode, including ``direct-virtiofs``,
   ``shared-root``, or ``persistent``: returns an error (mode mismatch). Detach +
   reattach is required to switch modes.
 * ``aivm code .`` without ``--mode``: reuses saved mode if present; otherwise

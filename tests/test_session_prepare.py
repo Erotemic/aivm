@@ -252,7 +252,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
     assert len(atts) == 1
     att = atts[0]
     assert att.host_path == str(harness.host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.access == 'rw'
     assert att.guest_dst == str(harness.host_src)
     assert att.tag == 'hostcode-proj'
@@ -542,7 +542,7 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     assert str(host_src.resolve()) in by_path
     docs = by_path[str(other_src.resolve())]
     assert docs.vm_name == 'restore-vm'
-    assert docs.mode == 'shared'
+    assert docs.mode == 'direct-virtiofs'
     assert docs.guest_dst == '/workspace/docs'
 
 

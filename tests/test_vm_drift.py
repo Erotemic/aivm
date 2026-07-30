@@ -163,7 +163,7 @@ class TestExpectedMappingForAttachment:
         cfg = MagicMock(spec=AgentVMConfig)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',
@@ -242,7 +242,7 @@ class TestAttachmentHasMapping:
         cfg = self._shared_env(monkeypatch, device_readonly=False)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',
@@ -266,7 +266,7 @@ class TestAttachmentHasMapping:
         cfg = self._shared_env(monkeypatch, device_readonly=False)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             access=AttachmentAccess.RO,
             source_dir='/home/user/project',
             tag='my-tag',
@@ -284,7 +284,7 @@ class TestAttachmentHasMapping:
         cfg = self._shared_env(monkeypatch, device_readonly=True)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             access=AttachmentAccess.RO,
             source_dir='/home/user/project',
             tag='my-tag',
@@ -298,7 +298,7 @@ class TestAttachmentHasMapping:
         cfg = MagicMock(spec=AgentVMConfig)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',
@@ -443,7 +443,7 @@ class TestAttachmentDriftReport:
         cfg.vm = VMConfig(name='test-vm', cpus=4, ram_mb=8192, disk_gb=50)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',
@@ -466,7 +466,7 @@ class TestAttachmentDriftReport:
         cfg.vm = VMConfig(name='test-vm', cpus=4, ram_mb=8192, disk_gb=50)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',
@@ -488,7 +488,7 @@ class TestAttachmentDriftReport:
         cfg.vm = VMConfig(name='test-vm', cpus=4, ram_mb=8192, disk_gb=50)
         att = ResolvedAttachment(
             vm_name='test-vm',
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             source_dir='/home/user/project',
             tag='my-tag',
             guest_dst='/guest/path',

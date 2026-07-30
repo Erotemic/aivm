@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 9a0f6da84551127f -->
+<!-- generation schema: 1; input digest: 72563be221f09cbe -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -71,7 +71,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py:371` |
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py:451` |
 | `aivm.attachments.resolve` | `aivm/attachments/resolve.py:145` |
-| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:249` |
+| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:265` |
 | `aivm.attachments.session` | `aivm/attachments/session.py:113` |
 | `aivm.attachments.session` | `aivm/attachments/session.py:144` |
 | `aivm.attachments.session` | `aivm/attachments/session.py:163` |
@@ -127,11 +127,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.config_scopes` | `aivm/config_scopes.py:137` |
 | `aivm.config_scopes` | `aivm/config_scopes.py:159` |
 | `aivm.config_store.models` | `aivm/config_store/models.py:28` |
-| `aivm.config_store.models` | `aivm/config_store/models.py:109` |
-| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:21` |
-| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:28` |
-| `aivm.config_store.parse` | `aivm/config_store/parse.py:106` |
+| `aivm.config_store.models` | `aivm/config_store/models.py:116` |
+| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:22` |
+| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:29` |
 | `aivm.config_store.parse` | `aivm/config_store/parse.py:107` |
+| `aivm.config_store.parse` | `aivm/config_store/parse.py:108` |
 | `aivm.config_store.resolve` | `aivm/config_store/resolve.py:224` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:62` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:79` |
@@ -255,15 +255,15 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.paths` | `aivm/vm/paths.py:26` |
 | `aivm.vm.paths` | `aivm/vm/paths.py:36` |
 | `aivm.vm.provision` | `aivm/vm/provision.py:20` |
-| `aivm.vm.share` | `aivm/vm/share.py:180` |
-| `aivm.vm.share` | `aivm/vm/share.py:248` |
-| `aivm.vm.share` | `aivm/vm/share.py:271` |
-| `aivm.vm.share` | `aivm/vm/share.py:300` |
-| `aivm.vm.share` | `aivm/vm/share.py:332` |
+| `aivm.vm.share` | `aivm/vm/share.py:190` |
+| `aivm.vm.share` | `aivm/vm/share.py:258` |
+| `aivm.vm.share` | `aivm/vm/share.py:281` |
+| `aivm.vm.share` | `aivm/vm/share.py:310` |
 | `aivm.vm.share` | `aivm/vm/share.py:342` |
-| `aivm.vm.share` | `aivm/vm/share.py:356` |
-| `aivm.vm.share` | `aivm/vm/share.py:482` |
-| `aivm.vm.share` | `aivm/vm/share.py:546` |
+| `aivm.vm.share` | `aivm/vm/share.py:352` |
+| `aivm.vm.share` | `aivm/vm/share.py:366` |
+| `aivm.vm.share` | `aivm/vm/share.py:492` |
+| `aivm.vm.share` | `aivm/vm/share.py:556` |
 | `aivm.vm.update.apply` | `aivm/vm/update/apply.py:46` |
 | `aivm.vm.update.detect` | `aivm/vm/update/detect.py:25` |
 | `aivm.vm.update.detect` | `aivm/vm/update/detect.py:73` |

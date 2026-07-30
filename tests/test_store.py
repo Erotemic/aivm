@@ -40,10 +40,14 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     cfg.vm.name = 'vm-a'
     upsert_vm(store, cfg)
     store.attachments.append(
-        AttachmentEntry(host_path='/tmp/z', vm_name='vm-b', mode='shared')
+        AttachmentEntry(
+            host_path='/tmp/z', vm_name='vm-b', mode='direct-virtiofs'
+        )
     )
     store.attachments.append(
-        AttachmentEntry(host_path='/tmp/a', vm_name='vm-a', mode='shared')
+        AttachmentEntry(
+            host_path='/tmp/a', vm_name='vm-a', mode='direct-virtiofs'
+        )
     )
     fpath = tmp_path / 'config.toml'
     save_store(store, fpath)
@@ -828,3 +832,16 @@ def test_attachment_lookup_reports_ambiguous_absent_path(
     assert '/work/alice' in text
     assert 'principal-bob' in text
     assert '/work/bob' in text
+
+
+def test_stored_default_mode_matches_the_attachment_vocabulary() -> None:
+    """The store's fallback mode and the mode enum must not drift apart.
+
+    ``DEFAULT_ATTACHMENT_MODE`` is spelled in the store models rather than
+    imported from the VM layer, to keep the persistence format free of that
+    dependency. That is only safe while the two agree, so pin them.
+    """
+    from aivm.config_store.models import DEFAULT_ATTACHMENT_MODE
+    from aivm.vm.share import AttachmentMode
+
+    assert DEFAULT_ATTACHMENT_MODE == AttachmentMode.DIRECT_VIRTIOFS.value

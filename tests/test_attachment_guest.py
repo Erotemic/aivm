@@ -366,7 +366,7 @@ def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
     guest_dst = str(host_src.expanduser().absolute())
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=guest_dst,
         guest_dst=guest_dst,
         tag='hostcode-foobar-abc12345',
@@ -420,7 +420,7 @@ def test_ensure_attachment_no_mirror_when_disabled(
     guest_dst = str(host_src.expanduser().absolute())
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=guest_dst,
         guest_dst=guest_dst,
         tag='hostcode-foobar-abc12345',
@@ -669,7 +669,7 @@ def test_apply_guest_derived_symlinks_companion_only(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag1',
@@ -711,7 +711,7 @@ def test_apply_guest_derived_symlinks_dual_mirror_for_symlink_host(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag2',
@@ -755,7 +755,7 @@ def test_apply_guest_derived_symlinks_no_dup_mirror_when_same(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag3',
@@ -799,7 +799,7 @@ def test_apply_guest_derived_symlinks_custom_dst_suppresses_all_mirrors(
 
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=custom_dst,
         tag='tag-custom',

@@ -242,7 +242,7 @@ def expected_mapping_for_attachment(
     Returns:
         A tuple of (host_source, tag) or None if attachment mode doesn't use virtiofs.
     """
-    if attachment.mode == AttachmentMode.SHARED:
+    if attachment.mode == AttachmentMode.DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag
     if attachment.mode == AttachmentMode.SHARED_ROOT:
         return str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG
@@ -633,14 +633,14 @@ def desired_saved_vm_mappings(
     desired: set[tuple[str, str]] = set()
     for att in find_attachments_for_vm(reg, cfg.vm.name):
         mode = att.mode
-        if mode in ('shared', 'shared-root'):
-            if mode == 'shared':
-                # For shared mode, use host_path (the store field) and tag from attachment
+        if mode in (AttachmentMode.DIRECT_VIRTIOFS, AttachmentMode.SHARED_ROOT):
+            if mode == AttachmentMode.DIRECT_VIRTIOFS:
+                # Its own device, so the mapping is the folder itself.
                 src = att.host_path
                 tag = att.tag
                 if src:  # Only add non-empty sources
                     desired.add((src, tag))
-            elif mode == 'shared-root':
+            elif mode == AttachmentMode.SHARED_ROOT:
                 # For shared-root mode, use canonical path and tag
                 desired.add(
                     (str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG)

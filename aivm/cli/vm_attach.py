@@ -37,8 +37,8 @@ from ..attachments.persistent import (
 )
 from ..attachments.resolve import (
     ATTACHMENT_ACCESS_RO,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _normalize_attachment_access,
     _normalize_attachment_mode,
@@ -210,7 +210,7 @@ def _ensure_attachment_in_vm_definition(
     if not vm_defined:
         return attachment, False, False
     vm_running = vm_out.ok is True
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         mappings = vm_share_mappings(cfg)
         attachment = drift_align_attachment_tag_with_mappings(
             attachment, host_src, mappings
@@ -340,7 +340,7 @@ def _print_attach_result(
     """Summarize what the attach accomplished and what happens next."""
     mounted_modes = {
         ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED,
+        ATTACHMENT_MODE_DIRECT_VIRTIOFS,
         ATTACHMENT_MODE_SHARED_ROOT,
     }
     print(
@@ -401,7 +401,7 @@ def _attach_privilege_guidance(
             f"\nAttachment mode '{mode}' stages this folder under the VM "
             'export root with a host bind mount, and only root can create '
             'one. Two ways forward:\n'
-            f'  * attach with `--mode {ATTACHMENT_MODE_SHARED}`, which maps '
+            f'  * attach with `--mode {ATTACHMENT_MODE_DIRECT_VIRTIOFS}`, which maps '
             'the folder straight into the guest over virtiofs and needs no '
             'host privileges;\n'
             '  * or ask a host administrator to declare it for you:\n'
@@ -747,7 +747,7 @@ def _print_detach_result(
 ) -> None:
     """Summarize what the detach accomplished per attachment mode."""
     print(f'Detached {host_src} from VM {cfg.vm.name} ({mode} mode)')
-    if mode == ATTACHMENT_MODE_SHARED and vm_defined is True:
+    if mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS and vm_defined is True:
         if detached_share:
             print('Detached virtiofs mapping from VM definition.')
         elif att.tag:
@@ -763,7 +763,7 @@ def _print_detach_result(
         print(
             'Removed persistent attachment intent and refreshed the guest replay manifest.'
         )
-    if vm_running and mode == ATTACHMENT_MODE_SHARED:
+    if vm_running and mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         print(
             f'If the guest still has {att.guest_dst or host_src} mounted, unmount it inside the VM manually.'
         )
@@ -896,7 +896,11 @@ def _run_vm_detach_locked(
     detached_shared_root_host_bind = False
     detached_shared_root_guest_bind = False
     detach_failed = False
-    if mode == ATTACHMENT_MODE_SHARED and vm_defined is True and att.tag:
+    if (
+        mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS
+        and vm_defined is True
+        and att.tag
+    ):
         detached_share = detach_vm_share(
             cfg,
             att.host_path,
@@ -1024,15 +1028,19 @@ class VMAttachCLI(_BaseCommand):
         '.', position=1, help='Host directory to attach.'
     )
     guest_dst: str = kwconf.Value('', help='Guest mount path override.')
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+    mode: Literal['', 'direct-virtiofs', 'shared-root', 'persistent', 'git'] = (
         kwconf.Value(
             '',
-            help='Attachment mode: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+            help=(
+                'Attachment mode: persistent, shared-root, git, or direct-virtiofs (default: saved mode or persistent; mode changes require detach+reattach). direct-virtiofs gives the folder its own virtiofs device and so consumes one of the guest PCIe slots -- prefer it only when a per-folder device is actually needed, such as when you have no host sudo.'
+            ),
         )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
-        help='Attachment access: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
+        help=(
+            'Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
+        ),
     )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
     admin_override: bool = kwconf.Flag(

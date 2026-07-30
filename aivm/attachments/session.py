@@ -70,8 +70,8 @@ from .persistent import (
 )
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _normalize_attachment_mode,
     _resolve_attachment,
@@ -253,7 +253,7 @@ def _saved_vm_attachments(
         mode = _normalize_attachment_mode(att.mode)
         if mode not in {
             ATTACHMENT_MODE_PERSISTENT,
-            ATTACHMENT_MODE_SHARED,
+            ATTACHMENT_MODE_DIRECT_VIRTIOFS,
             ATTACHMENT_MODE_SHARED_ROOT,
         }:
             continue
@@ -371,7 +371,7 @@ def _restore_saved_vm_attachments(
     shared_secondary = [
         att
         for att in secondary_attachments
-        if att.mode == ATTACHMENT_MODE_SHARED
+        if att.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS
     ]
     mappings: list[tuple[str, str]] = []
     if shared_secondary:
@@ -527,7 +527,7 @@ def _restore_saved_vm_attachments(
 def _virtiofs_mapping_for_attachment(
     cfg: AgentVMConfig, attachment: ResolvedAttachment
 ) -> tuple[str, str] | None:
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag
     if attachment.mode in {
         ATTACHMENT_MODE_SHARED_ROOT,
@@ -628,7 +628,7 @@ def _reconcile_attached_vm(
             and vm_running is True
         ):
             mappings = vm_share_mappings(cfg, use_sudo=False)
-            if attachment.mode == ATTACHMENT_MODE_SHARED:
+            if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
                 attachment = drift_align_attachment_tag_with_mappings(
                     attachment, host_src, mappings
                 )
@@ -707,7 +707,7 @@ def _reconcile_attached_vm(
                 and vm_running is True
             ):
                 mappings = vm_share_mappings(cfg, use_sudo=False)
-                if attachment.mode == ATTACHMENT_MODE_SHARED:
+                if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
                     attachment = drift_align_attachment_tag_with_mappings(
                         attachment, host_src, mappings
                     )
@@ -1047,7 +1047,7 @@ def _prepare_attached_session(
     mirror_home = bool(cfg.vm.mirror_shared_home_folders)
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED,
+        ATTACHMENT_MODE_DIRECT_VIRTIOFS,
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
         _reg_for_aliases = load_store(cfg_path)

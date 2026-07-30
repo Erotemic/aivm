@@ -36,6 +36,7 @@ from ..legacy.pre_0_6_0.schema import (
     finalize_schema_version as finalize_pre_0_6_0_schema_version,
 )
 from .models import (
+    DEFAULT_ATTACHMENT_MODE,
     STORE_SCHEMA_VERSION,
     AttachmentEntry,
     CredentialEntry,
@@ -177,7 +178,10 @@ def _attachment_from_dict(
         host_path=_norm_dir(host_path),
         vm_name=owner,
         owner_principal_id=str(item.get('owner_principal_id', '')).strip(),
-        mode=str(item.get('mode', 'shared') or 'shared'),
+        mode=str(
+            item.get('mode', DEFAULT_ATTACHMENT_MODE)
+            or DEFAULT_ATTACHMENT_MODE
+        ),
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),

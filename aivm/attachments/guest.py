@@ -22,8 +22,8 @@ from ..vm.share import ResolvedAttachment
 from .persistent import _prepare_persistent_attachment_host_and_vm
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _compute_mirror_home_symlink,
     _default_primary_guest_dst,
@@ -303,7 +303,7 @@ def _ensure_attachment_available_in_guest(
     symlink under the guest home mirroring the host-home-relative path is created.
     """
     mgr = CommandManager.current()
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         ensure_share_mounted(
             cfg,
             ip,

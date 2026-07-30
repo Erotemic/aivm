@@ -329,15 +329,19 @@ class VMCodeCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+    mode: Literal['', 'direct-virtiofs', 'shared-root', 'persistent', 'git'] = (
         kwconf.Value(
             '',
-            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+            help=(
+                'Override. Attachment mode: persistent, shared-root, git, or direct-virtiofs (default: saved mode or persistent; mode changes require detach+reattach). direct-virtiofs gives the folder its own virtiofs device and so consumes one of the guest PCIe slots -- prefer it only when a per-folder device is actually needed, such as when you have no host sudo.'
+            ),
         )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
-        help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
+        help=(
+            'Override. Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
+        ),
     )
     recreate_if_needed: bool = kwconf.Flag(
         False,
@@ -490,15 +494,19 @@ class VMSSHCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+    mode: Literal['', 'direct-virtiofs', 'shared-root', 'persistent', 'git'] = (
         kwconf.Value(
             '',
-            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+            help=(
+                'Override. Attachment mode: persistent, shared-root, git, or direct-virtiofs (default: saved mode or persistent; mode changes require detach+reattach). direct-virtiofs gives the folder its own virtiofs device and so consumes one of the guest PCIe slots -- prefer it only when a per-folder device is actually needed, such as when you have no host sudo.'
+            ),
         )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
-        help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
+        help=(
+            'Override. Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
+        ),
     )
     recreate_if_needed: bool = kwconf.Flag(
         False,

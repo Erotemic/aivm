@@ -43,13 +43,23 @@ class AttachmentMode(StrEnum):
     """Attachment mode for VM shared folders.
 
     These modes determine how host directories are shared with the VM:
-    - SHARED: Direct virtiofs mount of the host directory
+    - DIRECT_VIRTIOFS: its own virtiofs device per folder, mapped straight
+      into the guest
     - SHARED_ROOT: VM-specific bind mount via shared-root directory
     - PERSISTENT: Persistent staged attachments replayed in-guest
     - GIT: Git clone of the host repo into the guest
+
+    ``DIRECT_VIRTIOFS`` is named for its cost rather than its behavior,
+    because that cost is what should decide against it. Every folder
+    attached this way adds a *separate* virtiofs device to the domain, and
+    each device occupies one of the guest's finite PCIe slots; the other
+    virtiofs-backed modes multiplex any number of folders through a single
+    device. It is the only mode needing no host bind mount, so it remains
+    the right answer for a caller without root -- but reach for it for that
+    reason, not by default.
     """
 
-    SHARED = 'shared'
+    DIRECT_VIRTIOFS = 'direct-virtiofs'
     SHARED_ROOT = 'shared-root'
     PERSISTENT = 'persistent'
     GIT = 'git'
@@ -79,7 +89,7 @@ class ResolvedAttachment:
     """
 
     vm_name: str
-    mode: AttachmentMode = AttachmentMode.SHARED
+    mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS
     access: AttachmentAccess = AttachmentAccess.RW
     source_dir: str = ''
     guest_dst: str = ''

@@ -62,7 +62,7 @@ def test_vm_detach_shared_removes_store_and_detaches_mapping(
         AttachmentEntry(
             host_path=str(host_src.resolve()),
             vm_name=cfg.vm.name,
-            mode=AttachmentMode.SHARED,
+            mode=AttachmentMode.DIRECT_VIRTIOFS,
             guest_dst='/workspace/proj',
             tag='hostcode-proj',
         )

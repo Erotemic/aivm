@@ -82,10 +82,10 @@ What a user without sudo can and cannot do
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 They can create, start, stop, restart, update and delete VMs, attach folders
-in ``shared`` and ``git`` modes, manage credentials, and open sessions. Their
-already-established ``persistent`` attachments keep working: AIVM re-asserts
-those binds only when they have actually drifted, so an ordinary start needs
-no privileges.
+in ``direct-virtiofs`` and ``git`` modes, manage credentials, and open
+sessions. Their already-established ``persistent`` attachments keep working:
+AIVM re-asserts those binds only when they have actually drifted, so an
+ordinary start needs no privileges.
 
 They cannot install or read the nftables rules, and cannot create a *new*
 ``persistent`` or ``shared-root`` attachment. Two ways around the second:
@@ -93,7 +93,8 @@ They cannot install or read the nftables rules, and cannot create a *new*
 .. code-block:: bash
 
    # No host privileges needed; maps the folder straight into the guest.
-   aivm vm attach ~/proj --mode shared
+   # Costs one guest PCIe slot per folder, so keep the set small.
+   aivm vm attach ~/proj --mode direct-virtiofs
 
    # Or an administrator declares it on the user's behalf, so the record is
    # owned by that user rather than by the admin.

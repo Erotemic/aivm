@@ -82,7 +82,7 @@ is the subject of a different test file. Say which in a comment.
 - `aivm/attachments/`: Manages folder sharing between the host and guest. It supports four modes:
     - `persistent`: Bind-mount staged under the VM's export root, replayed in-guest (default).
     - `shared-root`: A single virtiofs mapping fed by per-folder host bind-mounts.
-    - `shared`: Direct per-folder virtiofs mappings. The only mode needing no host bind-mount, hence no sudo.
+    - `direct-virtiofs`: Its own virtiofs device per folder. The only mode needing no host bind-mount, hence the only one a caller without sudo can create -- but each device costs one of the guest's limited PCIe slots, which is what the name is for. Was called `shared`; the old name is rejected rather than aliased.
     - `git`: Syncs via host/guest Git remotes. Never shares the folder, so it is the mode for repos whose contents must not reach the guest. Never select it implicitly.
 - `aivm/host.py`, `aivm/net.py`, `aivm/firewall.py`: Provide abstractions for interacting with the host system's networking, libvirt, and nftables firewall.
 - `aivm/config_store/` & `aivm/config.py`: Manage the global configuration store located at `~/.config/aivm/config.toml`.

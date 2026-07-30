@@ -37,13 +37,20 @@ class NetworkEntry:
 
 ATTACHMENT_SYSTEM_OWNER = 'system'
 
+#: Mode assumed for a stored attachment that names none. Spelled here rather
+#: than imported from :class:`aivm.vm.share.AttachmentMode` to keep the store
+#: models free of any dependency on the VM layer; ``test_config_store_schema``
+#: holds the two spellings together. This is also the historical meaning of a
+#: record written before the mode had a name: one virtiofs device per folder.
+DEFAULT_ATTACHMENT_MODE = 'direct-virtiofs'
+
 
 @dataclass
 class AttachmentEntry:
     host_path: str
     vm_name: str
     owner_principal_id: str = ''
-    mode: str = 'shared'
+    mode: str = DEFAULT_ATTACHMENT_MODE
     access: str = 'rw'
     guest_dst: str = ''
     tag: str = ''

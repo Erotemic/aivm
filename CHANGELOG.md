@@ -4,6 +4,19 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.0 - Unreleased
 
+### Changed
+* Renamed the `shared` attachment mode to `direct-virtiofs`, after its cost
+  rather than its behavior. Each such attachment gives its folder a dedicated
+  virtiofs device, and every device occupies one of the guest's limited PCIe
+  slots -- `No more available PCI slots` is how a large attachment set fails --
+  while `persistent` and `shared-root` multiplex any number of folders through
+  a single device. It remains the only mode needing no host bind mount, and so
+  the only one a caller without sudo can create; that is the reason to choose
+  it, and the new name is meant to stop it being chosen by default. `--mode
+  shared` is rejected with an explanation rather than aliased, so nobody keeps
+  selecting a per-folder device by habit. Released pre-0.6 stores still spell
+  it `shared`, and migration renames those records.
+
 ### Added
 * Made a shared workstation usable by host accounts that hold libvirt/machine
   group membership but no sudo, which is the normal arrangement when one

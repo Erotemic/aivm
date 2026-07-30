@@ -130,7 +130,7 @@ def _sequence(*procs: FakeProc) -> Callable[[list[str]], FakeProc]:
 def _make_env(
     tmp_path: Path,
     *,
-    mode: AttachmentMode = AttachmentMode.SHARED,
+    mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS,
     tag: str = PROJ_TAG,
     guest_dst: str = PROJ_DST,
 ) -> tuple[Any, Path, ResolvedAttachment]:

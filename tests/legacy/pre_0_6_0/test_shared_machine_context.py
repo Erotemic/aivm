@@ -112,7 +112,7 @@ def test_prepared_sessions_keep_selected_principal_end_to_end(
             vm_opt=scenario.vm_name,
             host_src=principal.host_src,
             guest_dst_opt=f'/home/{principal.guest_user}/code/project',
-            attach_mode_opt='shared',
+            attach_mode_opt='direct-virtiofs',
             attach_access_opt='rw',
             recreate_if_needed=False,
             ensure_firewall_opt=False,
@@ -149,7 +149,7 @@ def test_released_shadow_stores_expose_partial_attachment_inventory(
             store,
             host_path=principal.host_src,
             vm_name=scenario.vm_name,
-            mode='shared',
+            mode='direct-virtiofs',
             guest_dst=f'/home/{principal.guest_user}/code/project',
         )
         save_store(store, principal.config_path)

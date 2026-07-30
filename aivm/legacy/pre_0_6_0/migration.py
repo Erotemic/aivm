@@ -36,6 +36,9 @@ from ...config_store import (
     upsert_principal,
     upsert_vm_with_network,
 )
+from ...config_store.models import (
+    DEFAULT_ATTACHMENT_MODE as ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+)
 from ...credentials.validation import (
     credential_id,
     validate_repository_identity,
@@ -816,6 +819,19 @@ def _machine_store_snapshot(path: Path) -> tuple[bool, str, Store | None]:
     return True, digest.hexdigest(), store
 
 
+#: Attachment modes whose released spelling differs from the current one.
+#: The live CLI deliberately refuses the old name so nobody keeps selecting a
+#: per-folder PCIe device out of habit, but a *released store* is evidence of
+#: what a user already had, not a fresh request, and must migrate to the same
+#: behavior under its new name.
+_RELEASED_ATTACHMENT_MODE_RENAMES = {'shared': ATTACHMENT_MODE_DIRECT_VIRTIOFS}
+
+
+def _migrated_attachment_mode(mode: str) -> str:
+    raw = str(mode or '').strip()
+    return _RELEASED_ATTACHMENT_MODE_RENAMES.get(raw, raw)
+
+
 def _machine_store_revision(path: Path) -> tuple[bool, str]:
     """Fingerprint machine-store files without treating I/O errors as absence."""
     exists, sha256, _store = _machine_store_snapshot(path)
@@ -1122,7 +1138,7 @@ def build_migration_plan(
                 host_path=attachment.host_path,
                 vm_name=vm_name,
                 owner_principal_id=principal_id,
-                mode=attachment.mode,
+                mode=_migrated_attachment_mode(attachment.mode),
                 access=attachment.access,
                 guest_dst=attachment.guest_dst,
                 tag=attachment.tag,

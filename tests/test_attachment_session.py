@@ -71,7 +71,7 @@ def make_attach_env(tmp_path: Path) -> Callable[..., AttachEnv]:
         *,
         name: str,
         dirname: str = 'proj',
-        mode: AttachmentMode = AttachmentMode.SHARED,
+        mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS,
         guest_dst: str = '/workspace/proj',
         tag: str = 'hostcode-proj',
     ) -> AttachEnv:
@@ -192,7 +192,7 @@ def test_vm_attach_mounts_share_when_vm_running(
     # The real _record_attachment persisted the share; the store is the artifact.
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.access == 'rw'
     assert att.guest_dst == '/workspace/proj'
     assert att.tag == 'hostcode-proj'
@@ -239,7 +239,7 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
     # Even with the VM stopped, the attachment is still persisted.
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.guest_dst == '/workspace/proj'
     assert att.tag == 'hostcode-proj'
 
@@ -350,7 +350,7 @@ def test_attach_without_sudo_names_both_ways_out(
 
     message = str(excinfo.value)
     assert 'could not obtain sudo credentials' in message
-    assert '--mode shared' in message
+    assert '--mode direct-virtiofs' in message
     assert '--admin_override' in message
 
 
@@ -465,7 +465,7 @@ def test_vm_attach_uses_single_escalating_probe(
     assert probe_calls == [{'use_sudo': True}]
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
 
 
 def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
@@ -619,7 +619,7 @@ def test_vm_connect_clis_pass_lexical_host_src_to_session(
     host_src.mkdir()
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(host_src.resolve()),
         guest_dst=str(host_src),
         tag='hostcode-proj-abc12345',
@@ -678,7 +678,7 @@ def test_vm_ssh_reports_only_transport_failures(
     host_src.mkdir()
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(host_src.resolve()),
         guest_dst=str(host_src),
         tag='hostcode-proj',
