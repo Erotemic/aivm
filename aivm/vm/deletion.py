@@ -59,8 +59,9 @@ from .domain import (
     _destroy_and_undefine_vm,
     domain_file_storage_paths,
     domain_is_defined,
+    require_managed_storage_path,
 )
-from .paths import _paths, shared_root_host_dir
+from .paths import _paths
 
 JOURNAL_SCHEMA_VERSION = 1
 
@@ -391,21 +392,23 @@ def _path_exists(path: Path) -> bool:
 
 
 def _require_managed_storage_path(cfg: AgentVMConfig, path: Path) -> None:
-    root = Path(os.path.abspath(os.fspath(_paths(cfg)['base_dir'])))
-    candidate = Path(os.path.abspath(os.fspath(path)))
-    resolved_root = root.resolve(strict=False)
-    resolved_candidate = candidate.resolve(strict=False)
-    try:
-        candidate.relative_to(root)
-        resolved_candidate.relative_to(resolved_root)
-    except ValueError as ex:
-        raise AIVMError(
-            f'VM {cfg.vm.name!r} uses storage outside its AIVM-managed tree: '
-            f'{candidate}. Refusing deletion before changing attachment, '
-            'credential, libvirt, or storage state. The deletion journal is '
-            'retained so an operator can detach, move, or explicitly manage '
-            'the external storage before retrying.'
-        ) from ex
+    """Deletion-flavored front for the shared containment chokepoint.
+
+    The containment rule itself lives in
+    :func:`aivm.vm.domain.require_managed_storage_path` so the recreate
+    path enforces the identical check; only the recovery guidance here is
+    deletion-specific.
+    """
+    require_managed_storage_path(
+        cfg,
+        path,
+        action='deletion',
+        recovery=(
+            'The deletion journal is retained so an operator can detach, '
+            'move, or explicitly manage the external storage before '
+            'retrying.'
+        ),
+    )
 
 
 def _remove_retained_storage(cfg: AgentVMConfig, paths: Iterable[Path]) -> None:

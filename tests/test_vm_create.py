@@ -326,13 +326,27 @@ def test_create_vm_raises_clear_error(
         create_or_start_vm(cfg, dry_run=False, recreate=False, **create_kwargs)
 
 
+def _domain_storage_xml(*disks: tuple[str, object]) -> str:
+    """Render ``virsh dumpxml`` output with one ``(device, path)`` per disk."""
+    rendered = ''.join(
+        f"<disk type='file' device='{device}'><source file='{path}'/></disk>"
+        for device, path in disks
+    )
+    return f'<domain><devices>{rendered}</devices></domain>'
+
+
 def test_recreate_refuses_to_continue_when_old_storage_remains(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """Recreate never provisions over an incompletely deleted old VM."""
-    cfg = make_cfg(None, **{'vm.name': 'vm-retained-storage'})
-    retained = tmp_path / 'vm-retained-storage.qcow2'
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-retained-storage'})
+    retained = (
+        Path(cfg.paths.base_dir)
+        / 'vm-retained-storage'
+        / 'images'
+        / 'vm-retained-storage.qcow2'
+    )
     cfg_path = tmp_path / 'config.toml'
     from aivm.config_store import Store, save_store
 
@@ -340,11 +354,19 @@ def test_recreate_refuses_to_continue_when_old_storage_remains(
     monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
     activate_manager(monkeypatch)
     command_recorder(
-        monkeypatch, {'virsh domstate': FakeProc(0, 'shut off\n', '')}
+        monkeypatch,
+        {
+            'virsh dominfo': FakeProc(0, 'Id: 1\n', ''),
+            'virsh dumpxml': FakeProc(
+                0, _domain_storage_xml(('disk', retained)), ''
+            ),
+        },
     )
     monkeypatch.setattr(
         'aivm.vm.create._destroy_and_undefine_vm',
-        lambda name: DomainRemovalReport((retained,), (retained,)),
+        lambda name, *, storage_paths=None: DomainRemovalReport(
+            (retained,), (retained,)
+        ),
     )
     monkeypatch.setattr(
         'aivm.vm.create.fetch_image',
@@ -358,6 +380,71 @@ def test_recreate_refuses_to_continue_when_old_storage_remains(
             recreate=True,
             config_store_path=cfg_path,
         )
+
+
+@pytest.mark.parametrize(
+    'external_device',
+    [
+        pytest.param('disk', id='external_disk'),
+        pytest.param('cdrom', id='external_cdrom_media'),
+    ],
+)
+def test_recreate_refuses_unmanaged_domain_storage(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    external_device: str,
+) -> None:
+    """Recreate never lets ``--remove-all-storage`` reach unmanaged files.
+
+    A live domain disk outside the AIVM-managed tree --- a user-attached
+    volume or inserted ISO --- refuses the recreate by name before any
+    destructive libvirt command is issued.
+    """
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-external-storage'})
+    managed = (
+        Path(cfg.paths.base_dir)
+        / 'vm-external-storage'
+        / 'images'
+        / 'vm-external-storage.qcow2'
+    )
+    external = tmp_path / 'outside' / 'user-volume.img'
+    cfg_path = tmp_path / 'config.toml'
+    from aivm.config_store import Store, save_store
+
+    save_store(Store(), cfg_path)
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh dominfo': FakeProc(0, 'Id: 1\n', ''),
+            'virsh dumpxml': FakeProc(
+                0,
+                _domain_storage_xml(
+                    ('disk', managed), (external_device, external)
+                ),
+                '',
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        'aivm.vm.create.fetch_image',
+        lambda *a, **k: pytest.fail('new image preparation must not begin'),
+    )
+
+    with pytest.raises(AIVMError) as excinfo:
+        create_or_start_vm(
+            cfg,
+            dry_run=False,
+            recreate=True,
+            config_store_path=cfg_path,
+        )
+
+    assert 'outside its AIVM-managed tree' in str(excinfo.value)
+    assert 'Refusing recreate' in str(excinfo.value)
+    assert str(external) in str(excinfo.value)
+    assert not rec.ran('virsh', 'destroy')
+    assert not rec.ran('virsh', 'undefine')
 
 
 def test_create_or_start_refuses_unfinished_deletion_journal(

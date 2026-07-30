@@ -16,7 +16,7 @@ from .commands import CommandManager
 from .config import AgentVMConfig
 from .errors import AIVMError
 from .privilege import virsh_needs_sudo
-from .runtime import virsh_cmd
+from .runtime import pin_locale, virsh_cmd
 from .util import which
 
 log = logger
@@ -215,9 +215,13 @@ def _network_inactive_error(detail: str) -> bool:
 
 
 def _network_defined(name: str) -> bool:
-    """Return a definitive libvirt-network presence answer or fail closed."""
+    """Return a definitive libvirt-network presence answer or fail closed.
+
+    The stderr is string-matched by :func:`_network_missing_error`, so the
+    invocation pins the C locale.
+    """
     result = CommandManager.current().run(
-        virsh_cmd('net-info', name),
+        pin_locale(virsh_cmd('net-info', name)),
         sudo=virsh_needs_sudo(),
         role='read',
         check=False,
@@ -248,8 +252,10 @@ def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         return
 
     mgr = CommandManager.current()
+    # Both teardown commands below have their stderr string-matched against
+    # the recognized absence/inactive diagnostics, so pin the C locale.
     stopped = mgr.run(
-        virsh_cmd('net-destroy', name),
+        pin_locale(virsh_cmd('net-destroy', name)),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
@@ -266,7 +272,7 @@ def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             )
 
     undefined = mgr.run(
-        virsh_cmd('net-undefine', name),
+        pin_locale(virsh_cmd('net-undefine', name)),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,

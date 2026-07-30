@@ -32,7 +32,12 @@ from aivm.scoped_store import (
     save_scope_store,
 )
 from aivm.util import CmdResult
-from tests.helpers import FakeProc, activate_manager
+from tests.helpers import FakeProc, activate_manager, command_recorder
+
+
+def _virsh_action(cmd: list[str]) -> str:
+    """Return the virsh subcommand, skipping any ``env LC_ALL=C`` pin."""
+    return cmd[cmd.index('virsh') + 3]
 
 
 def test_route_overlap_none_without_ip(
@@ -100,12 +105,13 @@ def test_network_status_and_destroy(
     def fake_run_cmd(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         nonlocal info_calls
         calls.append(cmd)
-        if cmd[3] == 'net-info':
+        action = _virsh_action(cmd)
+        if action == 'net-info':
             info_calls += 1
             if info_calls <= 2:
                 return CmdResult(0, 'INFO', '')
             return CmdResult(1, '', 'error: failed to get network')
-        if cmd[3] == 'net-dumpxml':
+        if action == 'net-dumpxml':
             return CmdResult(0, '<network/>', '')
         return CmdResult(0, '', '')
 
@@ -114,7 +120,11 @@ def test_network_status_and_destroy(
     assert 'INFO' in out
     assert '<network/>' in out
     destroy_network(cfg, dry_run=False)
+    # The teardown commands string-match libvirt stderr, so they carry the
+    # C-locale pin; localized diagnostics would defeat the absence checks.
     assert [
+        'env',
+        'LC_ALL=C',
         'virsh',
         '-c',
         'qemu:///system',
@@ -122,6 +132,8 @@ def test_network_status_and_destroy(
         cfg.network.name,
     ] in calls
     assert [
+        'env',
+        'LC_ALL=C',
         'virsh',
         '-c',
         'qemu:///system',
@@ -152,7 +164,7 @@ def test_destroy_network_rejects_unrecognized_libvirt_failures(
 
     def fake_run(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         del self, kwargs
-        action = cmd[3]
+        action = _virsh_action(cmd)
         calls.append(action)
         if action == 'net-info':
             return CmdResult(0, 'defined', '')
@@ -176,7 +188,7 @@ def test_destroy_network_fails_closed_when_net_info_fails(
 
     def fake_run(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         del self, kwargs
-        calls.append(cmd[3])
+        calls.append(_virsh_action(cmd))
         return CmdResult(1, '', 'error: failed to connect to the hypervisor')
 
     monkeypatch.setattr('aivm.net.CommandManager.run', fake_run)
@@ -194,7 +206,7 @@ def test_destroy_network_fails_when_final_absence_check_fails(
     def fake_run(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         nonlocal info_calls
         del self, kwargs
-        action = cmd[3]
+        action = _virsh_action(cmd)
         if action == 'net-info':
             info_calls += 1
             if info_calls == 1:
@@ -215,12 +227,61 @@ def test_destroy_network_accepts_definitively_absent_network(
 
     def fake_run(self, cmd: list[str], **kwargs: Any):  # type: ignore[no-untyped-def]
         del self, kwargs
-        calls.append(cmd[3])
+        calls.append(_virsh_action(cmd))
         return CmdResult(1, '', 'error: failed to get network')
 
     monkeypatch.setattr('aivm.net.CommandManager.run', fake_run)
     destroy_network(cfg)
     assert calls == ['net-info']
+
+
+def test_destroy_network_pins_c_locale_for_matched_virsh_output(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Every teardown command whose stderr is string-matched pins LC_ALL=C.
+
+    On a localized host libvirt translates its diagnostics; without the pin
+    the recognized absence/inactive matching fails and the idempotent
+    destroy turns into a hard error.  The realistic English replies here
+    only match because the raw command line carries the pin.
+    """
+    cfg = AgentVMConfig()
+    activate_manager(monkeypatch, euid=0)
+    replies = iter([FakeProc(0, 'Name: net', '')])
+
+    def net_info(cmd: list[str]) -> FakeProc:
+        del cmd
+        return next(
+            replies,
+            FakeProc(
+                1, '', f"error: failed to get network '{cfg.network.name}'"
+            ),
+        )
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh net-info': net_info,
+            'virsh net-destroy': FakeProc(
+                1,
+                '',
+                'error: Requested operation is not valid: '
+                f"network '{cfg.network.name}' is not active",
+            ),
+            'virsh net-undefine': FakeProc(0),
+        },
+    )
+
+    destroy_network(cfg)
+
+    matched = {'net-info', 'net-destroy', 'net-undefine'}
+    seen: set[str] = set()
+    for raw, normalized in zip(rec.calls, rec.normalized):
+        assert normalized[0] == 'virsh'
+        assert normalized[1] in matched
+        seen.add(normalized[1])
+        assert raw[:2] == ['env', 'LC_ALL=C']
+    assert seen == matched
 
 
 def _machine_network_store() -> tuple[StoreScope, AgentVMConfig]:

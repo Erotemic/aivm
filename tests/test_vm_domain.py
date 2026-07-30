@@ -285,25 +285,71 @@ def test_restart_vm_error(
         restart_vm(cfg, dry_run=False)
 
 
+@pytest.mark.parametrize(
+    ('vm_name', 'disk_xml'),
+    [
+        pytest.param(
+            'vm-block-storage',
+            '<disk type="block" device="disk">'
+            '<source dev="/dev/vg0/vm-disk"/></disk>',
+            id='rejects_non_file_disk',
+        ),
+        pytest.param(
+            'vm-block-cdrom',
+            '<disk type="block" device="cdrom"><source dev="/dev/sr0"/></disk>',
+            id='rejects_non_file_cdrom_media',
+        ),
+    ],
+)
 def test_domain_storage_capture_rejects_non_file_disk(
+    monkeypatch: MonkeyPatch, vm_name: str, disk_xml: str
+) -> None:
+    """Deletion must not proceed when libvirt storage cannot be enumerated.
+
+    ``--remove-all-storage`` acts on every ``<disk>`` source, so an
+    unverifiable source fails closed whether it is a writable disk or
+    inserted cdrom media.
+    """
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    xml = f'<domain><devices>{disk_xml}</devices></domain>'
+    command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
+
+    with pytest.raises(AIVMError, match='non-file or otherwise unverifiable'):
+        domain_file_storage_paths(vm_name)
+
+
+def test_domain_storage_capture_includes_cdrom_media(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Deletion must not proceed when libvirt storage cannot be enumerated."""
+    """File-backed cdrom media is inventoried alongside writable disks.
+
+    ``virsh undefine --remove-all-storage`` deletes an attached ISO exactly
+    like a qcow2, so the containment/journal inventory must include it.  An
+    empty removable drive (no ``<source>``) has nothing to delete and is
+    skipped rather than failing the capture.
+    """
     activate_manager(monkeypatch)
     monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
     xml = """
     <domain>
       <devices>
-        <disk type="block" device="disk">
-          <source dev="/dev/vg0/vm-disk"/>
+        <disk type="file" device="disk">
+          <source file="/managed/vm/images/vm.qcow2"/>
         </disk>
+        <disk type="file" device="cdrom">
+          <source file="/managed/vm/cloud-init/seed.iso"/>
+        </disk>
+        <disk type="file" device="cdrom"/>
       </devices>
     </domain>
     """
     command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
 
-    with pytest.raises(AIVMError, match='non-file or otherwise unverifiable'):
-        domain_file_storage_paths('vm-block-storage')
+    assert domain_file_storage_paths('vm-with-cdrom') == (
+        Path('/managed/vm/images/vm.qcow2'),
+        Path('/managed/vm/cloud-init/seed.iso'),
+    )
 
 
 def test_domain_undefine_never_retries_without_storage_removal(
@@ -389,6 +435,48 @@ def test_vm_defined_accepts_only_recognized_missing_domain(
         {'virsh dominfo': FakeProc(1, '', 'error: failed to get domain')},
     )
     assert _vm_defined('missing-vm') is False
+
+
+def test_vm_defined_pins_c_locale_on_dominfo(monkeypatch: MonkeyPatch) -> None:
+    """The dominfo stderr is string-matched, so the raw argv pins LC_ALL=C.
+
+    Localized libvirt diagnostics would otherwise turn every probe of a
+    missing VM into a hard 'Could not determine' error.
+    """
+    activate_manager(monkeypatch, euid=0)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh dominfo': FakeProc(
+                1, '', "error: failed to get domain 'missing-vm'"
+            )
+        },
+    )
+
+    assert _vm_defined('missing-vm') is False
+
+    raw = rec.calls[rec.normalized.index(['virsh', 'dominfo', 'missing-vm'])]
+    assert raw[:2] == ['env', 'LC_ALL=C']
+
+
+def test_vm_state_probe_pins_c_locale_on_domstate(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """State probes match English names ('running', 'shut off'), so the
+    raw domstate argv pins LC_ALL=C; a translated state name would make
+    shutdown flows misread an active VM as inactive."""
+    cfg = make_cfg(None, **{'vm.name': 'vm-locale-state'})
+    activate_manager(monkeypatch, euid=0)
+    rec = command_recorder(
+        monkeypatch, {'virsh domstate': FakeProc(0, 'shut off\n', '')}
+    )
+
+    shutdown_vm(cfg, dry_run=False)
+
+    raw = rec.calls[
+        rec.normalized.index(['virsh', 'domstate', 'vm-locale-state'])
+    ]
+    assert raw[:2] == ['env', 'LC_ALL=C']
 
 
 def test_domain_storage_capture_fails_closed_on_dumpxml_error(

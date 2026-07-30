@@ -14,8 +14,9 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
-from ..runtime import virsh_cmd, virsh_domain_missing
+from ..runtime import pin_locale, virsh_cmd, virsh_domain_missing
 from .connectivity import get_ip_cached
+from .paths import _paths
 
 log = logger
 
@@ -27,6 +28,7 @@ def _vm_defined(name: str) -> bool:
     domain and inspection failures such as a broken libvirt connection or a
     permission denial.  Only the recognized no-domain diagnostic is absence;
     every other failure aborts the caller before destructive work can begin.
+    The stderr is string-matched, so the invocation pins the C locale.
     """
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
@@ -39,7 +41,7 @@ def _vm_defined(name: str) -> bool:
             approval_scope=f'vm-defined:{name}',
         ):
             res = mgr.submit(
-                virsh_cmd('dominfo', name),
+                pin_locale(virsh_cmd('dominfo', name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -49,7 +51,7 @@ def _vm_defined(name: str) -> bool:
             ).result()
     else:
         res = mgr.run(
-            virsh_cmd('dominfo', name),
+            pin_locale(virsh_cmd('dominfo', name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
@@ -84,8 +86,50 @@ class DomainRemovalReport:
         return not self.retained_storage_paths
 
 
+def require_managed_storage_path(
+    cfg: AgentVMConfig,
+    path: Path,
+    *,
+    action: str,
+    recovery: str = '',
+) -> None:
+    """Refuse any storage path outside this VM's AIVM-managed tree.
+
+    This is the single containment rule guarding every flow that reaches
+    ``virsh undefine --remove-all-storage`` (deletion and recreate alike).
+    Both the literal and the fully resolved forms must sit under the managed
+    VM base directory so a symlinked component cannot smuggle an external
+    file into storage removal.  ``action`` names the refused operation in
+    the error; ``recovery`` optionally appends caller-specific next steps.
+    """
+    root = Path(os.path.abspath(os.fspath(_paths(cfg)['base_dir'])))
+    candidate = Path(os.path.abspath(os.fspath(path)))
+    resolved_root = root.resolve(strict=False)
+    resolved_candidate = candidate.resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+        resolved_candidate.relative_to(resolved_root)
+    except ValueError as ex:
+        message = (
+            f'VM {cfg.vm.name!r} uses storage outside its AIVM-managed tree: '
+            f'{candidate}. Refusing {action} before changing attachment, '
+            'credential, libvirt, or storage state.'
+        )
+        if recovery:
+            message += f' {recovery}'
+        raise AIVMError(message) from ex
+
+
 def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
-    """Return every file-backed disk path from the live domain XML."""
+    """Return every file-backed ``<disk>`` source from the live domain XML.
+
+    Every ``<disk>`` element is inventoried regardless of its ``device``
+    attribute: ``virsh undefine --remove-all-storage`` deletes cdrom/floppy
+    media exactly like writable disks, so containment validation and
+    deletion journaling must see them too.  A removable drive without a
+    ``<source>`` (empty tray) has nothing to delete and is skipped; a disk
+    proper without a source, or any non-file source, fails closed.
+    """
     if not _vm_defined(name):
         return ()
     mgr = CommandManager.current()
@@ -112,14 +156,17 @@ def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
     paths: list[Path] = []
     seen: set[str] = set()
     for disk in root.findall('./devices/disk'):
-        if str(disk.attrib.get('device', 'disk')).strip() != 'disk':
-            continue
+        device = str(disk.attrib.get('device', 'disk')).strip() or 'disk'
         source = disk.find('source')
         if source is None:
-            raise AIVMError(
-                f'VM {name!r} has a disk without a source; AIVM cannot '
-                'verify storage deletion.'
-            )
+            if device == 'disk':
+                raise AIVMError(
+                    f'VM {name!r} has a disk without a source; AIVM cannot '
+                    'verify storage deletion.'
+                )
+            # A removable drive (cdrom/floppy) with no inserted media has
+            # nothing for --remove-all-storage to delete.
+            continue
         raw = str(source.attrib.get('file', '')).strip()
         if not raw:
             source_kind = (
@@ -297,10 +344,13 @@ def _get_vm_state(name: str) -> tuple[int, str, str]:
     The state and error strings are lowercased and stripped.
     On success, state contains the VM state and error is empty.
     On failure, state is empty and error contains the error message.
+
+    Callers match the state against English names such as ``running`` and
+    ``shut off``, so the invocation pins the C locale.
     """
     mgr = CommandManager.current()
     res = mgr.run(
-        virsh_cmd('domstate', name),
+        pin_locale(virsh_cmd('domstate', name)),
         sudo=virsh_needs_sudo(),
         role='read',
         check=False,
@@ -391,8 +441,8 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Gracefully shut down the VM using ACPI shutdown signal.
 
     This sends a graceful shutdown signal to the guest OS. If the guest
-    does not shut down within a reasonable time, callers may need to use
-    ``destroy_vm`` for a forced shutdown.
+    does not shut down within a reasonable time, callers may need a
+    forced power-off (``virsh destroy``).
     """
     name = cfg.vm.name
     if dry_run:
@@ -476,7 +526,7 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     This sends a graceful shutdown signal to the guest OS, waits for it to
     stop, and then starts the VM again. If the guest does not shut down
     within a reasonable time, this may need to be followed by a forced
-    restart using ``destroy_vm`` and ``create_or_start_vm``.
+    restart using ``virsh destroy`` and ``create_or_start_vm``.
 
     This operation requires the VM to already exist; it will not create
     a new VM.
@@ -591,31 +641,6 @@ def _start_vm(name: str) -> None:
         check=True,
         summary=f'Start VM {name}',
     )
-
-
-def destroy_vm(
-    cfg: AgentVMConfig, *, dry_run: bool = False
-) -> DomainRemovalReport | None:
-    name = cfg.vm.name
-    if dry_run:
-        log.info('DRYRUN: virsh destroy/undefine {}', name)
-        return None
-    mgr = CommandManager.current()
-    with mgr.intent(
-        f'Destroy VM {name}',
-        why='Remove the libvirt domain and its related managed definition state.',
-        role='modify',
-    ):
-        report = _destroy_and_undefine_vm(name)
-    if report.retained_storage_paths:
-        rendered = '\n'.join(
-            f'  - {path}' for path in report.retained_storage_paths
-        )
-        raise AIVMError(
-            f'VM {name!r} was undefined, but storage remains:\n{rendered}'
-        )
-    log.info('VM removed with storage verified absent: {}', name)
-    return report
 
 
 def vm_status(cfg: AgentVMConfig) -> str:

@@ -1,4 +1,17 @@
-from aivm.runtime import ssh_base_args
+from aivm.runtime import pin_locale, ssh_base_args, virsh_cmd
+
+
+def test_pin_locale_prefixes_env_lc_all_c() -> None:
+    """The pin is argv-level so it survives sudo's environment reset."""
+    assert pin_locale(virsh_cmd('dominfo', 'vm')) == [
+        'env',
+        'LC_ALL=C',
+        'virsh',
+        '-c',
+        'qemu:///system',
+        'dominfo',
+        'vm',
+    ]
 
 
 def test_ssh_base_args_restricts_auth_to_configured_identity_by_default() -> (

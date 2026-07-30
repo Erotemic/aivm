@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import builtins
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Mapping
@@ -226,18 +225,23 @@ class FakeCommandManager:
 
 
 def normalize_cmd(cmd: Iterable[Any]) -> list[str]:
-    """Strip the sudo and libvirt-URI noise from a command list.
+    """Strip the sudo, locale-pin, and libvirt-URI noise from a command list.
 
-    ``sudo``/``sudo -n`` prefixes and an explicit ``-c <uri>`` connection
+    ``sudo``/``sudo -n`` prefixes, an ``env LC_ALL=C`` locale pin (see
+    ``aivm.runtime.pin_locale``), and an explicit ``-c <uri>`` connection
     flag are how the command layer spells things, not what a test is
-    trying to assert.  Reducing ``['sudo', '-n', 'virsh', '-c',
-    'qemu:///system', 'domstate', 'vm']`` to ``['virsh', 'domstate',
-    'vm']`` lets a test say what it means.
+    trying to assert.  Reducing ``['sudo', '-n', 'env', 'LC_ALL=C',
+    'virsh', '-c', 'qemu:///system', 'domstate', 'vm']`` to ``['virsh',
+    'domstate', 'vm']`` lets a test say what it means.  A test asserting
+    the locale pin itself should look at the raw ``calls`` instead.
 
     Example:
         >>> normalize_cmd(['sudo', '-n', 'virsh', '-c', 'qemu:///system',
         ...                'domstate', 'vm'])
         ['virsh', 'domstate', 'vm']
+        >>> normalize_cmd(['env', 'LC_ALL=C', 'virsh', '-c',
+        ...                'qemu:///system', 'dominfo', 'vm'])
+        ['virsh', 'dominfo', 'vm']
         >>> normalize_cmd(['sudo', 'mount', '--bind', '/a', '/b'])
         ['mount', '--bind', '/a', '/b']
     """
@@ -246,6 +250,8 @@ def normalize_cmd(cmd: Iterable[Any]) -> list[str]:
         parts = parts[2:]
     elif parts[:1] == ['sudo']:
         parts = parts[1:]
+    if parts[:2] == ['env', 'LC_ALL=C']:
+        parts = parts[2:]
     if parts[:1] == ['virsh'] and parts[1:3] == ['-c', SYSTEM_LIBVIRT_URI]:
         parts = ['virsh'] + parts[3:]
     return parts
