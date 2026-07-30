@@ -1010,6 +1010,41 @@ def test_persistent_host_replay_state_untouched_without_records(
     assert not state_dir.exists()
 
 
+def test_persistent_host_replay_dry_run_executes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--dry_run must not run the privileged replay (or anything else).
+
+    Regression: the replay submit had no dry-run gate, so `aivm vm
+    persistent_host_replay --dry_run` executed the real sudo bind replay
+    against a stale manifest and then printed DRYRUN.
+    """
+    from aivm.attachments.persistent import _reconcile_persistent_host_binds
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-replay-dry-run'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.attachments.append(
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
+    )
+    save_store(store, cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    # The virtiofs-mapping probe is a legitimate read; everything else --
+    # notably the sudo replay helper, mkdir, install, systemctl -- is strict.
+    rec = command_recorder(
+        monkeypatch, {'virsh': FakeProc(stdout='<domain/>')}
+    )
+
+    _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
+
+    assert [cmd for cmd in rec.normalized if cmd[0] != 'virsh'] == []
+
+
 def test_persistent_host_replay_manifest_still_updates_after_last_detach(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

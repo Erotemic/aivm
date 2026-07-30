@@ -9,6 +9,7 @@ from loguru import logger as log
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...errors import CommandControlError
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
@@ -150,6 +151,10 @@ def _reconcile_persistent_attachments_in_guest(
     CommandManager.activate(isolated_manager)
     try:
         _strict_reconcile()
+    except CommandControlError:
+        # A declined or unapproved prompt is the user's decision, not a
+        # recoverable guest failure; best-effort must not continue past it.
+        raise
     except Exception as ex:  # pragma: no cover - guest runtime path
         log.warning(
             'persistent-reconcile: VM {} ip={} failed but restore will continue: {}',

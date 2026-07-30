@@ -28,10 +28,10 @@ def _ensure_persistent_root_parent_dir(
 ) -> None:
     """Create the trusted export root before it is attached to a VM."""
     target = _persistent_root_host_dir(cfg)
+    if not _needs_mkdir(target):
+        return
     if dry_run:
         print(f'DRYRUN: would create persistent-root parent directory {target}')
-        return
-    if not _needs_mkdir(target):
         return
     mgr = CommandManager.current()
     with mgr.step(
@@ -75,6 +75,12 @@ def _run_persistent_host_replay(
         cfg, cfg_path, dry_run=dry_run
     )
     _ensure_persistent_host_replay_helper(dry_run=dry_run)
+    if dry_run:
+        print(
+            'DRYRUN: would replay approved persistent host bind manifest '
+            f'{approved_manifest}'
+        )
+        return
     cmd = [
         PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
         '--manifest',
