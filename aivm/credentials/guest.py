@@ -50,6 +50,7 @@ def _validated_entry_repository(cred: CredentialEntry) -> GitRepository:
             provider_host=cred.provider_host,
             owner=cred.owner,
             repository=cred.repository,
+            principal_id=cred.principal_id,
         )
     except CredentialValidationError as ex:
         from ..errors import AIVMError

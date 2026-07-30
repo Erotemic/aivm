@@ -426,6 +426,25 @@ def test_managed_guest_configs_are_repository_specific() -> None:
     assert 'insteadOf = https://github.com/Kitware/kwimage\n' not in git_text
 
 
+def test_guest_renders_accept_principal_scoped_credentials() -> None:
+    # Machine stores (and every credential rewritten by the pre-0.6
+    # migration) salt the credential id with the owning principal; the guest
+    # render path must validate against the same salted id.
+    repo = GitRepository('github.com', 'Kitware', 'kwimage')
+    principal = 'principal:agent'
+    cred_id = credential_id('test-vm', repo.canonical, principal)
+    entry = _entry()
+    entry.id = cred_id
+    entry.principal_id = principal
+    entry.provider_key_title = f'aivm:test:test-vm:Kitware/kwimage:{cred_id}'
+
+    ssh_text = render_ssh_config([entry])
+    git_text = render_git_config([entry])
+
+    assert f'Host aivm-cred-{cred_id}' in ssh_text
+    assert f'[url "git@aivm-cred-{cred_id}:Kitware/kwimage.git"]' in git_text
+
+
 class _GitHubManager(CommandManager):
     def __init__(
         self,
