@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import pwd
+import stat
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -28,10 +29,8 @@ from ...config_store import (
     Store,
     VMEntry,
     load_config_document,
-    load_store,
     parse_store_toml,
     render_store_toml,
-    split_source_paths,
     upsert_attachment,
     upsert_credential,
     upsert_network,
@@ -47,7 +46,7 @@ from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
 from ...scoped_store import stable_principal_id
 
-MIGRATION_PLAN_SCHEMA_VERSION = 2
+MIGRATION_PLAN_SCHEMA_VERSION = 3
 TARGET_MACHINE_SCHEMA_VERSION = 11
 
 
@@ -140,6 +139,8 @@ class MigrationPlan:
     persistent_state_moves: list[dict[str, object]]
     credential_material_moves: list[dict[str, object]]
     runtime: RuntimeInventory
+    target_machine_store_exists: bool = False
+    target_machine_store_sha256: str = ''
     conflicts: list[MigrationIssue] = field(default_factory=list)
     warnings: list[MigrationIssue] = field(default_factory=list)
     # Internal apply-phase material. These fields are intentionally omitted
@@ -164,6 +165,8 @@ class MigrationPlan:
             'mode': 'dry-run',
             'status': 'blocked' if self.blocked else 'ready',
             'target_machine_store': str(self.target_machine_store),
+            'target_machine_store_exists': self.target_machine_store_exists,
+            'target_machine_store_sha256': self.target_machine_store_sha256,
             'sources': self.sources,
             'proposed': {
                 'machine': self.machine,
@@ -185,6 +188,9 @@ class MigrationPlan:
             'AIVM released-store migration plan (dry-run; no state changed)',
             f'Status: {"BLOCKED" if self.blocked else "READY"}',
             f'Target machine store: {self.target_machine_store}',
+            'Target machine store revision: '
+            f'exists={self.target_machine_store_exists} '
+            f'sha256={self.target_machine_store_sha256}',
             f'Sources: {len(self.sources)}',
         ]
         for source in self.sources:
@@ -711,6 +717,99 @@ def _source_summary(
     }
 
 
+def _read_machine_store_file(role: str, path: Path) -> tuple[str, Path, bytes] | None:
+    """Read one regular store fragment without following its final symlink."""
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f'machine-store source is not a regular file: {path}')
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return role, path, b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _machine_store_snapshot(path: Path) -> tuple[bool, str, Store | None]:
+    """Read and fingerprint one coherent candidate machine-store snapshot."""
+    root = Path(os.path.abspath(os.fspath(path.expanduser())))
+    cfg_dir = root.parent
+    sources: list[tuple[str, Path, bytes]] = []
+    for role, candidate in (
+        ('root', root),
+        ('defaults', cfg_dir / 'defaults.toml'),
+        ('networks', cfg_dir / 'networks.toml'),
+    ):
+        source = _read_machine_store_file(role, candidate)
+        if source is not None:
+            sources.append(source)
+
+    vms_dir = cfg_dir / 'vms'
+    try:
+        vms_info = os.lstat(vms_dir)
+    except FileNotFoundError:
+        pass
+    else:
+        if stat.S_ISLNK(vms_info.st_mode):
+            raise OSError(f'machine-store VM directory is a symlink: {vms_dir}')
+        if not stat.S_ISDIR(vms_info.st_mode):
+            raise OSError(
+                f'machine-store VM path is not a directory: {vms_dir}'
+            )
+        with os.scandir(vms_dir) as entries:
+            names = sorted(
+                entry.name for entry in entries if entry.name.endswith('.toml')
+            )
+        for name in names:
+            candidate = vms_dir / name
+            source = _read_machine_store_file('vm', candidate)
+            if source is None:
+                raise OSError(
+                    'machine-store VM source disappeared during inspection: '
+                    f'{candidate}'
+                )
+            sources.append(source)
+
+    digest = hashlib.sha256()
+    if not sources:
+        digest.update(b'<missing>')
+        return False, digest.hexdigest(), None
+
+    text_parts: list[str] = []
+    for role, source, data in sources:
+        digest.update(role.encode('utf-8'))
+        digest.update(b'\0')
+        digest.update(os.fspath(source).encode('utf-8'))
+        digest.update(b'\0')
+        digest.update(data)
+        digest.update(b'\0')
+        decoded = data.decode('utf-8')
+        text_parts.append(
+            f'\n# --- aivm config source: {source} ({role}) ---\n'
+        )
+        text_parts.append(decoded.rstrip())
+        text_parts.append('\n')
+    store = parse_store_toml(''.join(text_parts).lstrip())
+    return True, digest.hexdigest(), store
+
+
+def _machine_store_revision(path: Path) -> tuple[bool, str]:
+    """Fingerprint machine-store files without treating I/O errors as absence."""
+    exists, sha256, _store = _machine_store_snapshot(path)
+    return exists, sha256
+
+
 def build_migration_plan(
     sources: list[LegacyStoreSource],
     *,
@@ -1114,18 +1213,16 @@ def build_migration_plan(
                 )
             )
 
-    if split_source_paths(layout.config_path):
-        try:
-            existing_machine = load_store(layout.config_path)
-        except Exception as ex:
-            conflicts.append(
-                MigrationIssue(
-                    code='target-store-invalid',
-                    message=f'Could not read target machine store: {ex}',
-                    sources=(str(layout.config_path),),
-                )
-            )
-        else:
+    target_machine_store_exists = False
+    target_machine_store_sha256 = ''
+    try:
+        (
+            revision_exists,
+            revision_sha256,
+            existing_machine,
+        ) = _machine_store_snapshot(layout.config_path)
+        revision_before = (revision_exists, revision_sha256)
+        if existing_machine is not None:
             if existing_machine.vms or existing_machine.networks:
                 conflicts.append(
                     MigrationIssue(
@@ -1146,6 +1243,31 @@ def build_migration_plan(
                         },
                     )
                 )
+        revision_after = _machine_store_revision(layout.config_path)
+        if revision_after != revision_before:
+            conflicts.append(
+                MigrationIssue(
+                    code='target-store-changed-during-planning',
+                    message=(
+                        'Target machine store changed while the migration plan '
+                        f'was being built: {layout.config_path}'
+                    ),
+                    sources=(str(layout.config_path),),
+                )
+            )
+        else:
+            (
+                target_machine_store_exists,
+                target_machine_store_sha256,
+            ) = revision_before
+    except Exception as ex:
+        conflicts.append(
+            MigrationIssue(
+                code='target-store-invalid',
+                message=f'Could not inspect target machine store: {ex}',
+                sources=(str(layout.config_path),),
+            )
+        )
 
     # Rendering and reparsing validates the complete in-memory proposal without
     # touching the target filesystem.
@@ -1264,6 +1386,8 @@ def build_migration_plan(
             ),
         ),
         runtime=runtime,
+        target_machine_store_exists=target_machine_store_exists,
+        target_machine_store_sha256=target_machine_store_sha256,
         conflicts=sorted(
             conflicts,
             key=lambda item: (item.code, item.vm_name, item.message),

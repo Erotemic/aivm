@@ -63,6 +63,7 @@ from .migration import (
     build_migration_plan,
     collect_runtime_inventory,
     fingerprint_migration_path,
+    _machine_store_revision,
 )
 from ...profile_store import (
     load_user_profile,
@@ -614,6 +615,12 @@ def _plan_fingerprint_payload(plan: MigrationPlan) -> dict[str, object]:
     return {
         'plan_schema_version': report.get('plan_schema_version', 0),
         'target_machine_store': report.get('target_machine_store', ''),
+        'target_machine_store_exists': report.get(
+            'target_machine_store_exists', False
+        ),
+        'target_machine_store_sha256': report.get(
+            'target_machine_store_sha256', ''
+        ),
         'sources': report.get('sources', []),
         'proposed': proposed,
     }
@@ -1538,16 +1545,46 @@ def verify_migration_runtime(
     }
 
 
-def apply_migration(
+def _migration_resource_names(
     plan: MigrationPlan,
-    *,
-    layout: MachineStoreLayout | None = None,
-    guest_installer: GuestInstaller = install_bootstrap_through_legacy_access,
-    runtime_verifier: RuntimeVerifier = verify_migration_runtime,
-    fail_after_step: str = '',
-) -> MigrationApplyResult:
-    """Apply or resume one ready migration plan."""
-    layout = layout or machine_store_layout(plan.target_machine_store.parent)
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    store = plan.proposed_store
+    if store is None:
+        return (), ()
+    networks = tuple(sorted({item.name for item in store.networks}))
+    vms = tuple(sorted({item.name for item in store.vms}))
+    return networks, vms
+
+
+def _frozen_report_resource_names(
+    report: dict[str, object],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    proposed = _json_object(report.get('proposed', {}))
+    machine = _json_object(proposed.get('machine', {}))
+    networks = tuple(
+        sorted(
+            {
+                str(item.get('name', ''))
+                for item in _object_dict_list(machine.get('networks', []))
+                if str(item.get('name', ''))
+            }
+        )
+    )
+    vms = tuple(
+        sorted(
+            {
+                str(item.get('name', ''))
+                for item in _object_dict_list(machine.get('vms', []))
+                if str(item.get('name', ''))
+            }
+        )
+    )
+    return networks, vms
+
+
+def _validate_apply_plan(
+    plan: MigrationPlan, layout: MachineStoreLayout
+) -> None:
     planned_target = plan.target_machine_store.expanduser().resolve()
     actual_target = layout.config_path.expanduser().resolve()
     if planned_target != actual_target:
@@ -1565,15 +1602,117 @@ def apply_migration(
             'Migration plan was deserialized without apply-phase material; '
             'rebuild it from the released sources.'
         )
+    if not plan.target_machine_store_sha256:
+        raise MigrationExecutionError(
+            'Migration plan does not bind the reviewed target machine-store '
+            'revision; rebuild and review the plan.'
+        )
+
+
+def _target_store_matches_proposal(
+    plan: MigrationPlan, layout: MachineStoreLayout
+) -> bool:
+    proposed = plan.proposed_store
+    if proposed is None or not split_source_paths(layout.config_path):
+        return False
+    try:
+        actual = load_store(
+            layout.config_path,
+            io_policy=current_machine_store_policy(layout),
+        )
+    except Exception:
+        return False
+    return render_store_toml(actual) == render_store_toml(proposed)
+
+
+def _verify_target_machine_store_revision(
+    plan: MigrationPlan,
+    layout: MachineStoreLayout,
+    *,
+    allow_applied_store: bool,
+) -> None:
+    try:
+        current_exists, current_sha256 = _machine_store_revision(
+            layout.config_path
+        )
+    except Exception as ex:
+        raise MigrationExecutionError(
+            'Could not verify the target machine-store revision reviewed by '
+            f'the migration plan: {ex}'
+        ) from ex
+    if (
+        current_exists == plan.target_machine_store_exists
+        and current_sha256 == plan.target_machine_store_sha256
+    ):
+        return
+    if allow_applied_store and _target_store_matches_proposal(plan, layout):
+        return
+    raise MigrationExecutionError(
+        'Target machine store changed after migration planning; refusing to '
+        f'overwrite unreviewed state at {layout.config_path}.'
+    )
+
+
+def apply_migration(
+    plan: MigrationPlan,
+    *,
+    layout: MachineStoreLayout | None = None,
+    guest_installer: GuestInstaller = install_bootstrap_through_legacy_access,
+    runtime_verifier: RuntimeVerifier = verify_migration_runtime,
+    fail_after_step: str = '',
+) -> MigrationApplyResult:
+    """Apply one reviewed plan under migration and machine-resource locks."""
+    layout = layout or machine_store_layout(plan.target_machine_store.parent)
+    _validate_apply_plan(plan, layout)
+    # Preserve the no-write failure contract for invalid reviewed inputs. These
+    # checks are repeated after acquiring every transaction lock.
+    _verify_source_hashes(plan)
+    _verify_planned_data_sources(plan)
+    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    networks, vms = _migration_resource_names(plan)
+    policy = current_machine_store_policy(layout)
+    with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
+        with machine_resource_locks(
+            layout,
+            group_gid=current_machine_group_gid(),
+            include_store=True,
+            networks=networks,
+            vms=vms,
+        ):
+            return _apply_migration_locked(
+                plan,
+                layout=layout,
+                guest_installer=guest_installer,
+                runtime_verifier=runtime_verifier,
+                fail_after_step=fail_after_step,
+            )
+
+
+def _apply_migration_locked(
+    plan: MigrationPlan,
+    *,
+    layout: MachineStoreLayout | None = None,
+    guest_installer: GuestInstaller = install_bootstrap_through_legacy_access,
+    runtime_verifier: RuntimeVerifier = verify_migration_runtime,
+    fail_after_step: str = '',
+) -> MigrationApplyResult:
+    """Apply or resume one ready migration plan."""
+    layout = layout or machine_store_layout(plan.target_machine_store.parent)
+    _validate_apply_plan(plan, layout)
     _verify_source_hashes(plan)
     _verify_planned_data_sources(plan)
     ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
     migration_id = migration_id_for_plan(plan)
     tx = migration_transaction_dir(migration_id, layout)
-    _ensure_transaction_directory(tx, layout)
-    policy = _transaction_policy(tx)
     state_path = _journal_path(tx)
     resumed = state_path.exists()
+    _verify_target_machine_store_revision(
+        plan,
+        layout,
+        allow_applied_store=resumed,
+    )
+    _ensure_transaction_directory(tx, layout)
+    policy = _transaction_policy(tx)
     plan_sha = migration_plan_sha256(plan)
     if resumed:
         journal = MigrationJournal.from_dict(_read_json(state_path))
@@ -1700,11 +1839,21 @@ def rebuild_plan_from_journal(
     check_runtime: bool = True,
     runtime_sudo: bool = False,
 ) -> MigrationPlan:
+    transaction_dir = migration_transaction_dir(journal.migration_id, layout)
+    report, _authorized = _load_and_validate_frozen_plan(
+        transaction_dir, journal, layout
+    )
     plan = build_migration_plan(
         sources_from_journal(journal),
         layout=layout,
         check_runtime=check_runtime,
         runtime_sudo=runtime_sudo,
+    )
+    plan.target_machine_store_exists = bool(
+        report.get('target_machine_store_exists', False)
+    )
+    plan.target_machine_store_sha256 = str(
+        report.get('target_machine_store_sha256', '')
     )
     # A resumed migration is expected to find the machine store written by an
     # earlier phase. Suppress only the generic non-empty-target conflict when
@@ -1737,6 +1886,50 @@ def rebuild_plan_from_journal(
     return plan
 
 
+def resume_migration(
+    migration_id: str,
+    *,
+    layout: MachineStoreLayout | None = None,
+    guest_installer: GuestInstaller = install_bootstrap_through_legacy_access,
+    runtime_verifier: RuntimeVerifier = verify_migration_runtime,
+    check_runtime: bool = True,
+    runtime_sudo: bool = False,
+    fail_after_step: str = '',
+) -> MigrationApplyResult:
+    """Resume one migration while serializing every transaction phase."""
+    layout = layout or machine_store_layout()
+    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    policy = current_machine_store_policy(layout)
+    with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
+        loaded = load_migration_journal(migration_id, layout=layout)
+        report, _authorized = _load_and_validate_frozen_plan(
+            loaded.transaction_dir, loaded.journal, layout
+        )
+        networks, vms = _frozen_report_resource_names(report)
+        with machine_resource_locks(
+            layout,
+            group_gid=current_machine_group_gid(),
+            include_store=True,
+            networks=networks,
+            vms=vms,
+        ):
+            # Reload only after all authoritative locks are held.
+            loaded = load_migration_journal(migration_id, layout=layout)
+            plan = rebuild_plan_from_journal(
+                loaded.journal,
+                layout=layout,
+                check_runtime=check_runtime,
+                runtime_sudo=runtime_sudo,
+            )
+            return _apply_migration_locked(
+                plan,
+                layout=layout,
+                guest_installer=guest_installer,
+                runtime_verifier=runtime_verifier,
+                fail_after_step=fail_after_step,
+            )
+
+
 def verify_applied_migration(
     migration_id: str,
     *,
@@ -1744,36 +1937,68 @@ def verify_applied_migration(
     runtime_verifier: RuntimeVerifier = verify_migration_runtime,
 ) -> MigrationApplyResult:
     layout = layout or machine_store_layout()
-    loaded = load_migration_journal(migration_id, layout=layout)
-    journal = loaded.journal
-    if journal.status not in {'complete', 'failed', 'applying'}:
-        raise MigrationExecutionError(
-            f'Migration {migration_id} is {journal.status!r}, not applied.'
+    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    policy = current_machine_store_policy(layout)
+    with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
+        loaded = load_migration_journal(migration_id, layout=layout)
+        report, _authorized = _load_and_validate_frozen_plan(
+            loaded.transaction_dir, loaded.journal, layout
         )
-    plan = rebuild_plan_from_journal(
-        journal, layout=layout, check_runtime=False
-    )
-    verification = verify_migration_local(plan, layout)
-    verification['runtime'] = runtime_verifier(plan, layout)
-    journal.verification = verification
-    if set(_APPLY_STEPS).issubset(journal.completed_steps):
-        journal.status = 'complete'
-        journal.error = ''
-    _save_journal(loaded.transaction_dir, journal)
-    return MigrationApplyResult(
-        journal=journal, transaction_dir=loaded.transaction_dir, resumed=True
-    )
+        networks, vms = _frozen_report_resource_names(report)
+        with machine_resource_locks(
+            layout,
+            group_gid=current_machine_group_gid(),
+            include_store=True,
+            networks=networks,
+            vms=vms,
+        ):
+            # Reload under both locks so verification cannot race with apply.
+            loaded = load_migration_journal(migration_id, layout=layout)
+            journal = loaded.journal
+            if journal.status not in {'complete', 'failed', 'applying'}:
+                raise MigrationExecutionError(
+                    f'Migration {migration_id} is {journal.status!r}, not applied.'
+                )
+            plan = rebuild_plan_from_journal(
+                journal, layout=layout, check_runtime=False
+            )
+            verification = verify_migration_local(plan, layout)
+            verification['runtime'] = runtime_verifier(plan, layout)
+            journal.verification = verification
+            if set(_APPLY_STEPS).issubset(journal.completed_steps):
+                journal.status = 'complete'
+                journal.error = ''
+            _save_journal(loaded.transaction_dir, journal)
+            return MigrationApplyResult(
+                journal=journal,
+                transaction_dir=loaded.transaction_dir,
+                resumed=True,
+            )
 
 
 def _plan_report_fingerprint_payload(
     report: dict[str, object],
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         'plan_schema_version': report.get('plan_schema_version', 0),
         'target_machine_store': report.get('target_machine_store', ''),
         'sources': report.get('sources', []),
         'proposed': report.get('proposed', {}),
     }
+    # Preserve validation of protected schema-2 plans created before target
+    # revision binding was added. Such plans remain rollback-readable, but
+    # apply/resume rejects them because they lack the reviewed revision fields.
+    if (
+        'target_machine_store_exists' in report
+        or 'target_machine_store_sha256' in report
+    ):
+        payload['target_machine_store_exists'] = report.get(
+            'target_machine_store_exists', False
+        )
+        payload['target_machine_store_sha256'] = report.get(
+            'target_machine_store_sha256', ''
+        )
+    return payload
 
 
 def _frozen_plan_sha256(report: dict[str, object]) -> str:
@@ -2622,6 +2847,7 @@ __all__ = [
     'migration_root',
     'migration_transaction_dir',
     'rebuild_plan_from_journal',
+    'resume_migration',
     'rollback_migration',
     'sources_from_journal',
     'verify_applied_migration',

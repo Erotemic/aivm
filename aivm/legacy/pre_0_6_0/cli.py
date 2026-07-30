@@ -26,7 +26,7 @@ from .migration_apply import (
     latest_migration_id,
     list_migration_ids,
     load_migration_journal,
-    rebuild_plan_from_journal,
+    resume_migration,
     rollback_migration,
     verify_applied_migration,
     verify_migration_runtime,
@@ -218,22 +218,17 @@ class ConfigMigrateResumeCLI(_MigrationJournalCLI):
         args = cls.cli(argv=argv, data=kwargs)
         migration_id = _selected_migration_id(args.migration)
         layout = machine_store_layout()
-        loaded = load_migration_journal(migration_id, layout=layout)
-        plan = rebuild_plan_from_journal(
-            loaded.journal,
-            layout=layout,
-            check_runtime=True,
-            runtime_sudo=bool(args.sudo),
-        )
         try:
             with CommandManager.current().approved_action(
                 purpose=f'Resume migration {migration_id} from its next incomplete phase.',
                 yes=bool(args.yes),
             ):
-                result = apply_migration(
-                    plan,
+                result = resume_migration(
+                    migration_id,
                     layout=layout,
                     runtime_verifier=_runtime_verifier(sudo=bool(args.sudo)),
+                    check_runtime=True,
+                    runtime_sudo=bool(args.sudo),
                 )
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
