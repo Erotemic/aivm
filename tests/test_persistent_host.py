@@ -26,6 +26,7 @@ from aivm.attachments.persistent import (
     _approved_binds_already_applied,
     _install_guest_text_if_changed,
     _install_persistent_host_bind_replay,
+    _mounted_child_names,
     _persistent_attachment_manifest_text,
     _persistent_host_manifest_path,
     _reconcile_persistent_attachments_in_guest,
@@ -1431,9 +1432,33 @@ def test_attachment_approval_rejects_intermediate_symlink(
 # ---------------------------------------------------------------------------
 
 
+def _write_mountinfo(path: Path, export_root: Path, *names: str) -> Path:
+    """Write a mountinfo table listing ``names`` as mounts under the export root.
+
+    Real bind mounts need root, so the kernel's answer is supplied rather
+    than produced. Crucially the fixture mirrors the same-filesystem case:
+    every entry shares one device with its parent, which is what defeats
+    ``st_dev``-based mount inference.
+    """
+    lines = [
+        # id parent major:minor root mountpoint options - fstype source opts
+        f'{40 + index} 30 259:2 /src/{name} {export_root}/{name} '
+        f'rw,relatime shared:1 - ext4 /dev/root rw'
+        for index, name in enumerate(names)
+    ]
+    path.write_text(
+        '\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8'
+    )
+    return path
+
+
 def _approved_manifest_for(
-    tmp_path: Path, *, access: str = 'rw', bound: bool = True
-) -> tuple[Path, Path]:
+    tmp_path: Path,
+    *,
+    access: str = 'rw',
+    bound: bool = True,
+    mounted: tuple[str, ...] = ('token-a',),
+) -> tuple[Path, Path, Path]:
     """Write an approved manifest describing one already-applied bind.
 
     A real bind target *is* its source directory, so a test can stand in for
@@ -1465,7 +1490,10 @@ def _approved_manifest_for(
         ),
         encoding='utf-8',
     )
-    return manifest_path, export_root
+    mountinfo = _write_mountinfo(
+        tmp_path / 'mountinfo', export_root, *mounted
+    )
+    return manifest_path, export_root, mountinfo
 
 
 def test_converged_persistent_binds_need_no_privileged_replay(
@@ -1477,57 +1505,124 @@ def test_converged_persistent_binds_need_no_privileged_replay(
     attachments, so demanding root here meant any user starting the VM had
     to escalate just to re-assert binds that were already in place.
     """
-    manifest_path, export_root = _approved_manifest_for(tmp_path)
+    manifest_path, export_root, mountinfo = _approved_manifest_for(tmp_path)
 
-    assert _approved_binds_already_applied(manifest_path, export_root)
+    assert _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
 
 def test_unapplied_persistent_bind_still_requires_the_replay(
     tmp_path: Path,
 ) -> None:
     """A target that is not the approved source is work the helper must do."""
-    manifest_path, export_root = _approved_manifest_for(tmp_path, bound=False)
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, bound=False
+    )
 
-    assert not _approved_binds_already_applied(manifest_path, export_root)
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
 
 def test_missing_bind_target_requires_the_replay(tmp_path: Path) -> None:
-    manifest_path, export_root = _approved_manifest_for(tmp_path)
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=()
+    )
     (export_root / 'token-a').rmdir()
 
-    assert not _approved_binds_already_applied(manifest_path, export_root)
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
 
 def test_readonly_mismatch_requires_the_replay(tmp_path: Path) -> None:
     """A bind whose access no longer matches must be remounted."""
     # The tmp_path filesystem is writable, so an 'ro' record cannot already
     # be satisfied -- exactly the drift the helper exists to correct.
-    manifest_path, export_root = _approved_manifest_for(tmp_path, access='ro')
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, access='ro'
+    )
 
-    assert not _approved_binds_already_applied(manifest_path, export_root)
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
 
 def test_stale_mount_under_the_export_root_requires_the_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    """A detached attachment leaves a mount only the helper can prune."""
-    manifest_path, export_root = _approved_manifest_for(tmp_path)
-    stale = export_root / 'token-detached'
-    stale.mkdir()
+    """A detached attachment leaves a mount only the helper can prune.
 
-    # Creating a real bind mount needs root; the decision under test is what
-    # happens once one is observed.
-    monkeypatch.setattr(
-        Path, 'is_mount', lambda self: self.name == 'token-detached'
+    Regression: this was decided with ``Path.is_mount()``, which infers a
+    mount from a ``st_dev`` difference against the parent. A bind mount
+    whose source shares a filesystem with the export root -- both on the
+    host root filesystem, the normal layout -- shows no such difference, so
+    a live bind read as "not mounted". Detach then concluded there was no
+    privileged work to do and went on to delete the record, the manifest and
+    the replay unit, leaving the host folder still exported to the guest and
+    the state needed to retry the cleanup gone.
+    """
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=('token-a', 'token-detached')
+    )
+    (export_root / 'token-detached').mkdir()
+
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
     )
 
-    assert not _approved_binds_already_applied(manifest_path, export_root)
+
+def test_mount_detection_sees_a_same_filesystem_bind(tmp_path: Path) -> None:
+    """The mount table is consulted, not a st_dev comparison.
+
+    Guards the specific inference that failed: every entry in this fixture
+    shares one device with its parent, exactly as a same-filesystem bind
+    mount does, and must still be reported as mounted.
+    """
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    (export_root / 'token-a').mkdir()
+    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root, 'token-a')
+
+    assert _mounted_child_names(export_root, mountinfo=mountinfo) == {'token-a'}
+    # The inference this replaced would answer False for the same directory.
+    assert not (export_root / 'token-a').is_mount()
+
+
+def test_mount_detection_decodes_escaped_mountinfo_paths(
+    tmp_path: Path,
+) -> None:
+    """A mount point containing a space arrives octal-escaped from the kernel."""
+    export_root = tmp_path / 'export root'
+    export_root.mkdir()
+    mountinfo = tmp_path / 'mountinfo'
+    escaped = str(export_root).replace(' ', r'\040')
+    mountinfo.write_text(
+        f'40 30 259:2 /src {escaped}/token-a rw - ext4 /dev/root rw\n',
+        encoding='utf-8',
+    )
+
+    assert _mounted_child_names(export_root, mountinfo=mountinfo) == {'token-a'}
+
+
+def test_unreadable_mount_table_requires_the_replay(tmp_path: Path) -> None:
+    """Not knowing what is mounted is never read as "nothing is mounted"."""
+    manifest_path, export_root, _mountinfo = _approved_manifest_for(tmp_path)
+
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=tmp_path / 'absent-mountinfo'
+    )
 
 
 def test_unreadable_approved_manifest_requires_the_replay(
     tmp_path: Path,
 ) -> None:
     """Every uncertainty falls through to the privileged helper."""
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root)
+
     assert not _approved_binds_already_applied(
-        tmp_path / 'never-written.json', tmp_path / 'export'
+        tmp_path / 'never-written.json', export_root, mountinfo=mountinfo
     )

@@ -21,6 +21,7 @@ from ...persistent_replay import (
 )
 
 _TOKEN_RE = re.compile(PERSISTENT_BIND_TOKEN_PATTERN)
+_PROC_MOUNTINFO = Path('/proc/self/mountinfo')
 from ...privilege import path_needs_sudo
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
@@ -71,7 +72,10 @@ def _ensure_persistent_host_replay_helper(*, dry_run: bool) -> bool:
 
 
 def _approved_binds_already_applied(
-    approved_manifest: Path, export_root: Path
+    approved_manifest: Path,
+    export_root: Path,
+    *,
+    mountinfo: Path | None = None,
 ) -> bool:
     """True when the live export root already matches the approved manifest.
 
@@ -94,7 +98,14 @@ def _approved_binds_already_applied(
     ``(dev, ino)`` proves both that the bind exists and that it still points
     at the approved object -- without needing any access to the source
     itself, which on a shared machine usually lives in another user's home.
+
+    What is *mounted* is read from the kernel's mount table rather than
+    inferred, which matters most for the leftovers of a detach: see
+    :func:`_mounted_child_names`.
     """
+    mounted = _mounted_child_names(export_root, mountinfo=mountinfo)
+    if mounted is None:
+        return False
     try:
         payload = json.loads(approved_manifest.read_text(encoding='utf-8'))
         records = payload['records']
@@ -113,6 +124,8 @@ def _approved_binds_already_applied(
         if not token:
             return False
         desired_tokens.add(token)
+        if token not in mounted:
+            return False
         target = export_root / token
         try:
             info = target.lstat()
@@ -130,23 +143,70 @@ def _approved_binds_already_applied(
         if not _bind_access_matches(target, str(record.get('access') or 'rw')):
             return False
 
-    # A record that was disabled or detached leaves a mount the helper would
-    # prune; anything still mounted under a non-desired token is work to do.
-    # Scoped to the names the helper itself will act on, so an unrelated
-    # mount it would skip cannot leave this permanently "not converged".
+    # A detached or disabled record leaves a mount only the privileged helper
+    # can prune, and deciding "nothing to do" here is what lets the detach
+    # flow go on to delete the record and the manifest. Miss one and the host
+    # folder stays exported to the guest with the durable state that would
+    # have retried the cleanup already gone. Scoped to the names the helper
+    # itself acts on, so an unrelated mount it would skip cannot leave this
+    # permanently unconverged.
+    stale = {
+        name for name in mounted - desired_tokens if _TOKEN_RE.fullmatch(name)
+    }
+    return not stale
+
+
+def _mounted_child_names(
+    export_root: Path, *, mountinfo: Path | None = None
+) -> set[str] | None:
+    """Direct children of ``export_root`` the kernel reports as mount points.
+
+    Read from ``/proc/self/mountinfo`` rather than inferred, because
+    inference gets this wrong in the ordinary case.
+    :meth:`pathlib.Path.is_mount` decides by comparing a path's ``st_dev``
+    with its parent's, and a bind mount whose source shares a filesystem
+    with the export root -- both on the host root filesystem, which is the
+    normal AIVM layout -- produces no such change. It reports False for a
+    perfectly live bind. The privileged replay helper already consults the
+    real table via ``mountpoint(1)``; this is the unprivileged equivalent.
+
+    Returns None when the table cannot be read, which every caller must
+    treat as "assume there is work to do".
+    """
+    source = mountinfo or _PROC_MOUNTINFO
     try:
-        children = list(export_root.iterdir())
+        root = Path(os.path.realpath(export_root))
+        text = source.read_text(encoding='utf-8')
     except OSError:
-        return False
-    for child in children:
-        if child.name in desired_tokens or not _TOKEN_RE.fullmatch(child.name):
+        return None
+    names: set[str] = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
             continue
-        try:
-            if child.is_mount():
-                return False
-        except OSError:
-            return False
-    return True
+        target = Path(_unescape_mountinfo_field(fields[4]))
+        if target.parent == root:
+            names.add(target.name)
+    return names
+
+
+def _unescape_mountinfo_field(text: str) -> str:
+    """Decode the octal escapes the kernel writes into mountinfo paths.
+
+    Space, tab, newline and backslash arrive as ``\\040``-style triples, so a
+    path containing any of them will not match a real one until decoded.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        chunk = text[index + 1 : index + 4]
+        if text[index] == '\\' and len(chunk) == 3 and chunk.isdigit():
+            out.append(chr(int(chunk, 8)))
+            index += 4
+        else:
+            out.append(text[index])
+            index += 1
+    return ''.join(out)
 
 
 def _bind_access_matches(target: Path, access: str) -> bool:

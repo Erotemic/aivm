@@ -38,6 +38,7 @@ from .host_bind import (
     _ensure_persistent_root_parent_dir,
     _ensure_persistent_root_vm_mapping,
     _install_persistent_host_bind_replay,
+    _mounted_child_names,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_host_binds,
 )
@@ -75,6 +76,7 @@ __all__ = [
     'PERSISTENT_ROOT_VIRTIOFS_TAG',
     'PersistentAttachmentRecord',
     '_approved_binds_already_applied',
+    '_mounted_child_names',
     '_ensure_persistent_root_parent_dir',
     '_ensure_persistent_root_vm_mapping',
     '_install_guest_text_if_changed',
