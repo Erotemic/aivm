@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 1d9ac08245e5c3d4 -->
+<!-- generation schema: 1; input digest: 1a0f25bec2ae0ceb -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -158,7 +158,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.firewall` | `aivm/firewall.py:482` |
 | `aivm.net` | `aivm/net.py:50` |
 | `aivm.net` | `aivm/net.py:181` |
-| `aivm.net` | `aivm/net.py:239` |
+| `aivm.net` | `aivm/net.py:238` |
 | `aivm.resource_checks` | `aivm/resource_checks.py:62` |
 | `aivm.resource_checks` | `aivm/resource_checks.py:99` |
 | `aivm.scoped_store` | `aivm/scoped_store.py:232` |
@@ -213,7 +213,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.deletion` | `aivm/vm/deletion.py:393` |
 | `aivm.vm.deletion` | `aivm/vm/deletion.py:411` |
 | `aivm.vm.deletion` | `aivm/vm/deletion.py:513` |
-| `aivm.vm.deletion` | `aivm/vm/deletion.py:658` |
+| `aivm.vm.deletion` | `aivm/vm/deletion.py:656` |
 | `aivm.vm.disk` | `aivm/vm/disk.py:19` |
 | `aivm.vm.domain` | `aivm/vm/domain.py:266` |
 | `aivm.vm.domain` | `aivm/vm/domain.py:390` |

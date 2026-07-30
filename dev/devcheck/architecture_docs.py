@@ -8,6 +8,7 @@ import ast
 import hashlib
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence, cast
@@ -419,14 +420,20 @@ def _subsystem_labels(config: dict[str, object]) -> dict[str, str]:
     return result
 
 
+def _semantic_python_bytes(path: Path) -> bytes:
+    """Return a formatting-insensitive representation of Python source."""
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    return ast.dump(tree, include_attributes=False).encode('utf-8')
+
+
 def _generation_digest(
     modules: dict[str, ModuleRecord], specification_paths: Sequence[Path]
 ) -> str:
     digest = hashlib.sha256()
-    digest.update(Path(__file__).read_bytes())
+    digest.update(_semantic_python_bytes(Path(__file__)))
     for module in sorted(modules.values()):
         digest.update(module.name.encode())
-        digest.update(module.path.read_bytes())
+        digest.update(_semantic_python_bytes(module.path))
     for path in specification_paths:
         digest.update(path.name.encode())
         digest.update(path.read_bytes())
@@ -612,7 +619,7 @@ def validate_symbol_reference(
         )
 
 
-def _flow_rows(config: dict[str, object]) -> list[dict[str, object]]:
+def _flow_rows(config: Mapping[str, object]) -> list[dict[str, object]]:
     return [
         _object_dict(item, context='flow')
         for item in _object_list(config.get('flows', []), context='flows')
@@ -620,8 +627,8 @@ def _flow_rows(config: dict[str, object]) -> list[dict[str, object]]:
 
 
 def validate_curated_specs(
-    flows: dict[str, object],
-    state: dict[str, object],
+    flows: Mapping[str, object],
+    state: Mapping[str, object],
     modules: dict[str, ModuleRecord],
 ) -> None:
     for flow in _flow_rows(flows):

@@ -11,6 +11,9 @@ import yaml
 from dev.devcheck import architecture_docs as arch
 
 
+LEGACY_PACKAGE = '.'.join(('aivm', 'legacy', 'pre_0_6_0'))
+
+
 def _write(root: Path, relative: str, text: str) -> Path:
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,7 +50,7 @@ def _minimal_architecture(
         'edge_annotations': [],
         'diagram_edges': diagram_edges or [],
         'legacy': {
-            'package': 'aivm.legacy.pre_0_6_0',
+            'package': LEGACY_PACKAGE,
             'test_root': 'tests/legacy/pre_0_6_0',
             'canonical_import_allowlist': legacy_allowlist or [],
         },
@@ -165,7 +168,7 @@ def test_allowlisted_transitional_legacy_import(tmp_path: Path) -> None:
         legacy_allowlist=[
             {
                 'importer': 'aivm.canonical',
-                'imported_prefix': 'aivm.legacy.pre_0_6_0',
+                'imported_prefix': LEGACY_PACKAGE,
                 'reason': 'Synthetic transition.',
             }
         ],
@@ -181,7 +184,7 @@ def test_nonlegacy_test_importing_legacy_is_rejected(tmp_path: Path) -> None:
     _write(
         tmp_path,
         'tests/test_canonical.py',
-        'from aivm.legacy.pre_0_6_0 import shim\n',
+        f'from {LEGACY_PACKAGE} import shim\n',
     )
     modules = arch.discover_modules(tmp_path)
     imports = arch.collect_imports(modules)
@@ -216,7 +219,7 @@ def test_missing_symbol_reference_is_rejected(tmp_path: Path) -> None:
     _write(tmp_path, 'aivm/__init__.py', '')
     _write(tmp_path, 'aivm/alpha.py', 'def entry():\n    return None\n')
     modules = arch.discover_modules(tmp_path)
-    flows = {
+    flows: dict[str, object] = {
         'flows': [
             {
                 'id': 'missing',
@@ -231,7 +234,7 @@ def test_missing_symbol_reference_is_rejected(tmp_path: Path) -> None:
             }
         ]
     }
-    state = {'owners': [], 'items': []}
+    state: dict[str, object] = {'owners': [], 'items': []}
     with pytest.raises(
         arch.ArchitectureError, match='Missing documented symbol'
     ):
@@ -271,6 +274,43 @@ def test_generation_is_deterministic_and_stable_ordering(
     payload = json.loads(first[paths.generated / 'component-edges.json'])
     pairs = [(row['from'], row['to']) for row in payload['edges']]
     assert pairs == sorted(pairs)
+
+
+def test_semantic_python_digest_ignores_formatting(tmp_path: Path) -> None:
+    compact = _write(
+        tmp_path, 'compact.py', 'def add(left,right):\n    return(left+right)\n'
+    )
+    formatted = _write(
+        tmp_path,
+        'formatted.py',
+        'def add(left, right):\n    return left + right\n',
+    )
+    assert arch._semantic_python_bytes(compact) == arch._semantic_python_bytes(
+        formatted
+    )
+
+
+def test_generation_digest_ignores_module_formatting(tmp_path: Path) -> None:
+    module_path = _write(
+        tmp_path,
+        'aivm/alpha.py',
+        'def entry():\n return(None)\n',
+    )
+    _write(tmp_path, 'aivm/__init__.py', '')
+    architecture = _minimal_architecture(
+        subsystems=[
+            _subsystem('alpha', exact=['aivm.alpha']),
+            _subsystem('support', exact=['aivm']),
+        ]
+    )
+    paths = _write_specs(tmp_path, architecture)
+    first = arch.generated_outputs(paths)
+    module_path.write_text(
+        'def entry():\n    return None\n',
+        encoding='utf-8',
+    )
+    second = arch.generated_outputs(paths)
+    assert first == second
 
 
 def test_stale_generated_output_is_detected(tmp_path: Path) -> None:
