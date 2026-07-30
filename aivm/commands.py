@@ -918,35 +918,45 @@ class CommandManager:
                 del self.plan_stack[idx]
                 return
 
-    def abort_plan(self, plan: CommandPlan) -> None:
-        """Mark ``plan`` as closed without executing its commands.
+    def _resolve_abandoned_plan_commands(self, plan: CommandPlan) -> None:
+        """Resolve every command ``plan`` will never run.
 
-        Every command that never ran is resolved here rather than left
-        pending. A handle that outlives its plan must still answer for itself:
-        awaiting one cannot be allowed to reopen a step the manager abandoned.
+        A handle that outlives its plan must still answer for itself:
+        awaiting one cannot be allowed to reopen a step the manager
+        abandoned.
         """
-        # TODO: probably a good public method, let the underlying scope handle it.
         for item in plan.commands:
             if not item.attempted and not item.handle.done():
                 item.handle._set_not_executed(
-                    f'Step {plan.title!r} was aborted before this command ran: '
-                    f'{self._preview_command(item.spec)}'
+                    f'Step {plan.title!r} was abandoned before this command '
+                    f'ran: {self._preview_command(item.spec)}'
                 )
+
+    def abort_plan(self, plan: CommandPlan) -> None:
+        """Mark ``plan`` as closed without executing its commands."""
+        # TODO: probably a good public method, let the underlying scope handle it.
+        self._resolve_abandoned_plan_commands(plan)
         plan.closed = True
 
     def finish_plan(self, plan: CommandPlan, *, _stacklevel: int = 1) -> None:
         """Finalize, approve, and execute a plan.
 
         Empty plans are simply marked closed. Non-empty plans are previewed,
-        approved if needed, then flushed in order.
+        approved if needed, then flushed in order. When approval is declined
+        or a command raises mid-plan, the exception escapes *this* call, so
+        the remaining commands are resolved here -- abort_plan only covers
+        exceptions raised by the step body itself.
         """
         # TODO: probably a good public method, let the underlying scope handle it.
         if plan.is_empty():
             plan.closed = True
             return
-        self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
-        self._flush_plan(plan, _stacklevel=_stacklevel + 1)
-        plan.closed = True
+        try:
+            self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
+            self._flush_plan(plan, _stacklevel=_stacklevel + 1)
+        finally:
+            self._resolve_abandoned_plan_commands(plan)
+            plan.closed = True
 
     def current_plan(self) -> CommandPlan | None:
         """Return the currently active innermost plan, if any."""

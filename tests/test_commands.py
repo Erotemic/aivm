@@ -530,9 +530,79 @@ def test_aborted_plan_leaves_every_handle_terminal(
     assert executed == []
     for handle in pending:
         assert handle.done(), 'an unexecuted handle stayed pending'
-        with pytest.raises(CommandNotExecutedError, match='aborted'):
+        with pytest.raises(CommandNotExecutedError, match='abandoned'):
             handle.result()
     assert executed == [], 'reading an abandoned handle executed something'
+
+
+def test_declined_plan_leaves_every_handle_terminal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Declining a plan's approval resolves every queued handle.
+
+    Regression: abort_plan only covers exceptions raised by the step body;
+    when the decline came out of finish_plan itself the plan left the stack
+    with every handle still pending, so done() lied and result() raised a
+    manager-invariant error instead of CommandNotExecutedError.
+    """
+    executed: list[list[str]] = []
+    prompts = patch_command_runtime(
+        monkeypatch,
+        lambda cmd, **kw: executed.append(list(cmd)) or FakeProc(0, '', ''),
+        answer='n',
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    pending: list[Any] = []
+    with pytest.raises(UserDeclinedError):
+        with mgr.step('Declined step'):
+            pending.append(
+                mgr.submit(['virsh', 'one'], sudo=True, role='modify')
+            )
+            pending.append(
+                mgr.submit(['virsh', 'two'], sudo=True, role='modify')
+            )
+
+    assert prompts, 'the plan approval prompt never fired'
+    assert executed == []
+    for handle in pending:
+        assert handle.done(), 'a declined-plan handle stayed pending'
+        with pytest.raises(CommandNotExecutedError, match='abandoned'):
+            handle.result()
+    assert executed == [], 'reading a declined handle executed something'
+
+
+def test_mid_plan_failure_resolves_the_remaining_handles(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A command that raises mid-plan must not leave later handles pending."""
+
+    def runner(cmd: list[str], **kw: Any) -> FakeProc:
+        if 'boom' in cmd:
+            return FakeProc(1, '', 'exploded')
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, runner)
+    mgr = CommandManager(yes=True)
+
+    pending: list[Any] = []
+    with pytest.raises(CommandError):
+        with mgr.step('Partially failing step'):
+            pending.append(
+                mgr.submit(['boom'], role='modify', check=True, capture=True)
+            )
+            pending.append(
+                mgr.submit(['after'], role='modify', check=True, capture=True)
+            )
+
+    failed, never_ran = pending
+    assert failed.done()
+    with pytest.raises(CommandError):
+        failed.result()
+    assert never_ran.done(), 'a post-failure handle stayed pending'
+    with pytest.raises(CommandNotExecutedError, match='abandoned'):
+        never_ran.result()
 
 
 def test_every_terminal_handle_replays_instead_of_executing(
