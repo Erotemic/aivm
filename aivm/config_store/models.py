@@ -10,7 +10,6 @@ from ..config import (
     FirewallConfig,
     NetworkConfig,
 )
-from ..legacy.pre_0_6_0 import compatibility_surface
 from ..credentials.schema import (
     CREDENTIAL_ACCESS_READ,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
@@ -19,6 +18,7 @@ from ..credentials.schema import (
     CredentialKind,
     CredentialState,
 )
+from ..legacy.pre_0_6_0 import compatibility_surface
 
 
 @dataclass
@@ -87,6 +87,13 @@ class PrincipalEntry:
     guest_user: str
     ssh_public_key: str = ''
     state: str = 'pending'
+
+
+# The highest store schema this build reads and writes. A shared machine
+# store may be edited by several aivm versions; parse refuses machine
+# documents newer than this so an older build cannot silently re-render the
+# store and drop fields a newer principal wrote.
+STORE_SCHEMA_VERSION = 11
 
 
 @compatibility_surface

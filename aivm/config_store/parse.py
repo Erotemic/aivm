@@ -29,11 +29,14 @@ from ..legacy.pre_0_6_0 import compatibility_surface
 from ..legacy.pre_0_6_0.schema import (
     apply_mirror_home_to_defaults,
     apply_mirror_home_to_vm,
-    finalize_schema_version as finalize_pre_0_6_0_schema_version,
+    mirror_home_from_behavior,
     parse_host_lexical_paths,
-    parse_store_header as parse_pre_0_6_0_store_header,
+)
+from ..legacy.pre_0_6_0.schema import (
+    finalize_schema_version as finalize_pre_0_6_0_schema_version,
 )
 from .models import (
+    STORE_SCHEMA_VERSION,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -42,8 +45,54 @@ from .models import (
     VMEntry,
 )
 
-
 _VALID_PRINCIPAL_STATES = {'pending', 'active', 'disabled', 'error', 'legacy'}
+_VALID_STORE_KINDS = {'legacy', 'machine'}
+
+
+def _parse_store_header(raw: dict[str, object], reg: Store) -> int:
+    """Parse the document header and return the declared schema version."""
+    schema_version_raw = raw.get('schema_version', 5)
+    if not isinstance(schema_version_raw, (str, bytes, bytearray, int, float)):
+        raise TypeError(
+            'schema_version must be an integer-compatible scalar, '
+            f'not {type(schema_version_raw).__name__}'
+        )
+    parsed_schema_version = int(schema_version_raw)
+    reg.schema_version = parsed_schema_version
+    store_kind = str(raw.get('store_kind', 'legacy') or 'legacy').strip()
+    if store_kind not in _VALID_STORE_KINDS:
+        allowed = ', '.join(sorted(_VALID_STORE_KINDS))
+        raise ValueError(
+            f'Invalid store_kind {store_kind!r}; expected one of: {allowed}'
+        )
+    reg.store_kind = store_kind
+    if (
+        store_kind == 'machine'
+        and parsed_schema_version > STORE_SCHEMA_VERSION
+    ):
+        # The shared document may be edited by several aivm versions. An
+        # older build re-rendering a newer document would silently drop the
+        # fields it does not know, for every principal on the machine.
+        raise ValueError(
+            f'Unsupported machine store schema version '
+            f'{parsed_schema_version}; this build supports up to '
+            f'{STORE_SCHEMA_VERSION}. Upgrade aivm before using this store.'
+        )
+    reg.active_vm = str(raw.get('active_vm', '')).strip()
+    behavior_raw = raw.get('behavior')
+    if isinstance(behavior_raw, dict):
+        for key, value in behavior_raw.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    'behavior field names must be strings, '
+                    f'not {type(key).__name__}'
+                )
+            if key == 'mirror_shared_home_folders':
+                # Pre-schema-6 location; lifted by the legacy shims.
+                continue
+            if hasattr(reg.behavior, key):
+                setattr(reg.behavior, key, value)
+    return parsed_schema_version
 
 
 def _norm_dir(path: str | Path) -> str:
@@ -285,8 +334,8 @@ def parse_store_toml(text: str) -> Store:
     """Parse a canonical AIVM desired-state TOML document."""
     raw = tomllib.loads(text)
     reg = Store()
-    compatibility = parse_pre_0_6_0_store_header(raw, reg)
-    legacy_mirror_home = compatibility.mirror_shared_home_folders
+    parsed_schema_version = _parse_store_header(raw, reg)
+    legacy_mirror_home = mirror_home_from_behavior(raw)
     defaults_raw = raw.get('defaults', None)
     if isinstance(defaults_raw, dict):
         reg.defaults = _cfg_from_dict(defaults_raw).expanded_paths()
@@ -393,7 +442,11 @@ def parse_store_toml(text: str) -> Store:
         att = _attachment_from_dict(item)
         if att is not None:
             reg.attachments.append(att)
-    finalize_pre_0_6_0_schema_version(reg, compatibility)
+    finalize_pre_0_6_0_schema_version(
+        reg,
+        parsed_schema_version=parsed_schema_version,
+        mirror_home=legacy_mirror_home,
+    )
     if reg.credentials:
         reg.schema_version = max(reg.schema_version, 8)
     if reg.principals or reg.store_kind == 'machine':

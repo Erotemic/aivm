@@ -258,6 +258,29 @@ host_path = "{project}"
         parse_store_toml(text)
 
 
+def test_machine_store_rejects_future_schema_version() -> None:
+    """An older build must not re-render a newer shared document.
+
+    A machine store may be edited by several aivm versions; silently
+    parsing (and later re-rendering) a newer schema would drop the fields
+    a newer principal wrote, for everyone on the machine.
+    """
+    from pytest import raises
+
+    from aivm.config_store import parse_store_toml
+    from aivm.config_store.models import STORE_SCHEMA_VERSION
+
+    future = STORE_SCHEMA_VERSION + 1
+    text = f'schema_version = {future}\nstore_kind = "machine"\n'
+    with raises(ValueError, match='Unsupported machine store schema'):
+        parse_store_toml(text)
+
+    # The per-user legacy document keeps its released tolerance: it is not
+    # shared, so no other principal's data is at stake.
+    legacy = parse_store_toml(f'schema_version = {future}\n')
+    assert legacy.schema_version == future
+
+
 def test_load_split_layout_by_literal_concatenation(tmp_path: Path) -> None:
     """Split fragments load as the same canonical desired-state document."""
     config = tmp_path / 'config.toml'

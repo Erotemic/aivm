@@ -1,8 +1,14 @@
-"""Schema compatibility helpers for released pre-0.6 stores."""
+"""Schema compatibility helpers for released pre-0.6 stores.
+
+Everything here exists only to read documents written before AIVM 0.6:
+the behavior-level ``mirror_shared_home_folders`` location (pre-schema-6)
+and the singular ``host_lexical_path`` attachment field (pre-schema-7).
+Deleting this module must only cost the ability to read those old
+documents; parsing of current stores lives in :mod:`aivm.config_store.parse`.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Mapping
 
 from loguru import logger as log
@@ -10,56 +16,16 @@ from loguru import logger as log
 from ...config import AgentVMConfig
 from ...config_store.models import Store
 
-_VALID_STORE_KINDS = {'legacy', 'machine'}
 
-
-@dataclass(frozen=True)
-class ParsedHeaderCompatibility:
-    """Compatibility state carried while parsing one store document."""
-
-    parsed_schema_version: int
-    mirror_shared_home_folders: bool | None
-
-
-def parse_store_header(
-    raw: Mapping[str, object],
-    reg: Store,
-) -> ParsedHeaderCompatibility:
-    """Parse fields whose old and 0.6 locations differ."""
-    schema_version_raw = raw.get('schema_version', 5)
-    if not isinstance(schema_version_raw, (str, bytes, bytearray, int, float)):
-        raise TypeError(
-            'schema_version must be an integer-compatible scalar, '
-            f'not {type(schema_version_raw).__name__}'
-        )
-    parsed_schema_version = int(schema_version_raw)
-    reg.schema_version = parsed_schema_version
-    store_kind = str(raw.get('store_kind', 'legacy') or 'legacy').strip()
-    if store_kind not in _VALID_STORE_KINDS:
-        allowed = ', '.join(sorted(_VALID_STORE_KINDS))
-        raise ValueError(
-            f'Invalid store_kind {store_kind!r}; expected one of: {allowed}'
-        )
-    reg.store_kind = store_kind
-    reg.active_vm = str(raw.get('active_vm', '')).strip()
-
-    mirror_home: bool | None = None
+def mirror_home_from_behavior(raw: Mapping[str, object]) -> bool | None:
+    """Read the pre-schema-6 behavior-level mirror setting, if present."""
     behavior_raw = raw.get('behavior')
-    if isinstance(behavior_raw, dict):
-        for key, value in behavior_raw.items():
-            if not isinstance(key, str):
-                raise TypeError(
-                    'behavior field names must be strings, '
-                    f'not {type(key).__name__}'
-                )
-            if key == 'mirror_shared_home_folders':
-                mirror_home = bool(value)
-            elif hasattr(reg.behavior, key):
-                setattr(reg.behavior, key, value)
-    return ParsedHeaderCompatibility(
-        parsed_schema_version=parsed_schema_version,
-        mirror_shared_home_folders=mirror_home,
-    )
+    if not isinstance(behavior_raw, dict):
+        return None
+    value = behavior_raw.get('mirror_shared_home_folders')
+    if value is None:
+        return None
+    return bool(value)
 
 
 def apply_mirror_home_to_defaults(
@@ -118,12 +84,14 @@ def parse_host_lexical_paths(item: Mapping[str, object]) -> list[str]:
 
 def finalize_schema_version(
     reg: Store,
-    state: ParsedHeaderCompatibility,
+    *,
+    parsed_schema_version: int,
+    mirror_home: bool | None,
 ) -> None:
     """Record in-memory upgrades caused solely by pre-0.6 compatibility."""
-    if state.mirror_shared_home_folders is not None:
+    if mirror_home is not None:
         reg.schema_version = max(reg.schema_version, 6)
-    if state.parsed_schema_version < 7 and any(
+    if parsed_schema_version < 7 and any(
         attachment.host_lexical_paths for attachment in reg.attachments
     ):
         reg.schema_version = max(reg.schema_version, 7)
