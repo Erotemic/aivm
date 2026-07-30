@@ -264,6 +264,28 @@ def _effective_cfg_for_principal(
     return cfg
 
 
+def _granted_state(existing: PrincipalEntry | None) -> str:
+    """Return the access grant a persisted principal already holds, if any.
+
+    ``PrincipalEntry.state`` records the last *known grant*, not the outcome
+    of the last reconcile attempt, and only an affirmative revocation may
+    lower it.  A failed attempt is never that evidence: the enrollment
+    transport reports one status for an unreachable guest and for a rejected
+    key alike, so the guest key is usually still installed and only the proof
+    is missing.  Downgrading on a failed attempt would retire the identity
+    from the last-access accounting in
+    :func:`aivm.access_control._require_not_last_access`, which counts only
+    ``active``/``legacy`` identities, and would lock its owner out of
+    :func:`aivm.scoped_store.resolve_machine_context` until some later attempt
+    happened to succeed.  Callers therefore persist ``_granted_state(existing)
+    or <attempt outcome>``, so only an identity that never held a grant
+    records the failure.
+    """
+    if existing is not None and existing.state in {'active', 'legacy'}:
+        return existing.state
+    return ''
+
+
 def _save_principal_state(
     scope: StoreScope,
     principal: PrincipalEntry,
@@ -445,10 +467,7 @@ def _reconcile_current_principal_impl(
         )
         return EnrollmentReport(principal=principal, ip=ip, changed=True)
 
-    already_granted = existing is not None and existing.state in {
-        'active',
-        'legacy',
-    }
+    already_granted = bool(_granted_state(existing))
     if not already_granted:
         # Record a brand-new enrollment as pending before any transport. An
         # already-granted identity is only being re-verified: writing
@@ -503,22 +522,19 @@ def _reconcile_current_principal_impl(
             detail='The bootstrap SSH key is forced to aivm-guestctl --forced.',
         )
     if result.code != 0:
-        if result.code == 255 and already_granted:
-            # An unreachable VM does not revoke a previously verified grant;
-            # keep the durable state and report the transport failure.
-            assert existing is not None
-            state = existing.state
-        elif result.code == 255:
-            state = 'pending'
-        else:
-            state = 'error'
+        # A failed helper invocation revokes nothing, so an identity that
+        # already holds a grant keeps it; 255 additionally distinguishes an
+        # unreachable VM (retry later) from a guest-side refusal.
+        state = _granted_state(existing) or (
+            'pending' if result.code == 255 else 'error'
+        )
         failed = replace(principal, state=state)
         _save_principal_state(
             scope,
             failed,
             reason=(
-                f'Record {state} enrollment for {host_user} on VM {vm_name} '
-                'after bootstrap transport failure.'
+                f'Record enrollment state {state} for {host_user} on VM '
+                f'{vm_name} after the guest enrollment helper failed.'
             ),
         )
         detail = (result.stderr or result.stdout or '').strip()
@@ -548,13 +564,17 @@ def _reconcile_current_principal_impl(
         summary=f'Verify personal SSH access for {principal.guest_user}',
     )
     if verify.code != 0:
-        failed = replace(principal, state='error')
+        # The helper reported success, so the personal key is installed and
+        # an unproven probe is not evidence that it is gone. An identity that
+        # already holds a grant keeps it; a brand-new one stays unproven.
+        state = _granted_state(existing) or 'error'
+        failed = replace(principal, state=state)
         _save_principal_state(
             scope,
             failed,
             reason=(
-                f'Record failed personal-key verification for {host_user} '
-                f'on VM {vm_name}.'
+                f'Record enrollment state {state} for {host_user} on VM '
+                f'{vm_name} after failed personal-key verification.'
             ),
         )
         detail = (verify.stderr or verify.stdout or '').strip()

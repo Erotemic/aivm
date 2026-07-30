@@ -14,7 +14,7 @@ from ..enrollment import ensure_bootstrap_identity
 from ..errors import AIVMError, CommandControlError
 from ..machine_store import is_machine_store_path
 from ..privilege import virsh_needs_sudo
-from ..runtime import current_libvirt_uri, virsh_cmd
+from ..runtime import current_libvirt_uri, pin_locale, virsh_cmd
 from ..util import CmdError
 from .cloudinit import _write_cloud_init
 from .disk import _ensure_disk
@@ -246,9 +246,11 @@ def create_or_start_vm(
                     ),
                     approval_scope=f'vm-start:{cfg.vm.name}',
                 ):
+                    # Every branch below matches English state names, so the
+                    # probe has to speak them regardless of the host locale.
                     st = (
                         mgr.submit(
-                            virsh_cmd('domstate', cfg.vm.name),
+                            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                             sudo=virsh_needs_sudo(),
                             role='read',
                             check=False,

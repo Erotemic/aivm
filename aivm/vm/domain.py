@@ -196,7 +196,7 @@ def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
 def _host_path_exists(path: Path) -> bool:
     """Return a definitive storage-path presence answer or fail closed."""
     result = CommandManager.current().run(
-        ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
+        pin_locale(['stat', '--format=%F', '--', str(path)]),
         sudo=virsh_needs_sudo(),
         role='read',
         check=False,

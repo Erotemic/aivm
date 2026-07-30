@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import pytest
 
+from aivm.access_control import mutate_access_identity
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     PrincipalEntry,
@@ -249,6 +250,133 @@ def test_reconcile_does_not_downgrade_active_identity_before_transport(
     )
     assert persisted is not None
     assert persisted.state == 'active'
+
+
+@pytest.mark.parametrize(
+    ('bootstrap', 'personal'),
+    [
+        pytest.param(
+            FakeProc(0, '{"status":"ok"}\n', ''),
+            FakeProc(255, '', 'kex_exchange_identification: read: timed out'),
+            id='personal-probe-unreachable',
+        ),
+        pytest.param(
+            FakeProc(1, '', 'enrollment helper refused the request'),
+            FakeProc(0, '', ''),
+            id='bootstrap-helper-refused',
+        ),
+    ],
+)
+def test_reconcile_keeps_active_state_when_an_attempt_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    bootstrap: FakeProc,
+    personal: FakeProc,
+) -> None:
+    """A failed attempt records no grant it did not revoke.
+
+    Regression: any non-transport failure persisted state='error', which
+    silently retired the sole active identity from last-access accounting --
+    a later disable/remove stopped demanding ``--allow_last_access`` -- and
+    locked its owner out of every ordinary command until some later attempt
+    happened to succeed. ssh answers 255 for an unreachable guest and for a
+    rejected key alike, so a failed probe is never evidence of revocation.
+    """
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg)
+    identity = bootstrap_identity_paths(
+        cfg.vm.name, layout=scope.machine_layout
+    )
+    identity.directory.mkdir(parents=True)
+    identity.private_key.write_text('BOOTSTRAP-PRIVATE\n')
+    identity.public_key_path.write_text(
+        'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
+    )
+    edward = HostIdentity(uid=1201, gid=1202, username='edward.wang')
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity', lambda: edward
+    )
+    monkeypatch.setattr(
+        'aivm.access_control.current_host_identity', lambda: edward
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment._resolve_enrollment_ip',
+        lambda cfg, ip_override='': '10.77.0.119',
+    )
+    activate_manager(monkeypatch, yes=True)
+
+    def route_ssh(cmd: list[str]) -> FakeProc:
+        if 'aivm-bootstrap@10.77.0.119' in cmd:
+            return bootstrap
+        if 'edward-wang-agent@10.77.0.119' in cmd:
+            return personal
+        raise AssertionError(cmd)
+
+    command_recorder(monkeypatch, {'ssh': route_ssh})
+
+    with pytest.raises(AIVMError):
+        reconcile_current_principal(scope, vm_name=cfg.vm.name)
+
+    persisted = find_principal_for_host(
+        load_store(scope.store_path),
+        vm_name=cfg.vm.name,
+        host_user='edward.wang',
+    )
+    assert persisted is not None
+    assert persisted.state == 'active'
+    # The invariant the state protects: the sole remaining access identity
+    # still cannot be given up by accident.
+    with pytest.raises(AIVMError, match='last active access identity'):
+        mutate_access_identity(
+            scope, vm_name=cfg.vm.name, action='disable', dry_run=True
+        )
+
+
+def test_reconcile_records_error_when_a_new_identity_is_never_proven(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An identity that never held a grant still records the failure.
+
+    The companion to keeping an existing grant: nothing is preserved here,
+    so the unproven enrollment must stay visibly broken rather than pass for
+    usable access.
+    """
+    cfg, scope = _machine_with_profile(tmp_path)
+    identity = bootstrap_identity_paths(
+        cfg.vm.name, layout=scope.machine_layout
+    )
+    identity.directory.mkdir(parents=True)
+    identity.private_key.write_text('BOOTSTRAP-PRIVATE\n')
+    identity.public_key_path.write_text(
+        'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment._resolve_enrollment_ip',
+        lambda cfg, ip_override='': '10.77.0.119',
+    )
+    activate_manager(monkeypatch, yes=True)
+
+    def route_ssh(cmd: list[str]) -> FakeProc:
+        if 'aivm-bootstrap@10.77.0.119' in cmd:
+            return FakeProc(0, '{"status":"ok"}\n', '')
+        return FakeProc(255, '', 'Permission denied (publickey)')
+
+    command_recorder(monkeypatch, {'ssh': route_ssh})
+
+    with pytest.raises(AIVMError, match='personal SSH verification failed'):
+        reconcile_current_principal(scope, vm_name=cfg.vm.name)
+
+    persisted = find_principal_for_host(
+        load_store(scope.store_path),
+        vm_name=cfg.vm.name,
+        host_user='edward.wang',
+    )
+    assert persisted is not None
+    assert persisted.state == 'error'
 
 
 def _record_existing_identity(

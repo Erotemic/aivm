@@ -27,6 +27,7 @@ from tests.helpers import (
     FakeProc,
     activate_manager,
     command_recorder,
+    is_locale_pinned,
     make_cfg,
 )
 
@@ -191,6 +192,33 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
     assert rec.normalized == [
         ['virsh', 'domstate', 'vm-existing'],
         ['virsh', 'start', 'vm-existing'],
+    ]
+
+
+def test_create_or_start_pins_c_locale_for_the_state_decision(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Start/resume/refuse is chosen by English state names, so pin them.
+
+    Regression: this probe ran in the operator's locale, so on a localized
+    host a perfectly ordinary stopped VM matched none of the branches and
+    `aivm vm create` refused to start it as 'an unexpected state'.
+    """
+    cfg = make_cfg(None, **{'vm.name': 'vm-locale'})
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh domstate': FakeProc(0, 'shut off\n', ''),
+            'virsh start': FakeProc(0, '', ''),
+        },
+    )
+
+    create_or_start_vm(cfg, dry_run=False, recreate=False)
+
+    assert [call for call in rec.calls if 'domstate' in call] == [
+        call for call in rec.calls if is_locale_pinned(call)
     ]
 
 

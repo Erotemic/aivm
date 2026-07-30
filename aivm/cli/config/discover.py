@@ -17,7 +17,7 @@ from ...config_store import (
     upsert_vm_with_network,
 )
 from ...modes import PrivilegeMode
-from ...runtime import virsh_cmd
+from ...runtime import pin_locale, virsh_cmd
 from ...scoped_store import (
     load_scope_store,
     resolve_store_scope,
@@ -120,8 +120,10 @@ def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
         'memory_mib': 'unknown',
         'shares': [],
     }
+    # Every field below is selected by its English name, so this summary is
+    # read under the C locale rather than the operator's.
     dominfo = mgr.run(
-        virsh_cmd('dominfo', vm_name),
+        pin_locale(virsh_cmd('dominfo', vm_name)),
         role='read',
         sudo=use_sudo,
         check=False,

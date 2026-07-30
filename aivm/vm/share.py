@@ -7,7 +7,6 @@ folders are shared into VMs.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import shlex
 import tempfile
@@ -28,6 +27,7 @@ from ..errors import AIVMError
 from ..modes import PrivilegeMode
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -205,17 +205,18 @@ def _dumpxml_text(
     if entry is not None and entry[0] == mgr.mutation_generation:
         return entry[1]
     # Closed stdin keeps an unprivileged probe from blocking on a polkit
-    # password prompt outside the manager's approval flow, and LC_ALL=C
-    # keeps the domain-missing stderr heuristic locale-independent.
-    probe_env = {**os.environ, 'LC_ALL': 'C'}
+    # password prompt outside the manager's approval flow, and the locale pin
+    # keeps the domain-missing stderr heuristic locale-independent. The pin
+    # rides in the argv rather than in env= so the sudo retry below cannot
+    # lose it to the host's sudoers environment policy.
+    dumpxml_cmd = pin_locale(virsh_cmd('dumpxml', cfg.vm.name))
     res = mgr.submit(
-        virsh_cmd('dumpxml', cfg.vm.name),
+        dumpxml_cmd,
         sudo=False,
         role='read',
         check=False,
         capture=True,
         input_text='',
-        env=probe_env,
         summary=summary,
         detail=detail,
     ).result()
@@ -229,12 +230,11 @@ def _dumpxml_text(
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(
-            virsh_cmd('dumpxml', cfg.vm.name),
+            dumpxml_cmd,
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
-            env=probe_env,
             summary=summary,
             detail=detail,
         ).result()
@@ -399,9 +399,13 @@ def attach_vm_share(
         tmp = f.name
     mgr = CommandManager.current()
     if vm_running is None:
+        # Whether the device is attached live or config-only turns on the
+        # English word 'running', so the probe must not be localized: a
+        # running VM would otherwise get the config-only attach and the share
+        # would stay unavailable until its next boot.
         state = (
             mgr.submit(
-                virsh_cmd('domstate', cfg.vm.name),
+                pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -505,9 +509,10 @@ def detach_vm_share(
         f.write(xml)
         tmp = f.name
     mgr = CommandManager.current()
+    # As in attach: the live-vs-config decision matches an English state name.
     state = (
         mgr.run(
-            virsh_cmd('domstate', cfg.vm.name),
+            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,

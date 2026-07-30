@@ -245,16 +245,40 @@ def normalize_cmd(cmd: Iterable[Any]) -> list[str]:
         >>> normalize_cmd(['sudo', 'mount', '--bind', '/a', '/b'])
         ['mount', '--bind', '/a', '/b']
     """
-    parts = [str(part) for part in cmd]
-    if parts[:2] == ['sudo', '-n']:
-        parts = parts[2:]
-    elif parts[:1] == ['sudo']:
-        parts = parts[1:]
+    parts = _without_sudo(cmd)
     if parts[:2] == ['env', 'LC_ALL=C']:
         parts = parts[2:]
     if parts[:1] == ['virsh'] and parts[1:3] == ['-c', SYSTEM_LIBVIRT_URI]:
         parts = ['virsh'] + parts[3:]
     return parts
+
+
+def _without_sudo(cmd: Iterable[Any]) -> list[str]:
+    parts = [str(part) for part in cmd]
+    if parts[:2] == ['sudo', '-n']:
+        return parts[2:]
+    if parts[:1] == ['sudo']:
+        return parts[1:]
+    return parts
+
+
+def is_locale_pinned(cmd: Iterable[Any]) -> bool:
+    """Return True when the command carries a working ``env LC_ALL=C`` pin.
+
+    Position matters, so this checks it rather than searching for the
+    string: the pin has to sit directly in front of the program (after any
+    ``sudo`` prefix) or it does not reach the process whose output is being
+    string-matched.  Use it wherever a decision reads English text out of a
+    command -- see ``aivm.runtime.pin_locale``.
+
+    Example:
+        >>> is_locale_pinned(['sudo', '-n', 'env', 'LC_ALL=C', 'virsh',
+        ...                   'domstate', 'vm'])
+        True
+        >>> is_locale_pinned(['sudo', '-n', 'virsh', 'domstate', 'vm'])
+        False
+    """
+    return _without_sudo(cmd)[:2] == ['env', 'LC_ALL=C']
 
 
 Route = Any

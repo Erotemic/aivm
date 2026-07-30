@@ -7,7 +7,6 @@ rendering so other CLI flows can reuse tri-state outcomes (``True`` /
 
 from __future__ import annotations
 
-import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +27,7 @@ from .host import check_commands
 from .modes import PrivilegeMode
 from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -276,7 +276,8 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     can show it without re-running the probe.
     """
     info = CommandManager.current().run(
-        virsh_cmd('net-info', cfg.network.name),
+        # Failures are classified by their English stderr text below.
+        pin_locale(virsh_cmd('net-info', cfg.network.name)),
         role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
@@ -400,12 +401,13 @@ def probe_vm_state(
     re-running the commands.
     """
     mgr = CommandManager.current()
-    dominfo_cmd = virsh_cmd('dominfo', cfg.vm.name)
-    sudo_used = False
     # Closed stdin keeps the unprivileged probe from blocking on a polkit
-    # password prompt outside the manager's approval flow, and LC_ALL=C
-    # keeps error/state string matching locale-independent.
-    probe_env = {**os.environ, 'LC_ALL': 'C'}
+    # password prompt outside the manager's approval flow, and the locale pin
+    # keeps error/state string matching locale-independent. The pin rides in
+    # the argv rather than in env= so the sudo retry below cannot lose it to
+    # the host's sudoers environment policy.
+    dominfo_cmd = pin_locale(virsh_cmd('dominfo', cfg.vm.name))
+    sudo_used = False
     dom = mgr.run(
         dominfo_cmd,
         role='read',
@@ -413,7 +415,6 @@ def probe_vm_state(
         check=False,
         capture=True,
         input_text='',
-        env=probe_env,
         summary=f'Inspect VM definition {cfg.vm.name}',
     )
     if (
@@ -429,7 +430,6 @@ def probe_vm_state(
             sudo=True,
             check=False,
             capture=True,
-            env=probe_env,
             summary=f'Inspect VM definition {cfg.vm.name}',
         )
     if dom.code != 0:
@@ -460,14 +460,13 @@ def probe_vm_state(
                 None,
             )
         return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
-    domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
+    domstate_cmd = pin_locale(virsh_cmd('domstate', cfg.vm.name))
     state_res = mgr.run(
         domstate_cmd,
         role='read',
         sudo=sudo_used,
         check=False,
         capture=True,
-        env=probe_env,
         summary=f'Inspect VM runtime state {cfg.vm.name}',
     )
     state = state_res.stdout.strip()

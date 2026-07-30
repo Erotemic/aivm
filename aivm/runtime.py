@@ -26,13 +26,18 @@ def virsh_cmd(*args: str) -> list[str]:
 def pin_locale(cmd: list[str]) -> list[str]:
     """Prefix ``env LC_ALL=C`` so the command's output can be string-matched.
 
-    virsh localizes its diagnostics and state names, so matchers such as
+    virsh (and ``stat``, and most of coreutils) localizes its diagnostics,
+    state names, and field labels, so matchers such as
     :func:`virsh_domain_missing` only see the English text they expect when
     the invocation pins the C locale.  The pin rides inside the argv rather
     than in an ``env=`` override so it also survives sudo's environment
     reset when the command escalates.  Apply it to every invocation whose
     stdout/stderr is string-matched; output that is merely displayed or
     exit-code-checked stays in the user's locale.
+
+    Being the one spelling of this rule is the point: a locale-sensitive
+    probe that skips it is findable by grep, and one that hand-rolls the
+    ``env LC_ALL=C`` prefix is not.
     """
     return ['env', 'LC_ALL=C', *cmd]
 

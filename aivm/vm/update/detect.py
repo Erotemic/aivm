@@ -8,7 +8,7 @@ from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...privilege import sudo_allowed, virsh_needs_sudo
-from ...runtime import virsh_cmd
+from ...runtime import pin_locale, virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
 from .fdguard import _fdguard_drift
 from .models import VMUpdateDrift
@@ -73,7 +73,8 @@ def _virsh_domblk_capacity_bytes(
     cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
 ) -> int | None:
     res = CommandManager.current().run(
-        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target),
+        # _parse_domblkinfo_capacity selects the English 'Capacity:' field.
+        pin_locale(virsh_cmd('domblkinfo', cfg.vm.name, path_or_target)),
         role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
@@ -107,8 +108,12 @@ def _vm_update_drift(
         ),
         role='read',
     ):
+        # Both probes are parsed by English field name ('CPU(s)', 'Max
+        # memory') or state name, so each invocation pins the C locale --
+        # including the sudo retry, which is where an env= override would be
+        # at the mercy of the host's sudoers env policy.
         dominfo = mgr.run(
-            virsh_cmd('dominfo', cfg.vm.name),
+            pin_locale(virsh_cmd('dominfo', cfg.vm.name)),
             sudo=False,
             check=False,
             capture=True,
@@ -116,7 +121,7 @@ def _vm_update_drift(
         )
         if dominfo.code != 0:
             dominfo = mgr.run(
-                virsh_cmd('dominfo', cfg.vm.name),
+                pin_locale(virsh_cmd('dominfo', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 check=False,
                 capture=True,
@@ -140,14 +145,14 @@ def _vm_update_drift(
         )
 
         state_res = mgr.run(
-            virsh_cmd('domstate', cfg.vm.name),
+            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
             sudo=False,
             check=False,
             capture=True,
         )
         if state_res.code != 0:
             state_res = mgr.run(
-                virsh_cmd('domstate', cfg.vm.name),
+                pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 check=False,
                 capture=True,

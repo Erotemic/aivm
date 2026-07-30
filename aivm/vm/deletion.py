@@ -53,6 +53,7 @@ from ..machine_store import (
 )
 from ..privilege import path_needs_sudo
 from ..profile_store import save_user_profile
+from ..runtime import pin_locale
 from ..scoped_store import StoreScope, load_scope_profile
 from ..vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
 from .domain import (
@@ -368,7 +369,7 @@ def _cleanup_attachment_artifacts(
 def _path_exists(path: Path) -> bool:
     """Return a definitive deletion-path presence answer or fail closed."""
     result = CommandManager.current().run(
-        ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
+        pin_locale(['stat', '--format=%F', '--', str(path)]),
         sudo=path_needs_sudo(path),
         role='read',
         check=False,
@@ -467,7 +468,7 @@ def _assert_no_mounts_below(path: Path) -> None:
         # useful diagnostic. Confirm that exact recovery case independently;
         # every other inspection failure must stop destructive cleanup.
         probe = CommandManager.current().run(
-            ['env', 'LC_ALL=C', 'stat', '--format=%F', '--', str(path)],
+            pin_locale(['stat', '--format=%F', '--', str(path)]),
             sudo=path_needs_sudo(path),
             role='read',
             check=False,

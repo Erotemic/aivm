@@ -22,6 +22,7 @@ from tests.helpers import (
     FakeProc,
     activate_manager,
     command_recorder,
+    normalize_cmd,
     resolved_test_context,
 )
 
@@ -712,9 +713,7 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
             return FakeProc(1, '', 'sudo: a password is required')
         if parts[:2] == ['sudo', '-v']:
             return FakeProc(0, '', '')
-        normalized = parts[1:] if parts[:1] == ['sudo'] else parts
-        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
-            normalized = ['virsh'] + normalized[3:]
+        normalized = normalize_cmd(parts)
         if normalized[:2] == ['virsh', 'dumpxml']:
             return FakeProc(1, '', 'domain not visible')
         if normalized[:2] == ['virsh', 'attach-device']:

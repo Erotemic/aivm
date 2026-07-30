@@ -88,6 +88,14 @@ class InitCLI(_BaseCommand):
             'join without interactive review.'
         ),
     )
+    vm: str = kwconf.Value(
+        '',
+        help=(
+            'Managed VM to join, for a shared machine store that holds more '
+            'than one. Only an already managed VM may be named; use '
+            '`aivm vm create` to add one.'
+        ),
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -98,6 +106,7 @@ class InitCLI(_BaseCommand):
             defaults=bool(args.defaults),
             force=bool(args.force),
             standalone_guidance=True,
+            vm_opt=str(args.vm or ''),
         )
 
 
@@ -108,11 +117,18 @@ def initialize_config_defaults(
     defaults: bool,
     force: bool,
     standalone_guidance: bool,
+    vm_opt: str = '',
 ) -> int:
     """Initialize creator defaults or join the caller to a managed machine."""
     path = cfg_path(config_opt)
     scope = resolve_store_scope(str(path), for_init=True)
     path = scope.store_path
+    requested_vm = str(vm_opt or '').strip()
+    if requested_vm and not scope.is_machine:
+        raise AIVMError(
+            f'`aivm config init --vm` selects one VM from a shared machine '
+            f'store, but this invocation uses the per-user store at {path}.'
+        )
     if scope.is_machine:
         ensure_machine_scope_ready(scope)
     reg = load_scope_store(scope)
@@ -124,7 +140,20 @@ def initialize_config_defaults(
         # during interactive review, and a second user's init must still
         # land in the join flow instead of the create-defaults flow.
         join_vm_name = ''
-        if find_vm(reg, canonical_vm_name) is not None:
+        if requested_vm:
+            # `config init` is where a joining user's profile and SSH keypair
+            # come from, so selecting the VM has to be possible here. Sending
+            # them to `vm access reconcile --vm` instead would deadlock: that
+            # command requires the profile key this command creates.
+            if find_vm(reg, requested_vm) is None:
+                names = ', '.join(sorted(vm.name for vm in reg.vms))
+                raise AIVMError(
+                    f'--vm {requested_vm!r} does not name a VM managed by '
+                    f'{path}. Managed VMs: {names or "none"}. Use '
+                    '`aivm vm create` to add a new one.'
+                )
+            join_vm_name = requested_vm
+        elif find_vm(reg, canonical_vm_name) is not None:
             join_vm_name = canonical_vm_name
         elif len(reg.vms) == 1:
             join_vm_name = reg.vms[0].name
@@ -133,8 +162,7 @@ def initialize_config_defaults(
             raise AIVMError(
                 f'This machine store already manages several VMs ({names}) '
                 f'and none matches the canonical name {canonical_vm_name!r}. '
-                'Join one explicitly with '
-                '`aivm vm access reconcile --vm NAME`.'
+                'Join one explicitly with `aivm config init --vm NAME`.'
             )
         if join_vm_name:
             return _join_existing_machine(

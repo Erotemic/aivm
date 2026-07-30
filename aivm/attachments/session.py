@@ -552,10 +552,12 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
         True if the VM is running, False if not defined/running,
         None if the probe is inconclusive (e.g., permission denied).
     """
-    from ..runtime import virsh_cmd
+    from ..runtime import pin_locale, virsh_cmd
 
+    # Both the inconclusive-permission stderr match and the running-state
+    # match below read English text, so the probe pins the C locale.
     res = CommandManager.current().run(
-        virsh_cmd('domstate', vm_name),
+        pin_locale(virsh_cmd('domstate', vm_name)),
         role='read',
         sudo=False,
         check=False,

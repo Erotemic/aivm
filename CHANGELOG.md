@@ -260,6 +260,29 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ### Fixed
+* Fixed a failed enrollment attempt durably weakening an access identity that
+  already had one. `vm access reconcile` recorded `error` whenever the guest
+  helper or the personal-key probe failed, but ssh answers the same status for
+  an unreachable guest and a rejected key, so a transient failure retired the
+  sole active identity from last-access accounting -- a later `access
+  disable`/`remove` stopped demanding `--allow_last_access` -- and locked its
+  owner out of ordinary commands until some later attempt happened to succeed.
+  The persisted state now records the last known grant, which only an
+  affirmative revocation lowers; an identity that never held one still records
+  the failure.
+* Fixed a shared machine store holding several VMs having no way in for a new
+  user. `aivm config init` gained `--vm NAME`, and the ambiguity error names it
+  instead of `aivm vm access reconcile --vm NAME`, which cannot run before
+  `config init` has created the caller's profile SSH key.
+* Completed the `LC_ALL=C` pin over the virsh probes whose output decides
+  behavior. VM start/resume, live-versus-config virtiofs attach and detach, the
+  non-sudo running probe, update planning, drift, discovery, IP discovery, and
+  the status probes all match English state names, field labels, or error text;
+  on a localized host they previously read an ordinary running VM as an
+  unexpected state, or attached a share config-only so it stayed missing until
+  the next boot. Every such probe now goes through `runtime.pin_locale`, whose
+  argv-level pin also survives the sudo retries that an `env=` override does
+  not.
 * Hardened destructive recovery against three fail-open/data-loss paths. VM
   directory cleanup now refuses to run when mount enumeration fails; resumed
   deletion recaptures the live libvirt disk inventory immediately before

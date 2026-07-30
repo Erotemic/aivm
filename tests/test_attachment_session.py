@@ -28,7 +28,15 @@ from aivm.config_store import (
 )
 from aivm.status import ProbeOutcome
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-from tests.helpers import patch_ns, resolved_test_context, returns
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    command_recorder,
+    is_locale_pinned,
+    patch_ns,
+    resolved_test_context,
+    returns,
+)
 
 AttachEnv = tuple[AgentVMConfig, Path, Path, ResolvedAttachment]
 
@@ -611,12 +619,7 @@ def test_vm_ssh_reports_only_transport_failures(
     run. Only ssh's own exit code 255 (connection/transport failure) is
     aivm's to report.
     """
-    from tests.helpers import (
-        FakeProc,
-        activate_manager,
-        capture_logs,
-        command_recorder,
-    )
+    from tests.helpers import capture_logs
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-ssh-exit'
@@ -658,3 +661,35 @@ def test_vm_ssh_reports_only_transport_failures(
     else:
         assert errors == []
         assert 'SSH session ended' in out
+
+
+@pytest.mark.parametrize(
+    ('reply', 'expected'),
+    [
+        pytest.param(FakeProc(0, 'running\n', ''), True, id='running'),
+        pytest.param(FakeProc(0, 'shut off\n', ''), False, id='shut-off'),
+        pytest.param(
+            FakeProc(1, '', 'error: authentication failed: access denied'),
+            None,
+            id='inconclusive',
+        ),
+    ],
+)
+def test_nonsudo_running_probe_pins_c_locale(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: object,
+    expected: bool | None,
+) -> None:
+    """Every answer this probe gives is read out of English text.
+
+    Both the running/not-running verdict and the 'inconclusive, needs sudo'
+    verdict string-match the reply, so a localized virsh would report a
+    running VM as stopped and a permission failure as a definite 'no'.
+    """
+    from aivm.attachments.session import _probe_vm_running_nonsudo
+
+    activate_manager(monkeypatch)
+    rec = command_recorder(monkeypatch, {'virsh domstate': reply})
+
+    assert _probe_vm_running_nonsudo('vm-locale') is expected
+    assert rec.calls and all(is_locale_pinned(call) for call in rec.calls)

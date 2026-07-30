@@ -14,6 +14,7 @@ from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -36,7 +37,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             approval_scope=f'vm-network-interfaces:{cfg.vm.name}',
         ):
             res = mgr.submit(
-                virsh_cmd('domiflist', cfg.vm.name),
+                pin_locale(virsh_cmd('domiflist', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -46,13 +47,15 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             ).result()
     else:
         res = mgr.run(
-            virsh_cmd('domiflist', cfg.vm.name),
+            pin_locale(virsh_cmd('domiflist', cfg.vm.name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
             summary=f'Inspect network interfaces for VM {cfg.vm.name}',
         )
+    # The row filter below tells the interface table's header apart from its
+    # body by English words, so both probes above pin the C locale.
     for line in res.stdout.splitlines():
         if (
             'network' in line.lower()
@@ -182,8 +185,10 @@ def wait_for_ip(
                     return cached_ip
             now = time.time()
             if now >= next_status_at:
+                # The wait gives up early when this state stops saying
+                # 'running', so it must not arrive translated.
                 st = mgr.run(
-                    virsh_cmd('domstate', cfg.vm.name),
+                    pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                     sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,

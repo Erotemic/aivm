@@ -26,7 +26,7 @@ from ..config import AgentVMConfig
 from ..config_store import Store, find_attachments_for_vm
 from ..firewall import read_firewall_tcp_ports
 from ..privilege import virsh_needs_sudo
-from ..runtime import virsh_cmd
+from ..runtime import pin_locale, virsh_cmd
 from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
@@ -206,7 +206,9 @@ def read_actual_vm_hardware(
         error_type is one of: 'not_found', 'permission', 'other', or '' on success.
         error_detail contains the raw error message.
     """
-    cmd = virsh_cmd('dominfo', cfg.vm.name)
+    # Parsed by English field name, and its failures are classified by
+    # English stderr text, so the invocation pins the C locale.
+    cmd = pin_locale(virsh_cmd('dominfo', cfg.vm.name))
     res = CommandManager.current().run(
         cmd,
         role='read',

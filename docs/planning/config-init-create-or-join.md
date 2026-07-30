@@ -24,6 +24,13 @@ An exact machine-store record is authoritative even when the domain is stopped
 or temporarily unreachable. In that case enrollment can be persisted as
 `pending` and retried later.
 
+When the store holds no record under the canonical name, a sole managed VM is
+still the join target. Several managed VMs are ambiguous, and the caller
+selects one with `aivm config init --vm NAME`. That selector belongs here
+rather than on `aivm vm access reconcile`, which cannot run first: it requires
+the profile SSH key that `config init` is the command that creates. `--vm` only
+ever names an already managed VM; new VMs come from `aivm vm create`.
+
 `--yes` and `--defaults` may accept an exact managed-machine join without an
 interactive prompt. They never permit silent import of an unmanaged domain.
 `--force` applies only to creator defaults; during a join it cannot rewrite VM,
@@ -46,8 +53,13 @@ A managed-machine join performs these steps:
 8. Set `active_vm` only after the principal is active or enrollment is
    explicitly recorded as pending.
 
-A personal-key verification failure leaves the principal in `error`, does not
-select the machine in the profile, and does not print a successful join.
+A personal-key verification failure does not select the machine in the profile
+and does not print a successful join. It leaves a first-time principal in
+`error`. A principal that already held `active` or `legacy` access keeps that
+state: the enrollment transport reports one status for an unreachable guest and
+for a rejected key alike, so a failed attempt is never evidence that the grant
+was revoked, and downgrading on it would retire the identity from last-access
+accounting and lock its owner out of ordinary commands.
 
 ## Idempotence and recovery
 

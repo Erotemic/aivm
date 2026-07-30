@@ -22,6 +22,7 @@ from aivm.vm.update import (
     _parse_vm_network_from_dumpxml,
     _vm_update_drift,
 )
+from tests.helpers import is_locale_pinned, normalize_cmd
 
 
 def test_parse_qemu_img_virtual_size() -> None:
@@ -325,28 +326,18 @@ def test_vm_update_drift_escalates_for_disk_probe(
         self: object, cmd: list[str], *, sudo: bool = False, **kwargs: Any
     ) -> CmdResult:
         del kwargs
-        if cmd[:3] == ['virsh', '-c', 'qemu:///system'] and cmd[3] == 'dominfo':
+        cmd = normalize_cmd(cmd)
+        if cmd[:2] == ['virsh', 'dominfo']:
             return CmdResult(
                 0,
                 'CPU(s):         4\nMax memory:     8388608 KiB\n',
                 '',
             )
-        if (
-            cmd[:3] == ['virsh', '-c', 'qemu:///system']
-            and cmd[3] == 'domstate'
-        ):
+        if cmd[:2] == ['virsh', 'domstate']:
             return CmdResult(0, 'running\n', '')
-        if (
-            cmd[:3] == ['virsh', '-c', 'qemu:///system']
-            and cmd[3] == 'dumpxml'
-            and not sudo
-        ):
+        if cmd[:2] == ['virsh', 'dumpxml'] and not sudo:
             return CmdResult(1, '', 'permission denied')
-        if (
-            cmd[:3] == ['virsh', '-c', 'qemu:///system']
-            and cmd[3] == 'dumpxml'
-            and sudo
-        ):
+        if cmd[:2] == ['virsh', 'dumpxml'] and sudo:
             xml = """
 <domain>
   <devices>
@@ -389,18 +380,16 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
         self: object, cmd: list[str], *, sudo: bool = False, **kwargs: Any
     ) -> CmdResult:
         del kwargs, sudo
-        if cmd[:3] == ['virsh', '-c', 'qemu:///system'] and cmd[3] == 'dominfo':
+        cmd = normalize_cmd(cmd)
+        if cmd[:2] == ['virsh', 'dominfo']:
             return CmdResult(
                 0,
                 'CPU(s):         4\nMax memory:     8388608 KiB\n',
                 '',
             )
-        if (
-            cmd[:3] == ['virsh', '-c', 'qemu:///system']
-            and cmd[3] == 'domstate'
-        ):
+        if cmd[:2] == ['virsh', 'domstate']:
             return CmdResult(0, 'running\n', '')
-        if cmd[:3] == ['virsh', '-c', 'qemu:///system'] and cmd[3] == 'dumpxml':
+        if cmd[:2] == ['virsh', 'dumpxml']:
             xml = """
 <domain>
   <devices>
@@ -420,10 +409,7 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
                 '',
                 'Failed to get shared "write" lock\nIs another process using the image?',
             )
-        if (
-            cmd[:3] == ['virsh', '-c', 'qemu:///system']
-            and cmd[3] == 'domblkinfo'
-        ):
+        if cmd[:2] == ['virsh', 'domblkinfo']:
             return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
         raise AssertionError(f'Unexpected command: {cmd!r}')
 
@@ -433,3 +419,66 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
     assert any('falling back to virsh domblkinfo' in n for n in drift.notes)
+
+
+def test_vm_update_planning_pins_c_locale_for_parsed_probes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Update planning reads English field and state names out of virsh.
+
+    'CPU(s)', 'Max memory', 'Capacity' and 'running' are all matched by
+    name, and each probe retries under sudo -- so the pin rides in the argv,
+    where the retry keeps it. Unpinned, a localized host plans an update
+    against a VM it believes has unknown hardware and is not running.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-locale-update'
+    cfg.vm.disk_gb = 60
+    raw_calls: list[list[str]] = []
+
+    def fake_run_cmd(
+        self: object, cmd: list[str], *, sudo: bool = False, **kwargs: Any
+    ) -> CmdResult:
+        del kwargs, sudo
+        raw_calls.append([str(part) for part in cmd])
+        cmd = normalize_cmd(cmd)
+        if cmd[:2] == ['virsh', 'dominfo']:
+            return CmdResult(
+                0, 'CPU(s):         4\nMax memory:     8388608 KiB\n', ''
+            )
+        if cmd[:2] == ['virsh', 'domstate']:
+            return CmdResult(0, 'running\n', '')
+        if cmd[:2] == ['virsh', 'dumpxml']:
+            return CmdResult(
+                0,
+                "<domain><devices><disk type='file' device='disk'>"
+                "<source file='/var/lib/libvirt/aivm/vm-locale-update/images/"
+                "vm-locale-update.qcow2'/></disk>"
+                "<interface type='network'><source network='aivm-net'/>"
+                '</interface></devices></domain>',
+                '',
+            )
+        if cmd[:3] == ['qemu-img', 'info', '--output=json']:
+            return CmdResult(
+                1, '', 'Failed to get shared "write" lock on the image'
+            )
+        if cmd[:2] == ['virsh', 'domblkinfo']:
+            return CmdResult(0, 'Capacity: 42949672960\nAllocation: 0\n', '')
+        raise AssertionError(f'Unexpected command: {cmd!r}')
+
+    monkeypatch.setattr(
+        'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
+    drift, running = _vm_update_drift(cfg, yes=True)
+
+    assert running is True
+    assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
+    parsed = [
+        call
+        for call in raw_calls
+        if any(
+            word in call for word in ('dominfo', 'domstate', 'domblkinfo')
+        )
+    ]
+    assert len(parsed) >= 3
+    assert all(is_locale_pinned(call) for call in parsed)

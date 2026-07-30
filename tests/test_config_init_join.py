@@ -451,3 +451,107 @@ def test_config_init_join_requires_confirmation_noninteractive(
             force=False,
             standalone_guidance=True,
         )
+
+
+def _add_managed_vm(scope: StoreScope, name: str) -> None:
+    """Add a second managed VM sharing the fixture's network."""
+    reg = load_scope_store(scope)
+    cfg = AgentVMConfig()
+    cfg.vm.name = name
+    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+    save_scope_store(scope, reg, reason=f'add managed VM {name}')
+
+
+def test_config_init_multi_vm_store_names_a_usable_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The ambiguity error points at a command a fresh user can run.
+
+    Regression: it pointed at `aivm vm access reconcile --vm NAME`, which
+    needs the profile SSH key that only `config init` creates -- so the two
+    commands sent a new user back and forth with no way in.
+    """
+    scope = _managed_machine(monkeypatch, tmp_path)
+    _add_managed_vm(scope, 'aivm-2404-second')
+    monkeypatch.setattr(
+        'aivm.cli.config.init.default_vm_name', lambda: 'not-either-of-them'
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+
+    with pytest.raises(AIVMError, match=r'`aivm config init --vm NAME`') as ex:
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=False,
+            force=False,
+            standalone_guidance=True,
+        )
+
+    assert 'aivm-2404-second' in str(ex.value)
+    assert VM_NAME in str(ex.value)
+
+
+def test_config_init_vm_selects_which_machine_to_join(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--vm resolves the ambiguity through the same join path."""
+    scope = _managed_machine(monkeypatch, tmp_path)
+    _add_managed_vm(scope, 'aivm-2404-second')
+    monkeypatch.setattr(
+        'aivm.cli.config.init.default_vm_name', lambda: 'not-either-of-them'
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.reconcile_current_principal', _activate_bob
+    )
+
+    rc = initialize_config_defaults(
+        config_opt=None,
+        yes=True,
+        defaults=False,
+        force=False,
+        standalone_guidance=True,
+        vm_opt='aivm-2404-second',
+    )
+
+    assert rc == 0
+    bob = find_principal_for_host(
+        load_scope_store(scope), vm_name='aivm-2404-second', host_user='bob'
+    )
+    assert bob is not None
+    assert bob.state == 'active'
+    assert scope.profile_path is not None
+    assert load_user_profile(scope.profile_path).active_vm == 'aivm-2404-second'
+    assert 'Existing managed machine found' in capsys.readouterr().out
+
+
+def test_config_init_vm_refuses_an_unmanaged_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """--vm joins an existing machine; it never creates one."""
+    scope = _managed_machine(monkeypatch, tmp_path)
+    _add_managed_vm(scope, 'aivm-2404-second')
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+
+    with pytest.raises(AIVMError, match='does not name a VM managed by') as ex:
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=False,
+            force=False,
+            standalone_guidance=True,
+            vm_opt='never-created',
+        )
+
+    assert 'aivm-2404-second' in str(ex.value)
+    assert 'aivm vm create' in str(ex.value)
