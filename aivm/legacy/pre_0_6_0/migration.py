@@ -717,7 +717,9 @@ def _source_summary(
     }
 
 
-def _read_machine_store_file(role: str, path: Path) -> tuple[str, Path, bytes] | None:
+def _read_machine_store_file(
+    role: str, path: Path
+) -> tuple[str, Path, bytes] | None:
     """Read one regular store fragment without following its final symlink."""
     flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
     if hasattr(os, 'O_NOFOLLOW'):

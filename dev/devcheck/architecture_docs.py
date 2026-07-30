@@ -90,7 +90,9 @@ def module_name_for_path(path: Path, root: Path) -> str:
     return '.'.join(parts)
 
 
-def discover_modules(root: Path, package: str = 'aivm') -> dict[str, ModuleRecord]:
+def discover_modules(
+    root: Path, package: str = 'aivm'
+) -> dict[str, ModuleRecord]:
     package_root = root / package.replace('.', '/')
     modules: dict[str, ModuleRecord] = {}
     for path in sorted(package_root.rglob('*.py')):
@@ -116,7 +118,11 @@ def _relative_import_base(
     level: int,
     module: str | None,
 ) -> str:
-    package = importer if importer_path.name == '__init__.py' else importer.rsplit('.', 1)[0]
+    package = (
+        importer
+        if importer_path.name == '__init__.py'
+        else importer.rsplit('.', 1)[0]
+    )
     parts = package.split('.') if package else []
     up = level - 1
     if up:
@@ -174,7 +180,9 @@ class _ImportCollector(ast.NodeVisitor):
                 candidates.add(candidate)
             elif alias.name != '*':
                 unresolved_alias = True
-        if base and (node.module is not None or unresolved_alias or not candidates):
+        if base and (
+            node.module is not None or unresolved_alias or not candidates
+        ):
             candidates.add(base)
         for candidate in sorted(candidates):
             self._add_target(candidate, node.lineno)
@@ -277,7 +285,9 @@ def _allowed_edges(config: dict[str, object]) -> set[tuple[str, str]]:
         config.get('allowed_edges', {}), context='allowed_edges'
     )
     for source, raw_targets in rows.items():
-        for target in _object_list(raw_targets, context=f'allowed_edges.{source}'):
+        for target in _object_list(
+            raw_targets, context=f'allowed_edges.{source}'
+        ):
             result.add((source, str(target)))
     return result
 
@@ -350,9 +360,7 @@ def validate_rules(
             )
 
     legacy = _object_dict(config.get('legacy', {}), context='legacy')
-    legacy_prefix = str(
-        legacy.get('package', 'aivm.legacy.pre_0_6_0')
-    )
+    legacy_prefix = str(legacy.get('package', 'aivm.legacy.pre_0_6_0'))
     allowlist = _legacy_allowlist(config)
     for record in imports:
         if record.importer.startswith(legacy_prefix):
@@ -440,9 +448,7 @@ def render_component_edges_json(
             {
                 'from': edge[0],
                 'to': edge[1],
-                'classification': annotation.get(
-                    'classification', 'accepted'
-                ),
+                'classification': annotation.get('classification', 'accepted'),
                 'note': annotation.get('note', ''),
                 'imports': [
                     {
@@ -483,8 +489,10 @@ def render_component_mermaid(
         config.get('diagram_edges', []), context='diagram_edges'
     )
     diagram_edges = {
-        (str(_object_dict(row, context='diagram edge')['from']),
-         str(_object_dict(row, context='diagram edge')['to']))
+        (
+            str(_object_dict(row, context='diagram edge')['from']),
+            str(_object_dict(row, context='diagram edge')['to']),
+        )
         for row in diagram_rows
     }
     missing = sorted(diagram_edges - set(edges))
@@ -503,13 +511,16 @@ def render_component_mermaid(
     for source, target in sorted(diagram_edges):
         annotation = annotations.get((source, target), {})
         classification = str(annotation.get('classification', 'accepted'))
-        arrow = '-.->' if classification in {'transitional', 'known-debt'} else '-->'
+        arrow = (
+            '-.->'
+            if classification in {'transitional', 'known-debt'}
+            else '-->'
+        )
         label = ''
         if classification != 'accepted':
             label = f'|{classification}|'
         lines.append(
-            f'    {_mermaid_id(source)} {arrow}{label} '
-            f'{_mermaid_id(target)}'
+            f'    {_mermaid_id(source)} {arrow}{label} {_mermaid_id(target)}'
         )
     lines.extend(
         [
@@ -524,10 +535,14 @@ def render_component_mermaid(
 
 def _find_named_node(body: Sequence[ast.stmt], name: str) -> ast.AST | None:
     for node in body:
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(
+            node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
             if node.name == name:
                 return node
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        elif isinstance(node, ast.AnnAssign) and isinstance(
+            node.target, ast.Name
+        ):
             if node.target.id == name:
                 return node
         elif isinstance(node, ast.Assign):
@@ -546,7 +561,9 @@ def resolve_symbol(
         module_name, tail = module_name.rsplit('.', 1)
         parts = (tail,) + parts
     if module_name not in modules:
-        raise ArchitectureError(f'Unknown documented module or symbol: {symbol}')
+        raise ArchitectureError(
+            f'Unknown documented module or symbol: {symbol}'
+        )
     module = modules[module_name]
     tree = ast.parse(module.path.read_text(encoding='utf-8'))
     node: ast.AST = tree
@@ -698,9 +715,7 @@ def render_state_mermaid(state: dict[str, object], digest: str) -> str:
         if symbol:
             label += f'<br/><code>{symbol}</code>'
         lines.append(f'    {item_id}(("{label}"))')
-        lines.append(
-            f'    {_mermaid_id(str(item["owner"]))} --> {item_id}'
-        )
+        lines.append(f'    {_mermaid_id(str(item["owner"]))} --> {item_id}')
     return '\n'.join(lines) + '\n'
 
 
@@ -709,13 +724,18 @@ def _agent_vm_config_references(
 ) -> list[tuple[str, str, int]]:
     result: list[tuple[str, str, int]] = []
     for module in modules.values():
-        if module.name == 'aivm.config' or module.name.startswith('aivm.legacy.'):
+        if module.name == 'aivm.config' or module.name.startswith(
+            'aivm.legacy.'
+        ):
             continue
         tree = ast.parse(module.path.read_text(encoding='utf-8'))
         aliases: set[str] = set()
         import_lines: set[int] = set()
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == 'aivm.config':
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == 'aivm.config'
+            ):
                 for alias in node.names:
                     if alias.name == 'AgentVMConfig':
                         aliases.add(alias.asname or alias.name)
@@ -774,7 +794,10 @@ def _store_scope_path_reconstructions(
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
-            if not isinstance(node.func, ast.Name) or node.func.id not in aliases:
+            if (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in aliases
+            ):
                 continue
             arg = node.args[0]
             if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
@@ -799,9 +822,7 @@ def render_compatibility_inventory(
     digest: str,
 ) -> str:
     legacy = _object_dict(config.get('legacy', {}), context='legacy')
-    legacy_prefix = str(
-        legacy.get('package', 'aivm.legacy.pre_0_6_0')
-    )
+    legacy_prefix = str(legacy.get('package', 'aivm.legacy.pre_0_6_0'))
     legacy_imports = [
         record
         for record in imports
@@ -876,7 +897,8 @@ def generated_outputs(paths: ArchitecturePaths) -> dict[Path, str]:
     classifier = ModuleClassifier(architecture)
     edges = subsystem_edges(imports, classifier)
     result = {
-        paths.generated / 'component-dependencies.mmd': render_component_mermaid(
+        paths.generated
+        / 'component-dependencies.mmd': render_component_mermaid(
             edges, architecture, digest
         ),
         paths.generated / 'component-edges.json': render_component_edges_json(
@@ -914,10 +936,14 @@ def check(paths: ArchitecturePaths) -> None:
         try:
             actual = path.read_text(encoding='utf-8')
         except FileNotFoundError:
-            stale.append(f'missing generated file: {path.relative_to(paths.root)}')
+            stale.append(
+                f'missing generated file: {path.relative_to(paths.root)}'
+            )
             continue
         if actual != expected:
-            stale.append(f'stale generated file: {path.relative_to(paths.root)}')
+            stale.append(
+                f'stale generated file: {path.relative_to(paths.root)}'
+            )
     extra = sorted(
         path
         for path in paths.generated.glob('*')

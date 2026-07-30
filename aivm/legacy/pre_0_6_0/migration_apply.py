@@ -590,9 +590,7 @@ def _verify_missing_source_destination(
 def _verify_planned_data_sources(plan: MigrationPlan) -> None:
     machine_root = plan.target_machine_store.expanduser().parent
     for move in plan.credential_material_moves:
-        expected = _verify_planned_move_source(
-            move, role='Credential material'
-        )
+        expected = _verify_planned_move_source(move, role='Credential material')
         _verify_missing_source_destination(
             move,
             expected,
@@ -715,7 +713,9 @@ def _ensure_transaction_directory(
         reject_symlinks=True,
     )
     ensure_store_directory(root, root_policy)
-    ensure_store_directory(transaction_dir, _transaction_policy(transaction_dir))
+    ensure_store_directory(
+        transaction_dir, _transaction_policy(transaction_dir)
+    )
 
 
 def _save_journal(transaction_dir: Path, journal: MigrationJournal) -> None:
@@ -1447,10 +1447,7 @@ def verify_migration_local(
                 managed_root=_credential_destination_root(move),
             )
             continue
-        if (
-            not target.exists()
-            or _path_content_fingerprint(target) != expected
-        ):
+        if not target.exists() or _path_content_fingerprint(target) != expected:
             raise MigrationExecutionError(
                 f'Credential material verification failed: {source} -> {target}'
             )
@@ -1468,10 +1465,7 @@ def verify_migration_local(
                 managed_root=layout.root,
             )
             continue
-        if (
-            not target.exists()
-            or _path_content_fingerprint(target) != expected
-        ):
+        if not target.exists() or _path_content_fingerprint(target) != expected:
             raise MigrationExecutionError(
                 f'Persistent state verification failed: {source} -> {target}'
             )
@@ -2087,9 +2081,7 @@ def _validate_transaction_control_paths(transaction_dir: Path) -> None:
             )
 
     _secure_lstat(root, expected='directory', owner_uid=owner_uid)
-    _secure_lstat(
-        transaction_dir, expected='directory', owner_uid=owner_uid
-    )
+    _secure_lstat(transaction_dir, expected='directory', owner_uid=owner_uid)
     _secure_lstat(
         _journal_path(transaction_dir), expected='file', owner_uid=owner_uid
     )
@@ -2128,9 +2120,9 @@ def _validate_transaction_control_paths(transaction_dir: Path) -> None:
         _secure_lstat(selected, expected='directory', owner_uid=owner_uid)
 
 
-def _frozen_plan_objects(report: dict[str, object]) -> tuple[
-    list[dict[str, object]], dict[str, object]
-]:
+def _frozen_plan_objects(
+    report: dict[str, object],
+) -> tuple[list[dict[str, object]], dict[str, object]]:
     sources = _object_dict_list(report.get('sources', []))
     proposed_value = report.get('proposed', {})
     proposed = _json_object(proposed_value)
@@ -2266,9 +2258,11 @@ def _load_and_validate_frozen_plan(
     report = _read_json(_plan_path(transaction_dir))
     digest = _frozen_plan_sha256(report)
     try:
-        anchored_digest = _plan_digest_path(transaction_dir).read_text(
-            encoding='ascii'
-        ).strip()
+        anchored_digest = (
+            _plan_digest_path(transaction_dir)
+            .read_text(encoding='ascii')
+            .strip()
+        )
     except OSError as ex:
         raise MigrationExecutionError(
             f'Could not read protected migration plan digest: {ex}'
@@ -2428,7 +2422,9 @@ def _validate_journal_backups(
                 f'for {original}'
             )
         selected_root = (
-            private_root if expected.role.startswith('private-') else backup_root
+            private_root
+            if expected.role.startswith('private-')
+            else backup_root
         )
         deterministic = _backup_path_for(original, selected_root)
         backup = _lexical_absolute(Path(record.backup))
@@ -2523,8 +2519,7 @@ def _assert_safe_restore_path(path: Path, managed_root: Path) -> None:
             ) from ex
         if stat.S_ISLNK(info.st_mode):
             raise MigrationExecutionError(
-                f'Refusing rollback through symlinked path component: '
-                f'{current}'
+                f'Refusing rollback through symlinked path component: {current}'
             )
         if not stat.S_ISDIR(info.st_mode):
             raise MigrationExecutionError(
@@ -2602,9 +2597,10 @@ def _atomic_restore_backup(
     staged_name = f'.aivm-rollback-stage-{token}'
     displaced_name = f'.aivm-rollback-old-{token}'
     moved_original = False
-    with _open_authorized_parent(
-        original, authorized.managed_root
-    ) as (parent_fd, parent_view):
+    with _open_authorized_parent(original, authorized.managed_root) as (
+        parent_fd,
+        parent_view,
+    ):
         staged = parent_view / staged_name
         displaced = parent_view / displaced_name
         restored = parent_view / original.name

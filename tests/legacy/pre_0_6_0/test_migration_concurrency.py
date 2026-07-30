@@ -92,9 +92,7 @@ def _legacy_source(
     credential_source = data_root / 'credentials' / old_cred_id
     credential_source.mkdir(parents=True)
     (credential_source / 'id_ed25519').write_text('private-key\n')
-    (credential_source / 'id_ed25519.pub').write_text(
-        _public_key(label) + '\n'
-    )
+    (credential_source / 'id_ed25519.pub').write_text(_public_key(label) + '\n')
     persistent_source = data_root / 'state'
     persistent_source.mkdir(parents=True)
     (persistent_source / 'persistent-attachments.json').write_text('{}\n')
@@ -169,12 +167,8 @@ def test_apply_rejects_machine_store_mutation_after_planning(
     cfg = AgentVMConfig()
     cfg.vm.name = 'concurrent-vm'
     cfg.network.name = 'concurrent-net'
-    upsert_network(
-        intervening, network=cfg.network, firewall=cfg.firewall
-    )
-    upsert_vm_with_network(
-        intervening, cfg, network_name=cfg.network.name
-    )
+    upsert_network(intervening, network=cfg.network, firewall=cfg.firewall)
+    upsert_vm_with_network(intervening, cfg, network_name=cfg.network.name)
     save_store_split(
         intervening,
         layout.config_path,
@@ -194,9 +188,7 @@ def test_apply_rejects_machine_store_mutation_after_planning(
 
     current = load_store(layout.config_path)
     assert [item.name for item in current.vms] == ['concurrent-vm']
-    transaction = migration_transaction_dir(
-        migration_id_for_plan(plan), layout
-    )
+    transaction = migration_transaction_dir(migration_id_for_plan(plan), layout)
     assert not transaction.exists()
 
 
@@ -206,8 +198,12 @@ def test_two_migrations_are_serialized_and_second_cannot_overwrite(
     source_a, vm_a = _legacy_source(tmp_path, label='first')
     source_b, _vm_b = _legacy_source(tmp_path, label='second')
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
-    plan_a = build_migration_plan([source_a], layout=layout, check_runtime=False)
-    plan_b = build_migration_plan([source_b], layout=layout, check_runtime=False)
+    plan_a = build_migration_plan(
+        [source_a], layout=layout, check_runtime=False
+    )
+    plan_b = build_migration_plan(
+        [source_b], layout=layout, check_runtime=False
+    )
     assert not plan_a.blocked
     assert not plan_b.blocked
 

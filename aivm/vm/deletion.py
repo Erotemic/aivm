@@ -565,9 +565,7 @@ def _cleanup_owned_trees(journal: VMDeletionJournal) -> None:
         candidates.append(
             (Path(journal.machine_state_dir), 'per-VM machine state')
         )
-    candidates.append(
-        (Path(journal.vm_base_dir), 'AIVM-managed VM directory')
-    )
+    candidates.append((Path(journal.vm_base_dir), 'AIVM-managed VM directory'))
 
     # Mount enumeration is an authorization check for recursive deletion.  Run
     # every required inspection before removing any tree so one late probe

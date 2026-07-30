@@ -209,9 +209,8 @@ def _network_missing_error(detail: str) -> bool:
 
 def _network_inactive_error(detail: str) -> bool:
     lowered = detail.lower()
-    return (
-        'network is not active' in lowered
-        or ("network '" in lowered and ' is not active' in lowered)
+    return 'network is not active' in lowered or (
+        "network '" in lowered and ' is not active' in lowered
     )
 
 

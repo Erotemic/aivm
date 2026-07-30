@@ -271,13 +271,16 @@ def test_net_destroy_cli_removes_record_for_already_absent_network(
         'aivm.cli.net.destroy_network', lambda *args, **kwargs: None
     )
 
-    assert NetDestroyCLI.main(
-        argv=False,
-        config=None,
-        network=cfg.network.name,
-        force=False,
-        dry_run=False,
-    ) == 0
+    assert (
+        NetDestroyCLI.main(
+            argv=False,
+            config=None,
+            network=cfg.network.name,
+            force=False,
+            dry_run=False,
+        )
+        == 0
+    )
 
     assert find_network(load_scope_store(scope), cfg.network.name) is None
 
@@ -363,12 +366,15 @@ def test_net_destroy_save_failure_is_retryable_after_external_deletion(
         )
     assert find_network(load_scope_store(scope), cfg.network.name) is not None
 
-    assert NetDestroyCLI.main(
-        argv=False,
-        config=None,
-        network=cfg.network.name,
-        force=False,
-        dry_run=False,
-    ) == 0
+    assert (
+        NetDestroyCLI.main(
+            argv=False,
+            config=None,
+            network=cfg.network.name,
+            force=False,
+            dry_run=False,
+        )
+        == 0
+    )
     assert destroy_calls == [True, False]
     assert find_network(load_scope_store(scope), cfg.network.name) is None

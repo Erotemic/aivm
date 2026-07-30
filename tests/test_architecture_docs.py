@@ -88,9 +88,7 @@ def _write_specs(
         yaml.safe_dump(
             {
                 'version': 1,
-                'owners': [
-                    {'id': 'state', 'label': 'State', 'symbol': symbol}
-                ],
+                'owners': [{'id': 'state', 'label': 'State', 'symbol': symbol}],
                 'items': [
                     {'label': 'Item', 'owner': 'state', 'symbol': symbol}
                 ],
@@ -125,7 +123,9 @@ def test_unclassified_production_module_is_reported(tmp_path: Path) -> None:
     assert errors == ['Unclassified production module: aivm.unclassified']
 
 
-def test_forbidden_subsystem_edge_names_modules_and_line(tmp_path: Path) -> None:
+def test_forbidden_subsystem_edge_names_modules_and_line(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path, 'aivm/__init__.py', '')
     _write(tmp_path, 'aivm/high.py', 'from . import low\n')
     _write(tmp_path, 'aivm/low.py', 'VALUE = 1\n')
@@ -147,7 +147,9 @@ def test_forbidden_subsystem_edge_names_modules_and_line(tmp_path: Path) -> None
 
 def test_allowlisted_transitional_legacy_import(tmp_path: Path) -> None:
     _write(tmp_path, 'aivm/__init__.py', '')
-    _write(tmp_path, 'aivm/canonical.py', 'from .legacy.pre_0_6_0 import shim\n')
+    _write(
+        tmp_path, 'aivm/canonical.py', 'from .legacy.pre_0_6_0 import shim\n'
+    )
     _write(tmp_path, 'aivm/legacy/__init__.py', '')
     _write(tmp_path, 'aivm/legacy/pre_0_6_0/__init__.py', '')
     _write(tmp_path, 'aivm/legacy/pre_0_6_0/shim.py', 'VALUE = 1\n')
@@ -230,11 +232,15 @@ def test_missing_symbol_reference_is_rejected(tmp_path: Path) -> None:
         ]
     }
     state = {'owners': [], 'items': []}
-    with pytest.raises(arch.ArchitectureError, match='Missing documented symbol'):
+    with pytest.raises(
+        arch.ArchitectureError, match='Missing documented symbol'
+    ):
         arch.validate_curated_specs(flows, state, modules)
 
 
-def test_generation_is_deterministic_and_stable_ordering(tmp_path: Path) -> None:
+def test_generation_is_deterministic_and_stable_ordering(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path, 'aivm/__init__.py', '')
     _write(
         tmp_path,

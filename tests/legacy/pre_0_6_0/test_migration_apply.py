@@ -246,7 +246,9 @@ def test_missing_source_destination_inspection_errors_fail_before_writes(
     target = Path(str(moves[0]['target']))
     failing = target if failure_path == 'target' else target.parent
     if source_name == 'persistent':
-        ancestor = target.parent if failure_path == 'target' else target.parent.parent
+        ancestor = (
+            target.parent if failure_path == 'target' else target.parent.parent
+        )
         ancestor.mkdir(parents=True, exist_ok=True)
     profile_path = Path(str(plan.profiles[0]['path']))
     transaction = migration_transaction_dir(
@@ -298,7 +300,9 @@ def test_missing_source_dangling_destination_symlink_fails_before_writes(
     target.symlink_to(tmp_path / 'missing-target', target_is_directory=True)
     profile_path = Path(str(plan.profiles[0]['path']))
 
-    with pytest.raises(MigrationExecutionError, match='destination is a symlink'):
+    with pytest.raises(
+        MigrationExecutionError, match='destination is a symlink'
+    ):
         apply_migration(
             plan,
             layout=layout,
@@ -766,9 +770,7 @@ def test_rollback_rejects_group_writable_control_state(tmp_path: Path) -> None:
     state_path = result.transaction_dir / 'state.json'
     os.chmod(state_path, 0o660)
 
-    with pytest.raises(
-        MigrationExecutionError, match='group/other writable'
-    ):
+    with pytest.raises(MigrationExecutionError, match='group/other writable'):
         rollback_migration(result.journal.migration_id, layout=layout)
 
     assert layout.config_path.exists()
@@ -779,9 +781,7 @@ def test_rollback_does_not_trust_journal_output_digest(tmp_path: Path) -> None:
     state_path = result.transaction_dir / 'state.json'
     payload = json.loads(state_path.read_text(encoding='utf-8'))
     selected = next(
-        row
-        for row in payload['backups']
-        if row.get('applied_existed') is True
+        row for row in payload['backups'] if row.get('applied_existed') is True
     )
     selected['applied_sha256'] = '0' * 64
     state_path.write_text(json.dumps(payload), encoding='utf-8')
@@ -813,7 +813,9 @@ def test_rollback_rejects_tampered_frozen_plan(tmp_path: Path) -> None:
     assert layout.config_path.exists()
 
 
-def test_rollback_rejects_replaced_transaction_directory(tmp_path: Path) -> None:
+def test_rollback_rejects_replaced_transaction_directory(
+    tmp_path: Path,
+) -> None:
     layout, _plan, result = _applied_migration_for_rollback(tmp_path)
     transaction = result.transaction_dir
     original = transaction.with_name(transaction.name + '-saved')
@@ -858,7 +860,9 @@ def test_rollback_rejects_symlinked_original_target(tmp_path: Path) -> None:
     marker.write_text('safe\n', encoding='utf-8')
     target.symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(MigrationExecutionError, match='symlinked rollback target'):
+    with pytest.raises(
+        MigrationExecutionError, match='symlinked rollback target'
+    ):
         rollback_migration(result.journal.migration_id, layout=layout)
 
     assert marker.read_text(encoding='utf-8') == 'safe\n'
@@ -931,7 +935,9 @@ def test_rollback_rejects_modified_backup_contents(tmp_path: Path) -> None:
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     plan = build_migration_plan([source], layout=layout, check_runtime=False)
     credential_target = Path(str(plan.credential_material_moves[0]['target']))
-    shutil.copytree(credential_source, credential_target, copy_function=shutil.copy2)
+    shutil.copytree(
+        credential_source, credential_target, copy_function=shutil.copy2
+    )
     result = apply_migration(
         plan,
         layout=layout,
@@ -944,7 +950,9 @@ def test_rollback_rejects_modified_backup_contents(tmp_path: Path) -> None:
         if item.role == 'private-credential-target'
     )
     backup = Path(private_record.backup)
-    (backup / 'id_ed25519').write_text('attacker replacement\n', encoding='utf-8')
+    (backup / 'id_ed25519').write_text(
+        'attacker replacement\n', encoding='utf-8'
+    )
 
     with pytest.raises(
         MigrationExecutionError, match='backup changed after creation'
