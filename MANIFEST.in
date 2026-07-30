@@ -1,0 +1,3 @@
+include run_linter.sh
+include dev/devcheck/architecture_docs.py
+recursive-include docs/architecture *.md *.yaml *.mmd *.json

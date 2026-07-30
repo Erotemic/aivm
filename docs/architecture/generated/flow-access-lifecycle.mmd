@@ -1,0 +1,18 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 1; input digest: 1d9ac08245e5c3d4
+flowchart TD
+    command["vm access disable/remove<br/><code>aivm.cli.vm_access.VMAccessDisableCLI.main</code>"]
+    lock[["Hold machine store and VM lock<br/><code>aivm.machine_store.machine_resource_locks</code>"]]
+    authorize["Resolve target authority and ownership references<br/><code>aivm.access_control.mutate_access_identity</code>"]
+    guest{"Remove only AIVM key and sudo fragment<br/><code>aivm.access_control._disable_guest_key</code>"}
+    disabled[("Disable preserves account, home, attachments, and credentials<br/><code>aivm.config_store.models.PrincipalEntry.state</code>")]
+    remove["Remove record only when no owned records remain<br/><code>aivm.access_control.access_ownership_summary</code>"]
+    profile[("Clear caller active selection when needed<br/><code>aivm.access_control._clear_current_profile_selection</code>")]
+    blocked>"Ownership or last-access invariant blocks mutation<br/><code>aivm.access_control._require_not_last_access</code>"]
+    command -->|serialize| lock
+    lock -->|reload authority| authorize
+    authorize -->|invariant failure| blocked
+    authorize -->|disable/remove| guest
+    guest -->|persist disabled| disabled
+    disabled -->|explicit remove| remove
+    remove -->|finalize| profile

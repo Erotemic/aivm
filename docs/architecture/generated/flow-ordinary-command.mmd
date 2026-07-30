@@ -1,0 +1,16 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 1; input digest: 1d9ac08245e5c3d4
+flowchart TD
+    command["CLI command requests a VM context<br/><code>aivm.services.load_vm_context_with_path</code>"]
+    scope["Resolve legacy or machine store scope<br/><code>aivm.scoped_store.resolve_store_scope</code>"]
+    stores[("Load machine store and caller profile<br/><code>aivm.scoped_store.load_scope_store</code>")]
+    identity["Resolve kernel caller to an active access identity<br/><code>aivm.scoped_store.resolve_machine_context</code>"]
+    materialize["Join VM, network, access identity, and profile<br/><code>aivm.scoped_store.materialize_machine_cfg</code>"]
+    context[("ResolvedVMContext with transitional effective_cfg<br/><code>aivm.config_scopes.ResolvedVMContext.effective_cfg</code>")]
+    operation["Runtime operation uses guest user, SSH identity, and machine config<br/><code>aivm.services.load_vm_context</code>"]
+    command -->|select scope| scope
+    scope -->|authoritative reads| stores
+    stores -->|machine + profile| identity
+    identity -->|active access identity| materialize
+    materialize -->|compatibility aggregate| context
+    context -->|execute| operation

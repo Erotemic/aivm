@@ -1,0 +1,103 @@
+version: 1
+owners:
+  - id: machine-store
+    label: Machine-global desired state
+    symbol: aivm.config_store.models.Store
+  - id: user-profile
+    label: Caller-owned profile
+    symbol: aivm.profile_store.UserProfileStore
+  - id: access-identity
+    label: Access identity record
+    symbol: aivm.config_store.models.PrincipalEntry
+  - id: attachment
+    label: Attachment declaration and replay state
+    symbol: aivm.config_store.models.AttachmentEntry
+  - id: credential
+    label: Credential metadata
+    symbol: aivm.config_store.models.CredentialEntry
+  - id: host-private
+    label: Host-private material and provider sessions
+    symbol: aivm.credentials.keys.host_private_key_path
+  - id: bootstrap
+    label: Machine bootstrap identity
+    symbol: aivm.enrollment.BootstrapIdentity
+  - id: runtime-journal
+    label: Recoverable runtime and transaction journals
+    symbol: aivm.vm.deletion.VMDeletionJournal
+  - id: compatibility-view
+    label: Transitional aggregate compatibility view
+    symbol: aivm.config_scopes.ResolvedVMContext
+
+items:
+  - label: VM definitions and machine-owned VM settings
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.vms
+  - label: Network definitions and firewall policy
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.networks
+  - label: Access identity collection
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.principals
+  - label: Attachment declarations
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.attachments
+  - label: Credential metadata records
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.credentials
+  - label: Active VM selection
+    owner: user-profile
+    symbol: aivm.profile_store.UserProfileStore.active_vm
+  - label: CLI behavior preferences
+    owner: user-profile
+    symbol: aivm.profile_store.UserProfileStore.behavior
+  - label: Personal SSH identity path references
+    owner: user-profile
+    symbol: aivm.profile_store.UserProfileStore.ssh_identity_file
+  - label: Host UID/GID, guest user, public key, and lifecycle state
+    owner: access-identity
+    symbol: aivm.config_store.models.PrincipalEntry.state
+  - label: Attachment owner, source identity, destination, mode, and state
+    owner: attachment
+    symbol: aivm.config_store.models.AttachmentEntry.state
+  - label: Credential owner, provider identity, access, and lifecycle state
+    owner: credential
+    symbol: aivm.config_store.models.CredentialEntry.state
+  - label: Repository deploy-key private material
+    owner: host-private
+    symbol: aivm.credentials.keys.host_private_key_path
+  - label: Provider login/session state
+    owner: host-private
+    unverified_reason: Provider authentication is intentionally external environment or tool state and is not persisted in an AIVM model.
+  - label: Restricted enrollment keypair
+    owner: bootstrap
+    symbol: aivm.enrollment.bootstrap_identity_paths
+  - label: Canonical persistent attachment manifest
+    owner: attachment
+    symbol: aivm.attachments.persistent.manifest._persistent_host_manifest_path
+  - label: Privileged persistent replay manifest and service inputs
+    owner: attachment
+    symbol: aivm.attachments.persistent.manifest._persistent_host_replay_manifest_path
+  - label: VM deletion phases, storage coordinates, and last error
+    owner: runtime-journal
+    symbol: aivm.vm.deletion.VMDeletionJournal.completed_phases
+  - label: Released-store migration plan, backups, phases, and verification
+    owner: runtime-journal
+    symbol: aivm.legacy.pre_0_6_0.migration_apply.MigrationJournal.completed_steps
+  - label: VMEntry.cfg aggregate persisted compatibility shape
+    owner: compatibility-view
+    symbol: aivm.config_store.models.VMEntry.cfg
+  - label: ResolvedVMContext.effective_cfg aggregate runtime compatibility shape
+    owner: compatibility-view
+    symbol: aivm.config_scopes.ResolvedVMContext.effective_cfg
+  - label: Canonical machine-only runtime projection
+    owner: compatibility-view
+    symbol: aivm.config_scopes.MachineConfig
+  - label: Canonical caller-only runtime projection
+    owner: compatibility-view
+    symbol: aivm.config_scopes.UserProfile
+  - label: Aggregate join from VM plus network
+    owner: compatibility-view
+    symbol: aivm.config_store.resolve.materialize_vm_cfg
+  - label: Aggregate join from machine, access identity, and profile
+    owner: compatibility-view
+    symbol: aivm.scoped_store.materialize_machine_cfg

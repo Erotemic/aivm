@@ -1,0 +1,46 @@
+%% GENERATED FILE - DO NOT EDIT
+%% source: Python imports under aivm/
+%% generation schema: 1; input digest: 1d9ac08245e5c3d4
+flowchart LR
+    access["Access identities and enrollment"]
+    attachments["Attachments and persistent replay"]
+    cli["CLI and command adapters"]
+    compatibility["Pre-0.6 compatibility boundary"]
+    config_model["Configuration models"]
+    credentials["Repository credentials"]
+    execution["Commands, privilege, and process control"]
+    lifecycle["VM, network, firewall, and host lifecycle"]
+    orchestration["Runtime resolution and services"]
+    persistence["Machine store, profile, and locking"]
+    support["Shared support utilities"]
+    access --> lifecycle
+    access --> persistence
+    attachments -.->|transitional| compatibility
+    attachments --> lifecycle
+    attachments --> persistence
+    cli --> access
+    cli --> attachments
+    cli --> credentials
+    cli --> lifecycle
+    cli --> orchestration
+    compatibility --> lifecycle
+    compatibility --> orchestration
+    compatibility --> persistence
+    credentials -.->|transitional| compatibility
+    credentials --> lifecycle
+    credentials --> persistence
+    lifecycle -.->|transitional| compatibility
+    lifecycle --> config_model
+    lifecycle --> execution
+    lifecycle --> persistence
+    orchestration --> access
+    orchestration -.->|transitional| compatibility
+    orchestration --> config_model
+    orchestration --> lifecycle
+    orchestration --> persistence
+    persistence -.->|transitional| compatibility
+    persistence --> config_model
+    classDef compatibility fill:#fff3cd,stroke:#8a6d3b;
+    class compatibility compatibility;
+
+%% The complete edge inventory is component-edges.json.

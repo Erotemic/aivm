@@ -1,0 +1,379 @@
+version: 1
+flows:
+  - id: ordinary-command
+    title: Ordinary access-identity-aware VM command loading
+    nodes:
+      - id: command
+        label: CLI command requests a VM context
+        symbol: aivm.services.load_vm_context_with_path
+        parameters: [config_path]
+      - id: scope
+        label: Resolve legacy or machine store scope
+        symbol: aivm.scoped_store.resolve_store_scope
+        parameters: [config_opt]
+      - id: stores
+        label: Load machine store and caller profile
+        symbol: aivm.scoped_store.load_scope_store
+        parameters: [scope]
+        kind: state
+      - id: identity
+        label: Resolve kernel caller to an active access identity
+        symbol: aivm.scoped_store.resolve_machine_context
+        parameters: [reg, vm_name]
+      - id: materialize
+        label: Join VM, network, access identity, and profile
+        symbol: aivm.scoped_store.materialize_machine_cfg
+        parameters: [reg, vm_name]
+      - id: context
+        label: ResolvedVMContext with transitional effective_cfg
+        symbol: aivm.config_scopes.ResolvedVMContext.effective_cfg
+        kind: state
+      - id: operation
+        label: Runtime operation uses guest user, SSH identity, and machine config
+        symbol: aivm.services.load_vm_context
+        parameters: [config_path]
+    edges:
+      - {from: command, to: scope, label: select scope}
+      - {from: scope, to: stores, label: authoritative reads}
+      - {from: stores, to: identity, label: machine + profile}
+      - {from: identity, to: materialize, label: active access identity}
+      - {from: materialize, to: context, label: compatibility aggregate}
+      - {from: context, to: operation, label: execute}
+
+  - id: create-machine
+    title: First-user initialization and VM creation
+    nodes:
+      - id: init
+        label: config init creator path
+        symbol: aivm.cli.config.init.initialize_config_defaults
+        parameters: [config_opt, "yes", defaults, force]
+      - id: scope
+        label: Select fresh machine scope
+        symbol: aivm.scoped_store.resolve_store_scope
+        parameters: [config_opt]
+      - id: defaults
+        label: Persist machine defaults and caller profile
+        symbol: aivm.scoped_store.save_scope_store
+        parameters: [scope, reg]
+        kind: state
+      - id: create
+        label: vm create from reviewed defaults
+        symbol: aivm.vm.create_ops.create_vm_from_defaults
+        parameters: [cfg_path]
+      - id: locks
+        label: Hold machine store, network, and VM locks
+        symbol: aivm.machine_store.machine_resource_locks
+        kind: lock
+      - id: persist
+        label: Persist VM, network, creator access identity, and profile
+        symbol: aivm.scoped_store.persist_creator_vm
+        parameters: [scope, reg, cfg]
+        kind: state
+      - id: libvirt
+        label: Create or start libvirt domain
+        symbol: aivm.vm.create.create_or_start_vm
+        parameters: [cfg]
+        kind: external
+      - id: bootstrap
+        label: Create restricted machine bootstrap identity
+        symbol: aivm.enrollment.ensure_bootstrap_identity
+        parameters: [vm_name]
+        kind: external
+      - id: failure
+        label: Failed creation leaves reviewed defaults; no unmanaged adoption
+        unverified_reason: This is a documented control-flow outcome, not a standalone symbol.
+        kind: failure
+    edges:
+      - {from: init, to: scope, label: fresh install}
+      - {from: scope, to: defaults, label: machine + user state}
+      - {from: defaults, to: create, label: later vm create}
+      - {from: create, to: locks, label: serialize global mutation}
+      - {from: locks, to: persist, label: creator desired state}
+      - {from: persist, to: libvirt, label: external realization}
+      - {from: libvirt, to: bootstrap, label: enrollment capability}
+      - {from: create, to: failure, label: validation or host failure}
+
+  - id: join-machine
+    title: Later-user join and access enrollment
+    nodes:
+      - id: init
+        label: config init detects existing managed VM
+        symbol: aivm.cli.config.init._join_existing_machine
+        parameters: [scope, reg, vm_name]
+      - id: profile
+        label: Write only caller SSH paths and preferences
+        symbol: aivm.profile_store.save_user_profile
+        parameters: [profile]
+        kind: state
+      - id: pending
+        label: Persist pending access identity before guest mutation
+        symbol: aivm.enrollment._save_principal_state
+        parameters: [scope, principal]
+        kind: state
+      - id: bootstrap
+        label: Restricted bootstrap SSH invokes aivm-guestctl
+        symbol: aivm.enrollment.require_bootstrap_identity
+        parameters: [vm_name]
+        kind: external
+      - id: guest
+        label: Add guest account, key, and constrained sudo fragment
+        symbol: aivm.guestctl.reconcile_guest_principal
+        kind: external
+      - id: verify
+        label: Verify new personal SSH connection
+        symbol: aivm.enrollment.reconcile_current_principal
+        parameters: [scope]
+      - id: active
+        label: Mark access identity active and select VM in caller profile
+        symbol: aivm.config_store.models.PrincipalEntry.state
+        kind: state
+      - id: recoverable
+        label: Unreachable guest leaves pending identity for reconcile
+        unverified_reason: This is a documented failure transition represented by PrincipalEntry.state.
+        kind: failure
+    edges:
+      - {from: init, to: profile, label: caller-owned state}
+      - {from: profile, to: pending, label: enroll}
+      - {from: pending, to: bootstrap, label: forced command}
+      - {from: bootstrap, to: guest, label: narrow mutation}
+      - {from: guest, to: verify, label: personal key}
+      - {from: verify, to: active, label: success}
+      - {from: bootstrap, to: recoverable, label: transport failure}
+      - {from: recoverable, to: verify, label: vm access reconcile}
+
+  - id: attachments
+    title: Attachment creation, lookup, replay, and detach
+    nodes:
+      - id: attach
+        label: Validate and attach host path
+        symbol: aivm.cli.vm_attach.run_vm_attach
+        parameters: [request]
+      - id: owner
+        label: Resolve caller access identity and ownership
+        symbol: aivm.attachments.ownership.attachment_owner_for_context
+      - id: record
+        label: Persist AttachmentEntry declaration
+        symbol: aivm.config_store.models.Store.attachments
+        kind: state
+      - id: reconcile
+        label: Reconcile VM definition or guest mount
+        symbol: aivm.attachments.session._reconcile_attached_vm
+        parameters: [cfg, host_src, attachment]
+      - id: manifest
+        label: Generate canonical persistent replay manifest
+        symbol: aivm.attachments.persistent.manifest._sync_persistent_attachment_manifest_on_host
+        parameters: [cfg, cfg_path]
+        kind: state
+      - id: replay
+        label: Replay approved persistent binds on host and guest
+        symbol: aivm.attachments.persistent.replay._reconcile_persistent_attachments_in_guest
+        kind: external
+      - id: detach
+        label: Mark detaching, remove mounts, then remove declaration
+        symbol: aivm.cli.vm_attach.run_vm_detach
+        parameters: [request]
+      - id: recoverable
+        label: Failed persistent teardown retains detaching state for retry
+        symbol: aivm.config_store.models.AttachmentEntry.state
+        kind: failure
+    edges:
+      - {from: attach, to: owner, label: authorize}
+      - {from: owner, to: record, label: machine-store lock}
+      - {from: record, to: reconcile, label: realize}
+      - {from: record, to: manifest, label: persistent mode}
+      - {from: manifest, to: replay, label: approved paths}
+      - {from: detach, to: recoverable, label: state=detaching}
+      - {from: recoverable, to: replay, label: resumable cleanup}
+      - {from: replay, to: record, label: remove after success}
+
+  - id: credentials
+    title: Credential creation and revocation
+    nodes:
+      - id: add
+        label: vm creds add resolves repository and access identity
+        symbol: aivm.cli.vm_creds.VMCredsAddCLI.main
+      - id: grant
+        label: Generate key, install guest key, and publish provider key
+        symbol: aivm.credentials.service.grant_repository_credential
+        parameters: [cfg, store, store_path, repo]
+      - id: private
+        label: Host private key material remains outside metadata store
+        symbol: aivm.credentials.keys.host_private_key_path
+        parameters: [vm_name, cred_id]
+        kind: state
+      - id: metadata
+        label: Persist access-identity-owned CredentialEntry
+        symbol: aivm.config_store.models.Store.credentials
+        kind: state
+      - id: provider
+        label: GitHub or GitLab provider API
+        symbol: aivm.credentials.providers.resolve_provider
+        kind: external
+      - id: revoke
+        label: Revoke provider key, remove guest key, then remove host key
+        symbol: aivm.credentials.service.revoke_repository_credential
+        parameters: [cfg, store, store_path, entry]
+      - id: recoverable
+        label: Uncertain provider outcome preserves metadata/material for operator action
+        symbol: aivm.config_store.models.CredentialEntry.state
+        kind: failure
+    edges:
+      - {from: add, to: grant, label: authorized mutation}
+      - {from: grant, to: private, label: generate}
+      - {from: grant, to: provider, label: best-effort publish}
+      - {from: grant, to: metadata, label: pending/active/unregistered}
+      - {from: metadata, to: revoke, label: recorded provider identity}
+      - {from: revoke, to: provider, label: revoke when managed}
+      - {from: provider, to: recoverable, label: uncertain failure}
+
+  - id: access-lifecycle
+    title: Access identity disable and remove
+    nodes:
+      - id: command
+        label: vm access disable/remove
+        symbol: aivm.cli.vm_access.VMAccessDisableCLI.main
+      - id: lock
+        label: Hold machine store and VM lock
+        symbol: aivm.machine_store.machine_resource_locks
+        kind: lock
+      - id: authorize
+        label: Resolve target authority and ownership references
+        symbol: aivm.access_control.mutate_access_identity
+        parameters: [scope]
+      - id: guest
+        label: Remove only AIVM key and sudo fragment
+        symbol: aivm.access_control._disable_guest_key
+        parameters: [scope, principal]
+        kind: external
+      - id: disabled
+        label: Disable preserves account, home, attachments, and credentials
+        symbol: aivm.config_store.models.PrincipalEntry.state
+        kind: state
+      - id: remove
+        label: Remove record only when no owned records remain
+        symbol: aivm.access_control.access_ownership_summary
+        parameters: [reg]
+      - id: profile
+        label: Clear caller active selection when needed
+        symbol: aivm.access_control._clear_current_profile_selection
+        parameters: [scope, principal]
+        kind: state
+      - id: blocked
+        label: Ownership or last-access invariant blocks mutation
+        symbol: aivm.access_control._require_not_last_access
+        parameters: [reg, principal]
+        kind: failure
+    edges:
+      - {from: command, to: lock, label: serialize}
+      - {from: lock, to: authorize, label: reload authority}
+      - {from: authorize, to: blocked, label: invariant failure}
+      - {from: authorize, to: guest, label: disable/remove}
+      - {from: guest, to: disabled, label: persist disabled}
+      - {from: disabled, to: remove, label: explicit remove}
+      - {from: remove, to: profile, label: finalize}
+
+  - id: vm-deletion
+    title: Resumable VM deletion
+    nodes:
+      - id: command
+        label: vm delete resolves managed VM
+        symbol: aivm.cli.vm_lifecycle.VMDeleteCLI.main
+      - id: lock
+        label: Hold store, network, and VM resources
+        symbol: aivm.vm.deletion._DeletionLockScope
+        kind: lock
+      - id: journal
+        label: Create or resume deletion journal
+        symbol: aivm.vm.deletion.VMDeletionJournal
+        kind: state
+      - id: preflight
+        label: Prove domain, storage, paths, and mounts safe before deletion
+        symbol: aivm.vm.deletion._revalidate_domain_storage_paths
+        parameters: [cfg, journal]
+      - id: attachments
+        label: Clean attachment and replay artifacts
+        symbol: aivm.vm.deletion._cleanup_attachment_artifacts
+        parameters: [scope, cfg, cfg_path, reg]
+      - id: credentials
+        label: Require released credentials and discard released material
+        symbol: aivm.credentials.guards.require_vm_credentials_released
+        kind: state
+      - id: libvirt
+        label: Destroy and undefine domain with reviewed storage
+        symbol: aivm.vm.domain._destroy_and_undefine_vm
+        kind: external
+      - id: trees
+        label: Remove bootstrap, machine-state, and VM-owned trees
+        symbol: aivm.vm.deletion._cleanup_owned_trees
+        parameters: [journal]
+      - id: store
+        label: Remove VM and finalize machine store/profile
+        symbol: aivm.vm.deletion.delete_managed_vm
+        parameters: [scope, cfg, cfg_path]
+        kind: state
+      - id: recoverable
+        label: Failure records last_error and completed phases for resume
+        symbol: aivm.vm.deletion.VMDeletionJournal.last_error
+        kind: failure
+    edges:
+      - {from: command, to: lock, label: global mutation}
+      - {from: lock, to: journal, label: durable recovery}
+      - {from: journal, to: preflight, label: inspect first}
+      - {from: preflight, to: attachments, label: safe}
+      - {from: attachments, to: credentials, label: phase}
+      - {from: credentials, to: libvirt, label: phase}
+      - {from: libvirt, to: trees, label: domain absent}
+      - {from: trees, to: store, label: finalize}
+      - {from: preflight, to: recoverable, label: any failure}
+      - {from: recoverable, to: journal, label: retry}
+
+  - id: migration
+    title: Explicit released-store migration
+    nodes:
+      - id: plan
+        label: Read-only plan fingerprints released inputs and target store
+        symbol: aivm.legacy.pre_0_6_0.migration.build_migration_plan
+        parameters: [sources]
+      - id: locks
+        label: Hold migration, store, network, and VM locks
+        symbol: aivm.legacy.pre_0_6_0.migration_apply.apply_migration
+        kind: lock
+      - id: revalidate
+        label: Revalidate sources, missing destinations, and target revision
+        symbol: aivm.legacy.pre_0_6_0.migration_apply._verify_target_machine_store_revision
+        kind: operation
+      - id: journal
+        label: Freeze plan, backups, outputs, and resumable phases
+        symbol: aivm.legacy.pre_0_6_0.migration_apply.MigrationJournal
+        kind: state
+      - id: machine
+        label: Write canonical machine store and user profiles
+        symbol: aivm.legacy.pre_0_6_0.migration_apply._write_machine_store
+        kind: state
+      - id: data
+        label: Copy reviewed credential and persistent-state trees
+        symbol: aivm.legacy.pre_0_6_0.migration_apply._copy_persistent_state
+        kind: state
+      - id: guest
+        label: Install restricted bootstrap through existing creator access
+        symbol: aivm.legacy.pre_0_6_0.migration_apply.install_bootstrap_through_legacy_access
+        kind: external
+      - id: verify
+        label: Verify local outputs and runtime access under the same locks
+        symbol: aivm.legacy.pre_0_6_0.migration_apply.verify_applied_migration
+        parameters: [migration_id]
+      - id: recoverable
+        label: Failed apply remains resumable or rollback-capable
+        symbol: aivm.legacy.pre_0_6_0.migration_apply.resume_migration
+        parameters: [migration_id]
+        kind: failure
+    edges:
+      - {from: plan, to: locks, label: reviewed plan}
+      - {from: locks, to: revalidate, label: transaction-wide}
+      - {from: revalidate, to: journal, label: before first write}
+      - {from: journal, to: machine, label: phased apply}
+      - {from: machine, to: data, label: copied state}
+      - {from: data, to: guest, label: bootstrap}
+      - {from: guest, to: verify, label: local + runtime}
+      - {from: revalidate, to: recoverable, label: mismatch/failure}
+      - {from: recoverable, to: locks, label: resume}
