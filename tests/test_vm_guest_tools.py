@@ -9,11 +9,13 @@ from pathlib import Path
 import pytest
 
 from aivm.config import AgentVMConfig, dump_toml, load
+from aivm.errors import AIVMError
 from aivm.status import probe_provisioned
 from aivm.util import CmdResult
 from aivm.vm.guest_tools import (
     GUEST_TOOL_REGISTRY,
     GuestToolRegistry,
+    GuestToolSpecError,
     UnknownGuestToolError,
     _build_claude_install_script,
     _guest_ensure_code_script,
@@ -232,7 +234,7 @@ def test_guest_claude_tool_default_off_and_opt_in() -> None:
 
     cfg.tools.claude = 'stable'
     with pytest.raises(
-        ValueError, match="only supports the specs 'latest' and 'off'"
+        GuestToolSpecError, match=r"accepted values are 'latest'"
     ):
         GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
 
@@ -295,6 +297,29 @@ def test_tools_config_rejects_unknown_registry_name(tmp_path: Path) -> None:
     )
     with pytest.raises(UnknownGuestToolError, match='kubernetes'):
         load(fpath)
+
+
+def test_tools_config_errors_are_domain_errors(tmp_path: Path) -> None:
+    """Regression: ``[tools]`` config mistakes raised bare ``ValueError``,
+    which escaped ``aivm.cli.main``'s ``AIVMError`` handler and crashed every
+    command with a traceback instead of a clean error message."""
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text('[tools]\nkubernetes = "latest"\n', encoding='utf-8')
+    with pytest.raises(AIVMError, match='kubernetes'):
+        load(fpath)
+
+    fpath.write_text('[tools]\nuv = 3\n', encoding='utf-8')
+    with pytest.raises(AIVMError, match='strings or booleans'):
+        load(fpath)
+
+
+def test_claude_pinned_version_is_domain_error() -> None:
+    """Regression: a pinned ``claude = "1.2.3"`` spec raised bare
+    ``ValueError`` at resolve time (status/provision) — also a traceback."""
+    cfg = AgentVMConfig()
+    cfg.tools.claude = '1.2.3'
+    with pytest.raises(AIVMError, match=r"\[tools\] claude = '1.2.3'"):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
 
 
 def test_probe_provisioned_uses_registry_command_requirements(

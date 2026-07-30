@@ -8,17 +8,17 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any, cast
 
-from ...legacy.pre_0_6_0 import compatibility_surface
 from ...config import (
     FirewallConfig,
     ImageConfig,
     NetworkConfig,
     PathsConfig,
     ProvisionConfig,
+    ToolsConfig,
     VirtiofsConfig,
     VMConfig,
 )
-from ...config_store import load_config_document
+from ...config_store import load_config_document, split_source_paths
 from ...credentials.schema import (
     VALID_CREDENTIAL_ACCESS,
     VALID_CREDENTIAL_KINDS,
@@ -31,8 +31,9 @@ from ...credentials.validation import (
     validate_metadata_text,
     validate_provider_key_id,
 )
+from ...legacy.pre_0_6_0 import compatibility_surface
 from ...services import cfg_path
-from ...vm.guest_tools import GUEST_TOOL_REGISTRY
+from ...vm.guest_tools import GUEST_TOOL_REGISTRY, GuestToolConfigError
 from .._common import _BaseCommand
 
 
@@ -43,18 +44,31 @@ class ConfigLintCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         path = cfg_path(args.config)
-        loaded = load_config_document(path)
-        if not loaded.sources:
+        try:
+            loaded = load_config_document(path)
+        except GuestToolConfigError:
+            # A broken [tools] value stops the store parser before lint gets
+            # a chance to run. Reporting exactly this kind of problem is
+            # lint's job, so fall back to the raw source text; the finding
+            # itself comes from _lint_store_text's tools checks below.
+            sources = split_source_paths(path)
+            layout = (
+                'split'
+                if any(src.role != 'root' for src in sources)
+                else 'monolith'
+            )
+            source_text = '\n'.join(
+                src.path.read_text(encoding='utf-8') for src in sources
+            )
+        else:
+            sources = loaded.sources
+            layout = loaded.layout
+            source_text = loaded.source_text or path.read_text(encoding='utf-8')
+        if not sources:
             print(f'Config store not found: {path}', file=sys.stderr)
             return 2
-        problems = _lint_store_text(
-            loaded.source_text or path.read_text(encoding='utf-8')
-        )
-        label = (
-            path
-            if loaded.layout != 'split'
-            else f'{path.parent} (split layout)'
-        )
+        problems = _lint_store_text(source_text)
+        label = path if layout != 'split' else f'{path.parent} (split layout)'
         if not problems:
             print(f'✅ Config lint passed: {label}')
             return 0
@@ -67,6 +81,26 @@ class ConfigLintCLI(_BaseCommand):
 def _field_names(cls: type[Any]) -> set[str]:
     """Small helper for dataclass-backed lint allow-lists."""
     return {f.name for f in fields(cast(Any, cls))}
+
+
+def _tools_value_problems(prefix: str, sec: dict[str, object]) -> list[str]:
+    """Validate known ``[tools]`` values with the registry's own spec rules.
+
+    Unknown keys are reported by the generic allow-list check; this catches
+    values the parser or resolver would reject, such as a non-string spec or
+    a pinned version a tool's installer cannot honor.
+    """
+    problems: list[str] = []
+    for definition in GUEST_TOOL_REGISTRY:
+        if definition.name not in sec:
+            continue
+        scratch = ToolsConfig()
+        try:
+            scratch.update({definition.name: sec[definition.name]})
+            GUEST_TOOL_REGISTRY.resolve(scratch, definition.name)
+        except GuestToolConfigError as ex:
+            problems.append(f'{prefix}: {ex}')
+    return problems
 
 
 def _lint_store_file(path: Path) -> list[str]:
@@ -176,6 +210,10 @@ def _lint_store_text(text: str) -> list[str]:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
                         )
+                if sec_name == 'tools':
+                    problems.extend(
+                        _tools_value_problems(f'defaults.{sec_name}', sec)
+                    )
 
     valid_principal_states = {
         'pending',
@@ -311,6 +349,13 @@ def _lint_store_text(text: str) -> list[str]:
                         problems.append(
                             f'vms[{idx}].{sec_name} unknown key: {key!r}'
                         )
+                if sec_name == 'tools':
+                    problems.extend(
+                        _tools_value_problems(
+                            f'vms[{idx}].{sec_name}',
+                            cast(dict[str, object], sec),
+                        )
+                    )
             nested_atts = item.get('attachments', [])
             if isinstance(nested_atts, list):
                 for att_idx, att in enumerate(nested_atts):

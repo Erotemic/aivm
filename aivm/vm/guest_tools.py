@@ -8,7 +8,8 @@ import textwrap
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
-from ..config import AgentVMConfig, ToolSpec, ToolsConfig
+from ..config import AgentVMConfig, ToolsConfig, ToolSpec
+from ..errors import AIVMError
 
 _TOOL_DISABLED_SPECS = {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
 _TOOL_NAME_RE = re.compile(r'^[a-z][a-z0-9-]*$')
@@ -17,8 +18,21 @@ InstallScriptBuilder = Callable[[AgentVMConfig, str, bool], str]
 SpecNormalizer = Callable[[str], str]
 
 
-class UnknownGuestToolError(ValueError):
+class GuestToolConfigError(AIVMError, ValueError):
+    """Base for user-config problems in the ``[tools]`` table.
+
+    Subclasses :class:`AIVMError` so the CLI presents the message cleanly
+    instead of dumping a traceback, and :class:`ValueError` for callers that
+    still catch the historical bare type.
+    """
+
+
+class UnknownGuestToolError(GuestToolConfigError):
     """Raised when config or CLI input names a tool outside the registry."""
+
+
+class GuestToolSpecError(GuestToolConfigError):
+    """Raised when a known guest tool's configured spec value is invalid."""
 
 
 @dataclass(frozen=True)
@@ -189,8 +203,10 @@ def _claude_spec(spec: str) -> str:
     normalized = spec.strip().lower()
     if normalized in {'', 'latest'}:
         return 'latest'
-    raise ValueError(
-        f"Claude only supports the specs 'latest' and 'off', not {spec!r}"
+    raise GuestToolSpecError(
+        f'Invalid config value [tools] claude = {spec!r}: the official '
+        'installer cannot pin a Claude Code version, so the accepted values '
+        "are 'latest' (or true) to enable and 'off' (or false) to disable."
     )
 
 

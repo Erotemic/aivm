@@ -188,13 +188,16 @@ class ToolsConfig:
 
     def update(self, values: dict[str, object]) -> None:
         """Load flattened ``[tools]`` values from TOML."""
+        from .vm.guest_tools import GuestToolSpecError
+
         for name, value in values.items():
             if name == 'bin_dir':
                 self.bin_dir = str(value or '~/.local/bin')
             else:
                 if not isinstance(value, (str, bool)):
-                    raise ValueError(
-                        f'guest tool {name!r} must be a string or boolean, '
+                    raise GuestToolSpecError(
+                        f'Invalid config value [tools] {name} = {value!r}: '
+                        'guest tool specs must be strings or booleans, '
                         f'not {type(value).__name__}'
                     )
                 self.set(name, value)
