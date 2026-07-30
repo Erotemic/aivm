@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -330,6 +331,10 @@ def test_stale_generated_output_is_detected(tmp_path: Path) -> None:
         arch.check(paths)
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 13),
+    reason='Architecture generation metadata is checked on Python 3.13+',
+)
 def test_current_architecture_documentation_is_current() -> None:
     root = Path(__file__).resolve().parents[1]
     arch.check(arch.ArchitecturePaths.from_root(root))
