@@ -23,6 +23,7 @@ from typing import Any, Callable
 import pytest
 
 from aivm.attachments.persistent import (
+    _approved_binds_already_applied,
     _install_guest_text_if_changed,
     _install_persistent_host_bind_replay,
     _persistent_attachment_manifest_text,
@@ -1423,3 +1424,110 @@ def test_attachment_approval_rejects_intermediate_symlink(
 
     with pytest.raises((NotADirectoryError, OSError)):
         directory_identity(alias / 'source')
+
+
+# ---------------------------------------------------------------------------
+# The privileged replay is skipped when there is nothing for it to do
+# ---------------------------------------------------------------------------
+
+
+def _approved_manifest_for(
+    tmp_path: Path, *, access: str = 'rw', bound: bool = True
+) -> tuple[Path, Path]:
+    """Write an approved manifest describing one already-applied bind.
+
+    A real bind target *is* its source directory, so a test can stand in for
+    one by recording the target's own identity as the approved source: that
+    is precisely the equality a live bind produces.
+    """
+    export_root = tmp_path / 'export'
+    target = export_root / 'token-a'
+    target.mkdir(parents=True)
+    info = target.stat()
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 2,
+                'vm_name': 'vm-shared',
+                'records': [
+                    {
+                        'shared_root_token': 'token-a',
+                        'source_dev': info.st_dev,
+                        # An unbound target is some other directory, so its
+                        # inode is not the approved source's.
+                        'source_ino': info.st_ino if bound else info.st_ino + 1,
+                        'access': access,
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    return manifest_path, export_root
+
+
+def test_converged_persistent_binds_need_no_privileged_replay(
+    tmp_path: Path,
+) -> None:
+    """An already-applied manifest is not re-applied through sudo.
+
+    On a shared machine this manifest covers every principal's persistent
+    attachments, so demanding root here meant any user starting the VM had
+    to escalate just to re-assert binds that were already in place.
+    """
+    manifest_path, export_root = _approved_manifest_for(tmp_path)
+
+    assert _approved_binds_already_applied(manifest_path, export_root)
+
+
+def test_unapplied_persistent_bind_still_requires_the_replay(
+    tmp_path: Path,
+) -> None:
+    """A target that is not the approved source is work the helper must do."""
+    manifest_path, export_root = _approved_manifest_for(tmp_path, bound=False)
+
+    assert not _approved_binds_already_applied(manifest_path, export_root)
+
+
+def test_missing_bind_target_requires_the_replay(tmp_path: Path) -> None:
+    manifest_path, export_root = _approved_manifest_for(tmp_path)
+    (export_root / 'token-a').rmdir()
+
+    assert not _approved_binds_already_applied(manifest_path, export_root)
+
+
+def test_readonly_mismatch_requires_the_replay(tmp_path: Path) -> None:
+    """A bind whose access no longer matches must be remounted."""
+    # The tmp_path filesystem is writable, so an 'ro' record cannot already
+    # be satisfied -- exactly the drift the helper exists to correct.
+    manifest_path, export_root = _approved_manifest_for(tmp_path, access='ro')
+
+    assert not _approved_binds_already_applied(manifest_path, export_root)
+
+
+def test_stale_mount_under_the_export_root_requires_the_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detached attachment leaves a mount only the helper can prune."""
+    manifest_path, export_root = _approved_manifest_for(tmp_path)
+    stale = export_root / 'token-detached'
+    stale.mkdir()
+
+    # Creating a real bind mount needs root; the decision under test is what
+    # happens once one is observed.
+    monkeypatch.setattr(
+        Path, 'is_mount', lambda self: self.name == 'token-detached'
+    )
+
+    assert not _approved_binds_already_applied(manifest_path, export_root)
+
+
+def test_unreadable_approved_manifest_requires_the_replay(
+    tmp_path: Path,
+) -> None:
+    """Every uncertainty falls through to the privileged helper."""
+    assert not _approved_binds_already_applied(
+        tmp_path / 'never-written.json', tmp_path / 'export'
+    )

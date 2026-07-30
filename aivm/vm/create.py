@@ -12,6 +12,7 @@ from ..config_store import load_store
 from ..credentials.guards import require_vm_credentials_released
 from ..enrollment import ensure_bootstrap_identity
 from ..errors import AIVMError, CommandControlError
+from ..firewall import ensure_firewall_ready
 from ..machine_store import is_machine_store_path
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, pin_locale, virsh_cmd
@@ -193,6 +194,7 @@ def create_or_start_vm(
     config_store_path: Path | None = None,
     share_source_dir: str = '',
     share_tag: str = '',
+    ensure_firewall: bool = True,
 ) -> None:
     """Ensure a VM exists and is running, creating/redefining when needed.
 
@@ -201,6 +203,15 @@ def create_or_start_vm(
     * existing stopped VM: start
     * recreate requested: destroy/undefine then define again
     * missing VM: create from base image + cloud-init artifacts
+
+    ``ensure_firewall`` verifies the managed nftables table before the guest
+    can reach the bridge. Creation has always installed it; a plain *start*
+    did not, and since the table lives only in the live kernel ruleset, the
+    first boot after a host reboot was the one way to run a guest with no
+    sandbox rules and no indication of it. Callers that already ran
+    :func:`aivm.firewall.ensure_firewall_ready` may leave it True --- the
+    guarantee is memoized per invocation --- and pass False only to honor a
+    user's explicit opt-out.
     """
     log.trace(
         'create_or_start_vm vm={} dry_run={} recreate={} share_source_dir={} share_tag={}',
@@ -226,6 +237,11 @@ def create_or_start_vm(
         store = load_store(config_store_path)
         require_vm_credentials_released(store, cfg.vm.name, action='recreated')
     cfg = cfg.expanded_paths()
+    # After every preflight that can still refuse the whole operation, and
+    # before the domain is allowed to run: a refused start must not have
+    # touched the host firewall on its way to failing.
+    if ensure_firewall:
+        ensure_firewall_ready(cfg, dry_run=dry_run)
     mgr = CommandManager.current()
 
     with mgr.intent(

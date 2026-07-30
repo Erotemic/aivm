@@ -71,7 +71,9 @@ def test_create_vm_fallback_when_uefi_firmware_missing(
         return CmdResult(0, '', '')
 
     monkeypatch.setattr('aivm.vm.lifecycle.CommandManager.run', fake_run_cmd)
-    create_or_start_vm(cfg, dry_run=False, recreate=False)
+    create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
     virt_calls = [c for c in calls if c and c[0] == 'virt-install']
     assert len(virt_calls) == 2
@@ -100,7 +102,9 @@ def test_create_vm_prefers_uefi_even_when_host_looks_nested(
         return CmdResult(0, '', '')
 
     monkeypatch.setattr('aivm.vm.lifecycle.CommandManager.run', fake_run_cmd)
-    create_or_start_vm(cfg, dry_run=False, recreate=False)
+    create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
     virt_calls = [c for c in calls if c and c[0] == 'virt-install']
     assert len(virt_calls) == 1
@@ -156,6 +160,7 @@ def test_machine_store_create_seeds_bootstrap_public_key(
         dry_run=False,
         recreate=False,
         config_store_path=machine_config,
+        ensure_firewall=False,
     )
 
     assert captured == {
@@ -186,13 +191,54 @@ def test_create_or_start_existing_vm_uses_step_for_state_and_start(
             'virsh start': FakeProc(0, '', ''),
         },
     )
-    create_or_start_vm(cfg, dry_run=False, recreate=False)
+    create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
     assert step_titles == ['Ensure existing VM is running']
     assert rec.normalized == [
         ['virsh', 'domstate', 'vm-existing'],
         ['virsh', 'start', 'vm-existing'],
     ]
+
+
+def test_starting_an_existing_vm_verifies_the_firewall_first(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Starting a guest checks its sandbox rules, not only creating one.
+
+    The managed nftables table lives in the live kernel ruleset, so a host
+    reboot removes it while the VM definition survives. Without this, the
+    first ``vm up`` after a reboot booted a guest with no sandbox rules and
+    nothing said so.
+    """
+    cfg = make_cfg(None, **{'vm.name': 'vm-cold-boot'})
+    monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: True)
+    activate_manager(monkeypatch, yes_sudo=True)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh domstate': FakeProc(0, 'shut off\n', ''),
+            'virsh start': FakeProc(0, '', ''),
+            # The table is gone, as it always is after a host reboot.
+            'nft list table': FakeProc(1, '', 'Error: No such file'),
+            'nft': FakeProc(0, '', ''),
+            'virsh net-dumpxml': FakeProc(
+                0, "<network><bridge name='virbr-aivm'/></network>", ''
+            ),
+            # `sudo -n true`, normalized: credentials are already cached.
+            'true': FakeProc(0),
+        },
+    )
+
+    create_or_start_vm(cfg, dry_run=False, recreate=False)
+
+    assert rec.ran('nft', 'list', 'table')
+    assert rec.ran('nft', '-f')
+    # ... and the rules are in place before the guest can use the bridge.
+    assert rec.normalized.index(['nft', '-f', '-']) < rec.normalized.index(
+        ['virsh', 'start', 'vm-cold-boot']
+    )
 
 
 def test_create_or_start_pins_c_locale_for_the_state_decision(
@@ -215,7 +261,9 @@ def test_create_or_start_pins_c_locale_for_the_state_decision(
         },
     )
 
-    create_or_start_vm(cfg, dry_run=False, recreate=False)
+    create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
     assert [call for call in rec.calls if 'domstate' in call] == [
         call for call in rec.calls if is_locale_pinned(call)
@@ -238,7 +286,9 @@ def test_create_or_start_paused_vm_resumes_instead_of_starting(
             'virsh resume': FakeProc(0, '', ''),
         },
     )
-    create_or_start_vm(cfg, dry_run=False, recreate=False)
+    create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
     assert rec.normalized == [
         ['virsh', 'domstate', 'vm-paused'],
@@ -261,7 +311,9 @@ def test_create_or_start_shutting_down_vm_raises_friendly_error(
     )
 
     with pytest.raises(RuntimeError, match='shutting down'):
-        create_or_start_vm(cfg, dry_run=False, recreate=False)
+        create_or_start_vm(
+        cfg, dry_run=False, recreate=False, ensure_firewall=False
+    )
 
 
 def _run_virtiofsd_missing(
@@ -351,7 +403,13 @@ def test_create_vm_raises_clear_error(
         }
 
     with pytest.raises(RuntimeError, match=match):
-        create_or_start_vm(cfg, dry_run=False, recreate=False, **create_kwargs)
+        create_or_start_vm(
+            cfg,
+            dry_run=False,
+            recreate=False,
+            ensure_firewall=False,
+            **create_kwargs,
+        )
 
 
 def _domain_storage_xml(*disks: tuple[str, object]) -> str:
@@ -407,6 +465,7 @@ def test_recreate_refuses_to_continue_when_old_storage_remains(
             dry_run=False,
             recreate=True,
             config_store_path=cfg_path,
+            ensure_firewall=False,
         )
 
 
@@ -466,6 +525,7 @@ def test_recreate_refuses_unmanaged_domain_storage(
             dry_run=False,
             recreate=True,
             config_store_path=cfg_path,
+            ensure_firewall=False,
         )
 
     assert 'outside its AIVM-managed tree' in str(excinfo.value)
@@ -495,6 +555,8 @@ def test_create_or_start_refuses_unfinished_deletion_journal(
     )
 
     with pytest.raises(AIVMError, match='unfinished deletion journal'):
-        create_or_start_vm(cfg, config_store_path=cfg_path)
+        create_or_start_vm(
+            cfg, config_store_path=cfg_path, ensure_firewall=False
+        )
 
     assert checked == [cfg_path.resolve()]

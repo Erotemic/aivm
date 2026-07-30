@@ -5,6 +5,25 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Added
+* Made a shared workstation usable by host accounts that hold libvirt/machine
+  group membership but no sudo, which is the normal arrangement when one
+  administrator prepares a host for several users. An unverifiable firewall is
+  no longer treated as a missing one: `nft` has no unprivileged read, so an
+  ordinary user cannot see the table an administrator installed, and inferring
+  "absent" from that silence used to schedule a repair they could not perform
+  and abort the session. Such a run now warns that the rules are unverified and
+  continues. Starting a VM whose persistent binds are already in place no longer
+  invokes the privileged replay helper at all, so an ordinary `vm up` on a VM
+  carrying another user's attachments stops requiring root. Attachment modes
+  that need a host bind mount fail with the two ways forward named
+  (`--mode shared`, or an administrator declaring it), and an administrator can
+  now create an attachment *owned by another access identity* with
+  `--owner_principal ... --admin_override` instead of having to own it
+  themselves. `aivm host permissions check` reports what is unavailable to the
+  calling account rather than promising sudo it may not have, and failures to
+  obtain sudo say what needed root instead of surfacing a bare `sudo -v` error.
+  The shared-workstation setup and its division of labour are now documented in
+  the quickstart.
 * Added the final shared-machine access lifecycle and operational scope UX.
   `aivm vm access disable` revokes one personal guest key and AIVM sudo policy
   while retaining the account, home, attachments, credentials, and provider
@@ -260,6 +279,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 
 ### Fixed
+* Fixed a guest starting without its sandbox firewall, silently. The managed
+  nftables table lives only in the live kernel ruleset, so a host reboot removes
+  it while the VM definition survives, and only *creation* ever installed it --
+  the first `aivm vm up` after a reboot booted an unprotected guest and said
+  nothing. Starting or restarting a VM now verifies the table first (skip with
+  `--no-ensure_firewall`), sharing one decision with the attached-session
+  reconcile so the two paths cannot drift.
 * Fixed a failed enrollment attempt durably weakening an access identity that
   already had one. `vm access reconcile` recorded `error` whenever the guest
   helper or the personal-key probe failed, but ssh answers the same status for

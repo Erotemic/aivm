@@ -10,9 +10,16 @@ from aivm.firewall import (
     _nft_script,
     apply_firewall,
     effective_firewall_table,
+    ensure_firewall_ready,
     firewall_status,
 )
-from tests.helpers import FakeProc, activate_manager
+from tests.helpers import (
+    CommandRecorder,
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+)
 
 
 def test_effective_bridge_and_gateway_prefers_live(
@@ -168,6 +175,104 @@ def test_firewall_tables_are_isolated_per_network() -> None:
     assert effective_firewall_table(cfg_a) != effective_firewall_table(cfg_b)
     assert effective_firewall_table(cfg_a).startswith('aivm_fw_')
     assert effective_firewall_table(cfg_b).startswith('aivm_fw_')
+
+
+def _fw_scenario(
+    monkeypatch: MonkeyPatch,
+    *,
+    sudo_ok: bool,
+    table_present: bool,
+) -> tuple[AgentVMConfig, CommandRecorder, list[str]]:
+    """One host account facing one live nftables state.
+
+    ``sudo_ok=False`` is the shared-workstation default: a member of the
+    libvirt group with no sudoers entry, for whom every ``sudo`` invocation
+    fails before the wrapped program starts.
+    """
+    cfg = AgentVMConfig()
+    activate_manager(monkeypatch, yes_sudo=True)
+
+    def route(normalized: list[str]) -> FakeProc:
+        if not sudo_ok:
+            # sudo declines before the wrapped program starts, so nothing is
+            # ever observed about the table -- which is the whole point.
+            return FakeProc(1, '', 'sudo: a password is required\n')
+        if normalized[:3] == ['nft', 'list', 'table']:
+            if table_present:
+                return FakeProc(0, 'table inet x { }\n')
+            return FakeProc(1, '', 'Error: No such file or directory\n')
+        return FakeProc(0)
+
+    rec = command_recorder(monkeypatch, default=route)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.firewall.log', levels=('warning',)
+    )
+    return cfg, rec, warnings
+
+
+def test_unverifiable_firewall_is_not_treated_as_a_missing_one(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A caller who cannot read nftables must not trigger a repair.
+
+    This is the shared-workstation case: an administrator installed the
+    table, and an ordinary libvirt-group user cannot see it because ``nft``
+    has no unprivileged read. Inferring "absent" from that silence would
+    schedule an install the caller cannot perform and abort a session that
+    had nothing wrong with it.
+    """
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=False, table_present=True
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert not rec.ran('nft', '-f')
+    assert not rec.ran('nft', 'delete')
+    joined = '\n'.join(warnings)
+    assert 'UNVERIFIED' in joined
+    assert 'sudo aivm firewall apply' in joined
+
+
+def test_unverifiable_firewall_never_blocks_the_caller(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Being unable to check the firewall must not stop the user working."""
+    cfg, _rec, _warnings = _fw_scenario(
+        monkeypatch, sudo_ok=False, table_present=False
+    )
+
+    # Returns rather than raising: the whole point is that a blind spot in
+    # the firewall check is not a reason to refuse a session.
+    ensure_firewall_ready(cfg)
+
+
+def test_missing_firewall_is_installed_when_the_caller_can(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=True, table_present=False
+    )
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert rec.ran('nft', '-f')
+    assert not warnings
+
+
+def test_present_firewall_is_left_alone(monkeypatch: MonkeyPatch) -> None:
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=True, table_present=True
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert not rec.ran('nft', '-f')
+    assert not warnings
 
 
 def test_firewall_dry_run_does_not_probe_virsh(

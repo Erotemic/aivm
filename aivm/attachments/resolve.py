@@ -12,9 +12,12 @@ from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..config import AgentVMConfig
 from ..config_store import (
     AttachmentEntry,
+    Store,
     find_attachment_by_guest_dst,
     find_attachment_for_vm,
     find_attachments_for_vm_path,
+    find_principal,
+    find_principals_for_vm,
     load_store,
 )
 from ..errors import AIVMError
@@ -219,6 +222,29 @@ def _normalize_attachment_access(access: str) -> AttachmentAccess:
     return AttachmentAccess(resolved)
 
 
+def _require_known_principal(
+    reg: Store, vm_name: str, principal_id: str
+) -> None:
+    """Reject an administrative owner that names nobody on this VM.
+
+    Creating a record for a principal that does not exist would produce a
+    dangling owner the machine store rejects later, at a point far from the
+    typo that caused it.
+    """
+    if find_principal(reg, vm_name=vm_name, principal_id=principal_id):
+        return
+    known = find_principals_for_vm(reg, vm_name)
+    listed = (
+        ', '.join(f'{item.host_user} ({item.id})' for item in known)
+        or '(none recorded)'
+    )
+    raise AIVMError(
+        f'No access identity {principal_id!r} exists on VM {vm_name!r}, so an '
+        'attachment cannot be declared on its behalf.\n'
+        f'Known access identities: {listed}'
+    )
+
+
 def _resolve_attachment(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -251,18 +277,26 @@ def _resolve_attachment(
             for item in find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
             if item.owner_principal_id == requested_owner
         ]
-        if len(targeted) != 1:
+        if len(targeted) > 1:
             raise AIVMError(
                 f'No unique attachment record for owner {requested_owner!r} '
                 f'matches {host_src} on VM {cfg.vm.name!r}.'
             )
-        att = targeted[0]
-        require_attachment_mutation_permission(
-            reg,
-            att,
-            current_principal_id=current_owner,
-            administrative_override=True,
-        )
+        if targeted:
+            att = targeted[0]
+            require_attachment_mutation_permission(
+                reg,
+                att,
+                current_principal_id=current_owner,
+                administrative_override=True,
+            )
+        else:
+            # Declaring a *new* attachment on another principal's behalf.
+            # Only an administrator can create the host bind that persistent
+            # and shared-root modes need, so without this an admin could set
+            # one up only by owning it themselves -- which records the wrong
+            # owner and hands the guest-side folder to the wrong account.
+            _require_known_principal(reg, cfg.vm.name, requested_owner)
     else:
         att = find_attachment_for_vm(
             reg,
@@ -293,7 +327,7 @@ def _resolve_attachment(
                     administrative_override=administrative_override,
                 )
                 att = candidate
-    selected_owner = current_owner
+    selected_owner = requested_owner or current_owner
     if att is not None and att.owner_principal_id:
         selected_owner = att.owner_principal_id
     if att is not None:

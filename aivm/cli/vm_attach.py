@@ -10,6 +10,8 @@ separate Request/Result layer.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -58,7 +60,7 @@ from ..attachments.shared_root import (
     _ensure_shared_root_host_bind,
     _ensure_shared_root_vm_mapping,
 )
-from ..commands import CommandManager
+from ..commands import CommandManager, SudoUnavailableError
 from ..config import AgentVMConfig
 from ..config_scopes import ResolvedVMContext
 from ..config_store import (
@@ -361,6 +363,53 @@ def _print_attach_result(
     print(f'Updated attachments: {reg_path}')
 
 
+#: Modes whose host-side setup stages the folder under the VM's export root
+#: with a bind mount, which only root can create. ``shared`` maps the folder
+#: to the guest directly and ``git`` never shares it at all, so neither needs
+#: any host privilege.
+_ROOT_REQUIRING_ATTACH_MODES = frozenset(
+    {ATTACHMENT_MODE_PERSISTENT, ATTACHMENT_MODE_SHARED_ROOT}
+)
+
+
+@contextmanager
+def _attach_privilege_guidance(
+    mode: str, owner_principal_id: str
+) -> Iterator[None]:
+    """Name both ways out when a mode's host setup needs unavailable root.
+
+    A host account without sudo -- the normal state of every ordinary user
+    on a shared workstation -- can attach in ``shared`` mode all day and
+    cannot create a ``persistent`` one at all. On its own the failure is a
+    bare "could not obtain sudo credentials", which says nothing about
+    which knob to turn.
+
+    Attached to the failure rather than probed up front, deliberately: a
+    preflight would have to guess at sudo capability, and that guess costs
+    a ``sudo -n true`` on every attach while still being wrong on a host
+    with a NOPASSWD rule scoped to one command. Here there is no guess ---
+    escalation has already been shown to be impossible.
+    """
+    try:
+        yield
+    except SudoUnavailableError as ex:
+        if mode not in _ROOT_REQUIRING_ATTACH_MODES:
+            raise
+        identity = owner_principal_id or '<your-access-identity>'
+        raise AIVMError(
+            f'{ex}\n'
+            f"\nAttachment mode '{mode}' stages this folder under the VM "
+            'export root with a host bind mount, and only root can create '
+            'one. Two ways forward:\n'
+            f'  * attach with `--mode {ATTACHMENT_MODE_SHARED}`, which maps '
+            'the folder straight into the guest over virtiofs and needs no '
+            'host privileges;\n'
+            '  * or ask a host administrator to declare it for you:\n'
+            f'      sudo aivm vm attach <path> --owner_principal {identity} '
+            '--admin_override'
+        ) from ex
+
+
 def run_vm_attach(request: VMAttachRequest) -> int:
     """Attach/register a host directory to an existing managed VM.
 
@@ -421,31 +470,36 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             f'{host_src} to {cfg.vm.name}.'
         ),
     )
-    attachment, vm_defined, vm_running = _ensure_attachment_in_vm_definition(
-        cfg, attachment, host_src, yes=bool(request.yes)
-    )
-    reg_path = _record_attachment(
-        cfg,
-        cfg_path,
-        host_src=host_src,
-        mode=attachment.mode,
-        access=attachment.access,
-        guest_dst=attachment.guest_dst,
-        tag=attachment.tag,
-        owner_principal_id=attachment.owner_principal_id,
-    )
-    if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
-        _sync_persistent_attachment_manifest_on_host(
+    with _attach_privilege_guidance(
+        attachment.mode, attachment.owner_principal_id
+    ):
+        attachment, vm_defined, vm_running = (
+            _ensure_attachment_in_vm_definition(
+                cfg, attachment, host_src, yes=bool(request.yes)
+            )
+        )
+        reg_path = _record_attachment(
             cfg,
             cfg_path,
-            dry_run=False,
+            host_src=host_src,
+            mode=attachment.mode,
+            access=attachment.access,
+            guest_dst=attachment.guest_dst,
+            tag=attachment.tag,
+            owner_principal_id=attachment.owner_principal_id,
         )
-        _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
-        _reconcile_persistent_host_binds(
-            cfg, cfg_path, dry_run=False, vm_running=vm_running
-        )
-        if vm_defined and not vm_running:
-            refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
+        if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
+            _sync_persistent_attachment_manifest_on_host(
+                cfg,
+                cfg_path,
+                dry_run=False,
+            )
+            _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+            _reconcile_persistent_host_binds(
+                cfg, cfg_path, dry_run=False, vm_running=vm_running
+            )
+            if vm_defined and not vm_running:
+                refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
     if vm_running:
         _reconcile_attachment_in_running_guest(
             cfg, cfg_path, attachment, host_src, yes=bool(request.yes)
@@ -987,7 +1041,13 @@ class VMAttachCLI(_BaseCommand):
     )
     owner_principal: str = kwconf.Value(
         '',
-        help='Owner principal id to target with --admin_override when a host path is ambiguous.',
+        help=(
+            'Access identity that owns the attachment, with --admin_override. '
+            'Disambiguates an existing record, and declares a new attachment '
+            "on that identity's behalf when it has none for this path -- how "
+            'an administrator sets up a root-requiring mode for a host user '
+            'who has no sudo.'
+        ),
     )
 
     @classmethod

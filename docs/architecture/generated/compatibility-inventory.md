@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: aee87b5481cddf9b -->
+<!-- generation schema: 1; input digest: 9a0f6da84551127f -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -46,13 +46,13 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:405` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:501` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:539` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:25` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:67` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:114` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:169` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:222` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:241` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:263` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:32` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:168` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:224` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:279` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:332` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:351` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:373` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:65` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:79` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:90` |
@@ -70,16 +70,15 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py:248` |
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py:371` |
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py:451` |
-| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:142` |
-| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:223` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:115` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:146` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:165` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:226` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:297` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:530` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:578` |
-| `aivm.attachments.session` | `aivm/attachments/session.py:610` |
+| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:145` |
+| `aivm.attachments.resolve` | `aivm/attachments/resolve.py:249` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:113` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:144` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:163` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:224` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:295` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:528` |
+| `aivm.attachments.session` | `aivm/attachments/session.py:577` |
 | `aivm.attachments.shared_root` | `aivm/attachments/shared_root.py:25` |
 | `aivm.attachments.shared_root` | `aivm/attachments/shared_root.py:33` |
 | `aivm.attachments.shared_root` | `aivm/attachments/shared_root.py:73` |
@@ -113,14 +112,14 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:491` |
 | `aivm.cli.net` | `aivm/cli/net.py:173` |
 | `aivm.cli.net` | `aivm/cli/net.py:196` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:188` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:259` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:329` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:466` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:540` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:568` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:606` |
-| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:682` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:190` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:261` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:331` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:520` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:594` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:622` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:660` |
+| `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:736` |
 | `aivm.cli.vm_update` | `aivm/cli/vm_update.py:35` |
 | `aivm.config_review` | `aivm/config_review.py:32` |
 | `aivm.config_scopes` | `aivm/config_scopes.py:102` |
@@ -155,8 +154,9 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.firewall` | `aivm/firewall.py:140` |
 | `aivm.firewall` | `aivm/firewall.py:208` |
 | `aivm.firewall` | `aivm/firewall.py:280` |
-| `aivm.firewall` | `aivm/firewall.py:311` |
-| `aivm.firewall` | `aivm/firewall.py:482` |
+| `aivm.firewall` | `aivm/firewall.py:444` |
+| `aivm.firewall` | `aivm/firewall.py:475` |
+| `aivm.firewall` | `aivm/firewall.py:646` |
 | `aivm.net` | `aivm/net.py:50` |
 | `aivm.net` | `aivm/net.py:181` |
 | `aivm.net` | `aivm/net.py:242` |
@@ -177,11 +177,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.status` | `aivm/status.py:141` |
 | `aivm.status` | `aivm/status.py:272` |
 | `aivm.status` | `aivm/status.py:325` |
-| `aivm.status` | `aivm/status.py:393` |
-| `aivm.status` | `aivm/status.py:488` |
-| `aivm.status` | `aivm/status.py:515` |
-| `aivm.status` | `aivm/status.py:572` |
-| `aivm.status` | `aivm/status.py:613` |
+| `aivm.status` | `aivm/status.py:422` |
+| `aivm.status` | `aivm/status.py:517` |
+| `aivm.status` | `aivm/status.py:544` |
+| `aivm.status` | `aivm/status.py:601` |
+| `aivm.status` | `aivm/status.py:642` |
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:61` |
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:65` |
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:78` |
@@ -193,9 +193,9 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:243` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:273` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:286` |
-| `aivm.vm.create` | `aivm/vm/create.py:33` |
-| `aivm.vm.create` | `aivm/vm/create.py:150` |
-| `aivm.vm.create` | `aivm/vm/create.py:189` |
+| `aivm.vm.create` | `aivm/vm/create.py:34` |
+| `aivm.vm.create` | `aivm/vm/create.py:151` |
+| `aivm.vm.create` | `aivm/vm/create.py:190` |
 | `aivm.vm.create_ops` | `aivm/vm/create_ops.py:70` |
 | `aivm.vm.create_ops` | `aivm/vm/create_ops.py:82` |
 | `aivm.vm.create_ops` | `aivm/vm/create_ops.py:91` |
@@ -289,13 +289,13 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:106` |
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:140` |
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:204` |
-| `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py:724` |
+| `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py:778` |
 | `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:66` |
-| `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:203` |
-| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:214` |
+| `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:215` |
+| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:226` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:352` |
 | `aivm.services` | `target` | `aivm/services.py:468` |
-| `aivm.vm.create` | `config_store_path` | `aivm/vm/create.py:218` |
+| `aivm.vm.create` | `config_store_path` | `aivm/vm/create.py:229` |
 | `aivm.vm.create_ops` | `cfg_path` | `aivm/vm/create_ops.py:247` |

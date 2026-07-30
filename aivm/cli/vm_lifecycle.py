@@ -17,6 +17,7 @@ from ..attachments.session import (
     _resolve_ip_for_ssh_ops,
 )
 from ..commands import CommandManager
+from ..firewall import ensure_firewall_ready
 from ..operational_scope import announce_vm_machine_impact
 from ..scoped_store import resolve_store_scope
 from ..services import (
@@ -49,6 +50,10 @@ class VMUpCLI(_BaseCommand):
     recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
+    ensure_firewall: bool = kwconf.Flag(
+        True,
+        help='Verify (and repair) firewall rules when firewall.enabled=true.',
+    )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
@@ -72,6 +77,7 @@ class VMUpCLI(_BaseCommand):
                 dry_run=args.dry_run,
                 recreate=args.recreate,
                 config_store_path=cfg_path,
+                ensure_firewall=bool(args.ensure_firewall),
             )
         if not args.dry_run and not args.recreate:
             _maybe_warn_hardware_drift(cfg)
@@ -114,6 +120,10 @@ class VMDownCLI(_BaseCommand):
 class VMRestartCLI(_BaseCommand):
     """Gracefully restart the VM (shutdown then start)."""
 
+    ensure_firewall: bool = kwconf.Flag(
+        True,
+        help='Verify (and repair) firewall rules when firewall.enabled=true.',
+    )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
 
     @classmethod
@@ -121,6 +131,8 @@ class VMRestartCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
         announce_vm_machine_impact(cfg_path, cfg.vm.name, action='restart')
+        if args.ensure_firewall:
+            ensure_firewall_ready(cfg, dry_run=bool(args.dry_run))
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',

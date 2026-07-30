@@ -22,10 +22,9 @@ from ..config_store import (
     upsert_vm_with_network,
 )
 from ..errors import AIVMError, CommandControlError
-from ..firewall import apply_firewall, effective_firewall_table
+from ..firewall import ensure_firewall_ready
 from ..fs_identity import directory_identity
 from ..net import ensure_network
-from ..privilege import sudo_allowed
 from ..services import (
     PreparedSession,
     maybe_install_missing_host_deps,
@@ -34,7 +33,6 @@ from ..services import (
     resolve_context_for_code,
 )
 from ..status import (
-    probe_firewall,
     probe_network,
     probe_ssh_ready,
 )
@@ -575,37 +573,6 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
     return 'running' in state
 
 
-def _note_unavoidable_firewall_sudo(cfg: AgentVMConfig) -> None:
-    """Explain the firewall probe's sudo prompt before it appears.
-
-    This one is not avoidable and not a symptom of anything being wrong, so
-    say that up front rather than letting it read as a stray escalation:
-    ``nft`` offers no unprivileged read, and the managed table lives only in
-    the kernel's live ruleset, so a host reboot always takes it with it.
-
-    Quiet when sudo is already authenticated -- with no prompt coming, the
-    explanation is just noise.
-    """
-    if not CommandManager.current().sudo_authentication_required():
-        return
-    log.info(
-        'The next step needs sudo and there is no way around it: reading '
-        'nftables state ({}) requires root, with no unprivileged fallback.',
-        f'table inet {effective_firewall_table(cfg)}',
-    )
-    log.info(
-        'The managed table exists only in the live kernel ruleset, so it is '
-        'gone after every host reboot and has to be checked (and usually '
-        'reinstalled) before the first session.'
-    )
-    log.info(
-        'Expect this roughly once per boot: later runs skip the firewall '
-        'check entirely while the VM stays reachable over SSH. Pass '
-        '--no-ensure_firewall to skip it, at the cost of running the '
-        'session without the sandbox rules.'
-    )
-
-
 def _reconcile_attached_vm(
     cfg: AgentVMConfig,
     host_src: Path,
@@ -644,27 +611,8 @@ def _reconcile_attached_vm(
         if need_network_ensure:
             ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
-        need_firewall_apply = False
-        if (
-            cfg.firewall.enabled
-            and policy.ensure_firewall_opt
-            and (not cached_ssh_ok)
-        ):
-            if not sudo_allowed():
-                log.warning(
-                    'Skipping firewall reconciliation: privilege_mode = '
-                    'never and nftables requires root. Set firewall.enabled '
-                    '= false to silence this warning.'
-                )
-            else:
-                # nft reads need root on almost every host, so probing
-                # without sudo first would just submit a doomed command; go
-                # straight to the read-only sudo probe.
-                _note_unavoidable_firewall_sudo(cfg)
-                fw_probe = probe_firewall(cfg, use_sudo=True).ok
-                need_firewall_apply = fw_probe is not True
-        if need_firewall_apply:
-            apply_firewall(cfg, dry_run=policy.dry_run)
+        if policy.ensure_firewall_opt and not cached_ssh_ok:
+            ensure_firewall_ready(cfg, dry_run=policy.dry_run)
 
         recreate = False
         vm_running = vm_running_probe
@@ -721,6 +669,7 @@ def _reconcile_attached_vm(
                         virtiofs_mapping[0] if virtiofs_mapping else ''
                     ),
                     share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
+                    ensure_firewall=policy.ensure_firewall_opt,
                 )
             except CommandControlError:
                 raise
@@ -743,6 +692,7 @@ def _reconcile_attached_vm(
                         share_tag=(
                             virtiofs_mapping[1] if virtiofs_mapping else ''
                         ),
+                        ensure_firewall=policy.ensure_firewall_opt,
                     )
                 else:
                     raise
@@ -900,6 +850,7 @@ def _reconcile_attached_vm(
                     virtiofs_mapping[0] if virtiofs_mapping else ''
                 ),
                 share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
+                ensure_firewall=policy.ensure_firewall_opt,
             )
 
         return ReconcileResult(

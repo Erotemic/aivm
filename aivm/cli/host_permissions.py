@@ -692,11 +692,28 @@ class HostPermissionsCheckCLI(_BaseCommand):
             )
             return 2
         if needs:
+            # Whether this account *can* sudo decides whether the remaining
+            # list is friction or a wall, and the old summary asserted
+            # "Ready" either way -- which reads as an all-clear to the one
+            # reader it is wrong for, an ordinary user on a shared host.
+            if CommandManager.current().sudo_escalation_possible():
+                print(
+                    f'✅ Ready under privilege_mode {str(mode)!r}; sudo will '
+                    'be used for: ' + '; '.join(needs) + '.'
+                )
+                print('   `aivm host permissions setup` trims that list.')
+                return 0
             print(
-                f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
-                'used for: ' + '; '.join(needs) + '.'
+                '⚠️ Ready except where root is required, and this account '
+                'cannot obtain sudo here. Unavailable to you: '
+                + '; '.join(needs)
+                + '.'
             )
-            print('   `aivm host permissions setup` trims that list.')
+            print(
+                '   Everything else works. Ask a host administrator to '
+                'perform those steps once (see `aivm host permissions setup '
+                '--user <you>`); routine VM use does not need them again.'
+            )
             return 0
         print('✅ Host permissions are ready for routine VM operation.')
         return 0

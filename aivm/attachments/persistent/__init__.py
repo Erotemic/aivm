@@ -33,6 +33,7 @@ from ...persistent_replay import (
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from . import host_bind, manifest, replay, transport
 from .host_bind import (
+    _approved_binds_already_applied,
     _cleanup_persistent_host_replay_artifacts,
     _ensure_persistent_root_parent_dir,
     _ensure_persistent_root_vm_mapping,
@@ -73,6 +74,7 @@ __all__ = [
     'PERSISTENT_ROOT_GUEST_MOUNT_ROOT',
     'PERSISTENT_ROOT_VIRTIOFS_TAG',
     'PersistentAttachmentRecord',
+    '_approved_binds_already_applied',
     '_ensure_persistent_root_parent_dir',
     '_ensure_persistent_root_vm_mapping',
     '_install_guest_text_if_changed',

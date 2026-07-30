@@ -378,8 +378,37 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             'requires privileges (run status --sudo for firewall checks)',
             raw,
         )
+    if _sudo_itself_failed(detail):
+        # sudo refused before nft ever ran, so nothing was observed about
+        # the table. Reporting "missing" here is how an unreadable firewall
+        # turns into a bogus repair: the caller would try to reinstall a
+        # table that may be present and correct.
+        return ProbeOutcome(
+            None,
+            'could not read nftables: sudo is unavailable for this account',
+            raw,
+        )
     return ProbeOutcome(
         False, f'table inet {effective_firewall_table(cfg)} missing', raw
+    )
+
+
+def _sudo_itself_failed(lowered_stderr: str) -> bool:
+    """Recognize sudo declining before the wrapped program ever started.
+
+    Keyed on sudo's own diagnostics rather than the exit status, because
+    sudo exits 1 for "you may not run this" exactly as ``nft`` exits 1 for
+    "no such table"."""
+    return any(
+        marker in lowered_stderr
+        for marker in (
+            'a password is required',
+            'sudo: a terminal is required',
+            'is not in the sudoers file',
+            'sudo: no askpass program',
+            'incorrect password attempt',
+            'account is locked',
+        )
     )
 
 

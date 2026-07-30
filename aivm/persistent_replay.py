@@ -29,6 +29,11 @@ PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX = (
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
 PERSISTENT_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-persistent'
 
+#: Export-root child names the privileged host replay helper will act on.
+#: The helper embeds this same pattern (it is a standalone script, so it
+#: cannot import it); ``test_persistent_templates`` holds the two together.
+PERSISTENT_BIND_TOKEN_PATTERN = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
+
 
 def persistent_replay_python() -> str:
     return textwrap.dedent(

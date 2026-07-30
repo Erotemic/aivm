@@ -16,7 +16,7 @@ from aivm.cli.host_permissions import (
 from aivm.config import AgentVMConfig
 from aivm.config_store import load_store, save_store, upsert_vm
 from aivm.config_store.models import Store, VMEntry
-from tests.helpers import FakeProc, activate_manager
+from tests.helpers import FakeProc, activate_manager, command_recorder
 
 
 def test_host_permissions_command_has_no_compatibility_alias() -> None:
@@ -249,14 +249,22 @@ def _stub_check_probes(
     *,
     writable_dirs: set[str] | None = None,
     blockers: list[Path] | None = None,
+    can_sudo: bool = True,
 ) -> None:
     """Pin the host probes so check verdicts depend only on the store.
 
     ``writable_dirs=None`` means every dir is user-writable; otherwise only
     the listed ones are.  These probes (group membership, live libvirt, path
-    ownership) read real host state, which is exactly what a unit test must
-    not depend on.
+    ownership, and whether this account can escalate at all) read real host
+    state, which is exactly what a unit test must not depend on.
     """
+    activate_manager(monkeypatch)
+    # `sudo -n true`, normalized: whether sudo is usable here is host state.
+    command_recorder(
+        monkeypatch,
+        {'true': FakeProc(0 if can_sudo else 1, '', 'a password is required')},
+        default=FakeProc(0),
+    )
     monkeypatch.setattr(
         'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
@@ -308,6 +316,35 @@ def test_check_reports_friction_not_failure_under_as_needed(
     assert 'sudo will be used for:' in out
     assert 'the nftables firewall' in out
     assert 'VM storage under /var/lib/libvirt/aivm' in out
+
+
+def test_check_does_not_promise_sudo_to_an_account_without_it(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """"sudo will be used for X" is a false all-clear when sudo is unavailable.
+
+    On a shared workstation the ordinary user is in the libvirt group and
+    has no sudoers entry. Telling them the host is "Ready" and that sudo
+    "will be used" describes a host they do not have; what they need to
+    know is which steps an administrator has to do for them.
+    """
+    cfg_path = tmp_path / 'config.toml'
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir='/var/lib/libvirt/aivm',
+        firewall_enabled=True,
+    )
+    _stub_check_probes(monkeypatch, writable_dirs=set(), can_sudo=False)
+
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert 'sudo will be used for:' not in out
+    assert 'cannot obtain sudo' in out
+    assert 'the nftables firewall' in out
+    assert 'host administrator' in out
 
 
 def test_check_fails_every_mode_on_qemu_traversal_blockers(

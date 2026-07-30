@@ -452,7 +452,9 @@ def test_explicit_owner_target_requires_admin_override(
             owner_principal_id='principal-alice',
             administrative_owner_principal_id=bob.id,
         )
-    with pytest.raises(AIVMError, match='No unique attachment record'):
+    # An owner that names nobody on this VM is refused up front rather than
+    # producing a dangling owner the machine store rejects much later.
+    with pytest.raises(AIVMError, match='No access identity'):
         _resolve_attachment(
             cfg,
             path,
@@ -462,3 +464,39 @@ def test_explicit_owner_target_requires_admin_override(
             administrative_override=True,
             administrative_owner_principal_id='principal-missing',
         )
+
+
+def test_admin_can_declare_an_attachment_for_another_identity(
+    tmp_path: Path,
+) -> None:
+    """An administrator sets up a root-requiring mode for a sudo-less user.
+
+    Persistent and shared-root attachments need a host bind mount, so on a
+    shared workstation only an administrator can create one. Without this
+    the admin could only attach as *themselves*, which records the wrong
+    owner and hands the guest-side folder to the wrong account.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared'
+    source = tmp_path / 'project'
+    source.mkdir()
+    reg = _machine_store()
+    bob = _principal(cfg.vm.name, 'principal-bob', 'bob')
+    upsert_principal(reg, bob)
+    upsert_principal(
+        reg, _principal(cfg.vm.name, 'principal-admin', 'admin')
+    )
+    path = tmp_path / 'config.toml'
+    save_store_split(reg, path)
+
+    resolved = _resolve_attachment(
+        cfg,
+        path,
+        source,
+        '',
+        owner_principal_id='principal-admin',
+        administrative_override=True,
+        administrative_owner_principal_id=bob.id,
+    )
+
+    assert resolved.owner_principal_id == bob.id

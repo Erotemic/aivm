@@ -200,6 +200,47 @@ class CommandError(AIVMError):
         )
 
 
+class SudoUnavailableError(CommandError):
+    """Raised when aivm cannot obtain the sudo credentials a command needs.
+
+    This is a failure, not a refusal, so it is deliberately a
+    :class:`CommandError` rather than a
+    :class:`~aivm.errors.CommandControlError`. Nobody declined anything and
+    no policy forbade it (:class:`~aivm.errors.SudoRequiredError` is that
+    case): the host will not give *this account* credentials right now --
+    no sudoers entry, a wrong password, or a non-interactive run with
+    nothing cached. On a shared workstation that is the normal state of
+    every non-administrator, so best-effort callers must be able to
+    recover: a read-only probe that cannot escalate should report "I could
+    not check" rather than abort the caller's whole operation.
+
+    The message names what needed root, because ``sudo -v`` failing on its
+    own tells the user nothing about which part of aivm wanted it.
+    """
+
+    def __init__(
+        self,
+        cmd: Sequence[str] | str,
+        result: CommandResult,
+        *,
+        purpose: str = '',
+    ) -> None:
+        self.purpose = purpose
+        super().__init__(cmd, result)
+        detail = (result.stderr or result.stdout or '').strip()
+        lines = ['aivm could not obtain sudo credentials on this host.']
+        if purpose:
+            lines.append(f'  Needed for: {purpose}')
+        if detail:
+            lines.append(f'  sudo said: {detail}')
+        lines.append(
+            '  If someone else administers this host, ask them to perform '
+            'the privileged step (or to grant you sudo); otherwise re-run '
+            'where you can authenticate.'
+        )
+        self.args = ('\n'.join(lines),)
+
+
 @dataclass(frozen=True)
 class IntentFrame:
     """One entry in the manager's intent stack.
@@ -869,6 +910,11 @@ class CommandManager:
         self._approve_all_remaining = False
         self._loose_commands: list[PlannedCommand] = []
         self._sudo_authentication_required: bool | None = None
+        # Sticky: set once an authentication attempt has actually failed.
+        # Without it every later privileged step re-prompts an account that
+        # has already been shown to have no usable sudo, turning one clear
+        # failure into a run of identical ones.
+        self._sudo_unavailable_result: CommandResult | None = None
         # Scratch space for modules to memoize read-only probe results
         # (e.g. domain XML) for the lifetime of this manager. Entries are
         # expected to be validated against ``mutation_generation`` so any
@@ -1162,6 +1208,30 @@ class CommandManager:
         )
         return self._sudo_authentication_required
 
+    def sudo_escalation_possible(self) -> bool:
+        """Return whether aivm could still obtain sudo in this invocation.
+
+        Answers the capability question a caller needs *before* deciding
+        whether a privileged step is worth starting, so a host account with
+        no sudo is told what it cannot do instead of walking into a failed
+        ``sudo -v``. It never prompts and never escalates.
+
+        ``sudo -n true`` failing is not on its own a "no": an interactive
+        run can still ask for a password. So the answer is False only when
+        we already know escalation cannot succeed --- root-less under a
+        no-sudo policy, an authentication attempt that already failed, or a
+        non-interactive run with nothing cached and nobody to ask.
+        """
+        if os.geteuid() == 0:
+            return True
+        if self.privilege_mode == PrivilegeMode.NEVER:
+            return False
+        if self._sudo_unavailable_result is not None:
+            return False
+        if not self.sudo_authentication_required():
+            return True
+        return bool(sys.stdin.isatty())
+
     def _readonly_sudo_policy_note(self) -> str:
         if self.auto_approve_readonly_sudo:
             return (
@@ -1198,12 +1268,19 @@ class CommandManager:
             )
             local_log.info('  {}', self._readonly_sudo_policy_note())
 
-    def _authenticate_sudo(self) -> None:
+    def _authenticate_sudo(self, *, purpose: str = '') -> None:
         """Refresh sudo credentials now so later commands do not surprise."""
         self._reject_sudo_if_forbidden(['sudo', '-v'], needs_sudo=True)
         if os.geteuid() == 0:
             self._sudo_authentication_required = False
             return
+        if self._sudo_unavailable_result is not None:
+            # Already proven impossible in this invocation. Re-running sudo
+            # would re-prompt an account that cannot answer, once per
+            # privileged step, burying the first clear explanation.
+            raise SudoUnavailableError(
+                ['sudo', '-v'], self._sudo_unavailable_result, purpose=purpose
+            )
         cmd = ['sudo', '-v']
         if not sys.stdin.isatty():
             cmd = ['sudo', '-n', '-v']
@@ -1214,7 +1291,11 @@ class CommandManager:
                 proc.stdout or '',
                 proc.stderr or '',
             )
-            raise CommandError(cmd, res)
+            # Remember it: this account cannot escalate in this invocation,
+            # and re-asking once per privileged step only repeats the same
+            # failure with less context each time.
+            self._sudo_unavailable_result = res
+            raise SudoUnavailableError(cmd, res, purpose=purpose)
         self._sudo_authentication_required = False
 
     def _reject_sudo_if_forbidden(
@@ -1274,7 +1355,7 @@ class CommandManager:
             )
         if auto_yes:
             if auth_required:
-                self._authenticate_sudo()
+                self._authenticate_sudo(purpose=purpose)
             return
         if not sys.stdin.isatty():
             raise ApprovalUnavailableError(
@@ -1294,7 +1375,7 @@ class CommandManager:
         elif ans not in {'y', 'yes'}:
             raise UserDeclinedError('Aborted by user.')
         if auth_required:
-            self._authenticate_sudo()
+            self._authenticate_sudo(purpose=purpose)
 
     def approved_action(
         self,
@@ -1410,7 +1491,7 @@ class CommandManager:
             and not (self.yes or self.yes_sudo or self._approve_all_remaining)
         ):
             if self.sudo_authentication_required():
-                self._authenticate_sudo()
+                self._authenticate_sudo(purpose=plan.title)
             plan.approved = True
             plan.approved_command_count = len(plan.commands)
             return

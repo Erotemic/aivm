@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import stat
 from pathlib import Path
 
 from loguru import logger as log
@@ -10,10 +14,13 @@ from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
+    PERSISTENT_BIND_TOKEN_PATTERN,
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     persistent_host_replay_python,
     persistent_host_replay_service_unit,
 )
+
+_TOKEN_RE = re.compile(PERSISTENT_BIND_TOKEN_PATTERN)
 from ...privilege import path_needs_sudo
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
@@ -63,6 +70,100 @@ def _ensure_persistent_host_replay_helper(*, dry_run: bool) -> bool:
     )
 
 
+def _approved_binds_already_applied(
+    approved_manifest: Path, export_root: Path
+) -> bool:
+    """True when the live export root already matches the approved manifest.
+
+    The replay helper needs root, and on a shared machine the manifest spans
+    *every* principal's persistent attachments. Submitting it unconditionally
+    meant that any caller starting the VM -- including one who owns none of
+    those attachments and has no sudo -- had to escalate merely to re-assert
+    binds that were already in place. The privilege model gates on the
+    command, so the fix is not to run the command when there is nothing for
+    it to do.
+
+    Every check here is an unprivileged ``stat``-family call, and every
+    uncertainty answers False, because a wrong "converged" leaves a guest
+    with a silently missing bind. In particular a target that cannot be
+    read, a manifest that cannot be parsed, and a source whose identity no
+    longer matches all fall through to the privileged helper.
+
+    The identity test is the load-bearing one: a bind target *is* the source
+    directory, so ``lstat`` of the target returning the approved
+    ``(dev, ino)`` proves both that the bind exists and that it still points
+    at the approved object -- without needing any access to the source
+    itself, which on a shared machine usually lives in another user's home.
+    """
+    try:
+        payload = json.loads(approved_manifest.read_text(encoding='utf-8'))
+        records = payload['records']
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(records, list):
+        return False
+
+    desired_tokens: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            return False
+        token = str(record.get('shared_root_token') or '')
+        if not bool(record.get('enabled', True)):
+            continue
+        if not token:
+            return False
+        desired_tokens.add(token)
+        target = export_root / token
+        try:
+            info = target.lstat()
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            # A symlink or file standing in for the bind target. The helper
+            # opens these with O_NOFOLLOW for exactly this reason.
+            return False
+        if (int(info.st_dev), int(info.st_ino)) != (
+            int(record.get('source_dev', -1)),
+            int(record.get('source_ino', -1)),
+        ):
+            return False
+        if not _bind_access_matches(target, str(record.get('access') or 'rw')):
+            return False
+
+    # A record that was disabled or detached leaves a mount the helper would
+    # prune; anything still mounted under a non-desired token is work to do.
+    # Scoped to the names the helper itself will act on, so an unrelated
+    # mount it would skip cannot leave this permanently "not converged".
+    try:
+        children = list(export_root.iterdir())
+    except OSError:
+        return False
+    for child in children:
+        if child.name in desired_tokens or not _TOKEN_RE.fullmatch(child.name):
+            continue
+        try:
+            if child.is_mount():
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _bind_access_matches(target: Path, access: str) -> bool:
+    """Compare a mounted bind's read-only flag against the approved access.
+
+    ``statvfs`` reports the mount's own ``ST_RDONLY``, which is what the
+    helper's ``remount,bind,ro`` sets, so this needs neither ``findmnt`` nor
+    root.
+    """
+    try:
+        flags = os.statvfs(target).f_flag
+    except OSError:
+        return False
+    read_only = bool(flags & os.ST_RDONLY)
+    return read_only == (access.strip() == 'ro')
+
+
 def _run_persistent_host_replay(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -74,11 +175,20 @@ def _run_persistent_host_replay(
     approved_manifest = manifest._sync_persistent_host_replay_manifest(
         cfg, cfg_path, dry_run=dry_run
     )
-    _ensure_persistent_host_replay_helper(dry_run=dry_run)
+    helper_changed = _ensure_persistent_host_replay_helper(dry_run=dry_run)
     if dry_run:
         print(
             'DRYRUN: would replay approved persistent host bind manifest '
             f'{approved_manifest}'
+        )
+        return
+    if not helper_changed and _approved_binds_already_applied(
+        approved_manifest, _persistent_root_host_dir(cfg)
+    ):
+        log.debug(
+            'Persistent host binds already match the approved manifest; '
+            'skipping the privileged replay for VM {}.',
+            cfg.vm.name,
         )
         return
     cmd = [

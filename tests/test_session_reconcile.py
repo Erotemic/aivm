@@ -502,7 +502,9 @@ def test_firewall_probe_explains_its_unavoidable_sudo_prompt(
             'true': FakeProc(1, '', 'a password is required'),
         },
     )
-    messages = capture_logs(monkeypatch, 'aivm.attachments.session.log')
+    # The reconcile delegates the whole firewall decision to
+    # aivm.firewall.ensure_firewall_ready, so that is where it narrates.
+    messages = capture_logs(monkeypatch, 'aivm.firewall.log')
 
     _reconcile_attached_vm(
         cfg, host_src, attachment, policy=_policy(ensure_firewall=True)
@@ -537,7 +539,7 @@ def test_firewall_skipped_and_warned_when_privilege_never(
         },
     )
     warnings = capture_logs(
-        monkeypatch, 'aivm.attachments.session.log', levels=('warning',)
+        monkeypatch, 'aivm.firewall.log', levels=('warning',)
     )
 
     _reconcile_attached_vm(

@@ -16,6 +16,7 @@ import pytest
 from aivm.attachments.session import _record_attachment
 from aivm.cli.vm_attach import VMAttachCLI
 from aivm.cli.vm_connect import VMSSHCLI, VMCodeCLI
+from aivm.commands import SudoUnavailableError
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     AttachmentEntry,
@@ -26,7 +27,9 @@ from aivm.config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from aivm.errors import AIVMError
 from aivm.status import ProbeOutcome
+from aivm.util import CmdResult
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
 from tests.helpers import (
     FakeProc,
@@ -303,6 +306,52 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     assert att.source_dev > 0
     assert att.source_ino > 0
     assert att.guest_dst == '/workspace/proj'
+
+
+def test_attach_without_sudo_names_both_ways_out(
+    monkeypatch: pytest.MonkeyPatch,
+    make_attach_env: Callable[..., AttachEnv],
+) -> None:
+    """A sudo-less caller learns which knob to turn, not just that sudo failed.
+
+    Persistent mode needs a host bind mount, so an ordinary user on a shared
+    workstation cannot create one. The bare credential failure says nothing
+    about ``--mode shared`` or about asking an administrator, which are the
+    only two things that actually get them unstuck.
+    """
+    cfg, cfg_path, host_src, attachment = make_attach_env(
+        name='vm-no-sudo', mode=AttachmentMode.PERSISTENT
+    )
+    patch_vm_attach_env(monkeypatch, cfg, cfg_path, attachment, running=False)
+
+    def refuse_sudo(*_a: Any, **_k: Any) -> None:
+        raise SudoUnavailableError(
+            ['sudo', '-v'],
+            CmdResult(1, '', 'sudo: a password is required'),
+            purpose='Reconcile persistent host binds',
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_host_replay_manifest', refuse_sudo
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
+        lambda *a, **k: cfg_path,
+    )
+
+    with pytest.raises(AIVMError) as excinfo:
+        VMAttachCLI.main(
+            argv=False,
+            config=str(cfg_path),
+            host_src=str(host_src),
+            mode='persistent',
+            yes=True,
+        )
+
+    message = str(excinfo.value)
+    assert 'could not obtain sudo credentials' in message
+    assert '--mode shared' in message
+    assert '--admin_override' in message
 
 
 def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
