@@ -142,14 +142,6 @@ def _enforce_metadata(
         ) from ex
 
 
-def _set_group(path: Path, group_gid: int | None) -> None:
-    if group_gid is None:
-        return
-    current_gid = path.stat().st_gid
-    if current_gid != group_gid:
-        os.chown(path, -1, group_gid)
-
-
 def ensure_store_directory(
     path: Path, policy: StoreFilesystemPolicy | None = None
 ) -> Path:
@@ -171,8 +163,8 @@ def ensure_store_directory(
             current.stat(),
             group_gid=policy.group_gid,
             desired_mode=policy.directory_mode,
-            chown=lambda gid, p=current: os.chown(p, -1, gid),
-            chmod=lambda mode, p=current: os.chmod(p, mode),
+            chown=lambda gid: os.chown(current, -1, gid),
+            chmod=lambda mode: os.chmod(current, mode),
             subject=f'Store directory {current}',
         )
     return chain[-1]

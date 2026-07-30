@@ -1082,15 +1082,6 @@ class CommandManager:
             _stacklevel=2,
         ).result()
 
-    def flush(self, *, _stacklevel: int = 1) -> None:
-        """Flush pending execution for the current plan or loose queue."""
-        # TODO: does this need to be public?
-        if self.plan_stack:
-            self._flush_plan(self.plan_stack[-1], _stacklevel=_stacklevel + 1)
-            return
-        if self._has_pending_loose():
-            self._flush_loose_commands(_stacklevel=_stacklevel + 1)
-
     def flush_through(self, command_id: int, *, _stacklevel: int = 1) -> None:
         """Flush execution through the specified command id.
 
