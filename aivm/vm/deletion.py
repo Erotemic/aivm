@@ -448,8 +448,11 @@ def _remove_tree(path: Path, *, label: str) -> None:
 
 
 def _assert_no_mounts_below(path: Path) -> None:
+    # ``--list`` is load-bearing: the default tree rendering prefixes every
+    # non-root line with box-drawing glyphs (``├─``), which the path filter
+    # below would silently discard, letting rm -rf proceed over live mounts.
     result = CommandManager.current().run(
-        ['findmnt', '-R', '-n', '-o', 'TARGET', '--target', str(path)],
+        ['findmnt', '-R', '--list', '-n', '-o', 'TARGET', '--target', str(path)],
         sudo=path_needs_sudo(path),
         role='read',
         check=False,
@@ -495,6 +498,14 @@ def _assert_no_mounts_below(path: Path) -> None:
     root = Path(os.path.abspath(os.fspath(path)))
     nested = []
     for raw in targets:
+        if not raw.startswith('/'):
+            # A mount target we cannot interpret (tree glyphs, escaping) means
+            # the enumeration cannot be trusted as a deletion authorization.
+            raise AIVMError(
+                f'Unrecognized findmnt output while checking for mounts '
+                f'beneath {path}: {raw!r}. Refusing to remove the VM '
+                'directory.'
+            )
         candidate = Path(os.path.abspath(raw))
         try:
             candidate.relative_to(root)

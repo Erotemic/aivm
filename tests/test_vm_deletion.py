@@ -268,6 +268,63 @@ def test_vm_tree_cleanup_allows_confirmed_absent_root(
     assert all(cmd[0] != 'bash' for cmd in commands)
 
 
+def test_vm_tree_cleanup_detects_nested_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / 'vm-base'
+    nested = root / 'persistent-root' / 'tok-project'
+    commands: list[list[str]] = []
+
+    def fake_run(
+        self: CommandManager,
+        cmd: list[str],
+        **kwargs: object,
+    ) -> CommandResult:
+        del self, kwargs
+        commands.append(list(cmd))
+        if cmd and cmd[0] == 'findmnt':
+            # ``findmnt -R --list`` output: one absolute target per line,
+            # including mounts elsewhere on the same filesystem.
+            return CommandResult(0, f'/\n/boot\n{nested}\n', '')
+        raise AssertionError(f'unexpected command: {cmd!r}')
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+
+    with pytest.raises(AIVMError, match='mounts remain beneath'):
+        _assert_no_mounts_below(root)
+
+    # The enumeration must ask for list output; the default tree rendering
+    # prefixes targets with box-drawing glyphs the filter cannot match.
+    findmnt_cmds = [cmd for cmd in commands if cmd[0] == 'findmnt']
+    assert findmnt_cmds and all('--list' in cmd for cmd in findmnt_cmds)
+
+
+def test_vm_tree_cleanup_fails_closed_on_tree_rendered_findmnt_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / 'vm-base'
+    nested = root / 'persistent-root' / 'tok-project'
+
+    def fake_run(
+        self: CommandManager,
+        cmd: list[str],
+        **kwargs: object,
+    ) -> CommandResult:
+        del self, kwargs
+        if cmd and cmd[0] == 'findmnt':
+            # Tree-mode rendering (the historical inert-guard bug): the
+            # nested mount is present but prefixed with box-drawing glyphs.
+            return CommandResult(0, f'/\n├─/boot\n└─{nested}\n', '')
+        raise AssertionError(f'unexpected command: {cmd!r}')
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+
+    with pytest.raises(AIVMError, match='Unrecognized findmnt output'):
+        _assert_no_mounts_below(root)
+
+
 def test_vm_tree_cleanup_does_not_confuse_missing_stat_with_missing_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
