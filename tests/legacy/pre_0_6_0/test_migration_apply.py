@@ -191,10 +191,10 @@ def test_apply_is_verified_resumable_and_retains_legacy_inputs(
     assert credential_target.stat().st_gid == credential_source.stat().st_gid
     assert (credential_target.stat().st_mode & 0o7777) == 0o700
     assert (credential_target / 'id_ed25519').stat().st_mode & 0o7777 == 0o600
-    assert (persistent_target.stat().st_mode & 0o7777) == 0o2775
+    assert (persistent_target.stat().st_mode & 0o7777) == 0o2770
     assert (
         persistent_target / 'persistent-attachments.json'
-    ).stat().st_mode & 0o7777 == 0o664
+    ).stat().st_mode & 0o7777 == 0o660
     assert (result.transaction_dir.stat().st_mode & 0o7777) == 0o750
     assert (
         result.transaction_dir / 'state.json'

@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
-from typing import Literal
+from typing import Callable, Literal
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
@@ -93,6 +93,55 @@ def _reject_link(path: Path) -> None:
         raise RuntimeError(f'Refusing to manage symlinked store path: {path}')
 
 
+def _enforce_metadata(
+    st: os.stat_result,
+    *,
+    group_gid: int | None,
+    desired_mode: int | None,
+    chown: Callable[[int], None],
+    chmod: Callable[[int], None],
+    subject: str,
+) -> None:
+    """Converge one path or descriptor onto the policy metadata.
+
+    A shared machine store is used by every member of the trusted group, and
+    chown/chmod require *ownership*, not group access. Metadata that already
+    complies is therefore never touched, and a non-owner who cannot tighten an
+    over-permissive mode proceeds (the other member's copy still grants the
+    group everything the policy needs) rather than failing the whole store.
+    Only metadata that actually denies the group is a hard error.
+    """
+    if group_gid is not None and st.st_gid != group_gid:
+        try:
+            chown(group_gid)
+        except PermissionError as ex:
+            raise PermissionError(
+                f'{subject} belongs to group {st.st_gid}, not the trusted '
+                f'machine-store group {group_gid}, and only its owner can '
+                'change that. Ask the owner (or root) to run '
+                f'`chgrp {group_gid} <path>` on it.'
+            ) from ex
+    if desired_mode is None:
+        return
+    current = stat.S_IMODE(st.st_mode)
+    if current == desired_mode:
+        return
+    try:
+        chmod(desired_mode)
+    except PermissionError as ex:
+        if (current & desired_mode) == desired_mode:
+            # At least as permissive as required: the group can do everything
+            # the policy demands, so a non-owner not being able to tighten
+            # the mode must not brick the shared store.
+            return
+        raise PermissionError(
+            f'{subject} has mode {current:o} which denies the trusted '
+            f'machine-store group required access {desired_mode:o}, and only '
+            'its owner can change that. Ask the owner (or root) to run '
+            f'`chmod {desired_mode:o} <path>` on it.'
+        ) from ex
+
+
 def _set_group(path: Path, group_gid: int | None) -> None:
     if group_gid is None:
         return
@@ -118,9 +167,14 @@ def ensure_store_directory(
         current.mkdir(parents=True, exist_ok=True)
         if policy.reject_symlinks:
             _reject_link(current)
-        _set_group(current, policy.group_gid)
-        if policy.directory_mode is not None:
-            os.chmod(current, policy.directory_mode)
+        _enforce_metadata(
+            current.stat(),
+            group_gid=policy.group_gid,
+            desired_mode=policy.directory_mode,
+            chown=lambda gid, p=current: os.chown(p, -1, gid),
+            chmod=lambda mode, p=current: os.chmod(p, mode),
+            subject=f'Store directory {current}',
+        )
     return chain[-1]
 
 
@@ -131,9 +185,14 @@ def apply_store_file_policy(
     policy = policy or StoreFilesystemPolicy()
     if policy.reject_symlinks:
         _reject_link(path)
-    _set_group(path, policy.group_gid)
-    if policy.file_mode is not None:
-        os.chmod(path, policy.file_mode)
+    _enforce_metadata(
+        path.stat(),
+        group_gid=policy.group_gid,
+        desired_mode=policy.file_mode,
+        chown=lambda gid: os.chown(path, -1, gid),
+        chmod=lambda mode: os.chmod(path, mode),
+        subject=f'Store file {path}',
+    )
 
 
 def apply_store_file_descriptor_policy(
@@ -141,10 +200,14 @@ def apply_store_file_descriptor_policy(
 ) -> None:
     """Apply explicit metadata to an open temporary or lock file."""
     policy = policy or StoreFilesystemPolicy()
-    if policy.group_gid is not None:
-        os.fchown(fd, -1, policy.group_gid)
-    if policy.file_mode is not None:
-        os.fchmod(fd, policy.file_mode)
+    _enforce_metadata(
+        os.fstat(fd),
+        group_gid=policy.group_gid,
+        desired_mode=policy.file_mode,
+        chown=lambda gid: os.fchown(fd, -1, gid),
+        chmod=lambda mode: os.fchmod(fd, mode),
+        subject='Store lock or temporary file',
+    )
 
 
 class ExclusiveFileLock:

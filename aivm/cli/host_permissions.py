@@ -731,7 +731,7 @@ def _prepare_machine_store_access(
             print(f'DRYRUN: sudo usermod -aG {group_name} {user}')
         print(
             f'DRYRUN: sudo install -d -o root -g {group_name} '
-            f'-m 2775 {layout.root}'
+            f'-m 2770 {layout.root}'
         )
         return not listed
 
@@ -790,7 +790,7 @@ def _prepare_machine_store_access(
                     '-g',
                     group_name,
                     '-m',
-                    '2775',
+                    '2770',
                     str(layout.root),
                 ],
                 sudo=True,

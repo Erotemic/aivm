@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable, Literal
 
 from loguru import logger as log
 
+from ..errors import AIVMError
 from .fs_policy import (
     StoreFilesystemPolicy,
     apply_store_file_descriptor_policy,
@@ -47,8 +48,13 @@ from .render import (
 )
 
 
-class ConcurrentStoreUpdateError(RuntimeError):
-    """Raised when saving a Store loaded from an older on-disk revision."""
+class ConcurrentStoreUpdateError(AIVMError):
+    """Raised when saving a Store loaded from an older on-disk revision.
+
+    On a shared machine store this is the *expected* two-principals-editing
+    collision, so it must render as a clean retry instruction, not a
+    traceback.
+    """
 
 
 def _resolve_io_policy(

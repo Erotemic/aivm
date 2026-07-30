@@ -562,7 +562,7 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
     out = capsys.readouterr().out
     assert 'sudo groupadd --system aivm' in out
     assert 'sudo usermod -aG aivm' in out
-    assert 'sudo install -d -o root -g aivm -m 2775 /var/lib/aivm' in out
+    assert 'sudo install -d -o root -g aivm -m 2770 /var/lib/aivm' in out
 
 
 def test_setup_target_user_ignores_sudo_environment(

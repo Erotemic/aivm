@@ -131,7 +131,7 @@ def ensure_machine_scope_ready(scope: StoreScope) -> None:
             '`aivm` and a group-writable setgid store root. Suggested setup:\n'
             '  sudo groupadd --system aivm  # only if the group is absent\n'
             '  sudo usermod -aG aivm "$USER"\n'
-            f'  sudo install -d -o root -g aivm -m 2775 {root}\n'
+            f'  sudo install -d -o root -g aivm -m 2770 {root}\n'
             'Log out and back in after changing group membership.'
         ) from ex
 

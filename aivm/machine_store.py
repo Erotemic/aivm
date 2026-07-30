@@ -16,6 +16,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Iterable
 
+from .errors import AIVMError
 from .host_identity import current_host_identity
 from .config_store.fs_policy import (
     StoreFilesystemPolicy,
@@ -28,13 +29,20 @@ DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm')
 DEFAULT_MACHINE_GROUP = 'aivm'
 MACHINE_GROUP_ENV = 'AIVM_MACHINE_GROUP'
 
-MACHINE_DIRECTORY_MODE = 0o2775
-MACHINE_FILE_MODE = 0o664
+# Group-shared but not world-readable: the machine store carries VM documents
+# that can include guest passwords, so access stops at the trusted group.
+MACHINE_DIRECTORY_MODE = 0o2770
+MACHINE_FILE_MODE = 0o660
 BOOTSTRAP_DIRECTORY_MODE = 0o2750
 
 
-class MachineStoreGroupError(RuntimeError):
-    """Raised when the configured trusted host group does not exist."""
+class MachineStoreGroupError(AIVMError):
+    """Raised when the configured trusted host group does not exist.
+
+    An :class:`AIVMError` so a fresh host (no ``aivm`` group, no store yet)
+    gets the CLI's clean error rendering and setup guidance instead of a
+    traceback from the first ``aivm status``/``aivm list``.
+    """
 
 
 @dataclass(frozen=True)
@@ -93,7 +101,8 @@ def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:
     except KeyError as ex:
         raise MachineStoreGroupError(
             f'Required host group {group_name!r} does not exist. '
-            'Create it before initializing the shared machine store.'
+            'Run `aivm config init` to set up this machine, or create the '
+            f'group yourself: sudo groupadd --system {group_name}'
         ) from ex
 
 
