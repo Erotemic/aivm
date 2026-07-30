@@ -33,7 +33,7 @@ from ...config_store import (
 )
 from ...detect import auto_defaults
 from ...enrollment import normalized_guest_username, reconcile_current_principal
-from ...errors import AIVMError
+from ...errors import AIVMError, CommandControlError
 from ...host_identity import current_host_identity
 from ...ssh_keys import same_ssh_public_key
 from ...resource_checks import vm_resource_warning_lines
@@ -119,11 +119,28 @@ def initialize_config_defaults(
 
     if scope.is_machine:
         canonical_vm_name = default_vm_name()
+        # Join any managed VM this machine already has, not only the
+        # canonical host-derived name: the creator may have renamed the VM
+        # during interactive review, and a second user's init must still
+        # land in the join flow instead of the create-defaults flow.
+        join_vm_name = ''
         if find_vm(reg, canonical_vm_name) is not None:
+            join_vm_name = canonical_vm_name
+        elif len(reg.vms) == 1:
+            join_vm_name = reg.vms[0].name
+        elif reg.vms:
+            names = ', '.join(sorted(vm.name for vm in reg.vms))
+            raise AIVMError(
+                f'This machine store already manages several VMs ({names}) '
+                f'and none matches the canonical name {canonical_vm_name!r}. '
+                'Join one explicitly with '
+                '`aivm vm access reconcile --vm NAME`.'
+            )
+        if join_vm_name:
             return _join_existing_machine(
                 scope=scope,
                 reg=reg,
-                vm_name=canonical_vm_name,
+                vm_name=join_vm_name,
                 yes=yes,
                 defaults=defaults,
                 force=force,
@@ -139,6 +156,16 @@ def initialize_config_defaults(
     else:
         canonical_vm_name = ''
 
+    if reg.defaults is not None and not force:
+        # Refuse before the SSH-keypair offer and the interactive review, so
+        # the user is not walked through every default only to be told the
+        # work was discarded.
+        print(
+            f'Config defaults already exist in store: {path}',
+            file=sys.stderr,
+        )
+        print('Use --force to overwrite defaults.', file=sys.stderr)
+        return 2
     seed = AgentVMConfig()
     if canonical_vm_name:
         seed.vm.name = canonical_vm_name
@@ -155,13 +182,6 @@ def initialize_config_defaults(
         cfg = _review_init_defaults_interactive(cfg, path)
     else:
         _show_init_advisories(cfg)
-    if reg.defaults is not None and not force:
-        print(
-            f'Config defaults already exist in store: {path}',
-            file=sys.stderr,
-        )
-        print('Use --force to overwrite defaults.', file=sys.stderr)
-        return 2
     reg.defaults = cfg
     if scope.is_machine:
         save_scope_store(
@@ -230,7 +250,6 @@ def _join_existing_machine(
     )
     profile = profile_from_effective_cfg(cfg, existing=profile)
     assert scope.profile_path is not None
-    save_user_profile(profile, scope.profile_path)
 
     current_key = _read_public_key_text(cfg.paths.ssh_pubkey_path)
     already_active = bool(
@@ -260,12 +279,20 @@ def _join_existing_machine(
         yes=yes,
         defaults=defaults,
     )
+    # Persist the caller profile only after the user confirmed the join;
+    # declining must leave no durable state behind.
+    save_user_profile(profile, scope.profile_path)
     try:
         report = reconcile_current_principal(
             scope,
             vm_name=vm_name,
             guest_user=guest_user,
         )
+    except CommandControlError:
+        # A declined or unavailable approval is the user's decision, not an
+        # unreachable VM; reporting it as a successful pending join would
+        # exit 0 against that decision.
+        raise
     except AIVMError as ex:
         refreshed = load_scope_store(scope)
         pending = find_principal_for_host_identity(

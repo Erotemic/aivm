@@ -206,6 +206,52 @@ def test_reconcile_keeps_pending_when_bootstrap_transport_is_unreachable(
     assert persisted.state == 'pending'
 
 
+def test_reconcile_does_not_downgrade_active_identity_before_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Re-verifying a granted identity must not durably weaken it.
+
+    Regression: reconcile persisted state='pending' before the first
+    privileged command, so declining the prompt -- or an unreachable VM --
+    left a previously active identity downgraded, which also weakens
+    last-access accounting.
+    """
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg)
+    identity = bootstrap_identity_paths(
+        cfg.vm.name, layout=scope.machine_layout
+    )
+    identity.directory.mkdir(parents=True)
+    identity.private_key.write_text('BOOTSTRAP-PRIVATE\n')
+    identity.public_key_path.write_text(
+        'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment._resolve_enrollment_ip',
+        lambda cfg, ip_override='': '10.77.0.119',
+    )
+    activate_manager(monkeypatch, yes=True)
+    command_recorder(
+        monkeypatch, {'ssh': FakeProc(255, '', 'connection refused')}
+    )
+
+    with pytest.raises(Exception, match='Guest enrollment failed'):
+        reconcile_current_principal(scope, vm_name=cfg.vm.name)
+
+    persisted = find_principal_for_host(
+        load_store(scope.store_path),
+        vm_name=cfg.vm.name,
+        host_user='edward.wang',
+    )
+    assert persisted is not None
+    assert persisted.state == 'active'
+
+
 def _record_existing_identity(
     scope: StoreScope,
     cfg: AgentVMConfig,

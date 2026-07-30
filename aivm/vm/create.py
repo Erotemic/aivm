@@ -10,15 +10,20 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..config_store import load_store
 from ..credentials.guards import require_vm_credentials_released
-from ..errors import AIVMError, CommandControlError
 from ..enrollment import ensure_bootstrap_identity
+from ..errors import AIVMError, CommandControlError
 from ..machine_store import is_machine_store_path
 from ..privilege import virsh_needs_sudo
 from ..runtime import current_libvirt_uri, virsh_cmd
 from ..util import CmdError
 from .cloudinit import _write_cloud_init
 from .disk import _ensure_disk
-from .domain import _destroy_and_undefine_vm, vm_exists
+from .domain import (
+    _destroy_and_undefine_vm,
+    domain_file_storage_paths,
+    require_managed_storage_path,
+    vm_exists,
+)
 from .images import fetch_image
 
 log = logger
@@ -284,7 +289,7 @@ def create_or_start_vm(
                         raise AIVMError(
                             f'VM {cfg.vm.name!r} is currently shutting down '
                             f'(state={st!r}). Wait for it to finish, or run '
-                            f'`aivm vm destroy {cfg.vm.name}` to force it off, '
+                            f'`aivm vm delete {cfg.vm.name}` to force it off, '
                             f'then retry.'
                         )
                     if 'shut off' in st or 'crashed' in st or st == '':
@@ -309,7 +314,25 @@ def create_or_start_vm(
             if dry_run:
                 log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
             else:
-                removal = _destroy_and_undefine_vm(cfg.vm.name)
+                # The same containment rule the deletion journal enforces:
+                # `virsh undefine --remove-all-storage` deletes every live
+                # domain disk source (cdrom media included), so each one
+                # must sit inside the AIVM-managed tree before a recreate
+                # may remove the old domain.
+                live_storage = domain_file_storage_paths(cfg.vm.name)
+                for storage_path in live_storage:
+                    require_managed_storage_path(
+                        cfg,
+                        storage_path,
+                        action='recreate',
+                        recovery=(
+                            'Detach the external storage from the domain '
+                            'before recreating this VM.'
+                        ),
+                    )
+                removal = _destroy_and_undefine_vm(
+                    cfg.vm.name, storage_paths=live_storage
+                )
                 if removal.retained_storage_paths:
                     rendered = '\n'.join(
                         f'  - {path}' for path in removal.retained_storage_paths

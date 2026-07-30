@@ -172,6 +172,87 @@ def test_config_init_joins_exact_managed_machine_without_machine_rewrite(
     assert 'No VM created' not in output
 
 
+def test_config_init_joins_renamed_sole_vm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A machine whose sole VM was renamed still routes init into the join.
+
+    Regression: the join keyed only on the canonical host-derived VM name,
+    so a renamed VM sent the second user into the create-defaults flow and
+    a misleading `--force` suggestion that would overwrite machine defaults.
+    """
+    scope = _managed_machine(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        'aivm.cli.config.init.default_vm_name',
+        lambda: 'some-other-canonical-name',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.reconcile_current_principal', _activate_bob
+    )
+
+    rc = initialize_config_defaults(
+        config_opt=None,
+        yes=True,
+        defaults=False,
+        force=False,
+        standalone_guidance=True,
+    )
+
+    assert rc == 0
+    assert scope.profile_path is not None
+    assert load_user_profile(scope.profile_path).active_vm == VM_NAME
+    output = capsys.readouterr().out
+    assert 'Existing managed machine found' in output
+
+
+def test_config_init_declined_join_approval_is_not_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A declined approval during enrollment must propagate, not exit 0.
+
+    Regression: the pending-join recovery caught every AIVMError, and
+    CommandControlError subclasses AIVMError, so declining the bootstrap
+    sudo prompt was reported as a successful pending enrollment.
+    """
+    from aivm.errors import UserDeclinedError
+
+    scope = _managed_machine(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+
+    def declined_reconcile(
+        scope: StoreScope,
+        *,
+        vm_name: str,
+        guest_user: str,
+    ) -> NoReturn:
+        raise UserDeclinedError('User declined sudo approval')
+
+    monkeypatch.setattr(
+        'aivm.cli.config.init.reconcile_current_principal',
+        declined_reconcile,
+    )
+
+    with pytest.raises(UserDeclinedError):
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=False,
+            force=False,
+            standalone_guidance=True,
+        )
+
+    assert scope.profile_path is not None
+    assert load_user_profile(scope.profile_path).active_vm == ''
+
+
 def test_config_init_repeat_is_idempotent_and_skips_enrollment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

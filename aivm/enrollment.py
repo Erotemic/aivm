@@ -408,7 +408,14 @@ def _reconcile_current_principal_impl(
             'authorized_keys and sudo policy are reconciled as one unit.'
         )
     principal = PrincipalEntry(
-        id=stable_principal_id(vm_name, host_user),
+        # Reuse the matched record's id: the lookup is by host identity, and
+        # writing a recomputed id for an existing principal would append a
+        # duplicate record instead of updating it.
+        id=(
+            existing.id
+            if existing is not None
+            else stable_principal_id(vm_name, host_user)
+        ),
         vm_name=vm_name,
         host_user=host_user,
         host_uid=host_uid,
@@ -438,11 +445,21 @@ def _reconcile_current_principal_impl(
         )
         return EnrollmentReport(principal=principal, ip=ip, changed=True)
 
-    _save_principal_state(
-        scope,
-        principal,
-        reason=f'Record pending enrollment for {host_user} on VM {vm_name}.',
-    )
+    already_granted = existing is not None and existing.state in {
+        'active',
+        'legacy',
+    }
+    if not already_granted:
+        # Record a brand-new enrollment as pending before any transport. An
+        # already-granted identity is only being re-verified: writing
+        # 'pending' here would durably downgrade it before the user has
+        # approved anything, so a declined prompt would leave the identity
+        # (and last-access accounting) weakened.
+        _save_principal_state(
+            scope,
+            principal,
+            reason=f'Record pending enrollment for {host_user} on VM {vm_name}.',
+        )
     identity = require_bootstrap_identity(vm_name, layout=scope.machine_layout)
     ip = _resolve_enrollment_ip(cfg, ip_override)
     request = GuestEnrollmentRequest(
@@ -486,7 +503,15 @@ def _reconcile_current_principal_impl(
             detail='The bootstrap SSH key is forced to aivm-guestctl --forced.',
         )
     if result.code != 0:
-        state = 'pending' if result.code == 255 else 'error'
+        if result.code == 255 and already_granted:
+            # An unreachable VM does not revoke a previously verified grant;
+            # keep the durable state and report the transport failure.
+            assert existing is not None
+            state = existing.state
+        elif result.code == 255:
+            state = 'pending'
+        else:
+            state = 'error'
         failed = replace(principal, state=state)
         _save_principal_state(
             scope,
