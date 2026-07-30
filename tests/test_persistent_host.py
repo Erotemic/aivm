@@ -266,8 +266,8 @@ def test_legacy_unpinned_persistent_attachment_instructs_migration(
 
     message = str(exc_info.value)
     assert 'pre-0.6 legacy store' in message
-    assert 'aivm config migrate plan --sudo' in message
-    assert 'aivm config migrate apply --sudo --yes' in message
+    assert 'aivm config migrate plan' in message
+    assert 'aivm config migrate apply --yes' in message
     assert 'source is unavailable' in message
 
 

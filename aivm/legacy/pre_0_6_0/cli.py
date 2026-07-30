@@ -11,17 +11,15 @@ import kwconf
 from ...cli._common import _BaseCommand
 from ...commands import CommandManager
 from ...errors import AIVMError
-from ...machine_store import MachineStoreLayout, machine_store_layout
+from ...machine_store import machine_store_layout
 from .migration import (
     LegacyStoreSource,
-    MigrationPlan,
     build_migration_plan,
     default_legacy_source,
     parse_legacy_source_spec,
 )
 from .migration_apply import (
     MigrationExecutionError,
-    RuntimeVerifier,
     apply_migration,
     latest_migration_id,
     list_migration_ids,
@@ -29,7 +27,6 @@ from .migration_apply import (
     resume_migration,
     rollback_migration,
     verify_applied_migration,
-    verify_migration_runtime,
 )
 from .paths import store_path as legacy_store_path
 
@@ -54,15 +51,6 @@ def _selected_migration_id(raw: str) -> str:
     return str(raw or '').strip() or latest_migration_id()
 
 
-def _runtime_verifier(*, sudo: bool) -> RuntimeVerifier:
-    def verify(
-        plan: MigrationPlan, layout: MachineStoreLayout
-    ) -> dict[str, object]:
-        return verify_migration_runtime(plan, layout, runtime_sudo=sudo)
-
-    return verify
-
-
 class _MigrationSourcesCLI(_BaseCommand):
     """Shared source and report options for plan/apply commands."""
 
@@ -81,10 +69,6 @@ class _MigrationSourcesCLI(_BaseCommand):
         'text',
         help='Report format: text or json.',
     )
-    sudo: bool = kwconf.Flag(
-        False,
-        help='Use sudo for read-only libvirt inventory and verification.',
-    )
 
 
 class ConfigMigratePlanCLI(_MigrationSourcesCLI):
@@ -102,7 +86,6 @@ class ConfigMigratePlanCLI(_MigrationSourcesCLI):
         plan = build_migration_plan(
             sources,
             check_runtime=not bool(args.no_runtime),
-            runtime_sudo=bool(args.sudo),
         )
         if args.output == 'json':
             print(plan.render_json(), end='')
@@ -121,7 +104,6 @@ class ConfigMigrateApplyCLI(_MigrationSourcesCLI):
         plan = build_migration_plan(
             sources,
             check_runtime=True,
-            runtime_sudo=bool(args.sudo),
         )
         if plan.blocked:
             print(
@@ -142,10 +124,7 @@ class ConfigMigrateApplyCLI(_MigrationSourcesCLI):
                 purpose=purpose,
                 yes=bool(args.yes),
             ):
-                result = apply_migration(
-                    plan,
-                    runtime_verifier=_runtime_verifier(sudo=bool(args.sudo)),
-                )
+                result = apply_migration(plan)
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':
@@ -208,11 +187,6 @@ class ConfigMigrateStatusCLI(_MigrationJournalCLI):
 class ConfigMigrateResumeCLI(_MigrationJournalCLI):
     """Resume a failed/interrupted migration from its durable journal."""
 
-    sudo: bool = kwconf.Flag(
-        False,
-        help='Use sudo for read-only libvirt inventory and verification.',
-    )
-
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
@@ -226,9 +200,7 @@ class ConfigMigrateResumeCLI(_MigrationJournalCLI):
                 result = resume_migration(
                     migration_id,
                     layout=layout,
-                    runtime_verifier=_runtime_verifier(sudo=bool(args.sudo)),
                     check_runtime=True,
-                    runtime_sudo=bool(args.sudo),
                 )
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
@@ -244,20 +216,12 @@ class ConfigMigrateResumeCLI(_MigrationJournalCLI):
 class ConfigMigrateVerifyCLI(_MigrationJournalCLI):
     """Re-run source, store, profile, data-copy, libvirt, and SSH checks."""
 
-    sudo: bool = kwconf.Flag(
-        False,
-        help='Use sudo for read-only libvirt verification.',
-    )
-
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         migration_id = _selected_migration_id(args.migration)
         try:
-            result = verify_applied_migration(
-                migration_id,
-                runtime_verifier=_runtime_verifier(sudo=bool(args.sudo)),
-            )
+            result = verify_applied_migration(migration_id)
         except MigrationExecutionError as ex:
             raise AIVMError(str(ex)) from ex
         if args.output == 'json':

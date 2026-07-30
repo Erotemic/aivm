@@ -271,8 +271,8 @@ def _persistent_attachment_records_for_vm(
                 else:
                     recovery = (
                         'This attachment is still recorded in a pre-0.6 legacy '
-                        'store. Run `aivm config migrate plan --sudo`, then '
-                        '`aivm config migrate apply --sudo --yes`. If migration '
+                        'store. Run `aivm config migrate plan`, then '
+                        '`aivm config migrate apply --yes`. If migration '
                         'reports that the source is unavailable, restore the '
                         'source path or detach and reattach this attachment.'
                     )

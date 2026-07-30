@@ -72,9 +72,11 @@ The planner currently blocks apply readiness when it finds conditions such as:
 - a legacy VM record with no corresponding libvirt domain.
 
 Unmanaged runtime resources are reported but are not imported or deleted.
-Runtime inspection can be skipped with `--no_runtime`, or performed through a
-read-only sudo invocation with `--sudo` when ordinary libvirt access is not
-available.
+Runtime inspection can be skipped with `--no_runtime`. Whether the two
+read-only libvirt probes run through sudo is not a migration choice: they take
+the same `virsh_needs_sudo()` decision as every other libvirt client command,
+so `behavior.privilege_mode` alone governs it. When the probes cannot reach
+libvirt, the plan reports a `runtime-inventory-unavailable` warning.
 
 ## Next phase
 

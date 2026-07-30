@@ -26,9 +26,11 @@ from aivm.legacy.pre_0_6_0.migration import (
     LegacyStoreSource,
     RuntimeInventory,
     build_migration_plan,
+    collect_runtime_inventory,
     parse_legacy_source_spec,
 )
 from aivm.machine_store import MachineStoreLayout
+from tests.helpers import FakeProc, activate_manager, command_recorder
 
 
 def _as_object_dict(value: object) -> dict[str, object]:
@@ -296,6 +298,41 @@ def test_runtime_missing_domain_blocks_apply_readiness(tmp_path: Path) -> None:
     )
 
     assert 'runtime-domain-missing' in {item.code for item in plan.conflicts}
+
+
+@pytest.mark.parametrize(
+    ('libvirt_ok', 'expect_sudo'),
+    [
+        pytest.param(False, True, id='escalates_when_libvirt_needs_sudo'),
+        pytest.param(True, False, id='stays_unprivileged_when_libvirt_reachable'),
+    ],
+)
+def test_runtime_inventory_follows_the_libvirt_escalation_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    libvirt_ok: bool,
+    expect_sudo: bool,
+) -> None:
+    """Inventory escalation is privilege policy, not a migration option.
+
+    Overrides the conftest probe pin, since the probe answer is the input
+    under test here.
+    """
+    monkeypatch.setattr(
+        'aivm.privilege.libvirt_without_sudo_ok', lambda: libvirt_ok
+    )
+    activate_manager(monkeypatch, yes_sudo=True)
+    rec = command_recorder(monkeypatch, default=FakeProc(stdout='aivm-2404\n'))
+
+    inventory = collect_runtime_inventory(
+        managed_vms=['aivm-2404'], managed_networks=['aivm-net']
+    )
+
+    assert inventory.checked and not inventory.error
+    assert rec.normalized == [
+        ['virsh', 'list', '--all', '--name'],
+        ['virsh', 'net-list', '--all', '--name'],
+    ]
+    assert [cmd[0] == 'sudo' for cmd in rec.calls] == [expect_sudo] * 2
 
 
 def test_existing_machine_store_is_reported_as_merge_conflict(

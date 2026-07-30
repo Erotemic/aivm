@@ -1488,8 +1488,6 @@ def verify_migration_local(
 def verify_migration_runtime(
     plan: MigrationPlan,
     layout: MachineStoreLayout,
-    *,
-    runtime_sudo: bool = False,
 ) -> dict[str, object]:
     """Verify libvirt identity and creator SSH without mutating runtime state."""
     inventory: RuntimeInventory = collect_runtime_inventory(
@@ -1498,7 +1496,6 @@ def verify_migration_runtime(
             str(item.get('name', ''))
             for item in _object_dict_list(plan.machine.get('networks', []))
         ],
-        sudo=runtime_sudo,
     )
     if inventory.error:
         raise MigrationExecutionError(
@@ -1831,7 +1828,6 @@ def rebuild_plan_from_journal(
     *,
     layout: MachineStoreLayout,
     check_runtime: bool = True,
-    runtime_sudo: bool = False,
 ) -> MigrationPlan:
     transaction_dir = migration_transaction_dir(journal.migration_id, layout)
     report, _authorized = _load_and_validate_frozen_plan(
@@ -1841,7 +1837,6 @@ def rebuild_plan_from_journal(
         sources_from_journal(journal),
         layout=layout,
         check_runtime=check_runtime,
-        runtime_sudo=runtime_sudo,
     )
     plan.target_machine_store_exists = bool(
         report.get('target_machine_store_exists', False)
@@ -1887,7 +1882,6 @@ def resume_migration(
     guest_installer: GuestInstaller = install_bootstrap_through_legacy_access,
     runtime_verifier: RuntimeVerifier = verify_migration_runtime,
     check_runtime: bool = True,
-    runtime_sudo: bool = False,
     fail_after_step: str = '',
 ) -> MigrationApplyResult:
     """Resume one migration while serializing every transaction phase."""
@@ -1913,7 +1907,6 @@ def resume_migration(
                 loaded.journal,
                 layout=layout,
                 check_runtime=check_runtime,
-                runtime_sudo=runtime_sudo,
             )
             return _apply_migration_locked(
                 plan,

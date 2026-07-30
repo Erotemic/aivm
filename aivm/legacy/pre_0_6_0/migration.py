@@ -42,6 +42,7 @@ from ...credentials.validation import (
 )
 from ...fs_identity import directory_identity
 from ...machine_store import MachineStoreLayout, machine_store_layout
+from ...privilege import virsh_needs_sudo
 from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
 from ...scoped_store import stable_principal_id
@@ -666,9 +667,18 @@ def _runtime_names(command: list[str], *, sudo: bool) -> tuple[list[str], str]:
 
 
 def collect_runtime_inventory(
-    *, managed_vms: Iterable[str], managed_networks: Iterable[str], sudo: bool
+    *, managed_vms: Iterable[str], managed_networks: Iterable[str]
 ) -> RuntimeInventory:
-    """Read libvirt names without changing runtime state."""
+    """Read libvirt names without changing runtime state.
+
+    Escalation is not a migration policy: these two probes are ordinary
+    libvirt client reads, so they take the same ``virsh_needs_sudo``
+    decision as every other virsh call. Under a mode that forbids sudo the
+    unprivileged read is still attempted, and a failure surfaces as
+    ``RuntimeInventory.error`` (a plan warning) rather than as a flag the
+    caller was supposed to have known to pass.
+    """
+    sudo = virsh_needs_sudo()
     domains, domain_error = _runtime_names(
         virsh_cmd('list', '--all', '--name'), sudo=sudo
     )
@@ -817,7 +827,6 @@ def build_migration_plan(
     *,
     layout: MachineStoreLayout | None = None,
     check_runtime: bool = True,
-    runtime_sudo: bool = False,
     runtime_collector: Callable[
         ..., RuntimeInventory
     ] = collect_runtime_inventory,
@@ -1338,7 +1347,6 @@ def build_migration_plan(
         runtime = runtime_collector(
             managed_vms=sorted(vm_claims),
             managed_networks=sorted(network_claims),
-            sudo=runtime_sudo,
         )
         if runtime.error:
             warnings.append(
