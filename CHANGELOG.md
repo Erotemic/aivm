@@ -129,6 +129,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   perform. Installing an unregistered key is safe and deliberate: it
   authenticates against nothing until the provider holds its public half. See
   the policy note in `aivm/credentials/__init__.py`.
+* `CommandManager.attempt(...)` for steps whose failure is an expected
+  outcome. The block reports its result on an `Attempt` (`.failed`,
+  `.reason`) instead of raising, so callers declare that a step may fail
+  rather than wrapping manager calls in `try`/`except`, and the log says a
+  failure was handled instead of showing what looks like a fatal error.
+
 
 ### Changed
 * Hardened destructive and privileged shared-machine lifecycle paths. Caller
@@ -230,6 +236,28 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `dominfo`, `domstate`, `dumpxml`, `domblkinfo`, and `qemu-img` probes were
   ungrouped, so each was classified as a state change and prompted separately
   under a header that called a read-only probe a hypervisor mutation.
+* `aivm vm creds add` no longer requires the GitHub CLI. Registering a deploy
+  key is automation, not a prerequisite: only `ssh` and `ssh-keygen` are
+  required, and a missing, outdated, or signed-out `gh` routes into the same
+  handoff used when the provider refuses.
+* The credential feature no longer sits on the shared CLI option path.
+  `cli._common` has no credential imports; it publishes which config store is
+  active and `credentials.policy` resolves its own setting from it. VM
+  lifecycle code reaches the feature only through `credentials.guards`. The
+  audit boundary is documented in `aivm/credentials/__init__.py` and enforced
+  by `tests/test_credentials_boundary.py`.
+* `aivm vm creds add` now takes `--access read|write` (default `read`) instead
+  of the `--write` flag, matching the `--access` option already used by
+  `vm attach` and `vm code` and the `read`/`write` values already reported by
+  `creds list` and `creds status`. `ro` and `rw` are accepted as aliases.
+  `--write` is gone rather than deprecated because it was never released.
+* Credential storage directory mode concerns now follow
+  ``behavior.credential_directory_permission_policy``: ``warn`` by default,
+  ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM
+  application-data root, VM data directory, credential parent, and credential
+  leaf directory. Ownership, symlink, file-type, and key-file permission
+  checks remain strict failures in every policy mode.
+
 
 ### Fixed
 * Hardened destructive recovery against three fail-open/data-loss paths. VM
@@ -317,37 +345,6 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   surfaced as `aivm vm creds add` dying inside an SSH probe that reported a
   `gh` error it never issued. Both queues now mark a command attempted before
   executing it.
-
-### Added
-* `CommandManager.attempt(...)` for steps whose failure is an expected
-  outcome. The block reports its result on an `Attempt` (`.failed`,
-  `.reason`) instead of raising, so callers declare that a step may fail
-  rather than wrapping manager calls in `try`/`except`, and the log says a
-  failure was handled instead of showing what looks like a fatal error.
-
-### Changed
-* `aivm vm creds add` no longer requires the GitHub CLI. Registering a deploy
-  key is automation, not a prerequisite: only `ssh` and `ssh-keygen` are
-  required, and a missing, outdated, or signed-out `gh` routes into the same
-  handoff used when the provider refuses.
-* The credential feature no longer sits on the shared CLI option path.
-  `cli._common` has no credential imports; it publishes which config store is
-  active and `credentials.policy` resolves its own setting from it. VM
-  lifecycle code reaches the feature only through `credentials.guards`. The
-  audit boundary is documented in `aivm/credentials/__init__.py` and enforced
-  by `tests/test_credentials_boundary.py`.
-* `aivm vm creds add` now takes `--access read|write` (default `read`) instead
-  of the `--write` flag, matching the `--access` option already used by
-  `vm attach` and `vm code` and the `read`/`write` values already reported by
-  `creds list` and `creds status`. `ro` and `rw` are accepted as aliases.
-  `--write` is gone rather than deprecated because it was never released.
-* Credential storage directory mode concerns now follow
-  ``behavior.credential_directory_permission_policy``: ``warn`` by default,
-  ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM
-  application-data root, VM data directory, credential parent, and credential
-  leaf directory. Ownership, symlink, file-type, and key-file permission
-  checks remain strict failures in every policy mode.
-
 
 ## Version 0.5.0 - Released 2026-07-18
 
