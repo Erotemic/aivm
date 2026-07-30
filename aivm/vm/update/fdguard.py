@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import shlex
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ...commands import CommandManager, Elided
 from ...config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ...errors import AIVMError
 from ...fdguard import (
     FDGUARD_TIMER,

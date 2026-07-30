@@ -32,6 +32,8 @@ from aivm.attachments.persistent import (
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_attachment_manifest_to_guest,
     _write_text_if_changed,
+)
+from aivm.attachments.persistent import (
     manifest as persistent_manifest,
 )
 from aivm.commands import CommandError, CommandManager
@@ -1097,7 +1099,7 @@ def test_persistent_host_replay_manifest_still_updates_after_last_detach(
     assert json.loads(staged[0])['records'] == []
 
 
-def _load_host_replay_helper(tmp_path: Path):
+def _load_host_replay_helper(tmp_path: Path) -> Any:
     helper_path = tmp_path / 'aivm_persistent_host_replay.py'
     helper_path.write_text(persistent_host_replay_python(), encoding='utf-8')
     spec = importlib.util.spec_from_file_location(

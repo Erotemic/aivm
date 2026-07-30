@@ -10,7 +10,6 @@ import pytest
 
 from aivm.attachments.ownership import attachment_owner_label
 from aivm.attachments.persistent import (
-    _persistent_attachment_manifest_text,
     _persistent_host_manifest_path,
     _sync_persistent_attachment_manifest_on_host,
 )
@@ -35,8 +34,8 @@ from aivm.fs_identity import directory_identity
 from aivm.host_identity import HostIdentity
 from aivm.machine_store import machine_store_layout
 from aivm.services import resolve_vm_name
-from tests.helpers import resolved_test_context
 from aivm.status import ProbeOutcome, render_global_status
+from tests.helpers import resolved_test_context
 
 
 def _principal(vm_name: str, owner: str, host_user: str) -> PrincipalEntry:

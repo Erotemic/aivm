@@ -38,6 +38,7 @@ from ...config_store.fs_policy import (
     ensure_store_directory,
     exclusive_file_lock,
 )
+from ...enrollment import bootstrap_identity_paths, ensure_bootstrap_identity
 from ...errors import AIVMError
 from ...guestctl import (
     BOOTSTRAP_GUEST_USER,
@@ -54,25 +55,24 @@ from ...machine_store import (
     machine_resource_locks,
     machine_store_layout,
 )
-from .migration import (
-    LegacyStoreSource,
-    MigrationPathFingerprint,
-    MigrationPathKind,
-    MigrationPlan,
-    RuntimeInventory,
-    build_migration_plan,
-    collect_runtime_inventory,
-    fingerprint_migration_path,
-    _machine_store_revision,
-)
 from ...profile_store import (
     load_user_profile,
     render_user_profile,
     save_user_profile,
 )
 from ...runtime import require_ssh_identity, ssh_base_args
-from ...enrollment import bootstrap_identity_paths, ensure_bootstrap_identity
 from ...vm.connectivity import wait_for_ip
+from .migration import (
+    LegacyStoreSource,
+    MigrationPathFingerprint,
+    MigrationPathKind,
+    MigrationPlan,
+    RuntimeInventory,
+    _machine_store_revision,
+    build_migration_plan,
+    collect_runtime_inventory,
+    fingerprint_migration_path,
+)
 
 MIGRATION_JOURNAL_SCHEMA_VERSION = 1
 MigrationStatus = Literal[
@@ -1438,16 +1438,16 @@ def verify_migration_local(
     for move in plan.credential_material_moves:
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
-        expected = _planned_move_fingerprint(move)
-        if not expected.exists:
+        expected_fingerprint = _planned_move_fingerprint(move)
+        if not expected_fingerprint.exists:
             _verify_missing_source_destination(
                 move,
-                expected,
+                expected_fingerprint,
                 role='Credential material',
                 managed_root=_credential_destination_root(move),
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected:
+        if not target.exists() or _path_content_fingerprint(target) != expected_fingerprint:
             raise MigrationExecutionError(
                 f'Credential material verification failed: {source} -> {target}'
             )
@@ -1456,16 +1456,16 @@ def verify_migration_local(
     for move in plan.persistent_state_moves:
         source = Path(str(move.get('source', '')))
         target = Path(str(move.get('target', '')))
-        expected = _planned_move_fingerprint(move)
-        if not expected.exists:
+        expected_fingerprint = _planned_move_fingerprint(move)
+        if not expected_fingerprint.exists:
             _verify_missing_source_destination(
                 move,
-                expected,
+                expected_fingerprint,
                 role='Persistent state',
                 managed_root=layout.root,
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected:
+        if not target.exists() or _path_content_fingerprint(target) != expected_fingerprint:
             raise MigrationExecutionError(
                 f'Persistent state verification failed: {source} -> {target}'
             )
@@ -2202,15 +2202,15 @@ def _frozen_backup_candidates(
         )
 
     for move in _object_dict_list(proposed.get('persistent_state_moves', [])):
-        source = _lexical_absolute(Path(str(move.get('source', ''))))
+        state_source = _lexical_absolute(Path(str(move.get('source', ''))))
         target = _lexical_absolute(Path(str(move.get('target', ''))))
         host_user = str(move.get('host_user', ''))
         result.append(
             _AuthorizedBackup(
-                source,
+                state_source,
                 'persistent-input',
                 'evidence_only',
-                homes.get(host_user, source.parent),
+                homes.get(host_user, state_source.parent),
             )
         )
         result.append(
@@ -2242,11 +2242,11 @@ def _frozen_backup_candidates(
 
     deduplicated: list[_AuthorizedBackup] = []
     seen: set[Path] = set()
-    for item in result:
-        if item.original in seen:
+    for backup in result:
+        if backup.original in seen:
             continue
-        seen.add(item.original)
-        deduplicated.append(item)
+        seen.add(backup.original)
+        deduplicated.append(backup)
     return deduplicated
 
 

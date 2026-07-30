@@ -20,7 +20,7 @@ from ..commands import CommandManager
 from ..config_store import find_vm, load_store
 from ..errors import PrivilegeModeError
 from ..scoped_store import load_scope_profile, resolve_store_scope
-from ..services import bind_active_config_option, cfg_path
+from ..services import bind_active_config_option
 
 log = logger
 _LAST_LOGGING_STATE: tuple[str, bool, int] | None = None

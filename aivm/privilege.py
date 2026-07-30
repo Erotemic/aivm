@@ -51,7 +51,6 @@ CommandManager._command_needs_approval).
 
 from __future__ import annotations
 
-import getpass
 import grp
 import os
 import pwd
@@ -61,8 +60,8 @@ from pathlib import Path
 from loguru import logger
 
 from .commands import CommandManager
-from .host_identity import current_host_identity
 from .errors import SudoRequiredError
+from .host_identity import current_host_identity
 from .modes import (
     PRIVILEGE_MODES,
     PrivilegeMode,

@@ -11,8 +11,8 @@ from ..config_store import (
     Store,
     find_principal,
 )
-from ..legacy.pre_0_6_0 import compatibility_surface
 from ..errors import AIVMError
+from ..legacy.pre_0_6_0 import compatibility_surface
 from ..scoped_store import resolve_store_scope
 
 SYSTEM_ATTACHMENT_OWNER = ATTACHMENT_SYSTEM_OWNER

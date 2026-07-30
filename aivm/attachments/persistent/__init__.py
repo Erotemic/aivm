@@ -33,9 +33,9 @@ from ...persistent_replay import (
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from . import host_bind, manifest, replay, transport
 from .host_bind import (
+    _cleanup_persistent_host_replay_artifacts,
     _ensure_persistent_root_parent_dir,
     _ensure_persistent_root_vm_mapping,
-    _cleanup_persistent_host_replay_artifacts,
     _install_persistent_host_bind_replay,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_host_binds,

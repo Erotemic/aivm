@@ -8,7 +8,6 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
-from aivm.host_identity import HostIdentity
 from aivm.config_store import (
     PrincipalEntry,
     load_store,
@@ -16,6 +15,7 @@ from aivm.config_store import (
     upsert_principal,
     upsert_vm_with_network,
 )
+from aivm.host_identity import HostIdentity
 from aivm.profile_store import UserProfileStore, save_user_profile
 from aivm.scoped_store import resolve_store_scope, save_scope_store
 from tests.helpers import run_cli

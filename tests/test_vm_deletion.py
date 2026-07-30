@@ -38,7 +38,9 @@ from aivm.vm.deletion import (
 from aivm.vm.domain import DomainRemovalReport
 
 
-def _machine_vm(tmp_path: Path):
+def _machine_vm(
+    tmp_path: Path,
+) -> tuple[StoreScope, AgentVMConfig, Path]:
     scope = resolve_store_scope(None)
     assert scope.is_machine
     cfg = AgentVMConfig()

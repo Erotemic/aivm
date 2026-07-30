@@ -11,9 +11,9 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence, cast
+from typing import Iterable, Sequence, cast
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 class ArchitectureError(RuntimeError):
@@ -869,8 +869,8 @@ def render_compatibility_inventory(
             '|---|---|',
         ]
     )
-    for module, path, line in aggregate:
-        lines.append(f'| `{module}` | `{path}:{line}` |')
+    for module, loc_path, line in aggregate:
+        lines.append(f'| `{module}` | `{loc_path}:{line}` |')
     lines.extend(
         [
             '',
@@ -883,8 +883,8 @@ def render_compatibility_inventory(
             '|---|---|---|',
         ]
     )
-    for module, path, line, argument in reconstructions:
-        lines.append(f'| `{module}` | `{argument}` | `{path}:{line}` |')
+    for module, loc_path, line, argument in reconstructions:
+        lines.append(f'| `{module}` | `{argument}` | `{loc_path}:{line}` |')
     return '\n'.join(lines) + '\n'
 
 

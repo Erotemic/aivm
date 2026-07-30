@@ -26,8 +26,9 @@ class ConfigShowCLI(_BaseCommand):
     """Show AIVM config content.
 
     By default this prints the canonical source document.  For split layouts,
-    that source document is the deterministic concatenation of config.toml,
-    defaults.toml, networks.toml, and sorted vms/*.toml fragments.
+    that source document is the deterministic concatenation of
+    ``config.toml``, ``defaults.toml``, ``networks.toml``, and sorted
+    ``vms/*.toml`` fragments.
     """
 
     vm: str = kwconf.Value(

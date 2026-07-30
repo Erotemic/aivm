@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from ..config_store import CredentialEntry, Store, find_principal
-from ..legacy.pre_0_6_0 import compatibility_surface
 from ..errors import AIVMError
+from ..legacy.pre_0_6_0 import compatibility_surface
 
 
 @compatibility_surface

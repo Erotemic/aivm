@@ -90,6 +90,7 @@ def _vm_update_drift(
     """Compute editable drift between config and live libvirt VM state.
 
     The update flow is intentionally conservative:
+
     * prefer non-sudo probes first,
     * escalate to sudo only when required,
     * gather diagnostics in ``notes`` instead of failing hard when a probe is

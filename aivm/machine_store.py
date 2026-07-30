@@ -16,13 +16,13 @@ from pathlib import Path
 from types import TracebackType
 from typing import Iterable
 
-from .errors import AIVMError
-from .host_identity import current_host_identity
 from .config_store.fs_policy import (
     StoreFilesystemPolicy,
     ensure_store_directory,
     exclusive_file_lock,
 )
+from .errors import AIVMError
+from .host_identity import current_host_identity
 
 MACHINE_STORE_ROOT_ENV = 'AIVM_MACHINE_STORE_ROOT'
 DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm')

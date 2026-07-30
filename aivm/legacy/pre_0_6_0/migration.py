@@ -19,7 +19,6 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, cast
 
-from ...fs_identity import directory_identity
 from ...commands import CommandManager
 from ...config import AgentVMConfig, agent_vm_config_asdict
 from ...config_store import (
@@ -41,6 +40,7 @@ from ...credentials.validation import (
     credential_id,
     validate_repository_identity,
 )
+from ...fs_identity import directory_identity
 from ...machine_store import MachineStoreLayout, machine_store_layout
 from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
@@ -789,10 +789,10 @@ def _machine_store_snapshot(path: Path) -> tuple[bool, str, Store | None]:
         return False, digest.hexdigest(), None
 
     text_parts: list[str] = []
-    for role, source, data in sources:
+    for role, source_path, data in sources:
         digest.update(role.encode('utf-8'))
         digest.update(b'\0')
-        digest.update(os.fspath(source).encode('utf-8'))
+        digest.update(os.fspath(source_path).encode('utf-8'))
         digest.update(b'\0')
         digest.update(data)
         digest.update(b'\0')

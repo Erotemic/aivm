@@ -6,9 +6,10 @@ import shlex
 
 from loguru import logger
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import GUEST_TOOL_REGISTRY

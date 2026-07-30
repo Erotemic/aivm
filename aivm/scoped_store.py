@@ -13,7 +13,6 @@ choose the machine store for a brand-new installation.
 from __future__ import annotations
 
 import hashlib
-import os
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +25,6 @@ from .config_scopes import (
 from .config_store import (
     PrincipalEntry,
     Store,
-    find_principal_for_host,
     find_principal_for_host_identity,
     load_store,
     materialize_vm_cfg,

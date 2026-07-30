@@ -7,10 +7,9 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from dev.devcheck import architecture_docs as arch
-
 
 LEGACY_PACKAGE = '.'.join(('aivm', 'legacy', 'pre_0_6_0'))
 

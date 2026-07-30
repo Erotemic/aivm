@@ -7,8 +7,6 @@ and prepared-session construction without calling libvirt, sudo, or SSH.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 import aivm.legacy.pre_0_6_0.context as legacy_context_mod
@@ -18,6 +16,8 @@ from aivm.attachments.session import (
 )
 from aivm.config_store import load_store, save_store, upsert_attachment
 from aivm.services import load_vm_context_with_path
+from aivm.vm.share import ResolvedAttachment
+
 from .scenario import SharedMachineScenario, SyntheticPrincipal
 
 
@@ -85,7 +85,14 @@ def test_prepared_sessions_keep_selected_principal_end_to_end(
 ) -> None:
     scenario = shared_machine_scenario
 
-    def fake_reconcile(cfg, host_src, attachment, *, policy, config_store_path):
+    def fake_reconcile(
+        cfg: object,
+        host_src: object,
+        attachment: ResolvedAttachment,
+        *,
+        policy: object,
+        config_store_path: object,
+    ) -> ReconcileResult:
         del cfg, host_src, policy, config_store_path
         return ReconcileResult(
             attachment=attachment,

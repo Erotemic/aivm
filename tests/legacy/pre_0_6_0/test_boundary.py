@@ -16,7 +16,6 @@ from aivm.legacy.pre_0_6_0.migration import MigrationPlan
 from aivm.legacy.pre_0_6_0.migration_apply import MigrationJournal
 from aivm.scoped_store import resolve_store_scope
 
-
 ROOT = Path(__file__).resolve().parents[3]
 SUPPORT_TAG = 'pre_0_6_0'
 

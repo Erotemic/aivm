@@ -14,7 +14,6 @@ from .lifecycle import (
     create_or_start_vm,
     fetch_image,
     get_ip_cached,
-    provision,
     refresh_cloud_init_seed_for_next_boot,
     restart_vm,
     shutdown_vm,
@@ -23,6 +22,9 @@ from .lifecycle import (
     vm_status,
     wait_for_ip,
     wait_for_ssh,
+)
+from .lifecycle import (
+    provision as provision,
 )
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,

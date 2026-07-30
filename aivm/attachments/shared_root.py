@@ -7,9 +7,10 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..errors import AIVMError
 from ..privilege import path_needs_sudo, path_read_needs_sudo
 from ..runtime import require_ssh_identity, ssh_base_args

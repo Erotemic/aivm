@@ -22,9 +22,6 @@ from loguru import logger as log
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .config_scopes import ResolvedVMContext
-from .legacy.pre_0_6_0.context import (
-    resolve_pre_0_6_0_vm_context,
-)
 from .config_store import (
     AttachmentEntry,
     find_attachments,
@@ -39,6 +36,9 @@ from .detect import detect_ssh_identity
 from .errors import AIVMError, NoVMContextError
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .host_identity import current_host_identity
+from .legacy.pre_0_6_0.context import (
+    resolve_pre_0_6_0_vm_context,
+)
 from .profile_store import save_user_profile
 from .scoped_store import (
     load_scope_profile,

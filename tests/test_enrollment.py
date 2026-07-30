@@ -10,7 +10,6 @@ from typing import Any, Literal
 
 import pytest
 
-from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     PrincipalEntry,
@@ -20,8 +19,6 @@ from aivm.config_store import (
     upsert_principal,
     upsert_vm_with_network,
 )
-from aivm.host_identity import HostIdentity
-from aivm.errors import AIVMError
 from aivm.enrollment import (
     EnrollmentReport,
     bootstrap_identity_paths,
@@ -29,6 +26,8 @@ from aivm.enrollment import (
     normalized_guest_username,
     reconcile_current_principal,
 )
+from aivm.errors import AIVMError
+from aivm.host_identity import HostIdentity
 from aivm.machine_store import ensure_machine_store_layout, machine_store_layout
 from aivm.profile_store import UserProfileStore, save_user_profile
 from aivm.scoped_store import StoreScope, resolve_store_scope, save_scope_store

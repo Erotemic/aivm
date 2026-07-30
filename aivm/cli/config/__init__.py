@@ -18,7 +18,12 @@ from .init import (
     _render_init_default_summary,
 )
 from .lint import ConfigLintCLI, _lint_store_file
-from .migrate import ConfigMigrateModalCLI, ConfigMigratePlanCLI
+from .migrate import (
+    ConfigMigrateModalCLI as ConfigMigrateModalCLI,
+)
+from .migrate import (
+    ConfigMigratePlanCLI as ConfigMigratePlanCLI,
+)
 from .paths import ConfigPathsCLI
 from .show import ConfigFormatCLI, ConfigShowCLI
 
@@ -41,8 +46,8 @@ __all__ = [
     'ConfigEditCLI',
     'ConfigFormatCLI',
     'ConfigLintCLI',
-    'ConfigMigrateModalCLI',
-    'ConfigMigratePlanCLI',
+    # The migrate CLIs stay importable but out of ``__all__``: they are
+    # defined in aivm.legacy and autodoc would document them twice.
     'ConfigModalCLI',
     'ConfigPathsCLI',
     'ConfigShowCLI',

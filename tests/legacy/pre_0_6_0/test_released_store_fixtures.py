@@ -6,7 +6,6 @@ from pathlib import Path
 
 from aivm.config_store import load_store, save_store
 
-
 FIXTURE_ROOT = Path(__file__).parent / 'data' / 'released_v0_5'
 
 

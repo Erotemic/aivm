@@ -9,10 +9,10 @@ from pathlib import Path
 from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...errors import AIVMError
+from ...legacy.pre_0_6_0 import virtiofsd_wrapper
 from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
 from ...xmlutil import parse_domain_xml
-from ...legacy.pre_0_6_0 import virtiofsd_wrapper
 from .models import VirtiofsBinaryDrift, VMUpdateDrift
 
 

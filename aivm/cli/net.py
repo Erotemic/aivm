@@ -20,13 +20,13 @@ from ..errors import AIVMError
 from ..machine_store import current_machine_group_gid, machine_resource_locks
 from ..net import destroy_network, ensure_network, network_status
 from ..operational_scope import announce_network_machine_impact
-from ..services import cfg_path
 from ..scoped_store import (
     load_scope_profile,
     load_scope_store,
     resolve_store_scope,
     save_scope_store,
 )
+from ..services import cfg_path
 from ._common import _BaseCommand
 
 

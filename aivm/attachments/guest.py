@@ -9,9 +9,10 @@ from pathlib import Path, PurePosixPath
 
 from loguru import logger
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
@@ -121,6 +122,7 @@ def _apply_guest_derived_symlinks(
     """Create companion and mirror-home symlinks in the guest after attachment.
 
     Three cases are handled:
+
     1. Companion symlinks: for ``host_src`` itself (when its lexical form
        differs from the resolved guest_dst) and for every additional alias
        supplied via ``extra_lexical_paths`` (typically the persisted

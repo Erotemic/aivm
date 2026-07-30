@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
-from ..legacy.pre_0_6_0 import compatibility_surface
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
     AttachmentEntry,
     CredentialEntry,

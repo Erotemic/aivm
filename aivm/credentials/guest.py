@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import shlex
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandHandle, CommandManager, CommandResult
 from ..config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..config_store import CredentialEntry
 from ..runtime import require_ssh_identity, ssh_base_args
 from .models import GitRepository

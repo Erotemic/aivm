@@ -16,8 +16,8 @@ from ...config_store import (
     require_vm,
     split_fragment_paths,
 )
-from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...errors import AIVMError
+from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...machine_store import machine_store_layout
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
 from ...scoped_store import load_scope_profile, resolve_store_scope

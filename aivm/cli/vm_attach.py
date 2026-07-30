@@ -19,11 +19,15 @@ import kwconf
 from loguru import logger as log
 
 from ..attachments.guest import _ensure_attachment_available_in_guest
+from ..attachments.ownership import (
+    attachment_owner_for_context,
+    require_attachment_mutation_permission,
+)
 from ..attachments.persistent import (
     _cleanup_persistent_host_replay_artifacts,
     _install_persistent_host_bind_replay,
-    _prepare_persistent_attachment_host_and_vm,
     _persistent_attachment_records_for_vm,
+    _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_attachments_in_guest,
     _reconcile_persistent_host_binds,
     _sync_persistent_attachment_manifest_on_host,
@@ -71,10 +75,6 @@ from ..machine_store import (
     MachineResourceLockScope,
     current_machine_group_gid,
     machine_resource_locks,
-)
-from ..attachments.ownership import (
-    attachment_owner_for_context,
-    require_attachment_mutation_permission,
 )
 from ..scoped_store import resolve_store_scope
 from ..services import (

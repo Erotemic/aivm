@@ -11,7 +11,6 @@ from loguru import logger
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..fs_identity import directory_identity
 from ..config_store import (
     Store,
     find_attachment_for_vm,
@@ -24,6 +23,7 @@ from ..config_store import (
 )
 from ..errors import AIVMError, CommandControlError
 from ..firewall import apply_firewall, effective_firewall_table
+from ..fs_identity import directory_identity
 from ..net import ensure_network
 from ..privilege import sudo_allowed
 from ..services import (

@@ -28,6 +28,8 @@ from typing import Any, Callable, Iterable, Literal
 from loguru import logger as log
 
 from ..errors import AIVMError
+from ..legacy.pre_0_6_0 import compatibility_surface
+from ..legacy.pre_0_6_0.paths import store_path
 from .fs_policy import (
     StoreFilesystemPolicy,
     apply_store_file_descriptor_policy,
@@ -37,8 +39,6 @@ from .fs_policy import (
 )
 from .models import Store
 from .parse import parse_store_toml
-from ..legacy.pre_0_6_0 import compatibility_surface
-from ..legacy.pre_0_6_0.paths import store_path
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from loguru import logger as log
 
-from ..config import AgentVMConfig
 from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from ..config import AgentVMConfig
 from ..config_store import (
     AttachmentEntry,
     find_attachment_by_guest_dst,
@@ -17,13 +18,13 @@ from ..config_store import (
     load_store,
 )
 from ..errors import AIVMError
-from .ownership import require_attachment_mutation_permission
 from ..vm.share import (
     AttachmentAccess,
     AttachmentMode,
     ResolvedAttachment,
     _ensure_share_tag_len,
 )
+from .ownership import require_attachment_mutation_permission
 
 
 def logical_absolute_path(raw: str | Path) -> Path:

@@ -32,7 +32,6 @@ from .machine_store import (
 )
 from .profile_store import UserProfileStore
 from .runtime import require_ssh_identity, ssh_base_args
-from .ssh_keys import same_ssh_public_key
 from .scoped_store import (
     StoreScope,
     load_scope_profile,
@@ -40,6 +39,7 @@ from .scoped_store import (
     save_scope_store,
     stable_principal_id,
 )
+from .ssh_keys import same_ssh_public_key
 from .vm.connectivity import get_ip_cached, wait_for_ip
 
 

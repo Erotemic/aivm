@@ -27,7 +27,6 @@ from aivm.config_store import (
 from aivm.credentials.validation import credential_id
 from aivm.enrollment import BootstrapIdentity
 from aivm.guestctl import restricted_bootstrap_authorized_key
-from aivm.machine_store import MachineStoreLayout
 from aivm.legacy.pre_0_6_0.migration import (
     LegacyStoreSource,
     MigrationPlan,
@@ -35,18 +34,20 @@ from aivm.legacy.pre_0_6_0.migration import (
 )
 from aivm.legacy.pre_0_6_0.migration_apply import (
     GuestInstaller,
+    MigrationApplyResult,
     MigrationExecutionError,
+    _guest_install_script,
     apply_migration,
+    install_bootstrap_through_legacy_access,
     latest_migration_id,
     load_migration_journal,
     migration_plan_sha256,
     migration_transaction_dir,
     rebuild_plan_from_journal,
     rollback_migration,
-    _guest_install_script,
-    install_bootstrap_through_legacy_access,
     verify_applied_migration,
 )
+from aivm.machine_store import MachineStoreLayout
 from aivm.profile_store import load_user_profile
 
 
@@ -731,7 +732,7 @@ def test_preexisting_private_target_uses_private_verified_backup(
 
 def _applied_migration_for_rollback(
     tmp_path: Path,
-):
+) -> tuple[MachineStoreLayout, MigrationPlan, MigrationApplyResult]:
     source, _vm_name, _credential_source, _persistent_source = _legacy_source(
         tmp_path
     )

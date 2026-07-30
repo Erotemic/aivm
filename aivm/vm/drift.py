@@ -2,6 +2,7 @@
 
 This module provides a clean separation between drift detection and drift handling.
 Its job is to:
+
   * compute desired VM/share shape from config + attachment intent
   * compute actual VM/share shape from libvirt
   * diff them

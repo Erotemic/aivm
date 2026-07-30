@@ -310,7 +310,13 @@ def test_vm_delete_removes_vm_and_attachments(
         lambda *a, **k: (cfg, cfg_path),
     )
 
-    def fake_delete(scope, delete_cfg, path, *, dry_run):
+    def fake_delete(
+        scope: object,
+        delete_cfg: AgentVMConfig,
+        path: Path,
+        *,
+        dry_run: bool,
+    ) -> None:
         del scope, dry_run
         current = load_store(path)
         from aivm.config_store import remove_vm
@@ -343,7 +349,13 @@ def test_vm_delete_warns_when_network_becomes_unused(
         lambda *a, **k: (cfg, cfg_path),
     )
 
-    def fake_delete(scope, delete_cfg, path, *, dry_run):
+    def fake_delete(
+        scope: object,
+        delete_cfg: AgentVMConfig,
+        path: Path,
+        *,
+        dry_run: bool,
+    ) -> None:
         del scope, dry_run
         current = load_store(path)
         from aivm.config_store import remove_vm

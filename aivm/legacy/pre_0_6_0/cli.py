@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 import kwconf
 
+from ...cli._common import _BaseCommand
 from ...commands import CommandManager
-from .paths import store_path as legacy_store_path
 from ...errors import AIVMError
 from ...machine_store import MachineStoreLayout, machine_store_layout
 from .migration import (
@@ -31,7 +31,7 @@ from .migration_apply import (
     verify_applied_migration,
     verify_migration_runtime,
 )
-from ...cli._common import _BaseCommand
+from .paths import store_path as legacy_store_path
 
 
 def _resolve_sources(

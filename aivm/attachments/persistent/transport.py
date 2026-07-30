@@ -18,6 +18,8 @@ from pathlib import Path
 
 from loguru import logger as log
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ...commands import (
     CommandError,
     CommandManager,
@@ -25,7 +27,6 @@ from ...commands import (
     CommandRole,
 )
 from ...config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ...privilege import path_needs_sudo
 from ...runtime import require_ssh_identity, ssh_base_args
 

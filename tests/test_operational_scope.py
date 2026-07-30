@@ -11,7 +11,6 @@ from aivm.config_store import (
     CredentialEntry,
     PrincipalEntry,
     Store,
-    save_store,
     upsert_attachment,
     upsert_credential,
     upsert_network,

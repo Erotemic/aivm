@@ -17,6 +17,8 @@ from ..attachments.session import (
     _resolve_ip_for_ssh_ops,
 )
 from ..commands import CommandManager
+from ..operational_scope import announce_vm_machine_impact
+from ..scoped_store import resolve_store_scope
 from ..services import (
     cfg_path,
     load_cfg,
@@ -25,8 +27,6 @@ from ..services import (
     record_vm,
     resolve_cfg_for_code,
 )
-from ..operational_scope import announce_vm_machine_impact
-from ..scoped_store import resolve_store_scope
 from ..vm import (
     create_or_start_vm,
     provision,

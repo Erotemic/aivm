@@ -16,20 +16,21 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import TracebackType
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ...commands import CommandManager
 from ...config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ...config_store import (
     find_attachments_for_vm,
     load_store,
 )
-from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...config_store.io import _atomic_write_text
+from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
 from ...machine_store import (
+    MachineResourceLockScope,
     current_machine_group_gid,
     current_machine_store_policy,
     is_machine_store_path,
-    MachineResourceLockScope,
     machine_resource_locks,
     machine_store_layout,
 )

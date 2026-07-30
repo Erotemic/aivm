@@ -9,17 +9,18 @@ from enum import StrEnum
 class RestartKind(StrEnum):
     """How invasive a post-update restart needs to be.
 
-    NONE  - no restart required (e.g. disk grow via qemu-img is live)
-    SOFT  - guest-OS reboot only; qemu process persists
-            (``virsh reboot``). Right for changes the guest reads on its
-            own boot.
-    HARD  - full power cycle; kill qemu and respawn it
-            (``virsh shutdown`` + ``virsh start``). Required when the
-            change is at the qemu/virtiofsd layer rather than inside the
-            guest: CPU and RAM are configured with ``--config`` only and
-            so are picked up on next qemu start, not on guest reboot;
-            virtiofsd's ``<binary path>`` likewise can only change when
-            qemu spawns a fresh virtiofsd.
+    NONE
+        no restart required (e.g. disk grow via qemu-img is live)
+    SOFT
+        guest-OS reboot only; qemu process persists (``virsh reboot``).
+        Right for changes the guest reads on its own boot.
+    HARD
+        full power cycle; kill qemu and respawn it (``virsh shutdown`` +
+        ``virsh start``). Required when the change is at the
+        qemu/virtiofsd layer rather than inside the guest: CPU and RAM are
+        configured with ``--config`` only and so are picked up on next qemu
+        start, not on guest reboot; virtiofsd's ``<binary path>`` likewise
+        can only change when qemu spawns a fresh virtiofsd.
     """
 
     NONE = 'none'

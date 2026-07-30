@@ -20,9 +20,10 @@ from xml.sax.saxutils import quoteattr
 
 from loguru import logger
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from ..errors import AIVMError
 from ..modes import PrivilegeMode
 from ..privilege import virsh_needs_sudo

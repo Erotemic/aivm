@@ -191,19 +191,17 @@ napoleon_use_ivar = True
 
 autodoc_inherit_docstrings = False
 
-# Hack for geowatch, todo configure
-autosummary_mock_imports = [
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_24_and_lt_4_xx',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_22_and_lt_4_24',
-    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_21_and_lt_4_22',
-    'geowatch.tasks.fusion.datamodules.temporal_sampling.affinity_sampling',
-    'geowatch.tasks.depth_pcd.model',
-    'geowatch.tasks.cold.export_change_map',
-]
-
 autodoc_default_options = {  # Document callable classes
     'special-members': '__call__'
 }
+
+# Single-backtick references in docstrings (the default role) resolve through
+# the python domain's fuzzy suffix matching, so a plain `list` matches every
+# CLI ``.list`` method and warns. The docs build treats warnings as errors;
+# these ambiguities are cosmetic (the link may pick a sibling target), so
+# suppress exactly this category rather than annotating hundreds of
+# docstrings with domain-qualified roles.
+suppress_warnings = ['ref.python']
 
 autodoc_member_order = 'bysource'
 autoclass_content = 'both'

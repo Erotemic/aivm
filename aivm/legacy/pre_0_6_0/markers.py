@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-
 T = TypeVar('T')
 SUPPORT_BOUNDARY = 'pre_0_6_0'
 

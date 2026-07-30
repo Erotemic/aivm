@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -22,13 +22,13 @@ from aivm.config_store import (
     upsert_vm_with_network,
 )
 from aivm.credentials.validation import credential_id
-from aivm.machine_store import MachineStoreLayout
 from aivm.legacy.pre_0_6_0.migration import (
     LegacyStoreSource,
     RuntimeInventory,
     build_migration_plan,
     parse_legacy_source_spec,
 )
+from aivm.machine_store import MachineStoreLayout
 
 
 def _as_object_dict(value: object) -> dict[str, object]:
@@ -120,7 +120,9 @@ def _legacy_store(
     return source, store_path
 
 
-def _runtime_for(vm_name: str = 'aivm-2404-shared'):
+def _runtime_for(
+    vm_name: str = 'aivm-2404-shared',
+) -> Callable[..., RuntimeInventory]:
     def collect(**kwargs: object) -> RuntimeInventory:
         del kwargs
         return RuntimeInventory(

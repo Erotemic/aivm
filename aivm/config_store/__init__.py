@@ -1,5 +1,6 @@
 """Implementation modules for AIVM's desired-state config store."""
 
+from .fs_policy import StoreFilesystemPolicy
 from .io import (
     ConcurrentStoreUpdateError,
     ConfigSource,
@@ -11,11 +12,10 @@ from .io import (
     render_split_fragments,
     save_store,
     save_store_split,
-    update_store,
     split_fragment_paths,
     split_source_paths,
+    update_store,
 )
-from .fs_policy import StoreFilesystemPolicy
 from .models import (
     ATTACHMENT_SYSTEM_OWNER,
     AttachmentEntry,
@@ -51,9 +51,9 @@ from .resolve import (
     find_attachment,
     find_attachment_by_guest_dst,
     find_attachment_for_vm,
-    find_attachments_for_vm_path,
     find_attachments,
     find_attachments_for_vm,
+    find_attachments_for_vm_path,
     find_credential,
     find_credentials_for_vm,
     find_network,

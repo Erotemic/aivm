@@ -19,7 +19,6 @@ from aivm.cli.vm_connect import (
     _remote_tunnel_name,
     _vscode_can_open_locally,
 )
-
 from tests.helpers import resolved_test_context
 
 

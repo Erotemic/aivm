@@ -12,11 +12,12 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from .access_control import TRUST_MODE, access_ownership_summary
 from .attachments.ownership import attachment_owner_label
 from .commands import CommandManager
 from .config import AgentVMConfig
-from aivm.config_scopes import guest_transport_from_effective_cfg
 from .config_store import (
     AttachmentEntry,
     find_principals_for_vm,

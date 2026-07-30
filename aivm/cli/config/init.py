@@ -35,16 +35,15 @@ from ...detect import auto_defaults
 from ...enrollment import normalized_guest_username, reconcile_current_principal
 from ...errors import AIVMError, CommandControlError
 from ...host_identity import current_host_identity
-from ...ssh_keys import same_ssh_public_key
-from ...resource_checks import vm_resource_warning_lines
 from ...profile_store import save_user_profile
+from ...resource_checks import vm_resource_warning_lines
 from ...scoped_store import (
+    StoreScope,
     ensure_machine_scope_ready,
     load_scope_profile,
     load_scope_store,
     profile_from_effective_cfg,
     resolve_store_scope,
-    StoreScope,
     save_scope_store,
 )
 from ...services import (
@@ -52,6 +51,7 @@ from ...services import (
     hydrate_ssh_identity_defaults,
     maybe_offer_create_ssh_identity,
 )
+from ...ssh_keys import same_ssh_public_key
 from ...vm.domain import domain_is_defined
 from ...vm.guest_tools import GUEST_TOOL_REGISTRY
 from .._common import _BaseCommand

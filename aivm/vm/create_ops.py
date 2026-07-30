@@ -38,7 +38,6 @@ from ..config_review import (
 from ..config_store import (
     find_network,
     find_vm,
-    load_store,
     materialize_vm_cfg,
     save_store,
     upsert_network,
@@ -48,11 +47,11 @@ from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
+from ..profile_store import UserProfileStore
 from ..resource_checks import (
     vm_resource_impossible_lines,
     vm_resource_warning_lines,
 )
-from ..services import maybe_install_missing_host_deps
 from ..scoped_store import (
     StoreScope,
     load_scope_profile,
@@ -60,7 +59,7 @@ from ..scoped_store import (
     persist_creator_vm,
     resolve_store_scope,
 )
-from ..profile_store import UserProfileStore
+from ..services import maybe_install_missing_host_deps
 from ..vm import create_or_start_vm
 
 if TYPE_CHECKING:

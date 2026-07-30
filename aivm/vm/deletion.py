@@ -724,8 +724,8 @@ def delete_managed_vm(
             # Refuse unmanaged or symlink-escaped storage before the first
             # destructive phase. Libvirt's --remove-all-storage must never be
             # allowed to delete a file outside the VM's AIVM-owned tree.
-            for storage_path in journal.storage_paths:
-                _require_managed_storage_path(cfg, Path(storage_path))
+            for storage_text in journal.storage_paths:
+                _require_managed_storage_path(cfg, Path(storage_text))
 
             if not journal.completed('attachments-cleaned'):
                 _cleanup_attachment_artifacts(scope, cfg, cfg_path, reg)
