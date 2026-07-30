@@ -51,6 +51,34 @@ jobs:
         python -m pip install ty
         pip install --prefer-binary -e ".[tests]"
         ty check ./aivm
+  docs_job:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v6.0.2
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v6.2.0
+      with:
+        python-version: '3.13'
+    - name: Install documentation dependencies
+      run: |-
+        python -m pip install pip -U
+        python -m pip install -e ".[docs]"
+    - name: Build Sphinx HTML
+      run: make -C docs html SPHINXOPTS="--keep-going"
+    - name: Verify documentation entry points
+      run: |-
+        test -f docs/build/html/index.html
+        test -f docs/build/html/api.html
+        test -f docs/build/html/auto/modules.html
+        test -f docs/build/html/auto/aivm.html
+        test -f docs/build/html/architecture/index.html
+        test -f docs/build/html/architecture/components.html
+        test -f docs/build/html/architecture/flows.html
+        test -f docs/build/html/architecture/state-ownership.html
+        grep -q mermaid docs/build/html/architecture/components.html
+
   build_and_test_sdist:
     ##
     # Build the pure python package from source and test it in the

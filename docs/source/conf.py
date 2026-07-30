@@ -177,6 +177,7 @@ extensions = [
     # 'sphinxcontrib.redirects',
     'sphinxcontrib.jquery',  # Fix for search
     'sphinx_reredirects',
+    'sphinxcontrib.mermaid',
 ]
 
 todo_include_todos = True

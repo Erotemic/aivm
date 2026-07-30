@@ -55,9 +55,14 @@ optional-dependencies.all = [
   "aivm[tests]",
 ]
 optional-dependencies.docs = [
+  "PyYAML>=6.0.2",
+  "myst-parser>=0.18.0",
   "sphinx>=5.0.1",
   "sphinx-autobuild>=2021.3.14",
-  "sphinx-rtd-theme>=1.0.0",
+  "sphinx-reredirects>=0.0.1",
+  "sphinx-rtd-theme>=1.2.1",
+  "sphinxcontrib-jquery>=4.1",
+  "sphinxcontrib-mermaid>=1.0.0",
 ]
 optional-dependencies.optional = [
   "pygments>=2.19.2",
