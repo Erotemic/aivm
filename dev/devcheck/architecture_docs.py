@@ -421,9 +421,18 @@ def _subsystem_labels(config: dict[str, object]) -> dict[str, str]:
 
 
 def _semantic_python_bytes(path: Path) -> bytes:
-    """Return a formatting-insensitive representation of Python source."""
+    """Return a formatting-insensitive representation of Python source.
+
+    Unparse rather than ``ast.dump``: the digest has to be reproducible on
+    every interpreter that runs the check, and a dump exposes node fields, so
+    it shifts whenever the *grammar* grows -- Python 3.15 added ``is_lazy`` to
+    ``Import`` (PEP 810) and stopped printing the defaulted ``ctx=Load()``,
+    which changed the digest of 138 of 139 modules and failed CI on the 3.15
+    prerelease alone. Unparsed source only shifts when the *code* itself uses
+    a new feature, which is the change we actually want to detect.
+    """
     tree = ast.parse(path.read_text(encoding='utf-8'))
-    return ast.dump(tree, include_attributes=False).encode('utf-8')
+    return ast.unparse(tree).encode('utf-8')
 
 
 def _generation_digest(
