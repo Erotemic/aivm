@@ -38,6 +38,38 @@ SSH into mapped directory
    aivm vm ssh .
    aivm vm ssh_config
 
+Rename a VM
+-----------
+
+.. code-block:: bash
+
+   aivm vm down --vm old-name          # renaming needs a shut-off VM
+   aivm vm rename new-name --vm old-name
+   aivm vm rename new-name --dry_run   # preview every move first
+
+The VM name is an identity, not a label: it names the libvirt domain, the
+disk file, the AIVM-owned storage tree, the machine-state and bootstrap
+directories, and the ``vm_name`` on every attachment, credential, and
+principal record. ``aivm vm rename`` moves all of them together, then
+rewrites the store last, so a failure part-way is rolled back and leaves the
+VM under its original name.
+
+This is why renaming is not a ``aivm vm update`` drift dimension: ``update``
+locates its subject *by* name, so a changed name leaves it nothing to compare
+against.
+
+The rename refuses rather than guessing when it cannot do the job safely --
+a running VM, a name already taken by another VM or libvirt domain, live bind
+mounts under the storage tree, or installed root-owned persistent host-bind
+replay artifacts (whose manifest filename and systemd unit both embed the VM
+name). Detach persistent attachments first, rename, then reattach.
+
+The guest's *own* hostname is not changed. AIVM only sets it through
+cloud-init's ``local-hostname`` on first boot and does not manage it
+afterwards, so update it inside the guest if you want it to match::
+
+   aivm vm ssh --vm new-name -- sudo hostnamectl set-hostname new-name
+
 Attach folders
 --------------
 

@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: c7761e29884e5288 -->
+<!-- generation schema: 1; input digest: aede1c9d8b5a554d -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -30,7 +30,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py:12` |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py:12` |
 
-## Canonical `AgentVMConfig` references (238)
+## Canonical `AgentVMConfig` references (243)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -255,6 +255,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.paths` | `aivm/vm/paths.py:26` |
 | `aivm.vm.paths` | `aivm/vm/paths.py:36` |
 | `aivm.vm.provision` | `aivm/vm/provision.py:20` |
+| `aivm.vm.rename` | `aivm/vm/rename.py:68` |
+| `aivm.vm.rename` | `aivm/vm/rename.py:96` |
+| `aivm.vm.rename` | `aivm/vm/rename.py:126` |
+| `aivm.vm.rename` | `aivm/vm/rename.py:260` |
+| `aivm.vm.rename` | `aivm/vm/rename.py:378` |
 | `aivm.vm.share` | `aivm/vm/share.py:190` |
 | `aivm.vm.share` | `aivm/vm/share.py:258` |
 | `aivm.vm.share` | `aivm/vm/share.py:281` |
@@ -276,7 +281,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:20` |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:71` |
 
-## Path-based `StoreScope` reconstruction sites (16)
+## Path-based `StoreScope` reconstruction sites (17)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -291,8 +296,9 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:204` |
 | `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py:778` |
 | `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:66` |
-| `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:215` |
-| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:226` |
+| `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:216` |
+| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:227` |
+| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:330` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:352` |

@@ -41,6 +41,7 @@ from ..vm.guest_tools import (
     GUEST_TOOL_REGISTRY,
     UnknownGuestToolError,
 )
+from ..vm.rename import rename_managed_vm, validate_vm_name
 from ._common import _BaseCommand
 
 
@@ -309,3 +310,40 @@ class VMListCLI(_BaseCommand):
         return ListCLI.main(
             argv=False, section=args.section, config=args.config
         )
+
+
+class VMRenameCLI(_BaseCommand):
+    """Rename a managed VM and every AIVM-owned artifact naming it."""
+
+    to: str = kwconf.Value(
+        '',
+        position=1,
+        help='New VM name (positional).',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
+        scope = resolve_store_scope(str(cfg_path))
+        new_name = validate_vm_name(str(args.to or ''))
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='rename')
+        mgr = CommandManager.current()
+        with mgr.approved_action(
+            purpose=(
+                f'Rename VM {cfg.vm.name} to {new_name}: move its storage '
+                'tree, machine state, and bootstrap identity, rename the '
+                'libvirt domain and repoint its storage paths, then rewrite '
+                'every store record naming it.'
+            )
+        ):
+            rename_managed_vm(
+                scope,
+                cfg,
+                cfg_path,
+                new_name,
+                dry_run=bool(args.dry_run),
+            )
+        return 0

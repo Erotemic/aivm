@@ -42,7 +42,7 @@ class _BaseCommand(kwconf.Config):
         help=(
             'Explicit config-store path. Without this option, AIVM uses an '
             'existing legacy user store or the shared machine store under '
-            '/var/lib/aivm.'
+            '/var/lib/aivm/machine.'
         ),
     )
     verbose: int = kwconf.Value(
