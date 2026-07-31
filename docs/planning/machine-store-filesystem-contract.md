@@ -9,21 +9,36 @@ serve fresh machine/profile installations.
 
 ## Layout
 
-The default root is `/var/lib/aivm`. Tests and advanced development setups may
-replace it with `AIVM_MACHINE_STORE_ROOT`.
+The default root is `/var/lib/aivm/machine`. Tests and advanced development
+setups may replace it with `AIVM_MACHINE_STORE_ROOT`.
+
+It is deliberately a subdirectory rather than `/var/lib/aivm` itself. The
+store root is group-writable, while `/var/lib/aivm` is the parent of
+`persistent-host`, the persistent-attachment replay state directory. The root
+replay service consumes manifests only from a chain no non-root account can
+write, so `_approved_state_directories_are_safe` rejects any group- or
+world-writable bit on that parent and rewrites it back to `root:root 0755`.
+Pointing the store at the same directory made the two subsystems overwrite
+each other's modes on every operation, and would have let a store-group
+member replace a directory a root service reads. `/var/lib/aivm` therefore
+stays `root:root 0755`, and setup prepares it separately -- `install -d`
+applies its mode to every directory it creates, so one call for both would
+hand the group write access to the parent.
 
 ```text
-/var/lib/aivm/
-├── config.toml
-├── defaults.toml
-├── networks.toml
-├── vms/
-├── state/
-├── bootstrap/
-└── locks/
-    ├── store.lock
-    ├── networks/
-    └── vms/
+/var/lib/aivm/                    # root:root 0755
+├── persistent-host/              # root:root, replay state (pre-0.6)
+└── machine/                      # root:<store group> 2770
+    ├── config.toml
+    ├── defaults.toml
+    ├── networks.toml
+    ├── vms/
+    ├── state/
+    ├── bootstrap/
+    └── locks/
+        ├── store.lock
+        ├── networks/
+        └── vms/
 ```
 
 The split config fragments retain their existing literal-concatenation

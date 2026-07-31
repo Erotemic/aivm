@@ -25,7 +25,17 @@ from .errors import AIVMError
 from .host_identity import current_host_identity
 
 MACHINE_STORE_ROOT_ENV = 'AIVM_MACHINE_STORE_ROOT'
-DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm')
+
+# A subdirectory, not /var/lib/aivm itself. The store root is group-writable
+# (MACHINE_DIRECTORY_MODE below), while /var/lib/aivm is the parent of the
+# persistent-attachment replay state directory, which the root replay service
+# will only consume from a chain no non-root account can write --
+# ``_approved_state_directories_are_safe`` rejects any group- or
+# world-writable bit on it and rewrites it back to root:root 0755. Pointing
+# the store at that same directory makes the two subsystems overwrite each
+# other's modes on every operation, and would let a store-group member
+# replace the directory a root service reads.
+DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm/machine')
 
 # Reuse the group every AIVM user already needs rather than inventing a second
 # one. Reaching qemu:///system without sudo requires `libvirt` membership, so

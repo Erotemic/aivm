@@ -12,8 +12,8 @@ Path A: One-command project entry (recommended)
 
 Behavior:
 
-* Uses the shared machine store under ``/var/lib/aivm`` and the caller's
-  private XDG profile.
+* Uses the shared machine store under ``/var/lib/aivm/machine`` and the
+  caller's private XDG profile.
 * If VM context is missing, ``aivm`` can bootstrap required config/VM steps.
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what

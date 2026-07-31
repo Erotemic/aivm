@@ -108,7 +108,7 @@ offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
    aivm status --sudo   # optional deeper privileged checks
 
 ``aivm code .`` auto-selects/bootstraps VM context from the shared machine
-store (normally ``/var/lib/aivm``) plus the caller's private XDG profile,
+store (normally ``/var/lib/aivm/machine``) plus the caller's private XDG profile,
 attaches the current folder if needed, and opens VS Code.
 
 During setup and reconcile flows, subprocess logging is now organized around

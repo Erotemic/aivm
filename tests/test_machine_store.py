@@ -26,6 +26,7 @@ from aivm.config_store import (
 )
 from aivm.machine_store import (
     BOOTSTRAP_DIRECTORY_MODE,
+    DEFAULT_MACHINE_STORE_ROOT,
     MACHINE_DIRECTORY_MODE,
     MACHINE_FILE_MODE,
     MachineStoreGroupError,
@@ -380,3 +381,27 @@ def test_interrupted_split_recovery_preserves_unrelated_vm_fragment(
     )
     assert (layout.root / 'vms' / 'vm-b.toml').is_file()
     assert _mode(layout.root / 'vms' / 'vm-a.toml') == MACHINE_FILE_MODE
+
+
+def test_store_root_stays_clear_of_the_persistent_replay_state_chain() -> None:
+    """The group-writable store must not sit on the root replay directory.
+
+    ``_approved_state_directories_are_safe`` refuses any group- or
+    world-writable bit on the persistent-host state directory and its parent,
+    and rewrites them back to root:root 0755 when it finds one. A store root
+    that is either of those paths -- or an ancestor of them -- makes the two
+    subsystems fight over the same mode on every operation, and lets a
+    store-group member replace a directory a root service reads.
+    """
+    from aivm.persistent_replay import (
+        PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR,
+    )
+
+    replay_state = Path(PERSISTENT_ATTACHMENT_HOST_APPROVED_STATE_DIR)
+    root = DEFAULT_MACHINE_STORE_ROOT
+    protected = (replay_state, replay_state.parent)
+
+    assert MACHINE_DIRECTORY_MODE & 0o022, 'store root is group-writable'
+    for path in protected:
+        assert root != path
+        assert root not in path.parents

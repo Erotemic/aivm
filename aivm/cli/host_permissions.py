@@ -759,6 +759,10 @@ def _prepare_machine_store_access(
         if not listed and owns_group:
             print(f'DRYRUN: sudo usermod -aG {group_name} {user}')
         print(
+            f'DRYRUN: sudo install -d -o root -g root -m 0755 '
+            f'{layout.root.parent}'
+        )
+        print(
             f'DRYRUN: sudo install -d -o root -g {group_name} '
             f'-m 2770 {layout.root}'
         )
@@ -814,6 +818,29 @@ def _prepare_machine_store_access(
             ),
             approval_scope='host-permissions-setup-aivm-root',
         ):
+            # The parent is created first and separately: `install -d` applies
+            # its mode to every directory it creates, so folding these into
+            # one call would hand the group write access to the parent too --
+            # which is the chain the root persistent-replay service requires
+            # nobody but root can write.
+            mgr.submit(
+                [
+                    'install',
+                    '-d',
+                    '-o',
+                    'root',
+                    '-g',
+                    'root',
+                    '-m',
+                    '0755',
+                    str(layout.root.parent),
+                ],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Prepare root-owned {layout.root.parent}',
+            )
             mgr.submit(
                 [
                     'install',

@@ -595,7 +595,13 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert 'sudo install -d -o root -g libvirt -m 2770 /var/lib/aivm' in out
+    # The parent is prepared separately and stays root-owned and non-group-
+    # writable: it is the chain the root persistent-replay service reads from.
+    assert 'sudo install -d -o root -g root -m 0755 /var/lib/aivm\n' in out
+    assert (
+        'sudo install -d -o root -g libvirt -m 2770 /var/lib/aivm/machine\n'
+        in out
+    )
     assert 'groupadd' not in out
     assert 'usermod' not in out
 
@@ -633,7 +639,8 @@ def test_setup_dry_run_creates_an_overridden_machine_group(
     assert 'sudo groupadd --system aivm-admins' in out
     assert 'sudo usermod -aG aivm-admins' in out
     assert (
-        'sudo install -d -o root -g aivm-admins -m 2770 /var/lib/aivm' in out
+        'sudo install -d -o root -g aivm-admins -m 2770 /var/lib/aivm/machine\n'
+        in out
     )
 
 
