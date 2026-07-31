@@ -104,3 +104,7 @@ wheelhouse
 dev/incidents/
 *.log
 aivm-source-*.tar.gz
+
+# >>> llm_resource_tally local state (managed) >>>
+/.llm_resource_tally/local/
+# <<< llm_resource_tally local state (managed) <<<

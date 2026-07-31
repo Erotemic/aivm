@@ -1,0 +1,3 @@
+# append-only ledger shards: keep rows from both sides on merge/rebase;
+# readers de-duplicate by row identity.
+ledger/*.jsonl merge=union
