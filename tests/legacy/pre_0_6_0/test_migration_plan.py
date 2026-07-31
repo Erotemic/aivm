@@ -402,3 +402,38 @@ def test_frozen_monolith_and_split_produce_same_migration_records(
     assert {item.code for item in plans[0].conflicts} == {
         item.code for item in plans[1].conflicts
     }
+
+
+def test_missing_trusted_host_group_blocks_the_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plan must not report READY when apply cannot take its first step.
+
+    Apply resolves the trusted group before any lock or write, so a host
+    without it fails immediately. Drop the sandbox root the suite sets so the
+    real group requirement applies, and deny the lookup the way a host that
+    never ran ``aivm config init`` does.
+    """
+    import grp
+
+    source, _ = _legacy_store(tmp_path, host_user='alice')
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+
+    def _no_such_group(name: str) -> object:
+        raise KeyError(name)
+
+    monkeypatch.setattr(grp, 'getgrnam', _no_such_group)
+
+    plan = build_migration_plan(
+        [source],
+        layout=MachineStoreLayout.from_root(tmp_path / 'machine'),
+        check_runtime=False,
+    )
+
+    assert plan.blocked
+    issue = next(
+        item for item in plan.conflicts if item.code == 'machine-group-missing'
+    )
+    assert 'groupadd --system aivm' in issue.message
+    assert 'Status: BLOCKED' in plan.render_text()

@@ -44,7 +44,12 @@ from ...credentials.validation import (
     validate_repository_identity,
 )
 from ...fs_identity import directory_identity
-from ...machine_store import MachineStoreLayout, machine_store_layout
+from ...machine_store import (
+    MachineStoreGroupError,
+    MachineStoreLayout,
+    current_machine_group_gid,
+    machine_store_layout,
+)
 from ...privilege import virsh_needs_sudo
 from ...profile_store import UserProfileStore
 from ...runtime import virsh_cmd
@@ -857,6 +862,17 @@ def build_migration_plan(
     credential_material_moves: list[dict[str, object]] = []
     loaded_sources: list[tuple[LegacyStoreSource, Store]] = []
     legacy_vm_cfgs: dict[str, AgentVMConfig] = {}
+
+    # Ask the question apply will ask, by calling what apply calls. Apply
+    # resolves the trusted group before it takes a lock or writes anything, so
+    # a missing group aborts it on the first step; a plan that did not check
+    # would report READY and hand the user a command that cannot start.
+    try:
+        current_machine_group_gid()
+    except MachineStoreGroupError as ex:
+        conflicts.append(
+            MigrationIssue(code='machine-group-missing', message=str(ex))
+        )
 
     if not sources:
         conflicts.append(
