@@ -99,10 +99,15 @@ def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:
     try:
         return int(grp.getgrnam(group_name).gr_gid)
     except KeyError as ex:
+        # `aivm config init` writes configuration and never touches host
+        # groups, so naming it here sends the caller to a command that cannot
+        # clear the error. Group creation lives in host permissions setup.
         raise MachineStoreGroupError(
             f'Required host group {group_name!r} does not exist. '
-            'Run `aivm config init` to set up this machine, or create the '
-            f'group yourself: sudo groupadd --system {group_name}'
+            'Run `aivm host permissions setup` to prepare this machine, or '
+            f'create the group yourself: sudo groupadd --system {group_name} '
+            f'&& sudo usermod -aG {group_name} "$USER". Group membership '
+            'applies at the next login.'
         ) from ex
 
 

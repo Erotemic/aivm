@@ -436,4 +436,8 @@ def test_missing_trusted_host_group_blocks_the_plan(
         item for item in plan.conflicts if item.code == 'machine-group-missing'
     )
     assert 'groupadd --system aivm' in issue.message
+    # The remediation has to name a command that creates the group; `config
+    # init` only writes configuration and would leave the caller stuck.
+    assert 'aivm host permissions setup' in issue.message
+    assert 'config init' not in issue.message
     assert 'Status: BLOCKED' in plan.render_text()
