@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 72563be221f09cbe -->
+<!-- generation schema: 1; input digest: 6c291a6026460782 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -46,13 +46,13 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:405` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:501` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:539` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:32` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:168` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:224` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:279` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:332` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:351` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:373` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:33` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:228` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:284` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:339` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:392` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:411` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:433` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:65` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:79` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:90` |
