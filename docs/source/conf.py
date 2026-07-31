@@ -177,7 +177,6 @@ extensions = [
     # 'sphinxcontrib.redirects',
     'sphinxcontrib.jquery',  # Fix for search
     'sphinx_reredirects',
-    'sphinxcontrib.mermaid',
 ]
 
 todo_include_todos = True
@@ -191,17 +190,19 @@ napoleon_use_ivar = True
 
 autodoc_inherit_docstrings = False
 
+# Hack for geowatch, todo configure
+autosummary_mock_imports = [
+    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_24_and_lt_4_xx',
+    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_22_and_lt_4_24',
+    'geowatch.utils.lightning_ext._jsonargparse_ext_ge_4_21_and_lt_4_22',
+    'geowatch.tasks.fusion.datamodules.temporal_sampling.affinity_sampling',
+    'geowatch.tasks.depth_pcd.model',
+    'geowatch.tasks.cold.export_change_map',
+]
+
 autodoc_default_options = {  # Document callable classes
     'special-members': '__call__'
 }
-
-# Single-backtick references in docstrings (the default role) resolve through
-# the python domain's fuzzy suffix matching, so a plain `list` matches every
-# CLI ``.list`` method and warns. The docs build treats warnings as errors;
-# these ambiguities are cosmetic (the link may pick a sibling target), so
-# suppress exactly this category rather than annotating hundreds of
-# docstrings with domain-qualified roles.
-suppress_warnings = ['ref.python']
 
 autodoc_member_order = 'bysource'
 autoclass_content = 'both'
@@ -235,6 +236,7 @@ intersphinx_mapping = {
     'xdoctest': ('https://xdoctest.readthedocs.io/en/latest/', None),
     'networkx': ('https://networkx.org/documentation/stable/', None),
     'scriptconfig': ('https://scriptconfig.readthedocs.io/en/latest/', None),
+    'kwconf': ('https://kwconf.readthedocs.io/en/latest/', None),
     'rich': ('https://rich.readthedocs.io/en/latest/', None),
     'numpy': ('https://numpy.org/doc/stable/', None),
     'sympy': ('https://docs.sympy.org/latest/', None),
@@ -410,6 +412,16 @@ from sphinx.domains.python import PythonDomain  # NOQA
 
 # from sphinx.application import Sphinx  # NOQA
 from typing import Any, List  # NOQA
+
+
+# HACK TO PREVENT EXCESSIVE TIME.
+# TODO: FIXME FOR REAL
+MAX_TIME_MINUTES = None
+if MAX_TIME_MINUTES:
+    import ubelt  # NOQA
+
+    TIMER = ubelt.Timer()
+    TIMER.tic()
 
 
 class PatchedPythonDomain(PythonDomain):
@@ -663,6 +675,9 @@ class GoogleStyleDocstringProcessor:
         #     xdev.embed()
 
         render_doc_images = 0
+
+        if MAX_TIME_MINUTES and TIMER.toc() > (60 * MAX_TIME_MINUTES):
+            render_doc_images = False  # FIXME too slow on RTD
 
         if render_doc_images:
             # DEVELOPING
