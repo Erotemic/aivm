@@ -1096,3 +1096,38 @@ def test_default_guest_installer_uses_existing_creator_ssh(
     assert 'legacy-agent@192.0.2.50' in cmd
     assert cmd[-4:] == ['sudo', '-n', 'bash', '-s']
     assert '/usr/local/sbin/aivm-guestctl' in str(captured['input_text'])
+
+
+def test_tree_digest_covers_a_file_the_caller_may_not_read(
+    tmp_path: Path,
+) -> None:
+    """Apply must digest the bootstrap directory without reading the key.
+
+    The bootstrap private key is root-owned 0600 by the machine-store
+    contract -- trusted-group members never read it directly -- while apply
+    runs unprivileged. Capturing outputs must therefore survive an unreadable
+    member, and must still notice when it changes.
+    """
+    from aivm.legacy.pre_0_6_0.migration_apply import _tree_sha256
+
+    tree = tmp_path / 'bootstrap'
+    tree.mkdir()
+    (tree / 'id_ed25519.pub').write_text('ssh-ed25519 AAAA pub\n')
+    private = tree / 'id_ed25519'
+    private.write_text('PRIVATE-A\n')
+    os.chmod(private, 0o000)
+
+    first = _tree_sha256(tree)
+
+    # A different length behind the same unreadable mode still moves it.
+    os.chmod(private, 0o600)
+    private.write_text('PRIVATE-A-LONGER\n')
+    os.chmod(private, 0o000)
+    assert _tree_sha256(tree) != first
+
+    # Becoming readable must not silently reuse the unreadable marker.
+    os.chmod(private, 0o600)
+    private.write_text('PRIVATE-A\n')
+    readable = _tree_sha256(tree)
+    os.chmod(private, 0o000)
+    assert _tree_sha256(tree) != readable

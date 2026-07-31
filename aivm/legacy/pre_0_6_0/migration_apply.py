@@ -415,6 +415,24 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _content_token(path: Path) -> bytes:
+    """Return the digest input for one regular file's contents.
+
+    A migration output can be unreadable to the caller by design rather than
+    by accident: the bootstrap private key is root-owned ``0600`` because the
+    machine-store contract says trusted-group members never read it directly,
+    and apply runs unprivileged. Substituting a size-tagged marker keeps the
+    tree digest computable while still moving when that file appears,
+    disappears, or changes length -- and because the marker differs from any
+    content hash, a file that silently becomes unreadable changes the digest
+    instead of quietly keeping its old one.
+    """
+    try:
+        return _file_sha256(path).encode('ascii')
+    except PermissionError:
+        return b'unreadable:' + str(path.stat().st_size).encode('ascii')
+
+
 def _tree_sha256(path: Path) -> str:
     if path.is_file():
         info = path.stat()
@@ -422,7 +440,7 @@ def _tree_sha256(path: Path) -> str:
         digest.update(str(info.st_mode & 0o7777).encode('ascii') + b'\0')
         digest.update(str(info.st_uid).encode('ascii') + b'\0')
         digest.update(str(info.st_gid).encode('ascii') + b'\0')
-        digest.update(_file_sha256(path).encode('ascii'))
+        digest.update(_content_token(path))
         return digest.hexdigest()
     digest = hashlib.sha256()
     root_info = path.stat()
@@ -441,7 +459,7 @@ def _tree_sha256(path: Path) -> str:
         digest.update(str(info.st_uid).encode('ascii') + b'\0')
         digest.update(str(info.st_gid).encode('ascii') + b'\0')
         if item.is_file():
-            digest.update(_file_sha256(item).encode('ascii'))
+            digest.update(_content_token(item))
     return digest.hexdigest()
 
 
