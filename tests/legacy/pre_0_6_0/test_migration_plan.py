@@ -412,8 +412,8 @@ def test_missing_trusted_host_group_blocks_the_plan(
 
     Apply resolves the trusted group before any lock or write, so a host
     without it fails immediately. Drop the sandbox root the suite sets so the
-    real group requirement applies, and deny the lookup the way a host that
-    never ran ``aivm config init`` does.
+    real group requirement applies, and deny the lookup the way a host with no
+    libvirt installation does.
     """
     import grp
 
@@ -435,9 +435,11 @@ def test_missing_trusted_host_group_blocks_the_plan(
     issue = next(
         item for item in plan.conflicts if item.code == 'machine-group-missing'
     )
-    assert 'groupadd --system aivm' in issue.message
-    # The remediation has to name a command that creates the group; `config
-    # init` only writes configuration and would leave the caller stuck.
+    # The default group ships with libvirt, so the remediation is to install
+    # libvirt -- never to forge a same-named group that grants no libvirt
+    # access. `config init` is wrong too: it never touches host groups.
+    assert 'libvirt' in issue.message
+    assert 'groupadd' not in issue.message
     assert 'aivm host permissions setup' in issue.message
     assert 'config init' not in issue.message
     assert 'Status: BLOCKED' in plan.render_text()

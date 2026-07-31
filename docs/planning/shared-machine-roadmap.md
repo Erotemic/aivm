@@ -179,8 +179,8 @@ before automatic enrollment of a second user.
   persisted principal into `ResolvedVMContext`.
 - [x] Expose the profile through `aivm config paths` and `aivm config edit
   profile`.
-- [x] Extend `aivm host permissions setup` to create/diagnose the trusted
-  `aivm` group and `/var/lib/aivm` root.
+- [x] Extend `aivm host permissions setup` to diagnose the trusted store group
+  (the libvirt group by default) and prepare the `/var/lib/aivm` root.
 
 #### Stage 4: creator principal persistence
 
@@ -502,7 +502,7 @@ removal boundary and retirement procedure are recorded in
   the machine schema.
 - Define how credential records reference principals while private material
   remains in user-owned storage.
-- Add a host `aivm` group setup/check path and diagnostics.
+- Add a trusted store-group setup/check path and diagnostics.
 - Make machine directories setgid and define exact owner/group/modes.
 - Update atomic writes so replacement preserves intended group ownership and
   modes.

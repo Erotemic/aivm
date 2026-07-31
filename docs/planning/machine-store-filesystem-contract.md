@@ -32,7 +32,23 @@ reuses this physical layout and transaction machinery.
 
 ## Ownership and modes
 
-The production installation is expected to be owned by `root:aivm`.
+The production installation is expected to be owned by `root:libvirt`.
+
+The trusted group is the libvirt group rather than a dedicated `aivm` group.
+Reaching `qemu:///system` without sudo already requires libvirt membership, so
+a separate group gated a strict subset of what its members could do, while
+costing an extra `groupadd`, `usermod`, and re-login -- and both "removing
+`libvirt` group root-equivalence" and hostile-user isolation are explicit
+non-goals of this release. Reusing it also removes the migration a host would
+otherwise face when its second user arrives: that user needs libvirt
+membership regardless, and it now carries store access with it. Sites wanting
+a narrower group set `AIVM_MACHINE_GROUP`; tightening later is a `chgrp`, not
+a data migration.
+
+The group is libvirt's to create and to grant. AIVM never runs `groupadd
+libvirt`: a same-named group of its own making would grant no libvirt access
+while looking like it had. Its absence means libvirt is not installed, and is
+reported that way.
 
 | Object | Mode | Rationale |
 |---|---:|---|
@@ -43,7 +59,7 @@ The production installation is expected to be owned by `root:aivm`.
 
 The implementation sets the target group before applying the final mode because
 `chown` may clear setgid bits. Tests inject the current process GID, so no test
-needs root or the real `aivm` group.
+needs root or the real trusted group.
 
 ## Atomic replacement
 

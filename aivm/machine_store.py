@@ -26,7 +26,18 @@ from .host_identity import current_host_identity
 
 MACHINE_STORE_ROOT_ENV = 'AIVM_MACHINE_STORE_ROOT'
 DEFAULT_MACHINE_STORE_ROOT = Path('/var/lib/aivm')
-DEFAULT_MACHINE_GROUP = 'aivm'
+
+# Reuse the group every AIVM user already needs rather than inventing a second
+# one. Reaching qemu:///system without sudo requires `libvirt` membership, so
+# a dedicated `aivm` group gated a strict subset of what its members could
+# already do -- it cost an extra groupadd, usermod, and re-login while
+# `removing libvirt group root-equivalence` and hostile-user isolation are
+# both explicit non-goals of the shared-machine release. Keeping one group
+# also means a single-user host needs no migration when a second user
+# arrives: they need libvirt membership regardless, and that now carries
+# store access with it. Sites that do want a narrower group set
+# ``AIVM_MACHINE_GROUP``; tightening later is a chgrp, not a data migration.
+DEFAULT_MACHINE_GROUP = 'libvirt'
 MACHINE_GROUP_ENV = 'AIVM_MACHINE_GROUP'
 
 # Group-shared but not world-readable: the machine store carries VM documents
@@ -99,15 +110,25 @@ def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:
     try:
         return int(grp.getgrnam(group_name).gr_gid)
     except KeyError as ex:
-        # `aivm config init` writes configuration and never touches host
-        # groups, so naming it here sends the caller to a command that cannot
-        # clear the error. Group creation lives in host permissions setup.
+        # The default group ships with libvirt, so its absence means libvirt
+        # is not installed -- creating an empty group of the same name would
+        # produce a group that grants no qemu:///system access and hide that.
+        # Only a site-chosen group is ours to create. `aivm config init` is
+        # not offered here either: it writes configuration and never touches
+        # host groups, so it cannot clear this error.
+        if group_name == DEFAULT_MACHINE_GROUP:
+            raise MachineStoreGroupError(
+                f'Required host group {group_name!r} does not exist. It is '
+                'provided by libvirt, so install libvirt first (for example '
+                '`sudo apt install libvirt-daemon-system`), then run `aivm '
+                'host permissions setup`.'
+            ) from ex
         raise MachineStoreGroupError(
-            f'Required host group {group_name!r} does not exist. '
-            'Run `aivm host permissions setup` to prepare this machine, or '
-            f'create the group yourself: sudo groupadd --system {group_name} '
-            f'&& sudo usermod -aG {group_name} "$USER". Group membership '
-            'applies at the next login.'
+            f'Required host group {group_name!r} does not exist. It is set by '
+            f'{MACHINE_GROUP_ENV}. Create it, or unset that variable to use '
+            f'the default {DEFAULT_MACHINE_GROUP!r} group: sudo groupadd '
+            f'--system {group_name} && sudo usermod -aG {group_name} "$USER". '
+            'Group membership applies at the next login.'
         ) from ex
 
 

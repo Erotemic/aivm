@@ -41,6 +41,7 @@ from .legacy.pre_0_6_0.selection import selected_store_path
 from .machine_store import (
     MachineStoreLayout,
     current_machine_group_gid,
+    current_machine_group_name,
     current_machine_store_policy,
     ensure_machine_store_layout,
     machine_store_layout,
@@ -123,13 +124,14 @@ def ensure_machine_scope_ready(scope: StoreScope) -> None:
         )
     except Exception as ex:
         root = scope.machine_layout.root
+        group = current_machine_group_name()
         raise AIVMError(
             f'Could not initialize the shared AIVM machine store at {root}: {ex}\n'
-            'The default installation requires a trusted host group named '
-            '`aivm` and a group-writable setgid store root. Suggested setup:\n'
-            '  sudo groupadd --system aivm  # only if the group is absent\n'
-            '  sudo usermod -aG aivm "$USER"\n'
-            f'  sudo install -d -o root -g aivm -m 2770 {root}\n'
+            f'The store is owned by root and writable by the {group!r} group, '
+            'which is the same membership that reaches qemu:///system without '
+            'sudo. Run `aivm host permissions setup`, or do it by hand:\n'
+            f'  sudo usermod -aG {group} "$USER"\n'
+            f'  sudo install -d -o root -g {group} -m 2770 {root}\n'
             'Log out and back in after changing group membership.'
         ) from ex
 

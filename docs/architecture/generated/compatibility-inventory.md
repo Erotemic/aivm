@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 30af4a548fa4f2ca -->
+<!-- generation schema: 1; input digest: 4fb4693bb52072ca -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -106,10 +106,10 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.cli.config.init` | `aivm/cli/config/init.py:659` |
 | `aivm.cli.config.init` | `aivm/cli/config/init.py:660` |
 | `aivm.cli.config.paths` | `aivm/cli/config/paths.py:271` |
-| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:187` |
-| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:198` |
-| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:486` |
-| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:491` |
+| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:188` |
+| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:199` |
+| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:487` |
+| `aivm.cli.host_permissions` | `aivm/cli/host_permissions.py:492` |
 | `aivm.cli.net` | `aivm/cli/net.py:173` |
 | `aivm.cli.net` | `aivm/cli/net.py:196` |
 | `aivm.cli.vm_attach` | `aivm/cli/vm_attach.py:190` |
@@ -162,10 +162,10 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.net` | `aivm/net.py:242` |
 | `aivm.resource_checks` | `aivm/resource_checks.py:62` |
 | `aivm.resource_checks` | `aivm/resource_checks.py:99` |
-| `aivm.scoped_store` | `aivm/scoped_store.py:230` |
-| `aivm.scoped_store` | `aivm/scoped_store.py:254` |
-| `aivm.scoped_store` | `aivm/scoped_store.py:274` |
-| `aivm.scoped_store` | `aivm/scoped_store.py:328` |
+| `aivm.scoped_store` | `aivm/scoped_store.py:232` |
+| `aivm.scoped_store` | `aivm/scoped_store.py:256` |
+| `aivm.scoped_store` | `aivm/scoped_store.py:276` |
+| `aivm.scoped_store` | `aivm/scoped_store.py:330` |
 | `aivm.services` | `aivm/services.py:80` |
 | `aivm.services` | `aivm/services.py:109` |
 | `aivm.services` | `aivm/services.py:397` |

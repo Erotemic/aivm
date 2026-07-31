@@ -573,10 +573,43 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
     tmp_path: Path,
     capsys: CaptureFixture[str],
 ) -> None:
-    """The normal setup path prepares the shared group and root explicitly."""
+    """Setup prepares the store root under the group libvirt already grants.
+
+    ``_stub_host_probes`` puts the caller in the libvirt group, which is also
+    the default store group, so no membership work remains. Creating or
+    joining that group is libvirt's to do, never setup's.
+    """
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    cfg_path = tmp_path / 'config.toml'
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
+
+    rc = HostPermissionsSetupCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        base_dir=str(tmp_path / 'vmstore'),
+        dry_run=True,
+        yes=True,
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert 'sudo install -d -o root -g libvirt -m 2770 /var/lib/aivm' in out
+    assert 'groupadd' not in out
+    assert 'usermod' not in out
+
+
+def test_setup_dry_run_creates_an_overridden_machine_group(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """A site-chosen group is ours to create, unlike the libvirt default."""
+    activate_manager(monkeypatch, yes=True)
+    _stub_host_probes(monkeypatch)
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setenv('AIVM_MACHINE_GROUP', 'aivm-admins')
     monkeypatch.setattr(
         'aivm.cli.host_permissions.machine_group_exists', lambda name: False
     )
@@ -597,9 +630,11 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert 'sudo groupadd --system aivm' in out
-    assert 'sudo usermod -aG aivm' in out
-    assert 'sudo install -d -o root -g aivm -m 2770 /var/lib/aivm' in out
+    assert 'sudo groupadd --system aivm-admins' in out
+    assert 'sudo usermod -aG aivm-admins' in out
+    assert (
+        'sudo install -d -o root -g aivm-admins -m 2770 /var/lib/aivm' in out
+    )
 
 
 def test_setup_target_user_ignores_sudo_environment(

@@ -39,6 +39,7 @@ from ..machine_store import (
     machine_group_exists,
     machine_store_layout,
     machine_store_root_ready,
+    resolve_machine_group_gid,
     user_in_machine_group,
 )
 from ..modes import PrivilegeMode
@@ -523,16 +524,20 @@ class HostPermissionsCheckCLI(_BaseCommand):
             machine_group_exists(machine_group)
             and user_in_machine_group(group_name=machine_group)
         )
-        lines.append(
-            friction_line(
-                machine_group_ok,
-                f'{machine_group} machine-store membership',
-                'permits shared desired-state updates'
-                if machine_group_ok
-                else 'run `aivm host permissions setup`, then log out/in',
-                'shared machine-store access',
+        # The store group is normally the libvirt group, which gets its own
+        # line below. Reporting the same membership twice under two names
+        # reads as two separate things to fix.
+        if machine_group != LIBVIRT_GROUP:
+            lines.append(
+                friction_line(
+                    machine_group_ok,
+                    f'{machine_group} machine-store membership',
+                    'permits shared desired-state updates'
+                    if machine_group_ok
+                    else 'run `aivm host permissions setup`, then log out/in',
+                    'shared machine-store access',
+                )
             )
-        )
         machine_root_ok = machine_store_root_ready()
         lines.append(
             friction_line(
@@ -741,16 +746,27 @@ def _prepare_machine_store_access(
     group_name = current_machine_group_name()
     group_exists = machine_group_exists(group_name)
     listed = group_exists and user_in_machine_group(user, group_name=group_name)
+    # The store group is the libvirt group unless a site overrode it. Both the
+    # group itself and membership in it are then libvirt's to manage: the
+    # group ships with the package, and the caller below adds membership for
+    # qemu:///system access. Creating or joining it here would either forge a
+    # libvirt group that grants no libvirt access, or issue a second identical
+    # usermod.
+    owns_group = group_name != LIBVIRT_GROUP
     if args.dry_run:
-        if not group_exists:
+        if not group_exists and owns_group:
             print(f'DRYRUN: sudo groupadd --system {group_name}')
-        if not listed:
+        if not listed and owns_group:
             print(f'DRYRUN: sudo usermod -aG {group_name} {user}')
         print(
             f'DRYRUN: sudo install -d -o root -g {group_name} '
             f'-m 2770 {layout.root}'
         )
-        return not listed
+        return not listed and owns_group
+    if not group_exists and not owns_group:
+        # Fail before the install below writes a root owned by a group that
+        # cannot exist; resolve_machine_group_gid explains how to get libvirt.
+        resolve_machine_group_gid(group_name)
 
     membership_added = False
     with mgr.intent(
@@ -761,7 +777,7 @@ def _prepare_machine_store_access(
         ),
         role='modify',
     ):
-        if not group_exists:
+        if not group_exists and owns_group:
             with mgr.step(
                 'Create the trusted AIVM host group',
                 why='The machine store is shared by trusted local AIVM users.',
@@ -775,7 +791,7 @@ def _prepare_machine_store_access(
                     capture=True,
                     summary=f'Create the {group_name} group',
                 )
-        if not listed:
+        if not listed and owns_group:
             with mgr.step(
                 'Add the invoking user to the AIVM host group',
                 why='Group membership permits shared machine-store updates.',
