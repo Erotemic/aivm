@@ -9,8 +9,16 @@ serve fresh machine/profile installations.
 
 ## Layout
 
-The default root is `/var/lib/aivm/machine`. Tests and advanced development
+The shared root is `/var/lib/aivm/machine`. Tests and advanced development
 setups may replace it with `AIVM_MACHINE_STORE_ROOT`.
+
+A host that has no shared root uses a personal one at
+`~/.local/share/aivm/machine`, owned by the caller at `0700`/`0600` with no
+trusted group. Everything below describes the shared layout; the personal one
+differs only in root path, owning gid, and modes. See
+[personal-machine-store.md](personal-machine-store.md) for why sudo cannot
+substitute for group membership, and for the rule that a shared root which
+exists but is unreadable refuses rather than falling back.
 
 It is deliberately a subdirectory rather than `/var/lib/aivm` itself. The
 store root is group-writable, while `/var/lib/aivm` is the parent of

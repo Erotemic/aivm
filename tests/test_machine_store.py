@@ -29,13 +29,19 @@ from aivm.machine_store import (
     DEFAULT_MACHINE_STORE_ROOT,
     MACHINE_DIRECTORY_MODE,
     MACHINE_FILE_MODE,
+    PERSONAL_DIRECTORY_MODE,
+    PERSONAL_FILE_MODE,
+    MachineStoreAccessError,
     MachineStoreGroupError,
     MachineStoreLayout,
+    current_machine_group_gid,
     ensure_machine_store_layout,
     machine_resource_locks,
+    machine_root_is_shared,
     machine_store_layout,
     machine_store_policy,
     ordered_machine_locks,
+    personal_machine_store_root,
     resolve_machine_group_gid,
 )
 
@@ -133,7 +139,7 @@ def test_machine_store_layout_uses_isolated_environment(
 
 
 def test_machine_store_layout_enforces_group_safe_modes(tmp_path: Path) -> None:
-    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
 
     ensure_machine_store_layout(layout, group_gid=gid)
@@ -177,7 +183,7 @@ def test_missing_machine_group_has_actionable_error(
 def test_atomic_replacement_preserves_machine_file_metadata(
     tmp_path: Path,
 ) -> None:
-    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
     ensure_machine_store_layout(layout, group_gid=gid)
     policy = machine_store_policy(layout, group_gid=gid)
@@ -202,7 +208,7 @@ def test_atomic_replacement_preserves_machine_file_metadata(
 
 
 def test_split_store_fragments_are_group_writable(tmp_path: Path) -> None:
-    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
     ensure_machine_store_layout(layout, group_gid=gid)
     policy = machine_store_policy(layout, group_gid=gid)
@@ -237,7 +243,7 @@ def test_machine_lock_order_is_global_then_network_then_vm(
 
 
 def test_machine_resource_locks_use_group_safe_files(tmp_path: Path) -> None:
-    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
     ensure_machine_store_layout(layout, group_gid=gid)
 
@@ -342,7 +348,7 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
 def test_interrupted_split_recovery_preserves_unrelated_vm_fragment(
     tmp_path: Path,
 ) -> None:
-    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
     ensure_machine_store_layout(layout, group_gid=gid)
     policy = machine_store_policy(layout, group_gid=gid)
@@ -405,3 +411,132 @@ def test_store_root_stays_clear_of_the_persistent_replay_state_chain() -> None:
     for path in protected:
         assert root != path
         assert root not in path.parents
+
+
+# ---------------------------------------------------------------------------
+# Store root selection
+#
+# Four rows decide where the store lives. The middle two are the interesting
+# ones: a host that shares wins over a personal store, and a host that shares
+# but locks this caller out must refuse rather than quietly hand them a second
+# authority over the same libvirt domains.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def unshared_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Point the shared root at a path no host-wide store occupies."""
+    absent = tmp_path / 'var-lib-aivm-machine'
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', absent
+    )
+    return absent
+
+
+def test_personal_root_is_used_when_the_host_has_no_shared_store(
+    unshared_host: Path,
+) -> None:
+    layout = machine_store_layout()
+
+    assert layout.root == personal_machine_store_root()
+    assert not layout.shared
+    # The whole point: no group is consulted, so no membership is required.
+    assert current_machine_group_gid(layout) == os.getgid()
+
+
+def test_personal_store_is_private_rather_than_group_shared(
+    unshared_host: Path,
+) -> None:
+    layout = machine_store_layout()
+
+    ensure_machine_store_layout(layout)
+
+    policy = machine_store_policy(layout)
+    assert policy.directory_mode == PERSONAL_DIRECTORY_MODE
+    assert policy.file_mode == PERSONAL_FILE_MODE
+    assert _mode(layout.root) == PERSONAL_DIRECTORY_MODE
+    assert layout.root.stat().st_gid == os.getgid()
+
+
+def test_shared_root_wins_over_the_personal_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
+    )
+
+    layout = machine_store_layout()
+
+    assert layout.root == shared
+    assert layout.shared
+    policy = machine_store_policy(layout, group_gid=os.getgid())
+    assert policy.directory_mode == MACHINE_DIRECTORY_MODE
+    assert policy.file_mode == MACHINE_FILE_MODE
+
+
+def test_unreachable_shared_store_refuses_instead_of_forking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A store this caller cannot read must not become a second authority.
+
+    Falling back to a personal store here is the one genuinely unsafe
+    outcome of supporting both layouts: the shared store already claims this
+    host's domains, and a private store beside it would claim them again.
+    """
+    shared = tmp_path / 'shared'
+    shared.mkdir(mode=0o000)
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
+    )
+
+    try:
+        with pytest.raises(MachineStoreAccessError) as caught:
+            machine_store_layout()
+    finally:
+        shared.chmod(0o700)
+
+    message = str(caught.value)
+    assert 'libvirt' in message
+    assert 'usermod' in message
+    assert str(personal_machine_store_root()) not in message
+
+
+def test_explicit_root_override_beats_both_defaults(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    sandbox = tmp_path / 'sandbox'
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
+    )
+    monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(sandbox))
+
+    layout = machine_store_layout()
+
+    assert layout.root == sandbox
+    # A caller-owned sandbox is not the host-wide store, so it needs no group.
+    assert not layout.shared
+    assert current_machine_group_gid(layout) == os.getgid()
+
+
+def test_subdirectories_inherit_the_ownership_of_their_store() -> None:
+    """Sublayouts must not be classified on their own name.
+
+    Migration transactions and lock namespaces build layouts rooted inside
+    the store. One that answered "personal" because its path is not exactly
+    the store root would write caller-owned modes into a group-shared tree.
+    """
+    assert machine_root_is_shared(DEFAULT_MACHINE_STORE_ROOT)
+    assert machine_root_is_shared(
+        DEFAULT_MACHINE_STORE_ROOT / 'state' / 'migrations' / 'abc'
+    )
+    assert not machine_root_is_shared(personal_machine_store_root())
+    assert not machine_root_is_shared(Path('/tmp/somewhere-else'))

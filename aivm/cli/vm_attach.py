@@ -780,7 +780,7 @@ class _DetachLockScope:
             assert scope.machine_layout is not None
             self.inner = machine_resource_locks(
                 scope.machine_layout,
-                group_gid=current_machine_group_gid(),
+                group_gid=current_machine_group_gid(scope.machine_layout),
                 include_store=True,
                 vms=[vm_name],
             )

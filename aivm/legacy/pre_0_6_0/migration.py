@@ -45,6 +45,8 @@ from ...credentials.validation import (
 )
 from ...fs_identity import directory_identity
 from ...machine_store import (
+    DEFAULT_MACHINE_STORE_ROOT,
+    MachineStoreAccessError,
     MachineStoreGroupError,
     MachineStoreLayout,
     current_machine_group_gid,
@@ -853,8 +855,20 @@ def build_migration_plan(
     ] = collect_runtime_inventory,
 ) -> MigrationPlan:
     """Build a deterministic migration proposal without writing anything."""
-    layout = layout or machine_store_layout()
     conflicts: list[MigrationIssue] = []
+    if layout is None:
+        # Reporting an unreachable target as a blocking conflict beats
+        # aborting: the rest of the plan still tells the operator what would
+        # move, and the report names the one thing standing in the way.
+        try:
+            layout = machine_store_layout()
+        except MachineStoreAccessError as ex:
+            conflicts.append(
+                MigrationIssue(
+                    code='machine-store-unreachable', message=str(ex)
+                )
+            )
+            layout = MachineStoreLayout.from_root(DEFAULT_MACHINE_STORE_ROOT)
     warnings: list[MigrationIssue] = []
     source_rows: list[dict[str, object]] = []
     profiles: list[dict[str, object]] = []
@@ -864,11 +878,12 @@ def build_migration_plan(
     legacy_vm_cfgs: dict[str, AgentVMConfig] = {}
 
     # Ask the question apply will ask, by calling what apply calls. Apply
-    # resolves the trusted group before it takes a lock or writes anything, so
-    # a missing group aborts it on the first step; a plan that did not check
-    # would report READY and hand the user a command that cannot start.
+    # resolves the store root and its trusted group before it takes a lock or
+    # writes anything, so either one being unavailable aborts it on the first
+    # step; a plan that did not check would report READY and hand the user a
+    # command that cannot start.
     try:
-        current_machine_group_gid()
+        current_machine_group_gid(layout)
     except MachineStoreGroupError as ex:
         conflicts.append(
             MigrationIssue(code='machine-group-missing', message=str(ex))

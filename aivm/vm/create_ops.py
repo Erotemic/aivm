@@ -43,6 +43,7 @@ from ..config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from ..domain_authority import stamp_domain_authority
 from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
@@ -480,6 +481,12 @@ def create_vm_from_defaults(
             share_source_dir=initial_share_source_dir,
             share_tag=initial_share_tag,
         )
+        if scope.is_machine and scope.machine_layout is not None:
+            # Claim the domain for this store while its definition is fresh,
+            # so a second store on this host can tell whose it is.
+            stamp_domain_authority(
+                cfg.vm.name, scope.machine_layout, dry_run=dry_run
+            )
 
     # Persist the new VM record
     if not dry_run:

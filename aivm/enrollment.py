@@ -125,7 +125,7 @@ def ensure_bootstrap_identity(
             public_key='ssh-ed25519 AAAA-AIVM-DRY-RUN aivm-bootstrap',
         )
 
-    gid = current_machine_group_gid()
+    gid = current_machine_group_gid(layout)
     owner = 'root' if identity.use_sudo else str(os.getuid())
     group = str(gid)
     mgr = CommandManager.current()
@@ -295,7 +295,7 @@ def _save_principal_state(
     assert scope.machine_layout is not None
     with machine_resource_locks(
         scope.machine_layout,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(scope.machine_layout),
         include_store=True,
         vms=[principal.vm_name],
     ):
@@ -339,7 +339,7 @@ def reconcile_current_principal(
         )
     with machine_resource_locks(
         scope.machine_layout,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(scope.machine_layout),
         include_store=True,
         vms=[vm_name],
     ):

@@ -39,6 +39,7 @@ from .host_identity import HostIdentity, current_host_identity
 from .legacy.pre_0_6_0 import compatibility_surface
 from .legacy.pre_0_6_0.selection import selected_store_path
 from .machine_store import (
+    MachineStoreAccessError,
     MachineStoreLayout,
     current_machine_group_gid,
     current_machine_group_name,
@@ -120,10 +121,22 @@ def ensure_machine_scope_ready(scope: StoreScope) -> None:
     try:
         ensure_machine_store_layout(
             scope.machine_layout,
-            group_gid=current_machine_group_gid(),
+            group_gid=current_machine_group_gid(scope.machine_layout),
         )
+    except MachineStoreAccessError:
+        # Already the precise, actionable diagnosis. Re-wrapping it would bury
+        # the reason under a generic "could not initialize" preamble.
+        raise
     except Exception as ex:
         root = scope.machine_layout.root
+        if not scope.machine_layout.shared:
+            raise AIVMError(
+                f'Could not initialize your AIVM machine store at {root}: '
+                f'{ex}\n'
+                'This store is owned by you alone and needs no group or '
+                'privileged step, so this is an ordinary filesystem problem '
+                '-- check that the path is writable and is not a symlink.'
+            ) from ex
         group = current_machine_group_name()
         raise AIVMError(
             f'Could not initialize the shared AIVM machine store at {root}: {ex}\n'

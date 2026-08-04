@@ -18,6 +18,29 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Gave the machine store a personal layout, so a host that never runs `aivm
+  host permissions setup` still works. 0.6 moved desired state out of the
+  caller's home into a root-owned, `libvirt`-group-writable
+  `/var/lib/aivm/machine`, which made trusted-group membership a prerequisite
+  for using AIVM at all -- including for a single user with no one to share
+  with. Membership in `libvirt` is root-equivalent, and declining it is a
+  reasonable position, not a misconfiguration. Sudo cannot stand in for it: the
+  store's `flock` scopes need a descriptor held open in-process, its atomic
+  replacement writes modes through file descriptors, and a store root written
+  by root for a non-member stays unreadable to them afterwards, so every later
+  read would escalate too. A host with no shared root therefore keeps its store at
+  `~/.local/share/aivm/machine`, owned by the caller at `0700`, with no group
+  and no privileged step in any operation. `aivm host permissions setup`
+  remains the way to share a host, and `aivm config migrate` moves a personal
+  store into a shared one. Only the root path, owning gid, and modes differ
+  between the two; the documents, lock order, and every consumer are the same.
+* Recorded which machine store owns a libvirt domain, in the domain's own
+  `<metadata>`. "One managed domain has at most one authoritative record" used
+  to be emergent -- a host held one store, so whatever appeared in it was
+  owned by it -- and two possible store layouts removes that guarantee. A
+  store now refuses to drive a domain another store stamped, and names the
+  owner. Domains created before the marker carry no stamp and are accepted; a
+  host with only one store on disk never runs the probe.
 * Made a shared workstation usable by host accounts that hold libvirt/machine
   group membership but no sudo, which is the normal arrangement when one
   administrator prepares a host for several users. An unverifiable firewall is

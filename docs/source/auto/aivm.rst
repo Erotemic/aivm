@@ -27,6 +27,7 @@ Submodules
    aivm.config_review
    aivm.config_scopes
    aivm.detect
+   aivm.domain_authority
    aivm.enrollment
    aivm.errors
    aivm.fdguard

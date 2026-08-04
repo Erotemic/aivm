@@ -713,7 +713,9 @@ def _transaction_policy(transaction_dir: Path) -> StoreFilesystemPolicy:
         managed_root=_lexical_absolute(transaction_dir),
         directory_mode=0o750,
         file_mode=0o640,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(
+            MachineStoreLayout.from_root(transaction_dir)
+        ),
         reject_symlinks=True,
     )
 
@@ -727,7 +729,7 @@ def _ensure_transaction_directory(
         managed_root=_lexical_absolute(root),
         directory_mode=0o750,
         file_mode=0o640,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(layout),
         reject_symlinks=True,
     )
     ensure_store_directory(root, root_policy)
@@ -1196,7 +1198,9 @@ def _write_machine_store(
         raise MigrationExecutionError(
             'Migration plan lacks proposed machine store.'
         )
-    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    ensure_machine_store_layout(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
     save_store_split(
         store,
         layout.config_path,
@@ -1677,13 +1681,15 @@ def apply_migration(
     # checks are repeated after acquiring every transaction lock.
     _verify_source_hashes(plan)
     _verify_planned_data_sources(plan)
-    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    ensure_machine_store_layout(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
     networks, vms = _migration_resource_names(plan)
     policy = current_machine_store_policy(layout)
     with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
         with machine_resource_locks(
             layout,
-            group_gid=current_machine_group_gid(),
+            group_gid=current_machine_group_gid(layout),
             include_store=True,
             networks=networks,
             vms=vms,
@@ -1710,7 +1716,9 @@ def _apply_migration_locked(
     _validate_apply_plan(plan, layout)
     _verify_source_hashes(plan)
     _verify_planned_data_sources(plan)
-    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    ensure_machine_store_layout(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
     migration_id = migration_id_for_plan(plan)
     tx = migration_transaction_dir(migration_id, layout)
     state_path = _journal_path(tx)
@@ -1904,7 +1912,9 @@ def resume_migration(
 ) -> MigrationApplyResult:
     """Resume one migration while serializing every transaction phase."""
     layout = layout or machine_store_layout()
-    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    ensure_machine_store_layout(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
     policy = current_machine_store_policy(layout)
     with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
         loaded = load_migration_journal(migration_id, layout=layout)
@@ -1914,7 +1924,7 @@ def resume_migration(
         networks, vms = _frozen_report_resource_names(report)
         with machine_resource_locks(
             layout,
-            group_gid=current_machine_group_gid(),
+            group_gid=current_machine_group_gid(layout),
             include_store=True,
             networks=networks,
             vms=vms,
@@ -1942,7 +1952,9 @@ def verify_applied_migration(
     runtime_verifier: RuntimeVerifier = verify_migration_runtime,
 ) -> MigrationApplyResult:
     layout = layout or machine_store_layout()
-    ensure_machine_store_layout(layout, group_gid=current_machine_group_gid())
+    ensure_machine_store_layout(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
     policy = current_machine_store_policy(layout)
     with exclusive_file_lock(layout.locks_dir / 'migration.lock', policy):
         loaded = load_migration_journal(migration_id, layout=layout)
@@ -1952,7 +1964,7 @@ def verify_applied_migration(
         networks, vms = _frozen_report_resource_names(report)
         with machine_resource_locks(
             layout,
-            group_gid=current_machine_group_gid(),
+            group_gid=current_machine_group_gid(layout),
             include_store=True,
             networks=networks,
             vms=vms,
@@ -2694,7 +2706,7 @@ def _migration_rollback_locks(
     with exclusive_file_lock(migration_lock, policy):
         with machine_resource_locks(
             layout,
-            group_gid=current_machine_group_gid(),
+            group_gid=current_machine_group_gid(layout),
             include_store=True,
         ):
             yield

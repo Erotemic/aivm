@@ -33,7 +33,10 @@ from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
 from ..host_identity import current_host_identity
 from ..machine_store import (
+    DEFAULT_MACHINE_STORE_ROOT,
     MACHINE_STORE_ROOT_ENV,
+    MachineStoreAccessError,
+    MachineStoreLayout,
     current_machine_group_name,
     ensure_machine_store_layout,
     machine_group_exists,
@@ -518,37 +521,51 @@ class HostPermissionsCheckCLI(_BaseCommand):
             return status_line(ok, label, detail, warn_only=True)
 
         machine_group = current_machine_group_name()
-        machine_group_ok = bool(
-            os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
-        ) or (
-            machine_group_exists(machine_group)
-            and user_in_machine_group(group_name=machine_group)
-        )
-        # The store group is normally the libvirt group, which gets its own
-        # line below. Reporting the same membership twice under two names
-        # reads as two separate things to fix.
-        if machine_group != LIBVIRT_GROUP:
+        try:
+            active_layout: MachineStoreLayout | None = machine_store_layout()
+        except MachineStoreAccessError as ex:
+            # The one row this command exists to explain: a shared store is
+            # present and out of reach. Report it as broken rather than as
+            # friction, because no privilege mode makes it usable.
+            active_layout = None
+            broken.append(str(ex).splitlines()[0])
+        if active_layout is not None and not active_layout.shared:
+            # Nothing to report about a group that this layout never consults.
+            lines.append(
+                status_line(
+                    True,
+                    'personal machine-store root',
+                    f'{active_layout.root} (no trusted group needed; '
+                    '`aivm host permissions setup` shares this host)',
+                )
+            )
+        elif active_layout is not None:
+            machine_group_ok = machine_group_exists(
+                machine_group
+            ) and user_in_machine_group(group_name=machine_group)
+            # The store group is normally the libvirt group, which gets its
+            # own line below. Reporting the same membership twice under two
+            # names reads as two separate things to fix.
+            if machine_group != LIBVIRT_GROUP:
+                lines.append(
+                    friction_line(
+                        machine_group_ok,
+                        f'{machine_group} machine-store membership',
+                        'permits shared desired-state updates'
+                        if machine_group_ok
+                        else 'run `aivm host permissions setup`, then log '
+                        'out/in',
+                        'shared machine-store access',
+                    )
+                )
             lines.append(
                 friction_line(
-                    machine_group_ok,
-                    f'{machine_group} machine-store membership',
-                    'permits shared desired-state updates'
-                    if machine_group_ok
-                    else 'run `aivm host permissions setup`, then log out/in',
+                    machine_store_root_ready(active_layout),
+                    'shared machine-store root',
+                    str(active_layout.root),
                     'shared machine-store access',
                 )
             )
-        machine_root_ok = machine_store_root_ready()
-        lines.append(
-            friction_line(
-                machine_root_ok,
-                'shared machine-store root',
-                str(machine_store_layout().root)
-                if machine_root_ok
-                else 'run `aivm host permissions setup`',
-                'shared machine-store access',
-            )
-        )
 
         in_group = user_in_libvirt_group()
         lines.append(
@@ -731,8 +748,14 @@ def _prepare_machine_store_access(
     user: str,
 ) -> bool:
     """Prepare the shared config root; return whether membership was added."""
-    layout = machine_store_layout()
+    # Setup is how a host *becomes* shared, so it always targets the host-wide
+    # root. Resolving the active layout instead would make it a no-op on the
+    # very hosts it exists to promote: an unshared host resolves to the
+    # caller's own personal root, which needs no privileged preparation.
     configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    layout = machine_store_layout(
+        None if configured_root else DEFAULT_MACHINE_STORE_ROOT
+    )
     if configured_root:
         if args.dry_run:
             print(

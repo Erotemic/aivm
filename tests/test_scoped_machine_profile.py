@@ -157,6 +157,13 @@ def test_machine_create_persists_creator_and_resolves_context(
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_or_start_vm', lambda *args, **kwargs: None
     )
+    # A libvirt boundary like the create above, and the subject of
+    # tests/test_domain_authority.py. This test is about what the store
+    # records, not about what gets written to the domain.
+    monkeypatch.setattr(
+        'aivm.vm.create_ops.stamp_domain_authority',
+        lambda *args, **kwargs: None,
+    )
 
     rc = create_vm_from_defaults(
         layout.config_path,

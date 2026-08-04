@@ -1,7 +1,15 @@
-"""Machine-wide store layout, permissions, and resource locks.
+"""Machine store layout, permissions, and resource locks.
 
-This module establishes the physical contract for the active host-wide AIVM
+This module establishes the physical contract for the active AIVM machine
 store: group-safe writes, recovery, and globally ordered resource locks.
+
+The store occupies one of two roots, chosen by
+:func:`resolve_machine_store_root`: the host-wide group-owned root, or a
+user-owned personal root for a host that never opted into trusted-group
+membership. That choice changes the root path, the owning gid, and the
+directory/file modes. It changes nothing else -- the documents, the lock
+order, and every consumer of :class:`MachineStoreLayout` are identical,
+because the layout is already a parameter throughout.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ from .config_store.fs_policy import (
     ensure_store_directory,
     exclusive_file_lock,
 )
+from .config_store.paths import app_data_path
 from .errors import AIVMError
 from .host_identity import current_host_identity
 
@@ -56,6 +65,17 @@ MACHINE_DIRECTORY_MODE = 0o2770
 MACHINE_FILE_MODE = 0o660
 BOOTSTRAP_DIRECTORY_MODE = 0o2750
 
+# The same store, owned by one user instead of a group. Membership in the
+# trusted group is a real privilege grant -- `libvirt` is root-equivalent, and
+# `removing libvirt group root-equivalence` is an explicit non-goal -- so a
+# single user who never opts into it still gets the whole 0.6 architecture,
+# just rooted in their own data directory. Nothing here is a second store
+# implementation: only the root path, the owning gid, and these modes differ,
+# and every consumer already takes the layout as a parameter.
+PERSONAL_DIRECTORY_MODE = 0o700
+PERSONAL_FILE_MODE = 0o600
+PERSONAL_BOOTSTRAP_DIRECTORY_MODE = 0o700
+
 
 class MachineStoreGroupError(AIVMError):
     """Raised when the configured trusted host group does not exist.
@@ -64,6 +84,35 @@ class MachineStoreGroupError(AIVMError):
     gets the CLI's clean error rendering and setup guidance instead of a
     traceback from the first ``aivm status``/``aivm list``.
     """
+
+
+class MachineStoreAccessError(AIVMError):
+    """Raised when a shared store exists that this caller cannot reach.
+
+    Falling back to a personal store here would be the one genuinely unsafe
+    outcome of supporting both layouts: the host has already been set up to
+    hold one authority, and a second private authority over the same libvirt
+    domains is what invariant 1 of the shared-machine architecture forbids.
+    Refusing is recoverable (join the group); silently forking is not.
+    """
+
+
+def personal_machine_store_root() -> Path:
+    """Return the user-owned machine-store root for an unshared host."""
+    return app_data_path('machine')
+
+
+def machine_root_is_shared(path: Path) -> bool:
+    """Return whether ``path`` belongs to the host-wide group-owned store.
+
+    Subdirectories answer the same as their root. Migration transactions and
+    lock namespaces build sublayouts, and every one of them must inherit the
+    ownership of the store it lives in rather than being classified on its
+    own name.
+    """
+    candidate = Path(os.path.abspath(os.fspath(path.expanduser())))
+    shared = DEFAULT_MACHINE_STORE_ROOT
+    return candidate == shared or shared in candidate.parents
 
 
 @dataclass(frozen=True)
@@ -77,9 +126,15 @@ class MachineStoreLayout:
     network_locks_dir: Path
     state_dir: Path
     bootstrap_dir: Path
+    #: Whether this root is the host-wide group-owned store. Drives the
+    #: owning gid and the directory/file modes, and nothing else: a personal
+    #: store holds the same documents under the same names.
+    shared: bool = True
 
     @classmethod
-    def from_root(cls, root: Path) -> MachineStoreLayout:
+    def from_root(
+        cls, root: Path, *, shared: bool | None = None
+    ) -> MachineStoreLayout:
         normalized = Path(os.path.abspath(os.fspath(root.expanduser())))
         locks = normalized / 'locks'
         return cls(
@@ -90,6 +145,11 @@ class MachineStoreLayout:
             network_locks_dir=locks / 'networks',
             state_dir=normalized / 'state',
             bootstrap_dir=normalized / 'bootstrap',
+            shared=(
+                machine_root_is_shared(normalized)
+                if shared is None
+                else shared
+            ),
         )
 
     @property
@@ -107,11 +167,63 @@ class MachineStoreLayout:
         return self.state_dir / 'vms' / _resource_stem(vm_name)
 
 
+def _directory_is_usable(path: Path) -> bool:
+    """Return whether ``path`` is a real directory this caller can write."""
+    if not path.is_dir() or path.is_symlink():
+        return False
+    return os.access(path, os.R_OK | os.W_OK | os.X_OK)
+
+
+def candidate_machine_store_roots() -> tuple[Path, ...]:
+    """Return every root a machine store may occupy, for diagnostics.
+
+    Reporting commands need to describe both layouts without committing to
+    one, so this never raises where :func:`resolve_machine_store_root` would.
+    """
+    configured = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    if configured:
+        return (Path(os.path.abspath(configured)),)
+    return (DEFAULT_MACHINE_STORE_ROOT, personal_machine_store_root())
+
+
+def resolve_machine_store_root() -> Path:
+    """Choose between the shared and personal machine store roots.
+
+    A host that has been set up for sharing always wins, because its records
+    are the host's one authority. A host that has not is not made to opt into
+    trusted-group membership merely to keep its own configuration: a user who
+    never runs ``aivm host permissions setup`` gets an equivalent store under
+    their own data directory, with no group and no privileged step anywhere.
+
+    The refusal in the middle is deliberate. Falling back to a personal store
+    while an unreadable shared one exists would hand this caller a second
+    authority over domains the shared store already claims.
+    """
+    configured = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    if configured:
+        return Path(configured)
+    shared = DEFAULT_MACHINE_STORE_ROOT
+    if shared.is_dir() and not shared.is_symlink():
+        if not _directory_is_usable(shared):
+            group = current_machine_group_name()
+            raise MachineStoreAccessError(
+                f'This host has a shared AIVM machine store at {shared}, but '
+                f'{current_host_identity().username!r} cannot write it. It is '
+                f'owned by root and writable by the {group!r} group, which is '
+                'the same membership that reaches qemu:///system without '
+                'sudo.\n'
+                f'  sudo usermod -aG {group} "$USER"   # then log out and in\n'
+                'AIVM will not keep a second private store beside a shared '
+                'one: both would claim the same libvirt domains.'
+            )
+        return shared
+    return personal_machine_store_root()
+
+
 def machine_store_layout(root: Path | None = None) -> MachineStoreLayout:
     """Resolve the machine-store layout without creating it."""
     if root is None:
-        configured = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
-        root = Path(configured) if configured else DEFAULT_MACHINE_STORE_ROOT
+        root = resolve_machine_store_root()
     return MachineStoreLayout.from_root(root)
 
 
@@ -183,22 +295,21 @@ def machine_store_root_ready(
 ) -> bool:
     """Return whether the caller can use the configured machine root."""
     layout = layout or machine_store_layout()
-    root = layout.root
-    if not root.is_dir() or root.is_symlink():
-        return False
-    return os.access(root, os.R_OK | os.W_OK | os.X_OK)
+    return _directory_is_usable(layout.root)
 
 
-def current_machine_group_gid() -> int:
-    """Resolve the group for real installs and the caller gid for test roots.
+def current_machine_group_gid(
+    layout: MachineStoreLayout | None = None,
+) -> int:
+    """Resolve the owning gid for whichever store root is in use.
 
-    An explicit ``AIVM_MACHINE_STORE_ROOT`` is an advanced/test override and
-    normally points at a caller-owned sandbox. Requiring a system ``aivm``
-    group there would make isolated tests and local prototypes unnecessarily
-    privileged. The default ``/var/lib/aivm`` path always uses the configured
-    trusted group.
+    Only the shared root is group-owned. A personal root and an explicit
+    ``AIVM_MACHINE_STORE_ROOT`` sandbox both belong to the caller, so
+    requiring a system group there would make an unshared host, an isolated
+    test, and a local prototype all unnecessarily privileged.
     """
-    if os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip():
+    layout = layout or machine_store_layout()
+    if not layout.shared:
         return int(os.getgid())
     return resolve_machine_group_gid(current_machine_group_name())
 
@@ -209,17 +320,22 @@ def machine_store_policy(
     group_gid: int | None = None,
     group_name: str = DEFAULT_MACHINE_GROUP,
 ) -> StoreFilesystemPolicy:
-    """Return group-safe filesystem rules for the global config store."""
+    """Return the filesystem rules for the selected config store root."""
     layout = layout or machine_store_layout()
-    gid = (
-        resolve_machine_group_gid(group_name)
-        if group_gid is None
-        else group_gid
-    )
+    if group_gid is None:
+        gid = (
+            resolve_machine_group_gid(group_name)
+            if layout.shared
+            else int(os.getgid())
+        )
+    else:
+        gid = group_gid
     return StoreFilesystemPolicy(
         managed_root=layout.root,
-        directory_mode=MACHINE_DIRECTORY_MODE,
-        file_mode=MACHINE_FILE_MODE,
+        directory_mode=(
+            MACHINE_DIRECTORY_MODE if layout.shared else PERSONAL_DIRECTORY_MODE
+        ),
+        file_mode=MACHINE_FILE_MODE if layout.shared else PERSONAL_FILE_MODE,
         group_gid=gid,
         lock_path=layout.store_lock_path,
         reject_symlinks=True,
@@ -231,18 +347,48 @@ def current_machine_store_policy(
 ) -> StoreFilesystemPolicy:
     """Return the policy used by normal machine-store reads and writes."""
     layout = layout or machine_store_layout()
-    return machine_store_policy(layout, group_gid=current_machine_group_gid())
+    return machine_store_policy(
+        layout, group_gid=current_machine_group_gid(layout)
+    )
 
 
 def is_machine_store_path(path: Path) -> bool:
-    """Return whether ``path`` is inside the configured machine root."""
-    layout = machine_store_layout()
+    """Return whether ``path`` is inside a machine root of either layout.
+
+    Callers use this to classify a path they already hold, so it answers for
+    every root a store may occupy rather than resolving the active one: the
+    question stays answerable on a host whose shared root exists but is
+    unreachable, where :func:`resolve_machine_store_root` deliberately fails.
+    """
     candidate = Path(os.path.abspath(os.fspath(path.expanduser())))
-    try:
-        candidate.relative_to(layout.root)
-    except ValueError:
-        return False
-    return True
+    for root in candidate_machine_store_roots():
+        try:
+            candidate.relative_to(Path(os.path.abspath(os.fspath(root))))
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _store_directory_error(
+    layout: MachineStoreLayout, path: Path, ex: OSError
+) -> AIVMError:
+    """Explain a store directory this caller could not create or fix."""
+    if not layout.shared:
+        return AIVMError(
+            f'Could not prepare your AIVM machine store at {path}: {ex}. '
+            'This store is yours alone and needs no group or privileged '
+            'step, so check that the path is writable.'
+        )
+    group = current_machine_group_name()
+    return AIVMError(
+        f'Could not prepare the shared AIVM machine store at {path}: {ex}.\n'
+        f'It is owned by root and writable by the {group!r} group. Run `aivm '
+        'host permissions setup`, or do it by hand:\n'
+        f'  sudo install -d -o root -g root -m 0755 {layout.root.parent}\n'
+        f'  sudo install -d -o root -g {group} -m 2770 {layout.root}\n'
+        f'  sudo usermod -aG {group} "$USER"   # then log out and in'
+    )
 
 
 def ensure_machine_store_layout(
@@ -263,11 +409,22 @@ def ensure_machine_store_layout(
         layout.network_locks_dir,
         layout.state_dir,
     ):
-        ensure_store_directory(path, policy)
+        # Every caller of this function is answering a user's command, and a
+        # store the caller cannot create is a condition the user can act on,
+        # not an internal fault. Raising OSError here reaches the CLI as an
+        # unhandled traceback; a symlink refusal stays a hard RuntimeError.
+        try:
+            ensure_store_directory(path, policy)
+        except OSError as ex:
+            raise _store_directory_error(layout, path, ex) from ex
     bootstrap_policy = StoreFilesystemPolicy(
         managed_root=layout.bootstrap_dir,
-        directory_mode=BOOTSTRAP_DIRECTORY_MODE,
-        file_mode=0o640,
+        directory_mode=(
+            BOOTSTRAP_DIRECTORY_MODE
+            if layout.shared
+            else PERSONAL_BOOTSTRAP_DIRECTORY_MODE
+        ),
+        file_mode=0o640 if layout.shared else PERSONAL_FILE_MODE,
         group_gid=policy.group_gid,
         reject_symlinks=True,
     )

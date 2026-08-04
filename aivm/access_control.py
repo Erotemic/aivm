@@ -354,7 +354,7 @@ def repair_current_host_identity(
 
     with machine_resource_locks(
         scope.machine_layout,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(scope.machine_layout),
         include_store=True,
         vms=[vm_name],
     ):
@@ -449,7 +449,7 @@ def mutate_access_identity(
 
     with machine_resource_locks(
         scope.machine_layout,
-        group_gid=current_machine_group_gid(),
+        group_gid=current_machine_group_gid(scope.machine_layout),
         include_store=True,
         vms=[vm_name],
     ):

@@ -61,6 +61,7 @@ subsystems:
   - id: lifecycle
     label: VM, network, firewall, and host lifecycle
     exact:
+      - aivm.domain_authority
       - aivm.net
       - aivm.firewall
       - aivm.host

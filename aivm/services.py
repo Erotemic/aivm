@@ -33,6 +33,7 @@ from .config_store import (
     upsert_vm_with_network,
 )
 from .detect import detect_ssh_identity
+from .domain_authority import require_domain_authority
 from .errors import AIVMError, NoVMContextError
 from .host import check_commands, host_is_debian_like, install_deps_debian
 from .host_identity import current_host_identity
@@ -352,6 +353,10 @@ def _load_context_with_path(
     scope = resolve_store_scope(str(store_path))
     reg = load_scope_store(scope)
     require_vm(reg, vm_name)
+    if scope.is_machine and scope.machine_layout is not None:
+        # The one place every post-creation command resolves a VM, so the one
+        # place to establish that this store is allowed to speak for it.
+        require_domain_authority(vm_name, scope.machine_layout)
     if scope.is_machine:
         profile = load_scope_profile(scope)
         context = resolve_machine_context(reg, vm_name, profile=profile)

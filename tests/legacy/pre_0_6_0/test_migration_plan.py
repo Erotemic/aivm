@@ -427,7 +427,9 @@ def test_missing_trusted_host_group_blocks_the_plan(
 
     plan = build_migration_plan(
         [source],
-        layout=MachineStoreLayout.from_root(tmp_path / 'machine'),
+        # Only the shared layout needs the trusted group at all: a personal
+        # store is owned by the caller and resolves no group.
+        layout=MachineStoreLayout.from_root(tmp_path / 'machine', shared=True),
         check_runtime=False,
     )
 

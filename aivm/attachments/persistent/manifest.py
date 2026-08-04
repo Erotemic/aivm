@@ -90,9 +90,10 @@ class _PersistentManifestLock:
     def __init__(self, cfg: AgentVMConfig, cfg_path: Path) -> None:
         self.scope: MachineResourceLockScope | None = None
         if is_machine_store_path(cfg_path):
+            layout = machine_store_layout()
             self.scope = machine_resource_locks(
-                machine_store_layout(),
-                group_gid=current_machine_group_gid(),
+                layout,
+                group_gid=current_machine_group_gid(layout),
                 include_store=True,
                 vms=[cfg.vm.name],
             )

@@ -147,7 +147,7 @@ class NetDestroyCLI(_BaseCommand):
                 assert scope.machine_layout is not None
                 with machine_resource_locks(
                     scope.machine_layout,
-                    group_gid=current_machine_group_gid(),
+                    group_gid=current_machine_group_gid(scope.machine_layout),
                     include_store=True,
                     networks=(network_name,),
                 ):
