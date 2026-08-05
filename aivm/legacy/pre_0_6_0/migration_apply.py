@@ -38,6 +38,7 @@ from ...config_store.fs_policy import (
     ensure_store_directory,
     exclusive_file_lock,
 )
+from ...domain_authority import stamp_domain_authority
 from ...enrollment import bootstrap_identity_paths, ensure_bootstrap_identity
 from ...errors import AIVMError
 from ...guestctl import (
@@ -91,6 +92,7 @@ _APPLY_STEPS = (
     'credential-material-copied',
     'persistent-state-copied',
     'bootstrap-installed',
+    'domains-claimed',
     'verified',
 )
 
@@ -1423,6 +1425,19 @@ def _install_bootstrap(
         installer(vm_name, cfg, layout)
 
 
+def _claim_domains(plan: MigrationPlan, layout: MachineStoreLayout) -> None:
+    """Record this store as the owner of every domain it now defines.
+
+    Migration is where a store takes authority over an already-running
+    domain, so it is where the claim has to be written. Leaving it unstamped
+    would let a machine store created on this host later -- by
+    ``aivm host permissions setup`` and a second user -- adopt the same
+    domain without ever seeing that this store got there first.
+    """
+    for vm_name in sorted(plan.legacy_vm_cfgs):
+        stamp_domain_authority(vm_name, layout)
+
+
 def verify_migration_local(
     plan: MigrationPlan,
     layout: MachineStoreLayout,
@@ -1826,6 +1841,7 @@ def _apply_migration_locked(
             lambda: _install_bootstrap(plan, layout, guest_installer),
             output_roles={'private-bootstrap-target'},
         )
+        run_step('domains-claimed', lambda: _claim_domains(plan, layout))
 
         def verify_action() -> None:
             verification = verify_migration_local(plan, layout)

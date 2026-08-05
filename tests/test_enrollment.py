@@ -29,7 +29,11 @@ from aivm.enrollment import (
 )
 from aivm.errors import AIVMError
 from aivm.host_identity import HostIdentity
-from aivm.machine_store import ensure_machine_store_layout, machine_store_layout
+from aivm.machine_store import (
+    MachineStoreLayout,
+    ensure_machine_store_layout,
+    machine_store_layout,
+)
 from aivm.profile_store import UserProfileStore, save_user_profile
 from aivm.scoped_store import StoreScope, resolve_store_scope, save_scope_store
 from tests.helpers import FakeProc, activate_manager, command_recorder
@@ -525,3 +529,32 @@ def test_reconcile_holds_identity_locks_through_guest_work(
 
     assert report.changed is True
     assert held is False
+
+
+def test_personal_store_bootstrap_identity_belongs_to_its_owner(
+    tmp_path: Path,
+) -> None:
+    """A personal store must not need root for its own bootstrap keypair.
+
+    Root ownership earns its keep only in a shared store, where every
+    trusted-group member can reach the directory and must be kept away from
+    the private half. In a personal store it costs a sudo prompt on an
+    otherwise unprivileged flow and leaves root-owned files inside the
+    user's home that they cannot then read, back up, or delete.
+    """
+    personal = MachineStoreLayout.from_root(tmp_path / 'machine')
+    assert not personal.shared
+
+    identity = bootstrap_identity_paths('aivm-2404', layout=personal)
+
+    assert not identity.use_sudo
+
+
+def test_shared_store_bootstrap_identity_stays_root_owned(
+    tmp_path: Path,
+) -> None:
+    shared = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
+
+    identity = bootstrap_identity_paths('aivm-2404', layout=shared)
+
+    assert identity.use_sudo

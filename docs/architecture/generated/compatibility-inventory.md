@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 0562230390c3d142 -->
+<!-- generation schema: 1; input digest: 1ac05d327d036c90 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -147,8 +147,8 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.service` | `aivm/credentials/service.py:583` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:717` |
 | `aivm.detect` | `aivm/detect.py:297` |
-| `aivm.enrollment` | `aivm/enrollment.py:257` |
-| `aivm.enrollment` | `aivm/enrollment.py:308` |
+| `aivm.enrollment` | `aivm/enrollment.py:264` |
+| `aivm.enrollment` | `aivm/enrollment.py:315` |
 | `aivm.firewall` | `aivm/firewall.py:29` |
 | `aivm.firewall` | `aivm/firewall.py:77` |
 | `aivm.firewall` | `aivm/firewall.py:140` |

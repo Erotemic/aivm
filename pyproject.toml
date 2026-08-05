@@ -146,6 +146,7 @@ ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore
 ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
 ini_options.markers = [
   "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",
+  "claims_domains: migration tests that assert on the libvirt domain-ownership claim instead of stubbing it",
 ]
 ini_options.filterwarnings = [
   "default",

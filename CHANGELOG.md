@@ -30,7 +30,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   by root for a non-member stays unreadable to them afterwards, so every later
   read would escalate too. A host with no shared root therefore keeps its store at
   `~/.local/share/aivm/machine`, owned by the caller at `0700`, with no group
-  and no privileged step in any operation. `aivm host permissions setup`
+  and no privileged step to create, read, or write it -- including the
+  enrollment bootstrap keypair, which is root-owned only in a shared store
+  where other trusted-group members can reach it. Host operations that were
+  always privileged for a non-`libvirt` account, such as `virsh` and the
+  persistent-replay binds, still escalate exactly as before.
+  `aivm host permissions setup`
   remains the way to share a host, and `aivm config migrate` moves a personal
   store into a shared one. Only the root path, owning gid, and modes differ
   between the two; the documents, lock order, and every consumer are the same.

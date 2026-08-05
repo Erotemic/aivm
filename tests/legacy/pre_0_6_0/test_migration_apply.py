@@ -1134,3 +1134,37 @@ def test_tree_digest_covers_a_file_the_caller_may_not_read(
     readable = _tree_sha256(tree)
     os.chmod(private, 0o000)
     assert _tree_sha256(tree) != readable
+
+
+@pytest.mark.claims_domains
+def test_apply_claims_every_domain_it_takes_authority_over(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Migration is where a store takes over an already-running domain.
+
+    Almost every 0.6 domain arrives this way rather than through a fresh
+    create, so a migration that left the domain unstamped would make the
+    ownership marker close to vacuous: a machine store created on this host
+    afterwards would adopt the same domain without seeing this one first.
+    """
+    source, vm_name, _credential, _persistent = _legacy_source(tmp_path)
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine')
+    plan = build_migration_plan([source], layout=layout, check_runtime=False)
+    assert not plan.blocked
+    claimed: list[tuple[str, Path]] = []
+    monkeypatch.setattr(
+        'aivm.legacy.pre_0_6_0.migration_apply.stamp_domain_authority',
+        lambda name, target, **kwargs: claimed.append((name, target.root)),
+    )
+
+    result = apply_migration(
+        plan,
+        layout=layout,
+        guest_installer=_guest_stub([]),
+        runtime_verifier=_runtime_ok,
+    )
+
+    assert result.journal.status == 'complete'
+    assert 'domains-claimed' in result.journal.completed_steps
+    assert claimed == [(vm_name, layout.root)]

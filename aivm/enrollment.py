@@ -87,7 +87,14 @@ def bootstrap_identity_paths(
         public_text = public.read_text(encoding='utf-8').strip()
     except OSError:
         pass
-    use_sudo = not bool(os.environ.get('AIVM_MACHINE_STORE_ROOT', '').strip())
+    # Root owns this keypair only where the store is shared: there it is a
+    # machine credential sitting in a directory every trusted-group member can
+    # reach, so group members must be able to read the public half and not the
+    # private one. A personal store has exactly one principal -- its owner --
+    # so root ownership would buy nothing and cost plenty: a sudo prompt on an
+    # otherwise unprivileged flow, and root-owned files inside the user's own
+    # home that they then cannot read, back up, or delete without escalating.
+    use_sudo = layout.shared
     return BootstrapIdentity(
         directory=directory,
         private_key=private,
