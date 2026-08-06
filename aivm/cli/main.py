@@ -15,6 +15,7 @@ from typing import Any, Literal
 import kwconf
 from loguru import logger as log
 
+from .. import __version__
 from ..access_control import TRUST_MODE
 from ..attachments.ownership import attachment_owner_label
 from ..commands import CommandManager
@@ -196,6 +197,11 @@ class StatusCLI(_BaseCommand):
 
 class AgentVMModalCLI(kwconf.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents."""
+
+    # kwconf's ModalCLI turns this into the ``--version`` flag. It registers
+    # the flag per modal that carries a version, so it is the root's alone --
+    # ``aivm vm --version`` remains an unrecognized argument.
+    __version__ = __version__
 
     help = HelpModalCLI
     status = StatusCLI

@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
+import aivm
 import aivm.cli._common as common_mod
 import aivm.services as services_mod
 from aivm.attachments.guest import (
@@ -25,7 +26,7 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 from aivm.services import maybe_offer_create_ssh_identity
 from aivm.vm.share import _auto_share_tag_for_path
-from tests.helpers import make_cfg, write_store
+from tests.helpers import make_cfg, run_cli, write_store
 
 
 def test_auto_share_tag_collision() -> None:
@@ -125,6 +126,17 @@ def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
     store.behavior.verbose = 4
     save_store(store, cfg_path)
     assert common_mod._resolve_cfg_verbosity(str(cfg_path)) == 4
+
+
+def test_version_flag_reports_package_version(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The modal ``--version`` flag only exists while the CLI class carries a
+    # ``__version__``, so this also guards the package-init import order that
+    # lets ``aivm.cli.main`` read it back.
+    rc = run_cli(['--version'])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == aivm.__version__
 
 
 def test_help_raw_outputs_direct_system_commands(
