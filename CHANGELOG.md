@@ -18,6 +18,9 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* `aivm --version` prints the package version. `kwconf.ModalCLI` already grows
+  the flag from a `__version__` class attribute, so this is that attribute
+  rather than a hand-rolled argument.
 * Gave the machine store a personal layout, so a host that never runs `aivm
   host permissions setup` still works. 0.6 moved desired state out of the
   caller's home into a root-owned, `libvirt`-group-writable
