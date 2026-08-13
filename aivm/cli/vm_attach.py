@@ -35,6 +35,10 @@ from ..attachments.persistent import (
     _sync_persistent_attachment_manifest_on_host,
     _sync_persistent_host_replay_manifest,
 )
+from ..attachments.persistent.identity import (
+    PersistentSourceIdentityRefresh,
+    refresh_persistent_source_identities,
+)
 from ..attachments.resolve import (
     ATTACHMENT_ACCESS_RO,
     ATTACHMENT_MODE_DIRECT_VIRTIOFS,
@@ -137,6 +141,8 @@ class VMPersistentHostReplayRequest:
     config_opt: str | None
     vm_opt: str
     dry_run: bool = False
+    trust_current_paths: bool = False
+    admin_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -965,13 +971,53 @@ def run_vm_detach(request: VMDetachRequest) -> int:
         return _run_vm_detach_locked(request, host_src, context, cfg_path)
 
 
+def _print_persistent_identity_refresh(
+    report: PersistentSourceIdentityRefresh, *, dry_run: bool
+) -> None:
+    prefix = 'DRYRUN: would trust' if dry_run else 'Trusted'
+    for host_path in report.refreshed:
+        print(f'{prefix} current persistent source object: {host_path}')
+    for host_path in report.unchanged:
+        print(f'Persistent source identity already current: {host_path}')
+    for host_path, detail in report.unavailable:
+        log.warning(
+            'Could not refresh persistent source identity for {}: {}',
+            host_path,
+            detail,
+        )
+    if report.skipped_foreign:
+        log.warning(
+            'Skipped {} persistent attachment(s) owned by another access '
+            'identity; use --admin_override only when intentionally '
+            'reauthorizing those paths.',
+            len(report.skipped_foreign),
+        )
+
+
 def run_persistent_host_replay(
     request: VMPersistentHostReplayRequest,
 ) -> int:
-    """Replay host-side persistent bind mounts from the saved manifest."""
-    cfg, cfg_path = load_cfg_with_path(
-        request.config_opt, vm_opt=request.vm_opt
-    )
+    """Replay host binds, optionally reauthorizing the current path objects."""
+    if request.trust_current_paths:
+        context, cfg_path = load_vm_context_with_path(
+            request.config_opt, vm_opt=request.vm_opt
+        )
+        cfg = context.effective_cfg
+        owner = attachment_owner_for_context(context, cfg_path)
+        report = refresh_persistent_source_identities(
+            cfg,
+            cfg_path,
+            current_principal_id=owner,
+            administrative_override=bool(request.admin_override),
+            dry_run=bool(request.dry_run),
+        )
+        _print_persistent_identity_refresh(
+            report, dry_run=bool(request.dry_run)
+        )
+    else:
+        cfg, cfg_path = load_cfg_with_path(
+            request.config_opt, vm_opt=request.vm_opt
+        )
     _sync_persistent_attachment_manifest_on_host(
         cfg,
         cfg_path,
@@ -1125,15 +1171,38 @@ class VMPersistentHostReplayCLI(_BaseCommand):
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    trust_current_paths: bool = kwconf.Flag(
+        False,
+        help=(
+            'Explicitly trust the filesystem objects currently present at '
+            'saved persistent host paths and refresh their pinned identities '
+            'before replay. This is the recovery escape hatch for legitimate '
+            'remount/reboot identity changes; use --dry_run to preview.'
+        ),
+    )
+    admin_override: bool = kwconf.Flag(
+        False,
+        help=(
+            'With --trust_current_paths, also reauthorize persistent paths '
+            'owned by other access identities.'
+        ),
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        if args.admin_override and not args.trust_current_paths:
+            raise AIVMError(
+                '--admin_override on persistent-host-replay is only valid '
+                'with --trust_current_paths.'
+            )
         return run_persistent_host_replay(
             VMPersistentHostReplayRequest(
                 config_opt=args.config,
                 vm_opt=args.vm,
                 dry_run=bool(args.dry_run),
+                trust_current_paths=bool(args.trust_current_paths),
+                admin_override=bool(args.admin_override),
             )
         )
 

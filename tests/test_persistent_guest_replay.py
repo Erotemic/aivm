@@ -514,3 +514,22 @@ def test_persistent_replay_helper_ignores_enabled_child_under_enabled_parent(
     mounts = ns['subprocess'].run.mounts  # type: ignore[attr-defined]
     assert '/workspace/proj' in mounts
     assert '/workspace/proj/sub' not in mounts
+
+
+def test_persistent_replay_helper_reports_record_failures_without_exiting() -> None:
+    from aivm.persistent_replay import persistent_replay_python
+
+    source = persistent_replay_python()
+    ns = _exec_guest_replay_helper(source)
+    ns['mount_persistent_root'] = lambda: None
+    ns['sync_state'] = lambda: ['could not verify /workspace/stale']
+
+    stderr = StringIO()
+    with redirect_stderr(stderr):
+        ns['main']()
+
+    assert (
+        'WARNING: persistent attachment replay skipped one record: '
+        'could not verify /workspace/stale'
+        in stderr.getvalue()
+    )

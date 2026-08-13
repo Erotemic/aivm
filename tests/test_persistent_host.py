@@ -1626,3 +1626,52 @@ def test_unreadable_approved_manifest_requires_the_replay(
     assert not _approved_binds_already_applied(
         tmp_path / 'never-written.json', export_root, mountinfo=mountinfo
     )
+
+
+def test_host_replay_isolates_record_failure_and_continues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {'shared_root_token': 'bad', 'enabled': True},
+                    {'shared_root_token': 'good', 'enabled': True},
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    seen: list[str] = []
+
+    def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:
+        token = str(record['shared_root_token'])
+        seen.append(token)
+        if token == 'bad':
+            raise RuntimeError('approved persistent source changed')
+
+    helper.ensure_record = ensure_record
+    helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+        ]
+    )
+
+    assert seen == ['bad', 'good']
+    assert (
+        'WARNING: skipping persistent host attachment bad: '
+        'approved persistent source changed'
+        in capsys.readouterr().err
+    )

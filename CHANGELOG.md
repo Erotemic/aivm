@@ -4,6 +4,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.0 - Unreleased
 
+### Fixed
+* Persistent attachment replay now isolates per-record host/guest failures, so
+  one missing or identity-mismatched saved folder no longer aborts every other
+  persistent attachment or an otherwise healthy VM session. The strict source
+  pin remains the default: mismatched paths are skipped with warnings. Operators
+  can deliberately accept the objects currently present at their own saved
+  paths with ``aivm vm persistent-host-replay --trust_current_paths`` (and can
+  preview that recovery with ``--dry_run``); cross-principal reauthorization
+  still requires the explicit ``--admin_override``.
+
 ### Changed
 * Renamed the `shared` attachment mode to `direct-virtiofs`, after its cost
   rather than its behavior. Each such attachment gives its folder a dedicated

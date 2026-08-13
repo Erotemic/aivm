@@ -348,8 +348,10 @@ def persistent_replay_python() -> str:
                 raise SystemExit(1)
             if failures:
                 for item in failures:
-                    print(item, file=sys.stderr)
-                raise SystemExit(1)
+                    print(
+                        f"WARNING: persistent attachment replay skipped one record: {{item}}",
+                        file=sys.stderr,
+                    )
 
         if __name__ == "__main__":
             main()
@@ -385,6 +387,7 @@ def persistent_host_replay_python() -> str:
         import re
         import stat
         import subprocess
+        import sys
         from pathlib import Path
 
         TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
@@ -642,9 +645,16 @@ def persistent_host_replay_python() -> str:
                 for record in records:
                     if not isinstance(record, dict):
                         raise RuntimeError("host replay manifest contains a non-object record")
+                    token = validate_token(record.get("shared_root_token"))
                     if bool(record.get("enabled", True)):
-                        desired_tokens.add(validate_token(record.get("shared_root_token")))
-                    ensure_record(export_root_fd, record)
+                        desired_tokens.add(token)
+                    try:
+                        ensure_record(export_root_fd, record)
+                    except Exception as ex:  # one stale source must not block the VM
+                        print(
+                            f"WARNING: skipping persistent host attachment {token}: {ex}",
+                            file=sys.stderr,
+                        )
                 if args.prune_stale:
                     prune_stale_mounts(export_root_fd, desired_tokens)
             finally:
