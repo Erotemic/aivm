@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from aivm.attachments.persistent.identity import (
+    _refresh_in_store,
     refresh_persistent_source_identities,
 )
-from aivm.config_store import AttachmentEntry, load_store, save_store
-from aivm.fs_identity import directory_identity
+from aivm.config_store import AttachmentEntry, Store, load_store, save_store
+from aivm.fs_identity import FilesystemIdentity, directory_identity
 from tests.helpers import make_cfg, write_store
 
 
@@ -117,4 +120,49 @@ def test_trust_current_paths_skips_missing_source_and_refreshes_others(
     assert report.refreshed == (str(good.resolve()),)
     assert report.unavailable and report.unavailable[0][0] == str(
         missing.resolve()
+    )
+
+
+def test_admin_refresh_can_use_privileged_descriptor_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / 'private-source'
+    source.mkdir()
+    reg = Store()
+    reg.attachments.append(
+        AttachmentEntry(
+            host_path=str(source.resolve()),
+            vm_name='test-vm',
+            mode='persistent',
+            guest_dst='/workspace/private-source',
+            tag='hostcode-private-source',
+            owner_principal_id='principal-other',
+            source_dev=1,
+            source_ino=2,
+        )
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.identity.directory_identity',
+        lambda _path: (_ for _ in ()).throw(PermissionError('private home')),
+    )
+    probed: list[Path] = []
+
+    def privileged_probe(path: Path) -> FilesystemIdentity:
+        probed.append(path)
+        return FilesystemIdentity(dev=9, ino=10)
+
+    report = _refresh_in_store(
+        reg,
+        vm_name='test-vm',
+        current_principal_id='principal-current',
+        administrative_override=True,
+        privileged_probe=privileged_probe,
+    )
+
+    assert probed == [source.resolve()]
+    assert report.refreshed == (str(source.resolve()),)
+    assert (reg.attachments[0].source_dev, reg.attachments[0].source_ino) == (
+        9,
+        10,
     )

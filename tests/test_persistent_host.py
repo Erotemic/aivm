@@ -59,6 +59,26 @@ REPLAY_INVOCATION = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
 """The exact remote script the reconcile flow runs to replay guest mounts."""
 
 
+def test_source_unavailable_diagnostics_parses_only_machine_records() -> None:
+    from aivm.attachments.persistent import host_bind
+
+    stderr = '\n'.join(
+        [
+            'WARNING: human readable detail',
+            (
+                'AIVM_PERSISTENT_SOURCE_UNAVAILABLE '
+                '{"detail": "identity changed", "source_dir": "/src/project", '
+                '"token": "hostcode-project"}'
+            ),
+            'AIVM_PERSISTENT_SOURCE_UNAVAILABLE not-json',
+        ]
+    )
+
+    assert host_bind._source_unavailable_diagnostics(stderr) == (
+        ('hostcode-project', '/src/project', 'identity changed'),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Local helpers for reading artifacts back out of the recorder
 # ---------------------------------------------------------------------------
@@ -884,6 +904,36 @@ def test_persistent_replay_script_nonchecking_path_avoids_error_log(
     assert not errors
 
 
+def test_persistent_guest_root_script_accepts_degraded_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-degraded-replay'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    activate_manager(monkeypatch)
+    command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(returncode=3, stderr='source unavailable')},
+    )
+
+    result = _run_guest_root_script(
+        cfg,
+        '10.0.0.5',
+        script='echo replay',
+        summary='Replay degraded persistent attachments',
+        detail='',
+        dry_run=False,
+        check=True,
+        allowed_exit_codes=(0, 3),
+    )
+
+    assert result is not None
+    assert result.code == 3
+    assert result.stderr == 'source unavailable'
+
+
 def test_persistent_guest_root_script_retries_transient_banner_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1129,7 +1179,7 @@ def test_host_replay_rejects_source_replacement(
     source.rename(tmp_path / 'approved-source')
     source.mkdir()
     with pytest.raises(
-        RuntimeError, match='approved persistent source changed'
+        helper.SourceUnavailableError, match='approved persistent source changed'
     ):
         helper.open_approved_source(record)
 
@@ -1150,7 +1200,7 @@ def test_host_replay_rejects_symlink_replacement(
     approved = tmp_path / 'approved-source'
     source.rename(approved)
     source.symlink_to(approved, target_is_directory=True)
-    with pytest.raises(OSError):
+    with pytest.raises(helper.SourceUnavailableError):
         helper.open_approved_source(record)
 
 
@@ -1171,7 +1221,7 @@ def test_host_replay_rejects_intermediate_symlink(
         'source_dev': info.st_dev,
         'source_ino': info.st_ino,
     }
-    with pytest.raises(OSError):
+    with pytest.raises(helper.SourceUnavailableError):
         helper.open_approved_source(record)
 
 
@@ -1628,9 +1678,63 @@ def test_unreadable_approved_manifest_requires_the_replay(
     )
 
 
-def test_host_replay_isolates_record_failure_and_continues(
+def test_host_replay_isolates_source_failure_and_continues(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {'shared_root_token': 'bad', 'enabled': True},
+                    {'shared_root_token': 'good', 'enabled': True},
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    seen: list[str] = []
+    quarantined: list[str] = []
+
+    def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:
+        token = str(record['shared_root_token'])
+        seen.append(token)
+        if token == 'bad':
+            raise helper.SourceUnavailableError('approved persistent source changed')
+
+    helper.ensure_record = ensure_record
+    helper.quarantine_unavailable_token = (
+        lambda _export_root_fd, token: quarantined.append(str(token))
+    )
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+        ]
+    )
+
+    assert code == helper.DEGRADED_EXIT
+    assert seen == ['bad', 'good']
+    assert quarantined == ['bad']
+    assert (
+        'WARNING: skipping persistent host attachment bad: '
+        'approved persistent source changed'
+        in capsys.readouterr().err
+    )
+
+
+def test_host_replay_does_not_swallow_mount_or_access_failure(
+    tmp_path: Path,
 ) -> None:
     helper = _load_host_replay_helper(tmp_path)
     manifest_path = tmp_path / 'approved.json'
@@ -1655,23 +1759,58 @@ def test_host_replay_isolates_record_failure_and_continues(
         token = str(record['shared_root_token'])
         seen.append(token)
         if token == 'bad':
-            raise RuntimeError('approved persistent source changed')
+            raise RuntimeError('remount,bind,ro failed')
 
     helper.ensure_record = ensure_record
-    helper.main(
-        [
-            '--manifest',
-            str(manifest_path),
-            '--export-root',
-            str(export_root),
-            '--vm-name',
-            'vm',
-        ]
-    )
 
-    assert seen == ['bad', 'good']
-    assert (
-        'WARNING: skipping persistent host attachment bad: '
-        'approved persistent source changed'
-        in capsys.readouterr().err
+    with pytest.raises(RuntimeError, match='remount,bind,ro failed'):
+        helper.main(
+            [
+                '--manifest',
+                str(manifest_path),
+                '--export-root',
+                str(export_root),
+                '--vm-name',
+                'vm',
+            ]
+        )
+
+    assert seen == ['bad']
+
+
+def test_host_replay_quarantines_unavailable_empty_token_directory(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    token_dir = export_root / 'stale-token'
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
     )
+    helper.is_mountpoint_fd = lambda _fd: False
+    try:
+        helper.quarantine_unavailable_token(export_root_fd, 'stale-token')
+    finally:
+        helper.os.close(export_root_fd)
+
+    assert not token_dir.exists()
+
+
+def test_host_replay_probe_source_uses_descriptor_walk(tmp_path: Path) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+
+    assert helper.main(['--probe-source', str(source)]) == 0
+
+
+def test_host_replay_probe_source_rejects_symlink(tmp_path: Path) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(source, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        helper.main(['--probe-source', str(alias)])

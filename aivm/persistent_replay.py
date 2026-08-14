@@ -29,6 +29,12 @@ PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX = (
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
 PERSISTENT_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-persistent'
 
+# Replay helpers use this distinct exit status when they safely isolate one or
+# more unavailable/untrusted source records while still converging every other
+# record. Callers may continue the broader VM/session operation, but should
+# surface the diagnostics and offer the explicit trust/re-pin recovery action.
+PERSISTENT_REPLAY_DEGRADED_EXIT = 3
+
 #: Export-root child names the privileged host replay helper will act on.
 #: The helper embeds this same pattern (it is a standalone script, so it
 #: cannot import it); ``test_persistent_templates`` holds the two together.
@@ -36,7 +42,7 @@ PERSISTENT_BIND_TOKEN_PATTERN = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
 
 
 def persistent_replay_python() -> str:
-    return textwrap.dedent(
+    source = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
         import json
@@ -53,6 +59,10 @@ def persistent_replay_python() -> str:
         # back through virtiofs.
         STATE_DIR = "{PERSISTENT_ATTACHMENT_GUEST_STATE_DIR}"
         STATE_PATH = "{PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}"
+        DEGRADED_EXIT = __AIVM_DEGRADED_EXIT__
+
+        class SourceUnavailableError(RuntimeError):
+            pass
 
         def run(cmd, check=True, capture=False):
             return subprocess.run(
@@ -275,33 +285,33 @@ def persistent_replay_python() -> str:
                 raise RuntimeError("persistent attachment record missing guest_dst")
             source = mount_source_for(record)
             if not source:
-                print(
-                    f"WARNING: skipping persistent attachment record with missing shared_root_token for guest_dst {{guest_dst}}",
-                    file=sys.stderr,
+                raise RuntimeError(
+                    f"persistent attachment record missing shared_root_token for guest_dst {{guest_dst}}"
                 )
-                return
-            if not os.path.isdir(source):
-                print(
-                    f"WARNING: skipping persistent attachment record with missing source in shared root: {{source}}",
-                    file=sys.stderr,
-                )
-                return
             current = current_mount_info(guest_dst)
+            if not os.path.isdir(source):
+                if current is not None:
+                    # A host-side rejected token must not leave an old guest
+                    # bind alive. Failure to remove it is a reconcile failure,
+                    # not a recoverable source-trust warning.
+                    unmount_guest_dst(guest_dst, ignore_busy=False)
+                raise SourceUnavailableError(
+                    f"persistent attachment source is unavailable in shared root: {{source}}"
+                )
             desired = desired_option(record)
             if current is not None:
                 current_source = str(current.get("source") or "").strip()
                 current_options = str(current.get("options") or "").strip()
                 if current_source and current_source != source:
-                    unmount_guest_dst(guest_dst, ignore_busy=True)
+                    unmount_guest_dst(guest_dst, ignore_busy=False)
                     current = current_mount_info(guest_dst)
                     if current is not None:
                         current_source = str(current.get("source") or "").strip()
                         if current_source and current_source != source:
-                            print(
-                                f"WARNING: skipping persistent attachment replacement for busy mount {{guest_dst}} (current={{current_source}} desired={{source}})",
-                                file=sys.stderr,
+                            raise RuntimeError(
+                                f"persistent attachment replacement did not unmount for {{guest_dst}} "
+                                f"(current={{current_source}} desired={{source}})"
                             )
-                            return
                         current_options = str(current.get("options") or "").strip()
                         if desired in current_options.split(","):
                             return
@@ -328,14 +338,11 @@ def persistent_replay_python() -> str:
             failures = []
             for guest_dst, enabled, record in records:
                 if not enabled:
-                    try:
-                        unmount_guest_dst(guest_dst, ignore_busy=True)
-                    except Exception as ex:  # pragma: no cover - guest runtime path
-                        failures.append(str(ex))
+                    unmount_guest_dst(guest_dst, ignore_busy=False)
                     continue
                 try:
                     ensure_record(record)
-                except Exception as ex:  # pragma: no cover - guest runtime path
+                except SourceUnavailableError as ex:
                     failures.append(str(ex))
             return failures
 
@@ -352,10 +359,15 @@ def persistent_replay_python() -> str:
                         f"WARNING: persistent attachment replay skipped one record: {{item}}",
                         file=sys.stderr,
                     )
+                return DEGRADED_EXIT
+            return 0
 
         if __name__ == "__main__":
-            main()
+            raise SystemExit(main())
         """
+    )
+    return source.replace(
+        '__AIVM_DEGRADED_EXIT__', str(PERSISTENT_REPLAY_DEGRADED_EXIT)
     )
 
 
@@ -378,7 +390,7 @@ def persistent_replay_service_unit() -> str:
 
 
 def persistent_host_replay_python() -> str:
-    return textwrap.dedent(
+    source = textwrap.dedent(
         """\
         #!/usr/bin/env python3
         import argparse
@@ -391,12 +403,16 @@ def persistent_host_replay_python() -> str:
         from pathlib import Path
 
         TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+        DEGRADED_EXIT = __AIVM_DEGRADED_EXIT__
         DIRECTORY_FLAGS = (
             getattr(os, "O_PATH", os.O_RDONLY)
             | getattr(os, "O_DIRECTORY", 0)
             | getattr(os, "O_NOFOLLOW", 0)
             | getattr(os, "O_CLOEXEC", 0)
         )
+
+        class SourceUnavailableError(RuntimeError):
+            pass
 
         def run(cmd, *, check=True, capture=False, pass_fds=()):
             return subprocess.run(
@@ -481,9 +497,17 @@ def persistent_host_replay_python() -> str:
 
         def open_approved_source(record):
             token = validate_token(record.get("shared_root_token"))
-            source_fd = open_absolute_directory(
+            source_path, _parts = path_parts(
                 record.get("source_dir"), label=f"source_dir for {token}"
             )
+            try:
+                source_fd = open_absolute_directory(
+                    source_path, label=f"source_dir for {token}"
+                )
+            except (OSError, RuntimeError) as ex:
+                raise SourceUnavailableError(
+                    f"persistent source unavailable for {token}: {source_path}: {ex}"
+                ) from ex
             info = os.fstat(source_fd)
             expected_dev = int(record.get("source_dev", -1))
             expected_ino = int(record.get("source_ino", -1))
@@ -492,7 +516,7 @@ def persistent_host_replay_python() -> str:
                 raise RuntimeError(f"manifest lacks approved source identity for {token}")
             if (int(info.st_dev), int(info.st_ino)) != (expected_dev, expected_ino):
                 os.close(source_fd)
-                raise RuntimeError(
+                raise SourceUnavailableError(
                     f"approved persistent source changed for {token}: "
                     f"expected dev={expected_dev} ino={expected_ino}, "
                     f"found dev={info.st_dev} ino={info.st_ino}"
@@ -617,13 +641,60 @@ def persistent_host_replay_python() -> str:
                     if child_fd >= 0:
                         os.close(child_fd)
 
+        def quarantine_unavailable_token(export_root_fd, token):
+            # A rejected token must not survive as an empty directory that the
+            # guest could mistake for a successfully exported source.
+            token = validate_token(token)
+            try:
+                child_fd = open_child_directory(export_root_fd, token)
+            except FileNotFoundError:
+                return
+            try:
+                if is_mountpoint_fd(child_fd):
+                    os.close(child_fd)
+                    child_fd = -1
+                    unmount_child(export_root_fd, token)
+            finally:
+                if child_fd >= 0:
+                    os.close(child_fd)
+            try:
+                os.rmdir(token, dir_fd=export_root_fd)
+            except FileNotFoundError:
+                return
+            except OSError as ex:
+                raise RuntimeError(
+                    f"could not quarantine unavailable persistent host bind {token}: {ex}"
+                ) from ex
+
+        def probe_source_identity(raw):
+            source_fd = open_absolute_directory(raw, label="probe source")
+            try:
+                info = os.fstat(source_fd)
+                print(
+                    json.dumps(
+                        {"dev": int(info.st_dev), "ino": int(info.st_ino)},
+                        sort_keys=True,
+                    )
+                )
+            finally:
+                os.close(source_fd)
+            return 0
+
         def main(argv=None):
             parser = argparse.ArgumentParser()
-            parser.add_argument("--manifest", required=True)
-            parser.add_argument("--export-root", required=True)
-            parser.add_argument("--vm-name", required=True)
+            parser.add_argument("--manifest")
+            parser.add_argument("--export-root")
+            parser.add_argument("--vm-name")
             parser.add_argument("--prune-stale", action="store_true")
+            parser.add_argument("--probe-source")
             args = parser.parse_args(argv)
+
+            if args.probe_source:
+                if args.manifest or args.export_root or args.vm_name or args.prune_stale:
+                    parser.error("--probe-source cannot be combined with replay arguments")
+                return probe_source_identity(args.probe_source)
+            if not args.manifest or not args.export_root or not args.vm_name:
+                parser.error("--manifest, --export-root, and --vm-name are required for replay")
 
             manifest_fd = open_validated_manifest(args.manifest)
             with os.fdopen(manifest_fd, "r", encoding="utf-8") as file:
@@ -642,27 +713,51 @@ def persistent_host_replay_python() -> str:
             )
             try:
                 desired_tokens = set()
+                unavailable = []
                 for record in records:
                     if not isinstance(record, dict):
                         raise RuntimeError("host replay manifest contains a non-object record")
                     token = validate_token(record.get("shared_root_token"))
-                    if bool(record.get("enabled", True)):
-                        desired_tokens.add(token)
+                    if not bool(record.get("enabled", True)):
+                        continue
                     try:
                         ensure_record(export_root_fd, record)
-                    except Exception as ex:  # one stale source must not block the VM
+                    except SourceUnavailableError as ex:
+                        quarantine_unavailable_token(export_root_fd, token)
+                        unavailable.append((token, str(record.get("source_dir") or ""), str(ex)))
                         print(
                             f"WARNING: skipping persistent host attachment {token}: {ex}",
                             file=sys.stderr,
                         )
+                        continue
+                    desired_tokens.add(token)
                 if args.prune_stale:
                     prune_stale_mounts(export_root_fd, desired_tokens)
             finally:
                 os.close(export_root_fd)
+            if unavailable:
+                for token, source_dir, detail in unavailable:
+                    print(
+                        "AIVM_PERSISTENT_SOURCE_UNAVAILABLE "
+                        + json.dumps(
+                            {
+                                "token": token,
+                                "source_dir": source_dir,
+                                "detail": detail,
+                            },
+                            sort_keys=True,
+                        ),
+                        file=sys.stderr,
+                    )
+                return DEGRADED_EXIT
+            return 0
 
         if __name__ == "__main__":
-            main()
+            raise SystemExit(main())
         """
+    )
+    return source.replace(
+        '__AIVM_DEGRADED_EXIT__', str(PERSISTENT_REPLAY_DEGRADED_EXIT)
     )
 
 

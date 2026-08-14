@@ -12,6 +12,8 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
+import pytest
+
 from tests.persistent_helpers import (
     _exec_guest_replay_helper,
     _make_guest_replay_fake_run,
@@ -310,7 +312,7 @@ def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
     assert stale_source in mounts
 
 
-def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
+def test_persistent_replay_helper_fails_when_source_replacement_is_busy(
     tmp_path: Path,
 ) -> None:
     from aivm.persistent_replay import persistent_replay_python
@@ -363,15 +365,12 @@ def test_persistent_replay_helper_skips_busy_source_replacement_and_continues(
         encoding='utf-8',
     )
 
-    stderr = StringIO()
-    with redirect_stderr(stderr):
+    with pytest.raises(RuntimeError, match='could not unmount /workspace/proj'):
         ns['main']()
 
-    messages = stderr.getvalue()
-    assert (
-        'WARNING: skipping persistent attachment replacement for busy mount /workspace/proj'
-        in messages
-    )
+    # Records are normalized deterministically, so this valid sibling is
+    # reconciled before /workspace/proj.  A hard failure must propagate, but
+    # replay is not transactional and does not roll back earlier successes.
     assert '/workspace/keep' in mounts
     assert mounts['/workspace/proj']['source'] == wrong_source
 
@@ -413,6 +412,54 @@ def test_persistent_replay_helper_removes_nonbusy_stale_mount(
         ns['main']()
 
     assert stale_source not in mounts
+
+
+def test_persistent_replay_helper_unmounts_guest_when_host_token_is_missing(
+    tmp_path: Path,
+) -> None:
+    from aivm.persistent_replay import persistent_replay_python
+
+    source = persistent_replay_python()
+    ns = _exec_guest_replay_helper(source)
+    ns['PERSISTENT_ROOT_MOUNT'] = str(tmp_path / 'mnt')
+    ns['STATE_PATH'] = str(tmp_path / 'attachments.json')
+    ns['os'].makedirs = lambda *a, **k: None  # type: ignore[attr-defined]
+
+    missing_source = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'missing-token')
+    mounts = {
+        '/workspace/proj': {
+            'source': missing_source,
+            'options': 'rw',
+        }
+    }
+    ns['subprocess'].run = _make_guest_replay_fake_run(mounts)  # type: ignore[index]
+    Path(ns['PERSISTENT_ROOT_MOUNT']).mkdir(parents=True, exist_ok=True)
+    Path(ns['STATE_PATH']).write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'vm_name': 'vm',
+                'shared_root_mount': ns['PERSISTENT_ROOT_MOUNT'],
+                'records': [
+                    {
+                        'guest_dst': '/workspace/proj',
+                        'shared_root_token': 'missing-token',
+                        'access': 'rw',
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    stderr = StringIO()
+    with redirect_stderr(stderr):
+        code = ns['main']()
+
+    assert code == ns['DEGRADED_EXIT']
+    assert '/workspace/proj' not in mounts
+    assert 'source is unavailable in shared root' in stderr.getvalue()
 
 
 def test_persistent_replay_helper_allows_enabled_child_under_disabled_parent(
@@ -516,20 +563,56 @@ def test_persistent_replay_helper_ignores_enabled_child_under_enabled_parent(
     assert '/workspace/proj/sub' not in mounts
 
 
-def test_persistent_replay_helper_reports_record_failures_without_exiting() -> None:
+def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:
     from aivm.persistent_replay import persistent_replay_python
 
     source = persistent_replay_python()
     ns = _exec_guest_replay_helper(source)
     ns['mount_persistent_root'] = lambda: None
-    ns['sync_state'] = lambda: ['could not verify /workspace/stale']
+    ns['sync_state'] = lambda: ['source is unavailable in shared root: /mnt/aivm-persistent/stale']
 
     stderr = StringIO()
     with redirect_stderr(stderr):
-        ns['main']()
+        code = ns['main']()
 
+    assert code == ns['DEGRADED_EXIT']
     assert (
         'WARNING: persistent attachment replay skipped one record: '
-        'could not verify /workspace/stale'
+        'source is unavailable in shared root: /mnt/aivm-persistent/stale'
         in stderr.getvalue()
     )
+
+
+def test_persistent_replay_helper_does_not_swallow_mount_failure() -> None:
+    from aivm.persistent_replay import persistent_replay_python
+
+    source = persistent_replay_python()
+    ns = _exec_guest_replay_helper(source)
+    ns['load_json'] = lambda _path: {'records': [{}]}
+    ns['validate_records'] = lambda _records: [('/workspace/proj', True, {})]
+    ns['prune_stale_mounts'] = lambda _targets: None
+
+    def fail_after_reconcile_started(_record: dict[str, object]) -> None:
+        raise RuntimeError('remount,bind,ro failed')
+
+    ns['ensure_record'] = fail_after_reconcile_started
+
+    with pytest.raises(RuntimeError, match='remount,bind,ro failed'):
+        ns['sync_state']()
+
+
+def test_persistent_replay_helper_isolates_only_source_unavailable() -> None:
+    from aivm.persistent_replay import persistent_replay_python
+
+    source = persistent_replay_python()
+    ns = _exec_guest_replay_helper(source)
+    ns['load_json'] = lambda _path: {'records': [{}]}
+    ns['validate_records'] = lambda _records: [('/workspace/proj', True, {})]
+    ns['prune_stale_mounts'] = lambda _targets: None
+
+    def unavailable(_record: dict[str, object]) -> None:
+        raise ns['SourceUnavailableError']('source identity changed')
+
+    ns['ensure_record'] = unavailable
+
+    assert ns['sync_state']() == ['source identity changed']

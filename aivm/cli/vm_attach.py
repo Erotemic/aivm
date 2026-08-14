@@ -1023,7 +1023,7 @@ def run_persistent_host_replay(
         cfg_path,
         dry_run=bool(request.dry_run),
     )
-    _reconcile_persistent_host_binds(
+    unavailable = _reconcile_persistent_host_binds(
         cfg,
         cfg_path,
         dry_run=bool(request.dry_run),
@@ -1034,7 +1034,14 @@ def run_persistent_host_replay(
             f'DRYRUN: would replay host-side persistent bind mounts for VM {cfg.vm.name}'
         )
     else:
-        print(f'Replayed host-side persistent bind mounts for VM {cfg.vm.name}')
+        suffix = (
+            f' with {len(unavailable)} unavailable source(s) left unmounted'
+            if unavailable
+            else ''
+        )
+        print(
+            f'Replayed host-side persistent bind mounts for VM {cfg.vm.name}{suffix}'
+        )
     return 0
 
 

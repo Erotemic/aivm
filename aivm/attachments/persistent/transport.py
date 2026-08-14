@@ -158,6 +158,7 @@ def _run_guest_root_script(
     dry_run: bool,
     role: CommandRole | None = None,
     check: bool = True,
+    allowed_exit_codes: tuple[int, ...] = (0,),
 ) -> CommandResult | None:
     result = _run_guest_ssh_script_with_retry(
         cfg,
@@ -168,12 +169,13 @@ def _run_guest_root_script(
         dry_run=dry_run,
         role=role,
         check=check,
+        allowed_exit_codes=allowed_exit_codes,
         connect_timeout_s=15,
         retries=3,
     )
     if not check:
         code = int(getattr(result, 'code', getattr(result, 'returncode', 0)))
-        if code != 0:
+        if code not in allowed_exit_codes:
             stderr = str(getattr(result, 'stderr', '') or '').strip()
             stdout = str(getattr(result, 'stdout', '') or '').strip()
             raise RuntimeError(
@@ -254,6 +256,7 @@ def _run_guest_ssh_script_with_retry(
     dry_run: bool,
     role: CommandRole | None = None,
     check: bool = True,
+    allowed_exit_codes: tuple[int, ...] = (0,),
     connect_timeout_s: int = 15,
     retries: int = 3,
 ) -> CommandResult | None:
@@ -289,7 +292,7 @@ def _run_guest_ssh_script_with_retry(
         )
         last_result = result
         code = int(getattr(result, 'code', getattr(result, 'returncode', 0)))
-        if code == 0:
+        if code in allowed_exit_codes:
             return result
         stderr = str(getattr(result, 'stderr', '') or '').strip()
         stdout = str(getattr(result, 'stdout', '') or '').strip()

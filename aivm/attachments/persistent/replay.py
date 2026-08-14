@@ -13,6 +13,7 @@ from ...errors import CommandControlError
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
+    PERSISTENT_REPLAY_DEGRADED_EXIT,
     persistent_replay_python,
     persistent_replay_service_unit,
 )
@@ -119,8 +120,9 @@ def _reconcile_persistent_attachments_in_guest(
                 detail='Verify and repair guest-visible persistent attachment bind mounts from the persisted manifest.',
                 dry_run=dry_run,
                 check=not continue_on_error,
+                allowed_exit_codes=(0, PERSISTENT_REPLAY_DEGRADED_EXIT),
             )
-            if continue_on_error and replay_result is not None:
+            if replay_result is not None:
                 code = int(
                     getattr(
                         replay_result,
@@ -128,10 +130,20 @@ def _reconcile_persistent_attachments_in_guest(
                         getattr(replay_result, 'returncode', 0),
                     )
                 )
-                if code != 0:
-                    stderr = str(
-                        getattr(replay_result, 'stderr', '') or ''
-                    ).strip()
+                stderr = str(
+                    getattr(replay_result, 'stderr', '') or ''
+                ).strip()
+                if stderr:
+                    for line in stderr.splitlines():
+                        log.warning('guest-persistent-replay: {}', line)
+                if code == PERSISTENT_REPLAY_DEGRADED_EXIT:
+                    log.warning(
+                        'Guest persistent attachment replay completed in '
+                        'degraded mode for VM {}; unavailable host sources '
+                        'remain unmounted.',
+                        cfg.vm.name,
+                    )
+                elif code != 0:
                     stdout = str(
                         getattr(replay_result, 'stdout', '') or ''
                     ).strip()

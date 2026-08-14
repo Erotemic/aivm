@@ -10,11 +10,13 @@ from pathlib import Path
 
 from loguru import logger as log
 
-from ...commands import CommandManager
+from ...commands import CommandError, CommandManager
 from ...config import AgentVMConfig
+from ...fs_identity import FilesystemIdentity
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
     PERSISTENT_BIND_TOKEN_PATTERN,
+    PERSISTENT_REPLAY_DEGRADED_EXIT,
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     persistent_host_replay_python,
     persistent_host_replay_service_unit,
@@ -224,13 +226,73 @@ def _bind_access_matches(target: Path, access: str) -> bool:
     return read_only == (access.strip() == 'ro')
 
 
+def _source_unavailable_diagnostics(
+    stderr: str,
+) -> tuple[tuple[str, str, str], ...]:
+    """Parse machine-readable degraded-source diagnostics from the helper."""
+    prefix = 'AIVM_PERSISTENT_SOURCE_UNAVAILABLE '
+    found: list[tuple[str, str, str]] = []
+    for line in stderr.splitlines():
+        if not line.startswith(prefix):
+            continue
+        try:
+            payload = json.loads(line[len(prefix) :])
+            token = str(payload['token'])
+            source_dir = str(payload['source_dir'])
+            detail = str(payload['detail'])
+        except (ValueError, KeyError, TypeError):
+            continue
+        found.append((token, source_dir, detail))
+    return tuple(found)
+
+
+def _probe_persistent_source_identity_as_root(
+    path: Path,
+) -> FilesystemIdentity:
+    """Read one no-symlink source identity through the installed root helper."""
+    cmd = [PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN, '--probe-source', str(path)]
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Inspect persistent source identity as root',
+        why=(
+            'An administrative reauthorization may target another account\'s '
+            'private path, so read only its descriptor-pinned filesystem '
+            'identity through the same no-symlink helper used for replay.'
+        ),
+        approval_scope='persistent-source-identity-probe',
+    ):
+        handle = mgr.submit(
+            cmd,
+            sudo=True,
+            role='read',
+            capture=True,
+            summary='Inspect persistent source filesystem identity',
+            detail=f'source={path}',
+        )
+    result = handle.result()
+    try:
+        payload = json.loads(result.stdout)
+        dev = int(payload['dev'])
+        ino = int(payload['ino'])
+    except (ValueError, KeyError, TypeError) as ex:
+        raise RuntimeError(
+            f'Could not parse privileged source identity for {path}: '
+            f'{result.stdout!r}'
+        ) from ex
+    if dev < 0 or ino <= 0:
+        raise RuntimeError(
+            f'Privileged source identity was invalid for {path}: dev={dev} ino={ino}'
+        )
+    return FilesystemIdentity(dev=dev, ino=ino)
+
+
 def _run_persistent_host_replay(
     cfg: AgentVMConfig,
     cfg_path: Path,
     *,
     dry_run: bool,
     prune_stale: bool = True,
-) -> None:
+) -> tuple[tuple[str, str, str], ...]:
     """Apply the approved manifest through the privileged pinned-FD helper."""
     approved_manifest = manifest._sync_persistent_host_replay_manifest(
         cfg, cfg_path, dry_run=dry_run
@@ -241,7 +303,7 @@ def _run_persistent_host_replay(
             'DRYRUN: would replay approved persistent host bind manifest '
             f'{approved_manifest}'
         )
-        return
+        return ()
     if not helper_changed and _approved_binds_already_applied(
         approved_manifest, _persistent_root_host_dir(cfg)
     ):
@@ -250,7 +312,7 @@ def _run_persistent_host_replay(
             'skipping the privileged replay for VM {}.',
             cfg.vm.name,
         )
-        return
+        return ()
     cmd = [
         PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
         '--manifest',
@@ -271,13 +333,41 @@ def _run_persistent_host_replay(
         ),
         approval_scope=f'persistent-host-replay:{cfg.vm.name}',
     ):
-        mgr.submit(
+        handle = mgr.submit(
             cmd,
             sudo=True,
             role='modify',
+            check=False,
+            capture=True,
             summary='Replay approved persistent host bind manifest',
             detail=f'manifest={approved_manifest}',
         )
+    result = handle.result()
+    if result.code not in {0, PERSISTENT_REPLAY_DEGRADED_EXIT}:
+        raise CommandError(cmd, result)
+
+    unavailable = _source_unavailable_diagnostics(result.stderr)
+    if result.code == PERSISTENT_REPLAY_DEGRADED_EXIT and not unavailable:
+        raise RuntimeError(
+            'Persistent host replay reported degraded source state without '
+            'identifying the affected attachment.'
+        )
+    for token, source_dir, detail in unavailable:
+        log.warning(
+            'Persistent attachment source is unavailable or no longer matches '
+            'its approved identity; left unmounted: source={} token={} detail={}',
+            source_dir,
+            token,
+            detail,
+        )
+    if unavailable:
+        log.warning(
+            'To accept the filesystem objects currently present at your saved '
+            'paths, review and run: aivm vm persistent-host-replay --vm {} '
+            '--trust_current_paths',
+            cfg.vm.name,
+        )
+    return unavailable
 
 
 def _install_persistent_host_bind_replay(
@@ -394,17 +484,19 @@ def _reconcile_persistent_host_binds(
     *,
     dry_run: bool,
     vm_running: bool | None = None,
-) -> None:
+) -> tuple[tuple[str, str, str], ...]:
     """Converge host binds and the VM's persistent-root mapping."""
     records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
+    unavailable: tuple[tuple[str, str, str], ...] = ()
     if records or manifest._persistent_host_replay_state_needed(cfg, cfg_path):
-        _run_persistent_host_replay(
+        unavailable = _run_persistent_host_replay(
             cfg, cfg_path, dry_run=dry_run, prune_stale=True
         )
     if any(record.enabled for record in records):
         _ensure_persistent_root_vm_mapping(
             cfg, dry_run=dry_run, vm_running=vm_running
         )
+    return unavailable
 
 
 def _ensure_persistent_root_vm_mapping(

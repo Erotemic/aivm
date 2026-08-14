@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from ...config import AgentVMConfig
 from ...config_store import AttachmentEntry, Store, load_store, update_store
-from ...errors import AIVMError
-from ...fs_identity import directory_identity
+from ...errors import AIVMError, CommandControlError
+from ...fs_identity import FilesystemIdentity, directory_identity
 from ..ownership import require_attachment_mutation_permission
 from ..resolve import ATTACHMENT_MODE_PERSISTENT
 
@@ -46,6 +47,7 @@ def _refresh_in_store(
     vm_name: str,
     current_principal_id: str,
     administrative_override: bool,
+    privileged_probe: Callable[[Path], FilesystemIdentity] | None = None,
 ) -> PersistentSourceIdentityRefresh:
     refreshed: list[str] = []
     unchanged: list[str] = []
@@ -67,8 +69,16 @@ def _refresh_in_store(
         try:
             identity = directory_identity(Path(att.host_path))
         except (OSError, ValueError) as ex:
-            unavailable.append((att.host_path, str(ex)))
-            continue
+            if privileged_probe is None:
+                unavailable.append((att.host_path, str(ex)))
+                continue
+            try:
+                identity = privileged_probe(Path(att.host_path))
+            except CommandControlError:
+                raise
+            except (OSError, RuntimeError) as privileged_ex:
+                unavailable.append((att.host_path, str(privileged_ex)))
+                continue
 
         current = (int(att.source_dev), int(att.source_ino))
         replacement = (identity.dev, identity.ino)
@@ -107,12 +117,24 @@ def refresh_persistent_source_identities(
     state as timeless.
     """
 
+    privileged_probe: Callable[[Path], FilesystemIdentity] | None = None
+    if administrative_override and not dry_run:
+        # Another principal's saved source may live below a private home
+        # directory. Prepare the root helper before taking the store lock, then
+        # use its read-only no-symlink probe only if the ordinary probe cannot
+        # reach a path.
+        from . import host_bind
+
+        host_bind._ensure_persistent_host_replay_helper(dry_run=False)
+        privileged_probe = host_bind._probe_persistent_source_identity_as_root
+
     if dry_run:
         return _refresh_in_store(
             load_store(cfg_path),
             vm_name=cfg.vm.name,
             current_principal_id=current_principal_id,
             administrative_override=administrative_override,
+            privileged_probe=None,
         )
 
     result: PersistentSourceIdentityRefresh | None = None
@@ -124,6 +146,7 @@ def refresh_persistent_source_identities(
             vm_name=cfg.vm.name,
             current_principal_id=current_principal_id,
             administrative_override=administrative_override,
+            privileged_probe=privileged_probe,
         )
         return None
 
