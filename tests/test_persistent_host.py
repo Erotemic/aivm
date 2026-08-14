@@ -193,11 +193,11 @@ def _hash_route(
         if fail_when is not None and fail_proc is not None:
             if fail_when(script):
                 return fail_proc
-        if 'sha256sum' in script:
+        if 'sha256sum --check --status -' in script:
             count = seen.get(script, 0)
             seen[script] = count + 1
             status = initial_status if count == 0 else 'MATCH'
-            return FakeProc(stdout=f'{status}\n')
+            return FakeProc(returncode=0 if status == 'MATCH' else 1)
         return FakeProc()
 
     return route
@@ -570,11 +570,13 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
         assert "printf '%s'" in install_script
     else:
         assert [_kind(s) for s in scripts] == ['check']
-    # Every check script really does a checksum comparison, not a byte cmp.
+    # The check remains an exact, copy/pasteable command rather than a
+    # multiline MATCH/MISMATCH mini-program hidden inside ssh.
     check_script = scripts[0]
-    assert 'sha256sum' in check_script
+    assert 'sha256sum --check --status -' in check_script
     assert 'cmp -s' not in check_script
-    assert all(
+    assert '\n' not in check_script
+    assert not any(
         token in check_script for token in ('MISSING', 'MATCH', 'MISMATCH')
     )
 
@@ -1039,6 +1041,11 @@ def test_install_persistent_host_bind_replay_enables_service(
     cfg_path = tmp_path / 'config.toml'
     _redirect_appdir(monkeypatch, tmp_path)
     _redirect_replay_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind.'
+        'PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN',
+        str(tmp_path / 'libexec' / 'aivm-persistent-host-bind-replay'),
+    )
     _record_persistent_attachment(cfg, cfg_path, tmp_path)
     activate_manager(monkeypatch)
 

@@ -111,6 +111,10 @@ def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     import aivm.commands as commands_mod
 
     messages: list[str] = []
+    # Approval policy deliberately differs for root. Pin this helper to the
+    # ordinary unprivileged-user case so the test does not depend on the uid
+    # of the process running pytest (CI/container runners are often root).
+    monkeypatch.setattr(commands_mod.os, 'geteuid', lambda: 1000)
     monkeypatch.setattr(commands_mod.sys.stdin, 'isatty', lambda: True)
     monkeypatch.setattr(builtins, 'input', lambda prompt: 'y')
 
