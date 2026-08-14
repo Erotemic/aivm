@@ -71,6 +71,39 @@ What it provides
 * Optional virtiofs folder sharing (explicit trust extension)
 * A single config store for defaults, VMs, networks, and attachments
 
+Auditability by imitation
+-------------------------
+
+AIVM deliberately treats command logging as part of its trust model. Normal
+operator output is meant to show enough of the concrete work that a user can
+understand what AIVM is doing and, where practical, copy the displayed commands
+and perform the equivalent operation manually. The goal is **auditability by
+imitation**, not the shortest possible log.
+
+This has a few consequences that differ from conventional CLI logging:
+
+* step names and explanations add context, but they do not replace useful
+  command lines;
+* commands should expose the executable, privilege boundary, meaningful
+  arguments, and relevant paths at ordinary verbosity;
+* substantial reusable host or guest logic should prefer stable AIVM-owned
+  helper programs in inspectable locations such as ``/usr/local/libexec/aivm/``
+  over large anonymous inline shell programs; the logs can then show a compact,
+  executable helper invocation while the implementation remains available on
+  disk for inspection;
+* intentionally large payloads may be rendered with a descriptive ``Elided``
+  label so they do not dominate the log. Elision is for readability, not for
+  hiding behavior: higher verbosity must retain a way to inspect the literal
+  payload, and an automatically omitted unmarked argument is something for the
+  call site to fix;
+* generated helpers and support files should have visible installation/update
+  steps and discoverable paths so users can inspect exactly what AIVM arranges
+  for root or the guest to execute.
+
+Secrets are the exception: private keys, tokens, credentials, and similar
+values remain redacted. Auditability means exposing the operation and trust
+boundaries, not leaking sensitive material.
+
 .. note::
 
    Opt-in end-to-end tests live in ``tests/e2e/``. They carry the ``e2e``
@@ -111,11 +144,12 @@ offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
 store (normally ``/var/lib/aivm/machine``) plus the caller's private XDG profile,
 attaches the current folder if needed, and opens VS Code.
 
-During setup and reconcile flows, subprocess logging is now organized around
-user-meaningful steps instead of isolated commands. ``aivm`` shows the current
-step, why it exists, a semantic summary for each planned command, and the exact
-command line that will run before it executes the step. Full raw commands still
-appear at higher verbosity.
+During setup and reconcile flows, subprocess logging is organized around
+user-meaningful steps without sacrificing the command-level visibility described
+in `Auditability by imitation`_. ``aivm`` shows the current step, why it exists,
+a semantic summary for each planned command, and the concrete command line that
+will run before it executes the step. Large explicitly elided payloads remain
+available at higher verbosity.
 
 If you prefer an explicit flow, the first user runs ``aivm config init`` and
 ``aivm vm create``. A later user on the same host runs ``aivm config init``;
@@ -210,9 +244,11 @@ inspecting host bind state, preparing host bind targets, ensuring the VM
 virtiofs mapping, syncing the persisted manifest, and mounting/verifying the
 bind inside the guest.
 
-Readable previews may abbreviate long shell payloads, but the full exact
-commands are still available on demand in the approval prompt and are always
-logged when they actually run.
+Readable previews may abbreviate intentionally marked large payloads, but the
+visible command must still make the operation understandable and reproducible.
+Prefer invoking a stable, inspectable helper for substantial logic instead of
+hiding an anonymous inline script. Literal elided payloads remain available at
+higher verbosity.
 
 Config defaults:
 

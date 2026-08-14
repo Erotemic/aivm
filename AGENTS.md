@@ -58,6 +58,40 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Status should be safe and informative by default; privileged checks are opt-in via `--sudo`.
 - Discovery/import should be explicit and user-confirmed for unmanaged VMs.
 
+## Auditability by Imitation
+AIVM's command logging is part of its trust model. The goal is not merely to
+report that an operation happened; a user reading the normal logs should be
+able to understand the concrete host/guest operations and, where practical,
+copy the shown commands and perform the equivalent work without AIVM.
+
+- Treat concrete command visibility as a product feature. Do not replace useful
+  command lines with opaque summaries just to make normal output shorter. Step
+  titles, rationale, and semantic descriptions should contextualize commands,
+  not hide them.
+- Prefer commands that are themselves understandable and reproducible. If an
+  operation requires substantial shell/Python logic, install that logic as a
+  stable, inspectable AIVM-owned helper (for example under
+  `/usr/local/libexec/aivm/`) and log the helper path plus ordinary arguments.
+  A named helper invocation is more auditable than repeatedly sending a large
+  anonymous inline script over SSH.
+- `Elided(value, label)` is a readability affordance, not a secrecy mechanism.
+  Use it intentionally for large payloads whose literal contents would obscure
+  the surrounding command, give the payload a useful label, and preserve a
+  higher-verbosity path that reveals the literal value. An automatically
+  omitted *unmarked* argument is a call-site defect and should be fixed rather
+  than normalized away.
+- Keep INFO useful for imitation: show the exact executable, meaningful
+  arguments, privilege boundary, and relevant paths. DEBUG/TRACE may add hashes,
+  transport details, generated content, and literal elided payloads, but should
+  not be the only place where the user can discover what operation AIVM chose.
+- When generated files or helper programs are part of the operation, make their
+  installed location discoverable and keep their update/install commands
+  visible. Users should be able to inspect the exact code AIVM asks root or a
+  guest to execute.
+- Auditability never overrides secret handling. Continue to redact credentials,
+  private keys, tokens, and other sensitive values; expose the operation and
+  destination without leaking the secret material.
+
 ## Safety Expectations
 - Do not silently broaden VM host-path exposure.
 - Avoid attaching the same host folder to multiple VMs unless user forces it.

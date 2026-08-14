@@ -26,6 +26,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   the privileged replay helper.
 
 ### Changed
+* Made command-log auditability an explicit product principle: ordinary logs
+  should expose enough concrete, reproducible operations for an operator to
+  understand and, where practical, imitate AIVM manually. Large guest symlink
+  and helper-install payloads are now deliberately labeled with ``Elided``
+  instead of tripping the unmarked-omission warning, while helper checksum
+  probes use a compact copy/pasteable ``sha256sum --check --status`` command
+  whose exit status is interpreted by Python instead of logging a multiline
+  ``MISSING``/``MATCH``/``MISMATCH`` shell program.
 * Renamed the `shared` attachment mode to `direct-virtiofs`, after its cost
   rather than its behavior. Each such attachment gives its folder a dedicated
   virtiofs device, and every device occupies one of the guest's limited PCIe

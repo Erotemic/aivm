@@ -11,7 +11,7 @@ from loguru import logger
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
-from ..commands import CommandManager
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -92,7 +92,10 @@ def _ensure_guest_symlink(
             strict_host_key_checking='accept-new',
         ),
         context.ssh_target(ip),
-        script,
+        Elided(
+            script,
+            f'guest symlink reconcile: {symlink_path} -> {target_path}',
+        ),
     ]
     res = CommandManager.current().run(
         cmd, sudo=False, check=False, capture=True
@@ -262,7 +265,7 @@ def _upsert_ssh_config_entry(
         )
         return ssh_cfg, False
     CommandManager.current().confirm_file_update(
-        yes=yes,
+        yes=bool(yes),
         path=ssh_cfg,
         purpose=f"Update SSH config entry for host '{block_name}'.",
     )
@@ -335,13 +338,13 @@ def _ensure_attachment_available_in_guest(
                 _ensure_shared_root_host_bind(
                     cfg,
                     attachment,
-                    yes=yes,
+                    yes=bool(yes),
                     dry_run=dry_run,
                     allow_disruptive_rebind=allow_disruptive_shared_root_rebind,
                 )
                 _ensure_shared_root_vm_mapping(
                     cfg,
-                    yes=yes,
+                    yes=bool(yes),
                     dry_run=dry_run,
                     vm_running=True,
                 )
@@ -357,7 +360,7 @@ def _ensure_attachment_available_in_guest(
             host_src,
             attachment,
             ip,
-            yes=yes,
+            yes=bool(yes),
             dry_run=dry_run,
         )
 

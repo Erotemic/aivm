@@ -25,6 +25,7 @@ from ...commands import (
     CommandManager,
     CommandResult,
     CommandRole,
+    Elided,
 )
 from ...config import AgentVMConfig
 from ...privilege import path_needs_sudo
@@ -194,23 +195,14 @@ def _guest_text_stats(text: str) -> tuple[str, int]:
 
 
 def _guest_text_hash_check_script(target: str, expected_sha256: str) -> str:
-    target_q = shlex.quote(target)
-    expected_q = shlex.quote(expected_sha256)
-    return textwrap.dedent(
-        f"""\
-        set -euo pipefail
-        if [ ! -f {target_q} ]; then
-            printf '%s\\n' MISSING
-            exit 0
-        fi
-        actual="$(sudo -n sha256sum {target_q} | cut -d ' ' -f1)"
-        if [ "$actual" = {expected_q} ]; then
-            printf '%s\\n' MATCH
-        else
-            printf '%s\\n' MISMATCH
-        fi
-        """
-    ).strip()
+    # Keep the audit log copy/pasteable: let coreutils perform the comparison
+    # and let Python interpret its exit status instead of sending a multiline
+    # MATCH/MISMATCH shell program over SSH.
+    check_record = f'{expected_sha256}  {target}'
+    return (
+        f"printf '%s\\n' {shlex.quote(check_record)} | "
+        'sudo -n sha256sum --check --status -'
+    )
 
 
 def _guest_text_install_script(target: str, text: str, mode: str) -> str:
@@ -482,21 +474,18 @@ def _install_guest_text_if_changed(
             detail=f'target={target} expected_sha256={expected_sha256}',
             dry_run=dry_run,
             role='read',
-            check=check,
+            check=False,
+            allowed_exit_codes=(0, 1),
         )
     if dry_run or check_result is None:
         return False
-    status_lines = (
-        str(getattr(check_result, 'stdout', '') or '').strip().splitlines()
+    check_code = int(
+        getattr(check_result, 'code', getattr(check_result, 'returncode', 0))
     )
-    status = status_lines[-1].strip().upper() if status_lines else ''
-    if status not in {'MATCH', 'MISSING', 'MISMATCH'}:
-        raise RuntimeError(
-            f'Unexpected guest file hash check result for {target}: {status or "<empty>"}'
-        )
-    log.info('{} hash check result: {}', label_title, status)
-    if status == 'MATCH':
+    if check_code == 0:
+        log.info('{} is already current (sha256 matches).', label_title)
         return False
+    log.info('{} differs or is missing; update required.', label_title)
     with mgr.step(
         f'{label_title} differs, installing updated content',
         why=(
@@ -505,7 +494,10 @@ def _install_guest_text_if_changed(
         ),
         approval_scope=f'{label.replace(" ", "-")}:{cfg.vm.name}:{target}',
     ):
-        write_script = _guest_text_install_script(target, text, mode)
+        write_script = Elided(
+            _guest_text_install_script(target, text, mode),
+            f'guest file install payload for {target}',
+        )
         _run_guest_root_script(
             cfg,
             ip,
@@ -525,19 +517,17 @@ def _install_guest_text_if_changed(
             dry_run=dry_run,
             role='read',
             check=False,
+            allowed_exit_codes=(0, 1),
         )
         if verify_result is not None:
-            verify_status_lines = (
-                str(getattr(verify_result, 'stdout', '') or '')
-                .strip()
-                .splitlines()
+            verify_code = int(
+                getattr(
+                    verify_result,
+                    'code',
+                    getattr(verify_result, 'returncode', 0),
+                )
             )
-            verify_status = (
-                verify_status_lines[-1].strip().upper()
-                if verify_status_lines
-                else ''
-            )
-            if verify_status != 'MATCH':
+            if verify_code != 0:
                 _diagnose_guest_text_mismatch(
                     cfg,
                     ip,
@@ -548,7 +538,6 @@ def _install_guest_text_if_changed(
                 )
                 raise RuntimeError(
                     f'{label_title} still mismatched after install: '
-                    f'target={target} status={verify_status or "<empty>"} '
-                    f'expected_sha256={expected_sha256}'
+                    f'target={target} expected_sha256={expected_sha256}'
                 )
     return True
