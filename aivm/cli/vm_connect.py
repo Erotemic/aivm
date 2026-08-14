@@ -22,7 +22,7 @@ from ..config_scopes import ResolvedVMContext
 from ..config_store import load_store
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..services import cfg_path, load_cfg
+from ..services import PreparedSession, cfg_path, load_cfg
 from ..util import which
 from ..vm import create_ops, wait_for_ip
 from ..vm import ssh_config as mk_ssh_config
@@ -315,6 +315,39 @@ def _print_remote_session_recipe(
     print(f'Folder registered in {session.reg_path}')
 
 
+def _prepare_foreground_session(args: Any) -> PreparedSession:
+    """Run the one shared startup pipeline for SSH and editor sessions.
+
+    ``aivm ssh`` and every ``aivm code`` launcher intentionally share this
+    exact preparation path.  The launcher is the only behavior that differs
+    after the VM, attachment, and live-state checks are complete.
+    """
+    host_src = logical_absolute_path(args.host_src)
+    return _prepare_attached_session(
+        config_opt=args.config,
+        vm_opt=args.vm,
+        host_src=host_src,
+        guest_dst_opt=args.guest_dst,
+        attach_mode_opt=args.mode,
+        attach_access_opt=args.access,
+        recreate_if_needed=args.recreate_if_needed,
+        ensure_firewall_opt=args.ensure_firewall,
+        dry_run=args.dry_run,
+        yes=args.yes,
+        bootstrap_missing_vm=partial(
+            _bootstrap_vm_for_folder,
+            config_opt=args.config,
+            vm_opt=args.vm,
+            host_src=host_src,
+            guest_dst_opt=args.guest_dst,
+            attach_mode_opt=args.mode,
+            attach_access_opt=args.access,
+            yes=args.yes,
+            dry_run=args.dry_run,
+        ),
+    )
+
+
 class VMCodeCLI(_BaseCommand):
     """Open a host project folder in VS Code attached to the VM via Remote-SSH."""
 
@@ -385,29 +418,7 @@ class VMCodeCLI(_BaseCommand):
             args.tunnel,
         )
         try:
-            session = _prepare_attached_session(
-                config_opt=args.config,
-                vm_opt=args.vm,
-                host_src=logical_absolute_path(args.host_src),
-                guest_dst_opt=args.guest_dst,
-                attach_mode_opt=args.mode,
-                attach_access_opt=args.access,
-                recreate_if_needed=args.recreate_if_needed,
-                ensure_firewall_opt=args.ensure_firewall,
-                dry_run=args.dry_run,
-                yes=args.yes,
-                bootstrap_missing_vm=partial(
-                    _bootstrap_vm_for_folder,
-                    config_opt=args.config,
-                    vm_opt=args.vm,
-                    host_src=logical_absolute_path(args.host_src),
-                    guest_dst_opt=args.guest_dst,
-                    attach_mode_opt=args.mode,
-                    attach_access_opt=args.access,
-                    yes=args.yes,
-                    dry_run=args.dry_run,
-                ),
-            )
+            session = _prepare_foreground_session(args)
         except RuntimeError as ex:
             log.opt(exception=True).trace('Failed preparing code session')
             log.error(str(ex))
@@ -536,29 +547,7 @@ class VMSSHCLI(_BaseCommand):
             args.yes,
         )
         try:
-            session = _prepare_attached_session(
-                config_opt=args.config,
-                vm_opt=args.vm,
-                host_src=logical_absolute_path(args.host_src),
-                guest_dst_opt=args.guest_dst,
-                attach_mode_opt=args.mode,
-                attach_access_opt=args.access,
-                recreate_if_needed=args.recreate_if_needed,
-                ensure_firewall_opt=args.ensure_firewall,
-                dry_run=args.dry_run,
-                yes=args.yes,
-                bootstrap_missing_vm=partial(
-                    _bootstrap_vm_for_folder,
-                    config_opt=args.config,
-                    vm_opt=args.vm,
-                    host_src=logical_absolute_path(args.host_src),
-                    guest_dst_opt=args.guest_dst,
-                    attach_mode_opt=args.mode,
-                    attach_access_opt=args.access,
-                    yes=args.yes,
-                    dry_run=args.dry_run,
-                ),
-            )
+            session = _prepare_foreground_session(args)
         except RuntimeError as ex:
             log.error(str(ex))
             return 1

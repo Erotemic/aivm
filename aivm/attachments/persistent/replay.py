@@ -78,12 +78,14 @@ def _reconcile_persistent_attachments_in_guest(
     continue_on_error: bool = False,
     reconcile_host: bool = True,
     only_guest_dst: str = '',
+    preserve_live_mounts: bool = False,
 ) -> None:
     # Host writes the canonical desired-state manifest first. The guest-local
-    # manifest and helper are refreshed next. Foreground code/ssh/attach paths
-    # use ``only_guest_dst`` so they can add or repair one attachment without
-    # reconciling unrelated live work. Boot/maintenance callers omit the scope
-    # and retain full desired-state repair and stale pruning.
+    # manifest and helper are refreshed next. Scoped foreground operations use
+    # ``only_guest_dst`` so they touch one attachment without reconciling
+    # unrelated live work. Code/ssh session entry additionally requests
+    # ``preserve_live_mounts``; explicit attach may still repair the selected
+    # mount. Boot/maintenance callers omit the scope and retain full replay.
     def _strict_reconcile() -> None:
         manifest._sync_persistent_attachment_manifest_on_host(
             cfg, cfg_path, dry_run=dry_run
@@ -95,6 +97,7 @@ def _reconcile_persistent_attachments_in_guest(
                 dry_run=dry_run,
                 vm_running=True,
                 only_guest_dst=only_guest_dst,
+                preserve_live_binds=preserve_live_mounts,
             )
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
@@ -119,6 +122,8 @@ def _reconcile_persistent_attachments_in_guest(
                 replay_script += (
                     ' --only-guest-dst ' + shlex.quote(only_guest_dst)
                 )
+                if preserve_live_mounts:
+                    replay_script += ' --preserve-live-mounts'
             replay_result = transport._run_guest_root_script(
                 cfg,
                 ip,
@@ -151,8 +156,8 @@ def _reconcile_persistent_attachments_in_guest(
                 if code == PERSISTENT_REPLAY_DEGRADED_EXIT:
                     log.warning(
                         'Guest persistent attachment replay completed in '
-                        'degraded mode for VM {}; unavailable host sources '
-                        'remain unmounted.',
+                        'degraded mode for VM {}; unavailable source state '
+                        'was left non-destructively as encountered.',
                         cfg.vm.name,
                     )
                 elif code != 0:

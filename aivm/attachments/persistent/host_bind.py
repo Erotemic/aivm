@@ -309,6 +309,7 @@ def _run_persistent_host_replay(
     dry_run: bool,
     prune_stale: bool = True,
     only_guest_dst: str = '',
+    preserve_live_binds: bool = False,
 ) -> tuple[tuple[str, str, str], ...]:
     """Apply the approved manifest through the privileged pinned-FD helper."""
     approved_manifest = manifest._sync_persistent_host_replay_manifest(
@@ -343,6 +344,8 @@ def _run_persistent_host_replay(
     ]
     if only_guest_dst:
         cmd.extend(['--only-guest-dst', only_guest_dst])
+        if preserve_live_binds:
+            cmd.append('--preserve-live-binds')
     elif prune_stale:
         cmd.append('--prune-stale')
     mgr = CommandManager.current()
@@ -374,14 +377,25 @@ def _run_persistent_host_replay(
             'identifying the affected attachment.'
         )
     for token, source_dir, detail in unavailable:
-        log.warning(
-            'Persistent attachment source is unavailable or no longer matches '
-            'its approved identity; left unmounted: source={} token={} detail={}',
-            source_dir,
-            token,
-            detail,
-        )
-    if unavailable:
+        if preserve_live_binds:
+            log.warning(
+                'Persistent attachment could not be reconciled without '
+                'disturbing live state; existing export was left untouched '
+                'when present: source={} token={} detail={}',
+                source_dir,
+                token,
+                detail,
+            )
+        else:
+            log.warning(
+                'Persistent attachment source is unavailable or no longer '
+                'matches its approved identity; left unmounted: source={} '
+                'token={} detail={}',
+                source_dir,
+                token,
+                detail,
+            )
+    if unavailable and not preserve_live_binds:
         log.warning(
             'To accept the filesystem objects currently present at your saved '
             'paths, review and run: aivm vm persistent-host-replay --vm {} '
@@ -506,6 +520,7 @@ def _reconcile_persistent_host_binds(
     dry_run: bool,
     vm_running: bool | None = None,
     only_guest_dst: str = '',
+    preserve_live_binds: bool = False,
 ) -> tuple[tuple[str, str, str], ...]:
     """Converge host binds and the VM's persistent-root mapping.
 
@@ -522,6 +537,7 @@ def _reconcile_persistent_host_binds(
             dry_run=dry_run,
             prune_stale=not bool(only_guest_dst),
             only_guest_dst=only_guest_dst,
+            preserve_live_binds=preserve_live_binds,
         )
     if any(record.enabled for record in records):
         _ensure_persistent_root_vm_mapping(

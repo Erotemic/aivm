@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 138d2d9eea5f3112 -->
+<!-- generation schema: 1; input digest: cd2adeb1246cd572 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -48,11 +48,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:542` |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:35` |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:306` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:395` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:450` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:503` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:534` |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:556` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:409` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:464` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:517` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:550` |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:572` |
 | `aivm.attachments.persistent.identity` | `aivm/attachments/persistent/identity.py:107` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:65` |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py:79` |

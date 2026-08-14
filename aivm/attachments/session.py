@@ -1087,6 +1087,7 @@ def _prepare_attached_session(
                 ip,
                 dry_run=False,
                 only_guest_dst=(attachment.guest_dst if vm_was_running else ''),
+                preserve_live_mounts=vm_was_running,
             )
         if not vm_was_running:
             _restore_saved_vm_attachments(

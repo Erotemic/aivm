@@ -701,18 +701,33 @@ def test_persistent_reconcile_can_scope_foreground_guest_replay(
         },
     )
 
+    host_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.replay.host_bind._reconcile_persistent_host_binds',
+        lambda *a, **k: host_calls.append(dict(k)) or (),
+    )
+
     _reconcile_persistent_attachments_in_guest(
         cfg,
         cfg_path,
         '10.0.0.5',
         dry_run=False,
-        reconcile_host=False,
         only_guest_dst='/workspace/proj',
+        preserve_live_mounts=True,
     )
 
+    assert host_calls == [
+        {
+            'dry_run': False,
+            'vm_running': True,
+            'only_guest_dst': '/workspace/proj',
+            'preserve_live_binds': True,
+        }
+    ]
     scripts = _ssh_scripts(rec)
     assert scripts[-1] == (
-        f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj'
+        f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj '
+        '--preserve-live-mounts'
     )
 
 
@@ -1800,7 +1815,7 @@ def test_host_replay_isolates_source_failure_and_continues(
     seen: list[str] = []
     quarantined: list[str] = []
 
-    def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:
+    def ensure_record(_export_root_fd: int, record: dict[str, object], **_kwargs: object) -> None:
         token = str(record['shared_root_token'])
         seen.append(token)
         if token == 'bad':
@@ -1831,6 +1846,63 @@ def test_host_replay_isolates_source_failure_and_continues(
     )
 
 
+
+def test_host_replay_preserves_existing_export_on_source_failure_in_foreground(
+    tmp_path: Path,
+) -> None:
+    """A source-pin problem during session entry must not quarantine a live export."""
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {
+                        'shared_root_token': 'token',
+                        'guest_dst': '/workspace/proj',
+                        'source_dir': '/host/proj',
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
+
+    def unavailable(
+        _export_root_fd: int,
+        _record: dict[str, object],
+        **_kwargs: object,
+    ) -> None:
+        raise helper.SourceUnavailableError('approved source identity changed')
+
+    helper.ensure_record = unavailable
+    helper.quarantine_unavailable_token = lambda *_a, **_k: pytest.fail(
+        'foreground source failure must not quarantine a live export'
+    )
+
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+            '--only-guest-dst',
+            '/workspace/proj',
+            '--preserve-live-binds',
+        ]
+    )
+    assert code == helper.DEGRADED_EXIT
+
+
 def test_host_replay_does_not_swallow_mount_or_access_failure(
     tmp_path: Path,
 ) -> None:
@@ -1853,7 +1925,7 @@ def test_host_replay_does_not_swallow_mount_or_access_failure(
     helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
     seen: list[str] = []
 
-    def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:
+    def ensure_record(_export_root_fd: int, record: dict[str, object], **_kwargs: object) -> None:
         token = str(record['shared_root_token'])
         seen.append(token)
         if token == 'bad':
@@ -1874,6 +1946,87 @@ def test_host_replay_does_not_swallow_mount_or_access_failure(
         )
 
     assert seen == ['bad']
+
+
+
+def test_host_replay_preserve_live_bind_never_unmounts_conflict(
+    tmp_path: Path,
+) -> None:
+    """Foreground host replay reports a conflict without replacing the live bind."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    source = tmp_path / 'source'
+    token_dir = export_root / 'token'
+    source.mkdir()
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
+    )
+    source_fd = helper.open_absolute_directory(source, label='source')
+    helper.open_approved_source = lambda _record: helper.os.dup(source_fd)
+    helper.is_mountpoint_fd = lambda _fd: True
+    helper.same_tree_fds = lambda _left, _right: False
+    helper.unmount_child = lambda *_a, **_k: pytest.fail(
+        'foreground replay must not unmount a live host bind'
+    )
+    try:
+        with pytest.raises(
+            helper.LiveBindConflictError,
+            match='leaves live binds untouched',
+        ):
+            helper.ensure_record(
+                export_root_fd,
+                {
+                    'shared_root_token': 'token',
+                    'enabled': True,
+                    'access': 'rw',
+                },
+                preserve_live_binds=True,
+            )
+    finally:
+        helper.os.close(source_fd)
+        helper.os.close(export_root_fd)
+
+
+
+def test_host_replay_preserve_live_bind_never_remounts_access(
+    tmp_path: Path,
+) -> None:
+    """Foreground host replay also preserves a live bind's access mode."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    source = tmp_path / 'source'
+    token_dir = export_root / 'token'
+    source.mkdir()
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
+    )
+    source_fd = helper.open_absolute_directory(source, label='source')
+    helper.open_approved_source = lambda _record: helper.os.dup(source_fd)
+    helper.is_mountpoint_fd = lambda _fd: True
+    helper.same_tree_fds = lambda _left, _right: True
+    helper.access_matches_fd = lambda _fd, _access: False
+    helper.enforce_access_fd = lambda *_a, **_k: pytest.fail(
+        'foreground replay must not remount a live host bind'
+    )
+    try:
+        with pytest.raises(
+            helper.LiveBindConflictError,
+            match='leaves live binds untouched',
+        ):
+            helper.ensure_record(
+                export_root_fd,
+                {
+                    'shared_root_token': 'token',
+                    'enabled': True,
+                    'access': 'ro',
+                },
+                preserve_live_binds=True,
+            )
+    finally:
+        helper.os.close(source_fd)
+        helper.os.close(export_root_fd)
 
 
 def test_host_replay_quarantines_unavailable_empty_token_directory(

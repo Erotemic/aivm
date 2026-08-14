@@ -648,6 +648,93 @@ def test_vm_connect_clis_pass_lexical_host_src_to_session(
     assert passed == host_src.expanduser().absolute()
 
 
+
+@pytest.mark.parametrize('cli_cls', [VMCodeCLI, VMSSHCLI], ids=['code', 'ssh'])
+def test_code_and_ssh_route_through_shared_foreground_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    cli_cls: Any,
+) -> None:
+    """Both launchers must call the common preparation seam, not duplicate it."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-common-prep-seam'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    inner = _fake_prepare_session(cfg, cfg_path, host_src, attachment, [])
+    calls: list[Any] = []
+
+    def fake_foreground(args: Any) -> Any:
+        calls.append(args)
+        return inner(host_src=host_src)
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session', fake_foreground
+    )
+    assert (
+        cli_cls.main(
+            argv=False,
+            config=str(cfg_path),
+            host_src=str(host_src),
+            yes=True,
+            dry_run=True,
+        )
+        == 0
+    )
+    assert len(calls) == 1
+
+
+def test_code_and_ssh_share_identical_foreground_preparation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Launcher choice happens only after one common startup pipeline."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared-foreground-prep'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, captured),
+    )
+
+    common = dict(
+        argv=False,
+        config=str(cfg_path),
+        host_src=str(host_src),
+        yes=True,
+        dry_run=True,
+    )
+    assert VMCodeCLI.main(**common) == 0
+    assert VMSSHCLI.main(**common) == 0
+
+    assert len(captured) == 2
+    first = dict(captured[0])
+    second = dict(captured[1])
+    first_bootstrap = first.pop('bootstrap_missing_vm')
+    second_bootstrap = second.pop('bootstrap_missing_vm')
+    assert first == second
+    assert first_bootstrap.func is second_bootstrap.func
+    assert first_bootstrap.args == second_bootstrap.args
+    assert first_bootstrap.keywords == second_bootstrap.keywords
+
+
+
 @pytest.mark.parametrize(
     ('ssh_exit', 'expect_rc', 'expect_error'),
     [

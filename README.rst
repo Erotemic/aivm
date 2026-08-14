@@ -316,8 +316,15 @@ In ``direct-virtiofs``, ``shared-root``, ``persistent``, and ``git`` modes, atta
 mount to the same absolute path inside the guest by default unless
 ``--guest_dst`` overrides it. Running VMs are
 live-attached when possible.
-``aivm code`` and ``aivm ssh`` remount the selected folder and best-effort
-restore other folders already saved for that VM after guest startup.
+``aivm code`` and ``aivm ssh`` use the same foreground preparation pipeline.
+When the VM is already running, that path verifies or adds only the selected
+folder and preserves existing live mounts: it does not unmount or remount a
+workspace merely to make desired state look cleaner. If a live mount genuinely
+conflicts with the requested attachment, AIVM reports the conflict and leaves
+the running workspace untouched. Full replacement/recovery remains an explicit
+attachment, maintenance, or VM lifecycle operation. After guest startup, AIVM
+may restore the broader saved attachment set because there is no pre-existing
+live session to disrupt.
 
 For ``persistent`` attachments, explicit detach first records a recoverable
 ``detaching`` transition, immediately prunes the host-side bind, reconciles any

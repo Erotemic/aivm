@@ -5,6 +5,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Foreground ``aivm ssh`` and all ``aivm code`` launch modes now share one
+  startup pipeline and preserve live persistent mounts on an already-running
+  VM. Guest replay compares bind mounts by underlying directory identity rather
+  than ``findmnt``'s presentation-oriented ``SOURCE`` string, and foreground
+  replay diagnoses genuine source/access conflicts without unmounting or
+  remounting active workspaces. Real-bind E2E coverage keeps this behavior
+  pinned against the kernel mount semantics that unit fakes can miss.
 * Foreground ``aivm code``, ``aivm ssh``, and explicit attachment operations
   on an already-running VM now reconcile only the requested persistent
   attachment. Opening another project no longer performs global guest replay,

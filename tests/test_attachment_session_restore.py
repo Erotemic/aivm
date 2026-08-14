@@ -1107,5 +1107,6 @@ def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
         {
             'dry_run': False,
             'only_guest_dst': '/workspace/new-project',
+            'preserve_live_mounts': True,
         }
     ]

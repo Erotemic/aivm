@@ -57,6 +57,15 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Ask before privileged operations unless `--yes` is provided.
 - Status should be safe and informative by default; privileged checks are opt-in via `--sudo`.
 - Discovery/import should be explicit and user-confirmed for unmanaged VMs.
+- Treat ``aivm ssh`` and every ``aivm code`` launcher as one foreground-session
+  workflow. They must source VM/attachment/startup checks from the same shared
+  preparation function; launcher-specific behavior begins only after that
+  preparation succeeds.
+- Foreground entry into an already-running VM is non-destructive. It may verify
+  or add the requested attachment, but it must not unmount, remount, replace,
+  or globally reconcile an existing live workspace. Diagnose genuine conflicts
+  and leave live state untouched; destructive convergence belongs to explicit
+  attach/maintenance/lifecycle operations.
 
 ## Auditability by Imitation
 AIVM's command logging is part of its trust model. The goal is not merely to

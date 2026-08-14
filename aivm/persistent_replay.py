@@ -65,6 +65,9 @@ def persistent_replay_python() -> str:
         class SourceUnavailableError(RuntimeError):
             pass
 
+        class LiveMountConflictError(RuntimeError):
+            pass
+
         def run(cmd, check=True, capture=False):
             return subprocess.run(
                 cmd,
@@ -120,6 +123,17 @@ def persistent_replay_python() -> str:
         def is_mountpoint(target):
             probe = subprocess.run(["mountpoint", "-q", target])
             return probe.returncode == 0
+
+        def same_directory_object(left, right):
+            try:
+                left_info = os.stat(left)
+                right_info = os.stat(right)
+            except OSError:
+                return False
+            return (left_info.st_dev, left_info.st_ino) == (
+                right_info.st_dev,
+                right_info.st_ino,
+            )
 
         def current_mount_info(target):
             if not is_mountpoint(target):
@@ -280,7 +294,7 @@ def persistent_replay_python() -> str:
                     continue
                 unmount_guest_dst(target, ignore_busy=True)
 
-        def ensure_record(record):
+        def ensure_record(record, *, preserve_live_mounts=False):
             guest_dst = normalize_guest_dst(record.get("guest_dst"))
             if not guest_dst:
                 raise RuntimeError("persistent attachment record missing guest_dst")
@@ -291,19 +305,46 @@ def persistent_replay_python() -> str:
                 )
             current = current_mount_info(guest_dst)
             if not os.path.isdir(source):
-                if current is not None:
-                    # A host-side rejected token must not leave an old guest
-                    # bind alive. Failure to remove it is a reconcile failure,
-                    # not a recoverable source-trust warning.
+                if current is not None and not preserve_live_mounts:
+                    # Full lifecycle replay converges desired state strictly.
+                    # Foreground session preparation instead leaves a live
+                    # workspace alone and reports the source problem.
                     unmount_guest_dst(guest_dst, ignore_busy=False)
+                suffix = (
+                    "; existing live mount left untouched"
+                    if current is not None and preserve_live_mounts
+                    else ""
+                )
                 raise SourceUnavailableError(
-                    f"persistent attachment source is unavailable in shared root: {{source}}"
+                    f"persistent attachment source is unavailable in shared root: {{source}}{{suffix}}"
                 )
             desired = desired_option(record)
             if current is not None:
                 current_source = str(current.get("source") or "").strip()
                 current_options = str(current.get("options") or "").strip()
-                if current_source and current_source != source:
+                # findmnt's SOURCE is presentation-oriented and a bind mount
+                # may be rendered as a filesystem plus FSROOT instead of the
+                # lexical source path. Object identity is authoritative.
+                same_source = (
+                    current_source == source
+                    or same_directory_object(source, guest_dst)
+                )
+                if same_source:
+                    if desired in current_options.split(","):
+                        return
+                    if preserve_live_mounts:
+                        raise LiveMountConflictError(
+                            f"live persistent attachment access differs for {{guest_dst}} "
+                            f"(current={{current_options}} desired={{desired}}); "
+                            "foreground session preparation leaves live mounts untouched"
+                        )
+                else:
+                    if preserve_live_mounts:
+                        raise LiveMountConflictError(
+                            f"live persistent attachment at {{guest_dst}} is a different directory "
+                            f"(findmnt source={{current_source or '<unknown>'}} desired={{source}}); "
+                            "foreground session preparation leaves live mounts untouched"
+                        )
                     unmount_guest_dst(guest_dst, ignore_busy=False)
                     current = current_mount_info(guest_dst)
                     if current is not None:
@@ -316,8 +357,6 @@ def persistent_replay_python() -> str:
                         current_options = str(current.get("options") or "").strip()
                         if desired in current_options.split(","):
                             return
-                elif desired in current_options.split(","):
-                    return
             if current is None:
                 os.makedirs(guest_dst, exist_ok=True)
                 if subprocess.run(["mountpoint", "-q", guest_dst]).returncode != 0:
@@ -327,6 +366,12 @@ def persistent_replay_python() -> str:
                 raise RuntimeError(f"could not verify persistent attachment mount {{guest_dst}}")
             current_options = str(current.get("options") or "").strip()
             if desired not in current_options.split(","):
+                if preserve_live_mounts:
+                    raise LiveMountConflictError(
+                        f"live persistent attachment access differs for {{guest_dst}} "
+                        f"(current={{current_options}} desired={{desired}}); "
+                        "foreground session preparation leaves live mounts untouched"
+                    )
                 run(["mount", "-o", f"remount,bind,{{desired}}", guest_dst])
 
         def select_record(records, only_guest_dst):
@@ -358,13 +403,13 @@ def persistent_replay_python() -> str:
                 )
             return matches
 
-        def sync_state(*, only_guest_dst=""):
+        def sync_state(*, only_guest_dst="", preserve_live_mounts=False):
             desired = load_json(STATE_PATH)
             raw_records = desired.get("records", [])
             if only_guest_dst:
-                # Foreground attach/code/ssh operations are intentionally
-                # attachment-local.  They may add or repair the requested
-                # path, but never prune or replace unrelated live mounts.
+                # Foreground operations are attachment-local. Session entry
+                # additionally requests preserve_live_mounts so it can verify
+                # or add the requested path without replacing live work.
                 records = select_record(raw_records, only_guest_dst)
             else:
                 records = validate_records(raw_records)
@@ -375,10 +420,18 @@ def persistent_replay_python() -> str:
             failures = []
             for guest_dst, enabled, record in records:
                 if not enabled:
-                    unmount_guest_dst(guest_dst, ignore_busy=False)
+                    if preserve_live_mounts and is_mountpoint(guest_dst):
+                        failures.append(
+                            f"persistent attachment {{guest_dst}} is disabled but still mounted; "
+                            "foreground session preparation leaves live mounts untouched"
+                        )
+                    else:
+                        unmount_guest_dst(guest_dst, ignore_busy=False)
                     continue
                 try:
-                    ensure_record(record)
+                    ensure_record(
+                        record, preserve_live_mounts=preserve_live_mounts
+                    )
                 except SourceUnavailableError as ex:
                     failures.append(str(ex))
             return failures
@@ -386,12 +439,18 @@ def persistent_replay_python() -> str:
         def main(argv=()):
             parser = argparse.ArgumentParser()
             parser.add_argument("--only-guest-dst", default="")
+            parser.add_argument("--preserve-live-mounts", action="store_true")
             # Keep programmatic calls isolated from the parent process argv.
             # The executable wrapper below explicitly forwards its own CLI args.
             args = parser.parse_args(list(argv))
+            if args.preserve_live_mounts and not args.only_guest_dst:
+                parser.error("--preserve-live-mounts requires --only-guest-dst")
             mount_persistent_root()
             try:
-                failures = sync_state(only_guest_dst=args.only_guest_dst)
+                failures = sync_state(
+                    only_guest_dst=args.only_guest_dst,
+                    preserve_live_mounts=args.preserve_live_mounts,
+                )
             except FileNotFoundError as ex:
                 print(str(ex), file=sys.stderr)
                 raise SystemExit(1)
@@ -454,6 +513,9 @@ def persistent_host_replay_python() -> str:
         )
 
         class SourceUnavailableError(RuntimeError):
+            pass
+
+        class LiveBindConflictError(RuntimeError):
             pass
 
         def run(cmd, *, check=True, capture=False, pass_fds=()):
@@ -618,7 +680,7 @@ def persistent_host_replay_python() -> str:
                     detail = f"{detail}; lazy detach also failed: {lazy_detail}"
             raise RuntimeError(f"could not unmount persistent host bind: {detail}")
 
-        def enforce_access_fd(target_fd, raw_access):
+        def access_matches_fd(target_fd, raw_access):
             desired = "ro" if str(raw_access or "").strip() == "ro" else "rw"
             result = run(
                 ["findmnt", "-n", "-o", "OPTIONS", "--mountpoint", fd_path(target_fd)],
@@ -627,14 +689,18 @@ def persistent_host_replay_python() -> str:
                 pass_fds=(target_fd,),
             )
             options = {item.strip() for item in (result.stdout or "").split(",")}
-            if desired in options:
+            return desired in options
+
+        def enforce_access_fd(target_fd, raw_access):
+            desired = "ro" if str(raw_access or "").strip() == "ro" else "rw"
+            if access_matches_fd(target_fd, raw_access):
                 return
             run(
                 ["mount", "-o", f"remount,bind,{desired}", fd_path(target_fd)],
                 pass_fds=(target_fd,),
             )
 
-        def ensure_record(export_root_fd, record):
+        def ensure_record(export_root_fd, record, *, preserve_live_binds=False):
             if not bool(record.get("enabled", True)):
                 return
             token = validate_token(record.get("shared_root_token"))
@@ -642,9 +708,21 @@ def persistent_host_replay_python() -> str:
             target_fd = open_child_directory(export_root_fd, token, create=True)
             try:
                 if is_mountpoint_fd(target_fd) and same_tree_fds(source_fd, target_fd):
+                    if preserve_live_binds and not access_matches_fd(
+                        target_fd, record.get("access")
+                    ):
+                        raise LiveBindConflictError(
+                            f"live persistent host bind for {{token}} has different access; "
+                            "foreground session preparation leaves live binds untouched"
+                        )
                     enforce_access_fd(target_fd, record.get("access"))
                     return
                 if is_mountpoint_fd(target_fd):
+                    if preserve_live_binds:
+                        raise LiveBindConflictError(
+                            f"live persistent host bind for {{token}} points at a different directory; "
+                            "foreground session preparation leaves live binds untouched"
+                        )
                     os.close(target_fd)
                     target_fd = -1
                     unmount_child(export_root_fd, token)
@@ -729,6 +807,7 @@ def persistent_host_replay_python() -> str:
             parser.add_argument("--vm-name")
             parser.add_argument("--prune-stale", action="store_true")
             parser.add_argument("--only-guest-dst", default="")
+            parser.add_argument("--preserve-live-binds", action="store_true")
             parser.add_argument("--probe-source")
             # Keep programmatic calls isolated from the parent process argv.
             # The executable wrapper below explicitly forwards its own CLI args.
@@ -741,6 +820,7 @@ def persistent_host_replay_python() -> str:
                     or args.vm_name
                     or args.prune_stale
                     or args.only_guest_dst
+                    or args.preserve_live_binds
                 ):
                     parser.error("--probe-source cannot be combined with replay arguments")
                 return probe_source_identity(args.probe_source)
@@ -748,6 +828,8 @@ def persistent_host_replay_python() -> str:
                 parser.error("--manifest, --export-root, and --vm-name are required for replay")
             if args.only_guest_dst and args.prune_stale:
                 parser.error("--only-guest-dst cannot be combined with --prune-stale")
+            if args.preserve_live_binds and not args.only_guest_dst:
+                parser.error("--preserve-live-binds requires --only-guest-dst")
 
             manifest_fd = open_validated_manifest(args.manifest)
             with os.fdopen(manifest_fd, "r", encoding="utf-8") as file:
@@ -782,13 +864,18 @@ def persistent_host_replay_python() -> str:
                                 f"multiple persistent attachment records target scoped guest destination {{args.only_guest_dst}}"
                             )
                     if not bool(record.get("enabled", True)):
-                        if args.only_guest_dst:
+                        if args.only_guest_dst and not args.preserve_live_binds:
                             quarantine_unavailable_token(export_root_fd, token)
                         continue
                     try:
-                        ensure_record(export_root_fd, record)
+                        ensure_record(
+                            export_root_fd,
+                            record,
+                            preserve_live_binds=args.preserve_live_binds,
+                        )
                     except SourceUnavailableError as ex:
-                        quarantine_unavailable_token(export_root_fd, token)
+                        if not args.preserve_live_binds:
+                            quarantine_unavailable_token(export_root_fd, token)
                         unavailable.append((token, str(record.get("source_dir") or ""), str(ex)))
                         print(
                             f"WARNING: skipping persistent host attachment {token}: {ex}",
