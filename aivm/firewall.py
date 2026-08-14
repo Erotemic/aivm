@@ -382,7 +382,9 @@ def ensure_firewall_ready(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
 def _warn_firewall_unverified(table: str, reason: str) -> None:
     log.warning(
-        'Could not verify the managed firewall table inet {}: {}.', table, reason
+        'Could not verify the managed firewall table inet {}: {}.',
+        table,
+        reason,
     )
     log.warning(
         '  The guest is starting with its sandbox rules UNVERIFIED. They may '

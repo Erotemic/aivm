@@ -424,15 +424,11 @@ def test_store_root_stays_clear_of_the_persistent_replay_state_chain() -> None:
 
 
 @pytest.fixture()
-def unshared_host(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Path:
+def unshared_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Point the shared root at a path no host-wide store occupies."""
     absent = tmp_path / 'var-lib-aivm-machine'
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
-    monkeypatch.setattr(
-        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', absent
-    )
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', absent)
     return absent
 
 
@@ -467,9 +463,7 @@ def test_shared_root_wins_over_the_personal_one(
     shared = tmp_path / 'shared'
     shared.mkdir()
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
-    monkeypatch.setattr(
-        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
-    )
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
 
     layout = machine_store_layout()
 
@@ -492,9 +486,7 @@ def test_unreachable_shared_store_refuses_instead_of_forking(
     shared = tmp_path / 'shared'
     shared.mkdir(mode=0o000)
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
-    monkeypatch.setattr(
-        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
-    )
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
 
     try:
         with pytest.raises(MachineStoreAccessError) as caught:
@@ -514,9 +506,7 @@ def test_explicit_root_override_beats_both_defaults(
     shared = tmp_path / 'shared'
     shared.mkdir()
     sandbox = tmp_path / 'sandbox'
-    monkeypatch.setattr(
-        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
-    )
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
     monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(sandbox))
 
     layout = machine_store_layout()

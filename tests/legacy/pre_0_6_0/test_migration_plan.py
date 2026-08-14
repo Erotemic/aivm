@@ -310,7 +310,9 @@ def test_runtime_missing_domain_blocks_apply_readiness(tmp_path: Path) -> None:
     ('libvirt_ok', 'expect_sudo'),
     [
         pytest.param(False, True, id='escalates_when_libvirt_needs_sudo'),
-        pytest.param(True, False, id='stays_unprivileged_when_libvirt_reachable'),
+        pytest.param(
+            True, False, id='stays_unprivileged_when_libvirt_reachable'
+        ),
     ],
 )
 def test_runtime_inventory_follows_the_libvirt_escalation_decision(

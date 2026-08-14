@@ -55,9 +55,9 @@ class VMUpCLI(_BaseCommand):
         True,
         help='Verify (and repair) firewall rules when firewall.enabled=true.',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -66,9 +66,7 @@ class VMUpCLI(_BaseCommand):
         announce_vm_machine_impact(
             cfg_path, cfg.vm.name, action='start or reconcile'
         )
-        maybe_install_missing_host_deps(
-            yes=args.yes, dry_run=args.dry_run
-        )
+        maybe_install_missing_host_deps(yes=args.yes, dry_run=args.dry_run)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Create/start VM {cfg.vm.name}',
@@ -103,9 +101,9 @@ class VMUpCLI(_BaseCommand):
 class VMDownCLI(_BaseCommand):
     """Gracefully shut down the VM."""
 
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -129,9 +127,9 @@ class VMRestartCLI(_BaseCommand):
         True,
         help='Verify (and repair) firewall rules when firewall.enabled=true.',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -163,9 +161,9 @@ class VMCreateCLI(_BaseCommand):
         short_alias=['f'],
         help='Overwrite existing VM entry and recreate VM definition if present.',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -214,9 +212,9 @@ class VMDeleteCLI(_BaseCommand):
         position=1,
         help='Optional VM name override (positional).',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -276,9 +274,9 @@ class VMProvisionCLI(_BaseCommand):
         '',
         help='Optional VM name override.',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -334,9 +332,9 @@ class VMRenameCLI(_BaseCommand):
         help='New VM name (positional).',
     )
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

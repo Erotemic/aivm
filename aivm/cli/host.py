@@ -125,9 +125,9 @@ class HostInstallDepsCLI(_BaseCommand):
 class ImageFetchCLI(_BaseCommand):
     """Download/cache the configured Ubuntu base image."""
 
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

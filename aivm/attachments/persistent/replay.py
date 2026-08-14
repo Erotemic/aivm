@@ -130,9 +130,7 @@ def _reconcile_persistent_attachments_in_guest(
                         getattr(replay_result, 'returncode', 0),
                     )
                 )
-                stderr = str(
-                    getattr(replay_result, 'stderr', '') or ''
-                ).strip()
+                stderr = str(getattr(replay_result, 'stderr', '') or '').strip()
                 if stderr:
                     for line in stderr.splitlines():
                         log.warning('guest-persistent-replay: {}', line)

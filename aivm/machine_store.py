@@ -146,9 +146,7 @@ class MachineStoreLayout:
             state_dir=normalized / 'state',
             bootstrap_dir=normalized / 'bootstrap',
             shared=(
-                machine_root_is_shared(normalized)
-                if shared is None
-                else shared
+                machine_root_is_shared(normalized) if shared is None else shared
             ),
         )
 

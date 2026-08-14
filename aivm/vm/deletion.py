@@ -456,7 +456,16 @@ def _assert_no_mounts_below(path: Path) -> None:
     # non-root line with box-drawing glyphs (``├─``), which the path filter
     # below would silently discard, letting rm -rf proceed over live mounts.
     result = CommandManager.current().run(
-        ['findmnt', '-R', '--list', '-n', '-o', 'TARGET', '--target', str(path)],
+        [
+            'findmnt',
+            '-R',
+            '--list',
+            '-n',
+            '-o',
+            'TARGET',
+            '--target',
+            str(path),
+        ],
         sudo=path_needs_sudo(path),
         role='read',
         check=False,

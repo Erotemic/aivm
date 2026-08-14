@@ -476,9 +476,7 @@ def test_vm_update_planning_pins_c_locale_for_parsed_probes(
     parsed = [
         call
         for call in raw_calls
-        if any(
-            word in call for word in ('dominfo', 'domstate', 'domblkinfo')
-        )
+        if any(word in call for word in ('dominfo', 'domstate', 'domblkinfo'))
     ]
     assert len(parsed) >= 3
     assert all(is_locale_pinned(call) for call in parsed)

@@ -483,9 +483,7 @@ def test_admin_can_declare_an_attachment_for_another_identity(
     reg = _machine_store()
     bob = _principal(cfg.vm.name, 'principal-bob', 'bob')
     upsert_principal(reg, bob)
-    upsert_principal(
-        reg, _principal(cfg.vm.name, 'principal-admin', 'admin')
-    )
+    upsert_principal(reg, _principal(cfg.vm.name, 'principal-admin', 'admin'))
     path = tmp_path / 'config.toml'
     save_store_split(reg, path)
 

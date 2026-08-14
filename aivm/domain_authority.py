@@ -112,9 +112,7 @@ def stamp_domain_authority(
 ) -> None:
     """Record ``layout`` as the owner of ``vm_name`` in libvirt metadata."""
     identity = current_host_identity().username
-    document = (
-        f'<authority store="{layout.root}" user="{identity}"/>'
-    )
+    document = f'<authority store="{layout.root}" user="{identity}"/>'
     if dry_run:
         print(f'DRYRUN: stamp {vm_name} as owned by {layout.root}')
         return
@@ -173,9 +171,7 @@ def _competing_store_possible(layout: MachineStoreLayout) -> bool:
     return False
 
 
-def require_domain_authority(
-    vm_name: str, layout: MachineStoreLayout
-) -> None:
+def require_domain_authority(vm_name: str, layout: MachineStoreLayout) -> None:
     """Refuse to act on a domain another machine store already claims."""
     if not _competing_store_possible(layout):
         return

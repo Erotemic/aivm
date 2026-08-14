@@ -1093,9 +1093,9 @@ class VMAttachCLI(_BaseCommand):
             'Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
         ),
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
     admin_override: bool = kwconf.Flag(
         False,
         help="Allow a trusted host administrator to update another principal's attachment.",
@@ -1147,9 +1147,9 @@ class VMDetachCLI(_BaseCommand):
     host_src: str = kwconf.Value(
         '.', position=1, help='Host directory to detach.'
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
     admin_override: bool = kwconf.Flag(
         False,
         help="Allow a trusted host administrator to detach another principal's attachment.",
@@ -1179,9 +1179,9 @@ class VMPersistentHostReplayCLI(_BaseCommand):
     """Replay host-side persistent bind mounts from the saved manifest."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
     trust_current_paths: bool = kwconf.Flag(
         False,
         help=(
@@ -1222,9 +1222,9 @@ class VMInstallPersistentHostReplayServiceCLI(_BaseCommand):
     """Install and enable a host systemd service for persistent bind replay."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

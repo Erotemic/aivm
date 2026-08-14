@@ -76,9 +76,7 @@ def test_help_tree_includes_one_line_descriptions(
 
 def test_common_short_aliases_parse_together(cfg_path: Path) -> None:
     """The conventional short forms map to the same CLI fields."""
-    args = ConfigFormatCLI.cli(
-        argv=['-n', '-y', '-c', str(cfg_path), '-f']
-    )
+    args = ConfigFormatCLI.cli(argv=['-n', '-y', '-c', str(cfg_path), '-f'])
     assert args.dry_run is True
     assert args.yes is True
     assert args.config == str(cfg_path)

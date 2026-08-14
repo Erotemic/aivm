@@ -105,9 +105,9 @@ class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
     timeout: int = kwconf.Value(360, parser=int, help='Timeout seconds.')
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -368,9 +368,9 @@ class VMCodeCLI(_BaseCommand):
             'attach. Useful for scripts / non-interactive callers.'
         ),
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -520,9 +520,9 @@ class VMSSHCLI(_BaseCommand):
         True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    dry_run: bool = kwconf.Flag(False,
-        short_alias=['n'],
-        help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:

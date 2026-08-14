@@ -321,7 +321,7 @@ def test_check_reports_friction_not_failure_under_as_needed(
 def test_check_does_not_promise_sudo_to_an_account_without_it(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
 ) -> None:
-    """"sudo will be used for X" is a false all-clear when sudo is unavailable.
+    """ "sudo will be used for X" is a false all-clear when sudo is unavailable.
 
     On a shared workstation the ordinary user is in the libvirt group and
     has no sudoers entry. Telling them the host is "Ready" and that sudo

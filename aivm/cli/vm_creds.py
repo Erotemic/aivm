@@ -131,7 +131,7 @@ class VMCredsAddCLI(_BaseCommand):
     dry_run: bool = kwconf.Flag(
         False,
         short_alias=['n'],
-        help='Print the grant without creating or installing a key.'
+        help='Print the grant without creating or installing a key.',
     )
 
     @classmethod
@@ -379,7 +379,7 @@ class VMCredsSetupCLI(_BaseCommand):
     dry_run: bool = kwconf.Flag(
         False,
         short_alias=['n'],
-        help='Print the setup actions without changing the host.'
+        help='Print the setup actions without changing the host.',
     )
 
     @classmethod
@@ -710,7 +710,7 @@ class VMCredsRevokeCLI(_BaseCommand):
     dry_run: bool = kwconf.Flag(
         False,
         short_alias=['n'],
-        help='Print the revocation without changing anything.'
+        help='Print the revocation without changing anything.',
     )
 
     @classmethod
@@ -785,7 +785,7 @@ class VMCredsAbandonCLI(_BaseCommand):
     dry_run: bool = kwconf.Flag(
         False,
         short_alias=['n'],
-        help='Print the abandonment without changing anything.'
+        help='Print the abandonment without changing anything.',
     )
 
     @classmethod

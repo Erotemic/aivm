@@ -297,9 +297,7 @@ def test_reconcile_keeps_active_state_when_an_attempt_fails(
         'ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n'
     )
     edward = HostIdentity(uid=1201, gid=1202, username='edward.wang')
-    monkeypatch.setattr(
-        'aivm.enrollment.current_host_identity', lambda: edward
-    )
+    monkeypatch.setattr('aivm.enrollment.current_host_identity', lambda: edward)
     monkeypatch.setattr(
         'aivm.access_control.current_host_identity', lambda: edward
     )

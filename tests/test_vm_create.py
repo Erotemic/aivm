@@ -312,8 +312,8 @@ def test_create_or_start_shutting_down_vm_raises_friendly_error(
 
     with pytest.raises(RuntimeError, match='shutting down'):
         create_or_start_vm(
-        cfg, dry_run=False, recreate=False, ensure_firewall=False
-    )
+            cfg, dry_run=False, recreate=False, ensure_firewall=False
+        )
 
 
 def _run_virtiofsd_missing(

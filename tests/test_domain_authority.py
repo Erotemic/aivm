@@ -49,9 +49,7 @@ def _two_store_host(
     personal = tmp_path / 'personal'
     personal.mkdir()
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
-    monkeypatch.setattr(
-        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
-    )
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
     monkeypatch.setattr(
         'aivm.domain_authority.candidate_machine_store_roots',
         lambda: (shared, personal),
@@ -109,11 +107,7 @@ def test_unstamped_domain_is_allowed(
     activate_manager(monkeypatch, yes=True)
     command_recorder(
         monkeypatch,
-        {
-            'virsh metadata': FakeProc(
-                returncode=1, stderr='metadata not found'
-            )
-        },
+        {'virsh metadata': FakeProc(returncode=1, stderr='metadata not found')},
     )
 
     require_domain_authority(VM, layout)

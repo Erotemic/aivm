@@ -1484,7 +1484,10 @@ def verify_migration_local(
                 managed_root=_credential_destination_root(move),
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected_fingerprint:
+        if (
+            not target.exists()
+            or _path_content_fingerprint(target) != expected_fingerprint
+        ):
             raise MigrationExecutionError(
                 f'Credential material verification failed: {source} -> {target}'
             )
@@ -1502,7 +1505,10 @@ def verify_migration_local(
                 managed_root=layout.root,
             )
             continue
-        if not target.exists() or _path_content_fingerprint(target) != expected_fingerprint:
+        if (
+            not target.exists()
+            or _path_content_fingerprint(target) != expected_fingerprint
+        ):
             raise MigrationExecutionError(
                 f'Persistent state verification failed: {source} -> {target}'
             )

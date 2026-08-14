@@ -188,9 +188,7 @@ class StatusCLI(_BaseCommand):
                     ),
                 )
             print(
-                render_status(
-                    cfg, path, detail=args.detail, use_sudo=args.sudo
-                )
+                render_status(cfg, path, detail=args.detail, use_sudo=args.sudo)
             )
         return 0
 

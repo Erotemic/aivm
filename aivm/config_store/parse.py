@@ -67,10 +67,7 @@ def _parse_store_header(raw: dict[str, object], reg: Store) -> int:
             f'Invalid store_kind {store_kind!r}; expected one of: {allowed}'
         )
     reg.store_kind = store_kind
-    if (
-        store_kind == 'machine'
-        and parsed_schema_version > STORE_SCHEMA_VERSION
-    ):
+    if store_kind == 'machine' and parsed_schema_version > STORE_SCHEMA_VERSION:
         # The shared document may be edited by several aivm versions. An
         # older build re-rendering a newer document would silently drop the
         # fields it does not know, for every principal on the machine.
@@ -179,8 +176,7 @@ def _attachment_from_dict(
         vm_name=owner,
         owner_principal_id=str(item.get('owner_principal_id', '')).strip(),
         mode=str(
-            item.get('mode', DEFAULT_ATTACHMENT_MODE)
-            or DEFAULT_ATTACHMENT_MODE
+            item.get('mode', DEFAULT_ATTACHMENT_MODE) or DEFAULT_ATTACHMENT_MODE
         ),
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),

@@ -132,4 +132,6 @@ def test_host_replay_token_pattern_matches_the_shared_constant() -> None:
 
     script = persistent_host_replay_python()
 
-    assert f'TOKEN_RE = re.compile(r"{PERSISTENT_BIND_TOKEN_PATTERN}")' in script
+    assert (
+        f'TOKEN_RE = re.compile(r"{PERSISTENT_BIND_TOKEN_PATTERN}")' in script
+    )

@@ -1090,9 +1090,7 @@ def test_persistent_host_replay_dry_run_executes_nothing(
 
     # The virtiofs-mapping probe is a legitimate read; everything else --
     # notably the sudo replay helper, mkdir, install, systemctl -- is strict.
-    rec = command_recorder(
-        monkeypatch, {'virsh': FakeProc(stdout='<domain/>')}
-    )
+    rec = command_recorder(monkeypatch, {'virsh': FakeProc(stdout='<domain/>')})
 
     _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
 
@@ -1179,7 +1177,8 @@ def test_host_replay_rejects_source_replacement(
     source.rename(tmp_path / 'approved-source')
     source.mkdir()
     with pytest.raises(
-        helper.SourceUnavailableError, match='approved persistent source changed'
+        helper.SourceUnavailableError,
+        match='approved persistent source changed',
     ):
         helper.open_approved_source(record)
 
@@ -1540,9 +1539,7 @@ def _approved_manifest_for(
         ),
         encoding='utf-8',
     )
-    mountinfo = _write_mountinfo(
-        tmp_path / 'mountinfo', export_root, *mounted
-    )
+    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root, *mounted)
     return manifest_path, export_root, mountinfo
 
 
@@ -1698,7 +1695,9 @@ def test_host_replay_isolates_source_failure_and_continues(
     )
     export_root = tmp_path / 'export'
     export_root.mkdir()
-    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
     seen: list[str] = []
     quarantined: list[str] = []
 
@@ -1706,11 +1705,13 @@ def test_host_replay_isolates_source_failure_and_continues(
         token = str(record['shared_root_token'])
         seen.append(token)
         if token == 'bad':
-            raise helper.SourceUnavailableError('approved persistent source changed')
+            raise helper.SourceUnavailableError(
+                'approved persistent source changed'
+            )
 
     helper.ensure_record = ensure_record
-    helper.quarantine_unavailable_token = (
-        lambda _export_root_fd, token: quarantined.append(str(token))
+    helper.quarantine_unavailable_token = lambda _export_root_fd, token: (
+        quarantined.append(str(token))
     )
     code = helper.main(
         [
@@ -1728,8 +1729,7 @@ def test_host_replay_isolates_source_failure_and_continues(
     assert quarantined == ['bad']
     assert (
         'WARNING: skipping persistent host attachment bad: '
-        'approved persistent source changed'
-        in capsys.readouterr().err
+        'approved persistent source changed' in capsys.readouterr().err
     )
 
 
@@ -1752,7 +1752,9 @@ def test_host_replay_does_not_swallow_mount_or_access_failure(
     )
     export_root = tmp_path / 'export'
     export_root.mkdir()
-    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
     seen: list[str] = []
 
     def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:

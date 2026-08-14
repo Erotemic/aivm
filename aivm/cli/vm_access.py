@@ -129,7 +129,7 @@ class VMAccessRepairHostIdentityCLI(_BaseCommand):
     dry_run: bool = kwconf.Flag(
         False,
         short_alias=['n'],
-        help='Describe the repair without changing the machine store.'
+        help='Describe the repair without changing the machine store.',
     )
 
     @classmethod

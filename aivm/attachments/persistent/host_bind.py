@@ -255,7 +255,7 @@ def _probe_persistent_source_identity_as_root(
     with mgr.step(
         'Inspect persistent source identity as root',
         why=(
-            'An administrative reauthorization may target another account\'s '
+            "An administrative reauthorization may target another account's "
             'private path, so read only its descriptor-pinned filesystem '
             'identity through the same no-symlink helper used for replay.'
         ),

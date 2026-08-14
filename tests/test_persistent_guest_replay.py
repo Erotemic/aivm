@@ -563,13 +563,17 @@ def test_persistent_replay_helper_ignores_enabled_child_under_enabled_parent(
     assert '/workspace/proj/sub' not in mounts
 
 
-def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:
+def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> (
+    None
+):
     from aivm.persistent_replay import persistent_replay_python
 
     source = persistent_replay_python()
     ns = _exec_guest_replay_helper(source)
     ns['mount_persistent_root'] = lambda: None
-    ns['sync_state'] = lambda: ['source is unavailable in shared root: /mnt/aivm-persistent/stale']
+    ns['sync_state'] = lambda: [
+        'source is unavailable in shared root: /mnt/aivm-persistent/stale'
+    ]
 
     stderr = StringIO()
     with redirect_stderr(stderr):

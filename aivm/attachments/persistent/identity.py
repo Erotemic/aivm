@@ -31,7 +31,9 @@ class PersistentSourceIdentityRefresh:
     skipped_foreign: tuple[str, ...]
 
 
-def _active_persistent_records(reg: Store, vm_name: str) -> list[AttachmentEntry]:
+def _active_persistent_records(
+    reg: Store, vm_name: str
+) -> list[AttachmentEntry]:
     return [
         att
         for att in reg.attachments

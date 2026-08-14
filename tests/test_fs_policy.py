@@ -103,7 +103,10 @@ def test_foreign_group_is_a_hard_error_with_guidance(
 
     monkeypatch.setattr(os, 'chown', eperm)
 
-    with pytest.raises(PermissionError, match='trusted\nmachine-store group|trusted machine-store group'):
+    with pytest.raises(
+        PermissionError,
+        match='trusted\nmachine-store group|trusted machine-store group',
+    ):
         ensure_store_directory(root, policy)
 
 
