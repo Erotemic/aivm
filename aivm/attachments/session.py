@@ -100,6 +100,7 @@ class ReconcileResult:
     cached_ip: str | None
     cached_ssh_ok: bool
     shared_root_host_side_ready: bool = False
+    vm_was_running: bool = False
 
 
 def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
@@ -301,11 +302,14 @@ def _restore_saved_vm_attachments(
     mirror_home: bool = False,
     owner_principal_id: str = '',
 ) -> None:
-    """Best-effort restore saved non-primary attachments for a running VM session.
+    """Best-effort restore saved non-primary attachments after VM startup.
 
-    After the primary folder for the current command has been reconciled, this
-    helper walks the other persisted attachments for the VM and attempts to make
-    them available inside the guest again. Standard shared attachments are
+    Session preparation calls this only when the VM was not already live at the
+    start of the foreground operation.  ``aivm code``/``ssh`` against an
+    already-running VM are attachment-local and must not disturb unrelated
+    work.  After a start/recovery, this helper walks the other persisted
+    attachments for the VM and attempts to make them available inside the
+    guest again. Standard shared attachments are
     restored by ensuring the virtiofs mapping exists and then mounting it in the
     guest. Shared-root attachments reuse the shared-root reconciliation path but
     disable disruptive host-side rebinds, because automatic restore should not
@@ -393,7 +397,7 @@ def _restore_saved_vm_attachments(
                     _restore_src,
                     aligned,
                     ip,
-                    yes=yes,
+                    yes=bool(yes),
                     dry_run=False,
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
@@ -605,6 +609,7 @@ def _reconcile_attached_vm(
             if not policy.dry_run
             else None
         )
+        vm_was_running = bool(cached_ssh_ok or vm_running_probe is True)
 
         net_probe = probe_network(cfg, use_sudo=False).ok
         need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
@@ -644,7 +649,7 @@ def _reconcile_attached_vm(
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
             maybe_install_missing_host_deps(
-                yes=policy.yes, dry_run=policy.dry_run
+                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
             )
             if attachment.mode in {
                 ATTACHMENT_MODE_SHARED_ROOT,
@@ -766,12 +771,12 @@ def _reconcile_attached_vm(
                                 _ensure_shared_root_host_bind(
                                     cfg,
                                     attachment,
-                                    yes=policy.yes,
+                                    yes=bool(policy.yes),
                                     dry_run=False,
                                 )
                                 _ensure_shared_root_vm_mapping(
                                     cfg,
-                                    yes=policy.yes,
+                                    yes=bool(policy.yes),
                                     dry_run=False,
                                     vm_running=True,
                                 )
@@ -858,6 +863,7 @@ def _reconcile_attached_vm(
             cached_ip=cached_ip,
             cached_ssh_ok=cached_ssh_ok,
             shared_root_host_side_ready=shared_root_host_side_ready,
+            vm_was_running=vm_was_running,
         )
 
 
@@ -896,8 +902,8 @@ def _prepare_attached_session(
 
     ok, _report = attachment_safety_preflight(
         host_src,
-        yes=yes,
-        dry_run=dry_run,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
     )
     if not ok:
         raise AIVMError(
@@ -942,8 +948,8 @@ def _prepare_attached_session(
         host_src,
         existing_attachments=existing_store.attachments,
         vm_name=cfg.vm.name,
-        yes=yes,
-        dry_run=dry_run,
+        yes=bool(yes),
+        dry_run=bool(dry_run),
     )
     if not ok:
         raise AIVMError(
@@ -973,10 +979,10 @@ def _prepare_attached_session(
         host_src,
         attachment,
         policy=ReconcilePolicy(
-            ensure_firewall_opt=ensure_firewall_opt,
-            recreate_if_needed=recreate_if_needed,
-            dry_run=dry_run,
-            yes=yes,
+            ensure_firewall_opt=bool(ensure_firewall_opt),
+            recreate_if_needed=bool(recreate_if_needed),
+            dry_run=bool(dry_run),
+            yes=bool(yes),
         ),
         config_store_path=cfg_path,
     )
@@ -985,7 +991,7 @@ def _prepare_attached_session(
 
     if (not dry_run) and maybe_offer_create_ssh_identity(
         cfg,
-        yes=yes,
+        yes=bool(yes),
         prompt_reason=(
             'Generate a dedicated SSH keypair so aivm can open SSH/VS Code '
             'sessions and provision the guest.'
@@ -1044,7 +1050,8 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = cfg.vm.mirror_shared_home_folders
+    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
+    vm_was_running = bool(getattr(reconcile, 'vm_was_running', False))
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
         ATTACHMENT_MODE_DIRECT_VIRTIOFS,
@@ -1063,7 +1070,7 @@ def _prepare_attached_session(
             host_src,
             attachment,
             ip,
-            yes=yes,
+            yes=bool(yes),
             dry_run=False,
             ensure_shared_root_host_side=(
                 attachment.mode
@@ -1079,23 +1086,25 @@ def _prepare_attached_session(
                 cfg_path,
                 ip,
                 dry_run=False,
+                only_guest_dst=(attachment.guest_dst if vm_was_running else ''),
             )
-        _restore_saved_vm_attachments(
-            cfg,
-            cfg_path,
-            ip=ip,
-            primary_attachment=attachment,
-            yes=yes,
-            mirror_home=mirror_home,
-            owner_principal_id=owner_principal_id,
-        )
+        if not vm_was_running:
+            _restore_saved_vm_attachments(
+                cfg,
+                cfg_path,
+                ip=ip,
+                primary_attachment=attachment,
+                yes=bool(yes),
+                mirror_home=mirror_home,
+                owner_principal_id=owner_principal_id,
+            )
     else:
         _ensure_git_clone_attachment(
             cfg,
             host_src,
             attachment,
             ip,
-            yes=yes,
+            yes=bool(yes),
             dry_run=False,
         )
         # Apply companion-symlink and mirror-home behavior for git mode too.
@@ -1107,15 +1116,16 @@ def _prepare_attached_session(
             attachment,
             mirror_home=mirror_home,
         )
-        _restore_saved_vm_attachments(
-            cfg,
-            cfg_path,
-            ip=ip,
-            primary_attachment=None,
-            yes=yes,
-            mirror_home=mirror_home,
-            owner_principal_id=owner_principal_id,
-        )
+        if not vm_was_running:
+            _restore_saved_vm_attachments(
+                cfg,
+                cfg_path,
+                ip=ip,
+                primary_attachment=None,
+                yes=bool(yes),
+                mirror_home=mirror_home,
+                owner_principal_id=owner_principal_id,
+            )
     return PreparedSession(
         context=context,
         cfg_path=cfg_path,

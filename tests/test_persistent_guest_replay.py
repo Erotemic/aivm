@@ -254,6 +254,69 @@ def test_persistent_replay_helper_keeps_correct_real_mountpoint(
     assert stderr.getvalue() == ''
 
 
+def test_scoped_persistent_replay_leaves_unrelated_busy_mount_alone(
+    tmp_path: Path,
+) -> None:
+    """Foreground replay may add one project without reconciling siblings."""
+    from aivm.persistent_replay import persistent_replay_python
+
+    source = persistent_replay_python()
+    ns = _exec_guest_replay_helper(source)
+    ns['PERSISTENT_ROOT_MOUNT'] = str(tmp_path / 'mnt')
+    ns['STATE_PATH'] = str(tmp_path / 'attachments.json')
+    ns['os'].makedirs = lambda *a, **k: None  # type: ignore[attr-defined]
+
+    ambition_wrong = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'ambition-old')
+    ambition_desired = str(
+        Path(ns['PERSISTENT_ROOT_MOUNT']) / 'ambition-new'
+    )
+    new_source = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'new-project')
+    mounts = {
+        '/workspace/ambition': {
+            'source': ambition_wrong,
+            'options': 'rw',
+        }
+    }
+    ns['subprocess'].run = _make_guest_replay_fake_run(  # type: ignore[index]
+        mounts,
+        umount_busy=True,
+    )
+
+    Path(ns['PERSISTENT_ROOT_MOUNT']).mkdir(parents=True, exist_ok=True)
+    Path(ambition_desired).mkdir(parents=True, exist_ok=True)
+    Path(new_source).mkdir(parents=True, exist_ok=True)
+    Path(ns['STATE_PATH']).write_text(
+        json.dumps(
+            {
+                'schema_version': 2,
+                'vm_name': 'vm',
+                'shared_root_mount': ns['PERSISTENT_ROOT_MOUNT'],
+                'records': [
+                    {
+                        'guest_dst': '/workspace/ambition',
+                        'shared_root_token': 'ambition-new',
+                        'access': 'rw',
+                        'enabled': True,
+                    },
+                    {
+                        'guest_dst': '/workspace/new-project',
+                        'shared_root_token': 'new-project',
+                        'access': 'rw',
+                        'enabled': True,
+                    },
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    code = ns['main'](['--only-guest-dst', '/workspace/new-project'])
+
+    assert code == 0
+    assert mounts['/workspace/new-project']['source'] == new_source
+    assert mounts['/workspace/ambition']['source'] == ambition_wrong
+
+
 def test_persistent_replay_helper_skips_busy_stale_prune_and_continues(
     tmp_path: Path,
 ) -> None:
@@ -563,15 +626,13 @@ def test_persistent_replay_helper_ignores_enabled_child_under_enabled_parent(
     assert '/workspace/proj/sub' not in mounts
 
 
-def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> (
-    None
-):
+def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:
     from aivm.persistent_replay import persistent_replay_python
 
     source = persistent_replay_python()
     ns = _exec_guest_replay_helper(source)
     ns['mount_persistent_root'] = lambda: None
-    ns['sync_state'] = lambda: [
+    ns['sync_state'] = lambda **kwargs: [
         'source is unavailable in shared root: /mnt/aivm-persistent/stale'
     ]
 

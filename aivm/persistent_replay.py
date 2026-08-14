@@ -45,6 +45,7 @@ def persistent_replay_python() -> str:
     source = textwrap.dedent(
         f"""\
         #!/usr/bin/env python3
+        import argparse
         import json
         import os
         import posixpath
@@ -328,13 +329,49 @@ def persistent_replay_python() -> str:
             if desired not in current_options.split(","):
                 run(["mount", "-o", f"remount,bind,{{desired}}", guest_dst])
 
-        def sync_state():
+        def select_record(records, only_guest_dst):
+            target = normalize_guest_dst(only_guest_dst)
+            if not target:
+                raise RuntimeError(
+                    f"invalid scoped persistent attachment guest destination: {{only_guest_dst!r}}"
+                )
+            matches = []
+            for index, record in enumerate(records):
+                if not isinstance(record, dict):
+                    continue
+                guest_dst = normalize_guest_dst(record.get("guest_dst"))
+                if guest_dst != target:
+                    continue
+                token = str(record.get("shared_root_token") or "").strip()
+                if not token:
+                    raise RuntimeError(
+                        f"persistent attachment record for {{target}} is missing shared_root_token"
+                    )
+                matches.append((guest_dst, bool(record.get("enabled", True)), record))
+            if not matches:
+                raise RuntimeError(
+                    f"persistent attachment record not found for scoped guest destination {{target}}"
+                )
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"multiple persistent attachment records target scoped guest destination {{target}}"
+                )
+            return matches
+
+        def sync_state(*, only_guest_dst=""):
             desired = load_json(STATE_PATH)
-            records = validate_records(desired.get("records", []))
-            desired_targets = {{
-                guest_dst for guest_dst, _enabled, _record in records
-            }}
-            prune_stale_mounts(desired_targets)
+            raw_records = desired.get("records", [])
+            if only_guest_dst:
+                # Foreground attach/code/ssh operations are intentionally
+                # attachment-local.  They may add or repair the requested
+                # path, but never prune or replace unrelated live mounts.
+                records = select_record(raw_records, only_guest_dst)
+            else:
+                records = validate_records(raw_records)
+                desired_targets = {{
+                    guest_dst for guest_dst, _enabled, _record in records
+                }}
+                prune_stale_mounts(desired_targets)
             failures = []
             for guest_dst, enabled, record in records:
                 if not enabled:
@@ -346,10 +383,15 @@ def persistent_replay_python() -> str:
                     failures.append(str(ex))
             return failures
 
-        def main():
+        def main(argv=()):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--only-guest-dst", default="")
+            # Keep programmatic calls isolated from the parent process argv.
+            # The executable wrapper below explicitly forwards its own CLI args.
+            args = parser.parse_args(list(argv))
             mount_persistent_root()
             try:
-                failures = sync_state()
+                failures = sync_state(only_guest_dst=args.only_guest_dst)
             except FileNotFoundError as ex:
                 print(str(ex), file=sys.stderr)
                 raise SystemExit(1)
@@ -363,7 +405,7 @@ def persistent_replay_python() -> str:
             return 0
 
         if __name__ == "__main__":
-            raise SystemExit(main())
+            raise SystemExit(main(sys.argv[1:]))
         """
     )
     return source.replace(
@@ -680,21 +722,32 @@ def persistent_host_replay_python() -> str:
                 os.close(source_fd)
             return 0
 
-        def main(argv=None):
+        def main(argv=()):
             parser = argparse.ArgumentParser()
             parser.add_argument("--manifest")
             parser.add_argument("--export-root")
             parser.add_argument("--vm-name")
             parser.add_argument("--prune-stale", action="store_true")
+            parser.add_argument("--only-guest-dst", default="")
             parser.add_argument("--probe-source")
-            args = parser.parse_args(argv)
+            # Keep programmatic calls isolated from the parent process argv.
+            # The executable wrapper below explicitly forwards its own CLI args.
+            args = parser.parse_args(list(argv))
 
             if args.probe_source:
-                if args.manifest or args.export_root or args.vm_name or args.prune_stale:
+                if (
+                    args.manifest
+                    or args.export_root
+                    or args.vm_name
+                    or args.prune_stale
+                    or args.only_guest_dst
+                ):
                     parser.error("--probe-source cannot be combined with replay arguments")
                 return probe_source_identity(args.probe_source)
             if not args.manifest or not args.export_root or not args.vm_name:
                 parser.error("--manifest, --export-root, and --vm-name are required for replay")
+            if args.only_guest_dst and args.prune_stale:
+                parser.error("--only-guest-dst cannot be combined with --prune-stale")
 
             manifest_fd = open_validated_manifest(args.manifest)
             with os.fdopen(manifest_fd, "r", encoding="utf-8") as file:
@@ -714,11 +767,23 @@ def persistent_host_replay_python() -> str:
             try:
                 desired_tokens = set()
                 unavailable = []
+                scoped_matches = 0
                 for record in records:
                     if not isinstance(record, dict):
                         raise RuntimeError("host replay manifest contains a non-object record")
                     token = validate_token(record.get("shared_root_token"))
+                    if args.only_guest_dst:
+                        guest_dst = str(record.get("guest_dst") or "").strip()
+                        if guest_dst != args.only_guest_dst:
+                            continue
+                        scoped_matches += 1
+                        if scoped_matches > 1:
+                            raise RuntimeError(
+                                f"multiple persistent attachment records target scoped guest destination {{args.only_guest_dst}}"
+                            )
                     if not bool(record.get("enabled", True)):
+                        if args.only_guest_dst:
+                            quarantine_unavailable_token(export_root_fd, token)
                         continue
                     try:
                         ensure_record(export_root_fd, record)
@@ -731,6 +796,10 @@ def persistent_host_replay_python() -> str:
                         )
                         continue
                     desired_tokens.add(token)
+                if args.only_guest_dst and scoped_matches == 0:
+                    raise RuntimeError(
+                        f"persistent attachment record not found for scoped guest destination {{args.only_guest_dst}}"
+                    )
                 if args.prune_stale:
                     prune_stale_mounts(export_root_fd, desired_tokens)
             finally:
@@ -753,7 +822,7 @@ def persistent_host_replay_python() -> str:
             return 0
 
         if __name__ == "__main__":
-            raise SystemExit(main())
+            raise SystemExit(main(sys.argv[1:]))
         """
     )
     return source.replace(

@@ -77,12 +77,13 @@ def _reconcile_persistent_attachments_in_guest(
     replay_even_if_unchanged: bool = True,
     continue_on_error: bool = False,
     reconcile_host: bool = True,
+    only_guest_dst: str = '',
 ) -> None:
     # Host writes the canonical desired-state manifest first. The guest-local
-    # manifest and helper are refreshed next. Explicit reconcile paths set
-    # ``replay_even_if_unchanged`` so we still repair live drift even when the
-    # sync steps were no-ops. Secondary restore paths can opt into
-    # ``continue_on_error`` so a single bad VM does not abort the broader pass.
+    # manifest and helper are refreshed next. Foreground code/ssh/attach paths
+    # use ``only_guest_dst`` so they can add or repair one attachment without
+    # reconciling unrelated live work. Boot/maintenance callers omit the scope
+    # and retain full desired-state repair and stale pruning.
     def _strict_reconcile() -> None:
         manifest._sync_persistent_attachment_manifest_on_host(
             cfg, cfg_path, dry_run=dry_run
@@ -93,6 +94,7 @@ def _reconcile_persistent_attachments_in_guest(
                 cfg_path,
                 dry_run=dry_run,
                 vm_running=True,
+                only_guest_dst=only_guest_dst,
             )
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
@@ -112,12 +114,22 @@ def _reconcile_persistent_attachments_in_guest(
         if dry_run:
             return
         if replay_even_if_unchanged or guest_manifest_changed or replay_changed:
+            replay_script = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
+            if only_guest_dst:
+                replay_script += (
+                    ' --only-guest-dst ' + shlex.quote(only_guest_dst)
+                )
             replay_result = transport._run_guest_root_script(
                 cfg,
                 ip,
-                script=f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}',
+                script=replay_script,
                 summary='Replay persistent attachment mounts inside guest',
-                detail='Verify and repair guest-visible persistent attachment bind mounts from the persisted manifest.',
+                detail=(
+                    'Verify and repair the requested guest-visible persistent '
+                    f'attachment only: {only_guest_dst}'
+                    if only_guest_dst
+                    else 'Verify and repair guest-visible persistent attachment bind mounts from the persisted manifest.'
+                ),
                 dry_run=dry_run,
                 check=not continue_on_error,
                 allowed_exit_codes=(0, PERSISTENT_REPLAY_DEGRADED_EXIT),
@@ -130,7 +142,9 @@ def _reconcile_persistent_attachments_in_guest(
                         getattr(replay_result, 'returncode', 0),
                     )
                 )
-                stderr = str(getattr(replay_result, 'stderr', '') or '').strip()
+                stderr = str(
+                    getattr(replay_result, 'stderr', '') or ''
+                ).strip()
                 if stderr:
                     for line in stderr.splitlines():
                         log.warning('guest-persistent-replay: {}', line)

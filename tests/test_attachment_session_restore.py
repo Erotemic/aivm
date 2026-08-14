@@ -1018,3 +1018,94 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
     assert create_kwargs['initial_attachment_guest_dst'] == '/workspace/proj'
     assert create_kwargs['initial_attachment_mode'] == 'persistent'
     assert create_kwargs['initial_attachment_access'] == 'ro'
+
+
+def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Opening another project in a live VM must not reconcile siblings."""
+    from aivm.attachments.session import _prepare_attached_session
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-live-local-scope'
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'new-project'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst='/workspace/new-project',
+        tag='hostcode-new-project',
+    )
+
+    monkeypatch.setattr(
+        'aivm.attachments.session.resolve_context_for_code',
+        lambda **kwargs: (resolved_test_context(cfg), cfg_path),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._resolve_attachment',
+        lambda *a, **k: attachment,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_attached_vm',
+        lambda *a, **k: type(
+            'R',
+            (),
+            {
+                'attachment': attachment,
+                'cached_ip': '10.0.0.5',
+                'cached_ssh_ok': True,
+                'shared_root_host_side_ready': False,
+                'vm_was_running': True,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_offer_create_ssh_identity',
+        lambda *a, **k: False,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.probe_ssh_ready',
+        lambda *a, **k: type('P', (), {'ok': True})(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._record_attachment',
+        lambda *a, **k: cfg_path,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._ensure_attachment_available_in_guest',
+        lambda *a, **k: None,
+    )
+
+    replay_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_persistent_attachments_in_guest',
+        lambda *a, **k: replay_calls.append(dict(k)),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._restore_saved_vm_attachments',
+        lambda *a, **k: pytest.fail(
+            'live foreground session must not restore unrelated attachments'
+        ),
+    )
+
+    session = _prepare_attached_session(
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        recreate_if_needed=False,
+        ensure_firewall_opt=False,
+        dry_run=False,
+        yes=True,
+    )
+
+    assert session.share_guest_dst == '/workspace/new-project'
+    assert replay_calls == [
+        {
+            'dry_run': False,
+            'only_guest_dst': '/workspace/new-project',
+        }
+    ]

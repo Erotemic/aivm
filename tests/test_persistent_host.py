@@ -677,6 +677,43 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
     assert scripts[-1] == REPLAY_INVOCATION
 
 
+def test_persistent_reconcile_can_scope_foreground_guest_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Foreground replay tells the guest helper to touch only one path."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-reconcile-scoped'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': _hash_route('MATCH'),
+            'rsync': FakeProc(stdout=''),
+        },
+    )
+
+    _reconcile_persistent_attachments_in_guest(
+        cfg,
+        cfg_path,
+        '10.0.0.5',
+        dry_run=False,
+        reconcile_host=False,
+        only_guest_dst='/workspace/proj',
+    )
+
+    scripts = _ssh_scripts(rec)
+    assert scripts[-1] == (
+        f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj'
+    )
+
+
 @pytest.mark.parametrize('phase', ['sync', 'install', 'replay'])
 def test_persistent_reconcile_propagates_primary_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, phase: str
@@ -1090,11 +1127,46 @@ def test_persistent_host_replay_dry_run_executes_nothing(
 
     # The virtiofs-mapping probe is a legitimate read; everything else --
     # notably the sudo replay helper, mkdir, install, systemctl -- is strict.
-    rec = command_recorder(monkeypatch, {'virsh': FakeProc(stdout='<domain/>')})
+    rec = command_recorder(
+        monkeypatch, {'virsh': FakeProc(stdout='<domain/>')}
+    )
 
     _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
 
     assert [cmd for cmd in rec.normalized if cmd[0] != 'virsh'] == []
+
+
+def test_persistent_host_replay_can_scope_foreground_reconcile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scoped host replay neither requests nor performs global stale pruning."""
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-replay-scoped'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    _record_persistent_attachment(cfg, cfg_path, tmp_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(monkeypatch, default=FakeProc())
+
+    host_bind._run_persistent_host_replay(
+        cfg,
+        cfg_path,
+        dry_run=False,
+        only_guest_dst='/workspace/proj',
+    )
+
+    replay_cmd = next(
+        cmd
+        for cmd in rec.normalized
+        if cmd and cmd[0].endswith('aivm-persistent-host-bind-replay')
+    )
+    assert replay_cmd[-2:] == ['--only-guest-dst', '/workspace/proj']
+    assert '--prune-stale' not in replay_cmd
 
 
 def test_persistent_host_replay_manifest_still_updates_after_last_detach(
@@ -1177,8 +1249,7 @@ def test_host_replay_rejects_source_replacement(
     source.rename(tmp_path / 'approved-source')
     source.mkdir()
     with pytest.raises(
-        helper.SourceUnavailableError,
-        match='approved persistent source changed',
+        helper.SourceUnavailableError, match='approved persistent source changed'
     ):
         helper.open_approved_source(record)
 
@@ -1527,6 +1598,7 @@ def _approved_manifest_for(
                 'records': [
                     {
                         'shared_root_token': 'token-a',
+                        'guest_dst': '/workspace/a',
                         'source_dev': info.st_dev,
                         # An unbound target is some other directory, so its
                         # inode is not the approved source's.
@@ -1539,7 +1611,9 @@ def _approved_manifest_for(
         ),
         encoding='utf-8',
     )
-    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root, *mounted)
+    mountinfo = _write_mountinfo(
+        tmp_path / 'mountinfo', export_root, *mounted
+    )
     return manifest_path, export_root, mountinfo
 
 
@@ -1620,6 +1694,26 @@ def test_stale_mount_under_the_export_root_requires_the_replay(
     )
 
 
+def test_scoped_convergence_ignores_unrelated_stale_host_mount(
+    tmp_path: Path,
+) -> None:
+    """Foreground attachment checks only the export it is about to use."""
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=('token-a', 'token-unrelated')
+    )
+    (export_root / 'token-unrelated').mkdir()
+
+    assert _approved_binds_already_applied(
+        manifest_path,
+        export_root,
+        mountinfo=mountinfo,
+        only_guest_dst='/workspace/a',
+    )
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
+
+
 def test_mount_detection_sees_a_same_filesystem_bind(tmp_path: Path) -> None:
     """The mount table is consulted, not a st_dev comparison.
 
@@ -1695,9 +1789,7 @@ def test_host_replay_isolates_source_failure_and_continues(
     )
     export_root = tmp_path / 'export'
     export_root.mkdir()
-    helper.open_validated_manifest = lambda path: helper.os.open(
-        path, helper.os.O_RDONLY
-    )
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
     seen: list[str] = []
     quarantined: list[str] = []
 
@@ -1705,13 +1797,11 @@ def test_host_replay_isolates_source_failure_and_continues(
         token = str(record['shared_root_token'])
         seen.append(token)
         if token == 'bad':
-            raise helper.SourceUnavailableError(
-                'approved persistent source changed'
-            )
+            raise helper.SourceUnavailableError('approved persistent source changed')
 
     helper.ensure_record = ensure_record
-    helper.quarantine_unavailable_token = lambda _export_root_fd, token: (
-        quarantined.append(str(token))
+    helper.quarantine_unavailable_token = (
+        lambda _export_root_fd, token: quarantined.append(str(token))
     )
     code = helper.main(
         [
@@ -1729,7 +1819,8 @@ def test_host_replay_isolates_source_failure_and_continues(
     assert quarantined == ['bad']
     assert (
         'WARNING: skipping persistent host attachment bad: '
-        'approved persistent source changed' in capsys.readouterr().err
+        'approved persistent source changed'
+        in capsys.readouterr().err
     )
 
 
@@ -1752,9 +1843,7 @@ def test_host_replay_does_not_swallow_mount_or_access_failure(
     )
     export_root = tmp_path / 'export'
     export_root.mkdir()
-    helper.open_validated_manifest = lambda path: helper.os.open(
-        path, helper.os.O_RDONLY
-    )
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
     seen: list[str] = []
 
     def ensure_record(_export_root_fd: int, record: dict[str, object]) -> None:

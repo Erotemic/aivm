@@ -297,8 +297,10 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     assert syncs
     assert replay_syncs
     assert host_replays
+    assert host_replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert guest_mounts
     assert replays
+    assert replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert guest_mounts[0][1]['ensure_shared_root_host_side'] is True
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
@@ -410,6 +412,7 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert syncs
     assert replay_syncs
     assert host_replays
+    assert host_replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert refreshes
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())

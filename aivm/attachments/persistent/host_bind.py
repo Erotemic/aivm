@@ -78,6 +78,7 @@ def _approved_binds_already_applied(
     export_root: Path,
     *,
     mountinfo: Path | None = None,
+    only_guest_dst: str = '',
 ) -> bool:
     """True when the live export root already matches the approved manifest.
 
@@ -115,6 +116,16 @@ def _approved_binds_already_applied(
         return False
     if not isinstance(records, list):
         return False
+    if only_guest_dst:
+        scoped = [
+            record
+            for record in records
+            if isinstance(record, dict)
+            and str(record.get('guest_dst') or '').strip() == only_guest_dst
+        ]
+        if len(scoped) != 1:
+            return False
+        records = scoped
 
     desired_tokens: set[str] = set()
     for record in records:
@@ -122,6 +133,8 @@ def _approved_binds_already_applied(
             return False
         token = str(record.get('shared_root_token') or '')
         if not bool(record.get('enabled', True)):
+            if only_guest_dst and token and token in mounted:
+                return False
             continue
         if not token:
             return False
@@ -144,6 +157,9 @@ def _approved_binds_already_applied(
             return False
         if not _bind_access_matches(target, str(record.get('access') or 'rw')):
             return False
+
+    if only_guest_dst:
+        return True
 
     # A detached or disabled record leaves a mount only the privileged helper
     # can prune, and deciding "nothing to do" here is what lets the detach
@@ -255,7 +271,7 @@ def _probe_persistent_source_identity_as_root(
     with mgr.step(
         'Inspect persistent source identity as root',
         why=(
-            "An administrative reauthorization may target another account's "
+            'An administrative reauthorization may target another account\'s '
             'private path, so read only its descriptor-pinned filesystem '
             'identity through the same no-symlink helper used for replay.'
         ),
@@ -292,6 +308,7 @@ def _run_persistent_host_replay(
     *,
     dry_run: bool,
     prune_stale: bool = True,
+    only_guest_dst: str = '',
 ) -> tuple[tuple[str, str, str], ...]:
     """Apply the approved manifest through the privileged pinned-FD helper."""
     approved_manifest = manifest._sync_persistent_host_replay_manifest(
@@ -305,7 +322,9 @@ def _run_persistent_host_replay(
         )
         return ()
     if not helper_changed and _approved_binds_already_applied(
-        approved_manifest, _persistent_root_host_dir(cfg)
+        approved_manifest,
+        _persistent_root_host_dir(cfg),
+        only_guest_dst=only_guest_dst,
     ):
         log.debug(
             'Persistent host binds already match the approved manifest; '
@@ -322,7 +341,9 @@ def _run_persistent_host_replay(
         '--vm-name',
         cfg.vm.name,
     ]
-    if prune_stale:
+    if only_guest_dst:
+        cmd.extend(['--only-guest-dst', only_guest_dst])
+    elif prune_stale:
         cmd.append('--prune-stale')
     mgr = CommandManager.current()
     with mgr.step(
@@ -484,13 +505,23 @@ def _reconcile_persistent_host_binds(
     *,
     dry_run: bool,
     vm_running: bool | None = None,
+    only_guest_dst: str = '',
 ) -> tuple[tuple[str, str, str], ...]:
-    """Converge host binds and the VM's persistent-root mapping."""
+    """Converge host binds and the VM's persistent-root mapping.
+
+    ``only_guest_dst`` scopes foreground attachment operations to the one
+    path the user asked for.  Full replay remains the boot/maintenance path
+    and is the only mode that prunes unrelated stale exports.
+    """
     records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
     unavailable: tuple[tuple[str, str, str], ...] = ()
     if records or manifest._persistent_host_replay_state_needed(cfg, cfg_path):
         unavailable = _run_persistent_host_replay(
-            cfg, cfg_path, dry_run=dry_run, prune_stale=True
+            cfg,
+            cfg_path,
+            dry_run=dry_run,
+            prune_stale=not bool(only_guest_dst),
+            only_guest_dst=only_guest_dst,
         )
     if any(record.enabled for record in records):
         _ensure_persistent_root_vm_mapping(

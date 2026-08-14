@@ -5,6 +5,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Foreground ``aivm code``, ``aivm ssh``, and explicit attachment operations
+  on an already-running VM now reconcile only the requested persistent
+  attachment. Opening another project no longer performs global guest replay,
+  replaces unrelated mounts, or restores the VM's broader saved working set.
+  Full desired-state reconciliation remains the boot/start and explicit
+  maintenance behavior.
 * Persistent attachment replay now isolates only pre-mutation source
   unavailability/identity failures, so one stale saved folder no longer aborts
   every other persistent attachment or an otherwise healthy VM session.

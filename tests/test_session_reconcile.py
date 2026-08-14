@@ -202,6 +202,7 @@ def test_running_vm_with_present_share_makes_no_changes(
     assert result.cached_ip is None
     assert result.cached_ssh_ok is False
     assert result.shared_root_host_side_ready is False
+    assert result.vm_was_running is True
     assert not rec.ran('virsh', 'start')
     assert not rec.ran('virsh', 'attach-device')
     assert not rec.ran('virsh', 'dominfo')
@@ -243,6 +244,7 @@ def test_stopped_vm_is_started_before_confirming_share(
     assert rec.only('virsh', 'start', VM_NAME) == ['virsh', 'start', VM_NAME]
     assert not rec.ran('virsh', 'attach-device')
     assert result.attachment.tag == PROJ_TAG
+    assert result.vm_was_running is False
 
 
 def test_running_vm_attaches_missing_share_live(
