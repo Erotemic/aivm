@@ -39,6 +39,7 @@ class _BaseCommand(kwconf.Config):
 
     config: str | None = kwconf.Value(
         None,
+        short_alias=['c'],
         help=(
             'Explicit config-store path. Without this option, AIVM uses an '
             'existing legacy user store, the shared machine store under '
@@ -54,6 +55,7 @@ class _BaseCommand(kwconf.Config):
     )
     yes: bool = kwconf.Flag(
         False,
+        short_alias=['y'],
         help='Auto-approve interactive confirmations.',
     )
     yes_sudo: bool = kwconf.Flag(

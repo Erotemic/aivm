@@ -198,9 +198,40 @@ class StatusCLI(_BaseCommand):
 class AgentVMModalCLI(kwconf.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents."""
 
-    # kwconf's ModalCLI turns this into the ``--version`` flag. It registers
-    # the flag per modal that carries a version, so it is the root's alone --
-    # ``aivm vm --version`` remains an unrecognized argument.
+    def argparse(
+        self,
+        parser: Any = None,
+        special_options: Any = ...,
+        fuzzy_hyphens: int | None = None,
+    ) -> Any:
+        # kwconf 0.10.x hardcodes the modal version option as ``--version``.
+        # Build the normal command tree without that one action, then restore
+        # the same destination with the conventional ``-V`` spelling as well.
+        version = self.version
+        self.version = None
+        try:
+            parser = super().argparse(
+                parser=parser,
+                special_options=special_options,
+                fuzzy_hyphens=fuzzy_hyphens,
+            )
+        finally:
+            self.version = version
+        if version is not None:
+            parser.add_argument(
+                '-V',
+                '--version',
+                action='store_true',
+                dest='__modal_version_request__',
+                help='show version number and exit',
+            )
+        return parser
+
+    build_parser = argparse
+
+    # Keep the package version on the root modal. ``argparse`` above exposes
+    # it as ``-V`` / ``--version`` without giving nested modals a version flag,
+    # so ``aivm vm --version`` remains an unrecognized argument.
     __version__ = __version__
 
     help = HelpModalCLI

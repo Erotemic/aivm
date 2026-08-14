@@ -129,7 +129,9 @@ class VMCredsAddCLI(_BaseCommand):
         ),
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print the grant without creating or installing a key.'
+        False,
+        short_alias=['n'],
+        help='Print the grant without creating or installing a key.'
     )
 
     @classmethod
@@ -375,7 +377,9 @@ class VMCredsSetupCLI(_BaseCommand):
         help='Only check readiness; do not install tools or authenticate.',
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print the setup actions without changing the host.'
+        False,
+        short_alias=['n'],
+        help='Print the setup actions without changing the host.'
     )
 
     @classmethod
@@ -704,7 +708,9 @@ class VMCredsRevokeCLI(_BaseCommand):
         'origin', help='Git remote used for a local repository selector.'
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print the revocation without changing anything.'
+        False,
+        short_alias=['n'],
+        help='Print the revocation without changing anything.'
     )
 
     @classmethod
@@ -777,7 +783,9 @@ class VMCredsAbandonCLI(_BaseCommand):
         ),
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print the abandonment without changing anything.'
+        False,
+        short_alias=['n'],
+        help='Print the abandonment without changing anything.'
     )
 
     @classmethod

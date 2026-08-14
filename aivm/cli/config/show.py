@@ -83,10 +83,12 @@ class ConfigFormatCLI(_BaseCommand):
 
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Show the files that would be written without modifying them.',
     )
     force: bool = kwconf.Flag(
         False,
+        short_alias=['f'],
         help='Rewrite existing formatted fragments from the loaded logical document.',
     )
     no_backup: bool = kwconf.Flag(

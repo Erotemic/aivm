@@ -76,6 +76,7 @@ class InitCLI(_BaseCommand):
 
     force: bool = kwconf.Flag(
         False,
+        short_alias=['f'],
         help=(
             'Overwrite existing defaults when initializing a new machine; '
             'ignored when joining an existing managed VM.'

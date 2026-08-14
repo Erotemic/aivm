@@ -92,6 +92,7 @@ class VMAccessReconcileCLI(_BaseCommand):
     )
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Describe enrollment without changing machine or guest state.',
     )
 
@@ -126,7 +127,9 @@ class VMAccessRepairHostIdentityCLI(_BaseCommand):
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
     dry_run: bool = kwconf.Flag(
-        False, help='Describe the repair without changing the machine store.'
+        False,
+        short_alias=['n'],
+        help='Describe the repair without changing the machine store.'
     )
 
     @classmethod
@@ -188,6 +191,7 @@ class _VMAccessMutationCLI(_BaseCommand):
     )
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Describe the operation without changing guest or host state.',
     )
 

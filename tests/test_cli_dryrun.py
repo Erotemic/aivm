@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from aivm.cli.config.show import ConfigFormatCLI
 from tests.helpers import run_cli
 
 
@@ -71,3 +72,14 @@ def test_help_tree_includes_one_line_descriptions(
         'aivm vm ssh - SSH into the VM and start a shell in the mapped guest directory.'
         in out
     )
+
+
+def test_common_short_aliases_parse_together(cfg_path: Path) -> None:
+    """The conventional short forms map to the same CLI fields."""
+    args = ConfigFormatCLI.cli(
+        argv=['-n', '-y', '-c', str(cfg_path), '-f']
+    )
+    assert bool(args.dry_run) is True
+    assert bool(args.yes) is True
+    assert args.config == str(cfg_path)
+    assert bool(args.force) is True

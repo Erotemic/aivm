@@ -717,3 +717,28 @@ migration is detected later. The focused migration suite passes 31 tests. The
 change is intentionally limited to migration apply/verification, its tests,
 and this journal entry; no plan-schema change is needed because the required
 absence follows directly from the already reviewed missing-source fingerprint.
+
+## 2026-08-14 09:46:53 -0400
+
+Rebased the CLI short-option work onto the 08:40 source snapshot rather than
+reapplying replacement files from the earlier overlay. The only upstream change
+inside the earlier patch surface was in vm_attach persistent-bind replay
+reporting; the alias edits were applied to the newer file so that reporting
+behavior remains intact.
+
+The CLI now treats -n, -y, -c, and -f as conventional short spellings for
+--dry_run, --yes, --config, and --force respectively. The shared options live
+on _BaseCommand, while force remains local to the four commands that expose it.
+All 32 dry-run declarations and all four force declarations are covered. The
+root modal also accepts -V alongside --version. kwconf 0.10.x constructs the
+modal version action internally, so AIVM's root parser temporarily suppresses
+that one generated action and reinstalls it with both spellings while preserving
+the destination and behavior expected by ModalCLI.main.
+
+Regression coverage parses -n -y -c and -f together on ConfigFormatCLI and
+checks both version spellings. Python compileall and an AST-based declaration
+check pass. The environment does not have the locked kwconf dependency
+installed, so the pytest regressions cannot be executed here; consumer-side
+pytest remains the runtime validation step. The main integration risk is the
+small root-parser adaptation around kwconf's modal version implementation, but
+it is intentionally localized and covered by the version regression.

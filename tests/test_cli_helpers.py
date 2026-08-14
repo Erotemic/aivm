@@ -128,13 +128,14 @@ def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
     assert common_mod._resolve_cfg_verbosity(str(cfg_path)) == 4
 
 
+@pytest.mark.parametrize('flag', ['--version', '-V'])
 def test_version_flag_reports_package_version(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], flag: str
 ) -> None:
-    # The modal ``--version`` flag only exists while the CLI class carries a
+    # The modal version flag only exists while the CLI class carries a
     # ``__version__``, so this also guards the package-init import order that
     # lets ``aivm.cli.main`` read it back.
-    rc = run_cli(['--version'])
+    rc = run_cli([flag])
     assert rc == 0
     assert capsys.readouterr().out.strip() == aivm.__version__
 

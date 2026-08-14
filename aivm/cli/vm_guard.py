@@ -114,6 +114,7 @@ class VMFdGuardCLI(_BaseCommand):
     )
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Print the guest command without running it.',
     )
 

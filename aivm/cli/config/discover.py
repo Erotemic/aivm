@@ -31,6 +31,7 @@ class ConfigDiscoverCLI(_BaseCommand):
 
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Print actions without writing config store.',
     )
 

@@ -961,7 +961,9 @@ class HostPermissionsSetupCLI(_BaseCommand):
             'symlinks are pruned. Running VMs are briefly stopped and restarted.'
         ),
     )
-    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(False,
+        short_alias=['n'],
+        help='Print actions without running.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
