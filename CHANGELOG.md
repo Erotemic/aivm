@@ -5,6 +5,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* ``aivm code --tunnel`` now treats the tunnel request itself as a one-shot
+  opt-in for its guest prerequisites. Missing ``code`` or ``tmux`` is installed
+  narrowly after approval instead of failing with a separate provisioning
+  instruction, and the tunnel launcher uses the inspectable
+  ``/usr/local/libexec/aivm/code-tunnel`` helper rather than an anonymous inline
+  shell program. This also removes the shell-quoting bug where backticks in the
+  old missing-tool diagnostic attempted to execute ``aivm`` inside the guest.
 * Foreground ``aivm ssh`` and all ``aivm code`` launch modes now share one
   startup pipeline and preserve live persistent mounts on an already-running
   VM. Guest replay compares bind mounts by underlying directory identity rather

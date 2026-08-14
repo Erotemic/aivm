@@ -94,6 +94,7 @@ subsystems:
     exact:
       - aivm
       - aivm.errors
+      - aivm.tunnel_helper
       - aivm.util
       - aivm.xmlutil
     prefixes: []

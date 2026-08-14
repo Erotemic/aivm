@@ -1,25 +1,28 @@
 """Tests for ``aivm code`` SSH-aware fallback logic.
 
-The pure detection rule lives in ``_vscode_can_open_locally``; that's
-what we exercise here. The actual launch path (which would invoke
-``code --remote``) is exercised manually on a workstation and is not
-unit-testable without significant subprocess stubbing.
+The pure local-launch detection rule and the tunnel orchestration seams are
+exercised here without opening an editor or interactive SSH session.
 """
 
 from __future__ import annotations
 
+import shlex
 from types import SimpleNamespace
 
 import pytest
 
 from aivm.cli.vm_connect import (
     _TUNNEL_TMUX_SESSION,
-    _build_tunnel_remote_script,
+    _ensure_remote_tunnel_prerequisites,
     _print_remote_session_recipe,
     _remote_tunnel_name,
+    _start_remote_tunnel_session,
     _vscode_can_open_locally,
 )
-from tests.helpers import resolved_test_context
+from aivm.config import AgentVMConfig
+from aivm.errors import AIVMError
+from aivm.tunnel_helper import TUNNEL_HELPER_PATH
+from tests.helpers import FakeCommandManager, resolved_test_context
 
 
 def _scrub_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,8 +121,6 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aivm.config import AgentVMConfig
-
     cfg = AgentVMConfig()
     cfg.vm.name = 'aivm-2404'
     cfg.vm.user = 'agent'
@@ -163,34 +164,134 @@ def test_print_remote_session_recipe_includes_tunnel_command(
     assert 'SSH entry updated on this host in ~/.ssh/config' in out
 
 
-def test_build_tunnel_remote_script_is_idempotent_and_uses_tmux() -> None:
-    script = _build_tunnel_remote_script(
-        guest_path='/home/agent/code/aivm',
-        tunnel_name='aivm-2404-builder',
+
+def test_tunnel_prerequisites_auto_install_only_missing_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(
+        cfg, host_user='joncrall', host_uid=1001, host_gid=1001
     )
-    # Guard: required guest binaries.
-    assert 'command -v tmux' in script
-    assert 'command -v code' in script
-    # Idempotency: existing session is a no-op.
-    assert f'tmux has-session -t {_TUNNEL_TMUX_SESSION}' in script
-    # New session command runs `code tunnel` in the share dir.
-    assert f'tmux new-session -d -s {_TUNNEL_TMUX_SESSION}' in script
-    assert 'cd /home/agent/code/aivm' in script
-    assert (
-        'code tunnel --name aivm-2404-builder --accept-server-license-terms'
-        in script
+    reports = iter([('code',), ()])
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._remote_tunnel_missing_commands',
+        lambda *a, **k: next(reports),
     )
-    # Tunnel session name is the constant — must not vary by VM/host name.
-    assert _TUNNEL_TMUX_SESSION == 'aivm-tunnel'
+    calls: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def fake_provision(
+        received: AgentVMConfig,
+        ip: str,
+        *,
+        packages: tuple[str, ...],
+        tools: tuple[str, ...],
+        dry_run: bool,
+    ) -> None:
+        assert received is context.effective_cfg
+        assert ip == '10.77.0.103'
+        assert dry_run is False
+        calls.append((packages, tools))
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.provision_guest_requirements', fake_provision
+    )
+    _ensure_remote_tunnel_prerequisites(context, '10.77.0.103')
+    assert calls == [((), ('code',))]
 
 
-def test_build_tunnel_remote_script_quotes_unusual_paths() -> None:
-    """Spaces or shell metachars in the share path must not break the script."""
-    script = _build_tunnel_remote_script(
-        guest_path='/home/agent/projects/has space; rm -rf /tmp',
-        tunnel_name='aivm-2404-builder',
+def test_tunnel_prerequisites_auto_install_tmux_and_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(
+        cfg, host_user='joncrall', host_uid=1001, host_gid=1001
     )
-    # The path appears only as a single shell-quoted argument to ``cd``.
-    assert "'/home/agent/projects/has space; rm -rf /tmp'" in script
-    # And there is no unquoted occurrence of the injection payload.
-    assert 'rm -rf /tmp\n' not in script
+    reports = iter([('tmux', 'code'), ()])
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._remote_tunnel_missing_commands',
+        lambda *a, **k: next(reports),
+    )
+    calls: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+
+    def fake_provision(
+        cfg: AgentVMConfig,
+        ip: str,
+        *,
+        packages: tuple[str, ...],
+        tools: tuple[str, ...],
+        dry_run: bool,
+    ) -> None:
+        del cfg, ip, dry_run
+        calls.append((packages, tools))
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.provision_guest_requirements', fake_provision
+    )
+    _ensure_remote_tunnel_prerequisites(context, '10.77.0.103')
+    assert calls == [(('tmux',), ('code',))]
+
+
+def test_tunnel_prerequisites_respect_disabled_provisioning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    cfg.provision.enabled = False
+    context = resolved_test_context(
+        cfg, host_user='joncrall', host_uid=1001, host_gid=1001
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._remote_tunnel_missing_commands',
+        lambda *a, **k: ('code',),
+    )
+    with pytest.raises(AIVMError, match='provisioning is disabled'):
+        _ensure_remote_tunnel_prerequisites(context, '10.77.0.103')
+
+
+def test_start_remote_tunnel_invokes_inspectable_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(
+        cfg, host_user='joncrall', host_uid=1001, host_gid=1001
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._ensure_guest_tunnel_helper', lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._ensure_remote_tunnel_prerequisites',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.require_ssh_identity',
+        lambda path: '/tmp/id_ed25519',
+    )
+    manager = FakeCommandManager()
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.CommandManager.current', lambda: manager
+    )
+
+    guest_path = '/home/agent/projects/has space; still-safe'
+    _start_remote_tunnel_session(
+        context,
+        '10.77.0.103',
+        guest_path,
+        'aivm-2404-builder',
+    )
+
+    assert len(manager.calls) == 1
+    remote = str(manager.calls[0][-1])
+    assert shlex.split(remote) == [
+        TUNNEL_HELPER_PATH,
+        'start',
+        '--guest-path',
+        guest_path,
+        '--name',
+        'aivm-2404-builder',
+        '--session',
+        _TUNNEL_TMUX_SESSION,
+    ]
+    assert '\n' not in remote

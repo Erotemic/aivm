@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import socket
@@ -14,6 +15,7 @@ import kwconf
 from loguru import logger as log
 
 from ..attachments.guest import _upsert_ssh_config_entry
+from ..attachments.persistent.transport import _install_guest_text_if_changed
 from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
@@ -23,9 +25,14 @@ from ..config_store import load_store
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import PreparedSession, cfg_path, load_cfg
+from ..tunnel_helper import (
+    DEFAULT_TMUX_SESSION,
+    TUNNEL_HELPER_PATH,
+    tunnel_helper_source,
+)
 from ..util import which
-from ..vm import create_ops, wait_for_ip
-from ..vm import ssh_config as mk_ssh_config
+from ..vm import create_ops, ssh_config as mk_ssh_config, wait_for_ip
+from ..vm.provision import provision_guest_requirements
 from ._common import _BaseCommand
 
 
@@ -176,40 +183,102 @@ def _remote_tunnel_name(cfg: Any) -> str:
     return f'{vm_name}-{safe_host}'
 
 
-_TUNNEL_TMUX_SESSION = 'aivm-tunnel'
+_TUNNEL_TMUX_SESSION = DEFAULT_TMUX_SESSION
 
 
-def _build_tunnel_remote_script(guest_path: str, tunnel_name: str) -> str:
-    """Build the remote shell snippet that ensures the tunnel tmux session is up.
-
-    Idempotent: if the session already exists, the script exits 0 without
-    starting a second ``code tunnel``. Otherwise it starts ``code tunnel`` in a
-    detached tmux session running in ``guest_path``.
-    """
-    qpath = shlex.quote(guest_path)
-    qname = shlex.quote(tunnel_name)
-    qsession = shlex.quote(_TUNNEL_TMUX_SESSION)
-    inner = (
-        f'cd {qpath} && '
-        f'exec code tunnel --name {qname} --accept-server-license-terms'
+def _ensure_guest_tunnel_helper(
+    context: ResolvedVMContext,
+    ip: str,
+) -> None:
+    """Install the inspectable guest tunnel helper when its content changed."""
+    _install_guest_text_if_changed(
+        context.effective_cfg,
+        ip,
+        target=TUNNEL_HELPER_PATH,
+        text=tunnel_helper_source(),
+        mode='0755',
+        label='VS Code tunnel helper',
+        dry_run=False,
     )
-    return (
-        'set -eu\n'
-        'if ! command -v tmux >/dev/null 2>&1; then\n'
-        '    echo "tmux is not installed in the guest; run `aivm vm provision` first" >&2\n'
-        '    exit 1\n'
-        'fi\n'
-        'if ! command -v code >/dev/null 2>&1; then\n'
-        '    echo "VS Code CLI is not installed in the guest; run `aivm vm provision code` first" >&2\n'
-        '    exit 1\n'
-        f'fi\n'
-        f'if tmux has-session -t {qsession} 2>/dev/null; then\n'
-        '    echo "aivm-tunnel session already running"\n'
-        '    exit 0\n'
-        'fi\n'
-        f'tmux new-session -d -s {qsession} {shlex.quote(inner)}\n'
-        f'echo "Started aivm-tunnel session running: code tunnel --name {tunnel_name}"\n'
+
+
+def _remote_tunnel_missing_commands(
+    context: ResolvedVMContext,
+    ip: str,
+) -> tuple[str, ...]:
+    """Return missing guest commands required by ``code --tunnel``."""
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    remote = f'{shlex.quote(TUNNEL_HELPER_PATH)} check'
+    result = CommandManager.current().run(
+        [
+            'ssh',
+            *ssh_base_args(ident),
+            context.ssh_target(ip),
+            remote,
+        ],
+        sudo=False,
+        role='read',
+        user_driven=True,
+        check=True,
+        capture=True,
+        summary='Check VS Code tunnel prerequisites',
+        detail=f'guest_helper={TUNNEL_HELPER_PATH}',
     )
+    try:
+        payload = json.loads(result.stdout.strip())
+        missing_raw = payload['missing']
+        if not isinstance(missing_raw, list):
+            raise TypeError('missing is not a list')
+        missing = tuple(str(name) for name in missing_raw)
+    except (json.JSONDecodeError, KeyError, TypeError) as ex:
+        raise AIVMError(
+            'Guest VS Code tunnel helper returned an invalid prerequisite report.'
+        ) from ex
+    unexpected = sorted(set(missing) - {'tmux', 'code'})
+    if unexpected:
+        raise AIVMError(
+            'Guest VS Code tunnel helper reported unknown prerequisite(s): '
+            + ', '.join(unexpected)
+        )
+    return missing
+
+
+def _ensure_remote_tunnel_prerequisites(
+    context: ResolvedVMContext,
+    ip: str,
+) -> None:
+    """One-shot provision only what the requested tunnel workflow is missing."""
+    missing = _remote_tunnel_missing_commands(context, ip)
+    if not missing:
+        return
+
+    cfg = context.effective_cfg
+    if not cfg.provision.enabled:
+        raise AIVMError(
+            'VS Code tunnel prerequisites are missing in the guest ('
+            + ', '.join(missing)
+            + '), but guest provisioning is disabled. Install them manually '
+            'or enable [provision].enabled.'
+        )
+
+    log.info(
+        'VS Code tunnel prerequisites missing in guest: {}. Installing them '
+        'for this tunnel request.',
+        ', '.join(missing),
+    )
+    provision_guest_requirements(
+        cfg,
+        ip,
+        packages=('tmux',) if 'tmux' in missing else (),
+        tools=('code',) if 'code' in missing else (),
+        dry_run=False,
+    )
+    remaining = _remote_tunnel_missing_commands(context, ip)
+    if remaining:
+        raise AIVMError(
+            'VS Code tunnel prerequisites are still missing after install: '
+            + ', '.join(remaining)
+        )
 
 
 def _start_remote_tunnel_session(
@@ -218,9 +287,22 @@ def _start_remote_tunnel_session(
     guest_path: str,
     tunnel_name: str,
 ) -> None:
-    """Idempotently start the ``code tunnel`` tmux session inside the guest."""
+    """Idempotently ensure prerequisites and start the guest tunnel session."""
+    _ensure_guest_tunnel_helper(context, ip)
+    _ensure_remote_tunnel_prerequisites(context, ip)
     ident = require_ssh_identity(context.profile.ssh_identity_file)
-    remote = _build_tunnel_remote_script(guest_path, tunnel_name)
+    remote = shell_join(
+        [
+            TUNNEL_HELPER_PATH,
+            'start',
+            '--guest-path',
+            guest_path,
+            '--name',
+            tunnel_name,
+            '--session',
+            _TUNNEL_TMUX_SESSION,
+        ]
+    )
     cmd = [
         'ssh',
         *ssh_base_args(ident),
@@ -228,7 +310,13 @@ def _start_remote_tunnel_session(
         remote,
     ]
     CommandManager.current().run(
-        cmd, sudo=False, user_driven=True, check=True, capture=False
+        cmd,
+        sudo=False,
+        user_driven=True,
+        check=True,
+        capture=False,
+        summary='Start VS Code tunnel session',
+        detail=f'guest_helper={TUNNEL_HELPER_PATH} guest_path={guest_path}',
     )
 
 

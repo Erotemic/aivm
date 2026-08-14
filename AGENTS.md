@@ -66,6 +66,14 @@ Guidance for contributors (human or AI agents) working in this repository.
   or globally reconcile an existing live workspace. Diagnose genuine conflicts
   and leave live state untouched; destructive convergence belongs to explicit
   attach/maintenance/lifecycle operations.
+- Launcher-specific preparation starts only after the shared foreground session
+  pipeline. In particular, ``aivm code --tunnel`` treats the tunnel request as
+  a one-shot opt-in to install only missing tunnel prerequisites; it must not
+  rerun full provisioning or make ``aivm ssh`` carry editor-specific checks.
+- Keep reusable guest launcher logic inspectable. The VS Code tunnel controller
+  lives at ``/usr/local/libexec/aivm/code-tunnel`` and normal logs should invoke
+  that helper with ordinary arguments instead of sending an anonymous shell
+  program over SSH.
 
 ## Auditability by Imitation
 AIVM's command logging is part of its trust model. The goal is not merely to

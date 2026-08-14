@@ -2,19 +2,101 @@
 
 from __future__ import annotations
 
+import copy
 import shlex
+from collections.abc import Sequence
 
 from loguru import logger
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
-from ..commands import CommandManager
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 from .connectivity import get_ip_cached, wait_for_ip, wait_for_ssh
 from .guest_tools import GUEST_TOOL_REGISTRY
 
 log = logger
+
+
+def provision_guest_requirements(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    packages: Sequence[str] = (),
+    tools: Sequence[str] = (),
+    dry_run: bool = False,
+) -> None:
+    """Install only the named guest requirements for an active workflow.
+
+    This is intentionally narrower than :func:`provision`: a foreground
+    feature such as ``aivm code --tunnel`` should be able to opt into the
+    tools it actually needs without rerunning Docker setup, unrelated tool
+    installers, or the full baseline provisioning pass.
+    """
+    package_names = tuple(dict.fromkeys(str(name) for name in packages if name))
+    tool_names = tuple(dict.fromkeys(str(name) for name in tools if name))
+    if not package_names and not tool_names:
+        return
+
+    effective = cfg.expanded_paths()
+    selected = copy.deepcopy(effective)
+    for name in tool_names:
+        resolved = GUEST_TOOL_REGISTRY.resolve(selected.tools, name)
+        if not resolved.enabled:
+            selected.tools.set(name, resolved.definition.enable_default)
+    context = guest_transport_from_effective_cfg(effective)
+    ident = require_ssh_identity(context.ssh_identity_file)
+
+    remote_parts = ['set -euo pipefail', 'sudo apt-get update -y']
+    if package_names:
+        quoted_packages = ' '.join(shlex.quote(name) for name in package_names)
+        remote_parts.append(
+            'sudo DEBIAN_FRONTEND=noninteractive '
+            f'apt-get install -y {quoted_packages}'
+        )
+    for name in tool_names:
+        tool = GUEST_TOOL_REGISTRY.resolve(selected.tools, name)
+        remote_parts.append(tool.install_script(selected, ensure_transport=True))
+
+    remote = '\n'.join(remote_parts)
+    labels = [*package_names, *tool_names]
+    detail = ', '.join(labels)
+    cmd = [
+        'ssh',
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+        ),
+        context.ssh_target(ip),
+        Elided(remote, f'guest prerequisite install payload for {detail}'),
+    ]
+    if dry_run:
+        log.info(
+            'DRYRUN: would install guest prerequisites {} on {}.',
+            detail,
+            effective.vm.name,
+        )
+        return
+
+    mgr = CommandManager.current()
+    with mgr.step(
+        f'Install guest prerequisites: {detail}',
+        why=(
+            'Install only the commands required by the requested foreground '
+            'workflow; leave unrelated guest tools and services untouched.'
+        ),
+        approval_scope=f'guest-prerequisites:{effective.vm.name}:{detail}',
+    ):
+        mgr.run(
+            cmd,
+            sudo=False,
+            role='modify',
+            check=True,
+            capture=False,
+            summary=f'Install guest prerequisites: {detail}',
+            detail=f'vm={effective.vm.name} requirements={detail}',
+        )
 
 
 def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:

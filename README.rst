@@ -326,6 +326,15 @@ attachment, maintenance, or VM lifecycle operation. After guest startup, AIVM
 may restore the broader saved attachment set because there is no pre-existing
 live session to disrupt.
 
+``aivm code --tunnel`` keeps those shared foreground checks identical and adds
+only tunnel-specific preparation afterward. The flag itself is a one-shot opt-in
+for its guest prerequisites: if ``tmux`` or the VS Code CLI is missing, AIVM
+installs only the missing tunnel requirements after normal command approval; it
+does not rerun full VM provisioning or persistently enable unrelated tools. The
+stable guest-side tunnel control logic is installed at
+``/usr/local/libexec/aivm/code-tunnel``, so the normal command log shows a short
+helper invocation that can be copied and the helper can be inspected on disk.
+
 For ``persistent`` attachments, explicit detach first records a recoverable
 ``detaching`` transition, immediately prunes the host-side bind, reconciles any
 live guest mount, and removes the declaration only after cleanup succeeds.

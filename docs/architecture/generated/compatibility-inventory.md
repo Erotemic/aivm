@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: cd2adeb1246cd572 -->
+<!-- generation schema: 1; input digest: c5e79246343b7f09 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -30,7 +30,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py:12` |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py:12` |
 
-## Canonical `AgentVMConfig` references (244)
+## Canonical `AgentVMConfig` references (245)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -255,7 +255,8 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.paths` | `aivm/vm/paths.py:10` |
 | `aivm.vm.paths` | `aivm/vm/paths.py:26` |
 | `aivm.vm.paths` | `aivm/vm/paths.py:36` |
-| `aivm.vm.provision` | `aivm/vm/provision.py:20` |
+| `aivm.vm.provision` | `aivm/vm/provision.py:23` |
+| `aivm.vm.provision` | `aivm/vm/provision.py:102` |
 | `aivm.vm.rename` | `aivm/vm/rename.py:68` |
 | `aivm.vm.rename` | `aivm/vm/rename.py:96` |
 | `aivm.vm.rename` | `aivm/vm/rename.py:126` |
