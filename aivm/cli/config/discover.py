@@ -73,9 +73,7 @@ class ConfigDiscoverCLI(_BaseCommand):
         for vm_name in vm_names:
             rec = find_vm(reg, vm_name)
             vm_info = _discover_vm_info(vm_name, use_sudo=used_sudo)
-            if rec is None and not _prompt_import_discovered_vm(
-                vm_info, yes=bool(args.yes)
-            ):
+            if rec is None and not _prompt_import_discovered_vm(vm_info, yes=args.yes):
                 skipped_unmanaged += 1
                 continue
             if rec is not None:

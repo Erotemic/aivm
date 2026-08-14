@@ -66,9 +66,9 @@ def render_user_profile(profile: UserProfileStore) -> str:
         f'default_guest_user = "{_toml_escape(profile.default_guest_user)}"',
         '',
         '[behavior]',
-        f'yes_sudo = {str(bool(profile.behavior.yes_sudo)).lower()}',
+        f'yes_sudo = {str(profile.behavior.yes_sudo).lower()}',
         'auto_approve_readonly_sudo = '
-        f'{str(bool(profile.behavior.auto_approve_readonly_sudo)).lower()}',
+        f'{str(profile.behavior.auto_approve_readonly_sudo).lower()}',
         f'verbose = {int(profile.behavior.verbose)}',
         f'privilege_mode = "{_toml_escape(profile.behavior.privilege_mode)}"',
         'credential_directory_permission_policy = '

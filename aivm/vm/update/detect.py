@@ -194,7 +194,7 @@ def _vm_update_drift(
                     'qemu-img could not inspect disk while VM was running (shared write lock); falling back to virsh domblkinfo.'
                 )
             domblk = _virsh_domblk_capacity_bytes(
-                cfg, str(disk_path), use_sudo=bool(sudo_confirmed)
+                cfg, str(disk_path), use_sudo=sudo_confirmed
             )
             if domblk is None and not sudo_confirmed:
                 sudo_confirmed = True

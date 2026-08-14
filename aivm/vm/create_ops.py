@@ -139,7 +139,7 @@ def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
     while True:
         raw = input(f'{prompt} [{default_label}]: ').strip().lower()
         if not raw:
-            return bool(default)
+            return default
         if raw in {'1', 'true', 't', 'y', 'yes', 'on'}:
             return True
         if raw in {'0', 'false', 'f', 'n', 'no', 'off'}:
@@ -476,7 +476,7 @@ def create_vm_from_defaults(
         create_or_start_vm(
             cfg,
             dry_run=dry_run,
-            recreate=bool(force and existing is not None),
+            recreate=force and existing is not None,
             config_store_path=cfg_path,
             share_source_dir=initial_share_source_dir,
             share_tag=initial_share_tag,

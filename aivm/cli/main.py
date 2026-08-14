@@ -65,7 +65,7 @@ class ListCLI(_BaseCommand):
                 by_net = {n.name: n for n in reg.networks}
                 for vm in sorted(reg.vms, key=lambda x: x.name):
                     strict = (
-                        bool(by_net[vm.network_name].firewall.enabled)
+                        by_net[vm.network_name].firewall.enabled
                         if vm.network_name in by_net
                         else False
                     )
@@ -178,18 +178,18 @@ class StatusCLI(_BaseCommand):
         ):
             if args.sudo:
                 mgr.confirm_sudo_scope(
-                    yes=bool(args.yes),
+                    yes=args.yes,
                     purpose=(
                         f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'."
                     ),
                     role='read',
                     preview_cmds=anticipated_status_sudo_commands(
-                        cfg, detail=bool(args.detail)
+                        cfg, detail=args.detail
                     ),
                 )
             print(
                 render_status(
-                    cfg, path, detail=args.detail, use_sudo=bool(args.sudo)
+                    cfg, path, detail=args.detail, use_sudo=args.sudo
                 )
             )
         return 0

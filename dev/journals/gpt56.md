@@ -742,3 +742,11 @@ installed, so the pytest regressions cannot be executed here; consumer-side
 pytest remains the runtime validation step. The main integration risk is the
 small root-parser adaptation around kwconf's modal version implementation, but
 it is intentionally localized and covered by the version regression.
+
+## 2026-08-14 10:24:00 -0400
+
+I audited redundant `bool(...)` coercions after the CLI short-alias work. The useful boundary turned out to be the type contract rather than a textual search: casts around values already annotated or inferable as `bool` add noise and runtime work, while superficially similar casts around `bool | None`, strings, collections, mapping values, bitmasks, regex matches, and deliberately `Any`-typed compatibility boundaries still perform real normalization.
+
+The cleanup removes 168 redundant bool conversions across CLI argument forwarding, request/policy dataclasses, config booleans, command-manager plumbing, a few pure-boolean expressions, and matching assertions. I included the pre-0.6 migration CLI where its inherited flags have the same explicit bool contract, but did not touch legacy schema/migration coercions that normalize untyped persisted data. I also left `_editor_command(args: Any)` alone: even though its current caller passes a CLI config with a boolean `visual` field, the helper's declared boundary is intentionally untyped, so the coercion is not redundant under the code's own contract.
+
+I am confident the changed expressions preserve behavior for values admitted by their annotations. The main risk would be callers violating those annotations and relying on defensive truthiness coercion; that is exactly the implicit behavior this cleanup chooses not to preserve for typed-bool APIs. `python -m compileall -q aivm tests` passes, and a follow-up AST/type-contract audit reports zero remaining structurally provable redundant bool casts. Targeted pytest collection could not start in this execution environment because the `kwconf` dependency is unavailable (`ModuleNotFoundError: kwconf`).

@@ -134,7 +134,7 @@ class _StatusChecklist:
         conclusiveness but prints a separate, more nuanced line).
         """
         self.total += 1
-        self.done += int(bool(ok))
+        self.done += int(ok)
 
 
 def probe_cwd_shared_with_vm(

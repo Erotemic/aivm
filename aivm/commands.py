@@ -641,7 +641,7 @@ class ApprovedActionScope:
         self.previous_approval = False
 
     def __enter__(self) -> None:
-        already_approved = bool(
+        already_approved = (
             self.yes or self.manager.yes or self.manager._approve_all_remaining
         )
         if not already_approved:
@@ -892,9 +892,9 @@ class CommandManager:
         auto_approve_readonly_sudo: bool = True,
         privilege_mode: str = str(DEFAULT_PRIVILEGE_MODE),
     ) -> None:
-        self.yes = bool(yes)
-        self.yes_sudo = bool(yes_sudo)
-        self.auto_approve_readonly_sudo = bool(auto_approve_readonly_sudo)
+        self.yes = yes
+        self.yes_sudo = yes_sudo
+        self.auto_approve_readonly_sudo = auto_approve_readonly_sudo
         # Under NEVER this manager refuses to execute any sudo command
         # (enforced in _execute_one and in confirm_sudo_scope) so no code
         # path can escalate silently; call sites consult aivm.privilege
@@ -1059,13 +1059,13 @@ class CommandManager:
             # Coerce tokens to str, but never through Elided: str() would drop
             # the label and silently restore the payload to previews.
             cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
-            sudo=bool(sudo),
+            sudo=sudo,
             role=role,
             ownership=ownership,
-            user_driven=bool(user_driven),
-            check=bool(check),
-            capture=bool(capture),
-            text=bool(text),
+            user_driven=user_driven,
+            check=check,
+            capture=capture,
+            text=text,
             input_text=input_text,
             env=env,
             timeout=timeout,
@@ -1115,7 +1115,7 @@ class CommandManager:
             sudo=sudo,
             role=role,
             ownership=ownership,
-            user_driven=bool(user_driven),
+            user_driven=user_driven,
             check=check,
             capture=capture,
             text=text,
@@ -1230,7 +1230,7 @@ class CommandManager:
             return False
         if not self.sudo_authentication_required():
             return True
-        return bool(sys.stdin.isatty())
+        return sys.stdin.isatty()
 
     def _readonly_sudo_policy_note(self) -> str:
         if self.auto_approve_readonly_sudo:
@@ -1339,7 +1339,7 @@ class CommandManager:
         )
         eff_role = self._normalize_role(role)
         auth_required = self.sudo_authentication_required()
-        auto_yes = bool(
+        auto_yes = (
             yes
             or self.yes
             or self.yes_sudo

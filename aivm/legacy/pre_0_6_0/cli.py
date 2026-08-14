@@ -85,7 +85,7 @@ class ConfigMigratePlanCLI(_MigrationSourcesCLI):
         sources = _resolve_sources(list(args.sources or []), args.config)
         plan = build_migration_plan(
             sources,
-            check_runtime=not bool(args.no_runtime),
+            check_runtime=not args.no_runtime,
         )
         if args.output == 'json':
             print(plan.render_json(), end='')
@@ -122,7 +122,7 @@ class ConfigMigrateApplyCLI(_MigrationSourcesCLI):
         try:
             with CommandManager.current().approved_action(
                 purpose=purpose,
-                yes=bool(args.yes),
+                yes=args.yes,
             ):
                 result = apply_migration(plan)
         except MigrationExecutionError as ex:
@@ -195,7 +195,7 @@ class ConfigMigrateResumeCLI(_MigrationJournalCLI):
         try:
             with CommandManager.current().approved_action(
                 purpose=f'Resume migration {migration_id} from its next incomplete phase.',
-                yes=bool(args.yes),
+                yes=args.yes,
             ):
                 result = resume_migration(
                     migration_id,
@@ -246,7 +246,7 @@ class ConfigMigrateRollbackCLI(_MigrationJournalCLI):
                     f'Roll back migration {migration_id}. Migrated machine/profile '
                     'files and copied state will be replaced by their verified backups.'
                 ),
-                yes=bool(args.yes),
+                yes=args.yes,
             ):
                 result = rollback_migration(migration_id)
         except MigrationExecutionError as ex:

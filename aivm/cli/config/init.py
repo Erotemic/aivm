@@ -103,9 +103,9 @@ class InitCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         return initialize_config_defaults(
             config_opt=args.config,
-            yes=bool(args.yes),
-            defaults=bool(args.defaults),
-            force=bool(args.force),
+            yes=args.yes,
+            defaults=args.defaults,
+            force=args.force,
             standalone_guidance=True,
             vm_opt=str(args.vm or ''),
         )
@@ -281,7 +281,7 @@ def _join_existing_machine(
     assert scope.profile_path is not None
 
     current_key = _read_public_key_text(cfg.paths.ssh_pubkey_path)
-    already_active = bool(
+    already_active = (
         existing is not None
         and existing.state in {'active', 'legacy'}
         and existing.guest_user == guest_user
@@ -502,7 +502,7 @@ def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
     while True:
         raw = input(f'{prompt} [{default_label}]: ').strip().lower()
         if not raw:
-            return bool(default)
+            return default
         if raw in {'1', 'true', 't', 'y', 'yes', 'on'}:
             return True
         if raw in {'0', 'false', 'f', 'n', 'no', 'off'}:

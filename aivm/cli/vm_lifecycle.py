@@ -67,7 +67,7 @@ class VMUpCLI(_BaseCommand):
             cfg_path, cfg.vm.name, action='start or reconcile'
         )
         maybe_install_missing_host_deps(
-            yes=bool(args.yes), dry_run=bool(args.dry_run)
+            yes=args.yes, dry_run=args.dry_run
         )
         mgr = CommandManager.current()
         with mgr.intent(
@@ -80,7 +80,7 @@ class VMUpCLI(_BaseCommand):
                 dry_run=args.dry_run,
                 recreate=args.recreate,
                 config_store_path=cfg_path,
-                ensure_firewall=bool(args.ensure_firewall),
+                ensure_firewall=args.ensure_firewall,
             )
         if not args.dry_run and not args.recreate:
             _maybe_warn_hardware_drift(cfg)
@@ -139,7 +139,7 @@ class VMRestartCLI(_BaseCommand):
         cfg, cfg_path = load_cfg_with_path(args.config)
         announce_vm_machine_impact(cfg_path, cfg.vm.name, action='restart')
         if args.ensure_firewall:
-            ensure_firewall_ready(cfg, dry_run=bool(args.dry_run))
+            ensure_firewall_ready(cfg, dry_run=args.dry_run)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',
@@ -173,19 +173,19 @@ class VMCreateCLI(_BaseCommand):
         log.trace(
             'VMCreateCLI.main vm={} set_default={} force={} dry_run={} yes={}',
             args.vm,
-            bool(args.set_default),
-            bool(args.force),
-            bool(args.dry_run),
-            bool(args.yes),
+            args.set_default,
+            args.force,
+            args.dry_run,
+            args.yes,
         )
         store_fpath = cfg_path(args.config)
         return create_vm_from_defaults(
             store_fpath,
             vm_override=args.vm if args.vm else None,
-            set_default=bool(args.set_default),
-            force=bool(args.force),
-            dry_run=bool(args.dry_run),
-            yes=bool(args.yes),
+            set_default=args.set_default,
+            force=args.force,
+            dry_run=args.dry_run,
+            yes=args.yes,
         )
 
 
@@ -222,7 +222,7 @@ class VMDeleteCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         requested_vm = str(args.vm or '').strip()
-        if requested_vm and not bool(args.dry_run):
+        if requested_vm and not args.dry_run:
             requested_path = resolve_store_scope(args.config).store_path
             requested_scope = resolve_store_scope(str(requested_path))
             completed = complete_missing_vm_deletion(
@@ -249,7 +249,7 @@ class VMDeleteCLI(_BaseCommand):
                 scope,
                 cfg,
                 cfg_path,
-                dry_run=bool(args.dry_run),
+                dry_run=args.dry_run,
             )
         return 0
 
@@ -300,7 +300,7 @@ class VMProvisionCLI(_BaseCommand):
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,
-                yes=bool(args.yes),
+                yes=args.yes,
                 purpose='Query VM networking state before SSH provisioning.',
             )
         provision(cfg, dry_run=args.dry_run)
@@ -359,6 +359,6 @@ class VMRenameCLI(_BaseCommand):
                 cfg,
                 cfg_path,
                 new_name,
-                dry_run=bool(args.dry_run),
+                dry_run=args.dry_run,
             )
         return 0

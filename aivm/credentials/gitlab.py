@@ -502,7 +502,7 @@ class GitLabDeployKeyBackend:
         payload: dict[str, object] = {
             'title': str(title),
             'key': public_key,
-            'can_push': bool(write),
+            'can_push': write,
         }
         if expires_at:
             payload['expires_at'] = expires_at
@@ -526,7 +526,7 @@ class GitLabDeployKeyBackend:
         if title is not None:
             payload['title'] = title
         if write is not None:
-            payload['can_push'] = bool(write)
+            payload['can_push'] = write
         if not payload:
             raise GitLabError('Deploy-key update has no requested changes.')
         selector = _project_selector(project)

@@ -79,7 +79,7 @@ def test_common_short_aliases_parse_together(cfg_path: Path) -> None:
     args = ConfigFormatCLI.cli(
         argv=['-n', '-y', '-c', str(cfg_path), '-f']
     )
-    assert bool(args.dry_run) is True
-    assert bool(args.yes) is True
+    assert args.dry_run is True
+    assert args.yes is True
     assert args.config == str(cfg_path)
-    assert bool(args.force) is True
+    assert args.force is True

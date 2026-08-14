@@ -262,7 +262,7 @@ def _upsert_ssh_config_entry(
         )
         return ssh_cfg, False
     CommandManager.current().confirm_file_update(
-        yes=bool(yes),
+        yes=yes,
         path=ssh_cfg,
         purpose=f"Update SSH config entry for host '{block_name}'.",
     )
@@ -335,13 +335,13 @@ def _ensure_attachment_available_in_guest(
                 _ensure_shared_root_host_bind(
                     cfg,
                     attachment,
-                    yes=bool(yes),
+                    yes=yes,
                     dry_run=dry_run,
                     allow_disruptive_rebind=allow_disruptive_shared_root_rebind,
                 )
                 _ensure_shared_root_vm_mapping(
                     cfg,
-                    yes=bool(yes),
+                    yes=yes,
                     dry_run=dry_run,
                     vm_running=True,
                 )
@@ -357,7 +357,7 @@ def _ensure_attachment_available_in_guest(
             host_src,
             attachment,
             ip,
-            yes=bool(yes),
+            yes=yes,
             dry_run=dry_run,
         )
 

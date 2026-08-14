@@ -393,7 +393,7 @@ def _restore_saved_vm_attachments(
                     _restore_src,
                     aligned,
                     ip,
-                    yes=bool(yes),
+                    yes=yes,
                     dry_run=False,
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
@@ -644,7 +644,7 @@ def _reconcile_attached_vm(
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
             maybe_install_missing_host_deps(
-                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+                yes=policy.yes, dry_run=policy.dry_run
             )
             if attachment.mode in {
                 ATTACHMENT_MODE_SHARED_ROOT,
@@ -766,12 +766,12 @@ def _reconcile_attached_vm(
                                 _ensure_shared_root_host_bind(
                                     cfg,
                                     attachment,
-                                    yes=bool(policy.yes),
+                                    yes=policy.yes,
                                     dry_run=False,
                                 )
                                 _ensure_shared_root_vm_mapping(
                                     cfg,
-                                    yes=bool(policy.yes),
+                                    yes=policy.yes,
                                     dry_run=False,
                                     vm_running=True,
                                 )
@@ -896,8 +896,8 @@ def _prepare_attached_session(
 
     ok, _report = attachment_safety_preflight(
         host_src,
-        yes=bool(yes),
-        dry_run=bool(dry_run),
+        yes=yes,
+        dry_run=dry_run,
     )
     if not ok:
         raise AIVMError(
@@ -942,8 +942,8 @@ def _prepare_attached_session(
         host_src,
         existing_attachments=existing_store.attachments,
         vm_name=cfg.vm.name,
-        yes=bool(yes),
-        dry_run=bool(dry_run),
+        yes=yes,
+        dry_run=dry_run,
     )
     if not ok:
         raise AIVMError(
@@ -973,10 +973,10 @@ def _prepare_attached_session(
         host_src,
         attachment,
         policy=ReconcilePolicy(
-            ensure_firewall_opt=bool(ensure_firewall_opt),
-            recreate_if_needed=bool(recreate_if_needed),
-            dry_run=bool(dry_run),
-            yes=bool(yes),
+            ensure_firewall_opt=ensure_firewall_opt,
+            recreate_if_needed=recreate_if_needed,
+            dry_run=dry_run,
+            yes=yes,
         ),
         config_store_path=cfg_path,
     )
@@ -985,7 +985,7 @@ def _prepare_attached_session(
 
     if (not dry_run) and maybe_offer_create_ssh_identity(
         cfg,
-        yes=bool(yes),
+        yes=yes,
         prompt_reason=(
             'Generate a dedicated SSH keypair so aivm can open SSH/VS Code '
             'sessions and provision the guest.'
@@ -1044,7 +1044,7 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
+    mirror_home = cfg.vm.mirror_shared_home_folders
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
         ATTACHMENT_MODE_DIRECT_VIRTIOFS,
@@ -1063,7 +1063,7 @@ def _prepare_attached_session(
             host_src,
             attachment,
             ip,
-            yes=bool(yes),
+            yes=yes,
             dry_run=False,
             ensure_shared_root_host_side=(
                 attachment.mode
@@ -1085,7 +1085,7 @@ def _prepare_attached_session(
             cfg_path,
             ip=ip,
             primary_attachment=attachment,
-            yes=bool(yes),
+            yes=yes,
             mirror_home=mirror_home,
             owner_principal_id=owner_principal_id,
         )
@@ -1095,7 +1095,7 @@ def _prepare_attached_session(
             host_src,
             attachment,
             ip,
-            yes=bool(yes),
+            yes=yes,
             dry_run=False,
         )
         # Apply companion-symlink and mirror-home behavior for git mode too.
@@ -1112,7 +1112,7 @@ def _prepare_attached_session(
             cfg_path,
             ip=ip,
             primary_attachment=None,
-            yes=bool(yes),
+            yes=yes,
             mirror_home=mirror_home,
             owner_principal_id=owner_principal_id,
         )

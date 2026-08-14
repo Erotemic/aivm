@@ -321,7 +321,7 @@ def _reconcile_attachment_in_running_guest(
             attachment.mode
             in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}
         ),
-        mirror_home=bool(cfg.vm.mirror_shared_home_folders),
+        mirror_home=cfg.vm.mirror_shared_home_folders,
         host_lexical_paths=aliases,
     )
     if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
@@ -436,7 +436,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         request.mode,
         request.access,
         owner_principal_id=owner_principal_id,
-        administrative_override=bool(request.admin_override),
+        administrative_override=request.admin_override,
         administrative_owner_principal_id=request.owner_principal,
     )
 
@@ -456,8 +456,8 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         host_src,
         existing_attachments=existing_reg.attachments,
         vm_name=cfg.vm.name,
-        yes=bool(request.yes),
-        dry_run=bool(request.dry_run),
+        yes=request.yes,
+        dry_run=request.dry_run,
     )
     if request.dry_run:
         print(
@@ -481,7 +481,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     ):
         attachment, vm_defined, vm_running = (
             _ensure_attachment_in_vm_definition(
-                cfg, attachment, host_src, yes=bool(request.yes)
+                cfg, attachment, host_src, yes=request.yes
             )
         )
         reg_path = _record_attachment(
@@ -508,7 +508,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
     if vm_running:
         _reconcile_attachment_in_running_guest(
-            cfg, cfg_path, attachment, host_src, yes=bool(request.yes)
+            cfg, cfg_path, attachment, host_src, yes=request.yes
         )
     _print_attach_result(
         cfg,
@@ -868,7 +868,7 @@ def _run_vm_detach_locked(
                     reg,
                     att,
                     current_principal_id=current_owner,
-                    administrative_override=bool(request.admin_override),
+                    administrative_override=request.admin_override,
                 )
     if att is None:
         print(
@@ -920,7 +920,7 @@ def _run_vm_detach_locked(
             detached_shared_root_host_bind,
             detach_failed,
         ) = _detach_shared_root_attachment(
-            cfg, resolved, vm_running=vm_running, yes=bool(request.yes)
+            cfg, resolved, vm_running=vm_running, yes=request.yes
         )
     elif mode == ATTACHMENT_MODE_PERSISTENT:
         detach_failed = _detach_persistent_attachment(
@@ -929,7 +929,7 @@ def _run_vm_detach_locked(
             att,
             resolved,
             vm_running=vm_running,
-            yes=bool(request.yes),
+            yes=request.yes,
         )
 
     if detach_failed:
@@ -1008,12 +1008,10 @@ def run_persistent_host_replay(
             cfg,
             cfg_path,
             current_principal_id=owner,
-            administrative_override=bool(request.admin_override),
-            dry_run=bool(request.dry_run),
+            administrative_override=request.admin_override,
+            dry_run=request.dry_run,
         )
-        _print_persistent_identity_refresh(
-            report, dry_run=bool(request.dry_run)
-        )
+        _print_persistent_identity_refresh(report, dry_run=request.dry_run)
     else:
         cfg, cfg_path = load_cfg_with_path(
             request.config_opt, vm_opt=request.vm_opt
@@ -1021,12 +1019,12 @@ def run_persistent_host_replay(
     _sync_persistent_attachment_manifest_on_host(
         cfg,
         cfg_path,
-        dry_run=bool(request.dry_run),
+        dry_run=request.dry_run,
     )
     unavailable = _reconcile_persistent_host_binds(
         cfg,
         cfg_path,
-        dry_run=bool(request.dry_run),
+        dry_run=request.dry_run,
         vm_running=None,
     )
     if request.dry_run:
@@ -1055,12 +1053,12 @@ def run_install_persistent_host_replay_service(
     _sync_persistent_attachment_manifest_on_host(
         cfg,
         cfg_path,
-        dry_run=bool(request.dry_run),
+        dry_run=request.dry_run,
     )
     _install_persistent_host_bind_replay(
         cfg,
         cfg_path,
-        dry_run=bool(request.dry_run),
+        dry_run=request.dry_run,
     )
     if request.dry_run:
         print(
@@ -1123,8 +1121,8 @@ class VMAttachCLI(_BaseCommand):
             args.guest_dst,
             args.mode,
             args.access,
-            bool(args.dry_run),
-            bool(args.yes),
+            args.dry_run,
+            args.yes,
         )
         return run_vm_attach(
             VMAttachRequest(
@@ -1134,9 +1132,9 @@ class VMAttachCLI(_BaseCommand):
                 guest_dst=args.guest_dst,
                 mode=args.mode,
                 access=args.access,
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
-                admin_override=bool(args.admin_override),
+                dry_run=args.dry_run,
+                yes=args.yes,
+                admin_override=args.admin_override,
                 owner_principal=args.owner_principal,
             )
         )
@@ -1169,9 +1167,9 @@ class VMDetachCLI(_BaseCommand):
                 config_opt=args.config,
                 vm_opt=args.vm,
                 host_src=Path(args.host_src),
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
-                admin_override=bool(args.admin_override),
+                dry_run=args.dry_run,
+                yes=args.yes,
+                admin_override=args.admin_override,
                 owner_principal=args.owner_principal,
             )
         )
@@ -1213,9 +1211,9 @@ class VMPersistentHostReplayCLI(_BaseCommand):
             VMPersistentHostReplayRequest(
                 config_opt=args.config,
                 vm_opt=args.vm,
-                dry_run=bool(args.dry_run),
-                trust_current_paths=bool(args.trust_current_paths),
-                admin_override=bool(args.admin_override),
+                dry_run=args.dry_run,
+                trust_current_paths=args.trust_current_paths,
+                admin_override=args.admin_override,
             )
         )
 
@@ -1235,6 +1233,6 @@ class VMInstallPersistentHostReplayServiceCLI(_BaseCommand):
             VMInstallPersistentHostReplayServiceRequest(
                 config_opt=args.config,
                 vm_opt=args.vm,
-                dry_run=bool(args.dry_run),
+                dry_run=args.dry_run,
             )
         )

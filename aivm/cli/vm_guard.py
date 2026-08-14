@@ -183,7 +183,7 @@ class VMFdGuardCLI(_BaseCommand):
         ):
             ip = _resolve_ip_for_ssh_ops(
                 cfg,
-                yes=bool(args.yes),
+                yes=args.yes,
                 purpose='Resolve VM networking before managing the fd guard.',
             )
             ident = require_ssh_identity(context.profile.ssh_identity_file)

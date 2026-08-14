@@ -50,7 +50,7 @@ def normalize_restart_policy(value: object) -> str:
 def run_vm_update(request: VMUpdateRequest) -> int:
     """Reconcile VM config drift against live libvirt settings."""
     cfg = request.cfg
-    drift, vm_running = _vm_update_drift(cfg, yes=bool(request.yes))
+    drift, vm_running = _vm_update_drift(cfg, yes=request.yes)
     if drift.notes:
         print('Detected diagnostics (not auto-applied):')
         for note in drift.notes:
@@ -70,15 +70,15 @@ def run_vm_update(request: VMUpdateRequest) -> int:
         role='modify',
     ):
         changed, restart_kind = _apply_vm_update(
-            cfg, drift, dry_run=bool(request.dry_run)
+            cfg, drift, dry_run=request.dry_run
         )
     if changed and restart_kind != RestartKind.NONE and vm_running:
         _maybe_restart_vm_after_update(
             cfg,
             kind=restart_kind,
             restart_policy=request.restart_policy,
-            dry_run=bool(request.dry_run),
-            yes=bool(request.yes),
+            dry_run=request.dry_run,
+            yes=request.yes,
         )
     elif changed:
         print('Update complete.')
@@ -106,8 +106,8 @@ class VMUpdateCLI(_BaseCommand):
             VMUpdateRequest(
                 cfg=cfg,
                 restart_policy=restart_policy,
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
+                dry_run=args.dry_run,
+                yes=args.yes,
                 store_path=store_path,
             )
         )

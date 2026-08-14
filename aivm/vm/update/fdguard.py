@@ -65,7 +65,7 @@ def _fdguard_drift(
     Returns ``(drift-or-None, notes)``. Probe failures are notes, not
     errors: the guard must never block an otherwise valid hardware update.
     """
-    desired = bool(cfg.virtiofs.fd_guard)
+    desired = cfg.virtiofs.fd_guard
     if not vm_running:
         return None, (
             'VM is not running; guest virtiofs fd guard state was not '

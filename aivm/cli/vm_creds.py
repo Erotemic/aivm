@@ -140,7 +140,7 @@ class VMCredsAddCLI(_BaseCommand):
         context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            persist_runtime_defaults=not bool(args.dry_run),
+            persist_runtime_defaults=not args.dry_run,
         )
         cfg = context.effective_cfg
         mgr = CommandManager.current()
@@ -721,7 +721,7 @@ class VMCredsRevokeCLI(_BaseCommand):
         context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            persist_runtime_defaults=not bool(args.dry_run),
+            persist_runtime_defaults=not args.dry_run,
         )
         cfg = context.effective_cfg
         entry = _resolve_credential_selector(
@@ -801,7 +801,7 @@ class VMCredsAbandonCLI(_BaseCommand):
         context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
-            persist_runtime_defaults=not bool(args.dry_run),
+            persist_runtime_defaults=not args.dry_run,
         )
         cfg = context.effective_cfg
         entry = _resolve_credential_selector(

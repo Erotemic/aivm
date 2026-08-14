@@ -79,20 +79,18 @@ class _BaseCommand(kwconf.Config):
                 'require escalation, so aivm refuses to advertise a global '
                 'no-sudo guarantee. Use as-needed or always.'
             )
-        effective_yes_sudo = bool(parsed.yes_sudo or parsed.yes or cfg_yes_sudo)
+        effective_yes_sudo = parsed.yes_sudo or parsed.yes or cfg_yes_sudo
         setattr(parsed, 'yes_sudo', effective_yes_sudo)
         _CURRENT_YES_SUDO.set(effective_yes_sudo)
-        _CURRENT_AUTO_APPROVE_READONLY_SUDO.set(
-            bool(cfg_auto_approve_readonly_sudo)
-        )
+        _CURRENT_AUTO_APPROVE_READONLY_SUDO.set(cfg_auto_approve_readonly_sudo)
         # Optional features resolve their own settings from this store; the
         # shared option surface stays free of any single feature's config.
         bind_active_config_option(parsed.config)
         CommandManager.activate(
             CommandManager(
-                yes=bool(parsed.yes),
-                yes_sudo=bool(effective_yes_sudo),
-                auto_approve_readonly_sudo=bool(cfg_auto_approve_readonly_sudo),
+                yes=parsed.yes,
+                yes_sudo=effective_yes_sudo,
+                auto_approve_readonly_sudo=cfg_auto_approve_readonly_sudo,
                 privilege_mode=privilege_mode,
             )
         )
@@ -103,9 +101,9 @@ class _BaseCommand(kwconf.Config):
             cls.__name__,
             parsed.config,
             args_verbose,
-            bool(parsed.yes),
-            bool(parsed.yes_sudo),
-            bool(cfg_auto_approve_readonly_sudo),
+            parsed.yes,
+            parsed.yes_sudo,
+            cfg_auto_approve_readonly_sudo,
             privilege_mode,
         )
         return parsed
@@ -140,10 +138,10 @@ def _resolve_cfg_yes_sudo(config_opt: str | None) -> bool:
         scope = resolve_store_scope(config_opt)
         path = scope.store_path
         if scope.is_machine:
-            return bool(load_scope_profile(scope).behavior.yes_sudo)
+            return load_scope_profile(scope).behavior.yes_sudo
         if path.exists():
             reg = load_store(path)
-            cfg_yes_sudo = bool(reg.behavior.yes_sudo)
+            cfg_yes_sudo = reg.behavior.yes_sudo
     except Exception:
         cfg_yes_sudo = False
     return cfg_yes_sudo
@@ -179,14 +177,10 @@ def _resolve_cfg_auto_approve_readonly_sudo(config_opt: str | None) -> bool:
         scope = resolve_store_scope(config_opt)
         path = scope.store_path
         if scope.is_machine:
-            return bool(
-                load_scope_profile(scope).behavior.auto_approve_readonly_sudo
-            )
+            return load_scope_profile(scope).behavior.auto_approve_readonly_sudo
         if path.exists():
             reg = load_store(path)
-            auto_approve_readonly_sudo = bool(
-                reg.behavior.auto_approve_readonly_sudo
-            )
+            auto_approve_readonly_sudo = reg.behavior.auto_approve_readonly_sudo
     except Exception:
         auto_approve_readonly_sudo = True
     return auto_approve_readonly_sudo

@@ -47,7 +47,7 @@ class ConfigShowCLI(_BaseCommand):
         scope = resolve_store_scope(args.config)
         path = scope.store_path
         vm_name = str(args.vm or '').strip()
-        if bool(args.resolved) or vm_name:
+        if args.resolved or vm_name:
             cfg, resolved_store_path = load_cfg_with_path(
                 args.config, vm_opt=vm_name, host_src=Path.cwd()
             )
@@ -102,9 +102,9 @@ class ConfigFormatCLI(_BaseCommand):
         path = cfg_path(args.config)
         targets = format_existing_config(
             path,
-            backup=not bool(args.no_backup),
-            dry_run=bool(args.dry_run),
-            force=bool(args.force),
+            backup=not args.no_backup,
+            dry_run=args.dry_run,
+            force=args.force,
         )
         if args.dry_run:
             print('Would write formatted config paths:')

@@ -110,8 +110,8 @@ class VMAccessReconcileCLI(_BaseCommand):
             vm_name=vm_name,
             guest_user=str(args.guest_user or ''),
             ip_override=str(args.ip or ''),
-            dry_run=bool(args.dry_run),
-            enable_disabled=bool(args.enable),
+            dry_run=args.dry_run,
+            enable_disabled=args.enable,
         )
         prefix = 'Would enroll' if args.dry_run else 'Enrolled'
         print(
@@ -142,7 +142,7 @@ class VMAccessRepairHostIdentityCLI(_BaseCommand):
         )
         scope = resolve_store_scope(str(path))
         report = repair_current_host_identity(
-            scope, vm_name=vm_name, dry_run=bool(args.dry_run)
+            scope, vm_name=vm_name, dry_run=args.dry_run
         )
         prefix = 'Would repair' if args.dry_run else 'Repaired'
         if report.changed:
@@ -218,8 +218,8 @@ class _VMAccessMutationCLI(_BaseCommand):
                 vm_name=vm_name,
                 selector=str(args.identity or ''),
                 action=action,
-                administrative_override=bool(args.admin_override),
-                allow_last_access=bool(args.allow_last_access),
+                administrative_override=args.admin_override,
+                allow_last_access=args.allow_last_access,
                 ip_override=str(args.ip or ''),
                 dry_run=True,
             )
@@ -230,8 +230,8 @@ class _VMAccessMutationCLI(_BaseCommand):
                     vm_name=vm_name,
                     selector=str(args.identity or ''),
                     action=action,
-                    administrative_override=bool(args.admin_override),
-                    allow_last_access=bool(args.allow_last_access),
+                    administrative_override=args.admin_override,
+                    allow_last_access=args.allow_last_access,
                     ip_override=str(args.ip or ''),
                     dry_run=False,
                 )

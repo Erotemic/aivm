@@ -77,8 +77,8 @@ def _bootstrap_vm_for_folder(
 
         init_rc = initialize_config_defaults(
             config_opt=str(missing_store_path),
-            yes=bool(yes),
-            defaults=bool(yes),
+            yes=yes,
+            defaults=yes,
             force=False,
             standalone_guidance=False,
         )
@@ -91,9 +91,9 @@ def _bootstrap_vm_for_folder(
         vm_override=vm_opt if vm_opt else None,
         set_default=False,
         force=False,
-        dry_run=bool(dry_run),
-        yes=bool(yes),
-        configuration_reviewed=bool(need_init and not yes),
+        dry_run=dry_run,
+        yes=yes,
+        configuration_reviewed=need_init and not yes,
         initial_attachment_host_src=host_src,
         initial_attachment_guest_dst=guest_dst_opt,
         initial_attachment_mode=attach_mode_opt,
@@ -380,9 +380,9 @@ class VMCodeCLI(_BaseCommand):
             args.host_src,
             args.vm,
             args.guest_dst,
-            bool(args.dry_run),
-            bool(args.yes),
-            bool(args.tunnel),
+            args.dry_run,
+            args.yes,
+            args.tunnel,
         )
         try:
             session = _prepare_attached_session(
@@ -392,10 +392,10 @@ class VMCodeCLI(_BaseCommand):
                 guest_dst_opt=args.guest_dst,
                 attach_mode_opt=args.mode,
                 attach_access_opt=args.access,
-                recreate_if_needed=bool(args.recreate_if_needed),
-                ensure_firewall_opt=bool(args.ensure_firewall),
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
+                recreate_if_needed=args.recreate_if_needed,
+                ensure_firewall_opt=args.ensure_firewall,
+                dry_run=args.dry_run,
+                yes=args.yes,
                 bootstrap_missing_vm=partial(
                     _bootstrap_vm_for_folder,
                     config_opt=args.config,
@@ -404,8 +404,8 @@ class VMCodeCLI(_BaseCommand):
                     guest_dst_opt=args.guest_dst,
                     attach_mode_opt=args.mode,
                     attach_access_opt=args.access,
-                    yes=bool(args.yes),
-                    dry_run=bool(args.dry_run),
+                    yes=args.yes,
+                    dry_run=args.dry_run,
                 ),
             )
         except RuntimeError as ex:
@@ -430,7 +430,7 @@ class VMCodeCLI(_BaseCommand):
         assert ip is not None
 
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=bool(args.yes)
+            cfg, dry_run=False, yes=args.yes
         )
 
         if args.tunnel:
@@ -532,8 +532,8 @@ class VMSSHCLI(_BaseCommand):
             args.host_src,
             args.vm,
             args.guest_dst,
-            bool(args.dry_run),
-            bool(args.yes),
+            args.dry_run,
+            args.yes,
         )
         try:
             session = _prepare_attached_session(
@@ -543,10 +543,10 @@ class VMSSHCLI(_BaseCommand):
                 guest_dst_opt=args.guest_dst,
                 attach_mode_opt=args.mode,
                 attach_access_opt=args.access,
-                recreate_if_needed=bool(args.recreate_if_needed),
-                ensure_firewall_opt=bool(args.ensure_firewall),
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
+                recreate_if_needed=args.recreate_if_needed,
+                ensure_firewall_opt=args.ensure_firewall,
+                dry_run=args.dry_run,
+                yes=args.yes,
                 bootstrap_missing_vm=partial(
                     _bootstrap_vm_for_folder,
                     config_opt=args.config,
@@ -555,8 +555,8 @@ class VMSSHCLI(_BaseCommand):
                     guest_dst_opt=args.guest_dst,
                     attach_mode_opt=args.mode,
                     attach_access_opt=args.access,
-                    yes=bool(args.yes),
-                    dry_run=bool(args.dry_run),
+                    yes=args.yes,
+                    dry_run=args.dry_run,
                 ),
             )
         except RuntimeError as ex:
@@ -573,7 +573,7 @@ class VMSSHCLI(_BaseCommand):
         ip = session.ip
         assert ip is not None
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=bool(args.yes)
+            cfg, dry_run=False, yes=args.yes
         )
         ident = require_ssh_identity(context.profile.ssh_identity_file)
         remote_cmd = (

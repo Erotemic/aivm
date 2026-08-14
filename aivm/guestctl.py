@@ -80,7 +80,7 @@ class GuestEnrollmentRequest:
             uid=uid,
             gid=gid,
             public_key=key,
-            allow_sudo=bool(self.allow_sudo),
+            allow_sudo=self.allow_sudo,
             groups=groups,
         )
 

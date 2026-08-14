@@ -181,11 +181,11 @@ def render_store_toml(reg: Store, *, attachment_style: str = 'legacy') -> str:
         lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
         lines.append('')
         lines.append('[behavior]')
-        _emit_toml_kv(lines, 'yes_sudo', bool(reg.behavior.yes_sudo))
+        _emit_toml_kv(lines, 'yes_sudo', reg.behavior.yes_sudo)
         _emit_toml_kv(
             lines,
             'auto_approve_readonly_sudo',
-            bool(reg.behavior.auto_approve_readonly_sudo),
+            reg.behavior.auto_approve_readonly_sudo,
         )
         _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
         _emit_toml_kv(
