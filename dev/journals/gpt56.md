@@ -781,3 +781,27 @@ not installed, so consumer-side pytest remains the integration check. I am most
 confident in the plan-format and Git-discovery boundaries; the remaining runtime
 risk is integration with the existing CLI/config context, which is kept narrow
 by passing the plan's repository root into credential-context resolution.
+
+## 2026-08-18 19:12:23 -0400
+
+I added Docker as an explicit ``aivm vm provision`` target without creating a
+second Docker abstraction. The existing provisioning model already owns Docker
+through ``provision.install_docker`` and installs ``docker.io`` plus
+``docker-compose-v2``; the CLI gap was only that positional provision arguments
+were validated exclusively against the optional guest-tool registry. Treating
+Docker as another registry tool would have introduced two independent config
+switches and two ways to describe the same installation, so the CLI now has a
+small ordered set of provisioning targets: ``docker`` plus the registry-defined
+developer tools. An explicit Docker target sets the existing install switch for
+that invocation, while registry targets continue through their normal one-shot
+overrides.
+
+I am confident this preserves the current full-provision behavior and makes the
+previously failing ``vm provision docker`` command do exactly what its name
+suggests. The main tradeoff is that Docker remains intentionally distinct from
+versioned developer tools: there is no ``[tools].docker`` spec, because the
+released provisioning config already has a Docker policy and duplicating it
+would make precedence unclear. Tests cover Docker when persistently disabled,
+Docker mixed with a registry tool, and existing unknown-target rejection. The
+remaining environment-dependent behavior is the existing Ubuntu apt package
+installation itself; this change does not alter that implementation.

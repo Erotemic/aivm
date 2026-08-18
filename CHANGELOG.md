@@ -61,6 +61,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* ``aivm vm provision docker`` now explicitly enables the existing Docker
+  provisioning path for that invocation. Docker can be combined with named
+  guest tools such as ``aivm vm provision docker rust``; it reuses
+  ``provision.install_docker`` rather than introducing a second Docker
+  installer or configuration switch.
 * Added ``aivm vm creds plan`` / ``apply`` for repositories with many
   initialized submodules. The planner emits a comment-driven YAML document: each
   repository choice is a self-contained one-line row with explicit ``ro``/``rw``

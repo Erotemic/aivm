@@ -76,6 +76,57 @@ def test_provision_with_multiple_positional_tools(
     assert captured['cfg'].tools.rust == 'stable'
 
 
+def test_provision_docker_reuses_existing_install_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.install_docker = False
+    cfg_path = tmp_path / 'config.toml'
+    cfg_path.write_text('[vm]\nname = "vmx"\n', encoding='utf-8')
+    _stub_cfg_loader(monkeypatch, cfg)
+
+    captured: dict[str, AgentVMConfig] = {}
+
+    def fake_provision(received: AgentVMConfig, *, dry_run: bool) -> None:
+        captured['cfg'] = received
+
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.provision', fake_provision)
+
+    rc = VMProvisionCLI.main(
+        argv=False, config=str(cfg_path), tools=['docker'], dry_run=True
+    )
+    assert rc == 0
+    assert captured['cfg'].provision.install_docker is True
+    assert captured['cfg'].tools.specs == {}
+
+
+def test_provision_docker_can_mix_with_guest_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.install_docker = False
+    cfg_path = tmp_path / 'config.toml'
+    cfg_path.write_text('[vm]\nname = "vmx"\n', encoding='utf-8')
+    _stub_cfg_loader(monkeypatch, cfg)
+
+    captured: dict[str, AgentVMConfig] = {}
+
+    def fake_provision(received: AgentVMConfig, *, dry_run: bool) -> None:
+        captured['cfg'] = received
+
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.provision', fake_provision)
+
+    rc = VMProvisionCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        tools=['docker', 'rust'],
+        dry_run=True,
+    )
+    assert rc == 0
+    assert captured['cfg'].provision.install_docker is True
+    assert captured['cfg'].tools.rust == 'stable'
+
+
 def test_provision_rejects_unknown_tool_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

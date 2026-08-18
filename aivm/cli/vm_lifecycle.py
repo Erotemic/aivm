@@ -37,12 +37,12 @@ from ..vm import (
 )
 from ..vm.create_ops import create_vm_from_defaults
 from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
-from ..vm.guest_tools import (
-    GUEST_TOOL_REGISTRY,
-    UnknownGuestToolError,
-)
+from ..vm.guest_tools import GUEST_TOOL_REGISTRY
 from ..vm.rename import rename_managed_vm, validate_vm_name
 from ._common import _BaseCommand
+
+
+PROVISION_TARGET_NAMES = ('docker', *GUEST_TOOL_REGISTRY.names())
 
 
 class VMUpCLI(_BaseCommand):
@@ -253,11 +253,12 @@ class VMDeleteCLI(_BaseCommand):
 
 
 class VMProvisionCLI(_BaseCommand):
-    """Provision the VM with configured or one-shot optional guest tools.
+    """Provision configured components plus one-shot named targets.
 
-    Positional tool names enable registry-defined tools for this invocation in
-    addition to persistent ``[tools]`` configuration. Version or channel pins
-    remain config values; the registry supplies each one-shot default.
+    ``docker`` reuses the existing ``provision.install_docker`` path. Other
+    positional names enable registry-defined guest tools for this invocation.
+    Version or channel pins remain config values; the registry supplies each
+    one-shot tool default.
     """
 
     tools: list[str] = kwconf.Value(
@@ -265,9 +266,8 @@ class VMProvisionCLI(_BaseCommand):
         position=1,
         nargs='*',
         help=(
-            'Names of additional tools to install for this run. Known tools: '
-            + ', '.join(GUEST_TOOL_REGISTRY.names())
-            + '.'
+            'Names of additional targets to provision for this run. Known '
+            'targets: ' + ', '.join(PROVISION_TARGET_NAMES) + '.'
         ),
     )
     vm: str = kwconf.Value(
@@ -290,11 +290,22 @@ class VMProvisionCLI(_BaseCommand):
                 host_src=Path.cwd(),
             )
         requested = list(args.tools or [])
-        try:
-            GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, requested)
-        except UnknownGuestToolError as ex:
-            log.error(str(ex))
+        unknown = next(
+            (name for name in requested if name not in PROVISION_TARGET_NAMES),
+            None,
+        )
+        if unknown is not None:
+            log.error(
+                "Unknown provisioning target {!r}. Known targets: {}.",
+                unknown,
+                ', '.join(PROVISION_TARGET_NAMES),
+            )
             return 2
+        if 'docker' in requested:
+            cfg.provision.install_docker = True
+        GUEST_TOOL_REGISTRY.apply_enable_overrides(
+            cfg.tools, (name for name in requested if name != 'docker')
+        )
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,

@@ -151,6 +151,15 @@ a semantic summary for each planned command, and the concrete command line that
 will run before it executes the step. Large explicitly elided payloads remain
 available at higher verbosity.
 
+Guest provisioning can also be requested explicitly by target. Docker uses the
+same Ubuntu package provisioning path as ``provision.install_docker`` and may
+be combined with optional developer tools in one command:
+
+.. code-block:: bash
+
+   aivm vm provision docker
+   aivm vm provision docker rust
+
 If you prefer an explicit flow, the first user runs ``aivm config init`` and
 ``aivm vm create``. A later user on the same host runs ``aivm config init``;
 when the hostname-qualified VM exactly matches a managed machine, AIVM creates
