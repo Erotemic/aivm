@@ -16,6 +16,7 @@ source = { editable = "." }
 dependencies = [
     { name = "kwconf" },
     { name = "loguru" },
+    { name = "pyyaml" },
     { name = "rich" },
 ]
 
@@ -73,6 +74,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'tests'", specifier = ">=6.2.5" },
     { name = "pytest-cov", marker = "extra == 'tests'", specifier = ">=3.0.0" },
     { name = "pytest-timeout", marker = "extra == 'tests'", specifier = ">=1.4.2" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "pyyaml", marker = "extra == 'docs'", specifier = ">=6.0.2" },
     { name = "pyyaml", marker = "extra == 'tests'", specifier = ">=6.0.2" },
     { name = "rich", specifier = ">=13.7.0" },

@@ -612,6 +612,13 @@ host user.
    # Or name both explicitly.
    aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --access write
 
+   # For a checkout with many initialized submodules, generate one editable
+   # plan instead of granting every repository by hand.
+   aivm vm creds plan . --access rw > /tmp/aivm-creds.yaml
+   ${EDITOR:-vi} /tmp/aivm-creds.yaml
+   aivm vm creds apply /tmp/aivm-creds.yaml --dry_run
+   aivm vm creds apply /tmp/aivm-creds.yaml
+
    # GitLab.com is inferred from its canonical URL. A host-only GITLAB_TOKEN
    # enables automatic publication, but it is optional: without one AIVM
    # prints the public key for a project administrator to add.
@@ -635,6 +642,21 @@ host user.
 
    # Secret-bearing changes must run as the owning host user.
    aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
+
+``creds plan`` crawls the selected checkout and every initialized nested Git
+submodule. The result is a real YAML document whose active repository list
+items are grants. Each row contains its own ``access`` (``ro`` or ``rw``), Git
+``remote``, and ``provider`` value, so the reviewed file has no hidden access
+defaults. A repository with one remote gets one active row. When several remote
+names point at the exact same URL, ``origin`` is active when available and the
+aliases are shown as commented alternatives. When remotes point at distinct
+destinations, every choice is commented and annotated with its URL; uncomment
+exactly one choice, or leave them all commented to skip that checkout.
+
+``creds apply`` parses the YAML, resolves every selected remote again from the
+checkout recorded by ``root``, rejects duplicate choices or duplicate repository
+identities, and completes that validation before creating any credential. Use
+``--dry_run`` to review the resolved grants before applying them.
 
 ``creds setup`` installs a missing GitHub CLI or OpenSSH client using the
 host's package backend (apt, dnf, zypper, pacman, or apk), then starts

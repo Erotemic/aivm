@@ -750,3 +750,34 @@ I audited redundant `bool(...)` coercions after the CLI short-alias work. The us
 The cleanup removes 168 redundant bool conversions across CLI argument forwarding, request/policy dataclasses, config booleans, command-manager plumbing, a few pure-boolean expressions, and matching assertions. I included the pre-0.6 migration CLI where its inherited flags have the same explicit bool contract, but did not touch legacy schema/migration coercions that normalize untyped persisted data. I also left `_editor_command(args: Any)` alone: even though its current caller passes a CLI config with a boolean `visual` field, the helper's declared boundary is intentionally untyped, so the coercion is not redundant under the code's own contract.
 
 I am confident the changed expressions preserve behavior for values admitted by their annotations. The main risk would be callers violating those annotations and relying on defensive truthiness coercion; that is exactly the implicit behavior this cleanup chooses not to preserve for typed-bool APIs. `python -m compileall -q aivm tests` passes, and a follow-up AST/type-contract audit reports zero remaining structurally provable redundant bool casts. Targeted pytest collection could not start in this execution environment because the `kwconf` dependency is unavailable (`ModuleNotFoundError: kwconf`).
+
+## 2026-08-18 18:47:00 -0400
+
+I consolidated the repository-credential bulk-grant work into one unreleased
+feature rather than preserving intermediate plan formats from this session. The
+result has one mechanism: ``vm creds plan`` discovers the current checkout plus
+initialized nested submodules, emits a real YAML review file, and ``vm creds
+apply`` validates and executes the active rows. I deliberately removed the
+parallel recursive-add experiment and all compatibility parsing for earlier
+session-only plan formats; neither had become a released or committed surface,
+and keeping them would make a small UX feature carry needless branches.
+
+The plan is intentionally explicit. Every selectable row contains its own
+``ro``/``rw`` access, remote, and provider. Multiple distinct remote destinations
+are all commented with their URLs, making selection an uncomment operation and
+leaving ambiguous checkouts ungranted by default. Same-URL aliases may keep one
+deterministic active choice because choosing between them cannot broaden the
+repository destination. Apply trusts neither the displayed URL nor stale
+planning state: it resolves the chosen remote again from the recorded checkout
+root, resolves every row before the first credential mutation, and rejects both
+duplicate checkout choices and duplicate canonical repository identities.
+
+Using PyYAML as a runtime dependency is an intentional simplification. A narrow
+hand-written YAML-ish parser had grown substantially more code than the feature
+it protected; ``safe_load`` lets the on-disk interface actually be YAML while
+validation remains small and explicit. Python compilation passes. The focused
+pytest module cannot start in this execution environment because ``kwconf`` is
+not installed, so consumer-side pytest remains the integration check. I am most
+confident in the plan-format and Git-discovery boundaries; the remaining runtime
+risk is integration with the existing CLI/config context, which is kept narrow
+by passing the plan's repository root into credential-context resolution.

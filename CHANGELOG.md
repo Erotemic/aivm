@@ -61,6 +61,13 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Added ``aivm vm creds plan`` / ``apply`` for repositories with many
+  initialized submodules. The planner emits a comment-driven YAML document: each
+  repository choice is a self-contained one-line row with explicit ``ro``/``rw``
+  access, remote, provider, and an informational remote URL. Distinct remote
+  destinations are emitted as commented alternatives so choosing one is an
+  uncomment operation; apply re-resolves every selected remote and validates the
+  full plan before creating credentials.
 * `aivm --version` prints the package version. `kwconf.ModalCLI` already grows
   the flag from a `__version__` class attribute, so this is that attribute
   rather than a hand-rolled argument.

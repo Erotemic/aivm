@@ -16,10 +16,18 @@ from ..config_store import (
     find_credentials_for_vm,
 )
 from ..credentials import providers
+from ..credentials.plan import (
+    CredentialPlanEntry,
+    discover_credential_candidates,
+    parse_credential_plan_document,
+    render_credential_plan,
+    repository_root,
+)
 from ..credentials.gitlab import host_token_envvar
+from ..credentials.models import GitRepository
 from ..credentials.ownership import credential_principal_label
 from ..credentials.resolve import resolve_repository
-from ..credentials.schema import normalize_credential_access
+from ..credentials.schema import CredentialKind, normalize_credential_access
 from ..credentials.service import (
     abandon_repository_credential,
     describe_unregistered_credential,
@@ -55,12 +63,13 @@ def _load_credential_context(
     *,
     vm_opt: str,
     persist_runtime_defaults: bool,
+    host_src: Path | None = None,
 ) -> tuple[ResolvedVMContext, Store, Path, str]:
     """Load the caller context plus the matching physical credential store."""
     context, store_path = load_vm_context_with_path(
         config_opt,
         vm_opt=vm_opt,
-        host_src=Path.cwd(),
+        host_src=host_src or Path.cwd(),
         persist_runtime_defaults=persist_runtime_defaults,
     )
     scope = resolve_store_scope(str(store_path))
@@ -95,6 +104,160 @@ def _resolve_credential_selector(
         repo=repo,
         principal_id=principal_id,
     )
+
+
+def _resolve_plan_entries(
+    entries: list[CredentialPlanEntry],
+    *,
+    root: Path,
+    manager: CommandManager,
+) -> list[tuple[CredentialPlanEntry, GitRepository, CredentialKind]]:
+    """Resolve every plan entry before any credential mutation begins."""
+    resolved: list[tuple[CredentialPlanEntry, GitRepository, CredentialKind]] = []
+    seen_repositories: dict[str, str] = {}
+    for entry in entries:
+        checkout = (root / entry.path).resolve()
+        try:
+            checkout.relative_to(root)
+        except ValueError as ex:
+            raise AIVMError(
+                f'Credential plan path escapes repository root: {entry.path!r}'
+            ) from ex
+        if not checkout.is_dir():
+            raise AIVMError(
+                f'Credential plan checkout does not exist: {entry.path!r}'
+            )
+        repo = resolve_repository(
+            checkout,
+            remote=entry.remote,
+            default_host=(
+                'gitlab.com' if entry.provider == 'gitlab' else 'github.com'
+            ),
+            manager=manager,
+        )
+        prior_path = seen_repositories.get(repo.canonical)
+        if prior_path is not None:
+            raise AIVMError(
+                f'Credential plan paths {prior_path!r} and {entry.path!r} '
+                f'resolve to the same repository {repo.display}; keep one '
+                'grant line for that repository.'
+            )
+        seen_repositories[repo.canonical] = entry.path
+        resolved_provider = providers.resolve_provider(repo, entry.provider)
+        kind = providers.kind_for_provider(resolved_provider)
+        resolved.append((entry, repo, kind))
+    return resolved
+
+
+class VMCredsPlanCLI(_BaseCommand):
+    """Discover candidate checkout credentials and print an editable plan."""
+
+    repository: str = kwconf.Value(
+        '.',
+        position=1,
+        help='Checkout to crawl for initialized submodules (default: .).',
+    )
+    access: Literal['read', 'ro', 'write', 'rw'] = kwconf.Value(
+        'read',
+        help='Initial access written into every candidate line.',
+    )
+    provider: Literal['auto', 'github', 'gitlab'] = kwconf.Value(
+        'auto',
+        help='Initial provider written into every candidate line.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        mgr = CommandManager.current()
+        root, candidates = discover_credential_candidates(
+            Path(args.repository).expanduser(),
+            access=args.access,
+            provider=args.provider,
+            manager=mgr,
+        )
+        print(render_credential_plan(candidates, root=root), end='')
+        return 0
+
+
+class VMCredsApplyCLI(_BaseCommand):
+    """Validate and apply an edited multi-repository credential plan."""
+
+    plan_file: str = kwconf.Value(
+        '', position=1, help='Credential plan file produced by `vm creds plan`.'
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(
+        False,
+        short_alias=['n'],
+        help='Validate and print all grants without changing credentials.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if not args.plan_file:
+            raise AIVMError('Provide a credential plan file to apply.')
+        plan_path = Path(args.plan_file).expanduser()
+        try:
+            text = plan_path.read_text(encoding='utf-8')
+        except OSError as ex:
+            raise AIVMError(
+                f'Could not read credential plan {plan_path}: {ex}'
+            ) from ex
+
+        # Parse and resolve the complete operation before the first provider or
+        # credential-store mutation, so editing mistakes fail closed.
+        document = parse_credential_plan_document(text)
+        entries = list(document.entries)
+        mgr = CommandManager.current()
+        root = repository_root(document.root, manager=mgr)
+        resolved = _resolve_plan_entries(entries, root=root, manager=mgr)
+        context, store, store_path, principal_id = _load_credential_context(
+            args.config,
+            vm_opt=args.vm,
+            persist_runtime_defaults=not args.dry_run,
+            host_src=root,
+        )
+        cfg = context.effective_cfg
+
+        print(f'Credential plan: {len(resolved)} repository grant(s)')
+        for entry, repo, kind in resolved:
+            print(
+                f'  {entry.path}: {entry.access} {entry.remote} '
+                f'{providers.provider_for_kind(kind)} {repo.display}'
+            )
+        if args.dry_run:
+            print('DRYRUN: no credential state was changed.')
+            return 0
+
+        for entry, repo, kind in resolved:
+            with mgr.intent(
+                f'Grant {cfg.vm.name} access to {repo.display}',
+                why=(
+                    'Apply one reviewed repository line from the credential '
+                    'plan using the normal principal-owned credential grant.'
+                ),
+                role='modify',
+            ):
+                granted = grant_repository_credential(
+                    cfg,
+                    store,
+                    store_path,
+                    repo,
+                    access=entry.access,
+                    kind=kind,
+                    principal_id=principal_id,
+                    manager=mgr,
+                )
+            if not granted.provider_managed:
+                print(describe_unregistered_credential(granted, repo))
+            else:
+                print(
+                    f'Granted {granted.access} access: '
+                    f'repository={repo.display} credential={granted.id}'
+                )
+        return 0
 
 
 class VMCredsAddCLI(_BaseCommand):
@@ -850,6 +1013,8 @@ class VMCredsModalCLI(kwconf.ModalCLI):
     """Manage scoped credentials installed in a VM."""
 
     setup = VMCredsSetupCLI
+    plan = VMCredsPlanCLI
+    apply = VMCredsApplyCLI
     add = VMCredsAddCLI
     list = VMCredsListCLI
     status = VMCredsStatusCLI
