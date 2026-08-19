@@ -18,6 +18,7 @@ from .io import (
 )
 from .models import (
     ATTACHMENT_SYSTEM_OWNER,
+    AgentCredentialEntry,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -26,11 +27,13 @@ from .models import (
     VMEntry,
 )
 from .mutate import (
+    remove_agent_credential,
     remove_attachment,
     remove_credential,
     remove_network,
     remove_principal,
     remove_vm,
+    upsert_agent_credential,
     upsert_attachment,
     upsert_credential,
     upsert_network,
@@ -71,6 +74,7 @@ from .resolve import (
 
 __all__ = [
     'ATTACHMENT_SYSTEM_OWNER',
+    'AgentCredentialEntry',
     'AttachmentEntry',
     'CredentialEntry',
     'split_source_paths',
@@ -107,6 +111,7 @@ __all__ = [
     'unknown_name_message',
     'network_users',
     'parse_store_toml',
+    'remove_agent_credential',
     'remove_attachment',
     'remove_credential',
     'remove_network',
@@ -123,6 +128,7 @@ __all__ = [
     'render_store_toml',
     'save_store',
     'update_store',
+    'upsert_agent_credential',
     'upsert_attachment',
     'upsert_credential',
     'upsert_network',

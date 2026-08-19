@@ -11,6 +11,7 @@ from collections.abc import Iterable
 
 from ..config_store import CredentialEntry, Store, find_credentials_for_vm
 from ..errors import AIVMError
+from .agent_store import list_agent_credentials_for_vm
 from .keys import remove_host_key
 from .schema import credential_allows_vm_delete
 
@@ -21,7 +22,7 @@ def require_vm_credentials_released(
     *,
     action: str,
 ) -> list[CredentialEntry]:
-    """Reject destructive VM operations while provider credentials are live."""
+    """Reject destructive VM operations while any repository authority is live."""
     credentials = find_credentials_for_vm(store, vm_name)
     blocking = [
         entry for entry in credentials if not credential_allows_vm_delete(entry)
@@ -38,6 +39,21 @@ def require_vm_credentials_released(
             f'{action}:\n{lines}\n'
             'Revoke them first with `aivm vm creds revoke ...`. '
             'AIVM will not silently orphan an active deploy key.'
+        )
+
+    agent_blocking = list_agent_credentials_for_vm(store, vm_name)
+    if agent_blocking:
+        lines = '\n'.join(
+            '  - '
+            f'{entry.provider_host}/{entry.owner}/{entry.repository} '
+            f'({entry.access}, {entry.id}, principal={entry.principal_id or "legacy"})'
+            for entry in agent_blocking
+        )
+        raise AIVMError(
+            f"VM '{vm_name}' still owns host-agent repository credentials and "
+            f'cannot be {action}:\n{lines}\n'
+            'Revoke them first with `aivm vm agent_creds revoke ...`. '
+            'AIVM will not silently orphan a host-only deploy key.'
         )
     return credentials
 

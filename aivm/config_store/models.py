@@ -83,6 +83,29 @@ class CredentialEntry:
 
 
 @dataclass
+class AgentCredentialEntry:
+    """One host-only repository grant owned by agent credentials.
+
+    This collection is intentionally separate from :class:`CredentialEntry`.
+    Its private key material belongs only to the host-side agent subsystem and
+    must never be installed through the guest-key credential path.
+    """
+
+    id: str
+    vm_name: str
+    principal_id: str = ''
+    kind: CredentialKind = CREDENTIAL_KIND_GITHUB_DEPLOY_KEY
+    provider_host: str = 'github.com'
+    owner: str = ''
+    repository: str = ''
+    access: CredentialAccess = CREDENTIAL_ACCESS_READ
+    provider_key_id: str = ''
+    provider_key_title: str = ''
+    key_fingerprint: str = ''
+    state: CredentialState = CREDENTIAL_STATE_PENDING
+
+
+@dataclass
 class PrincipalEntry:
     """One host user's persisted identity inside a managed VM."""
 
@@ -100,7 +123,7 @@ class PrincipalEntry:
 # store may be edited by several aivm versions; parse refuses machine
 # documents newer than this so an older build cannot silently re-render the
 # store and drop fields a newer principal wrote.
-STORE_SCHEMA_VERSION = 11
+STORE_SCHEMA_VERSION = 12
 
 
 @compatibility_surface
@@ -118,6 +141,7 @@ class Store:
     vms: list[VMEntry] = field(default_factory=list)
     attachments: list[AttachmentEntry] = field(default_factory=list)
     credentials: list[CredentialEntry] = field(default_factory=list)
+    agent_credentials: list[AgentCredentialEntry] = field(default_factory=list)
     principals: list[PrincipalEntry] = field(default_factory=list)
     # Private optimistic-concurrency metadata populated by load_store().
     # It is deliberately excluded from repr/equality and never serialized.

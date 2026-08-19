@@ -61,6 +61,20 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Added an experimental, independent ``aivm vm agent_creds`` subsystem for
+  repository deploy keys whose private halves remain host-only. Agent
+  credentials use their own ``agent_credentials`` store collection, separate
+  host-only key tree, and a distinct credential id namespace; existing ``aivm vm creds`` guest-key records are never adopted or
+  loaded into the dedicated agent. ``add`` creates a fresh provider deploy key,
+  ``revoke`` removes provider authority before local key cleanup, and normal
+  lifecycle operations converge the dedicated agent automatically.
+  ``agent_creds doctor`` is read-only by default; ``--fix`` repairs only derived
+  local agent state and refuses provider/key-authority changes. The guest
+  capability channel is intentionally deferred, so this release establishes and
+  tests the host-side security boundary without replacing the working guest-key
+  credential path.
+  VM deletion also refuses to proceed while independent host-agent records
+  remain, preventing provider deploy keys from being orphaned.
 * ``aivm vm provision docker`` now explicitly enables the existing Docker
   provisioning path for that invocation. Docker can be combined with named
   guest tools such as ``aivm vm provision docker rust``; it reuses

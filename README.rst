@@ -767,6 +767,56 @@ warning rather than blocking credential creation; tighten it with
 ``chmod 700 ~/.local/share/aivm`` when the broader permissions are not
 intentional.
 
+Host-agent repository credentials (experimental)
+-----------------------------------------------
+
+AIVM also has an experimental *independent* credential system for deploy keys
+whose private halves remain on the host. It does not convert or reuse ordinary
+``aivm vm creds`` grants. A host-agent grant always gets a newly generated key
+pair, a distinct ``agent-git-*`` identity, a separate
+``[[vms.agent_credentials]]`` metadata collection, and host-only private-key
+storage under the owning user's AIVM data directory. Existing guest-key credentials therefore keep their
+original operational tradeoff: they are self-contained in the VM and require no
+host agent to remain available.
+
+.. code-block:: bash
+
+   # Create a new host-only deploy key and load it into the dedicated agent.
+   aivm vm agent_creds add Kitware/kwimage --access rw
+
+   # Inspect grants and current runtime health.
+   aivm vm agent_creds list
+   aivm vm agent_creds status
+
+   # Doctor is diagnostic by default. --fix may restart/reload only the
+   # derived local agent; it never creates or revokes provider authority.
+   aivm vm agent_creds doctor
+   aivm vm agent_creds doctor --fix
+
+   # Provider authority is changed only by explicit lifecycle commands.
+   aivm vm agent_creds revoke Kitware/kwimage
+
+The dedicated agent is scoped by ``(VM, principal)`` and never inherits the
+caller's ordinary ``SSH_AUTH_SOCK``. Its desired identities come only from the
+``agent_credentials`` collection; ordinary ``credentials`` records are never
+inputs to the agent. ``doctor`` cross-checks their
+fingerprints against ordinary guest-key records and treats any overlap as a
+non-repairable security violation: once a private key may have been exposed to
+a guest, AIVM will not relabel it as non-exportable. Switching a repository
+between the two systems therefore means revoking one grant and creating a new
+grant with fresh key material.
+
+This phase is intentionally host-side only. The provider deploy key and
+dedicated agent lifecycle are real, but AIVM does not yet expose the agent
+socket inside the VM. That guest capability channel is a separate feature so
+the existing ``aivm vm creds`` path remains production-usable while the
+non-exportable transport is developed and tested independently.
+
+A VM with any ``agent_creds`` record cannot be deleted until those grants are
+revoked, using the same cross-cutting deletion safety boundary as ordinary
+repository credentials. This keeps the independently stored provider keys
+addressable instead of orphaning them when the VM definition disappears.
+
 Command Groups
 --------------
 
@@ -780,6 +830,7 @@ Command Groups
    aivm host fw --help
    aivm vm --help
    aivm vm creds --help
+   aivm vm agent_creds --help
 
 Safety Notes
 ------------

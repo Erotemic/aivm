@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: c5e79246343b7f09 -->
+<!-- generation schema: 1; input digest: 732da84f5d6b9d47 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -18,9 +18,9 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.config_store.io` | `aivm.legacy.pre_0_6_0.paths` | `aivm/config_store/io.py:32` |
 | `aivm.config_store.models` | `aivm.legacy.pre_0_6_0` | `aivm/config_store/models.py:21` |
 | `aivm.config_store.mutate` | `aivm.legacy.pre_0_6_0` | `aivm/config_store/mutate.py:9` |
-| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0` | `aivm/config_store/parse.py:28` |
-| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0.schema` | `aivm/config_store/parse.py:29` |
-| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0.schema` | `aivm/config_store/parse.py:35` |
+| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0` | `aivm/config_store/parse.py:32` |
+| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0.schema` | `aivm/config_store/parse.py:33` |
+| `aivm.config_store.parse` | `aivm.legacy.pre_0_6_0.schema` | `aivm/config_store/parse.py:39` |
 | `aivm.config_store.render` | `aivm.legacy.pre_0_6_0` | `aivm/config_store/render.py:9` |
 | `aivm.credentials.ownership` | `aivm.legacy.pre_0_6_0` | `aivm/credentials/ownership.py:7` |
 | `aivm.firewall` | `aivm.legacy.pre_0_6_0.firewall` | `aivm/firewall.py:19` |
@@ -128,11 +128,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.config_scopes` | `aivm/config_scopes.py:137` |
 | `aivm.config_scopes` | `aivm/config_scopes.py:159` |
 | `aivm.config_store.models` | `aivm/config_store/models.py:28` |
-| `aivm.config_store.models` | `aivm/config_store/models.py:116` |
-| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:22` |
-| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:29` |
-| `aivm.config_store.parse` | `aivm/config_store/parse.py:104` |
-| `aivm.config_store.parse` | `aivm/config_store/parse.py:105` |
+| `aivm.config_store.models` | `aivm/config_store/models.py:139` |
+| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:23` |
+| `aivm.config_store.mutate` | `aivm/config_store/mutate.py:30` |
+| `aivm.config_store.parse` | `aivm/config_store/parse.py:109` |
+| `aivm.config_store.parse` | `aivm/config_store/parse.py:110` |
 | `aivm.config_store.resolve` | `aivm/config_store/resolve.py:224` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:62` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:79` |
@@ -283,7 +283,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:20` |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:71` |
 
-## Path-based `StoreScope` reconstruction sites (17)
+## Path-based `StoreScope` reconstruction sites (19)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -296,11 +296,13 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:107` |
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:143` |
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:208` |
+| `aivm.cli.vm_agent_creds` | `store_path` | `aivm/cli/vm_agent_creds.py:35` |
 | `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py:789` |
-| `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:66` |
+| `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:75` |
 | `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:225` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:236` |
-| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:343` |
+| `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:354` |
+| `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:65` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:353` |

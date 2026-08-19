@@ -9,12 +9,14 @@ Audit boundary
 This package is optional: nothing here runs unless a user grants a VM access
 to a repository. It is deliberately kept off the path of the core VM, network,
 firewall, and privilege code so that a review of *those* never has to reason
-about deploy keys. Core modules reference this package in exactly five places,
-and that list is the thing to check when reviewing the boundary:
+about deploy keys. Core modules reference this package through a deliberately small set of pure
+or guard seams, and that list is the thing to check when reviewing the boundary:
 
-- ``config_store.models`` / ``config_store.parse`` import :mod:`.schema` and
-  :mod:`.validation`. The store persists credential records, so it must
-  validate them; both modules are pure and import nothing outward.
+- ``config_store.models`` imports :mod:`.schema`, while ``config_store.parse``
+  imports :mod:`.schema`, :mod:`.validation`, and the pure
+  :mod:`.agent_schema`. The store persists both independent credential record
+  collections, so it must validate their serialized identities; these modules
+  are pure and import no provider, key, agent-process, or guest lifecycle code.
 - ``cli.vm_lifecycle`` and ``vm.create`` import :mod:`.guards` -- and only
   :mod:`.guards` -- so a VM cannot be deleted or recreated out from under a
   live deploy key.
@@ -24,7 +26,8 @@ and that list is the thing to check when reviewing the boundary:
   planner can preserve repository identity while assigning principal-scoped
   credential IDs. Planning remains read-only and does not import key/provider
   lifecycle code.
-- ``cli.vm_creds`` is the feature's own command surface.
+- ``cli.vm_creds`` and ``cli.vm_agent_creds`` are the feature's own command
+  surfaces.
 
 The shared CLI option surface (``cli._common``) must stay free of credential
 imports. Settings this feature needs are resolved by :mod:`.policy` from the

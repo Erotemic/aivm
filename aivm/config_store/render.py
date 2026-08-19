@@ -7,7 +7,13 @@ from typing import cast
 
 from ..config import agent_vm_config_asdict
 from ..legacy.pre_0_6_0 import compatibility_surface
-from .models import AttachmentEntry, CredentialEntry, PrincipalEntry, Store
+from .models import (
+    AgentCredentialEntry,
+    AttachmentEntry,
+    CredentialEntry,
+    PrincipalEntry,
+    Store,
+)
 
 
 def _toml_escape(s: str) -> str:
@@ -72,6 +78,26 @@ def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
     if not cred.provider_managed:
         lines.append('provider_managed = false')
 
+
+
+def _emit_agent_credential(
+    lines: list[str], cred: AgentCredentialEntry
+) -> None:
+    lines.append(f'id = "{_toml_escape(cred.id)}"')
+    if cred.principal_id:
+        lines.append(f'principal_id = "{_toml_escape(cred.principal_id)}"')
+    for key in (
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_id',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    ):
+        lines.append(f'{key} = "{_toml_escape(str(getattr(cred, key)))}"')
 
 def _emit_principal(lines: list[str], principal: PrincipalEntry) -> None:
     for key in (
@@ -256,6 +282,13 @@ def render_store_toml(reg: Store, *, attachment_style: str = 'legacy') -> str:
         for cred in nested_creds:
             lines.append('[[vms.credentials]]')
             _emit_credential(lines, cred)
+        nested_agent_creds = sorted(
+            (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
+            key=lambda cred: cred.id,
+        )
+        for cred in nested_agent_creds:
+            lines.append('[[vms.agent_credentials]]')
+            _emit_agent_credential(lines, cred)
         nested_principals = sorted(
             (item for item in reg.principals if item.vm_name == vm.name),
             key=lambda item: (item.host_user, item.id),
@@ -372,6 +405,13 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     for cred in nested_creds:
         lines.append('[[vms.credentials]]')
         _emit_credential(lines, cred)
+    nested_agent_creds = sorted(
+        (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
+        key=lambda cred: cred.id,
+    )
+    for cred in nested_agent_creds:
+        lines.append('[[vms.agent_credentials]]')
+        _emit_agent_credential(lines, cred)
     nested_principals = sorted(
         (item for item in reg.principals if item.vm_name == vm.name),
         key=lambda item: (item.host_user, item.id),

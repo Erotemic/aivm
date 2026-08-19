@@ -27,6 +27,7 @@ _ALLOWED: dict[str, set[str]] = {
     # imported modules are pure and import nothing outward.
     'aivm/config_store/models.py': {'aivm.credentials.schema'},
     'aivm/config_store/parse.py': {
+        'aivm.credentials.agent_schema',
         'aivm.credentials.schema',
         'aivm.credentials.validation',
     },
@@ -45,8 +46,11 @@ _ALLOWED: dict[str, set[str]] = {
     'aivm/legacy/pre_0_6_0/migration.py': {'aivm.credentials.validation'},
 }
 
-# The feature's own command surface, exempt by definition.
-_FEATURE_CLI = 'aivm/cli/vm_creds.py'
+# The feature's own command surfaces, exempt by definition.
+_FEATURE_CLIS = {
+    'aivm/cli/vm_creds.py',
+    'aivm/cli/vm_agent_creds.py',
+}
 
 
 def _module_name(path: Path) -> str:
@@ -84,7 +88,7 @@ def test_core_modules_reach_the_credential_feature_only_where_allowed() -> None:
     unexpected: dict[str, set[str]] = {}
     for path in _core_sources():
         relative = str(path.relative_to(_PACKAGE_ROOT.parent))
-        if relative == _FEATURE_CLI:
+        if relative in _FEATURE_CLIS:
             continue
         used = {
             name

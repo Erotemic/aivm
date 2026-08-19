@@ -9,6 +9,7 @@ from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
     DEFAULT_ATTACHMENT_MODE,
+    AgentCredentialEntry,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -88,6 +89,9 @@ def remove_vm(
     if remove_attachments:
         reg.attachments = [a for a in reg.attachments if a.vm_name != vm_name]
     reg.credentials = [c for c in reg.credentials if c.vm_name != vm_name]
+    reg.agent_credentials = [
+        c for c in reg.agent_credentials if c.vm_name != vm_name
+    ]
     reg.principals = [p for p in reg.principals if p.vm_name != vm_name]
     if reg.active_vm == vm_name:
         reg.active_vm = reg.vms[0].name if reg.vms else ''
@@ -232,6 +236,46 @@ def remove_credential(
     ]
     return len(reg.credentials) != original
 
+
+
+def upsert_agent_credential(
+    reg: Store, credential: AgentCredentialEntry
+) -> None:
+    existing = [
+        item
+        for item in reg.agent_credentials
+        if item.vm_name == credential.vm_name
+        and item.id == credential.id
+        and item.principal_id == credential.principal_id
+    ]
+    if existing:
+        reg.agent_credentials[reg.agent_credentials.index(existing[0])] = credential
+    else:
+        reg.agent_credentials.append(credential)
+    reg.schema_version = max(reg.schema_version, 12)
+
+
+def remove_agent_credential(
+    reg: Store,
+    *,
+    vm_name: str,
+    credential_id: str,
+    principal_id: str | None = None,
+) -> bool:
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
+    original = len(reg.agent_credentials)
+    reg.agent_credentials = [
+        item
+        for item in reg.agent_credentials
+        if not (
+            item.vm_name == vm_name
+            and item.id == credential_id
+            and (principal is None or item.principal_id == principal)
+        )
+    ]
+    return len(reg.agent_credentials) != original
 
 def upsert_principal(reg: Store, principal: PrincipalEntry) -> None:
     """Insert or replace one VM principal by stable id."""

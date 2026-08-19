@@ -805,3 +805,39 @@ would make precedence unclear. Tests cover Docker when persistently disabled,
 Docker mixed with a registry tool, and existing unknown-target rejection. The
 remaining environment-dependent behavior is the existing Ubuntu apt package
 installation itself; this change does not alter that implementation.
+
+## 2026-08-19 11:24:00 -0400
+
+Reworked the host-backed credential experiment around a stricter composability
+boundary. The original Phase 1 idea of loading existing guest-key credentials
+into a dedicated ssh-agent was wrong for the security model: once a key has
+been installed into a guest it is potentially transferable, so an agent cannot
+honestly treat that same identity as non-exportable.
+
+The new ``aivm vm agent_creds`` feature is independent. It has a separate
+``agent_credentials`` desired-state collection, a separate host-only key tree,
+a distinct ``agent-git-*`` id namespace, and always generates fresh key
+material. The implementation never consumes the existing ``credentials``
+collection as an identity source. The CLI consults ordinary guest-key
+fingerprints only for a doctor collision check, which fails closed if the same
+key somehow appears in both systems. Provider grant/revoke operations are
+explicit; internal agent convergence is automatic and no user-facing
+``reconcile`` command exists. ``doctor`` is read-only, while ``doctor --fix``
+may only repair derived local agent process/identity state and refuses to alter
+provider authority or invent replacement key material.
+
+This remains a host-side development phase. It deliberately does not expose
+the dedicated agent into the VM yet, and it leaves the existing guest-private-
+key ``aivm vm creds`` system unchanged as a legitimate lower-complexity option.
+The next feature can focus solely on the persistent host-to-guest agent channel
+without entangling key issuance or migration semantics.
+
+
+
+A follow-up integration pass moved only the new subsystem's metadata into the
+shared desired-state store as ``[[vms.agent_credentials]]`` while keeping its
+private keys in the owning host user's data directory. This preserves the
+independent lifecycle and the non-exportable-key invariant, but lets every
+authorized machine-store user see that a VM still has outstanding provider
+authority before deletion. Store schema 12 is the first schema carrying this
+sibling collection.

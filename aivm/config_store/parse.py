@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import cast
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..credentials.agent_schema import (
+    VALID_AGENT_CREDENTIAL_STATES,
+    validate_agent_credential_identity,
+)
 from ..credentials.schema import (
     CREDENTIAL_ACCESS_READ,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
@@ -38,6 +42,7 @@ from ..legacy.pre_0_6_0.schema import (
 from .models import (
     DEFAULT_ATTACHMENT_MODE,
     STORE_SCHEMA_VERSION,
+    AgentCredentialEntry,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
@@ -275,6 +280,100 @@ def _credential_from_dict(
     )
 
 
+
+def _agent_credential_from_dict(
+    item: dict[str, object], *, vm_name: str
+) -> AgentCredentialEntry:
+    values = {
+        'id': str(item.get('id', '')).strip(),
+        'principal_id': str(item.get('principal_id', '')).strip(),
+        'kind': str(
+            item.get('kind', CREDENTIAL_KIND_GITHUB_DEPLOY_KEY) or ''
+        ).strip(),
+        'provider_host': str(
+            item.get('provider_host', 'github.com') or ''
+        ).strip(),
+        'owner': str(item.get('owner', '')).strip(),
+        'repository': str(item.get('repository', '')).strip(),
+        'access': str(item.get('access', CREDENTIAL_ACCESS_READ) or '').strip(),
+        'provider_key_id': str(item.get('provider_key_id', '')).strip(),
+        'provider_key_title': str(item.get('provider_key_title', '')).strip(),
+        'key_fingerprint': str(item.get('key_fingerprint', '')).strip(),
+        'state': str(item.get('state', CREDENTIAL_STATE_PENDING) or '').strip(),
+    }
+    # A pending agent grant is deliberately persisted before key generation so
+    # an interrupted add never leaves untracked host-only key material.  The
+    # fingerprint therefore becomes required once the record leaves pending.
+    required = (
+        'id',
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_title',
+        'state',
+    )
+    missing = [name for name in required if not values[name]]
+    if missing:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential is missing required field(s): '
+            + ', '.join(missing)
+        )
+    if values['kind'] not in VALID_CREDENTIAL_KINDS:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential {values["id"]!r} has '
+            f'unsupported kind {values["kind"]!r}'
+        )
+    if values['access'] not in VALID_CREDENTIAL_ACCESS:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential {values["id"]!r} has invalid '
+            f'access {values["access"]!r}'
+        )
+    if values['state'] not in VALID_AGENT_CREDENTIAL_STATES:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential {values["id"]!r} has invalid '
+            f'state {values["state"]!r}'
+        )
+    if values['state'] != CREDENTIAL_STATE_PENDING and not values['key_fingerprint']:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential {values["id"]!r} has no key '
+            'fingerprint outside the pending state'
+        )
+    try:
+        repo = validate_agent_credential_identity(
+            vm_name=vm_name,
+            cred_id=values['id'],
+            provider_host=values['provider_host'],
+            owner=values['owner'],
+            repository=values['repository'],
+            principal_id=values['principal_id'],
+        )
+        provider_key_id = validate_provider_key_id(values['provider_key_id'])
+        provider_key_title = validate_metadata_text(
+            'provider_key_title', values['provider_key_title']
+        )
+        key_fingerprint = validate_key_fingerprint(values['key_fingerprint'])
+    except CredentialValidationError as ex:
+        raise ValueError(
+            f'VM {vm_name!r} agent credential {values["id"]!r} is invalid: '
+            f'{ex}'
+        ) from ex
+    return AgentCredentialEntry(
+        id=values['id'],
+        vm_name=vm_name,
+        principal_id=values['principal_id'],
+        kind=cast(CredentialKind, values['kind']),
+        provider_host=repo.host,
+        owner=repo.owner,
+        repository=repo.name,
+        access=cast(CredentialAccess, values['access']),
+        provider_key_id=provider_key_id,
+        provider_key_title=provider_key_title,
+        key_fingerprint=key_fingerprint,
+        state=cast(CredentialState, values['state']),
+    )
+
 def _principal_from_dict(
     item: dict[str, object], *, vm_name: str
 ) -> PrincipalEntry:
@@ -415,6 +514,35 @@ def parse_store_toml(text: str) -> Store:
             seen_credential_scopes.add(scope)
             reg.credentials.append(cred)
 
+        seen_agent_credential_ids: set[str] = set()
+        seen_agent_credential_scopes: set[tuple[str, str, str, str]] = set()
+        for cred_raw in item.get('agent_credentials', []):
+            if not isinstance(cred_raw, dict):
+                raise ValueError(
+                    f'VM {name!r} agent credential entry must be a table/object'
+                )
+            cred = _agent_credential_from_dict(cred_raw, vm_name=name)
+            if cred.id in seen_agent_credential_ids:
+                raise ValueError(
+                    f'VM {name!r} has duplicate agent credential id '
+                    f'{cred.id!r}'
+                )
+            agent_scope = (
+                cred.principal_id,
+                cred.provider_host.lower(),
+                cred.owner.lower(),
+                cred.repository.lower(),
+            )
+            if agent_scope in seen_agent_credential_scopes:
+                raise ValueError(
+                    f'VM {name!r} has duplicate agent credential scope '
+                    f'{cred.principal_id or "legacy"}:'
+                    f'{cred.provider_host}/{cred.owner}/{cred.repository}'
+                )
+            seen_agent_credential_ids.add(cred.id)
+            seen_agent_credential_scopes.add(agent_scope)
+            reg.agent_credentials.append(cred)
+
         seen_principal_ids: set[str] = set()
         seen_host_users: set[str] = set()
         for principal_raw in item.get('principals', []):
@@ -455,4 +583,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = max(reg.schema_version, 10)
     if any(cred.principal_id for cred in reg.credentials):
         reg.schema_version = max(reg.schema_version, 11)
+    if reg.agent_credentials:
+        reg.schema_version = max(reg.schema_version, 12)
     return reg
