@@ -841,3 +841,21 @@ independent lifecycle and the non-exportable-key invariant, but lets every
 authorized machine-store user see that a VM still has outstanding provider
 authority before deletion. Store schema 12 is the first schema carrying this
 sibling collection.
+
+## 2026-08-19 13:04:36 -0400
+
+Fixed the remaining foreground persistent-attachment failure revealed while
+testing host-agent credentials. The earlier non-destructive session policy
+correctly refused to replace a live mount whose source/access differed from the
+persisted target, but it propagated that deliberate refusal as an exception.
+That preserved the workspace and then aborted `aivm ssh`, which defeats the
+foreground contract.
+
+Low-level guest and host replay still detect genuine live conflicts. Scoped
+foreground replay now converts those conflicts into the existing degraded
+result path: the live mount/bind is left exactly as encountered, the mismatch is
+reported as a warning, and SSH/VS Code session preparation continues. Full
+lifecycle and maintenance replay remain strict because they do not request the
+preserve-live flags. Regression coverage includes the observed guest
+`findmnt source=none` mismatch and the symmetric host-bind conflict.
+

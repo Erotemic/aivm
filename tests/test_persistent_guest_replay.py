@@ -731,7 +731,7 @@ def test_persistent_replay_helper_preserves_conflicting_live_mount_in_foreground
     calls: list[list[object]] = []
     mounts = {
         '/workspace/proj': {
-            'source': '/different/live/source',
+            'source': 'none',
             'options': 'rw',
         }
     }
@@ -755,18 +755,16 @@ def test_persistent_replay_helper_preserves_conflicting_live_mount_in_foreground
     )
     ns['mount_persistent_root'] = lambda: None
 
-    with pytest.raises(
-        ns['LiveMountConflictError'], match='leaves live mounts untouched'
-    ):
-        ns['main'](
-            [
-                '--only-guest-dst',
-                '/workspace/proj',
-                '--preserve-live-mounts',
-            ]
-        )
+    code = ns['main'](
+        [
+            '--only-guest-dst',
+            '/workspace/proj',
+            '--preserve-live-mounts',
+        ]
+    )
 
-    assert mounts['/workspace/proj']['source'] == '/different/live/source'
+    assert code == ns['DEGRADED_EXIT']
+    assert mounts['/workspace/proj']['source'] == 'none'
     assert not any(call and call[0] == 'umount' for call in calls)
 
 def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:

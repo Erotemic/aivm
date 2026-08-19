@@ -1903,6 +1903,65 @@ def test_host_replay_preserves_existing_export_on_source_failure_in_foreground(
     assert code == helper.DEGRADED_EXIT
 
 
+def test_host_replay_reports_live_bind_conflict_as_degraded_in_foreground(
+    tmp_path: Path,
+) -> None:
+    """A preserved live host bind warns without aborting foreground entry."""
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {
+                        'shared_root_token': 'token',
+                        'guest_dst': '/workspace/proj',
+                        'source_dir': '/host/proj',
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
+
+    def conflict(
+        _export_root_fd: int,
+        _record: dict[str, object],
+        **_kwargs: object,
+    ) -> None:
+        raise helper.LiveBindConflictError(
+            'live export points at a different directory; '
+            'foreground session preparation leaves live binds untouched'
+        )
+
+    helper.ensure_record = conflict
+    helper.quarantine_unavailable_token = lambda *_a, **_k: pytest.fail(
+        'foreground live-bind conflict must not quarantine the live export'
+    )
+
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+            '--only-guest-dst',
+            '/workspace/proj',
+            '--preserve-live-binds',
+        ]
+    )
+    assert code == helper.DEGRADED_EXIT
+
+
 def test_host_replay_does_not_swallow_mount_or_access_failure(
     tmp_path: Path,
 ) -> None:

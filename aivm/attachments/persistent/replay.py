@@ -156,8 +156,8 @@ def _reconcile_persistent_attachments_in_guest(
                 if code == PERSISTENT_REPLAY_DEGRADED_EXIT:
                     log.warning(
                         'Guest persistent attachment replay completed in '
-                        'degraded mode for VM {}; unavailable source state '
-                        'was left non-destructively as encountered.',
+                        'degraded mode for VM {}; conflicting or unavailable '
+                        'live state was left non-destructively as encountered.',
                         cfg.vm.name,
                     )
                 elif code != 0:

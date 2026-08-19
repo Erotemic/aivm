@@ -16,9 +16,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   startup pipeline and preserve live persistent mounts on an already-running
   VM. Guest replay compares bind mounts by underlying directory identity rather
   than ``findmnt``'s presentation-oriented ``SOURCE`` string, and foreground
-  replay diagnoses genuine source/access conflicts without unmounting or
-  remounting active workspaces. Real-bind E2E coverage keeps this behavior
-  pinned against the kernel mount semantics that unit fakes can miss.
+  replay reports genuine source/access conflicts as degraded warnings without
+  unmounting or remounting active workspaces, and foreground SSH/VS Code entry
+  continues against the preserved live workspace. Real-bind E2E coverage keeps
+  this behavior pinned against the kernel mount semantics that unit fakes can
+  miss.
 * Foreground ``aivm code``, ``aivm ssh``, and explicit attachment operations
   on an already-running VM now reconcile only the requested persistent
   attachment. Opening another project no longer performs global guest replay,

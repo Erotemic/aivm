@@ -432,7 +432,14 @@ def persistent_replay_python() -> str:
                     ensure_record(
                         record, preserve_live_mounts=preserve_live_mounts
                     )
-                except SourceUnavailableError as ex:
+                except (SourceUnavailableError, LiveMountConflictError) as ex:
+                    # Foreground session preparation is explicitly
+                    # non-destructive. A live mismatch is useful diagnostic
+                    # information, but it must not prevent SSH/VS Code from
+                    # entering an already-running VM whose workspace we just
+                    # promised to leave untouched. Return degraded state so
+                    # the host can warn and continue. Strict lifecycle replay
+                    # never sets preserve_live_mounts and remains convergent.
                     failures.append(str(ex))
             return failures
 
@@ -873,10 +880,19 @@ def persistent_host_replay_python() -> str:
                             record,
                             preserve_live_binds=args.preserve_live_binds,
                         )
-                    except SourceUnavailableError as ex:
-                        if not args.preserve_live_binds:
+                    except (SourceUnavailableError, LiveBindConflictError) as ex:
+                        if (
+                            isinstance(ex, SourceUnavailableError)
+                            and not args.preserve_live_binds
+                        ):
                             quarantine_unavailable_token(export_root_fd, token)
-                        unavailable.append((token, str(record.get("source_dir") or ""), str(ex)))
+                        unavailable.append(
+                            (
+                                token,
+                                str(record.get("source_dir") or ""),
+                                str(ex),
+                            )
+                        )
                         print(
                             f"WARNING: skipping persistent host attachment {token}: {ex}",
                             file=sys.stderr,
