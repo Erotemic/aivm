@@ -806,11 +806,23 @@ a guest, AIVM will not relabel it as non-exportable. Switching a repository
 between the two systems therefore means revoking one grant and creating a new
 grant with fresh key material.
 
-This phase is intentionally host-side only. The provider deploy key and
-dedicated agent lifecycle are real, but AIVM does not yet expose the agent
-socket inside the VM. That guest capability channel is a separate feature so
-the existing ``aivm vm creds`` path remains production-usable while the
-non-exportable transport is developed and tested independently.
+Managed ``aivm ssh`` and VS Code Remote-SSH sessions expose the dedicated
+agent to the selected guest for the life of that SSH connection. AIVM names
+the dedicated socket explicitly when requesting forwarding, so the caller's
+ordinary ``SSH_AUTH_SOCK`` is never forwarded by this feature. Before opening
+the foreground session, AIVM also installs only the public halves of active
+agent credentials under ``~/.local/share/aivm/agent-credentials`` and writes
+repo-specific SSH aliases plus exact Git URL rewrites. ``IdentityFile`` points
+at those public selectors with ``IdentitiesOnly yes``; OpenSSH then asks the
+forwarded agent for the matching private-key operation without copying private
+material into the VM. A preflight ``ssh-add -l`` over the forwarded channel
+verifies that the guest sees exactly the expected fingerprints.
+
+The forwarding channel is intentionally connection-scoped rather than another
+persistent broker. A host reboot or dead agent is repaired lazily by the next
+managed SSH/Remote-SSH entry. Detached ``code --tunnel`` processes do not keep
+a forwarding channel after their bootstrap SSH connection exits; use Remote-SSH
+when the editor session needs host-agent Git credentials.
 
 A VM with any ``agent_creds`` record cannot be deleted until those grants are
 revoked, using the same cross-cutting deletion safety boundary as ordinary

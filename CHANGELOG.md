@@ -63,6 +63,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Wired independent ``agent_creds`` into managed SSH and VS Code Remote-SSH
+  sessions. AIVM now lazily restores the VM/principal-scoped dedicated
+  ``ssh-agent``, forwards that exact socket instead of the caller's ordinary
+  agent, installs only public key selectors in the guest, and writes
+  repository-specific SSH/Git routing so multiple loaded deploy keys remain
+  deterministic. Session preparation preflights the forwarded fingerprints
+  before handing control to the shell/editor; private deploy-key material
+  remains host-only.
 * Added an experimental, independent ``aivm vm agent_creds`` subsystem for
   repository deploy keys whose private halves remain host-only. Agent
   credentials use their own ``agent_credentials`` store collection, separate

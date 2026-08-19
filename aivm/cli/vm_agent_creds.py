@@ -205,8 +205,8 @@ class VMAgentCredsAddCLI(_BaseCommand):
         )
         print('Private key remains host-only.')
         print(
-            'Guest capability transport is intentionally not wired yet; '
-            'this phase validates the independent host-side lifecycle.'
+            'Managed `aivm ssh` / Remote-SSH sessions forward only this '
+            'principal-scoped AIVM agent into the guest.'
         )
         return 0
 

@@ -4,9 +4,10 @@ This subsystem is intentionally separate from the existing guest-key credential
 feature. It owns a distinct desired-state collection and deploy-key material. A key
 created here is host-only: AIVM never installs its private half in a guest.
 
-The current feature is host-side only. It can create/revoke provider deploy
-keys and maintain the dedicated ``ssh-agent`` that will eventually be exposed
-to the guest by a separate capability-transport feature.
+The runtime capability path is connection-scoped. Managed SSH/Remote-SSH
+sessions forward only this dedicated agent into the selected guest, while
+repo-specific public selectors choose the right loaded deploy key. Private
+key material remains host-only throughout.
 """
 
 from __future__ import annotations
@@ -205,6 +206,17 @@ def _inspect_keypair(
             f'recorded={record.key_fingerprint} actual={fingerprint}.'
         )
     return public_text, fingerprint
+
+
+def validated_agent_public_key(
+    record: AgentCredentialEntry, *, manager: CommandManager
+) -> tuple[str, str]:
+    """Return validated public material for guest-side identity selection.
+
+    This intentionally exposes only the public half and its fingerprint.  The
+    private path remains an implementation detail of the host agent manager.
+    """
+    return _inspect_keypair(record, manager=manager)
 
 
 def _ensure_keypair(

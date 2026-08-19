@@ -22,6 +22,10 @@ from ..commands import CommandManager, shell_join
 from ..config import default_host_label
 from ..config_scopes import ResolvedVMContext
 from ..config_store import load_store
+from ..credentials.agent_transport import (
+    AgentForwarding,
+    prepare_agent_forwarding,
+)
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import PreparedSession, cfg_path, load_cfg
@@ -403,6 +407,40 @@ def _print_remote_session_recipe(
     print(f'Folder registered in {session.reg_path}')
 
 
+def _prepare_foreground_agent_forwarding(
+    session: PreparedSession,
+) -> AgentForwarding | None:
+    """Prepare the optional dedicated repository agent for this connection.
+
+    The credential feature remains opt-in: sessions with no active
+    ``agent_credentials`` records perform no agent-related guest work and
+    forward nothing.
+    """
+    if session.ip is None:
+        return None
+    store_path = session.reg_path
+    if store_path is None:
+        raise AIVMError(
+            'Prepared foreground session has no persisted store path for '
+            'host-agent credential forwarding.'
+        )
+    forwarding = prepare_agent_forwarding(
+        session.context,
+        Path(store_path),
+        session.ip,
+        manager=CommandManager.current(),
+    )
+    if forwarding is not None:
+        log.info(
+            'Forwarding dedicated AIVM repository agent into {} '
+            '(credentials={}, socket={})',
+            session.context.effective_cfg.vm.name,
+            forwarding.credential_count,
+            forwarding.socket_path,
+        )
+    return forwarding
+
+
 def _prepare_foreground_session(args: Any) -> PreparedSession:
     """Run the one shared startup pipeline for SSH and editor sessions.
 
@@ -527,12 +565,25 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
+        agent_forwarding = _prepare_foreground_agent_forwarding(session)
 
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=args.yes
+            cfg,
+            dry_run=False,
+            yes=args.yes,
+            forward_agent_socket=(
+                str(agent_forwarding.socket_path) if agent_forwarding else ''
+            ),
         )
 
         if args.tunnel:
+            if agent_forwarding is not None:
+                log.warning(
+                    'Host-agent repository credentials are available only '
+                    'while an AIVM-managed SSH/Remote-SSH connection is '
+                    'forwarding the dedicated agent. Detached `code --tunnel` '
+                    'work does not retain that SSH forwarding channel.'
+                )
             tunnel_name = _remote_tunnel_name(cfg)
             _start_remote_tunnel_session(
                 context, ip, session.share_guest_dst, tunnel_name
@@ -649,8 +700,14 @@ class VMSSHCLI(_BaseCommand):
 
         ip = session.ip
         assert ip is not None
+        agent_forwarding = _prepare_foreground_agent_forwarding(session)
         ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=args.yes
+            cfg,
+            dry_run=False,
+            yes=args.yes,
+            forward_agent_socket=(
+                str(agent_forwarding.socket_path) if agent_forwarding else ''
+            ),
         )
         ident = require_ssh_identity(context.profile.ssh_identity_file)
         remote_cmd = (
@@ -663,6 +720,14 @@ class VMSSHCLI(_BaseCommand):
                 *ssh_base_args(
                     ident,
                     strict_host_key_checking='accept-new',
+                ),
+                *(
+                    [
+                        '-o',
+                        f'ForwardAgent={agent_forwarding.socket_path}',
+                    ]
+                    if agent_forwarding is not None
+                    else []
                 ),
                 context.ssh_target(ip),
                 remote_cmd,

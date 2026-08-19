@@ -229,7 +229,11 @@ def _apply_guest_derived_symlinks(
 
 
 def _upsert_ssh_config_entry(
-    cfg: AgentVMConfig, *, dry_run: bool = False, yes: bool = False
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    forward_agent_socket: str = '',
 ) -> tuple[Path, bool]:
     cfg = cfg.expanded_paths()
     ssh_dir = Path.home() / '.ssh'
@@ -237,7 +241,7 @@ def _upsert_ssh_config_entry(
     block_name = cfg.vm.name
     new_block = (
         f'# >>> aivm:{block_name} >>>\n'
-        f'{mk_ssh_config(cfg).rstrip()}\n'
+        f'{mk_ssh_config(cfg, forward_agent_socket=forward_agent_socket).rstrip()}\n'
         f'# <<< aivm:{block_name} <<<\n'
     )
     if dry_run:

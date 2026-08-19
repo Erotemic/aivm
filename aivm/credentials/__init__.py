@@ -26,6 +26,9 @@ or guard seams, and that list is the thing to check when reviewing the boundary:
   planner can preserve repository identity while assigning principal-scoped
   credential IDs. Planning remains read-only and does not import key/provider
   lifecycle code.
+- ``cli.vm_connect`` imports only :mod:`.agent_transport`, the narrow runtime
+  seam that exposes an explicitly selected dedicated agent during managed
+  SSH/Remote-SSH sessions.
 - ``cli.vm_creds`` and ``cli.vm_agent_creds`` are the feature's own command
   surfaces.
 

@@ -240,19 +240,28 @@ def wait_for_ip(
     )
 
 
-def ssh_config(cfg: AgentVMConfig) -> str:
+def ssh_config(
+    cfg: AgentVMConfig, *, forward_agent_socket: str = ''
+) -> str:
     cfg = cfg.expanded_paths()
     context = guest_transport_from_effective_cfg(cfg)
     ident = context.ssh_identity_file or '~/.ssh/id_ed25519'
     host = cfg.vm.name
     ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
-    return f"""Host {host}
-  HostName {ip}
-  User {context.guest_user}
-  IdentityFile {ident}
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-"""
+    lines = [
+        f'Host {host}',
+        f'  HostName {ip}',
+        f'  User {context.guest_user}',
+        f'  IdentityFile {ident}',
+        '  IdentitiesOnly yes',
+        '  StrictHostKeyChecking accept-new',
+    ]
+    if forward_agent_socket:
+        # Name the dedicated AIVM socket explicitly.  This forwards only the
+        # VM/principal-scoped credential agent rather than inheriting the
+        # caller's ordinary SSH_AUTH_SOCK.
+        lines.append(f'  ForwardAgent {forward_agent_socket}')
+    return '\n'.join(lines) + '\n'
 
 
 def _is_ssh_host_key_mismatch(stderr: str) -> bool:

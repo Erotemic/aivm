@@ -54,6 +54,26 @@ def test_upsert_ssh_config_no_confirm_when_unchanged(
     assert changed2 is False
 
 
+def test_upsert_ssh_config_names_dedicated_forwarded_agent(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('HOME', str(tmp_path))
+    cfg = AgentVMConfig()
+    socket_path = '/tmp/aivm-agent-credentials-1000/scope-test.sock'
+
+    path, changed = _upsert_ssh_config_entry(
+        cfg,
+        dry_run=False,
+        yes=True,
+        forward_agent_socket=socket_path,
+    )
+
+    assert changed is True
+    text = path.read_text(encoding='utf-8')
+    assert f'  ForwardAgent {socket_path}\n' in text
+    assert 'SSH_AUTH_SOCK' not in text
+
+
 def test_plan_omits_default_config_flag(
     monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -859,3 +859,31 @@ lifecycle and maintenance replay remain strict because they do not request the
 preserve-live flags. Regression coverage includes the observed guest
 `findmnt source=none` mismatch and the symmetric host-bind conflict.
 
+## 2026-08-19 13:16:00 -0400
+
+Completed the missing guest capability path for independent host-agent
+credentials. Managed foreground SSH and VS Code Remote-SSH sessions now treat
+the dedicated agent as disposable runtime state: session entry loads the
+current principal's active ``agent_credentials``, lazily starts/repopulates the
+scoped host ``ssh-agent`` after crashes or reboot, and requests OpenSSH agent
+forwarding from that explicit socket path rather than inheriting the user's
+ordinary ``SSH_AUTH_SOCK``.
+
+Forwarding the socket alone is insufficient when one agent carries several
+repo-scoped deploy keys, so the guest receives a separate derived routing
+layer containing only public material. Each active agent credential gets a
+public ``id_ed25519.pub`` selector, an ``aivm-agent-cred-*`` SSH alias with
+``IdentitiesOnly yes``, and exact Git ``insteadOf`` rewrites for its repository.
+OpenSSH can therefore match the selected public key to the private identity in
+the forwarded agent without putting a private deploy key in the guest. Session
+preparation probes ``ssh-add -l -E sha256`` through a short forwarded SSH
+connection and fails closed unless the guest observes exactly the expected
+fingerprint set.
+
+The existing guest-key credential lifecycle is unchanged and remains a
+separate operational choice. The new integration seam is deliberately narrow:
+``cli.vm_connect`` reaches the credential feature only through
+``credentials.agent_transport``. Detached ``code --tunnel`` remains outside
+the guarantee because its bootstrap SSH connection ends while the tunnel
+process continues; standard Remote-SSH keeps the forwarding connection alive.
+

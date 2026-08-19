@@ -37,6 +37,9 @@ _ALLOWED: dict[str, set[str]] = {
     'aivm/vm/create.py': {'aivm.credentials.guards'},
     'aivm/vm/deletion.py': {'aivm.credentials.guards'},
     # Config linting reports on credential blocks found in the store.
+    # Foreground SSH/Remote-SSH is the narrow runtime seam that may expose
+    # the dedicated host-only agent capability to its selected VM principal.
+    'aivm/cli/vm_connect.py': {'aivm.credentials.agent_transport'},
     'aivm/cli/config/lint.py': {
         'aivm.credentials.schema',
         'aivm.credentials.validation',

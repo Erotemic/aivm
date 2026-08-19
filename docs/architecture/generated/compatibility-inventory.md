@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 1165ed996e6b3b5c -->
+<!-- generation schema: 1; input digest: 20fe1067943c3293 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -30,7 +30,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py:12` |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py:12` |
 
-## Canonical `AgentVMConfig` references (245)
+## Canonical `AgentVMConfig` references (254)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -42,10 +42,10 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:42` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:117` |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py:232` |
-| `aivm.attachments.guest` | `aivm/attachments/guest.py:278` |
-| `aivm.attachments.guest` | `aivm/attachments/guest.py:408` |
-| `aivm.attachments.guest` | `aivm/attachments/guest.py:504` |
-| `aivm.attachments.guest` | `aivm/attachments/guest.py:542` |
+| `aivm.attachments.guest` | `aivm/attachments/guest.py:282` |
+| `aivm.attachments.guest` | `aivm/attachments/guest.py:412` |
+| `aivm.attachments.guest` | `aivm/attachments/guest.py:508` |
+| `aivm.attachments.guest` | `aivm/attachments/guest.py:546` |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:35` |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:306` |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py:409` |
@@ -134,6 +134,9 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.config_store.parse` | `aivm/config_store/parse.py:109` |
 | `aivm.config_store.parse` | `aivm/config_store/parse.py:110` |
 | `aivm.config_store.resolve` | `aivm/config_store/resolve.py:224` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:102` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:160` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:230` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:62` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:79` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:101` |
@@ -142,6 +145,12 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:240` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:302` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:335` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:24` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:53` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:81` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:106` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:138` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:182` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:174` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:347` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:504` |
@@ -191,9 +200,9 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:28` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:71` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:80` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:243` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:273` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:286` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:244` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:282` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:295` |
 | `aivm.vm.create` | `aivm/vm/create.py:34` |
 | `aivm.vm.create` | `aivm/vm/create.py:151` |
 | `aivm.vm.create` | `aivm/vm/create.py:190` |
@@ -283,7 +292,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:20` |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py:71` |
 
-## Path-based `StoreScope` reconstruction sites (19)
+## Path-based `StoreScope` reconstruction sites (20)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -302,7 +311,8 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:225` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:236` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:354` |
-| `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:65` |
+| `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:66` |
+| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:40` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:353` |
