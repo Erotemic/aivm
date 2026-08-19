@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import cast
 
+from ..attachment_schema import MIRROR_HOME_AUTO
 from ..config import agent_vm_config_asdict
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
@@ -46,6 +47,11 @@ def _emit_attachment(
     lines.append(f'access = "{_toml_escape(att.access)}"')
     lines.append(f'guest_dst = "{_toml_escape(att.guest_dst)}"')
     lines.append(f'tag = "{_toml_escape(att.tag)}"')
+    # ``auto`` is the compatibility default and is intentionally omitted so
+    # pre-feature attachment records stay byte-shape compatible until a user
+    # chooses an explicit per-attachment override.
+    if att.mirror_home != MIRROR_HOME_AUTO:
+        lines.append(f'mirror_home = "{_toml_escape(att.mirror_home)}"')
     if att.state != 'active':
         lines.append(f'state = "{_toml_escape(att.state)}"')
     if att.source_dev:

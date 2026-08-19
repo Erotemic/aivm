@@ -6,6 +6,10 @@ import tomllib
 from pathlib import Path
 from typing import cast
 
+from ..attachment_schema import (
+    MIRROR_HOME_AUTO,
+    normalize_mirror_home_policy,
+)
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..credentials.agent_schema import (
     VALID_AGENT_CREDENTIAL_STATES,
@@ -186,6 +190,9 @@ def _attachment_from_dict(
         access=str(item.get('access', 'rw') or 'rw'),
         guest_dst=str(item.get('guest_dst', '')).strip(),
         tag=str(item.get('tag', '')).strip(),
+        mirror_home=normalize_mirror_home_policy(
+            item.get('mirror_home', MIRROR_HOME_AUTO)
+        ),
         state=str(item.get('state', 'active') or 'active').strip(),
         source_dev=_nonnegative_int_field(item, 'source_dev'),
         source_ino=_nonnegative_int_field(item, 'source_ino'),
@@ -585,4 +592,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = max(reg.schema_version, 11)
     if reg.agent_credentials:
         reg.schema_version = max(reg.schema_version, 12)
+    if any(att.mirror_home != MIRROR_HOME_AUTO for att in reg.attachments):
+        reg.schema_version = max(reg.schema_version, 13)
     return reg

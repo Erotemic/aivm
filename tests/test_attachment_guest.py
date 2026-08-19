@@ -932,3 +932,54 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     assert any(c['symlink_path'] == str(stale_link) for c in calls)
     # And a drift warning was emitted
     assert any('no longer resolves to canonical' in w for w in warnings)
+
+
+def test_explicit_no_removes_matching_prior_mirror_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicit attachment opt-out converges an old AIVM mirror away."""
+    from aivm.attachments.guest import _ensure_attachment_available_in_guest
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-no-mirror-cleanup'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
+
+    host_src = tmp_path / 'code' / 'foobar'
+    host_src.mkdir(parents=True)
+    guest_dst = str(host_src.expanduser().absolute())
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
+        source_dir=guest_dst,
+        guest_dst=guest_dst,
+        tag='hostcode-foobar-cleanup',
+        mirror_home='no',
+    )
+
+    monkeypatch.setattr(
+        'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
+    )
+    monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: tmp_path)
+    activate_manager(monkeypatch)
+    recorder = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(0, guest_dst + '\n', '')},
+    )
+
+    _ensure_attachment_available_in_guest(
+        cfg,
+        host_src,
+        attachment,
+        '10.0.0.1',
+        yes=True,
+        dry_run=False,
+        ensure_shared_root_host_side=False,
+        mirror_home=False,
+    )
+
+    expected_mirror = '/home/agent/code/foobar'
+    scripts = _ssh_scripts(recorder)
+    assert any(f'readlink -- {expected_mirror}' in script for script in scripts)
+    assert any(f'sudo -n rm -- {expected_mirror}' in script for script in scripts)
+    assert not any('ln -s' in script for script in scripts)

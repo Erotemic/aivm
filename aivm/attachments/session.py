@@ -76,6 +76,7 @@ from .resolve import (
     _normalize_attachment_mode,
     _resolve_attachment,
 )
+from ..attachment_schema import MIRROR_HOME_AUTO, resolve_mirror_home_enabled
 from .shared_root import (
     _ensure_shared_root_host_bind,
     _ensure_shared_root_parent_dir,
@@ -170,6 +171,7 @@ def _record_attachment(
     guest_dst: str,
     tag: str,
     owner_principal_id: str = '',
+    mirror_home: str = MIRROR_HOME_AUTO,
 ) -> Path:
     """Persist one owner-scoped attachment under the store lock."""
     lexical_str = str(host_src.expanduser().absolute())
@@ -203,6 +205,7 @@ def _record_attachment(
             access=access,
             guest_dst=guest_dst,
             tag=tag,
+            mirror_home=mirror_home,
             source_dev=source_dev,
             source_ino=source_ino,
             host_lexical_paths=aliases,
@@ -215,7 +218,13 @@ def _record_attachment(
         reason=(
             f'Persist attachment record for {host_src} on VM {cfg.vm.name} '
             f'(owner={owner or "legacy"}, mode={mode}, access={access}, '
-            f'guest_dst={guest_dst}).'
+            f'guest_dst={guest_dst}'
+            + (
+                f', mirror_home={mirror_home}'
+                if str(mirror_home) != MIRROR_HOME_AUTO
+                else ''
+            )
+            + ').'
         ),
     )
     return cfg_path
@@ -299,7 +308,8 @@ def _restore_saved_vm_attachments(
     ip: str,
     primary_attachment: ResolvedAttachment | None,
     yes: bool,
-    mirror_home: bool = False,
+    user_mirror_home_policy: str = MIRROR_HOME_AUTO,
+    mirror_home: bool | None = None,
     owner_principal_id: str = '',
 ) -> None:
     """Best-effort restore saved non-primary attachments after VM startup.
@@ -385,6 +395,15 @@ def _restore_saved_vm_attachments(
 
     restored = 0
     for att in secondary_attachments:
+        effective_mirror_home = (
+            bool(mirror_home)
+            if mirror_home is not None
+            else resolve_mirror_home_enabled(
+                att.mirror_home,
+                user_mirror_home_policy,
+                cfg.vm.mirror_shared_home_folders,
+            )
+        )
         if att.mode == ATTACHMENT_MODE_PERSISTENT:
             continue
         if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
@@ -401,7 +420,7 @@ def _restore_saved_vm_attachments(
                     dry_run=False,
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
-                    mirror_home=mirror_home,
+                    mirror_home=effective_mirror_home,
                     host_lexical_paths=_lx,
                 )
                 _record_attachment(
@@ -413,6 +432,7 @@ def _restore_saved_vm_attachments(
                     guest_dst=aligned.guest_dst,
                     tag=aligned.tag,
                     owner_principal_id=aligned.owner_principal_id,
+                    mirror_home=aligned.mirror_home,
                 )
                 restored += 1
             except CommandControlError:
@@ -496,7 +516,7 @@ def _restore_saved_vm_attachments(
                 ip,
                 _restore_src,
                 aligned,
-                mirror_home=mirror_home,
+                mirror_home=effective_mirror_home,
             )
             _record_attachment(
                 cfg,
@@ -507,6 +527,7 @@ def _restore_saved_vm_attachments(
                 guest_dst=aligned.guest_dst,
                 tag=aligned.tag,
                 owner_principal_id=aligned.owner_principal_id,
+                mirror_home=aligned.mirror_home,
             )
             restored += 1
         except CommandControlError:
@@ -1038,6 +1059,7 @@ def _prepare_attached_session(
         guest_dst=attachment.guest_dst,
         tag=attachment.tag,
         owner_principal_id=attachment.owner_principal_id,
+        mirror_home=attachment.mirror_home,
     )
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)
@@ -1050,7 +1072,11 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
+    mirror_home = resolve_mirror_home_enabled(
+        attachment.mirror_home,
+        context.profile.mirror_shared_home_folders,
+        cfg.vm.mirror_shared_home_folders,
+    )
     vm_was_running = bool(getattr(reconcile, 'vm_was_running', False))
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
@@ -1096,7 +1122,7 @@ def _prepare_attached_session(
                 ip=ip,
                 primary_attachment=attachment,
                 yes=bool(yes),
-                mirror_home=mirror_home,
+                user_mirror_home_policy=context.profile.mirror_shared_home_folders,
                 owner_principal_id=owner_principal_id,
             )
     else:
@@ -1124,7 +1150,7 @@ def _prepare_attached_session(
                 ip=ip,
                 primary_attachment=None,
                 yes=bool(yes),
-                mirror_home=mirror_home,
+                user_mirror_home_policy=context.profile.mirror_shared_home_folders,
                 owner_principal_id=owner_principal_id,
             )
     return PreparedSession(

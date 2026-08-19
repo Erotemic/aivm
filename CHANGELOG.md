@@ -63,6 +63,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Added layered mirror-home attachment policy. ``aivm attach`` now accepts
+  ``--mirror_home auto|yes|no`` and persists explicit per-attachment overrides.
+  ``auto`` resolves through the invoking user's private profile preference and
+  then the VM's existing ``mirror_shared_home_folders`` policy. Existing
+  attachment records implicitly remain ``auto`` and require no rewrite; only
+  explicit attachment overrides require the new store schema field. Explicit
+  per-attachment opt-out also safely removes a matching AIVM-derived mirror
+  symlink instead of leaving stale presentation state behind.
 * Wired independent ``agent_creds`` into managed SSH and VS Code Remote-SSH
   sessions. AIVM now lazily restores the VM/principal-scoped dedicated
   ``ssh-agent``, forwards that exact socket instead of the caller's ordinary

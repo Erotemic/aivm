@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+from ..attachment_schema import (
+    MIRROR_HOME_AUTO,
+    normalize_mirror_home_policy,
+)
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
@@ -108,6 +112,7 @@ def upsert_attachment(
     access: str = 'rw',
     guest_dst: str = '',
     tag: str = '',
+    mirror_home: str = MIRROR_HOME_AUTO,
     state: str = 'active',
     source_dev: int = 0,
     source_ino: int = 0,
@@ -142,6 +147,7 @@ def upsert_attachment(
             paths.append(legacy)
     norm = _norm_dir(host_path)
     owner_principal_id = str(owner_principal_id or '').strip()
+    mirror_home = normalize_mirror_home_policy(mirror_home)
     existing = [
         a
         for a in reg.attachments
@@ -157,6 +163,7 @@ def upsert_attachment(
         access=access,
         guest_dst=guest_dst,
         tag=tag,
+        mirror_home=mirror_home,
         state=state,
         source_dev=int(source_dev),
         source_ino=int(source_ino),
@@ -169,6 +176,8 @@ def upsert_attachment(
         reg.attachments.append(rec)
     if owner_principal_id:
         reg.schema_version = max(reg.schema_version, 10)
+    if mirror_home != MIRROR_HOME_AUTO:
+        reg.schema_version = max(reg.schema_version, 13)
 
 
 def remove_attachment(

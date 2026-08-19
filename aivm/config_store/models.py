@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..attachment_schema import MIRROR_HOME_AUTO
 from ..config import (
     AgentVMConfig,
     BehaviorConfig,
@@ -54,6 +55,10 @@ class AttachmentEntry:
     access: str = 'rw'
     guest_dst: str = ''
     tag: str = ''
+    # Per-attachment presentation policy. ``auto`` deliberately inherits the
+    # invoking user's preference and then the VM default, so old records that
+    # predate this field retain their historical behavior without migration.
+    mirror_home: str = MIRROR_HOME_AUTO
     state: str = 'active'
     source_dev: int = 0
     source_ino: int = 0
@@ -123,7 +128,7 @@ class PrincipalEntry:
 # store may be edited by several aivm versions; parse refuses machine
 # documents newer than this so an older build cannot silently re-render the
 # store and drop fields a newer principal wrote.
-STORE_SCHEMA_VERSION = 12
+STORE_SCHEMA_VERSION = 13
 
 
 @compatibility_surface

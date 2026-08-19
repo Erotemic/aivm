@@ -49,6 +49,7 @@ from ..attachments.resolve import (
     _resolve_attachment,
     logical_absolute_path,
 )
+from ..attachment_schema import resolve_mirror_home_enabled
 from ..attachments.safety import (
     AttachmentSafetyReport,
     attachment_safety_preflight,
@@ -115,6 +116,7 @@ class VMAttachRequest:
     guest_dst: str = ''
     mode: str = ''
     access: str = ''
+    mirror_home: str = ''
     dry_run: bool = False
     yes: bool = False
     admin_override: bool = False
@@ -264,7 +266,7 @@ def _ensure_attachment_in_vm_definition(
 
 
 def _reconcile_attachment_in_running_guest(
-    cfg: AgentVMConfig,
+    context: ResolvedVMContext,
     cfg_path: Path,
     attachment: ResolvedAttachment,
     host_src: Path,
@@ -272,6 +274,7 @@ def _reconcile_attachment_in_running_guest(
     yes: bool,
 ) -> None:
     """Reconcile a newly recorded attachment inside the running guest."""
+    cfg = context.effective_cfg
     if maybe_offer_create_ssh_identity(
         cfg,
         yes=yes,
@@ -310,6 +313,11 @@ def _reconcile_attachment_in_running_guest(
         owner_principal_id=(attachment.owner_principal_id or None),
     )
     aliases = list(saved.host_lexical_paths) if saved else []
+    mirror_home = resolve_mirror_home_enabled(
+        attachment.mirror_home,
+        context.profile.mirror_shared_home_folders,
+        cfg.vm.mirror_shared_home_folders,
+    )
     _ensure_attachment_available_in_guest(
         cfg,
         host_src,
@@ -321,7 +329,7 @@ def _reconcile_attachment_in_running_guest(
             attachment.mode
             in {ATTACHMENT_MODE_SHARED_ROOT, ATTACHMENT_MODE_PERSISTENT}
         ),
-        mirror_home=bool(cfg.vm.mirror_shared_home_folders),
+        mirror_home=mirror_home,
         host_lexical_paths=aliases,
     )
     if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
@@ -436,6 +444,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         request.guest_dst,
         request.mode,
         request.access,
+        request.mirror_home,
         owner_principal_id=owner_principal_id,
         administrative_override=bool(request.admin_override),
         administrative_owner_principal_id=request.owner_principal,
@@ -462,7 +471,9 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     )
     if request.dry_run:
         print(
-            f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at {attachment.guest_dst} ({attachment.mode} mode, access={attachment.access})'
+            f'DRYRUN: would attach {host_src} to VM {cfg.vm.name} at '
+            f'{attachment.guest_dst} ({attachment.mode} mode, '
+            f'access={attachment.access}, mirror_home={attachment.mirror_home})'
         )
         return 0
     if not ok:
@@ -494,6 +505,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             guest_dst=attachment.guest_dst,
             tag=attachment.tag,
             owner_principal_id=attachment.owner_principal_id,
+            mirror_home=attachment.mirror_home,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _sync_persistent_attachment_manifest_on_host(
@@ -513,7 +525,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 refresh_cloud_init_seed_for_next_boot(cfg, dry_run=False)
     if vm_running:
         _reconcile_attachment_in_running_guest(
-            cfg, cfg_path, attachment, host_src, yes=bool(request.yes)
+            context, cfg_path, attachment, host_src, yes=bool(request.yes)
         )
     _print_attach_result(
         cfg,
@@ -1100,6 +1112,15 @@ class VMAttachCLI(_BaseCommand):
             'Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
         ),
     )
+    mirror_home: Literal['', 'auto', 'yes', 'no'] = kwconf.Value(
+        '',
+        help=(
+            'Mirror this attachment under the guest user home: auto, yes, '
+            'or no. auto uses the user profile preference, then the VM '
+            'policy. Omitted preserves an existing attachment policy and '
+            'defaults new attachments to auto.'
+        ),
+    )
     dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
     admin_override: bool = kwconf.Flag(
         False,
@@ -1120,12 +1141,13 @@ class VMAttachCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         log.trace(
-            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} dry_run={} yes={}',
+            'VMAttachCLI.main host_src={} vm={} guest_dst={} mode={} access={} mirror_home={} dry_run={} yes={}',
             args.host_src,
             args.vm,
             args.guest_dst,
             args.mode,
             args.access,
+            args.mirror_home,
             bool(args.dry_run),
             bool(args.yes),
         )
@@ -1137,6 +1159,7 @@ class VMAttachCLI(_BaseCommand):
                 guest_dst=args.guest_dst,
                 mode=args.mode,
                 access=args.access,
+                mirror_home=args.mirror_home,
                 dry_run=bool(args.dry_run),
                 yes=bool(args.yes),
                 admin_override=bool(args.admin_override),

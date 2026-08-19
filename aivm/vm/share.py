@@ -21,6 +21,7 @@ from loguru import logger
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
+from ..attachment_schema import MIRROR_HOME_AUTO
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
@@ -95,6 +96,9 @@ class ResolvedAttachment:
     guest_dst: str = ''
     tag: str = ''
     owner_principal_id: str = ''
+    # Guest presentation policy carried with the resolved attachment.  Kept as
+    # a string here so the VM/share layer does not own policy resolution.
+    mirror_home: str = MIRROR_HOME_AUTO
 
 
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:

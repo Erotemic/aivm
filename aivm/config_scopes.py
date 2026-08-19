@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from .attachment_schema import MIRROR_HOME_AUTO
 from .config import (
     AgentVMConfig,
     BehaviorConfig,
@@ -74,6 +75,7 @@ class UserProfile:
     ssh_identity_file: str
     ssh_pubkey_path: str
     state_dir: str
+    mirror_shared_home_folders: str = MIRROR_HOME_AUTO
 
 
 @dataclass(frozen=True)
@@ -177,6 +179,7 @@ def resolve_persisted_vm_context(
         ssh_identity_file=profile_store.ssh_identity_file,
         ssh_pubkey_path=profile_store.ssh_pubkey_path,
         state_dir=profile_store.state_dir,
+        mirror_shared_home_folders=profile_store.mirror_shared_home_folders,
     )
     return ResolvedVMContext(
         machine=machine_config_from_effective(cfg),

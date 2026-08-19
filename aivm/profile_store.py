@@ -16,10 +16,14 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .attachment_schema import (
+    MIRROR_HOME_AUTO,
+    normalize_mirror_home_policy,
+)
 from .config import BehaviorConfig
 from .user_paths import user_app_dir
 
-PROFILE_SCHEMA_VERSION = 1
+PROFILE_SCHEMA_VERSION = 2
 PROFILE_FILE_MODE = 0o600
 PROFILE_DIRECTORY_MODE = 0o700
 
@@ -34,6 +38,9 @@ class UserProfileStore:
     ssh_identity_file: str = ''
     ssh_pubkey_path: str = ''
     state_dir: str = '~/.cache/aivm'
+    # Preferred default for attachments whose mirror_home policy is ``auto``.
+    # ``auto`` here defers once more to the selected VM's policy.
+    mirror_shared_home_folders: str = MIRROR_HOME_AUTO
     # Used only while creating a VM from global defaults. Once the VM exists,
     # its guest login is authoritative in the persisted principal record.
     default_guest_user: str = 'agent'
@@ -64,6 +71,8 @@ def render_user_profile(profile: UserProfileStore) -> str:
         f'ssh_pubkey_path = "{_toml_escape(profile.ssh_pubkey_path)}"',
         f'state_dir = "{_toml_escape(profile.state_dir)}"',
         f'default_guest_user = "{_toml_escape(profile.default_guest_user)}"',
+        'mirror_shared_home_folders = '
+        f'"{_toml_escape(normalize_mirror_home_policy(profile.mirror_shared_home_folders))}"',
         '',
         '[behavior]',
         f'yes_sudo = {str(profile.behavior.yes_sudo).lower()}',
@@ -95,6 +104,9 @@ def parse_user_profile(text: str) -> UserProfileStore:
     profile.default_guest_user = str(
         raw.get('default_guest_user', 'agent') or 'agent'
     ).strip()
+    profile.mirror_shared_home_folders = normalize_mirror_home_policy(
+        raw.get('mirror_shared_home_folders', MIRROR_HOME_AUTO)
+    )
     behavior = raw.get('behavior', {})
     if isinstance(behavior, dict):
         for key, value in behavior.items():
@@ -128,6 +140,12 @@ def save_user_profile(
     profile: UserProfileStore, path: Path | None = None
 ) -> Path:
     """Atomically save one private profile with mode ``0600``."""
+    # Once this build writes the profile, advertise the newest schema it may
+    # contain so older builds fail closed instead of silently dropping newer
+    # caller-owned preferences on their next save.
+    profile.schema_version = max(
+        int(profile.schema_version), PROFILE_SCHEMA_VERSION
+    )
     target = (path or profile_store_path()).expanduser().resolve()
     target.parent.mkdir(
         parents=True,
@@ -168,6 +186,7 @@ def profile_debug_json(profile: UserProfileStore) -> str:
         'ssh_pubkey_path': profile.ssh_pubkey_path,
         'state_dir': profile.state_dir,
         'default_guest_user': profile.default_guest_user,
+        'mirror_shared_home_folders': profile.mirror_shared_home_folders,
         'behavior': {
             key: getattr(profile.behavior, key)
             for key in profile.behavior.__dataclass_fields__

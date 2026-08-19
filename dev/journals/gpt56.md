@@ -887,3 +887,11 @@ separate operational choice. The new integration seam is deliberately narrow:
 the guarantee because its bootstrap SSH connection ends while the tunnel
 process continues; standard Remote-SSH keeps the forwarding connection alive.
 
+
+## 2026-08-19 14:53:00 -0400
+
+Added layered mirror-home policy without turning it into an attachment migration. The attachment record now has a tri-state `mirror_home` policy (`auto`, `yes`, `no`), but `auto` is intentionally omitted from serialized attachment records so every existing record already has the correct meaning and retains its previous behavior. Explicit overrides are durable desired state and raise the machine-store schema to 13 so older writers fail closed instead of silently discarding the choice.
+
+The caller-owned profile now has its own tri-state `mirror_shared_home_folders` preference. Attachment `auto` resolves first through that private user preference and then through the VM's existing boolean policy. This keeps machine policy and user preference separate while allowing one attachment to opt in or out without redefining either broader default. Session restore and foreground preparation carry the saved attachment policy forward so ordinary `ssh`/`code` reconciliation cannot accidentally erase a per-attachment override.
+
+Explicit per-attachment opt-out also converges the guest presentation state: when `mirror_home=no`, AIVM probes the derived mirror path read-only and removes it only if it is still a symlink to that attachment's canonical guest destination. The ordinary inherited `auto` false path does not perform this cleanup probe, so the common default does not acquire another SSH round trip.

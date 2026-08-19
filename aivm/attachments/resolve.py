@@ -9,6 +9,10 @@ from loguru import logger as log
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
+from ..attachment_schema import (
+    MIRROR_HOME_AUTO,
+    normalize_mirror_home_policy,
+)
 from ..config import AgentVMConfig
 from ..config_store import (
     AttachmentEntry,
@@ -268,6 +272,7 @@ def _resolve_attachment(
     guest_dst_opt: str,
     mode_opt: str = '',
     access_opt: str = '',
+    mirror_home_opt: str = '',
     *,
     owner_principal_id: str = '',
     administrative_override: bool = False,
@@ -278,6 +283,9 @@ def _resolve_attachment(
     tag = _ensure_share_tag_len('', host_src, set())
     mode = _normalize_attachment_mode(mode_opt)
     access = _normalize_attachment_access(access_opt)
+    mirror_home = normalize_mirror_home_policy(
+        mirror_home_opt if mirror_home_opt else MIRROR_HOME_AUTO
+    )
     reg = load_store(cfg_path)
     current_owner = str(owner_principal_id or '').strip()
     requested_owner = str(administrative_owner_principal_id or '').strip()
@@ -349,6 +357,7 @@ def _resolve_attachment(
     if att is not None:
         saved_mode = _normalize_attachment_mode(att.mode)
         saved_access = _normalize_attachment_access(att.access)
+        saved_mirror_home = normalize_mirror_home_policy(att.mirror_home)
         if mode_opt and mode != saved_mode:
             raise AIVMError(
                 'Attachment mode mismatch for existing folder attachment.\n'
@@ -377,6 +386,8 @@ def _resolve_attachment(
             mode = saved_mode
         if not access_opt:
             access = saved_access
+        if not mirror_home_opt:
+            mirror_home = saved_mirror_home
         if not guest_dst_opt and att.guest_dst:
             guest_dst = att.guest_dst
         if att.tag:
@@ -414,4 +425,5 @@ def _resolve_attachment(
         guest_dst=guest_dst,
         tag=tag,
         owner_principal_id=selected_owner,
+        mirror_home=mirror_home,
     )

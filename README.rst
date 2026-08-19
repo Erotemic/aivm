@@ -299,6 +299,7 @@ Folder attachment
    aivm detach .
    aivm vm attach --vm aivm-2404-$HOSTNAME --host_src .
    aivm attach . --mode git
+   aivm attach ~/data --mirror_home yes
 
 Attachment modes:
 
@@ -334,6 +335,24 @@ the running workspace untouched. Full replacement/recovery remains an explicit
 attachment, maintenance, or VM lifecycle operation. After guest startup, AIVM
 may restore the broader saved attachment set because there is no pre-existing
 live session to disrupt.
+
+Mirror-home presentation is a per-attachment policy with ``auto``, ``yes``,
+and ``no`` values. New attachments default to ``auto``. An explicit
+``--mirror_home yes`` or ``--mirror_home no`` is persisted with that attachment;
+``--mirror_home auto`` returns it to inherited behavior. When an attachment is
+``auto``, the invoking user's private profile preference wins when set, then the
+VM's ``mirror_shared_home_folders`` boolean is used. The user preference is also
+tri-state and defaults to ``auto`` (defer to the VM). Edit it with:
+
+.. code-block:: bash
+
+   aivm config edit profile
+
+and set, for example, ``mirror_shared_home_folders = "yes"``. Existing
+attachment records have no mirror-home field and therefore already mean
+``auto``; they do not need to be rewritten for this policy model. An explicit
+per-attachment ``no`` also removes a prior AIVM-derived mirror symlink when it
+still points at that attachment, while preserving unrelated guest paths.
 
 ``aivm code --tunnel`` keeps those shared foreground checks identical and adds
 only tunnel-specific preparation afterward. The flag itself is a one-shot opt-in

@@ -11,6 +11,7 @@ from loguru import logger
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
+from ..attachment_schema import MIRROR_HOME_NO
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
@@ -113,6 +114,103 @@ def _ensure_guest_symlink(
         log.warning('{}', stderr.replace('aivm-symlink-warn: ', ''))
 
 
+def _remove_guest_symlink_if_target(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    symlink_path: str,
+    target_path: str,
+) -> None:
+    """Remove one AIVM-derived guest symlink only when it still matches.
+
+    A read-only probe keeps the common already-absent case free of mutation
+    approval.  The removal script rechecks the target immediately before
+    unlinking so a changed/user-owned path is preserved.
+    """
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
+    link_q = shlex.quote(symlink_path)
+    target_q = shlex.quote(target_path)
+    mgr = CommandManager.current()
+    base = [
+        'ssh',
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+        ),
+        context.ssh_target(ip),
+    ]
+    probe_script = f'if [ -L {link_q} ]; then readlink -- {link_q}; fi'
+    with mgr.intent(
+        f'Inspect mirror-home symlink {symlink_path}',
+        why='Remove only an AIVM-derived mirror that still points at this attachment.',
+        role='read',
+    ):
+        probe = mgr.run(
+            [*base, probe_script],
+            sudo=False,
+            check=False,
+            capture=True,
+        )
+    if probe.code != 0 or (probe.stdout or '').strip() != target_path:
+        return
+
+    remove_script = (
+        f'if [ -L {link_q} ] && [ "$(readlink -- {link_q})" = {target_q} ]; '
+        f'then sudo -n rm -- {link_q}; fi'
+    )
+    with mgr.intent(
+        f'Remove disabled mirror-home symlink {symlink_path}',
+        why='Converge an explicit per-attachment mirror_home=no policy without touching unrelated guest paths.',
+        role='modify',
+    ):
+        result = mgr.run(
+            [*base, remove_script],
+            sudo=False,
+            check=False,
+            capture=True,
+        )
+    if result.code != 0:
+        log.warning(
+            'Guest mirror-home symlink cleanup failed for {} -> {}: {}',
+            symlink_path,
+            target_path,
+            (result.stderr or result.stdout or '').strip(),
+        )
+
+
+def _mirror_home_symlink_paths(
+    cfg: AgentVMConfig,
+    host_src: Path,
+    attachment: ResolvedAttachment,
+) -> list[str]:
+    """Return the unique mirror-home paths derived for one attachment."""
+    guest_dst = attachment.guest_dst
+    is_default_dst = guest_dst == _default_primary_guest_dst(host_src)
+    if not is_default_dst:
+        return []
+
+    paths: list[str] = []
+    lexical_mirror = _compute_mirror_home_symlink(
+        cfg, host_src, guest_dst, is_default_dst=True
+    )
+    if lexical_mirror is not None:
+        paths.append(lexical_mirror)
+
+    current_lexical = _host_symlink_lexical_path(host_src)
+    if current_lexical is not None:
+        try:
+            resolved_src = host_src.resolve()
+        except OSError:
+            return paths
+        resolved_mirror = _compute_mirror_home_symlink(
+            cfg, resolved_src, guest_dst, is_default_dst=True
+        )
+        if resolved_mirror is not None and resolved_mirror not in paths:
+            paths.append(resolved_mirror)
+    return paths
+
+
 def _apply_guest_derived_symlinks(
     cfg: AgentVMConfig,
     ip: str,
@@ -193,39 +291,29 @@ def _apply_guest_derived_symlinks(
             target_path=guest_dst,
         )
 
+    mirror_paths = _mirror_home_symlink_paths(cfg, host_src, attachment)
     if not mirror_home:
+        # Explicit per-attachment opt-out owns cleanup of the derived links it
+        # may have created while previously enabled. Inherited ``auto`` false
+        # remains a no-op so the default path does not add SSH round trips.
+        if attachment.mirror_home == MIRROR_HOME_NO:
+            for mirror_path in mirror_paths:
+                _remove_guest_symlink_if_target(
+                    cfg,
+                    ip,
+                    symlink_path=mirror_path,
+                    target_path=guest_dst,
+                )
         return
 
-    # 2. Mirror-home for the lexical host path.
-    is_default_dst = guest_dst == _default_primary_guest_dst(host_src)
-    mirror_path = _compute_mirror_home_symlink(
-        cfg, host_src, guest_dst, is_default_dst=is_default_dst
-    )
-    if mirror_path is not None:
+    # 2/3. Mirror-home for the lexical and, when distinct, resolved host path.
+    for mirror_path in mirror_paths:
         _ensure_guest_symlink(
             cfg,
             ip,
             symlink_path=mirror_path,
             target_path=guest_dst,
         )
-
-    # 3. Mirror-home for the resolved host path (only when host_src is a symlink
-    #    and the attachment did not use an explicit custom guest_dst).
-    if current_lexical is not None and is_default_dst:
-        try:
-            resolved_src = host_src.resolve()
-        except OSError:
-            return
-        resolved_mirror = _compute_mirror_home_symlink(
-            cfg, resolved_src, guest_dst, is_default_dst=True
-        )
-        if resolved_mirror is not None and resolved_mirror != mirror_path:
-            _ensure_guest_symlink(
-                cfg,
-                ip,
-                symlink_path=resolved_mirror,
-                target_path=guest_dst,
-            )
 
 
 def _upsert_ssh_config_entry(
