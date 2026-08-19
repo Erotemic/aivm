@@ -345,13 +345,32 @@ def _active_records(
 
 
 def _pid_is_owned_ssh_agent(pid: int) -> bool:
+    """Recognize a same-user ssh-agent without inspecting its key memory.
+
+    OpenSSH deliberately makes ssh-agent non-dumpable.  Linux may therefore
+    make /proc/<pid> appear root-owned and deny readlink(/proc/<pid>/exe) even
+    though the process still runs entirely as the invoking user.  Read the
+    process credentials and command name from /proc/<pid>/status instead.
+    """
     proc = Path('/proc') / str(pid)
     try:
-        info = proc.stat()
-        exe = (proc / 'exe').resolve(strict=True)
-    except (FileNotFoundError, PermissionError, OSError, RuntimeError):
+        status = (proc / 'status').read_text(encoding='utf-8')
+    except (FileNotFoundError, PermissionError, OSError, UnicodeError):
         return False
-    return info.st_uid == os.getuid() and exe.name == 'ssh-agent'
+    name = ''
+    uids: tuple[int, ...] = ()
+    for line in status.splitlines():
+        if line.startswith('Name:'):
+            name = line.partition(':')[2].strip()
+        elif line.startswith('Uid:'):
+            raw = line.partition(':')[2].split()
+            try:
+                uids = tuple(int(value) for value in raw[:4])
+            except ValueError:
+                return False
+    return name == 'ssh-agent' and len(uids) == 4 and all(
+        value == os.getuid() for value in uids
+    )
 
 
 def _require_safe_socket(path: Path, *, allow_missing: bool) -> None:

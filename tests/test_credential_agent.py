@@ -207,6 +207,45 @@ def _grant(
     )
 
 
+def test_pid_check_accepts_nondumpable_same_user_ssh_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Linux may make /proc/<pid> appear root-owned and deny /proc/<pid>/exe
+    # for OpenSSH's intentionally non-dumpable agent.  Process UIDs in status
+    # still identify the actual user that owns the agent.
+    status = "Name:\tssh-agent\nUid:\t1000\t1000\t1000\t1000\n"
+    original_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == Path('/proc/4242/status'):
+            return status
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', fake_read_text)
+    monkeypatch.setattr(agent.os, 'getuid', lambda: 1000)
+    assert agent._pid_is_owned_ssh_agent(4242)
+
+
+def test_pid_check_rejects_wrong_process_or_mixed_uids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_read_text = Path.read_text
+    statuses = {
+        4242: "Name:\tpython\nUid:\t1000\t1000\t1000\t1000\n",
+        4243: "Name:\tssh-agent\nUid:\t1000\t0\t0\t1000\n",
+    }
+
+    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self.parent.parent == Path('/proc') and self.name == 'status':
+            return statuses[int(self.parent.name)]
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', fake_read_text)
+    monkeypatch.setattr(agent.os, 'getuid', lambda: 1000)
+    assert not agent._pid_is_owned_ssh_agent(4242)
+    assert not agent._pid_is_owned_ssh_agent(4243)
+
+
 def test_agent_credential_ids_are_disjoint_from_guest_key_ids() -> None:
     repo = GitRepository('github.com', 'Kitware', 'alpha')
     agent_id = agent.agent_credential_id('vm-a', repo.canonical, 'principal-a')
@@ -298,6 +337,33 @@ def test_doctor_fix_repairs_only_agent_runtime(
     )
     assert after.healthy
     assert after.agent.loaded_fingerprints == (record.key_fingerprint,)
+
+
+def test_add_retry_reuses_active_provider_grant_after_agent_loss(
+    isolated_agent: tuple[_FakeManager, dict[str, list[ProviderDeployKey]], Store],
+) -> None:
+    manager, remotes, store = isolated_agent
+    record = _grant(manager, store)
+    repo_key = agent.agent_repository(record).canonical
+    assert len(remotes[repo_key]) == 1
+
+    status = agent.inspect_agent(
+        record.vm_name, record.principal_id, manager=manager
+    )
+    manager.drop_agent(str(status.socket_path))
+    try:
+        agent._pid_path(record.vm_name, record.principal_id).unlink()
+    except FileNotFoundError:
+        pass
+
+    retried = _grant(manager, store)
+    assert retried == record
+    assert len(remotes[repo_key]) == 1
+    repaired = agent.inspect_agent(
+        record.vm_name, record.principal_id, manager=manager
+    )
+    assert repaired.runtime_state == 'running'
+    assert repaired.loaded_fingerprints == (record.key_fingerprint,)
 
 
 def test_add_does_not_resurrect_revocation_pending_grant(

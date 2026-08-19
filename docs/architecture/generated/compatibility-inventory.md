@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 732da84f5d6b9d47 -->
+<!-- generation schema: 1; input digest: 43073b000a62e41c -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
