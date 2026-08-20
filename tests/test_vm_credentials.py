@@ -1547,7 +1547,7 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
         lambda *a, **k: (_ for _ in ()).throw(AIVMError('VM unavailable')),
     )
 
-    with pytest.raises(AIVMError, match='VM unavailable'):
+    with pytest.raises(AIVMError) as exc_info:
         revoke_repository_credential(
             cfg,
             store,
@@ -1556,6 +1556,11 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
             manager=CommandManager(yes=True),
         )
 
+    message = str(exc_info.value)
+    assert f'Provider access for credential {entry.id} was revoked' in message
+    assert 'VM unavailable' in message
+    assert 'remains recorded as revocation-pending' in message
+    assert f'`aivm vm creds revoke {entry.id}`' in message
     assert events == ['provider-delete']
     [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
     assert pending.state == 'revocation-pending'

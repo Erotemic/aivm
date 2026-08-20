@@ -579,6 +579,20 @@ def inspect_credential(
     }
 
 
+def _revocation_cleanup_message(
+    entry: CredentialEntry, error: AIVMError
+) -> str:
+    """Explain a safe partial revoke without obscuring the root cause."""
+    return (
+        f'Provider access for credential {entry.id} was revoked, but AIVM '
+        f'could not finish local cleanup: {error}\n'
+        f'The credential remains recorded as {CREDENTIAL_STATE_REVOCATION_PENDING} '
+        'and the revoked deploy key no longer grants repository access. '
+        'Restore VM/local availability as needed, then rerun '
+        f'`aivm vm creds revoke {entry.id}`.'
+    )
+
+
 def revoke_repository_credential(
     cfg: AgentVMConfig,
     store: Store,
@@ -640,40 +654,47 @@ def revoke_repository_credential(
         ),
     )
 
-    ip = _resolve_ip_for_ssh_ops(
-        cfg,
-        yes=manager.yes,
-        purpose='Remove the revoked repository credential from the VM.',
-    )
-    remaining = [
-        item
-        for item in find_credentials_for_vm(
+    # Provider authority is gone and revocation-pending is durable. Everything
+    # below is retryable cleanup, so expected failures should say that plainly.
+    try:
+        ip = _resolve_ip_for_ssh_ops(
+            cfg,
+            yes=manager.yes,
+            purpose='Remove the revoked repository credential from the VM.',
+        )
+        remaining = [
+            item
+            for item in find_credentials_for_vm(
+                store,
+                cfg.vm.name,
+                principal_id=entry.principal_id,
+            )
+            if item.id != entry.id and credential_is_guest_usable(item)
+        ]
+        reconcile_guest_credentials(
+            cfg,
+            ip,
+            credentials=remaining,
+            private_key=None,
+            remove_credential_id=entry.id,
+            manager=manager,
+        )
+        keys.remove_host_key(entry.vm_name, entry.id)
+        remove_credential(
             store,
-            cfg.vm.name,
+            vm_name=entry.vm_name,
+            credential_id=entry.id,
             principal_id=entry.principal_id,
         )
-        if item.id != entry.id and credential_is_guest_usable(item)
-    ]
-    reconcile_guest_credentials(
-        cfg,
-        ip,
-        credentials=remaining,
-        private_key=None,
-        remove_credential_id=entry.id,
-        manager=manager,
-    )
-    keys.remove_host_key(entry.vm_name, entry.id)
-    remove_credential(
-        store,
-        vm_name=entry.vm_name,
-        credential_id=entry.id,
-        principal_id=entry.principal_id,
-    )
-    _save_credential_store(
-        store,
-        store_path,
-        reason=f'Remove revoked repository credential {entry.id}.',
-    )
+        _save_credential_store(
+            store,
+            store_path,
+            reason=f'Remove revoked repository credential {entry.id}.',
+        )
+    except CommandControlError as ex:
+        raise type(ex)(_revocation_cleanup_message(entry, ex)) from ex
+    except AIVMError as ex:
+        raise AIVMError(_revocation_cleanup_message(entry, ex)) from ex
 
 
 def _write_abandon_tombstone(

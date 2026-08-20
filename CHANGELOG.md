@@ -5,6 +5,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Revoking a guest-key credential while its VM is stopped now reports a clean
+  recoverable error instead of an internal traceback. Provider revocation is
+  still verified and persisted first; the credential remains
+  ``revocation-pending`` until the VM is available, and the error explains that
+  repository authority is already gone and names the revoke command to rerun.
 * ``aivm code --tunnel`` now treats the tunnel request itself as a one-shot
   opt-in for its guest prerequisites. Missing ``code`` or ``tmux`` is installed
   narrowly after approval instead of failing with a separate provisioning

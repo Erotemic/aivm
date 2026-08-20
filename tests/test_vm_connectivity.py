@@ -16,8 +16,9 @@ from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
 from aivm.config import AgentVMConfig
+from aivm.errors import AIVMError
 from aivm.util import CmdResult
-from aivm.vm import get_ip_cached, wait_for_ssh
+from aivm.vm import get_ip_cached, wait_for_ip, wait_for_ssh
 from aivm.vm.connectivity import _mac_for_vm
 from tests.helpers import FakeProc, activate_manager, command_recorder
 
@@ -73,6 +74,35 @@ def test_get_ip_cached(tmp_path: Path) -> None:
     ip_dir.mkdir()
     (ip_dir / 'vmx.ip').write_text('10.77.0.123\n', encoding='utf-8')
     assert get_ip_cached(cfg) == '10.77.0.123'
+
+
+def test_wait_for_ip_stopped_vm_is_domain_error(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stopped VM is expected unavailability, not an internal traceback."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-stopped'
+    cfg.paths.state_dir = str(tmp_path / 'state')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.vm.connectivity.require_ssh_identity', lambda p: p
+    )
+    command_recorder(
+        monkeypatch,
+        {
+            'virsh domiflist': FakeProc(0, _DOMIFLIST, ''),
+            'virsh net-dhcp-leases': FakeProc(0, '', ''),
+            'virsh domifaddr': FakeProc(0, '', ''),
+            'virsh domstate': FakeProc(0, 'shut off\n', ''),
+        },
+    )
+
+    with pytest.raises(
+        AIVMError,
+        match=r"VM vm-stopped is not running.*state='shut off'",
+    ):
+        wait_for_ip(cfg, timeout_s=30, dry_run=False)
 
 
 def test_wait_for_ssh_uses_generous_probe_timeout(

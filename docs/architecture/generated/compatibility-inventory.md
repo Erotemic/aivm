@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 1f1c12b33e29a26a -->
+<!-- generation schema: 1; input digest: 955f4beb0d48d7da -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -155,8 +155,8 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.service` | `aivm/credentials/service.py:174` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:347` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:504` |
-| `aivm.credentials.service` | `aivm/credentials/service.py:583` |
-| `aivm.credentials.service` | `aivm/credentials/service.py:717` |
+| `aivm.credentials.service` | `aivm/credentials/service.py:597` |
+| `aivm.credentials.service` | `aivm/credentials/service.py:738` |
 | `aivm.detect` | `aivm/detect.py:297` |
 | `aivm.enrollment` | `aivm/enrollment.py:264` |
 | `aivm.enrollment` | `aivm/enrollment.py:315` |
@@ -201,9 +201,9 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:28` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:71` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:80` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:244` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:282` |
-| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:295` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:245` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:283` |
+| `aivm.vm.connectivity` | `aivm/vm/connectivity.py:296` |
 | `aivm.vm.create` | `aivm/vm/create.py:34` |
 | `aivm.vm.create` | `aivm/vm/create.py:151` |
 | `aivm.vm.create` | `aivm/vm/create.py:190` |

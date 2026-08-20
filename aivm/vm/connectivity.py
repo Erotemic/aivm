@@ -228,8 +228,9 @@ def wait_for_ip(
                         cfg.vm.name,
                     )
                 if 'running' not in last_state.lower():
-                    raise RuntimeError(
-                        f'VM {cfg.vm.name} is not running while waiting for IP (state={last_state!r}).'
+                    raise AIVMError(
+                        f'VM {cfg.vm.name} is not running while waiting for IP '
+                        f'(state={last_state!r}).'
                     )
                 next_status_at = now + 10
             time.sleep(2)
