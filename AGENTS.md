@@ -136,6 +136,9 @@ copy the shown commands and perform the equivalent work without AIVM.
 - Do not over-comment; prefer intent-level comments that quickly explain what
   is going on and why, rather than line-by-line narration.
 
+## Restricted test environments
+If missing `kwconf` or `xdoctest` prevents tests from running, install them from `submodules/`.
+
 ## Useful Local Commands
 - Lint/type/test (as available in environment):
   - `python -m py_compile aivm/*.py`
