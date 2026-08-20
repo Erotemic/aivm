@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 955f4beb0d48d7da -->
+<!-- generation schema: 1; input digest: c21e55097fe91d57 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -307,12 +307,12 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:143` |
 | `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py:208` |
 | `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py:801` |
-| `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:101` |
+| `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py:105` |
 | `aivm.cli.vm_lifecycle` | `requested_path` | `aivm/cli/vm_lifecycle.py:225` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:236` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:354` |
 | `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:66` |
-| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:40` |
+| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:56` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:353` |

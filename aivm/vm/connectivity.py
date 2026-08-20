@@ -11,7 +11,7 @@ from aivm.config_scopes import guest_transport_from_effective_cfg
 
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..errors import AIVMError
+from ..errors import AIVMError, VMNotRunningError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
     pin_locale,
@@ -228,7 +228,7 @@ def wait_for_ip(
                         cfg.vm.name,
                     )
                 if 'running' not in last_state.lower():
-                    raise AIVMError(
+                    raise VMNotRunningError(
                         f'VM {cfg.vm.name} is not running while waiting for IP '
                         f'(state={last_state!r}).'
                     )

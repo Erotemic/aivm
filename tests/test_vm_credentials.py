@@ -16,7 +16,11 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.cli.config.lint import _lint_store_text
-from aivm.cli.vm_creds import VMCredsAddCLI, _resolve_credential_selector
+from aivm.cli.vm_creds import (
+    VMCredsAddCLI,
+    _print_agent_grant_readiness,
+    _resolve_credential_selector,
+)
 from aivm.cli.vm_lifecycle import VMCreateCLI, VMDeleteCLI, VMUpCLI
 from aivm.commands import (
     CommandError,
@@ -34,6 +38,10 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.credentials import github, providers
+from aivm.credentials.agent_transport import (
+    AgentForwarding,
+    AgentGrantForwardingReadiness,
+)
 from aivm.credentials.errors import (
     ProviderPermissionError,
     ProviderRejectedError,
@@ -1565,6 +1573,44 @@ def test_revoke_keeps_recoverable_state_when_guest_cleanup_fails(
     [pending] = find_credentials_for_vm(load_store(path), 'vm-a')
     assert pending.state == 'revocation-pending'
     assert private.exists()
+
+
+def test_agent_grant_readiness_output_requires_reconnect(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    readiness = AgentGrantForwardingReadiness(
+        forwarding=AgentForwarding(
+            socket_path=tmp_path / 'agent.sock',
+            credential_count=1,
+            fingerprints=('SHA256:test',),
+        ),
+        ip='10.77.0.195',
+    )
+
+    _print_agent_grant_readiness(readiness)
+
+    out = capsys.readouterr().out
+    assert 'forwarding preflight passed' in out
+    assert 'Existing guest sessions do not acquire new agent forwarding.' in out
+    assert 'Reconnect with `aivm vm ssh` or `aivm vm code`' in out
+
+
+def test_agent_grant_readiness_output_explains_deferred_activation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    readiness = AgentGrantForwardingReadiness(
+        forwarding=None,
+        ip=None,
+        deferred_reason="VM aivm-2404 is not running (state='shut off').",
+    )
+
+    _print_agent_grant_readiness(readiness)
+
+    out = capsys.readouterr().out
+    assert 'Guest activation deferred:' in out
+    assert 'shut off' in out
+    assert 'next managed SSH/Remote-SSH session' in out
+    assert 'Existing guest sessions do not acquire new agent forwarding.' in out
 
 
 def test_creds_add_dry_run_and_help_tree(

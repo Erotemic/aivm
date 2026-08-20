@@ -9,7 +9,12 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import AgentCredentialEntry, Store
 from aivm.credentials import agent
 from aivm.credentials.agent_schema import agent_credential_id
-from aivm.credentials.agent_transport import prepare_agent_forwarding
+from aivm.credentials.agent_transport import (
+    AgentForwarding,
+    prepare_agent_forwarding,
+    prepare_agent_grant_forwarding,
+)
+from aivm.errors import VMNotRunningError
 from tests.helpers import FakeCommandManager, resolved_test_context
 
 
@@ -138,6 +143,124 @@ def test_prepare_agent_forwarding_is_noop_without_agent_credentials(
         )
         is None
     )
+
+
+def test_prepare_agent_grant_forwarding_verifies_live_guest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(cfg, principal_id='principal-test')
+    forwarding = AgentForwarding(
+        socket_path=tmp_path / 'agent.sock',
+        credential_count=2,
+        fingerprints=('SHA256:one', 'SHA256:two'),
+    )
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.get_ip_cached',
+        lambda cfg_arg: '10.77.0.195',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.probe_ssh_ready',
+        lambda cfg_arg, ip: SimpleNamespace(ok=True),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.wait_for_ip',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('cached reachable IP should avoid discovery')
+        ),
+    )
+
+    def fake_prepare(context_arg, store_path, ip, *, manager):
+        del context_arg, store_path, manager
+        calls.append(('prepare', ip))
+        return forwarding
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.prepare_agent_forwarding',
+        fake_prepare,
+    )
+
+    result = prepare_agent_grant_forwarding(
+        context,
+        tmp_path / 'config.toml',
+        manager=FakeCommandManager(),
+    )
+
+    assert result.verified
+    assert result.ip == '10.77.0.195'
+    assert result.forwarding == forwarding
+    assert result.deferred_reason == ''
+    assert calls == [('prepare', '10.77.0.195')]
+
+
+def test_prepare_agent_grant_forwarding_defers_stopped_vm(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(cfg, principal_id='principal-test')
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.get_ip_cached', lambda cfg_arg: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.wait_for_ip',
+        lambda *a, **k: (_ for _ in ()).throw(
+            VMNotRunningError("VM aivm-2404 is not running (state='shut off').")
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.prepare_agent_forwarding',
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError('must defer')),
+    )
+
+    result = prepare_agent_grant_forwarding(
+        context,
+        tmp_path / 'config.toml',
+        manager=FakeCommandManager(),
+    )
+
+    assert not result.verified
+    assert result.forwarding is None
+    assert result.ip is None
+    assert 'shut off' in result.deferred_reason
+
+
+def test_prepare_agent_grant_forwarding_defers_until_ssh_ready(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    context = resolved_test_context(cfg, principal_id='principal-test')
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.get_ip_cached', lambda cfg_arg: None
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.wait_for_ip',
+        lambda *a, **k: '10.77.0.195',
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.probe_ssh_ready',
+        lambda cfg_arg, ip: SimpleNamespace(ok=False),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.prepare_agent_forwarding',
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError('must defer')),
+    )
+
+    result = prepare_agent_grant_forwarding(
+        context,
+        tmp_path / 'config.toml',
+        manager=FakeCommandManager(),
+    )
+
+    assert not result.verified
+    assert result.ip == '10.77.0.195'
+    assert 'SSH is not ready yet' in result.deferred_reason
 
 
 def test_vm_ssh_forwards_prepared_dedicated_agent(

@@ -7,7 +7,10 @@ from pathlib import Path
 
 from ..commands import CommandManager
 from ..config_scopes import ResolvedVMContext
+from ..errors import AIVMError, VMNotRunningError
 from ..scoped_store import load_scope_store, resolve_store_scope
+from ..status import probe_ssh_ready
+from ..vm.connectivity import get_ip_cached, wait_for_ip
 from . import agent
 from .agent_guest import (
     probe_forwarded_agent,
@@ -23,6 +26,19 @@ class AgentForwarding:
     socket_path: Path
     credential_count: int
     fingerprints: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AgentGrantForwardingReadiness:
+    """Result of opportunistically activating a new grant in the guest."""
+
+    forwarding: AgentForwarding | None
+    ip: str | None
+    deferred_reason: str = ''
+
+    @property
+    def verified(self) -> bool:
+        return self.forwarding is not None
 
 
 def prepare_agent_forwarding(
@@ -83,3 +99,63 @@ def prepare_agent_forwarding(
         credential_count=len(active),
         fingerprints=expected,
     )
+
+
+def prepare_agent_grant_forwarding(
+    context: ResolvedVMContext,
+    store_path: Path,
+    *,
+    manager: CommandManager,
+    discovery_timeout_s: int = 12,
+) -> AgentGrantForwardingReadiness:
+    """Activate a newly granted ssh-agent credential when the guest is ready.
+
+    Provider authority and the dedicated host agent are already durable before
+    this helper runs.  A stopped or still-booting VM therefore defers guest
+    activation instead of making credential creation depend on VM availability.
+    When SSH is ready, reuse the normal foreground-session preparation path to
+    reconcile public selectors and prove the forwarded fingerprints end to end.
+    """
+    cfg = context.effective_cfg
+    ip = get_ip_cached(cfg)
+    ssh = probe_ssh_ready(cfg, ip) if ip else None
+    if ssh is None or not ssh.ok:
+        try:
+            ip = wait_for_ip(
+                cfg,
+                timeout_s=discovery_timeout_s,
+                dry_run=False,
+            )
+        except (VMNotRunningError, TimeoutError) as ex:
+            return AgentGrantForwardingReadiness(
+                forwarding=None,
+                ip=None,
+                deferred_reason=str(ex),
+            )
+        ssh = probe_ssh_ready(cfg, ip)
+
+    if not ssh.ok:
+        return AgentGrantForwardingReadiness(
+            forwarding=None,
+            ip=ip,
+            deferred_reason=(
+                f'VM {cfg.vm.name} is reachable at {ip}, but SSH is not ready yet.'
+            ),
+        )
+
+    forwarding = prepare_agent_forwarding(
+        context,
+        store_path,
+        ip,
+        manager=manager,
+    )
+    if forwarding is None:
+        raise AIVMError(
+            'The ssh-agent grant is active, but foreground credential '
+            'preparation found no active ssh-agent credentials.'
+        )
+    return AgentGrantForwardingReadiness(
+        forwarding=forwarding,
+        ip=ip,
+    )
+

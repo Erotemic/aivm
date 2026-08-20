@@ -19,6 +19,10 @@ from ..config_store import (
     set_vm_credential_backend,
 )
 from ..credentials import agent, providers
+from ..credentials.agent_transport import (
+    AgentGrantForwardingReadiness,
+    prepare_agent_grant_forwarding,
+)
 from ..credential_backends import (
     CREDENTIAL_BACKEND_GUEST_KEY,
     CREDENTIAL_BACKEND_SSH_AGENT,
@@ -63,7 +67,7 @@ from ..credentials.validation import (
     credential_id,
     validate_provider_host,
 )
-from ..errors import AIVMError
+from ..errors import AIVMError, CommandControlError
 from ..scoped_store import (
     load_scope_profile,
     load_scope_store,
@@ -401,6 +405,39 @@ def _grant_repository(
     )
 
 
+def _agent_grant_activation_error(
+    entry: AgentCredentialEntry, error: BaseException
+) -> str:
+    return (
+        f'SSH-agent credential {entry.id} is active and its private key is '
+        'loaded in the dedicated host agent, but AIVM could not verify guest '
+        f'activation: {error} Existing guest sessions are unchanged. '
+        'Reconnect with `aivm vm ssh` or `aivm vm code`; managed session '
+        'preparation will retry public routing and agent-forwarding verification.'
+    )
+
+
+def _print_agent_grant_readiness(
+    readiness: AgentGrantForwardingReadiness,
+) -> None:
+    print('Private key remains host-only in the dedicated AIVM ssh-agent.')
+    if readiness.verified:
+        assert readiness.forwarding is not None
+        print(
+            'Guest routing and dedicated-agent forwarding preflight passed '
+            f'on {readiness.ip} ({readiness.forwarding.credential_count} active '
+            'credential(s)).'
+        )
+    else:
+        print(f'Guest activation deferred: {readiness.deferred_reason}')
+        print(
+            'AIVM will reconcile guest routing and verify forwarding on the '
+            'next managed SSH/Remote-SSH session.'
+        )
+    print('Existing guest sessions do not acquire new agent forwarding.')
+    print('Reconnect with `aivm vm ssh` or `aivm vm code` to use this credential.')
+
+
 class VMCredsPreferenceCLI(_BaseCommand):
     """Inspect or set the credential backend preference."""
 
@@ -678,6 +715,7 @@ class VMCredsAddCLI(_BaseCommand):
             print('DRYRUN: no key, provider setting, guest file, or config was changed.')
             return 0
 
+        agent_readiness: AgentGrantForwardingReadiness | None = None
         with mgr.intent(
             f'Grant {cfg.vm.name} access to {repo.display}',
             why=f'Create repository authority using the {choice.backend} backend.',
@@ -694,6 +732,17 @@ class VMCredsAddCLI(_BaseCommand):
                 kind=kind,
                 manager=mgr,
             )
+            if isinstance(entry, AgentCredentialEntry):
+                try:
+                    agent_readiness = prepare_agent_grant_forwarding(
+                        context,
+                        store_path,
+                        manager=mgr,
+                    )
+                except CommandControlError as ex:
+                    raise type(ex)(_agent_grant_activation_error(entry, ex)) from ex
+                except AIVMError as ex:
+                    raise AIVMError(_agent_grant_activation_error(entry, ex)) from ex
         if isinstance(entry, CredentialEntry) and not entry.provider_managed:
             print(describe_unregistered_credential(entry, repo))
             return 0
@@ -703,7 +752,8 @@ class VMCredsAddCLI(_BaseCommand):
             f'credential={entry.id} backend={choice.backend}'
         )
         if choice.backend == CREDENTIAL_BACKEND_SSH_AGENT:
-            print('Private key remains host-only and is exposed through managed SSH forwarding.')
+            assert agent_readiness is not None
+            _print_agent_grant_readiness(agent_readiness)
         return 0
 
 

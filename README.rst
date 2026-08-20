@@ -858,9 +858,16 @@ selectors plus repository-specific SSH/Git routing in the guest. ``IdentityFile`
 points at a public selector with ``IdentitiesOnly yes`` so OpenSSH asks the
 forwarded agent for the matching private-key operation without copying private
 material into the VM. Session preparation verifies the forwarded fingerprints
-before handing control to the shell/editor.
+before handing control to the shell/editor. When ``creds add`` creates an
+``ssh-agent`` grant, it also opportunistically performs that same guest-routing
+and forwarding preflight if the VM is running and SSH-ready. A stopped or
+still-booting VM does not block the grant; activation is deferred to the next
+managed session.
 
-The forwarding channel is connection-scoped. A host reboot or dead agent is
+The forwarding channel is connection-scoped. Adding a credential cannot modify
+an already-running guest process tree, so an existing shell/editor must
+reconnect with ``aivm vm ssh`` or ``aivm vm code`` before it can see the newly
+forwarded agent. A host reboot or dead agent is
 repaired lazily by the next managed SSH/Remote-SSH entry. Detached
 ``code --tunnel`` processes do not retain an SSH forwarding channel after their
 bootstrap connection exits, so Remote-SSH is the credential-bearing editor path.

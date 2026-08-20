@@ -5,6 +5,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* ``aivm vm creds add --backend ssh-agent`` now makes its connection-scoped
+  behavior explicit and verifies the usable path when possible. After the
+  provider grant is active and the dedicated host agent is loaded, a live
+  SSH-ready VM gets its public selectors/routing reconciled and a temporary
+  forwarded-agent fingerprint preflight. Stopped or still-booting VMs defer
+  that guest activation without invalidating the grant, and the command always
+  explains that already-running guest sessions must reconnect before they can
+  inherit agent forwarding.
 * Revoking a guest-key credential while its VM is stopped now reports a clean
   recoverable error instead of an internal traceback. Provider revocation is
   still verified and persisted first; the credential remains
