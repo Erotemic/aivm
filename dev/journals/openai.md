@@ -137,3 +137,8 @@ before `creds add` claims guest activation succeeded. Foreground session setup
 keeps the cheaper fingerprint-only check so opening a shell does not contact
 every configured repository.
 
+
+## 2026-08-20 15:29:00 -0400
+Simplified the ssh-agent grant guidance and added bulk credential revocation. The grant command no longer tries to explain whether an already-running SSH process tree might happen to have a usable forwarded agent; it gives one reliable operational instruction instead: use a fresh managed `aivm vm ssh` or `aivm vm code` session.
+
+`aivm vm creds revoke` now supports two explicit bulk scopes. `revoke <repository> --all` snapshots every matching credential backend for the current principal on the selected VM, while bare `revoke --all` snapshots every credential in that principal/VM scope. `--backend` narrows either form. The snapshot happens before mutation so removing one record cannot change what "all" meant midway through the operation. Each credential still runs through its existing provider-first revoke transaction. Ordinary domain failures are isolated so independent credentials can continue; command-control refusals still abort immediately. If any credential fails, the command returns a domain error after the remaining matches are attempted and reports the failed ids without undoing successful revocations.

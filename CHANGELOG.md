@@ -25,8 +25,8 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   SSH-ready VM gets its public selectors/routing reconciled and a temporary
   forwarded-agent fingerprint preflight. Stopped or still-booting VMs defer
   that guest activation without invalidating the grant, and the command always
-  explains that already-running guest sessions must reconnect before they can
-  inherit agent forwarding.
+  points operators at a fresh ``aivm vm ssh`` or ``aivm vm code`` session as
+  the reliable way to use the credential.
 * Revoking a guest-key credential while its VM is stopped now reports a clean
   recoverable error instead of an internal traceback. Provider revocation is
   still verified and persisted first; the credential remains
@@ -90,6 +90,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* ``aivm vm creds revoke`` now supports bulk cleanup without a preceding list
+  step. ``revoke <repository> --all`` revokes every matching backend for that
+  repository, while bare ``revoke --all`` revokes every credential owned by
+  the current principal on the selected VM. ``--backend`` narrows either form.
+  Each selected credential keeps its existing provider-first lifecycle;
+  independent domain failures are reported after the remaining matches are
+  attempted, and a partial bulk revoke returns nonzero without undoing
+  successful revocations.
 * Unified repository credential commands under ``aivm vm creds`` while keeping
   ``guest-key`` and ``ssh-agent`` as independently owned backends. New grants
   use ``--backend auto`` by default: an explicit backend wins, then a VM-level

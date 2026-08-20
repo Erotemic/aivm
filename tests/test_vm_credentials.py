@@ -1591,8 +1591,8 @@ def test_agent_grant_readiness_output_requires_reconnect(
 
     out = capsys.readouterr().out
     assert 'repository authentication preflight passed' in out
-    assert 'Existing guest sessions do not acquire new agent forwarding.' in out
-    assert 'Reconnect with `aivm vm ssh` or `aivm vm code`' in out
+    assert 'Use this ssh-agent credential from a fresh managed session' in out
+    assert '`aivm vm ssh` or `aivm vm code`' in out
 
 
 def test_agent_grant_readiness_output_explains_deferred_activation(
@@ -1610,7 +1610,8 @@ def test_agent_grant_readiness_output_explains_deferred_activation(
     assert 'Guest activation deferred:' in out
     assert 'shut off' in out
     assert 'next managed SSH/Remote-SSH session' in out
-    assert 'Existing guest sessions do not acquire new agent forwarding.' in out
+    assert 'Use this ssh-agent credential from a fresh managed session' in out
+    assert '`aivm vm ssh` or `aivm vm code`' in out
 
 
 def test_creds_add_dry_run_and_help_tree(

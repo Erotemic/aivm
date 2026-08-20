@@ -836,8 +836,18 @@ The normal commands operate over the union of both backend stores::
    aivm vm creds list
    aivm vm creds status <credential-id>
    aivm vm creds revoke <credential-id>
+   aivm vm creds revoke Kitware/kwimage --all
+   aivm vm creds revoke --all
    aivm vm creds doctor
    aivm vm creds doctor --fix
+
+``revoke <repository> --all`` revokes every credential for that repository
+owned by the current principal on the selected VM, including both backends by
+default. Bare ``revoke --all`` revokes every credential in that same
+principal/VM scope. Add ``--backend guest-key`` or ``--backend ssh-agent`` to
+narrow either bulk form. Each credential still follows its own provider-first
+revocation lifecycle; successful revocations remain complete if a different
+credential reports a retryable failure.
 
 Bulk plans carry a per-row ``backend`` field. ``backend: auto`` resolves through
 the same VM/user/fallback hierarchy when the plan is applied, while
@@ -864,10 +874,9 @@ and forwarding preflight if the VM is running and SSH-ready. A stopped or
 still-booting VM does not block the grant; activation is deferred to the next
 managed session.
 
-The forwarding channel is connection-scoped. Adding a credential cannot modify
-an already-running guest process tree, so an existing shell/editor must
-reconnect with ``aivm vm ssh`` or ``aivm vm code`` before it can see the newly
-forwarded agent. A host reboot or dead agent is
+The forwarding channel is connection-scoped. After adding an ``ssh-agent``
+credential, AIVM points the operator at a fresh ``aivm vm ssh`` or
+``aivm vm code`` session as the reliable way to use it. A host reboot or dead agent is
 repaired lazily by the next managed SSH/Remote-SSH entry. Detached
 ``code --tunnel`` processes do not retain an SSH forwarding channel after their
 bootstrap connection exits, so Remote-SSH is the credential-bearing editor path.

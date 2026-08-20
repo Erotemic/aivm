@@ -434,8 +434,161 @@ def _print_agent_grant_readiness(
             'AIVM will reconcile guest routing and verify forwarding on the '
             'next managed SSH/Remote-SSH session.'
         )
-    print('Existing guest sessions do not acquire new agent forwarding.')
-    print('Reconnect with `aivm vm ssh` or `aivm vm code` to use this credential.')
+    print(
+        'Use this ssh-agent credential from a fresh managed session: '
+        '`aivm vm ssh` or `aivm vm code`.'
+    )
+
+
+def _bulk_revoke_matches(
+    store: Store,
+    *,
+    vm_name: str,
+    principal_id: str,
+    selector: str,
+    remote: str,
+    backend: object,
+    manager: CommandManager,
+) -> list[_SelectedCredential]:
+    """Snapshot all credentials selected by one explicit bulk revoke scope."""
+    requested = normalize_credential_backend(backend)
+    enabled = (
+        (CREDENTIAL_BACKEND_GUEST_KEY, CREDENTIAL_BACKEND_SSH_AGENT)
+        if requested == 'auto'
+        else (requested,)
+    )
+
+    if selector:
+        exact: list[_SelectedCredential] = []
+        if CREDENTIAL_BACKEND_GUEST_KEY in enabled:
+            guest = find_credential(
+                store,
+                vm_name=vm_name,
+                credential_id=selector,
+                principal_id=principal_id,
+            )
+            if guest is not None:
+                exact.append(
+                    _SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, guest)
+                )
+        if CREDENTIAL_BACKEND_SSH_AGENT in enabled:
+            exact.extend(
+                _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, item)
+                for item in _agent_matches(
+                    store,
+                    vm_name=vm_name,
+                    principal_id=principal_id,
+                    credential_id_text=selector,
+                )
+            )
+        if exact:
+            raise AIVMError(
+                'With --all, the selector names a repository rather than a '
+                'credential id. Omit --all to revoke one credential.'
+            )
+        repo = resolve_repository(selector, remote=remote, manager=manager)
+    else:
+        repo = None
+
+    matches: list[_SelectedCredential] = []
+    if CREDENTIAL_BACKEND_GUEST_KEY in enabled:
+        for entry in find_credentials_for_vm(
+            store,
+            vm_name,
+            principal_id=principal_id,
+        ):
+            if repo is not None:
+                if (
+                    entry.provider_host.lower(),
+                    entry.owner.lower(),
+                    entry.repository.lower(),
+                ) != (repo.host.lower(), repo.owner.lower(), repo.name.lower()):
+                    continue
+            matches.append(
+                _SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, entry)
+            )
+    if CREDENTIAL_BACKEND_SSH_AGENT in enabled:
+        for entry in _agent_records(
+            store,
+            vm_name=vm_name,
+            principal_id=principal_id,
+        ):
+            if repo is not None:
+                if (
+                    entry.provider_host.lower(),
+                    entry.owner.lower(),
+                    entry.repository.lower(),
+                ) != (repo.host.lower(), repo.owner.lower(), repo.name.lower()):
+                    continue
+            matches.append(
+                _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, entry)
+            )
+
+    matches.sort(key=lambda item: (item.backend, item.entry.id))
+    if not matches:
+        backend_text = '' if requested == 'auto' else f' in backend {requested}'
+        if repo is None:
+            raise AIVMError(
+                f'No credentials owned by the current principal exist on VM '
+                f'{vm_name!r}{backend_text}.'
+            )
+        raise AIVMError(
+            f'No credentials owned by the current principal match '
+            f'{repo.display} on VM {vm_name!r}{backend_text}.'
+        )
+    return matches
+
+
+def _credential_repo(
+    selected: _SelectedCredential,
+) -> GitRepository:
+    entry = selected.entry
+    if isinstance(entry, AgentCredentialEntry):
+        return agent.agent_repository(entry)
+    return entry_repository(entry)
+
+
+def _print_revoke_dry_run(selected: _SelectedCredential) -> None:
+    entry = selected.entry
+    repo = _credential_repo(selected)
+    print(f'DRYRUN: would revoke credential {entry.id}')
+    print(f'  Backend:    {selected.backend}')
+    print(f'  Repository: {repo.display}')
+    print(f'  Access:     {entry.access}')
+    if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+        print('  Order: provider deploy key, ssh-agent identity, host-only key, config record')
+    else:
+        print('  Order: provider deploy key, guest copy, host copy, config record')
+
+
+def _revoke_selected_credential(
+    *,
+    selected: _SelectedCredential,
+    context: ResolvedVMContext,
+    store: Store,
+    store_path: Path,
+    principal_id: str,
+    manager: CommandManager,
+) -> None:
+    entry = selected.entry
+    with manager.intent(
+        f'Revoke {selected.backend} credential {entry.id}',
+        why='Remove provider authority before removing backend-owned local state.',
+        role='modify',
+    ):
+        if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+            assert isinstance(entry, AgentCredentialEntry)
+            agent.revoke_agent_credential(store, store_path, entry, manager=manager)
+        else:
+            assert isinstance(entry, CredentialEntry)
+            revoke_repository_credential(
+                context.effective_cfg,
+                store,
+                store_path,
+                entry,
+                current_principal_id=principal_id,
+                manager=manager,
+            )
 
 
 class VMCredsPreferenceCLI(_BaseCommand):
@@ -1295,7 +1448,7 @@ class VMCredsStatusCLI(_BaseCommand):
 
 
 class VMCredsRevokeCLI(_BaseCommand):
-    """Revoke one repository credential owned by the current principal."""
+    """Revoke repository credentials owned by the current principal."""
 
     selector: str = kwconf.Value('', position=1, help='Credential ID or repository selector.')
     vm: str = kwconf.Value('', help='Optional VM name override.')
@@ -1303,63 +1456,93 @@ class VMCredsRevokeCLI(_BaseCommand):
     backend: BackendOption = kwconf.Value(
         'auto', help='Restrict lookup to auto/both, guest-key, or ssh-agent.'
     )
+    all: bool = kwconf.Flag(
+        False,
+        help=(
+            'Revoke every matching credential. With a repository selector, '
+            'revoke all matching backends for that repository; without a '
+            'selector, revoke all credentials owned by the current principal '
+            'on the selected VM.'
+        ),
+    )
     dry_run: bool = kwconf.Flag(False, short_alias=['n'], help='Print the revocation without changing anything.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        if not args.selector:
+        if not args.selector and not args.all:
             raise AIVMError('Provide a credential ID or repository selector.')
         context, store, store_path, principal_id = _load_credential_context(
             args.config,
             vm_opt=args.vm,
             persist_runtime_defaults=not args.dry_run,
         )
-        selected = _resolve_existing_credential(
-            store,
-            vm_name=context.effective_cfg.vm.name,
-            selector=args.selector,
-            remote=args.remote,
-            manager=CommandManager.current(),
-            principal_id=principal_id,
-            backend=args.backend,
-        )
-        entry = selected.entry
-        repo = (
-            agent.agent_repository(entry)
-            if isinstance(entry, AgentCredentialEntry)
-            else entry_repository(entry)
-        )
-        if args.dry_run:
-            print(f'DRYRUN: would revoke credential {entry.id}')
-            print(f'  Backend:    {selected.backend}')
-            print(f'  Repository: {repo.display}')
-            print(f'  Access:     {entry.access}')
-            if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
-                print('  Order: provider deploy key, ssh-agent identity, host-only key, config record')
-            else:
-                print('  Order: provider deploy key, guest copy, host copy, config record')
-            return 0
         mgr = CommandManager.current()
-        with mgr.intent(
-            f'Revoke {selected.backend} credential {entry.id}',
-            why='Remove provider authority before removing backend-owned local state.',
-            role='modify',
-        ):
-            if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
-                assert isinstance(entry, AgentCredentialEntry)
-                agent.revoke_agent_credential(store, store_path, entry, manager=mgr)
-            else:
-                assert isinstance(entry, CredentialEntry)
-                revoke_repository_credential(
-                    context.effective_cfg,
+        if args.all:
+            selected_rows = _bulk_revoke_matches(
+                store,
+                vm_name=context.effective_cfg.vm.name,
+                principal_id=principal_id,
+                selector=args.selector,
+                remote=args.remote,
+                backend=args.backend,
+                manager=mgr,
+            )
+        else:
+            selected_rows = [
+                _resolve_existing_credential(
                     store,
-                    store_path,
-                    entry,
-                    current_principal_id=principal_id,
+                    vm_name=context.effective_cfg.vm.name,
+                    selector=args.selector,
+                    remote=args.remote,
+                    manager=mgr,
+                    principal_id=principal_id,
+                    backend=args.backend,
+                )
+            ]
+        if args.dry_run:
+            if args.all:
+                print(f'DRYRUN: matched {len(selected_rows)} credential(s).')
+            for selected in selected_rows:
+                _print_revoke_dry_run(selected)
+            return 0
+
+        failures: list[tuple[_SelectedCredential, str]] = []
+        for selected in selected_rows:
+            try:
+                _revoke_selected_credential(
+                    selected=selected,
+                    context=context,
+                    store=store,
+                    store_path=store_path,
+                    principal_id=principal_id,
                     manager=mgr,
                 )
-        print(f'Revoked credential {entry.id} (backend={selected.backend}).')
+            except CommandControlError:
+                raise
+            except AIVMError as ex:
+                if not args.all:
+                    raise
+                failures.append((selected, str(ex)))
+                print(
+                    f'Could not fully revoke credential {selected.entry.id} '
+                    f'(backend={selected.backend}): {ex}'
+                )
+                continue
+            print(
+                f'Revoked credential {selected.entry.id} '
+                f'(backend={selected.backend}).'
+            )
+
+        if failures:
+            failed_ids = ', '.join(item.entry.id for item, _reason in failures)
+            raise AIVMError(
+                f'Bulk revoke completed with {len(failures)} failure(s): '
+                f'{failed_ids}. Successful credentials remain revoked; rerun '
+                'the same command after resolving the reported failures.'
+            )
+        if args.all:
+            print(f'Revoked {len(selected_rows)} credential(s).')
         return 0
 
 
