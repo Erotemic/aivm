@@ -713,25 +713,30 @@ class VMSSHCLI(_BaseCommand):
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        ssh_result = CommandManager.current().run(
+        ssh_cmd: list[str] = []
+        if agent_forwarding is not None:
+            ssh_cmd.extend(
+                [
+                    'env',
+                    f'SSH_AUTH_SOCK={agent_forwarding.socket_path}',
+                ]
+            )
+        ssh_cmd.append('ssh')
+        if agent_forwarding is not None:
+            ssh_cmd.append('-A')
+        ssh_cmd.extend(
             [
-                'ssh',
                 '-t',
                 *ssh_base_args(
                     ident,
                     strict_host_key_checking='accept-new',
                 ),
-                *(
-                    [
-                        '-o',
-                        f'ForwardAgent={agent_forwarding.socket_path}',
-                    ]
-                    if agent_forwarding is not None
-                    else []
-                ),
                 context.ssh_target(ip),
                 remote_cmd,
-            ],
+            ]
+        )
+        ssh_result = CommandManager.current().run(
+            ssh_cmd,
             sudo=False,
             user_driven=True,
             check=False,

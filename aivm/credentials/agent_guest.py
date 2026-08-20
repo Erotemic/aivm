@@ -235,10 +235,20 @@ def probe_forwarded_agent(
     manager: CommandManager,
 ) -> None:
     """Prove the guest sees exactly the dedicated host agent over SSH."""
+    probe_script = (
+        'set -eu; '
+        'if [ -z "${SSH_AUTH_SOCK:-}" ]; then '
+        'echo "AIVM agent forwarding: SSH_AUTH_SOCK is unset in the guest session" >&2; '
+        'exit 97; fi; '
+        'if [ ! -S "$SSH_AUTH_SOCK" ]; then '
+        'echo "AIVM agent forwarding: SSH_AUTH_SOCK does not name a socket: $SSH_AUTH_SOCK" >&2; '
+        'exit 98; fi; '
+        'ssh-add -l -E sha256'
+    )
     result = run_guest(
         cfg,
         ip,
-        script='ssh-add -l -E sha256',
+        script=probe_script,
         manager=manager,
         role='read',
         summary='Verify dedicated credential agent is forwarded into guest',
@@ -254,8 +264,26 @@ def probe_forwarded_agent(
         loaded
     ) != set(expected_fingerprints):
         detail = (result.stderr or result.stdout or '').strip()
+        policy_result = run_guest(
+            cfg,
+            ip,
+            script=(
+                "sudo sshd -T 2>/dev/null | "
+                "grep -E '^(allowagentforwarding|disableforwarding) ' || true"
+            ),
+            manager=manager,
+            role='read',
+            summary='Inspect guest sshd agent-forwarding policy',
+            check=False,
+        )
+        policy = (policy_result.stdout or policy_result.stderr or '').strip()
+        policy_detail = (
+            f' Guest sshd policy: {policy}.'
+            if policy
+            else ' Guest sshd forwarding policy could not be determined.'
+        )
         raise AIVMError(
             'Dedicated ssh-agent credential forwarding did not reach the '
             f'guest with the expected identities: expected={expected_fingerprints!r} '
-            f'loaded={loaded!r}. {detail}'.rstrip()
+            f'loaded={loaded!r}. {detail}{policy_detail}'.rstrip()
         )

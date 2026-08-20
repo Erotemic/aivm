@@ -29,22 +29,34 @@ def guest_ssh_command(
 ) -> list[str]:
     """Build an SSH command to the guest, optionally forwarding one agent.
 
-    ``ForwardAgent=<path>`` deliberately names the AIVM-owned dedicated agent
-    socket instead of inheriting the caller's ordinary ``SSH_AUTH_SOCK``.
+    For AIVM-owned SSH processes, bind the dedicated agent through a
+    process-local ``SSH_AUTH_SOCK`` and ordinary ``ssh -A``.  This keeps the
+    user's ambient agent out of the connection while using the oldest and
+    most widely exercised OpenSSH forwarding path.  External clients such as
+    VS Code still use ``ForwardAgent=<path>`` in the generated SSH config,
+    where AIVM cannot inject a process environment.
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
-    args = [
-        'ssh',
-        *ssh_base_args(
+    args: list[str] = []
+    if forward_agent_socket is not None:
+        args.extend(
+            [
+                'env',
+                f'SSH_AUTH_SOCK={forward_agent_socket}',
+            ]
+        )
+    args.append('ssh')
+    if forward_agent_socket is not None:
+        args.append('-A')
+    args.extend(
+        ssh_base_args(
             ident,
             strict_host_key_checking='accept-new',
             connect_timeout=15,
             batch_mode=True,
-        ),
-    ]
-    if forward_agent_socket is not None:
-        args.extend(['-o', f'ForwardAgent={forward_agent_socket}'])
+        )
+    )
     args.extend([context.ssh_target(ip), script])
     return args
 

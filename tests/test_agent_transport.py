@@ -320,7 +320,16 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
         'aivm.cli.vm_connect.require_ssh_identity', lambda path: path
     )
     activate_manager(monkeypatch)
-    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+    recorder = command_recorder(
+        monkeypatch,
+        {
+            (
+                'env',
+                f'SSH_AUTH_SOCK={forwarding.socket_path}',
+                'ssh',
+            ): FakeProc(0, '', '')
+        },
+    )
 
     rc = VMSSHCLI.main(
         argv=False,
@@ -337,5 +346,11 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
             'forward_agent_socket': str(forwarding.socket_path),
         }
     ]
-    ssh_cmd = next(cmd for cmd in recorder.normalized if cmd[0] == 'ssh')
-    assert f'ForwardAgent={forwarding.socket_path}' in ssh_cmd
+    ssh_cmd = next(cmd for cmd in recorder.normalized if cmd[0] == 'env')
+    assert ssh_cmd[:4] == [
+        'env',
+        f'SSH_AUTH_SOCK={forwarding.socket_path}',
+        'ssh',
+        '-A',
+    ]
+    assert not any(part.startswith('ForwardAgent=') for part in ssh_cmd)

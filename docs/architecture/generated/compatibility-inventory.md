@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: c21e55097fe91d57 -->
+<!-- generation schema: 1; input digest: 460eadd87b160d5c -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -147,11 +147,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:302` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:335` |
 | `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:24` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:53` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:81` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:106` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:138` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:182` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:65` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:93` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:118` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:150` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:194` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:174` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:347` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:504` |
@@ -197,7 +197,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:65` |
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:78` |
 | `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:117` |
-| `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:330` |
+| `aivm.vm.cloudinit` | `aivm/vm/cloudinit.py:331` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:28` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:71` |
 | `aivm.vm.connectivity` | `aivm/vm/connectivity.py:80` |

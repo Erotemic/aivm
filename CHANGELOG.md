@@ -5,6 +5,12 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Dedicated ssh-agent forwarding for AIVM-owned SSH processes now binds the
+  dedicated socket through a process-local ``SSH_AUTH_SOCK`` and ordinary
+  ``ssh -A`` instead of relying on the explicit-path ``ForwardAgent`` client
+  form. New VM cloud-init explicitly allows agent forwarding, and failed
+  forwarding preflights report the guest sshd forwarding policy to distinguish
+  client transport failures from server-side refusal.
 * ``aivm vm creds add --backend ssh-agent`` now makes its connection-scoped
   behavior explicit and verifies the usable path when possible. After the
   provider grant is active and the dedicated host agent is loaded, a live

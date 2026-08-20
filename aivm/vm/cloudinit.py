@@ -306,6 +306,7 @@ def _render_user_data_text(
               KbdInteractiveAuthentication {sshd_kbd}
               X11Forwarding no
               AllowTcpForwarding yes
+              AllowAgentForwarding yes
               GatewayPorts no
           - path: {PERSISTENT_ATTACHMENT_REPLAY_BIN}
             permissions: "0755"
