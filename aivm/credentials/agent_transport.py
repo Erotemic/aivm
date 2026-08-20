@@ -14,6 +14,7 @@ from ..vm.connectivity import get_ip_cached, wait_for_ip
 from . import agent
 from .agent_guest import (
     probe_forwarded_agent,
+    probe_repository_access,
     reconcile_guest_agent_credentials,
 )
 from .agent_schema import AGENT_CREDENTIAL_STATE_ACTIVE
@@ -47,6 +48,7 @@ def prepare_agent_forwarding(
     ip: str,
     *,
     manager: CommandManager,
+    verify_repository_id: str | None = None,
 ) -> AgentForwarding | None:
     """Prepare host agent, public guest routing, and forwarding preflight.
 
@@ -94,6 +96,23 @@ def prepare_agent_forwarding(
         expected_fingerprints=expected,
         manager=manager,
     )
+    if verify_repository_id is not None:
+        verified_record = next(
+            (record for record in active if record.id == verify_repository_id),
+            None,
+        )
+        if verified_record is None:
+            raise AIVMError(
+                'Cannot verify ssh-agent repository routing because active '
+                f'credential {verify_repository_id!r} was not found.'
+            )
+        probe_repository_access(
+            context.effective_cfg,
+            ip,
+            socket_path=status.socket_path,
+            credential=verified_record,
+            manager=manager,
+        )
     return AgentForwarding(
         socket_path=status.socket_path,
         credential_count=len(active),
@@ -105,6 +124,7 @@ def prepare_agent_grant_forwarding(
     context: ResolvedVMContext,
     store_path: Path,
     *,
+    credential_id: str,
     manager: CommandManager,
     discovery_timeout_s: int = 12,
 ) -> AgentGrantForwardingReadiness:
@@ -114,7 +134,8 @@ def prepare_agent_grant_forwarding(
     this helper runs.  A stopped or still-booting VM therefore defers guest
     activation instead of making credential creation depend on VM availability.
     When SSH is ready, reuse the normal foreground-session preparation path to
-    reconcile public selectors and prove the forwarded fingerprints end to end.
+    reconcile public selectors, prove the forwarded fingerprints, and verify
+    repository authentication through the generated Git/SSH route end to end.
     """
     cfg = context.effective_cfg
     ip = get_ip_cached(cfg)
@@ -148,6 +169,7 @@ def prepare_agent_grant_forwarding(
         store_path,
         ip,
         manager=manager,
+        verify_repository_id=credential_id,
     )
     if forwarding is None:
         raise AIVMError(

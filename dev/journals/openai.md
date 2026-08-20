@@ -114,3 +114,26 @@ For AIVM-owned SSH processes I switched to the most conventional forwarding path
 
 The tradeoff is deliberately narrow: AIVM does not broaden the user's normal shell environment or source identities from their ordinary agent. The environment override exists only for the managed SSH child. Existing VMs retain their current sshd configuration, but the diagnostic now tells us whether that policy is the remaining blocker if forwarding still fails. Focused credential, transport, connectivity, and cloud-init coverage passes with the bundled dependency sources.
 
+## 2026-08-20 14:50:00 -0400
+A live credential grant passed the forwarded-agent fingerprint preflight but a
+subsequent `git pull` failed before authentication because OpenSSH rejected the
+managed public-key selector as an unprotected IdentityFile. The selector is not
+secret, but OpenSSH applies private-key-style permission checks to IdentityFile
+paths even when they contain only public material used to select a matching
+identity from ssh-agent. AIVM had installed these files as 0644, so
+`IdentitiesOnly yes` discarded the selector and never matched the forwarded
+agent key.
+
+I changed ssh-agent selectors to 0600 and, importantly, changed the shared guest
+file reconciler to compare the desired mode as well as the content digest. That
+lets an already-correct 0644 selector be repaired on the next reconciliation
+instead of being skipped because its bytes are unchanged. I also strengthened
+the live grant preflight: after proving the dedicated agent fingerprints are
+forwarded, it now performs a read-only `git ls-remote` against the canonical
+repository URL. The managed `insteadOf` rewrite must therefore select the AIVM
+SSH alias, the alias must load the public selector, the selector must match the
+forwarded identity, and the provider must accept repository authentication
+before `creds add` claims guest activation succeeded. Foreground session setup
+keeps the cheaper fingerprint-only check so opening a shell does not contact
+every configured repository.
+

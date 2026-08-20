@@ -1590,7 +1590,7 @@ def test_agent_grant_readiness_output_requires_reconnect(
     _print_agent_grant_readiness(readiness)
 
     out = capsys.readouterr().out
-    assert 'forwarding preflight passed' in out
+    assert 'repository authentication preflight passed' in out
     assert 'Existing guest sessions do not acquire new agent forwarding.' in out
     assert 'Reconnect with `aivm vm ssh` or `aivm vm code`' in out
 

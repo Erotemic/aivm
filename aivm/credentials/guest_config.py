@@ -156,15 +156,17 @@ def install_guest_file_if_changed(
     manager: CommandManager,
     label: str,
 ) -> bool:
-    """Install one derived guest file only when its content differs."""
+    """Install one derived guest file when its content or mode drifts."""
     rel_q = shlex.quote(relpath)
+    mode_q = shlex.quote(mode)
     digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
     digest_q = shlex.quote(digest)
     check_script = (
         'set -eu; '
         f'target="$HOME"/{rel_q}; '
         '[ -f "$target" ] || exit 1; '
-        f'printf "%s  %s\\n" {digest_q} "$target" '
+        f'[ "$(stat -c %a "$target")" = {mode_q} ] || exit 1; '
+        f'printf "%s  %s\n" {digest_q} "$target" '
         '| sha256sum --check --status -'
     )
     check = run_guest(
@@ -173,7 +175,7 @@ def install_guest_file_if_changed(
         script=check_script,
         manager=manager,
         role='read',
-        summary=f'Check guest {label} hash',
+        summary=f'Check guest {label} content and mode',
         check=False,
     )
     if check.code == 0:

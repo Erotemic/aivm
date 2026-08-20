@@ -196,7 +196,10 @@ def reconcile_guest_agent_credentials(
                 ip,
                 relpath=guest_public_key_relpath(entry.id),
                 text=public_text.rstrip() + '\n',
-                mode='644',
+                # OpenSSH applies IdentityFile permission checks even when
+                # the selector contains only a public key.  Keep it private-mode
+                # so IdentitiesOnly can use it to select the forwarded identity.
+                mode='600',
                 manager=manager,
                 label=f'ssh-agent public selector {entry.id}',
             )
@@ -287,3 +290,39 @@ def probe_forwarded_agent(
             f'guest with the expected identities: expected={expected_fingerprints!r} '
             f'loaded={loaded!r}. {detail}{policy_detail}'.rstrip()
         )
+
+
+def probe_repository_access(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    socket_path: Path,
+    credential: AgentCredentialEntry,
+    manager: CommandManager,
+) -> None:
+    """Prove managed Git routing authenticates with the forwarded identity."""
+    repo = _validated_repository(credential)
+    canonical = f'git@{repo.host}:{repo.owner}/{repo.name}.git'
+    script = (
+        'set -eu; '
+        'export GIT_TERMINAL_PROMPT=0; '
+        f'git ls-remote {shlex.quote(canonical)} HEAD >/dev/null'
+    )
+    result = run_guest(
+        cfg,
+        ip,
+        script=script,
+        manager=manager,
+        role='read',
+        summary=f'Verify repository authentication for {credential.id}',
+        check=False,
+        forward_agent_socket=socket_path,
+    )
+    if result.code != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        suffix = f': {detail}' if detail else ''
+        raise AIVMError(
+            'Guest repository authentication failed for ssh-agent credential '
+            f'{credential.id} after routing reconciliation{suffix}'
+        )
+

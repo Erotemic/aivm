@@ -95,11 +95,28 @@ def test_prepare_agent_forwarding_converges_host_and_guest(
         'aivm.credentials.agent_transport.probe_forwarded_agent', fake_probe
     )
 
+    def fake_repo_probe(
+        cfg_arg,
+        ip,
+        *,
+        socket_path,
+        credential,
+        manager,
+    ):
+        del cfg_arg, manager
+        calls.append(('repo', (ip, socket_path, credential.id)))
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.probe_repository_access',
+        fake_repo_probe,
+    )
+
     result = prepare_agent_forwarding(
         context,
         tmp_path / 'config.toml',
         '10.77.0.195',
         manager=FakeCommandManager(),
+        verify_repository_id=record.id,
     )
 
     assert result is not None
@@ -110,6 +127,10 @@ def test_prepare_agent_forwarding_converges_host_and_guest(
     assert calls[1] == (
         'probe',
         ('10.77.0.195', socket_path, (record.key_fingerprint,)),
+    )
+    assert calls[2] == (
+        'repo',
+        ('10.77.0.195', socket_path, record.id),
     )
 
 
@@ -173,9 +194,16 @@ def test_prepare_agent_grant_forwarding_verifies_live_guest(
         ),
     )
 
-    def fake_prepare(context_arg, store_path, ip, *, manager):
+    def fake_prepare(
+        context_arg,
+        store_path,
+        ip,
+        *,
+        manager,
+        verify_repository_id=None,
+    ):
         del context_arg, store_path, manager
-        calls.append(('prepare', ip))
+        calls.append(('prepare', (ip, verify_repository_id)))
         return forwarding
 
     monkeypatch.setattr(
@@ -186,6 +214,7 @@ def test_prepare_agent_grant_forwarding_verifies_live_guest(
     result = prepare_agent_grant_forwarding(
         context,
         tmp_path / 'config.toml',
+        credential_id='agent-test',
         manager=FakeCommandManager(),
     )
 
@@ -193,7 +222,7 @@ def test_prepare_agent_grant_forwarding_verifies_live_guest(
     assert result.ip == '10.77.0.195'
     assert result.forwarding == forwarding
     assert result.deferred_reason == ''
-    assert calls == [('prepare', '10.77.0.195')]
+    assert calls == [('prepare', ('10.77.0.195', 'agent-test'))]
 
 
 def test_prepare_agent_grant_forwarding_defers_stopped_vm(
@@ -220,6 +249,7 @@ def test_prepare_agent_grant_forwarding_defers_stopped_vm(
     result = prepare_agent_grant_forwarding(
         context,
         tmp_path / 'config.toml',
+        credential_id='agent-test',
         manager=FakeCommandManager(),
     )
 
@@ -255,6 +285,7 @@ def test_prepare_agent_grant_forwarding_defers_until_ssh_ready(
     result = prepare_agent_grant_forwarding(
         context,
         tmp_path / 'config.toml',
+        credential_id='agent-test',
         manager=FakeCommandManager(),
     )
 

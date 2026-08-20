@@ -424,9 +424,9 @@ def _print_agent_grant_readiness(
     if readiness.verified:
         assert readiness.forwarding is not None
         print(
-            'Guest routing and dedicated-agent forwarding preflight passed '
-            f'on {readiness.ip} ({readiness.forwarding.credential_count} active '
-            'credential(s)).'
+            'Guest routing and dedicated-agent repository authentication '
+            f'preflight passed on {readiness.ip} '
+            f'({readiness.forwarding.credential_count} active credential(s)).'
         )
     else:
         print(f'Guest activation deferred: {readiness.deferred_reason}')
@@ -737,6 +737,7 @@ class VMCredsAddCLI(_BaseCommand):
                     agent_readiness = prepare_agent_grant_forwarding(
                         context,
                         store_path,
+                        credential_id=entry.id,
                         manager=mgr,
                     )
                 except CommandControlError as ex:

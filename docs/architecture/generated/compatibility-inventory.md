@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 460eadd87b160d5c -->
+<!-- generation schema: 1; input digest: 8fa3918918f776b1 -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -30,7 +30,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py:12` |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py:12` |
 
-## Canonical `AgentVMConfig` references (255)
+## Canonical `AgentVMConfig` references (256)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -137,7 +137,8 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.config_store.resolve` | `aivm/config_store/resolve.py:224` |
 | `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:102` |
 | `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:160` |
-| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:230` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:233` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:296` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:62` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:79` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:101` |
@@ -151,7 +152,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:93` |
 | `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:118` |
 | `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:150` |
-| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:194` |
+| `aivm.credentials.guest_config` | `aivm/credentials/guest_config.py:196` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:174` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:347` |
 | `aivm.credentials.service` | `aivm/credentials/service.py:504` |
@@ -312,7 +313,7 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:236` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:354` |
 | `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:66` |
-| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:56` |
+| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:58` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:353` |

@@ -5,6 +5,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* ssh-agent guest public selectors now use mode ``0600`` because OpenSSH
+  applies ``IdentityFile`` permission checks even when the file contains only
+  a public key used to select an identity from the forwarded agent. Guest file
+  reconciliation now repairs mode drift as well as content drift, so existing
+  ``0644`` selectors converge in place. Live ssh-agent grants also finish with
+  a read-only ``git ls-remote`` through the generated repository route, so the
+  command verifies Git rewriting, SSH selector loading, forwarded-agent
+  authentication, and repository access before reporting success.
 * Dedicated ssh-agent forwarding for AIVM-owned SSH processes now binds the
   dedicated socket through a process-local ``SSH_AUTH_SOCK`` and ordinary
   ``ssh -A`` instead of relying on the explicit-path ``ForwardAgent`` client

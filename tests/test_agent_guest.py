@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from aivm.config import AgentVMConfig
 from aivm.config_store import AgentCredentialEntry
-from aivm.credentials.agent_guest import render_git_config, render_ssh_config
+from aivm.credentials import agent_guest, guest_config
+from aivm.credentials.agent_guest import (
+    probe_repository_access,
+    reconcile_guest_agent_credentials,
+    render_git_config,
+    render_ssh_config,
+)
 from aivm.credentials.agent_schema import agent_credential_id
 from aivm.credentials.guest_config import guest_ssh_command
+from tests.helpers import FakeCommandManager
 
 
 def _entry() -> AgentCredentialEntry:
@@ -71,3 +79,101 @@ def test_guest_ssh_command_forwards_only_named_agent_socket(tmp_path: Path) -> N
     ]
     assert not any(part.startswith('ForwardAgent=') for part in cmd)
     assert cmd[-2:] == ['agent@10.77.0.195', 'ssh-add -l -E sha256']
+
+def test_guest_selector_is_private_mode_for_openssh(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    entry = _entry()
+    installed: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(agent_guest, 'ensure_guest_managed_includes', lambda *a, **k: None)
+    monkeypatch.setattr(agent_guest, '_remove_stale_public_selectors', lambda *a, **k: None)
+
+    def fake_install(
+        cfg_arg,
+        ip,
+        *,
+        relpath,
+        text,
+        mode,
+        manager,
+        label,
+    ):
+        del cfg_arg, ip, text, manager, label
+        installed.append((relpath, mode))
+        return True
+
+    monkeypatch.setattr(agent_guest, 'install_guest_file_if_changed', fake_install)
+    reconcile_guest_agent_credentials(
+        cfg,
+        '10.77.0.195',
+        credentials=(entry,),
+        public_keys={entry.id: 'ssh-ed25519 AAAATEST agent-test'},
+        manager=FakeCommandManager(),
+    )
+
+    selector = next(item for item in installed if item[0].endswith('id_ed25519.pub'))
+    assert selector[1] == '600'
+
+
+def test_guest_file_reconciliation_checks_mode_as_well_as_content(monkeypatch) -> None:
+    cfg = AgentVMConfig()
+    observed: dict[str, object] = {}
+
+    def fake_run_guest(cfg_arg, ip, *, script, **kwargs):
+        del cfg_arg, ip, kwargs
+        observed['check_script'] = script
+        return SimpleNamespace(code=1)
+
+    def fake_install(cfg_arg, ip, **kwargs):
+        del cfg_arg, ip
+        observed['install_mode'] = kwargs['mode']
+
+    monkeypatch.setattr(guest_config, 'run_guest', fake_run_guest)
+    monkeypatch.setattr(guest_config, 'install_guest_file', fake_install)
+
+    changed = guest_config.install_guest_file_if_changed(
+        cfg,
+        '10.77.0.195',
+        relpath='.local/share/aivm/test.pub',
+        text='ssh-ed25519 AAAATEST\n',
+        mode='600',
+        manager=FakeCommandManager(),
+        label='test selector',
+    )
+
+    assert changed
+    assert 'stat -c %a' in str(observed['check_script'])
+    assert '= 600' in str(observed['check_script'])
+    assert observed['install_mode'] == '600'
+
+
+def test_repository_preflight_exercises_managed_git_route(monkeypatch, tmp_path: Path) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    entry = _entry()
+    socket_path = tmp_path / 'agent.sock'
+    observed: dict[str, object] = {}
+
+    def fake_run_guest(cfg_arg, ip, *, script, forward_agent_socket, **kwargs):
+        del cfg_arg, kwargs
+        observed['ip'] = ip
+        observed['script'] = script
+        observed['socket'] = forward_agent_socket
+        return SimpleNamespace(code=0, stdout='', stderr='')
+
+    monkeypatch.setattr(agent_guest, 'run_guest', fake_run_guest)
+    probe_repository_access(
+        cfg,
+        '10.77.0.195',
+        socket_path=socket_path,
+        credential=entry,
+        manager=FakeCommandManager(),
+    )
+
+    assert observed['ip'] == '10.77.0.195'
+    assert observed['socket'] == socket_path
+    assert 'git ls-remote git@github.com:Erotemic/aivm.git HEAD' in str(
+        observed['script']
+    )
+
