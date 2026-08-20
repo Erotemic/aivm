@@ -58,6 +58,7 @@ def resolve_pre_0_6_0_vm_context(
         ssh_pubkey_path=cfg.paths.ssh_pubkey_path,
         state_dir=cfg.paths.state_dir,
         mirror_shared_home_folders=MIRROR_HOME_AUTO,
+        credential_backend='auto',
     )
     return ResolvedVMContext(
         machine=machine,

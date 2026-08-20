@@ -46,10 +46,25 @@ repositories:
 """
     document = parse_credential_plan_document(text)
     assert document.root == Path('/tmp/example root')
-    assert [(e.path, e.access, e.remote, e.provider) for e in document.entries] == [
-        ('.', 'write', 'origin', 'auto'),
-        ('module', 'read', 'upstream', 'gitlab'),
+    assert [
+        (e.path, e.access, e.remote, e.provider, e.backend)
+        for e in document.entries
+    ] == [
+        ('.', 'write', 'origin', 'auto', 'auto'),
+        ('module', 'read', 'upstream', 'gitlab', 'auto'),
     ]
+
+
+
+def test_plan_accepts_explicit_ssh_agent_backend() -> None:
+    text = """\
+version: 1
+root: "/tmp/root"
+repositories:
+  - {path: ".", access: rw, remote: origin, provider: auto, backend: ssh-agent}
+"""
+    document = parse_credential_plan_document(text)
+    assert document.entries[0].backend == 'ssh-agent'
 
 
 def test_plan_rejects_duplicate_active_remote_choices() -> None:
@@ -93,11 +108,11 @@ def test_ambiguous_remotes_render_as_commented_choices(tmp_path: Path) -> None:
 
     erodemic_row = (
         '  # - {"path": ".", "access": "rw", "remote": "Erotemic", '
-        f'"provider": "auto"}}  # {erodemic_url}'
+        f'"provider": "auto", "backend": "auto"}}  # {erodemic_url}'
     )
     kitware_row = (
         '  # - {"path": ".", "access": "rw", "remote": "origin", '
-        f'"provider": "auto"}}  # {kitware_url}'
+        f'"provider": "auto", "backend": "auto"}}  # {kitware_url}'
     )
     assert erodemic_row in rendered
     assert kitware_row in rendered
@@ -127,11 +142,11 @@ def test_same_destination_aliases_keep_one_active_choice(tmp_path: Path) -> None
 
     assert (
         '  - {"path": ".", "access": "ro", "remote": "origin", '
-        f'"provider": "auto"}}  # {shared_url}'
+        f'"provider": "auto", "backend": "auto"}}  # {shared_url}'
     ) in rendered
     assert (
         '  # - {"path": ".", "access": "ro", "remote": "mirror", '
-        f'"provider": "auto"}}  # {shared_url}'
+        f'"provider": "auto", "backend": "auto"}}  # {shared_url}'
     ) in rendered
 
 

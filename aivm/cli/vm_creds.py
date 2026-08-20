@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -10,12 +11,23 @@ import kwconf
 from ..commands import CommandManager
 from ..config_scopes import ResolvedVMContext
 from ..config_store import (
+    AgentCredentialEntry,
     CredentialEntry,
     Store,
     find_credential,
     find_credentials_for_vm,
+    set_vm_credential_backend,
 )
-from ..credentials import providers
+from ..credentials import agent, providers
+from ..credential_backends import (
+    CREDENTIAL_BACKEND_GUEST_KEY,
+    CREDENTIAL_BACKEND_SSH_AGENT,
+    DEFAULT_CREDENTIAL_BACKEND,
+    CredentialBackend,
+    CredentialBackendResolution,
+    normalize_credential_backend,
+    resolve_credential_backend,
+)
 from ..credentials.plan import (
     CredentialPlanEntry,
     discover_credential_candidates,
@@ -35,7 +47,6 @@ from ..credentials.service import (
     grant_repository_credential,
     inspect_credential,
     revoke_repository_credential,
-    select_credential,
 )
 from ..credentials.setup import (
     CREDENTIAL_TOOLS,
@@ -53,9 +64,24 @@ from ..credentials.validation import (
     validate_provider_host,
 )
 from ..errors import AIVMError
-from ..scoped_store import load_scope_store, resolve_store_scope
+from ..scoped_store import (
+    load_scope_profile,
+    load_scope_store,
+    resolve_store_scope,
+    save_scope_store,
+)
 from ..services import load_vm_context_with_path
+from ..profile_store import save_user_profile
 from ._common import _BaseCommand
+
+
+BackendOption = Literal['auto', 'guest-key', 'ssh-agent']
+
+
+@dataclass(frozen=True)
+class _SelectedCredential:
+    backend: CredentialBackend
+    entry: CredentialEntry | AgentCredentialEntry
 
 
 def _load_credential_context(
@@ -78,6 +104,192 @@ def _load_credential_context(
     return context, store, store_path, principal_id
 
 
+def _creation_backend(
+    context: ResolvedVMContext,
+    requested: object,
+) -> CredentialBackendResolution:
+    """Resolve one new grant through explicit, VM, user, then fallback policy."""
+    return resolve_credential_backend(
+        requested,
+        vm_preference=context.machine.vm.credential_backend,
+        user_preference=context.profile.credential_backend,
+    )
+
+
+def _guest_key_fingerprints(
+    store: Store, *, vm_name: str, principal_id: str
+) -> tuple[str, ...]:
+    """Return guest-key fingerprints for ssh-agent collision diagnostics."""
+    return tuple(
+        entry.key_fingerprint
+        for entry in find_credentials_for_vm(
+            store,
+            vm_name,
+            principal_id=principal_id,
+        )
+        if entry.key_fingerprint
+    )
+
+
+def _agent_records(
+    store: Store,
+    *,
+    vm_name: str,
+    principal_id: str | None,
+) -> list[AgentCredentialEntry]:
+    records = [item for item in store.agent_credentials if item.vm_name == vm_name]
+    if principal_id is not None:
+        records = [item for item in records if item.principal_id == principal_id]
+    return sorted(records, key=lambda item: (item.principal_id, item.id))
+
+
+def _agent_matches(
+    store: Store,
+    *,
+    vm_name: str,
+    principal_id: str | None,
+    credential_id_text: str = '',
+    repo: GitRepository | None = None,
+) -> list[AgentCredentialEntry]:
+    records = _agent_records(
+        store,
+        vm_name=vm_name,
+        principal_id=principal_id,
+    )
+    if credential_id_text:
+        return [item for item in records if item.id == credential_id_text]
+    if repo is None:
+        return []
+    return [
+        item
+        for item in records
+        if item.provider_host.lower() == repo.host.lower()
+        and item.owner.lower() == repo.owner.lower()
+        and item.repository.lower() == repo.name.lower()
+    ]
+
+
+def _resolve_guest_selector(
+    store: Store,
+    *,
+    vm_name: str,
+    selector: str,
+    repo: GitRepository | None,
+    principal_id: str | None,
+) -> CredentialEntry | None:
+    exact = find_credential(
+        store,
+        vm_name=vm_name,
+        credential_id=selector,
+        principal_id=principal_id,
+    )
+    if exact is not None:
+        return exact
+    if repo is None:
+        return None
+    matches = [
+        item
+        for item in find_credentials_for_vm(
+            store, vm_name, principal_id=principal_id
+        )
+        if item.provider_host.lower() == repo.host.lower()
+        and item.owner.lower() == repo.owner.lower()
+        and item.repository.lower() == repo.name.lower()
+    ]
+    if len(matches) > 1:
+        owners = ', '.join(
+            sorted(item.principal_id or 'legacy' for item in matches)
+        )
+        raise AIVMError(
+            f'Multiple principal guest-key credentials match {repo.display!r} '
+            f'on VM {vm_name!r}: {owners}. Use an exact credential id.'
+        )
+    return matches[0] if matches else None
+
+
+def _resolve_existing_credential(
+    store: Store,
+    *,
+    vm_name: str,
+    selector: str,
+    remote: str,
+    manager: CommandManager,
+    principal_id: str | None,
+    backend: object = 'auto',
+) -> _SelectedCredential:
+    """Resolve an existing credential across both independent backend stores."""
+    requested = normalize_credential_backend(backend)
+    enabled = (
+        (CREDENTIAL_BACKEND_GUEST_KEY, CREDENTIAL_BACKEND_SSH_AGENT)
+        if requested == 'auto'
+        else (requested,)
+    )
+
+    exact: list[_SelectedCredential] = []
+    if CREDENTIAL_BACKEND_GUEST_KEY in enabled:
+        guest = find_credential(
+            store,
+            vm_name=vm_name,
+            credential_id=selector,
+            principal_id=principal_id,
+        )
+        if guest is not None:
+            exact.append(_SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, guest))
+    if CREDENTIAL_BACKEND_SSH_AGENT in enabled:
+        exact.extend(
+            _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, item)
+            for item in _agent_matches(
+                store,
+                vm_name=vm_name,
+                principal_id=principal_id,
+                credential_id_text=selector,
+            )
+        )
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AIVMError(
+            f'Credential id {selector!r} is ambiguous across backends; '
+            'specify --backend guest-key or --backend ssh-agent.'
+        )
+
+    repo = resolve_repository(selector, remote=remote, manager=manager)
+    matches: list[_SelectedCredential] = []
+    if CREDENTIAL_BACKEND_GUEST_KEY in enabled:
+        guest = _resolve_guest_selector(
+            store,
+            vm_name=vm_name,
+            selector=selector,
+            repo=repo,
+            principal_id=principal_id,
+        )
+        if guest is not None:
+            matches.append(_SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, guest))
+    if CREDENTIAL_BACKEND_SSH_AGENT in enabled:
+        matches.extend(
+            _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, item)
+            for item in _agent_matches(
+                store,
+                vm_name=vm_name,
+                principal_id=principal_id,
+                repo=repo,
+            )
+        )
+    if not matches:
+        requested_text = '' if requested == 'auto' else f' in backend {requested}'
+        raise AIVMError(
+            f'Credential not found for {repo.display} on VM {vm_name!r}'
+            f'{requested_text}.'
+        )
+    if len(matches) > 1:
+        choices = ', '.join(f'{item.backend}:{item.entry.id}' for item in matches)
+        raise AIVMError(
+            f'Multiple credentials match {repo.display}: {choices}. '
+            'Select a credential id or specify --backend.'
+        )
+    return matches[0]
+
+
 def _resolve_credential_selector(
     store: Store,
     *,
@@ -87,23 +299,28 @@ def _resolve_credential_selector(
     manager: CommandManager,
     principal_id: str | None = None,
 ) -> CredentialEntry:
-    """Resolve an id or repository selector within one principal scope."""
-    exact = find_credential(
-        store,
-        vm_name=vm_name,
-        credential_id=selector,
-        principal_id=principal_id,
-    )
-    if exact is not None:
-        return exact
-    repo = resolve_repository(selector, remote=remote, manager=manager)
-    return select_credential(
+    """Resolve one guest-key credential through the unified selector path.
+
+    This helper predates the multi-backend frontend and remains as a narrow
+    compatibility seam for callers that explicitly operate on the guest-key
+    store.  New frontend code should use :func:`_resolve_existing_credential`
+    so ``auto`` can inspect both independent backends.
+    """
+    selected = _resolve_existing_credential(
         store,
         vm_name=vm_name,
         selector=selector,
-        repo=repo,
+        remote=remote,
+        manager=manager,
         principal_id=principal_id,
+        backend=CREDENTIAL_BACKEND_GUEST_KEY,
     )
+    entry = selected.entry
+    if not isinstance(entry, CredentialEntry):
+        raise AssertionError(
+            'guest-key selector resolved a non-guest credential entry'
+        )
+    return entry
 
 
 def _resolve_plan_entries(
@@ -149,6 +366,121 @@ def _resolve_plan_entries(
     return resolved
 
 
+def _grant_repository(
+    *,
+    backend: CredentialBackend,
+    context: ResolvedVMContext,
+    store: Store,
+    store_path: Path,
+    principal_id: str,
+    repo: GitRepository,
+    access: str,
+    kind: CredentialKind,
+    manager: CommandManager,
+) -> CredentialEntry | AgentCredentialEntry:
+    if backend == CREDENTIAL_BACKEND_SSH_AGENT:
+        return agent.grant_agent_credential(
+            store,
+            store_path,
+            context.effective_cfg.vm.name,
+            principal_id,
+            repo,
+            access=access,
+            kind=kind,
+            manager=manager,
+        )
+    return grant_repository_credential(
+        context.effective_cfg,
+        store,
+        store_path,
+        repo,
+        access=access,
+        kind=kind,
+        principal_id=principal_id,
+        manager=manager,
+    )
+
+
+class VMCredsPreferenceCLI(_BaseCommand):
+    """Inspect or set the credential backend preference."""
+
+    backend: str = kwconf.Value(
+        '',
+        position=1,
+        help=(
+            'Preference to set: auto, guest-key, or ssh-agent. Omit to show '
+            'the current preference hierarchy without changing it.'
+        ),
+    )
+    scope: Literal['vm', 'user'] = kwconf.Value(
+        'vm',
+        help='Preference scope to change when BACKEND is provided (default: vm).',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        context, store, _store_path, _principal_id = _load_credential_context(
+            args.config,
+            vm_opt=args.vm,
+            persist_runtime_defaults=False,
+        )
+        physical_scope = resolve_store_scope(args.config)
+        vm_name = context.effective_cfg.vm.name
+        vm_preference = context.machine.vm.credential_backend
+        user_preference = context.profile.credential_backend
+
+        requested = str(args.backend or '').strip()
+        if requested:
+            preference = normalize_credential_backend(requested)
+            if args.scope == 'user':
+                if not physical_scope.is_machine:
+                    raise AIVMError(
+                        'User-level credential backend preferences require the '
+                        'machine-store/profile architecture. Use a VM preference '
+                        'or an explicit --backend with this legacy store.'
+                    )
+                profile = load_scope_profile(physical_scope)
+                profile.credential_backend = preference
+                save_user_profile(profile, physical_scope.profile_path)
+                user_preference = preference
+                print(
+                    f'Set user credential backend preference to {preference}.'
+                )
+            else:
+                set_vm_credential_backend(store, vm_name, preference)
+                save_scope_store(
+                    physical_scope,
+                    store,
+                    reason=(
+                        f'Set credential backend preference for VM {vm_name} '
+                        f'to {preference}.'
+                    ),
+                )
+                vm_preference = preference
+                print(
+                    f'Set VM {vm_name} credential backend preference to '
+                    f'{preference}.'
+                )
+
+        resolved = resolve_credential_backend(
+            'auto',
+            vm_preference=vm_preference,
+            user_preference=user_preference,
+        )
+        print('Credential backend preference')
+        print(f'  VM:        {vm_name}')
+        print(f'  VM scope:  {vm_preference}')
+        if physical_scope.is_machine:
+            print(f'  User scope: {user_preference}')
+        else:
+            print('  User scope: unavailable (legacy store)')
+        print(f'  Fallback:  {DEFAULT_CREDENTIAL_BACKEND}')
+        print(f'  Effective: {resolved.backend} ({resolved.source})')
+        return 0
+
+
 class VMCredsPlanCLI(_BaseCommand):
     """Discover candidate checkout credentials and print an editable plan."""
 
@@ -158,12 +490,14 @@ class VMCredsPlanCLI(_BaseCommand):
         help='Checkout to crawl for initialized submodules (default: .).',
     )
     access: Literal['read', 'ro', 'write', 'rw'] = kwconf.Value(
-        'read',
-        help='Initial access written into every candidate line.',
+        'read', help='Initial access written into every candidate line.'
     )
     provider: Literal['auto', 'github', 'gitlab'] = kwconf.Value(
+        'auto', help='Initial provider written into every candidate line.'
+    )
+    backend: BackendOption = kwconf.Value(
         'auto',
-        help='Initial provider written into every candidate line.',
+        help='Credential backend written into each row: auto, guest-key, or ssh-agent.',
     )
 
     @classmethod
@@ -174,6 +508,7 @@ class VMCredsPlanCLI(_BaseCommand):
             Path(args.repository).expanduser(),
             access=args.access,
             provider=args.provider,
+            backend=args.backend,
             manager=mgr,
         )
         print(render_credential_plan(candidates, root=root), end='')
@@ -202,12 +537,8 @@ class VMCredsApplyCLI(_BaseCommand):
         try:
             text = plan_path.read_text(encoding='utf-8')
         except OSError as ex:
-            raise AIVMError(
-                f'Could not read credential plan {plan_path}: {ex}'
-            ) from ex
+            raise AIVMError(f'Could not read credential plan {plan_path}: {ex}') from ex
 
-        # Parse and resolve the complete operation before the first provider or
-        # credential-store mutation, so editing mistakes fail closed.
         document = parse_credential_plan_document(text)
         entries = list(document.entries)
         mgr = CommandManager.current()
@@ -219,43 +550,48 @@ class VMCredsApplyCLI(_BaseCommand):
             persist_runtime_defaults=not args.dry_run,
             host_src=root,
         )
-        cfg = context.effective_cfg
 
-        print(f'Credential plan: {len(resolved)} repository grant(s)')
-        for entry, repo, kind in resolved:
+        rows = [
+            (entry, repo, kind, _creation_backend(context, entry.backend))
+            for entry, repo, kind in resolved
+        ]
+        print(f'Credential plan: {len(rows)} repository grant(s)')
+        for entry, repo, kind, choice in rows:
             print(
                 f'  {entry.path}: {entry.access} {entry.remote} '
-                f'{providers.provider_for_kind(kind)} {repo.display}'
+                f'{providers.provider_for_kind(kind)} {repo.display} '
+                f'backend={choice.backend} ({choice.source})'
             )
         if args.dry_run:
             print('DRYRUN: no credential state was changed.')
             return 0
 
-        for entry, repo, kind in resolved:
+        for entry, repo, kind, choice in rows:
             with mgr.intent(
-                f'Grant {cfg.vm.name} access to {repo.display}',
+                f'Grant {context.effective_cfg.vm.name} access to {repo.display}',
                 why=(
-                    'Apply one reviewed repository line from the credential '
-                    'plan using the normal principal-owned credential grant.'
+                    f'Apply one reviewed credential-plan row using the '
+                    f'{choice.backend} backend.'
                 ),
                 role='modify',
             ):
-                granted = grant_repository_credential(
-                    cfg,
-                    store,
-                    store_path,
-                    repo,
+                granted = _grant_repository(
+                    backend=choice.backend,
+                    context=context,
+                    store=store,
+                    store_path=store_path,
+                    principal_id=principal_id,
+                    repo=repo,
                     access=entry.access,
                     kind=kind,
-                    principal_id=principal_id,
                     manager=mgr,
                 )
-            if not granted.provider_managed:
+            if isinstance(granted, CredentialEntry) and not granted.provider_managed:
                 print(describe_unregistered_credential(granted, repo))
             else:
                 print(
-                    f'Granted {granted.access} access: '
-                    f'repository={repo.display} credential={granted.id}'
+                    f'Granted {granted.access} access: repository={repo.display} '
+                    f'credential={granted.id} backend={choice.backend}'
                 )
         return 0
 
@@ -279,16 +615,18 @@ class VMCredsAddCLI(_BaseCommand):
             'GitHub otherwise; specify gitlab for a self-managed GitLab host.'
         ),
     )
-    # argparse builds its choice list from this annotation and rejects
-    # anything outside it before normalize_credential_access() runs, so the
-    # accepted spellings have to be declared here, not only in the normalizer.
+    backend: BackendOption = kwconf.Value(
+        'auto',
+        help=(
+            'Credential backend. auto resolves VM preference, then user '
+            'preference, then the package fallback (currently guest-key).'
+        ),
+    )
     access: Literal['read', 'ro', 'write', 'rw'] = kwconf.Value(
         'read',
         help=(
             'Credential access: read (ro) or write (rw); default read. '
-            'write means read+write -- deploy keys have no write-only '
-            'mode. Changing the access of an existing credential requires '
-            'revoking it first.'
+            'Changing access requires revoking that backend credential first.'
         ),
     )
     dry_run: bool = kwconf.Flag(
@@ -306,11 +644,10 @@ class VMCredsAddCLI(_BaseCommand):
             persist_runtime_defaults=not args.dry_run,
         )
         cfg = context.effective_cfg
+        choice = _creation_backend(context, args.backend)
         mgr = CommandManager.current()
         requested_provider = providers.normalize_provider(args.provider)
-        default_host = (
-            'gitlab.com' if requested_provider == 'gitlab' else 'github.com'
-        )
+        default_host = 'gitlab.com' if requested_provider == 'gitlab' else 'github.com'
         repo = resolve_repository(
             args.repository,
             remote=args.remote,
@@ -320,7 +657,11 @@ class VMCredsAddCLI(_BaseCommand):
         resolved_provider = providers.resolve_provider(repo, requested_provider)
         kind = providers.kind_for_provider(resolved_provider)
         access = normalize_credential_access(args.access)
-        cred_id = credential_id(cfg.vm.name, repo.canonical, principal_id)
+        cred_id = (
+            agent.agent_credential_id(cfg.vm.name, repo.canonical, principal_id)
+            if choice.backend == CREDENTIAL_BACKEND_SSH_AGENT
+            else credential_id(cfg.vm.name, repo.canonical, principal_id)
+        )
         if args.dry_run:
             print('Repository credential grant')
             print(f'  VM:          {cfg.vm.name}')
@@ -328,42 +669,41 @@ class VMCredsAddCLI(_BaseCommand):
             print(f'  Repository:  {repo.display}')
             print(f'  Access:      {access}')
             print(f'  Provider:    {resolved_provider}')
-            print(f'  Type:        {kind}')
+            print(f'  Backend:     {choice.backend} ({choice.source})')
             print(f'  Credential:  {cred_id}')
-            print('  Branches:    not managed by AIVM')
-            print(
-                'DRYRUN: no key, provider setting, guest file, or config '
-                'was changed.'
-            )
+            if choice.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+                print('  Private key: host-only; reached through a dedicated ssh-agent')
+            else:
+                print('  Private key: copied into the selected guest principal home')
+            print('DRYRUN: no key, provider setting, guest file, or config was changed.')
             return 0
 
         with mgr.intent(
             f'Grant {cfg.vm.name} access to {repo.display}',
-            why=(
-                'Create a principal-owned deploy key on the host, register '
-                'its public half, and install the private half only in the '
-                "selected principal's guest home."
-            ),
+            why=f'Create repository authority using the {choice.backend} backend.',
             role='modify',
         ):
-            entry = grant_repository_credential(
-                cfg,
-                store,
-                store_path,
-                repo,
+            entry = _grant_repository(
+                backend=choice.backend,
+                context=context,
+                store=store,
+                store_path=store_path,
+                principal_id=principal_id,
+                repo=repo,
                 access=access,
                 kind=kind,
-                principal_id=principal_id,
                 manager=mgr,
             )
-        if not entry.provider_managed:
+        if isinstance(entry, CredentialEntry) and not entry.provider_managed:
             print(describe_unregistered_credential(entry, repo))
             return 0
         print(
             f'Granted {entry.access} access: vm={entry.vm_name} '
-            f'principal={entry.principal_id or "legacy"} '
-            f'repository={repo.display} credential={entry.id}'
+            f'principal={entry.principal_id or "legacy"} repository={repo.display} '
+            f'credential={entry.id} backend={choice.backend}'
         )
+        if choice.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+            print('Private key remains host-only and is exposed through managed SSH forwarding.')
         return 0
 
 
@@ -694,64 +1034,174 @@ class VMCredsListCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=False,
         )
-        cfg = context.effective_cfg
+        vm_name = context.effective_cfg.vm.name
         selected_principal = None if args.all_principals else principal_id
-        entries = find_credentials_for_vm(
-            store, cfg.vm.name, principal_id=selected_principal
+        guest_entries = find_credentials_for_vm(
+            store, vm_name, principal_id=selected_principal
         )
-        view = (
-            'machine-wide metadata'
-            if args.all_principals
-            else (principal_id or 'legacy')
+        ssh_agent_entries = _agent_records(
+            store,
+            vm_name=vm_name,
+            principal_id=selected_principal,
         )
-        print(f'Credentials for VM {cfg.vm.name} ({view})')
-        if not entries:
+        rows = [
+            _SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, item)
+            for item in guest_entries
+        ] + [
+            _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, item)
+            for item in ssh_agent_entries
+        ]
+        rows.sort(key=lambda item: (item.entry.principal_id, item.entry.id))
+        view = 'machine-wide metadata' if args.all_principals else (principal_id or 'legacy')
+        print(f'Credentials for VM {vm_name} ({view})')
+        if not rows:
             print('  (none)')
             return 0
         print(
-            '  ID                OWNER                         ACCESS  STATE                 SCOPE'
+            '  ID                       BACKEND    OWNER                         '
+            'ACCESS  STATE                 SCOPE'
         )
         unregistered = False
-        for entry in entries:
-            scope_text = (
-                f'{entry.provider_host}/{entry.owner}/{entry.repository}'
-            )
+        for selected in rows:
+            entry = selected.entry
+            scope_text = f'{entry.provider_host}/{entry.owner}/{entry.repository}'
             state = str(entry.state)
-            if not entry.provider_managed:
+            if isinstance(entry, CredentialEntry) and not entry.provider_managed:
                 state = f'{state} (unregistered)'
                 unregistered = True
             owner = credential_principal_label(store, entry.principal_id)
             print(
-                f'  {entry.id:<17} {owner:<29.29} {entry.access:<7} '
-                f'{state:<21} {scope_text}'
+                f'  {entry.id:<24} {selected.backend:<10} {owner:<29.29} '
+                f'{entry.access:<7} {state:<21} {scope_text}'
             )
         if unregistered:
             print(
-                '\n  unregistered: AIVM could not add the deploy key; an '
-                'admin must. Run `aivm vm creds status <id>` as the owning '
-                'host user for the public-key handoff.'
+                '\n  unregistered: AIVM could not add a guest-key deploy key; '
+                'an admin must. Run `aivm vm creds status <id>` as its owner.'
             )
         return 0
 
 
-class VMCredsStatusCLI(_BaseCommand):
-    """Inspect one principal credential or machine-wide metadata."""
+def _print_guest_key_status(
+    *,
+    cfg: Any,
+    store: Store,
+    entry: CredentialEntry,
+    principal_id: str,
+    owner_label: str,
+    manager: CommandManager,
+) -> int:
+    foreign = bool(entry.principal_id and entry.principal_id != principal_id)
+    print(f'Credential {entry.id}')
+    print(f'  Backend:      {CREDENTIAL_BACKEND_GUEST_KEY}')
+    print(f'  VM:           {entry.vm_name}')
+    print(f'  Principal:    {owner_label}')
+    print(f'  Scope:        {entry.provider_host}/{entry.owner}/{entry.repository}')
+    print(f'  Access:       {entry.access}')
+    print(f'  State:        {entry.state}')
+    print(f'  Fingerprint:  {entry.key_fingerprint}')
+    print(f'  Provider ID:  {entry.provider_key_id or "(unrecorded)"}')
+    if foreign:
+        print('  Observation:  metadata only; detailed checks require the owning host user.')
+        return 0
+    with manager.intent(
+        f'Inspect credential {entry.id}',
+        why="Compare the owner's host key, provider deploy key, and guest installation.",
+        role='read',
+    ):
+        report = inspect_credential(
+            cfg,
+            entry,
+            store=store,
+            current_principal_id=principal_id,
+            manager=manager,
+        )
+    remote_key = report['remote']
+    remote_text = 'missing'
+    if remote_key is not None:
+        remote_text = (
+            f'active id={remote_key.key_id} '
+            f'access={"read" if remote_key.read_only else "write"}'
+        )
+    elif report['remote_error']:
+        remote_text = f'unavailable: {report["remote_error"]}'
+    print('  Host key:     ' + ('healthy' if report['host_ok'] else 'invalid or unavailable'))
+    print('  Fingerprint:  ' + ('matches' if report['fingerprint_ok'] else 'mismatch'))
+    if report['host_detail']:
+        print(f'  Host detail:  {report["host_detail"]}')
+    label = providers.provider_label(entry.kind)
+    print(f'  {label + " key:":<15}{remote_text}')
+    print(f'  Guest:        {report["guest"]}')
+    if report['guest_detail']:
+        print(f'  Guest detail: {report["guest_detail"]}')
+    if not entry.provider_managed:
+        print(describe_unregistered_credential(entry, entry_repository(entry)))
+    return 0
 
-    selector: str = kwconf.Value(
-        '',
-        position=1,
-        help='Credential ID or repository selector.',
+
+def _print_ssh_agent_status(
+    *,
+    store: Store,
+    entry: AgentCredentialEntry,
+    principal_id: str,
+    owner_label: str,
+    manager: CommandManager,
+) -> int:
+    foreign = bool(entry.principal_id and entry.principal_id != principal_id)
+    print(f'Credential {entry.id}')
+    print(f'  Backend:      {CREDENTIAL_BACKEND_SSH_AGENT}')
+    print(f'  VM:           {entry.vm_name}')
+    print(f'  Principal:    {owner_label}')
+    print(f'  Scope:        {entry.provider_host}/{entry.owner}/{entry.repository}')
+    print(f'  Access:       {entry.access}')
+    print(f'  State:        {entry.state}')
+    print(f'  Fingerprint:  {entry.key_fingerprint}')
+    print(f'  Provider ID:  {entry.provider_key_id or "(unrecorded)"}')
+    if foreign:
+        print('  Observation:  metadata only; host key and ssh-agent checks require the owner.')
+        return 0
+    report = agent.inspect_doctor(
+        store,
+        entry.vm_name,
+        principal_id,
+        guest_key_fingerprints=_guest_key_fingerprints(
+            store,
+            vm_name=entry.vm_name,
+            principal_id=principal_id,
+        ),
+        manager=manager,
     )
+    print(f'  SSH agent:    {report.agent.runtime_state}')
+    print(f'  Agent socket: {report.agent.socket_path}')
+    print(f'  Loaded keys:  {len(report.agent.loaded_fingerprints)}')
+    relevant = [issue for issue in report.issues if entry.id in issue.detail]
+    shared = [
+        issue
+        for issue in report.issues
+        if issue.code in {'agent-not-running', 'agent-identities', 'unused-agent'}
+    ]
+    issues = relevant + [item for item in shared if item not in relevant]
+    if issues:
+        for issue in issues:
+            print(f'  Issue:        {issue.code}: {issue.detail}')
+        return 1
+    print('  Health:       healthy')
+    return 0
+
+
+class VMCredsStatusCLI(_BaseCommand):
+    """Inspect one repository credential or machine-wide metadata."""
+
+    selector: str = kwconf.Value('', position=1, help='Credential ID or repository selector.')
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    remote: str = kwconf.Value(
-        'origin', help='Git remote used for a local repository selector.'
+    remote: str = kwconf.Value('origin', help='Git remote used for a local repository selector.')
+    backend: BackendOption = kwconf.Value(
+        'auto',
+        help='Restrict lookup to auto/both, guest-key, or ssh-agent.',
     )
     all_principals: bool = kwconf.Flag(
         False,
-        help=(
-            'Allow selecting any principal record. Records owned by another '
-            'host user are shown as metadata only.'
-        ),
+        help='Allow selecting any principal record; foreign records show metadata only.',
     )
 
     @classmethod
@@ -760,121 +1210,49 @@ class VMCredsStatusCLI(_BaseCommand):
         if not args.selector:
             raise AIVMError('Provide a credential ID or repository selector.')
         context, store, _store_path, principal_id = _load_credential_context(
-            args.config,
-            vm_opt=args.vm,
-            persist_runtime_defaults=False,
+            args.config, vm_opt=args.vm, persist_runtime_defaults=False
         )
-        cfg = context.effective_cfg
-        selector_principal = None if args.all_principals else principal_id
-        entry = _resolve_credential_selector(
+        selected = _resolve_existing_credential(
             store,
-            vm_name=cfg.vm.name,
+            vm_name=context.effective_cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
-            principal_id=selector_principal,
+            principal_id=None if args.all_principals else principal_id,
+            backend=args.backend,
         )
-        owner_label = credential_principal_label(store, entry.principal_id)
-        foreign = bool(
-            entry.principal_id and entry.principal_id != principal_id
-        )
-        if foreign:
-            print(f'Credential {entry.id}')
-            print(f'  VM:           {entry.vm_name}')
-            print(f'  Principal:    {owner_label}')
-            print(
-                f'  Scope:        {entry.provider_host}/{entry.owner}/'
-                f'{entry.repository}'
-            )
-            print(f'  Access:       {entry.access}')
-            print(f'  State:        {entry.state}')
-            print(f'  Fingerprint:  {entry.key_fingerprint}')
-            print(f'  Provider ID:  {entry.provider_key_id or "(unrecorded)"}')
-            print(
-                '  Observation:  metadata only; host key, provider auth, and '
-                'guest-home checks require the owning host user.'
-            )
-            return 0
-
-        with CommandManager.current().intent(
-            f'Inspect credential {entry.id}',
-            why=(
-                "Compare the owning principal's host key, provider deploy "
-                'key, and guest installation.'
-            ),
-            role='read',
-        ):
-            report = inspect_credential(
-                cfg,
-                entry,
+        owner_label = credential_principal_label(store, selected.entry.principal_id)
+        mgr = CommandManager.current()
+        if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+            assert isinstance(selected.entry, AgentCredentialEntry)
+            return _print_ssh_agent_status(
                 store=store,
-                current_principal_id=principal_id,
-                manager=CommandManager.current(),
+                entry=selected.entry,
+                principal_id=principal_id,
+                owner_label=owner_label,
+                manager=mgr,
             )
-        remote_key = report['remote']
-        remote_text = 'missing'
-        if remote_key is not None:
-            remote_text = (
-                f'active id={remote_key.key_id} '
-                f'access={"read" if remote_key.read_only else "write"}'
-            )
-        elif report['remote_error']:
-            remote_text = f'unavailable: {report["remote_error"]}'
-        print(f'Credential {entry.id}')
-        print(f'  VM:           {entry.vm_name}')
-        print(f'  Principal:    {owner_label}')
-        print(
-            f'  Scope:        {entry.provider_host}/{entry.owner}/{entry.repository}'
+        assert isinstance(selected.entry, CredentialEntry)
+        return _print_guest_key_status(
+            cfg=context.effective_cfg,
+            store=store,
+            entry=selected.entry,
+            principal_id=principal_id,
+            owner_label=owner_label,
+            manager=mgr,
         )
-        print(f'  Access:       {entry.access}')
-        print(f'  State:        {entry.state}')
-        if not entry.provider_managed:
-            print(
-                '  Registered:   no -- AIVM could not administer this '
-                'repository'
-            )
-            print(
-                '                an admin must add the public key; it grants '
-                'nothing until then'
-            )
-        print(
-            '  Host key:     '
-            + ('healthy' if report['host_ok'] else 'invalid or unavailable')
-        )
-        print(
-            '  Fingerprint:  '
-            + ('matches' if report['fingerprint_ok'] else 'mismatch')
-        )
-        if report['host_detail']:
-            print(f'  Host detail:  {report["host_detail"]}')
-        label = providers.provider_label(entry.kind)
-        print(f'  {label + " key:":<15}{remote_text}')
-        print(f'  Guest:        {report["guest"]}')
-        if report['guest_detail']:
-            print(f'  Guest detail: {report["guest_detail"]}')
-        print('  Branch rules: not managed by AIVM')
-        if not entry.provider_managed:
-            print(
-                describe_unregistered_credential(entry, entry_repository(entry))
-            )
-        return 0
 
 
 class VMCredsRevokeCLI(_BaseCommand):
-    """Revoke one credential owned by the current VM principal."""
+    """Revoke one repository credential owned by the current principal."""
 
-    selector: str = kwconf.Value(
-        '', position=1, help='Credential ID or repository selector.'
-    )
+    selector: str = kwconf.Value('', position=1, help='Credential ID or repository selector.')
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    remote: str = kwconf.Value(
-        'origin', help='Git remote used for a local repository selector.'
+    remote: str = kwconf.Value('origin', help='Git remote used for a local repository selector.')
+    backend: BackendOption = kwconf.Value(
+        'auto', help='Restrict lookup to auto/both, guest-key, or ssh-agent.'
     )
-    dry_run: bool = kwconf.Flag(
-        False,
-        short_alias=['n'],
-        help='Print the revocation without changing anything.',
-    )
+    dry_run: bool = kwconf.Flag(False, short_alias=['n'], help='Print the revocation without changing anything.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -886,58 +1264,60 @@ class VMCredsRevokeCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=not args.dry_run,
         )
-        cfg = context.effective_cfg
-        entry = _resolve_credential_selector(
+        selected = _resolve_existing_credential(
             store,
-            vm_name=cfg.vm.name,
+            vm_name=context.effective_cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
             principal_id=principal_id,
+            backend=args.backend,
+        )
+        entry = selected.entry
+        repo = (
+            agent.agent_repository(entry)
+            if isinstance(entry, AgentCredentialEntry)
+            else entry_repository(entry)
         )
         if args.dry_run:
             print(f'DRYRUN: would revoke credential {entry.id}')
-            print(f'  Principal: {principal_id or "legacy"}')
-            print(
-                '  Scope: '
-                f'{entry.provider_host}/{entry.owner}/{entry.repository}'
-            )
-            print(
-                '  Order: provider deploy key, guest copy, host copy, '
-                'config record'
-            )
+            print(f'  Backend:    {selected.backend}')
+            print(f'  Repository: {repo.display}')
+            print(f'  Access:     {entry.access}')
+            if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+                print('  Order: provider deploy key, ssh-agent identity, host-only key, config record')
+            else:
+                print('  Order: provider deploy key, guest copy, host copy, config record')
             return 0
         mgr = CommandManager.current()
         with mgr.intent(
-            f'Revoke credential {entry.id}',
-            why=(
-                'Invalidate the repository permission using the owning host '
-                "principal's provider authentication before removing copies."
-            ),
+            f'Revoke {selected.backend} credential {entry.id}',
+            why='Remove provider authority before removing backend-owned local state.',
             role='modify',
         ):
-            revoke_repository_credential(
-                cfg,
-                store,
-                store_path,
-                entry,
-                current_principal_id=principal_id,
-                manager=mgr,
-            )
-        print(f'Revoked credential {entry.id}.')
+            if selected.backend == CREDENTIAL_BACKEND_SSH_AGENT:
+                assert isinstance(entry, AgentCredentialEntry)
+                agent.revoke_agent_credential(store, store_path, entry, manager=mgr)
+            else:
+                assert isinstance(entry, CredentialEntry)
+                revoke_repository_credential(
+                    context.effective_cfg,
+                    store,
+                    store_path,
+                    entry,
+                    current_principal_id=principal_id,
+                    manager=mgr,
+                )
+        print(f'Revoked credential {entry.id} (backend={selected.backend}).')
         return 0
 
 
 class VMCredsAbandonCLI(_BaseCommand):
     """Forget an inaccessible provider grant owned by this principal."""
 
-    selector: str = kwconf.Value(
-        '', position=1, help='Credential ID or repository selector.'
-    )
+    selector: str = kwconf.Value('', position=1, help='Credential ID or repository selector.')
     vm: str = kwconf.Value('', help='Optional VM name override.')
-    remote: str = kwconf.Value(
-        'origin', help='Git remote used for a local repository selector.'
-    )
+    remote: str = kwconf.Value('origin', help='Git remote used for a local repository selector.')
     provider_unverified: bool = kwconf.Flag(
         False,
         help=(
@@ -945,11 +1325,7 @@ class VMCredsAbandonCLI(_BaseCommand):
             'revocation and the copied key may remain usable.'
         ),
     )
-    dry_run: bool = kwconf.Flag(
-        False,
-        short_alias=['n'],
-        help='Print the abandonment without changing anything.',
-    )
+    dry_run: bool = kwconf.Flag(False, short_alias=['n'], help='Print the abandonment without changing anything.')
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -966,17 +1342,25 @@ class VMCredsAbandonCLI(_BaseCommand):
             vm_opt=args.vm,
             persist_runtime_defaults=not args.dry_run,
         )
-        cfg = context.effective_cfg
-        entry = _resolve_credential_selector(
+        selected = _resolve_existing_credential(
             store,
-            vm_name=cfg.vm.name,
+            vm_name=context.effective_cfg.vm.name,
             selector=args.selector,
             remote=args.remote,
             manager=CommandManager.current(),
             principal_id=principal_id,
+            backend='auto',
         )
+        if selected.backend != CREDENTIAL_BACKEND_GUEST_KEY:
+            raise AIVMError(
+                'The ssh-agent backend does not support provider-unverified '
+                'abandonment; use `aivm vm creds revoke`.'
+            )
+        entry = selected.entry
+        assert isinstance(entry, CredentialEntry)
         if args.dry_run:
             print(f'DRYRUN: would abandon credential {entry.id}')
+            print(f'  Backend: {CREDENTIAL_BACKEND_GUEST_KEY}')
             print(f'  Principal: {principal_id or "legacy"}')
             print(
                 '  WARNING: provider revocation would remain unverified for '
@@ -989,13 +1373,13 @@ class VMCredsAbandonCLI(_BaseCommand):
         with mgr.intent(
             f'Abandon provider-unverified credential {entry.id}',
             why=(
-                "Remove the owning principal's local copies and retain an "
+                "Remove the owning principal's guest-key copies and retain an "
                 'audit tombstone when the provider cannot be administered.'
             ),
             role='modify',
         ):
             tombstone = abandon_repository_credential(
-                cfg,
+                context.effective_cfg,
                 store,
                 store_path,
                 entry,
@@ -1009,10 +1393,79 @@ class VMCredsAbandonCLI(_BaseCommand):
         return 0
 
 
+def _print_ssh_agent_doctor(report: agent.DoctorReport) -> None:
+    print(f'  ssh-agent credentials: {len(report.records)}')
+    print(f'  ssh-agent runtime:     {report.agent.runtime_state}')
+    print(f'  ssh-agent socket:      {report.agent.socket_path}')
+    print(f'  ssh-agent loaded keys: {len(report.agent.loaded_fingerprints)}')
+    if report.issues:
+        print('  ssh-agent issues:')
+        for issue in report.issues:
+            action = 'fixable' if issue.fixable else 'manual'
+            print(f'    {action:7} {issue.code}: {issue.detail}')
+    else:
+        print('  ssh-agent issues:      none')
+
+
+class VMCredsDoctorCLI(_BaseCommand):
+    """Diagnose credential health; --fix repairs derived runtime state."""
+
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    fix: bool = kwconf.Flag(
+        False,
+        help=(
+            'Repair derived ssh-agent runtime state only. Provider grants and '
+            'credential authority remain explicit add/revoke operations.'
+        ),
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        context, store, _store_path, principal_id = _load_credential_context(
+            args.config, vm_opt=args.vm, persist_runtime_defaults=False
+        )
+        vm_name = context.effective_cfg.vm.name
+        guest_records = find_credentials_for_vm(store, vm_name, principal_id=principal_id)
+        fingerprints = _guest_key_fingerprints(
+            store, vm_name=vm_name, principal_id=principal_id
+        )
+        mgr = CommandManager.current()
+        if args.fix:
+            with mgr.intent(
+                f'Repair ssh-agent credential runtime for {vm_name}',
+                why='Repair only derived local ssh-agent state.',
+                role='modify',
+            ):
+                report = agent.fix_doctor(
+                    store,
+                    vm_name,
+                    principal_id,
+                    guest_key_fingerprints=fingerprints,
+                    manager=mgr,
+                )
+        else:
+            report = agent.inspect_doctor(
+                store,
+                vm_name,
+                principal_id,
+                guest_key_fingerprints=fingerprints,
+                manager=mgr,
+            )
+        print('Credential doctor')
+        print(f'  VM:                    {vm_name}')
+        print(f'  Principal:             {principal_id or "legacy"}')
+        print(f'  guest-key credentials: {len(guest_records)}')
+        print('  guest-key repair:      explicit status/revoke lifecycle')
+        _print_ssh_agent_doctor(report)
+        return 0 if report.healthy else 1
+
+
 class VMCredsModalCLI(kwconf.ModalCLI):
-    """Manage scoped credentials installed in a VM."""
+    """Manage scoped repository credentials for a VM."""
 
     setup = VMCredsSetupCLI
+    preference = VMCredsPreferenceCLI
     plan = VMCredsPlanCLI
     apply = VMCredsApplyCLI
     add = VMCredsAddCLI
@@ -1020,3 +1473,4 @@ class VMCredsModalCLI(kwconf.ModalCLI):
     status = VMCredsStatusCLI
     revoke = VMCredsRevokeCLI
     abandon = VMCredsAbandonCLI
+    doctor = VMCredsDoctorCLI

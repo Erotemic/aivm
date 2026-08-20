@@ -10,6 +10,7 @@ from ..attachment_schema import (
     normalize_mirror_home_policy,
 )
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
+from ..credential_backends import normalize_credential_backend
 from ..legacy.pre_0_6_0 import compatibility_surface
 from .models import (
     DEFAULT_ATTACHMENT_MODE,
@@ -19,6 +20,7 @@ from .models import (
     NetworkEntry,
     PrincipalEntry,
     Store,
+    STORE_SCHEMA_VERSION,
     VMEntry,
 )
 from .parse import _norm_dir
@@ -47,6 +49,22 @@ def upsert_vm_with_network(
         reg.vms.append(rec)
     if reg.store_kind != 'machine':
         reg.active_vm = name
+    elif cfg.vm.credential_backend != 'auto':
+        reg.schema_version = max(reg.schema_version, 14)
+
+
+def set_vm_credential_backend(
+    reg: Store, vm_name: str, backend: object
+) -> str:
+    """Set one VM's credential-backend preference and return its name."""
+    normalized = normalize_credential_backend(backend)
+    matches = [entry for entry in reg.vms if entry.name == vm_name]
+    if not matches:
+        raise KeyError(f'Unknown VM {vm_name!r}')
+    matches[0].cfg.vm.credential_backend = normalized
+    if reg.store_kind == 'machine' and normalized != 'auto':
+        reg.schema_version = max(reg.schema_version, STORE_SCHEMA_VERSION)
+    return normalized
 
 
 def upsert_network(

@@ -15,6 +15,7 @@ from ..credentials.agent_schema import (
     VALID_AGENT_CREDENTIAL_STATES,
     validate_agent_credential_identity,
 )
+from ..credential_backends import normalize_credential_backend
 from ..credentials.schema import (
     CREDENTIAL_ACCESS_READ,
     CREDENTIAL_KIND_GITHUB_DEPLOY_KEY,
@@ -131,6 +132,9 @@ def _cfg_from_dict(raw: dict[str, object]) -> AgentVMConfig:
             for k, v in body.items():
                 if hasattr(obj, str(k)):
                     setattr(obj, str(k), v)
+    cfg.vm.credential_backend = normalize_credential_backend(
+        cfg.vm.credential_backend
+    )
     verbosity_val = raw.get('verbosity')
     if verbosity_val is not None:
         cfg.verbosity = int(verbosity_val)  # type: ignore
@@ -324,27 +328,27 @@ def _agent_credential_from_dict(
     missing = [name for name in required if not values[name]]
     if missing:
         raise ValueError(
-            f'VM {vm_name!r} agent credential is missing required field(s): '
+            f'VM {vm_name!r} ssh-agent credential is missing required field(s): '
             + ', '.join(missing)
         )
     if values['kind'] not in VALID_CREDENTIAL_KINDS:
         raise ValueError(
-            f'VM {vm_name!r} agent credential {values["id"]!r} has '
+            f'VM {vm_name!r} ssh-agent credential {values["id"]!r} has '
             f'unsupported kind {values["kind"]!r}'
         )
     if values['access'] not in VALID_CREDENTIAL_ACCESS:
         raise ValueError(
-            f'VM {vm_name!r} agent credential {values["id"]!r} has invalid '
+            f'VM {vm_name!r} ssh-agent credential {values["id"]!r} has invalid '
             f'access {values["access"]!r}'
         )
     if values['state'] not in VALID_AGENT_CREDENTIAL_STATES:
         raise ValueError(
-            f'VM {vm_name!r} agent credential {values["id"]!r} has invalid '
+            f'VM {vm_name!r} ssh-agent credential {values["id"]!r} has invalid '
             f'state {values["state"]!r}'
         )
     if values['state'] != CREDENTIAL_STATE_PENDING and not values['key_fingerprint']:
         raise ValueError(
-            f'VM {vm_name!r} agent credential {values["id"]!r} has no key '
+            f'VM {vm_name!r} ssh-agent credential {values["id"]!r} has no key '
             'fingerprint outside the pending state'
         )
     try:
@@ -363,7 +367,7 @@ def _agent_credential_from_dict(
         key_fingerprint = validate_key_fingerprint(values['key_fingerprint'])
     except CredentialValidationError as ex:
         raise ValueError(
-            f'VM {vm_name!r} agent credential {values["id"]!r} is invalid: '
+            f'VM {vm_name!r} ssh-agent credential {values["id"]!r} is invalid: '
             f'{ex}'
         ) from ex
     return AgentCredentialEntry(
@@ -526,12 +530,12 @@ def parse_store_toml(text: str) -> Store:
         for cred_raw in item.get('agent_credentials', []):
             if not isinstance(cred_raw, dict):
                 raise ValueError(
-                    f'VM {name!r} agent credential entry must be a table/object'
+                    f'VM {name!r} ssh-agent credential entry must be a table/object'
                 )
             cred = _agent_credential_from_dict(cred_raw, vm_name=name)
             if cred.id in seen_agent_credential_ids:
                 raise ValueError(
-                    f'VM {name!r} has duplicate agent credential id '
+                    f'VM {name!r} has duplicate ssh-agent credential id '
                     f'{cred.id!r}'
                 )
             agent_scope = (
@@ -542,7 +546,7 @@ def parse_store_toml(text: str) -> Store:
             )
             if agent_scope in seen_agent_credential_scopes:
                 raise ValueError(
-                    f'VM {name!r} has duplicate agent credential scope '
+                    f'VM {name!r} has duplicate ssh-agent credential scope '
                     f'{cred.principal_id or "legacy"}:'
                     f'{cred.provider_host}/{cred.owner}/{cred.repository}'
                 )
@@ -594,4 +598,6 @@ def parse_store_toml(text: str) -> Store:
         reg.schema_version = max(reg.schema_version, 12)
     if any(att.mirror_home != MIRROR_HOME_AUTO for att in reg.attachments):
         reg.schema_version = max(reg.schema_version, 13)
+    if any(vm.cfg.vm.credential_backend != 'auto' for vm in reg.vms):
+        reg.schema_version = max(reg.schema_version, 14)
     return reg

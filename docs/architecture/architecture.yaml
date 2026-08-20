@@ -25,6 +25,7 @@ subsystems:
       - aivm.attachment_schema
       - aivm.config
       - aivm.config_scopes
+      - aivm.credential_backends
     prefixes: []
 
   - id: persistence

@@ -422,7 +422,7 @@ def _prepare_foreground_agent_forwarding(
     if store_path is None:
         raise AIVMError(
             'Prepared foreground session has no persisted store path for '
-            'host-agent credential forwarding.'
+            'ssh-agent credential forwarding.'
         )
     forwarding = prepare_agent_forwarding(
         session.context,
@@ -579,7 +579,7 @@ class VMCodeCLI(_BaseCommand):
         if args.tunnel:
             if agent_forwarding is not None:
                 log.warning(
-                    'Host-agent repository credentials are available only '
+                    'SSH-agent repository credentials are available only '
                     'while an AIVM-managed SSH/Remote-SSH connection is '
                     'forwarding the dedicated agent. Detached `code --tunnel` '
                     'work does not retain that SSH forwarding channel.'

@@ -1589,7 +1589,7 @@ def test_creds_add_dry_run_and_help_tree(
     assert run_cli(['help', 'tree', '--yes', '--config', str(cfg_path)]) == 0
     tree = capsys.readouterr().out
     assert (
-        'aivm vm creds - Manage scoped credentials installed in a VM.' in tree
+        'aivm vm creds - Manage scoped repository credentials for a VM.' in tree
     )
     assert 'aivm vm creds add - Grant a VM repository access' in tree
     assert (

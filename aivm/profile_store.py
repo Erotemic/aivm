@@ -21,9 +21,10 @@ from .attachment_schema import (
     normalize_mirror_home_policy,
 )
 from .config import BehaviorConfig
+from .credential_backends import normalize_credential_backend
 from .user_paths import user_app_dir
 
-PROFILE_SCHEMA_VERSION = 2
+PROFILE_SCHEMA_VERSION = 3
 PROFILE_FILE_MODE = 0o600
 PROFILE_DIRECTORY_MODE = 0o700
 
@@ -44,6 +45,8 @@ class UserProfileStore:
     # Used only while creating a VM from global defaults. Once the VM exists,
     # its guest login is authoritative in the persisted principal record.
     default_guest_user: str = 'agent'
+    # User-wide preference used after any VM-specific preference.
+    credential_backend: str = 'auto'
 
 
 def profile_store_path() -> Path:
@@ -73,6 +76,7 @@ def render_user_profile(profile: UserProfileStore) -> str:
         f'default_guest_user = "{_toml_escape(profile.default_guest_user)}"',
         'mirror_shared_home_folders = '
         f'"{_toml_escape(normalize_mirror_home_policy(profile.mirror_shared_home_folders))}"',
+        f'credential_backend = "{_toml_escape(profile.credential_backend)}"',
         '',
         '[behavior]',
         f'yes_sudo = {str(profile.behavior.yes_sudo).lower()}',
@@ -96,7 +100,7 @@ def parse_user_profile(text: str) -> UserProfileStore:
             f'Unsupported AIVM profile schema version {version}; '
             f'this build supports up to {PROFILE_SCHEMA_VERSION}.'
         )
-    profile = UserProfileStore(schema_version=version)
+    profile = UserProfileStore(schema_version=PROFILE_SCHEMA_VERSION)
     profile.active_vm = str(raw.get('active_vm', '')).strip()
     profile.ssh_identity_file = str(raw.get('ssh_identity_file', '')).strip()
     profile.ssh_pubkey_path = str(raw.get('ssh_pubkey_path', '')).strip()
@@ -106,6 +110,9 @@ def parse_user_profile(text: str) -> UserProfileStore:
     ).strip()
     profile.mirror_shared_home_folders = normalize_mirror_home_policy(
         raw.get('mirror_shared_home_folders', MIRROR_HOME_AUTO)
+    )
+    profile.credential_backend = normalize_credential_backend(
+        raw.get('credential_backend', 'auto')
     )
     behavior = raw.get('behavior', {})
     if isinstance(behavior, dict):
@@ -187,6 +194,7 @@ def profile_debug_json(profile: UserProfileStore) -> str:
         'state_dir': profile.state_dir,
         'default_guest_user': profile.default_guest_user,
         'mirror_shared_home_folders': profile.mirror_shared_home_folders,
+        'credential_backend': profile.credential_backend,
         'behavior': {
             key: getattr(profile.behavior, key)
             for key in profile.behavior.__dataclass_fields__

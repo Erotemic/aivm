@@ -13,8 +13,11 @@ owners:
     label: Attachment declaration and replay state
     symbol: aivm.config_store.models.AttachmentEntry
   - id: credential
-    label: Credential metadata
+    label: Guest-key credential metadata
     symbol: aivm.config_store.models.CredentialEntry
+  - id: ssh-agent-credential
+    label: SSH-agent credential metadata
+    symbol: aivm.config_store.models.AgentCredentialEntry
   - id: host-private
     label: Host-private material and provider sessions
     symbol: aivm.credentials.keys.host_private_key_path
@@ -41,15 +44,24 @@ items:
   - label: Attachment declarations
     owner: machine-store
     symbol: aivm.config_store.models.Store.attachments
-  - label: Credential metadata records
+  - label: Guest-key credential metadata records
     owner: machine-store
     symbol: aivm.config_store.models.Store.credentials
+  - label: SSH-agent credential metadata records
+    owner: machine-store
+    symbol: aivm.config_store.models.Store.agent_credentials
+  - label: VM credential backend preference
+    owner: machine-store
+    symbol: aivm.config.VMConfig.credential_backend
   - label: Active VM selection
     owner: user-profile
     symbol: aivm.profile_store.UserProfileStore.active_vm
   - label: CLI behavior preferences
     owner: user-profile
     symbol: aivm.profile_store.UserProfileStore.behavior
+  - label: User credential backend preference
+    owner: user-profile
+    symbol: aivm.profile_store.UserProfileStore.credential_backend
   - label: Personal SSH identity path references
     owner: user-profile
     symbol: aivm.profile_store.UserProfileStore.ssh_identity_file
@@ -59,9 +71,12 @@ items:
   - label: Attachment owner, source identity, destination, mode, and state
     owner: attachment
     symbol: aivm.config_store.models.AttachmentEntry.state
-  - label: Credential owner, provider identity, access, and lifecycle state
+  - label: Guest-key credential owner, provider identity, access, and lifecycle state
     owner: credential
     symbol: aivm.config_store.models.CredentialEntry.state
+  - label: SSH-agent credential owner, provider identity, access, and lifecycle state
+    owner: ssh-agent-credential
+    symbol: aivm.config_store.models.AgentCredentialEntry.state
   - label: Repository deploy-key private material
     owner: host-private
     symbol: aivm.credentials.keys.host_private_key_path

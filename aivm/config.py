@@ -135,6 +135,9 @@ class VMConfig:
     # same host-side filesystem location. Off by default for backwards
     # compatibility with existing setups.
     mirror_shared_home_folders: bool = False
+    # Backend preference used when `aivm vm creds ... --backend auto` is used.
+    # `auto` defers to the caller profile, then the stable package fallback.
+    credential_backend: str = 'auto'
 
 
 @dataclass

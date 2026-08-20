@@ -63,6 +63,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   it `shared`, and migration renames those records.
 
 ### Added
+* Unified repository credential commands under ``aivm vm creds`` while keeping
+  ``guest-key`` and ``ssh-agent`` as independently owned backends. New grants
+  use ``--backend auto`` by default: an explicit backend wins, then a VM-level
+  ``vm.credential_backend`` preference, then the caller profile
+  ``credential_backend`` preference, then the package fallback. The fallback
+  is intentionally ``guest-key`` for now; the backend name ``ssh-agent`` is
+  used throughout the public surface to avoid ambiguity with AI agents.
+  ``preference``, ``list``, ``status``, ``revoke``, ``doctor``, and YAML plans
+  operate over both backend stores, and the former public ``vm agent_creds``
+  modal is gone.
 * Added layered mirror-home attachment policy. ``aivm attach`` now accepts
   ``--mirror_home auto|yes|no`` and persists explicit per-attachment overrides.
   ``auto`` resolves through the invoking user's private profile preference and
@@ -71,7 +81,7 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   explicit attachment overrides require the new store schema field. Explicit
   per-attachment opt-out also safely removes a matching AIVM-derived mirror
   symlink instead of leaving stale presentation state behind.
-* Wired independent ``agent_creds`` into managed SSH and VS Code Remote-SSH
+* Wired independent ``ssh-agent`` credentials into managed SSH and VS Code Remote-SSH
   sessions. AIVM now lazily restores the VM/principal-scoped dedicated
   ``ssh-agent``, forwards that exact socket instead of the caller's ordinary
   agent, installs only public key selectors in the guest, and writes

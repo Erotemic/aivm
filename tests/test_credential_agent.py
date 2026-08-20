@@ -1,4 +1,4 @@
-"""Tests for the independent host-agent credential subsystem."""
+"""Tests for the independent ssh-agent credential backend."""
 
 from __future__ import annotations
 
@@ -411,7 +411,7 @@ def test_vm_delete_guard_sees_independent_agent_credentials(
 ) -> None:
     manager, _, store = isolated_agent
     record = _grant(manager, store)
-    with pytest.raises(AIVMError, match='host-agent repository credentials'):
+    with pytest.raises(AIVMError, match='ssh-agent repository credentials'):
         require_vm_credentials_released(
             store, record.vm_name, action='deleted'
         )

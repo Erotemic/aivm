@@ -1,6 +1,6 @@
-"""Pure desired-state and host-key storage for agent credentials.
+"""Pure desired-state and host-key storage for ssh-agent credentials.
 
-Host-agent grants live in ``Store.agent_credentials`` and are deliberately
+SSH-agent grants live in ``Store.agent_credentials`` and are deliberately
 separate from the existing guest-key ``Store.credentials`` collection.  Only
 private key material is user-local.  This module has no provider, ssh-agent,
 or guest-transport behavior.
@@ -25,7 +25,7 @@ def agent_scope_id(vm_name: str, principal_id: str) -> str:
 
     vm = str(vm_name or '').strip()
     if not vm:
-        raise AIVMError('Agent credentials require a VM name.')
+        raise AIVMError('SSH-agent credentials require a VM name.')
     principal = str(principal_id or '').strip()
     digest = hashlib.sha256(f'{vm}\0{principal}'.encode('utf-8')).hexdigest()[:20]
     return f'scope-{digest}'
@@ -188,7 +188,7 @@ def find_agent_credential(
     else:
         raise ValueError('credential_id or repo is required')
     if len(matches) > 1:
-        raise AIVMError('Duplicate host-agent credential records were found.')
+        raise AIVMError('Duplicate ssh-agent credential records were found.')
     return matches[0] if matches else None
 
 

@@ -1,4 +1,4 @@
-"""Independent host-agent repository credentials.
+"""Independent ssh-agent repository credentials.
 
 This subsystem is intentionally separate from the existing guest-key credential
 feature. It owns a distinct desired-state collection and deploy-key material. A key
@@ -174,8 +174,8 @@ def _inspect_keypair(
     private = private_key_path(record)
     public = public_key_path(record)
     _require_private_dir(private.parent, label='Agent-credential entry directory')
-    _require_safe_file(private, label='Agent credential private key', private=True)
-    _require_safe_file(public, label='Agent credential public key', private=False)
+    _require_safe_file(private, label='SSH-agent credential private key', private=True)
+    _require_safe_file(public, label='SSH-agent credential public key', private=False)
     public_text = normalized_public_key(public.read_text(encoding='utf-8'))
     fingerprint = public_key_fingerprint(public_text)
     result = manager.run(
@@ -192,17 +192,17 @@ def _inspect_keypair(
     if result.code != 0:
         detail = (result.stderr or result.stdout or '').strip()
         raise AIVMError(
-            f'Private key for agent credential {record.id} is invalid: '
+            f'Private key for ssh-agent credential {record.id} is invalid: '
             f'{detail or "ssh-keygen -y failed"}'
         )
     if normalized_public_key(result.stdout) != public_text:
         raise AIVMError(
-            f'Private and public keys for agent credential {record.id} do not '
+            f'Private and public keys for ssh-agent credential {record.id} do not '
             'form a matching keypair.'
         )
     if record.key_fingerprint and record.key_fingerprint != fingerprint:
         raise AIVMError(
-            f'Agent credential {record.id} key fingerprint drifted: '
+            f'SSH-agent credential {record.id} key fingerprint drifted: '
             f'recorded={record.key_fingerprint} actual={fingerprint}.'
         )
     return public_text, fingerprint
@@ -232,12 +232,12 @@ def _ensure_keypair(
         return replace(record, key_fingerprint=fingerprint)
     if private_exists or public_exists:
         raise AIVMError(
-            f'Agent credential keypair is incomplete under {directory}; '
+            f'SSH-agent credential keypair is incomplete under {directory}; '
             'doctor will not invent replacement key material.'
         )
     if record.key_fingerprint:
         raise AIVMError(
-            f'Host-only key material for recorded agent credential {record.id} '
+            f'Host-only key material for recorded ssh-agent credential {record.id} '
             'is missing. Refusing to generate a replacement while its provider '
             'identity may still exist.'
         )
@@ -299,7 +299,7 @@ def _find_remote(
             if _provider_fingerprint(exact[0]) != record.key_fingerprint:
                 raise AIVMError(
                     f'Provider key id {record.provider_key_id} no longer '
-                    f'matches agent credential {record.id}; refusing to use it.'
+                    f'matches ssh-agent credential {record.id}; refusing to use it.'
                 )
             return exact[0]
     by_fingerprint = [
@@ -309,7 +309,7 @@ def _find_remote(
     ]
     if len(by_fingerprint) > 1:
         raise AIVMError(
-            f'Multiple provider deploy keys match agent credential {record.id}.'
+            f'Multiple provider deploy keys match ssh-agent credential {record.id}.'
         )
     if by_fingerprint:
         return by_fingerprint[0]
@@ -329,7 +329,7 @@ def _require_agent_tools(kind: str, *, manager: CommandManager) -> None:
     missing = [name for name in names if shutil.which(name) is None]
     if missing:
         raise AIVMError(
-            'Missing host command(s) required for host-agent credentials: '
+            'Missing host command(s) required for ssh-agent credentials: '
             + ', '.join(missing)
         )
     if 'gh' in providers.required_tools(kind):
@@ -471,7 +471,7 @@ def _probe_agent(
         check=False,
         capture=True,
         env=_agent_env(state),
-        summary='Inspect host-agent credential identities',
+        summary='Inspect ssh-agent credential identities',
         detail=f'socket={state.socket_path}',
     )
     combined = f'{result.stdout}\n{result.stderr}'.lower()
@@ -549,7 +549,7 @@ def _start_agent_locked(
     elif os.path.lexists(socket_path):
         _require_safe_socket(socket_path, allow_missing=False)
         raise AIVMError(
-            f'Untracked host-agent credential socket exists: {socket_path}.'
+            f'Untracked ssh-agent credential socket exists: {socket_path}.'
         )
     result = manager.run(
         ['ssh-agent', '-a', str(socket_path), '-s'],
@@ -558,7 +558,7 @@ def _start_agent_locked(
         ownership='tool',
         check=True,
         capture=True,
-        summary='Start dedicated host-agent credential process',
+        summary='Start dedicated ssh-agent credential process',
         detail=f'vm={vm_name} principal={principal_id or "legacy"}',
     )
     match = _AGENT_PID_RE.search(result.stdout)
@@ -576,7 +576,7 @@ def _start_agent_locked(
         live, _ = _probe_agent(state, manager=manager)
         if not live:
             raise AIVMError(
-                f'New host-agent credential process did not answer at '
+                f'New ssh-agent credential process did not answer at '
                 f'{socket_path}.'
             )
         if not _pid_is_owned_ssh_agent(state.pid):
@@ -592,7 +592,7 @@ def _start_agent_locked(
             check=False,
             capture=True,
             env=_agent_env(state),
-            summary='Clean up failed host-agent startup',
+            summary='Clean up failed ssh-agent startup',
         )
         try:
             _cleanup_stale(state)
@@ -611,7 +611,7 @@ def _stop_agent_locked(
         if os.path.lexists(socket_path):
             _require_safe_socket(socket_path, allow_missing=False)
             raise AIVMError(
-                f'Cannot remove untracked host-agent socket: {socket_path}'
+                f'Cannot remove untracked ssh-agent socket: {socket_path}'
             )
         return False
     live, _ = _probe_agent(state, manager=manager)
@@ -620,7 +620,7 @@ def _stop_agent_locked(
         return False
     if not _pid_is_owned_ssh_agent(state.pid):
         raise AIVMError(
-            f'Host-agent socket is live but pid {state.pid} is not a '
+            f'SSH-agent socket is live but pid {state.pid} is not a '
             'user-owned ssh-agent; refusing to kill it.'
         )
     manager.run(
@@ -631,7 +631,7 @@ def _stop_agent_locked(
         check=True,
         capture=True,
         env=_agent_env(state),
-        summary='Unload host-agent credential identities',
+        summary='Unload ssh-agent credential identities',
     )
     manager.run(
         ['ssh-agent', '-k'],
@@ -641,7 +641,7 @@ def _stop_agent_locked(
         check=True,
         capture=True,
         env=_agent_env(state),
-        summary='Stop dedicated host-agent credential process',
+        summary='Stop dedicated ssh-agent credential process',
     )
     _cleanup_stale(state)
     return True
@@ -656,11 +656,11 @@ def _validated_active_key_paths(
         _, actual = _inspect_keypair(record, manager=manager)
         if not record.key_fingerprint:
             raise AIVMError(
-                f'Active agent credential {record.id} has no fingerprint.'
+                f'Active ssh-agent credential {record.id} has no fingerprint.'
             )
         if actual != record.key_fingerprint:
             raise AIVMError(
-                f'Agent credential {record.id} fingerprint mismatch.'
+                f'SSH-agent credential {record.id} fingerprint mismatch.'
             )
         paths.append(private_key_path(record))
         fingerprints.append(actual)
@@ -674,7 +674,7 @@ def ensure_agent_state(
     *,
     manager: CommandManager,
 ) -> AgentStatus:
-    """Make the dedicated agent exactly match active agent credentials.
+    """Make the dedicated agent exactly match active ssh-agent credentials.
 
     This is an internal convergence primitive, not a user-facing workflow.
     Existing guest-key credentials are never inputs.
@@ -693,9 +693,9 @@ def ensure_agent_state(
             return AgentStatus('running', state.pid, state.socket_path, loaded)
         env = _agent_env(state)
         with manager.step(
-            f'Repair host-agent credentials for {vm_name}',
+            f'Repair ssh-agent credentials for {vm_name}',
             why=(
-                'The dedicated agent may contain only fresh host-agent '
+                'The dedicated agent may contain only fresh ssh-agent '
                 'credentials owned by this VM principal.'
             ),
             approval_scope=(
@@ -710,7 +710,7 @@ def ensure_agent_state(
                 check=True,
                 capture=True,
                 env=env,
-                summary='Clear dedicated host-agent identities',
+                summary='Clear dedicated ssh-agent identities',
             )
             manager.run(
                 ['ssh-add', *(str(path) for path in paths)],
@@ -727,7 +727,7 @@ def ensure_agent_state(
         loaded = _parse_loaded_fingerprints(result) if live else ()
         if not live or len(loaded) != len(expected) or set(loaded) != set(expected):
             raise AIVMError(
-                'Dedicated host-agent did not converge exactly: '
+                'Dedicated ssh-agent did not converge exactly: '
                 f'expected={expected!r} loaded={loaded!r}'
             )
         return AgentStatus('running', state.pid, state.socket_path, loaded)
@@ -760,18 +760,18 @@ def grant_agent_credential(
         if existing is not None:
             if existing.state == AGENT_CREDENTIAL_STATE_REVOCATION_PENDING:
                 raise AIVMError(
-                    f'Agent credential {cred_id} is already being revoked; '
-                    'finish with aivm vm agent_creds revoke before granting '
+                    f'SSH-agent credential {cred_id} is already being revoked; '
+                    'finish with aivm vm creds revoke --backend ssh-agent before granting '
                     'this repository again.'
                 )
             if existing.access != access:
                 raise AIVMError(
-                    f'Agent credential {cred_id} already has '
+                    f'SSH-agent credential {cred_id} already has '
                     f'access={existing.access}; revoke it before changing access.'
                 )
             if existing.kind != kind:
                 raise AIVMError(
-                    f'Agent credential {cred_id} already uses kind={existing.kind}; '
+                    f'SSH-agent credential {cred_id} already uses kind={existing.kind}; '
                     'revoke it before changing providers.'
                 )
             record = existing
@@ -793,7 +793,7 @@ def grant_agent_credential(
                 store,
                 store_path,
                 reason=(
-                    f'Record pending host-agent credential {record.id} for '
+                    f'Record pending ssh-agent credential {record.id} for '
                     f'VM {vm_name}.'
                 ),
             )
@@ -811,7 +811,7 @@ def grant_agent_credential(
         )
         if reason:
             raise AIVMError(
-                'Host-agent credentials currently require automatic provider '
+                'SSH-agent credentials currently require automatic provider '
                 f'publication. Pending credential {record.id} and its '
                 f'host-only key were kept for safe retry. {reason}'
             )
@@ -829,7 +829,7 @@ def grant_agent_credential(
         if remote.read_only != expected_read_only:
             raise AIVMError(
                 f'Provider deploy key {remote.key_id} has the wrong access '
-                f'mode for agent credential {record.id}; expected {access}.'
+                f'mode for ssh-agent credential {record.id}; expected {access}.'
             )
         if _provider_fingerprint(remote) != record.key_fingerprint:
             raise AIVMError(
@@ -845,7 +845,7 @@ def grant_agent_credential(
         _save_agent_store(
             store,
             store_path,
-            reason=f'Activate host-agent credential {record.id}.',
+            reason=f'Activate ssh-agent credential {record.id}.',
         )
     ensure_agent_state(store, vm_name, principal, manager=manager)
     return record
@@ -869,11 +869,11 @@ def revoke_agent_credential(
             credential_id=record.id,
         )
         if current is None:
-            raise AIVMError(f'Agent credential not found: {record.id}')
+            raise AIVMError(f'SSH-agent credential not found: {record.id}')
         _, actual = _inspect_keypair(current, manager=manager)
         if actual != current.key_fingerprint:
             raise AIVMError(
-                f'Agent credential {current.id} key material has drifted; '
+                f'SSH-agent credential {current.id} key material has drifted; '
                 'refusing provider deletion.'
             )
         providers.check_auth(current.kind, agent_repository(current), manager=manager)
@@ -899,7 +899,7 @@ def revoke_agent_credential(
             store,
             store_path,
             reason=(
-                f'Record provider revocation for host-agent credential '
+                f'Record provider revocation for ssh-agent credential '
                 f'{current.id} before local cleanup.'
             ),
         )
@@ -920,7 +920,7 @@ def revoke_agent_credential(
         _save_agent_store(
             store,
             store_path,
-            reason=f'Remove revoked host-agent credential {current.id}.',
+            reason=f'Remove revoked ssh-agent credential {current.id}.',
         )
     ensure_agent_state(store, record.vm_name, record.principal_id, manager=manager)
 
@@ -944,7 +944,7 @@ def inspect_doctor(
                 DoctorIssue(
                     'pending-grant',
                     f'{record.id} for {agent_repository(record).display} is pending; rerun '
-                    '`aivm vm agent_creds add` to finish provider authority.',
+                    '`aivm vm creds add --backend ssh-agent` to finish provider authority.',
                     False,
                 )
             )
@@ -953,7 +953,7 @@ def inspect_doctor(
                 DoctorIssue(
                     'pending-revocation',
                     f'{record.id} for {agent_repository(record).display} is in a partial '
-                    'revocation state; rerun `aivm vm agent_creds revoke`.',
+                    'revocation state; rerun `aivm vm creds revoke --backend ssh-agent`.',
                     False,
                 )
             )
@@ -985,7 +985,7 @@ def inspect_doctor(
         issues.append(
             DoctorIssue(
                 'duplicate-agent-key',
-                f'Multiple host-agent records use identity {fingerprint}; '
+                f'Multiple ssh-agent records use identity {fingerprint}; '
                 'fresh grants must never share private key material.',
                 False,
             )
@@ -996,7 +996,7 @@ def inspect_doctor(
         issues.append(
             DoctorIssue(
                 'guest-key-collision',
-                f'Host-agent identity {fingerprint} is also recorded by the '
+                f'SSH-agent identity {fingerprint} is also recorded by the '
                 'guest-key subsystem. This violates the non-exportable-key '
                 'invariant and requires explicit credential replacement.',
                 False,
@@ -1011,7 +1011,7 @@ def inspect_doctor(
                 DoctorIssue(
                     'agent-not-running',
                     f'Dedicated agent is {agent_status.runtime_state}; active '
-                    'host-agent credentials exist.',
+                    'ssh-agent credentials exist.',
                     not (
                         agent_status.runtime_state == 'stale'
                         and agent_status.pid is None
@@ -1026,7 +1026,7 @@ def inspect_doctor(
                 DoctorIssue(
                     'agent-identities',
                     'Dedicated agent identities do not exactly match active '
-                    'host-agent credential records.',
+                    'ssh-agent credential records.',
                     True,
                 )
             )
@@ -1035,7 +1035,7 @@ def inspect_doctor(
             DoctorIssue(
                 'unused-agent',
                 f'Dedicated agent is {agent_status.runtime_state} but this '
-                'scope has no active host-agent credentials.',
+                'scope has no active ssh-agent credentials.',
                 not (
                     agent_status.runtime_state == 'stale'
                     and agent_status.pid is None
@@ -1072,7 +1072,7 @@ def fix_doctor(
     if blockers:
         details = '\n'.join(f'  - {issue.detail}' for issue in blockers)
         raise AIVMError(
-            'Host-agent credential doctor found issue(s) that --fix must not '
+            'SSH-agent credential doctor found issue(s) that --fix must not '
             f'change automatically:\n{details}'
         )
     ensure_agent_state(store, vm_name, principal_id, manager=manager)

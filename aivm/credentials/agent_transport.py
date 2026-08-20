@@ -1,4 +1,4 @@
-"""Connection-time capability transport for independent host-agent grants."""
+"""Connection-time capability transport for independent ssh-agent grants."""
 
 from __future__ import annotations
 

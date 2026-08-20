@@ -12,6 +12,10 @@ import yaml
 from ..commands import CommandManager
 from ..errors import AIVMError
 from . import providers
+from ..credential_backends import (
+    CredentialBackendSelection,
+    normalize_credential_backend,
+)
 from .schema import CredentialAccess, normalize_credential_access
 
 PLAN_VERSION = 1
@@ -25,6 +29,7 @@ class CredentialPlanEntry:
     access: CredentialAccess
     remote: str
     provider: providers.CredentialProvider
+    backend: CredentialBackendSelection
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,7 @@ class CredentialPlanCandidate:
     path: str
     access: CredentialAccess
     provider: providers.CredentialProvider
+    backend: CredentialBackendSelection
     remotes: tuple[tuple[str, str], ...]
 
 
@@ -115,12 +121,14 @@ def discover_credential_candidates(
     *,
     access: object = 'read',
     provider: object = 'auto',
+    backend: object = 'auto',
     manager: CommandManager,
 ) -> tuple[Path, list[CredentialPlanCandidate]]:
     """Discover the checkout root and initialized submodules."""
     root = repository_root(checkout, manager=manager)
     normalized_access = normalize_credential_access(access)
     normalized_provider = providers.normalize_provider(provider)
+    normalized_backend = normalize_credential_backend(backend)
     relative_paths = ('.', *_initialized_submodule_paths(root, manager=manager))
 
     candidates: list[CredentialPlanCandidate] = []
@@ -144,6 +152,7 @@ def discover_credential_candidates(
                 path=relative,
                 access=normalized_access,
                 provider=normalized_provider,
+                backend=normalized_backend,
                 remotes=remotes,
             )
         )
@@ -164,6 +173,7 @@ def _render_repository_mapping(
             'access': _plan_access_spelling(candidate.access),
             'remote': remote,
             'provider': candidate.provider,
+            'backend': candidate.backend,
         },
         ensure_ascii=False,
     )
@@ -200,6 +210,7 @@ def render_credential_plan(
         '# Active list items are grants. Comment a row out to skip it.',
         '# For multiple distinct remotes, uncomment exactly one offered row.',
         '# Edit access on any row to ro or rw before applying.',
+        '# Backend may be auto, guest-key, or ssh-agent.',
         '# Each row is self-contained; there are no hidden access defaults.',
         f'version: {PLAN_VERSION}',
         f'root: {json.dumps(str(root), ensure_ascii=False)}',
@@ -290,6 +301,7 @@ def parse_credential_plan_document(text: str) -> CredentialPlanDocument:
     entries: list[CredentialPlanEntry] = []
     seen_paths: set[str] = set()
     required_fields = {'path', 'access', 'remote', 'provider'}
+    allowed_fields = required_fields | {'backend'}
     for row, record in enumerate(raw_entries, start=1):
         if not isinstance(record, dict):
             raise AIVMError(
@@ -297,7 +309,7 @@ def parse_credential_plan_document(text: str) -> CredentialPlanDocument:
             )
         fields = set(record)
         missing = required_fields - fields
-        unknown = fields - required_fields
+        unknown = fields - allowed_fields
         if missing:
             names = ', '.join(sorted(missing))
             raise AIVMError(
@@ -330,6 +342,13 @@ def parse_credential_plan_document(text: str) -> CredentialPlanDocument:
             )
         remote = _require_string(record, 'remote', row=row)
         provider_text = _require_string(record, 'provider', row=row)
+        backend_raw = record.get('backend', 'auto')
+        if not isinstance(backend_raw, str) or not backend_raw.strip():
+            raise AIVMError(
+                f"Credential plan repository row {row} field 'backend' "
+                'must be a non-empty string.'
+            )
+        backend_text = backend_raw
 
         entries.append(
             CredentialPlanEntry(
@@ -337,6 +356,7 @@ def parse_credential_plan_document(text: str) -> CredentialPlanDocument:
                 access=normalize_credential_access(access_text),
                 remote=remote,
                 provider=providers.normalize_provider(provider_text),
+                backend=normalize_credential_backend(backend_text),
             )
         )
 

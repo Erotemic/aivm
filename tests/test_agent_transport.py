@@ -1,4 +1,4 @@
-"""Connection-time forwarding of independent host-agent credentials."""
+"""Connection-time forwarding of independent ssh-agent credentials."""
 
 from __future__ import annotations
 

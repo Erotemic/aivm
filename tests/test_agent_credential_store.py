@@ -1,4 +1,4 @@
-"""Config-store coverage for the independent host-agent credential collection."""
+"""Config-store coverage for the independent ssh-agent credential collection."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _store_with_both_credential_systems() -> Store:
         repository=repo.name,
         access='write',
         provider_key_id='202',
-        provider_key_title='host-agent-key',
+        provider_key_title='ssh-agent-key',
         key_fingerprint='SHA256:YWdlbnQ',
         state='active',
     )

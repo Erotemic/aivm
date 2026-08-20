@@ -1,4 +1,4 @@
-"""Guest routing for independent host-agent repository credentials."""
+"""Guest routing for independent ssh-agent repository credentials."""
 
 from __future__ import annotations
 

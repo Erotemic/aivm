@@ -50,10 +50,10 @@ def require_vm_credentials_released(
             for entry in agent_blocking
         )
         raise AIVMError(
-            f"VM '{vm_name}' still owns host-agent repository credentials and "
+            f"VM '{vm_name}' still owns ssh-agent repository credentials and "
             f'cannot be {action}:\n{lines}\n'
-            'Revoke them first with `aivm vm agent_creds revoke ...`. '
-            'AIVM will not silently orphan a host-only deploy key.'
+            'Revoke them first with `aivm vm creds revoke --backend ssh-agent ...`. '
+            'AIVM will not silently orphan a ssh-agent deploy key.'
         )
     return credentials
 

@@ -29,12 +29,13 @@ or guard seams, and that list is the thing to check when reviewing the boundary:
 - ``cli.vm_connect`` imports only :mod:`.agent_transport`, the narrow runtime
   seam that exposes an explicitly selected dedicated agent during managed
   SSH/Remote-SSH sessions.
-- ``cli.vm_creds`` and ``cli.vm_agent_creds`` are the feature's own command
-  surfaces.
+- ``cli.vm_creds`` is the feature's single public command surface; it
+  dispatches to independently owned guest-key and ssh-agent backends.
 
 The shared CLI option surface (``cli._common``) must stay free of credential
-imports. Settings this feature needs are resolved by :mod:`.policy` from the
-store the running command bound, rather than pushed in by core.
+imports. Backend naming and preference precedence live in the neutral
+:mod:`aivm.credential_backends` config-policy module; credential authority and
+runtime behavior remain inside this package.
 
 Dependencies point inward only: modules here import ``commands``, ``config``,
 ``config_store``, ``errors``, ``host``, ``runtime``, and ``services``. No core

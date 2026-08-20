@@ -37,6 +37,7 @@ class MachineVMConfig:
     disk_gb: int
     timezone: str
     mirror_shared_home_folders: bool
+    credential_backend: str
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class UserProfile:
     ssh_pubkey_path: str
     state_dir: str
     mirror_shared_home_folders: str = MIRROR_HOME_AUTO
+    credential_backend: str = 'auto'
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,7 @@ def machine_config_from_effective(cfg: AgentVMConfig) -> MachineConfig:
             disk_gb=cfg.vm.disk_gb,
             timezone=cfg.vm.timezone,
             mirror_shared_home_folders=cfg.vm.mirror_shared_home_folders,
+            credential_backend=cfg.vm.credential_backend,
         ),
         network=deepcopy(cfg.network),
         firewall=deepcopy(cfg.firewall),
@@ -180,6 +183,7 @@ def resolve_persisted_vm_context(
         ssh_pubkey_path=profile_store.ssh_pubkey_path,
         state_dir=profile_store.state_dir,
         mirror_shared_home_folders=profile_store.mirror_shared_home_folders,
+        credential_backend=profile_store.credential_backend,
     )
     return ResolvedVMContext(
         machine=machine_config_from_effective(cfg),

@@ -89,7 +89,7 @@ class CredentialEntry:
 
 @dataclass
 class AgentCredentialEntry:
-    """One host-only repository grant owned by agent credentials.
+    """One host-only repository grant owned by ssh-agent credentials.
 
     This collection is intentionally separate from :class:`CredentialEntry`.
     Its private key material belongs only to the host-side agent subsystem and
@@ -128,7 +128,7 @@ class PrincipalEntry:
 # store may be edited by several aivm versions; parse refuses machine
 # documents newer than this so an older build cannot silently re-render the
 # store and drop fields a newer principal wrote.
-STORE_SCHEMA_VERSION = 13
+STORE_SCHEMA_VERSION = 14
 
 
 @compatibility_surface

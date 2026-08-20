@@ -1,4 +1,4 @@
-"""Derived guest routing for host-agent repository credentials.
+"""Derived guest routing for ssh-agent repository credentials.
 
 Only public key material crosses the guest boundary.  The corresponding
 private keys remain in the principal-scoped host ssh-agent and are reachable
@@ -57,7 +57,7 @@ def _validated_repository(entry: AgentCredentialEntry) -> GitRepository:
 
 def render_ssh_config(credentials: list[AgentCredentialEntry]) -> str:
     """Render repo aliases that select one forwarded-agent identity exactly."""
-    lines = ['# Managed by aivm. Public selectors for host-agent credentials.']
+    lines = ['# Managed by aivm. Public selectors for ssh-agent credentials.']
     for entry in sorted(credentials, key=lambda item: item.id):
         repo = _validated_repository(entry)
         alias = f'aivm-agent-cred-{entry.id}'
@@ -80,7 +80,7 @@ def render_ssh_config(credentials: list[AgentCredentialEntry]) -> str:
 
 def render_git_config(credentials: list[AgentCredentialEntry]) -> str:
     """Rewrite exact repository URLs to their public-key-selecting SSH alias."""
-    lines = ['# Managed by aivm. Host-agent repository routing.']
+    lines = ['# Managed by aivm. SSH-agent repository routing.']
     for entry in sorted(credentials, key=lambda item: item.id):
         repo = _validated_repository(entry)
         alias = f'aivm-agent-cred-{entry.id}'
@@ -131,7 +131,7 @@ def _remove_stale_public_selectors(
         script=check_script,
         manager=manager,
         role='read',
-        summary='Check guest host-agent public selector set',
+        summary='Check guest ssh-agent public selector set',
         check=False,
     )
     if clean.code == 0:
@@ -152,7 +152,7 @@ def _remove_stale_public_selectors(
         script=cleanup_script,
         manager=manager,
         role='modify',
-        summary='Remove stale guest host-agent public selectors',
+        summary='Remove stale guest ssh-agent public selectors',
     )
 
 
@@ -171,7 +171,7 @@ def reconcile_guest_agent_credentials(
         if entry.state == AGENT_CREDENTIAL_STATE_ACTIVE
     )
     with manager.step(
-        'Reconcile guest host-agent credential routing',
+        'Reconcile guest ssh-agent credential routing',
         why=(
             'Install public key selectors and repository aliases while all '
             'private deploy keys remain exclusively in the host ssh-agent.'
@@ -189,7 +189,7 @@ def reconcile_guest_agent_credentials(
                 public_text = public_keys[entry.id]
             except KeyError as ex:
                 raise AIVMError(
-                    f'Missing validated public key for agent credential {entry.id}.'
+                    f'Missing validated public key for ssh-agent credential {entry.id}.'
                 ) from ex
             install_guest_file_if_changed(
                 cfg,
@@ -198,7 +198,7 @@ def reconcile_guest_agent_credentials(
                 text=public_text.rstrip() + '\n',
                 mode='644',
                 manager=manager,
-                label=f'host-agent public selector {entry.id}',
+                label=f'ssh-agent public selector {entry.id}',
             )
         install_guest_file_if_changed(
             cfg,
@@ -207,7 +207,7 @@ def reconcile_guest_agent_credentials(
             text=render_ssh_config(list(active)),
             mode='600',
             manager=manager,
-            label='host-agent SSH routing config',
+            label='ssh-agent SSH routing config',
         )
         install_guest_file_if_changed(
             cfg,
@@ -216,7 +216,7 @@ def reconcile_guest_agent_credentials(
             text=render_git_config(list(active)),
             mode='600',
             manager=manager,
-            label='host-agent Git routing config',
+            label='ssh-agent Git routing config',
         )
         _remove_stale_public_selectors(
             cfg,
@@ -255,7 +255,7 @@ def probe_forwarded_agent(
     ) != set(expected_fingerprints):
         detail = (result.stderr or result.stdout or '').strip()
         raise AIVMError(
-            'Dedicated host-agent credential forwarding did not reach the '
+            'Dedicated ssh-agent credential forwarding did not reach the '
             f'guest with the expected identities: expected={expected_fingerprints!r} '
             f'loaded={loaded!r}. {detail}'.rstrip()
         )

@@ -786,67 +786,88 @@ warning rather than blocking credential creation; tighten it with
 ``chmod 700 ~/.local/share/aivm`` when the broader permissions are not
 intentional.
 
-Host-agent repository credentials (experimental)
------------------------------------------------
+Credential backends
+-------------------
 
-AIVM also has an experimental *independent* credential system for deploy keys
-whose private halves remain on the host. It does not convert or reuse ordinary
-``aivm vm creds`` grants. A host-agent grant always gets a newly generated key
-pair, a distinct ``agent-git-*`` identity, a separate
-``[[vms.agent_credentials]]`` metadata collection, and host-only private-key
-storage under the owning user's AIVM data directory. Existing guest-key credentials therefore keep their
-original operational tradeoff: they are self-contained in the VM and require no
-host agent to remain available.
+``aivm vm creds`` is the single repository-credential frontend. It dispatches
+to two independently owned backends:
 
-.. code-block:: bash
+``guest-key``
+   Generates a repository deploy key and installs the private half into the
+   selected guest principal. This remains the stable fallback backend today.
 
-   # Create a new host-only deploy key and load it into the dedicated agent.
-   aivm vm agent_creds add Kitware/kwimage --access rw
+``ssh-agent``
+   Generates a fresh repository deploy key whose private half remains host-only,
+   loads it into a dedicated ``(VM, principal)`` ``ssh-agent``, and exposes only
+   that signing capability through managed SSH / VS Code Remote-SSH sessions.
 
-   # Inspect grants and current runtime health.
-   aivm vm agent_creds list
-   aivm vm agent_creds status
+New grants default to ``--backend auto``. An explicit ``--backend guest-key``
+or ``--backend ssh-agent`` bypasses preferences. Otherwise ``auto`` resolves the
+selected VM's ``vm.credential_backend`` preference, then the caller profile's
+``credential_backend`` preference, then AIVM's package fallback. The fallback
+is currently ``guest-key``; a future release may change the fallback to
+``ssh-agent`` after that backend has accumulated equivalent operational history.
 
-   # Doctor is diagnostic by default. --fix may restart/reload only the
-   # derived local agent; it never creates or revokes provider authority.
-   aivm vm agent_creds doctor
-   aivm vm agent_creds doctor --fix
+Inspect the preference hierarchy, set a VM-specific preference, or set a
+user-wide preference with the schema-aware credential frontend::
 
-   # Provider authority is changed only by explicit lifecycle commands.
-   aivm vm agent_creds revoke Kitware/kwimage
+   aivm vm creds preference
+   aivm vm creds preference ssh-agent
+   aivm vm creds preference guest-key --scope user
 
-The dedicated agent is scoped by ``(VM, principal)`` and never inherits the
-caller's ordinary ``SSH_AUTH_SOCK``. Its desired identities come only from the
-``agent_credentials`` collection; ordinary ``credentials`` records are never
-inputs to the agent. ``doctor`` cross-checks their
-fingerprints against ordinary guest-key records and treats any overlap as a
-non-repairable security violation: once a private key may have been exposed to
-a guest, AIVM will not relabel it as non-exportable. Switching a repository
-between the two systems therefore means revoking one grant and creating a new
-grant with fresh key material.
+Use ``auto`` to clear either preference::
 
-Managed ``aivm ssh`` and VS Code Remote-SSH sessions expose the dedicated
-agent to the selected guest for the life of that SSH connection. AIVM names
-the dedicated socket explicitly when requesting forwarding, so the caller's
-ordinary ``SSH_AUTH_SOCK`` is never forwarded by this feature. Before opening
-the foreground session, AIVM also installs only the public halves of active
-agent credentials under ``~/.local/share/aivm/agent-credentials`` and writes
-repo-specific SSH aliases plus exact Git URL rewrites. ``IdentityFile`` points
-at those public selectors with ``IdentitiesOnly yes``; OpenSSH then asks the
+   aivm vm creds preference auto
+   aivm vm creds preference auto --scope user
+
+A VM-specific preference wins over the user-wide preference. The values are
+persisted as ``vm.credential_backend`` in machine state and
+``credential_backend`` in the caller profile respectively.
+
+The normal commands operate over the union of both backend stores::
+
+   # Uses VM/user preference, then the current guest-key fallback.
+   aivm vm creds add Kitware/kwimage --access rw
+
+   # Explicit backend selection bypasses preferences.
+   aivm vm creds add Kitware/kwimage --backend ssh-agent --access rw
+   aivm vm creds add Kitware/kwimage --backend guest-key --access rw
+
+   aivm vm creds list
+   aivm vm creds status <credential-id>
+   aivm vm creds revoke <credential-id>
+   aivm vm creds doctor
+   aivm vm creds doctor --fix
+
+Bulk plans carry a per-row ``backend`` field. ``backend: auto`` resolves through
+the same VM/user/fallback hierarchy when the plan is applied, while
+``guest-key`` and ``ssh-agent`` pin a row to one backend.
+
+The two backend stores remain independent. ``ssh-agent`` never adopts or loads a
+private key from ``guest-key`` records, and a key that may have crossed into a
+guest is never relabeled as host-only. This allows a migration window in which
+the same repository has one credential in each backend: create and verify the
+fresh ``ssh-agent`` grant, then revoke the old ``guest-key`` grant. Repository
+selectors that match both backends are deliberately ambiguous; use an exact
+credential id or ``--backend`` rather than letting AIVM guess.
+
+For the ``ssh-agent`` backend, the dedicated agent never inherits the caller's
+ordinary ``SSH_AUTH_SOCK``. Managed ``aivm ssh`` and VS Code Remote-SSH sessions
+forward the explicitly selected AIVM agent socket and install only public key
+selectors plus repository-specific SSH/Git routing in the guest. ``IdentityFile``
+points at a public selector with ``IdentitiesOnly yes`` so OpenSSH asks the
 forwarded agent for the matching private-key operation without copying private
-material into the VM. A preflight ``ssh-add -l`` over the forwarded channel
-verifies that the guest sees exactly the expected fingerprints.
+material into the VM. Session preparation verifies the forwarded fingerprints
+before handing control to the shell/editor.
 
-The forwarding channel is intentionally connection-scoped rather than another
-persistent broker. A host reboot or dead agent is repaired lazily by the next
-managed SSH/Remote-SSH entry. Detached ``code --tunnel`` processes do not keep
-a forwarding channel after their bootstrap SSH connection exits; use Remote-SSH
-when the editor session needs host-agent Git credentials.
+The forwarding channel is connection-scoped. A host reboot or dead agent is
+repaired lazily by the next managed SSH/Remote-SSH entry. Detached
+``code --tunnel`` processes do not retain an SSH forwarding channel after their
+bootstrap connection exits, so Remote-SSH is the credential-bearing editor path.
 
-A VM with any ``agent_creds`` record cannot be deleted until those grants are
-revoked, using the same cross-cutting deletion safety boundary as ordinary
-repository credentials. This keeps the independently stored provider keys
-addressable instead of orphaning them when the VM definition disappears.
+A VM cannot be deleted while either backend still owns repository authority.
+``creds doctor --fix`` repairs only derived ``ssh-agent`` runtime state; provider
+grants, revocations, and key replacement remain explicit lifecycle operations.
 
 Command Groups
 --------------
@@ -861,7 +882,6 @@ Command Groups
    aivm host fw --help
    aivm vm --help
    aivm vm creds --help
-   aivm vm agent_creds --help
 
 Safety Notes
 ------------
