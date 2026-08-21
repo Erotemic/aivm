@@ -5,6 +5,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Live ``ssh-agent`` grants no longer fail after the credential is active merely
+  because the guest cannot reach the provider SSH endpoint for the final
+  read-only repository probe. Clear transport failures such as connection
+  refusal, timeout, DNS failure, or no route are reported as warnings while
+  forwarding/authentication defects remain hard errors.
 * ssh-agent guest public selectors now use mode ``0600`` because OpenSSH
   applies ``IdentityFile`` permission checks even when the file contains only
   a public key used to select an identity from the forwarded agent. Guest file

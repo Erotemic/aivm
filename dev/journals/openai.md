@@ -142,3 +142,24 @@ every configured repository.
 Simplified the ssh-agent grant guidance and added bulk credential revocation. The grant command no longer tries to explain whether an already-running SSH process tree might happen to have a usable forwarded agent; it gives one reliable operational instruction instead: use a fresh managed `aivm vm ssh` or `aivm vm code` session.
 
 `aivm vm creds revoke` now supports two explicit bulk scopes. `revoke <repository> --all` snapshots every matching credential backend for the current principal on the selected VM, while bare `revoke --all` snapshots every credential in that principal/VM scope. `--backend` narrows either form. The snapshot happens before mutation so removing one record cannot change what "all" meant midway through the operation. Each credential still runs through its existing provider-first revoke transaction. Ordinary domain failures are isolated so independent credentials can continue; command-control refusals still abort immediately. If any credential fails, the command returns a domain error after the remaining matches are attempted and reports the failed ids without undoing successful revocations.
+
+
+## 2026-08-21 10:11:00 -0400
+A live ssh-agent grant for AIQ-Kitware/aiq-dkps-formalization completed the
+authority and local setup successfully, then returned nonzero only because the
+VM's final read-only repository probe could not connect to github.com:22. That
+was the wrong severity boundary: provider registration, active-store state, the
+dedicated host agent, forwarded fingerprints, and guest routing were already
+healthy, while the failed check described guest network availability rather
+than credential correctness.
+
+I kept the end-to-end probe because it is useful, but split its failure modes.
+Clear network-path failures from the repository probe (connection refused or
+timed out, DNS resolution failure, network unreachable, or no route) are now
+carried back as a successful forwarding readiness result with a warning. The
+CLI states that the credential is active, includes the transport detail, and
+says no key change is needed. Authentication failures such as public-key
+denial, missing forwarded identities, selector/routing failures, and other
+unclassified repository errors remain hard AIVM errors. I deliberately did not
+add GitHub SSH-over-443 fallback here; transport routing policy is a separate
+feature decision from accurately reporting the state of a credential grant.

@@ -33,6 +33,27 @@ _GIT_MANAGED = '.config/aivm/gitconfig-agent-credentials'
 _GIT_INCLUDE = '~/.config/aivm/gitconfig-agent-credentials'
 
 
+class RepositoryVerificationNetworkError(AIVMError):
+    """Repository probe could not reach the provider from the guest."""
+
+
+_REPOSITORY_NETWORK_FAILURE_MARKERS = (
+    'connection refused',
+    'connection timed out',
+    'network is unreachable',
+    'no route to host',
+    'could not resolve hostname',
+    'temporary failure in name resolution',
+    'name or service not known',
+)
+
+
+def _repository_probe_network_unavailable(detail: str) -> bool:
+    """Return whether a failed SSH probe is clearly a guest network failure."""
+    lowered = detail.lower()
+    return any(marker in lowered for marker in _REPOSITORY_NETWORK_FAILURE_MARKERS)
+
+
 def guest_public_key_relpath(cred_id: str) -> str:
     try:
         safe_id = validate_agent_credential_id_format(cred_id)
@@ -320,6 +341,8 @@ def probe_repository_access(
     )
     if result.code != 0:
         detail = (result.stderr or result.stdout or '').strip()
+        if detail and _repository_probe_network_unavailable(detail):
+            raise RepositoryVerificationNetworkError(detail)
         suffix = f': {detail}' if detail else ''
         raise AIVMError(
             'Guest repository authentication failed for ssh-agent credential '

@@ -1595,6 +1595,33 @@ def test_agent_grant_readiness_output_requires_reconnect(
     assert '`aivm vm ssh` or `aivm vm code`' in out
 
 
+def test_agent_grant_readiness_output_warns_on_guest_network_failure(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    readiness = AgentGrantForwardingReadiness(
+        forwarding=AgentForwarding(
+            socket_path=tmp_path / 'agent.sock',
+            credential_count=1,
+            fingerprints=('SHA256:test',),
+            repository_warning=(
+                'ssh: connect to host github.com port 22: Connection refused'
+            ),
+        ),
+        ip='10.77.0.195',
+    )
+
+    _print_agent_grant_readiness(readiness)
+
+    out = capsys.readouterr().out
+    assert 'forwarding preflight passed' in out
+    assert 'WARNING: Credential is active' in out
+    assert 'provider network path is unavailable' in out
+    assert 'Connection refused' in out
+    assert 'No key change is needed' in out
+    assert 'repository authentication preflight passed' not in out
+    assert 'Use this ssh-agent credential from a fresh managed session' in out
+
+
 def test_agent_grant_readiness_output_explains_deferred_activation(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

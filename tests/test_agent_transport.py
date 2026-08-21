@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from aivm.config import AgentVMConfig
 from aivm.config_store import AgentCredentialEntry, Store
 from aivm.credentials import agent
+from aivm.credentials.agent_guest import RepositoryVerificationNetworkError
 from aivm.credentials.agent_schema import agent_credential_id
 from aivm.credentials.agent_transport import (
     AgentForwarding,
@@ -131,6 +132,67 @@ def test_prepare_agent_forwarding_converges_host_and_guest(
     assert calls[2] == (
         'repo',
         ('10.77.0.195', socket_path, record.id),
+    )
+
+
+def test_prepare_agent_forwarding_preserves_network_verification_warning(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    principal_id = 'principal-test'
+    context = resolved_test_context(cfg, principal_id=principal_id)
+    record = _active_record(cfg.vm.name, principal_id)
+    store = Store(agent_credentials=[record])
+    socket_path = tmp_path / 'agent.sock'
+
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.resolve_store_scope',
+        lambda path: SimpleNamespace(is_machine=True),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.load_scope_store', lambda scope: store
+    )
+    monkeypatch.setattr(
+        agent,
+        'ensure_agent_state',
+        lambda *a, **k: agent.AgentStatus(
+            'running', 42, socket_path, (record.key_fingerprint,)
+        ),
+    )
+    monkeypatch.setattr(
+        agent,
+        'validated_agent_public_key',
+        lambda *a, **k: ('ssh-ed25519 AAAATEST agent-test', record.key_fingerprint),
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.reconcile_guest_agent_credentials',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.probe_forwarded_agent',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.credentials.agent_transport.probe_repository_access',
+        lambda *a, **k: (_ for _ in ()).throw(
+            RepositoryVerificationNetworkError(
+                'ssh: connect to host github.com port 22: Connection refused'
+            )
+        ),
+    )
+
+    result = prepare_agent_forwarding(
+        context,
+        tmp_path / 'config.toml',
+        '10.77.0.195',
+        manager=FakeCommandManager(),
+        verify_repository_id=record.id,
+    )
+
+    assert result is not None
+    assert result.repository_warning == (
+        'ssh: connect to host github.com port 22: Connection refused'
     )
 
 

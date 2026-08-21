@@ -1,5 +1,5 @@
 <!-- GENERATED FILE - DO NOT EDIT -->
-<!-- generation schema: 1; input digest: 58a9bba960556733 -->
+<!-- generation schema: 1; input digest: b679eb1b4ea870bf -->
 # Compatibility and transitional architecture inventory
 
 This inventory is observational. The legacy-import allowlist is enforced;
@@ -135,10 +135,10 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.config_store.parse` | `aivm/config_store/parse.py:114` |
 | `aivm.config_store.parse` | `aivm/config_store/parse.py:115` |
 | `aivm.config_store.resolve` | `aivm/config_store/resolve.py:224` |
-| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:102` |
-| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:160` |
-| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:233` |
-| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:296` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:123` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:181` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:254` |
+| `aivm.credentials.agent_guest` | `aivm/credentials/agent_guest.py:317` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:62` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:79` |
 | `aivm.credentials.guest` | `aivm/credentials/guest.py:101` |
@@ -313,7 +313,7 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:236` |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py:354` |
 | `aivm.credentials.agent` | `store_path` | `aivm/credentials/agent.py:66` |
-| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:58` |
+| `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py:60` |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py:74` |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py:33` |
 | `aivm.services` | `store_path` | `aivm/services.py:353` |

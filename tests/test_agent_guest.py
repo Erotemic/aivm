@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from aivm.config import AgentVMConfig
 from aivm.config_store import AgentCredentialEntry
 from aivm.credentials import agent_guest, guest_config
 from aivm.credentials.agent_guest import (
+    RepositoryVerificationNetworkError,
     probe_repository_access,
     reconcile_guest_agent_credentials,
     render_git_config,
@@ -16,6 +19,7 @@ from aivm.credentials.agent_guest import (
 )
 from aivm.credentials.agent_schema import agent_credential_id
 from aivm.credentials.guest_config import guest_ssh_command
+from aivm.errors import AIVMError
 from tests.helpers import FakeCommandManager
 
 
@@ -177,3 +181,64 @@ def test_repository_preflight_exercises_managed_git_route(monkeypatch, tmp_path:
         observed['script']
     )
 
+
+def test_repository_preflight_classifies_guest_network_failure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    entry = _entry()
+
+    monkeypatch.setattr(
+        agent_guest,
+        'run_guest',
+        lambda *a, **k: SimpleNamespace(
+            code=128,
+            stdout='',
+            stderr=(
+                'ssh: connect to host github.com port 22: Connection refused\n'
+                'fatal: Could not read from remote repository.\n'
+            ),
+        ),
+    )
+
+    with pytest.raises(RepositoryVerificationNetworkError) as exc_info:
+        probe_repository_access(
+            cfg,
+            '10.77.0.195',
+            socket_path=tmp_path / 'agent.sock',
+            credential=entry,
+            manager=FakeCommandManager(),
+        )
+
+    assert 'Connection refused' in str(exc_info.value)
+
+
+def test_repository_preflight_keeps_auth_failure_hard(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    entry = _entry()
+
+    monkeypatch.setattr(
+        agent_guest,
+        'run_guest',
+        lambda *a, **k: SimpleNamespace(
+            code=128,
+            stdout='',
+            stderr='git@github.com: Permission denied (publickey).',
+        ),
+    )
+
+    with pytest.raises(AIVMError) as exc_info:
+        probe_repository_access(
+            cfg,
+            '10.77.0.195',
+            socket_path=tmp_path / 'agent.sock',
+            credential=entry,
+            manager=FakeCommandManager(),
+        )
+
+    assert not isinstance(exc_info.value, RepositoryVerificationNetworkError)
+    assert 'Permission denied (publickey)' in str(exc_info.value)

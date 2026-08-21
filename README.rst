@@ -872,7 +872,10 @@ before handing control to the shell/editor. When ``creds add`` creates an
 ``ssh-agent`` grant, it also opportunistically performs that same guest-routing
 and forwarding preflight if the VM is running and SSH-ready. A stopped or
 still-booting VM does not block the grant; activation is deferred to the next
-managed session.
+managed session. If the final read-only repository probe cannot reach the
+provider because the guest network path is unavailable, the grant remains
+active and ``creds add`` reports a warning instead of treating the credential
+as failed; forwarding or authentication failures still return an error.
 
 The forwarding channel is connection-scoped. After adding an ``ssh-agent``
 credential, AIVM points the operator at a fresh ``aivm vm ssh`` or

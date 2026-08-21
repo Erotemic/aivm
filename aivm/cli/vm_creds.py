@@ -423,11 +423,28 @@ def _print_agent_grant_readiness(
     print('Private key remains host-only in the dedicated AIVM ssh-agent.')
     if readiness.verified:
         assert readiness.forwarding is not None
-        print(
-            'Guest routing and dedicated-agent repository authentication '
-            f'preflight passed on {readiness.ip} '
-            f'({readiness.forwarding.credential_count} active credential(s)).'
-        )
+        if readiness.forwarding.repository_warning:
+            print(
+                'Guest routing and dedicated-agent forwarding preflight passed '
+                f'on {readiness.ip} '
+                f'({readiness.forwarding.credential_count} active credential(s)).'
+            )
+            print(
+                'WARNING: Credential is active, but repository access could not '
+                'be verified from the VM because the provider network path is '
+                'unavailable.'
+            )
+            print(f'  Detail: {readiness.forwarding.repository_warning}')
+            print(
+                '  No key change is needed; retry after guest network access is '
+                'restored.'
+            )
+        else:
+            print(
+                'Guest routing and dedicated-agent repository authentication '
+                f'preflight passed on {readiness.ip} '
+                f'({readiness.forwarding.credential_count} active credential(s)).'
+            )
     else:
         print(f'Guest activation deferred: {readiness.deferred_reason}')
         print(

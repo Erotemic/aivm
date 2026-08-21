@@ -13,6 +13,7 @@ from ..status import probe_ssh_ready
 from ..vm.connectivity import get_ip_cached, wait_for_ip
 from . import agent
 from .agent_guest import (
+    RepositoryVerificationNetworkError,
     probe_forwarded_agent,
     probe_repository_access,
     reconcile_guest_agent_credentials,
@@ -27,6 +28,7 @@ class AgentForwarding:
     socket_path: Path
     credential_count: int
     fingerprints: tuple[str, ...]
+    repository_warning: str = ''
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ def prepare_agent_forwarding(
         expected_fingerprints=expected,
         manager=manager,
     )
+    repository_warning = ''
     if verify_repository_id is not None:
         verified_record = next(
             (record for record in active if record.id == verify_repository_id),
@@ -106,17 +109,21 @@ def prepare_agent_forwarding(
                 'Cannot verify ssh-agent repository routing because active '
                 f'credential {verify_repository_id!r} was not found.'
             )
-        probe_repository_access(
-            context.effective_cfg,
-            ip,
-            socket_path=status.socket_path,
-            credential=verified_record,
-            manager=manager,
-        )
+        try:
+            probe_repository_access(
+                context.effective_cfg,
+                ip,
+                socket_path=status.socket_path,
+                credential=verified_record,
+                manager=manager,
+            )
+        except RepositoryVerificationNetworkError as ex:
+            repository_warning = str(ex)
     return AgentForwarding(
         socket_path=status.socket_path,
         credential_count=len(active),
         fingerprints=expected,
+        repository_warning=repository_warning,
     )
 
 
