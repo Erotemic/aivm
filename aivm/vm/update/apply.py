@@ -67,8 +67,31 @@ def _apply_vm_update(
             print(f'DRYRUN: {" ".join(cmd)}')
         else:
             mgr = CommandManager.current()
-            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
-            mgr.run(cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            sudo = virsh_needs_sudo()
+            with mgr.step(
+                f'Update CPU count for VM {cfg.vm.name}',
+                why=(
+                    'Raise the persistent vCPU maximum before setting the '
+                    'configured vCPU count.'
+                ),
+                approval_scope=f'vm-update-cpu:{cfg.vm.name}',
+            ):
+                mgr.submit(
+                    max_cmd,
+                    sudo=sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Raise persistent vCPU maximum to {want}',
+                )
+                mgr.submit(
+                    cmd,
+                    sudo=sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Set persistent vCPU count to {want}',
+                )
             print(f'Updated CPU count to {want}.')
         changed = True
         # --config writes the persistent XML only; live qemu keeps the old
@@ -85,8 +108,31 @@ def _apply_vm_update(
             print(f'DRYRUN: {" ".join(mem_cmd)}')
         else:
             mgr = CommandManager.current()
-            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
-            mgr.run(mem_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            sudo = virsh_needs_sudo()
+            with mgr.step(
+                f'Update RAM for VM {cfg.vm.name}',
+                why=(
+                    'Raise the persistent memory maximum before setting the '
+                    'configured memory size.'
+                ),
+                approval_scope=f'vm-update-ram:{cfg.vm.name}',
+            ):
+                mgr.submit(
+                    max_cmd,
+                    sudo=sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Raise persistent memory maximum to {want} MiB',
+                )
+                mgr.submit(
+                    mem_cmd,
+                    sudo=sudo,
+                    role='modify',
+                    check=True,
+                    capture=True,
+                    summary=f'Set persistent memory to {want} MiB',
+                )
             print(f'Updated RAM to {want} MiB.')
         changed = True
         # Same reasoning as CPU: setmem --config is persistent-only.

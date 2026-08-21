@@ -235,29 +235,58 @@ def test_apply_vm_update(
     assert kind == expected_kind
 
 
-def test_apply_vm_update_cpu_grow_raises_maximum_first(
+@pytest.mark.parametrize(
+    ('drift', 'expected_commands'),
+    [
+        pytest.param(
+            VMUpdateDrift(cpus=(8, 14)),
+            [
+                ['setvcpus', 'vm-update', '14', '--maximum', '--config'],
+                ['setvcpus', 'vm-update', '14', '--config'],
+            ],
+            id='cpu',
+        ),
+        pytest.param(
+            VMUpdateDrift(ram_mb=(8192, 16384)),
+            [
+                ['setmaxmem', 'vm-update', '16777216', '--config'],
+                ['setmem', 'vm-update', '16777216', '--config'],
+            ],
+            id='ram',
+        ),
+    ],
+)
+def test_apply_vm_update_groups_dependent_virsh_updates_under_one_approval(
     monkeypatch: MonkeyPatch,
+    drift: VMUpdateDrift,
+    expected_commands: list[list[str]],
 ) -> None:
-    """setvcpus rejects counts above the persistent <vcpu> maximum, so the
-    maximum must be raised before the count (mirrors setmaxmem/setmem).
-    """
+    """Each max/value pair is one logical update and gets one prompt."""
+    from aivm.commands import CommandManager
+    from tests.helpers import FakeProc, patch_command_runtime
+
     cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-cpu'
-    drift = VMUpdateDrift(cpus=(8, 14))
+    cfg.vm.name = 'vm-update'
     commands: list[list[str]] = []
 
-    def fake_run(self: object, cmd: list[str], **kwargs: Any) -> CmdResult:
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         commands.append(list(cmd))
-        return CmdResult(0, '', '')
+        return FakeProc(0, '', '')
 
-    monkeypatch.setattr('aivm.vm.update.apply.CommandManager.run', fake_run)
-    _apply_vm_update(cfg, drift, dry_run=False)
+    prompts = patch_command_runtime(monkeypatch, fake_run, answer='y')
+    monkeypatch.setattr(
+        'aivm.vm.update.apply.virsh_needs_sudo', lambda: False
+    )
+    CommandManager.activate(CommandManager())
+    try:
+        _apply_vm_update(cfg, drift, dry_run=False)
+    finally:
+        CommandManager.reset_current()
+
     prefix = ['virsh', '-c', 'qemu:///system']
-    assert commands == [
-        prefix + ['setvcpus', 'vm-cpu', '14', '--maximum', '--config'],
-        prefix + ['setvcpus', 'vm-cpu', '14', '--config'],
-    ]
+    assert commands == [prefix + suffix for suffix in expected_commands]
+    assert len(prompts) == 1
 
 
 def test_vm_update_no_changes(
