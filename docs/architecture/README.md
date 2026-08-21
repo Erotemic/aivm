@@ -31,8 +31,8 @@ AIVM is organized into these reviewed subsystems:
 The readable component diagram is
 [`generated/component-dependencies.mmd`](generated/component-dependencies.mmd).
 It intentionally shows the major edges rather than every foundation import.
-The complete, deterministic edge inventory—with every importing module and
-source line—is
+The complete, deterministic edge inventory records every importing-module /
+imported-module relationship and its occurrence count in each source file:
 [`generated/component-edges.json`](generated/component-edges.json).
 
 Dependency arrows point from the importer to the subsystem it uses. Dashed
@@ -119,9 +119,11 @@ Generated; do not edit directly:
 - `generated/state-ownership.mmd`
 - `generated/compatibility-inventory.md`
 
-Generated files contain a schema version and a deterministic digest of the
-Python sources and curated specifications. They contain no timestamp, so
-running generation twice without source changes produces identical bytes.
+Generated files contain a schema version but no timestamp or whole-package
+source digest. `check` regenerates expected content and compares bytes, so
+stale architecture still fails without making unrelated implementation edits
+dirty every generated file. Source locations in inventories are file-level so
+line movement alone does not create documentation churn.
 
 ## Contributor commands
 

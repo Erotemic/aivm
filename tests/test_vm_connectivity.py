@@ -20,7 +20,12 @@ from aivm.errors import AIVMError, VMNotRunningError
 from aivm.util import CmdResult
 from aivm.vm import get_ip_cached, wait_for_ip, wait_for_ssh
 from aivm.vm.connectivity import _mac_for_vm
-from tests.helpers import FakeProc, activate_manager, command_recorder
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    command_recorder,
+    patch_command_runtime,
+)
 
 _DOMIFLIST = (
     ' Interface   Type      Source     Model    MAC\n'
@@ -218,3 +223,41 @@ def test_wait_for_ssh_retries_transient_startup_errors(
 
     wait_for_ssh(cfg, '10.0.0.2', timeout_s=60, dry_run=False)
     assert calls['n'] == 3
+
+
+def test_wait_for_ssh_readiness_probes_do_not_prompt(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Retrying a read-only readiness probe never asks for mutation approval."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-probe'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    calls = {'n': 0}
+
+    monkeypatch.setattr(
+        'aivm.vm.connectivity.require_ssh_identity',
+        lambda p: p or '/tmp/id_ed25519',
+    )
+    monkeypatch.setattr(
+        'aivm.vm.connectivity.ssh_base_args',
+        lambda *a, **k: ['-i', '/tmp/id_ed25519'],
+    )
+    monkeypatch.setattr('aivm.vm.connectivity.time.sleep', lambda s: None)
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del cmd, kwargs
+        calls['n'] += 1
+        if calls['n'] < 3:
+            return FakeProc(255, '', 'Connection refused')
+        return FakeProc(0, '', '')
+
+    prompts = patch_command_runtime(monkeypatch, fake_run, answer='y')
+    CommandManager.activate(CommandManager())
+    try:
+        wait_for_ssh(cfg, '10.0.0.2', timeout_s=60, dry_run=False)
+    finally:
+        CommandManager.reset_current()
+
+    assert calls['n'] == 3
+    assert prompts == []

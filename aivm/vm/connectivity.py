@@ -312,31 +312,38 @@ def wait_for_ssh(
     # handshake to finish before declaring the guest unreachable.
     probe_timeout_s = 30
     last_stderr = ''
-    while time.time() < deadline:
-        cmd = [
-            'ssh',
-            *ssh_base_args(
-                ident,
-                batch_mode=True,
-                connect_timeout=3,
-                strict_host_key_checking='accept-new',
-            ),
-            context.ssh_target(ip),
-            'true',
-        ]
-        res = CommandManager.current().run(
-            cmd,
-            sudo=False,
-            check=False,
-            capture=True,
-            timeout=probe_timeout_s,
-        )
-        if res.code == 0:
-            log.info('SSH is ready on {}', ip)
-            return
-        last_stderr = (res.stderr or '').strip()
-        if _is_ssh_host_key_mismatch(last_stderr):
-            raise AIVMError(_ssh_host_key_mismatch_message(cfg, ip))
-        time.sleep(2)
+    mgr = CommandManager.current()
+    with mgr.intent(
+        f'Wait for SSH on {cfg.vm.name}',
+        why='Poll guest SSH readiness until a login probe succeeds.',
+        role='read',
+    ):
+        while time.time() < deadline:
+            cmd = [
+                'ssh',
+                *ssh_base_args(
+                    ident,
+                    batch_mode=True,
+                    connect_timeout=3,
+                    strict_host_key_checking='accept-new',
+                ),
+                context.ssh_target(ip),
+                'true',
+            ]
+            res = mgr.run(
+                cmd,
+                sudo=False,
+                check=False,
+                capture=True,
+                timeout=probe_timeout_s,
+                summary=f'Probe SSH readiness for VM {cfg.vm.name}',
+            )
+            if res.code == 0:
+                log.info('SSH is ready on {}', ip)
+                return
+            last_stderr = (res.stderr or '').strip()
+            if _is_ssh_host_key_mismatch(last_stderr):
+                raise AIVMError(_ssh_host_key_mismatch_message(cfg, ip))
+            time.sleep(2)
     detail = f' Last SSH error: {last_stderr}' if last_stderr else ''
     raise TimeoutError(f'Timed out waiting for SSH on {ip}.{detail}')

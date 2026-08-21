@@ -276,37 +276,81 @@ def test_generation_is_deterministic_and_stable_ordering(
     assert pairs == sorted(pairs)
 
 
-def test_semantic_python_digest_ignores_formatting(tmp_path: Path) -> None:
-    compact = _write(
-        tmp_path, 'compact.py', 'def add(left,right):\n    return(left+right)\n'
-    )
-    formatted = _write(
-        tmp_path,
-        'formatted.py',
-        'def add(left, right):\n    return left + right\n',
-    )
-    assert arch._semantic_python_bytes(compact) == arch._semantic_python_bytes(
-        formatted
-    )
-
-
-def test_generation_digest_ignores_module_formatting(tmp_path: Path) -> None:
+def test_ordinary_implementation_edit_does_not_dirty_generated_outputs(
+    tmp_path: Path,
+) -> None:
     module_path = _write(
         tmp_path,
         'aivm/alpha.py',
-        'def entry():\n return(None)\n',
+        'from . import beta\n\ndef entry():\n    return beta.VALUE + 1\n',
     )
     _write(tmp_path, 'aivm/__init__.py', '')
+    _write(tmp_path, 'aivm/beta.py', 'VALUE = 1\n')
     architecture = _minimal_architecture(
         subsystems=[
             _subsystem('alpha', exact=['aivm.alpha']),
+            _subsystem('beta', exact=['aivm.beta']),
             _subsystem('support', exact=['aivm']),
-        ]
+        ],
+        allowed_edges={'alpha': ['beta']},
     )
     paths = _write_specs(tmp_path, architecture)
     first = arch.generated_outputs(paths)
     module_path.write_text(
-        'def entry():\n    return None\n',
+        'from . import beta\n\ndef entry():\n    return beta.VALUE + 2\n',
+        encoding='utf-8',
+    )
+    second = arch.generated_outputs(paths)
+    assert first == second
+
+
+def test_source_line_movement_does_not_dirty_generated_outputs(
+    tmp_path: Path,
+) -> None:
+    module_path = _write(
+        tmp_path,
+        'aivm/alpha.py',
+        'from . import beta\n'
+        'from .config import AgentVMConfig\n'
+        'from .scoped_store import resolve_store_scope\n'
+        '\n'
+        'def entry():\n'
+        '    cfg_type = AgentVMConfig\n'
+        '    scope = resolve_store_scope(str(cfg_type.__name__))\n'
+        '    return beta.VALUE, scope\n',
+    )
+    _write(tmp_path, 'aivm/__init__.py', '')
+    _write(tmp_path, 'aivm/beta.py', 'VALUE = 1\n')
+    _write(tmp_path, 'aivm/config.py', 'class AgentVMConfig:\n    pass\n')
+    _write(
+        tmp_path,
+        'aivm/scoped_store.py',
+        'def resolve_store_scope(path):\n    return path\n',
+    )
+    architecture = _minimal_architecture(
+        subsystems=[
+            _subsystem('alpha', exact=['aivm.alpha']),
+            _subsystem('beta', exact=['aivm.beta']),
+            _subsystem('config', exact=['aivm.config']),
+            _subsystem('scope', exact=['aivm.scoped_store']),
+            _subsystem('support', exact=['aivm']),
+        ],
+        allowed_edges={'alpha': ['beta', 'config', 'scope']},
+    )
+    paths = _write_specs(tmp_path, architecture)
+    first = arch.generated_outputs(paths)
+    module_path.write_text(
+        '"""Implementation documentation that shifts source lines."""\n'
+        '\n'
+        '\n'
+        'from . import beta\n'
+        'from .config import AgentVMConfig\n'
+        'from .scoped_store import resolve_store_scope\n'
+        '\n'
+        'def entry():\n'
+        '    cfg_type = AgentVMConfig\n'
+        '    scope = resolve_store_scope(str(cfg_type.__name__))\n'
+        '    return beta.VALUE, scope\n',
         encoding='utf-8',
     )
     second = arch.generated_outputs(paths)

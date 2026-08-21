@@ -98,9 +98,20 @@ def _ensure_guest_symlink(
             f'guest symlink reconcile: {symlink_path} -> {target_path}',
         ),
     ]
-    res = CommandManager.current().run(
-        cmd, sudo=False, check=False, capture=True
-    )
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Reconcile guest attachment symlink',
+        why=f'Ensure {symlink_path} points to the attached path {target_path}.',
+        approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+    ):
+        res = mgr.run(
+            cmd,
+            sudo=False,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Reconcile guest symlink {symlink_path}',
+        )
     if res.code not in (0, 3, 4, 5):
         log.warning(
             'Guest symlink setup failed for {} -> {}: {}',
