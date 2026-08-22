@@ -446,7 +446,12 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """
     name = cfg.vm.name
     if dry_run:
-        log.info('DRYRUN: virsh shutdown {}', name)
+        CommandManager.current().preview(
+            virsh_cmd('shutdown', name),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            summary=f'Send ACPI shutdown signal to VM {name}',
+        )
         return
     mgr = CommandManager.current()
     with mgr.intent(
@@ -533,7 +538,19 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """
     name = cfg.vm.name
     if dry_run:
-        log.info('DRYRUN: restart VM {}', name)
+        mgr = CommandManager.current()
+        mgr.preview(
+            virsh_cmd('shutdown', name),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            summary=f'Shut down VM {name}',
+        )
+        mgr.preview(
+            virsh_cmd('start', name),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            summary=f'Start VM {name}',
+        )
         return
 
     # Verify the VM exists before attempting restart

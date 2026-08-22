@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from aivm import tunnel_helper
+from aivm.rc.guest import tunnel_helper
 
 pytestmark = pytest.mark.e2e
 

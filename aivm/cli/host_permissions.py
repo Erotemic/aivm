@@ -20,8 +20,7 @@ from __future__ import annotations
 
 import os
 import pwd
-import shlex
-import textwrap
+import importlib.resources
 from pathlib import Path
 from typing import Any
 
@@ -204,100 +203,31 @@ def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
         return cfg
 
 
-def _adopt_script(tree: Path) -> str:
-    """Render the privileged in-place storage metadata handoff.
-
-    The walk never follows symlinks and prunes every descendant mount point
-    listed in ``/proc/self/mountinfo``. That second rule is essential: a bind
-    mount can live on the same filesystem, so ``find -xdev`` is not sufficient.
-    """
-    program = textwrap.dedent(
-        f"""\
-        import grp
-        import os
-        import stat
-        import subprocess
-        from pathlib import Path
-
-        tree = Path(os.path.realpath({str(tree)!r}))
-        libvirt_gid = grp.getgrnam({LIBVIRT_GROUP!r}).gr_gid
-
-        def decode_mount_field(text):
-            out = []
-            index = 0
-            while index < len(text):
-                if (
-                    ord(text[index]) == 92
-                    and index + 3 < len(text)
-                    and text[index + 1:index + 4].isdigit()
-                ):
-                    out.append(chr(int(text[index + 1:index + 4], 8)))
-                    index += 4
-                else:
-                    out.append(text[index])
-                    index += 1
-            return ''.join(out)
-
-        mountpoints = set()
-        with open('/proc/self/mountinfo', encoding='utf-8') as file:
-            for line in file:
-                fields = line.split()
-                if len(fields) >= 5:
-                    mountpoint = Path(decode_mount_field(fields[4]))
-                    if mountpoint != tree and tree in mountpoint.parents:
-                        mountpoints.add(mountpoint)
-
-        directories = []
-        for root_text, dirnames, filenames in os.walk(
-            tree, topdown=True, followlinks=False
-        ):
-            root = Path(root_text)
-            kept = []
-            for name in dirnames:
-                path = root / name
-                if path.is_symlink() or path in mountpoints:
-                    continue
-                kept.append(name)
-            dirnames[:] = kept
-
-            directories.append(root)
-            paths = [root]
-            paths.extend(root / name for name in filenames)
-            for path in paths:
-                if path.is_symlink():
-                    continue
-                info = path.stat(follow_symlinks=False)
-                mode = stat.S_IMODE(info.st_mode)
-                mode |= stat.S_IRGRP | stat.S_IWGRP
-                if path.is_dir() or mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
-                    mode |= stat.S_IXGRP
-                if path.is_dir():
-                    mode |= stat.S_ISGID
-                os.chown(path, -1, libvirt_gid, follow_symlinks=False)
-                os.chmod(path, mode, follow_symlinks=False)
-
-        if subprocess.run(
-            ['sh', '-c', 'command -v setfacl >/dev/null 2>&1']
-        ).returncode == 0:
-            for offset in range(0, len(directories), 128):
-                chunk = [str(path) for path in directories[offset:offset + 128]]
-                subprocess.run(
-                    [
-                        'setfacl',
-                        '-m',
-                        'u:{LIBVIRT_QEMU_USER}:x',
-                        '-m',
-                        'default:group:{LIBVIRT_GROUP}:rwX',
-                        '-m',
-                        'default:user:{LIBVIRT_QEMU_USER}:x',
-                        '--',
-                        *chunk,
-                    ],
-                    check=True,
-                )
-        """
+def _storage_adopt_source() -> str:
+    """Return the standalone privileged storage-adoption program."""
+    return (
+        importlib.resources.files('aivm')
+        .joinpath('rc', 'host', 'storage_adopt.py')
+        .read_text(encoding='utf-8')
     )
-    return f'python3 -c {shlex.quote(program)}'
+
+
+def _storage_adopt_command(tree: Path) -> list[str | Elided]:
+    """Build the resource-backed storage-adoption command."""
+    return [
+        'python3',
+        '-c',
+        Elided(
+            _storage_adopt_source(),
+            'privileged storage-adoption resource',
+        ),
+        '--tree',
+        str(tree),
+        '--group',
+        LIBVIRT_GROUP,
+        '--qemu-user',
+        LIBVIRT_QEMU_USER,
+    ]
 
 
 def _adopt_one_tree(
@@ -323,11 +253,19 @@ def _adopt_one_tree(
         )
     if args.dry_run:
         for name in running:
-            print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
-        print(
-            f'DRYRUN: recursively grant {LIBVIRT_GROUP} access under {tree}; '
-            'prune mounted subtrees and symlinks; set setgid/default ACLs'
+            shutdown_vm(_cfg_for_stored_vm(args.config, name), dry_run=True)
+        mgr.preview(
+            _storage_adopt_command(tree),
+            sudo=True,
+            role='modify',
+            summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
         )
+        for name in running:
+            mgr.preview(
+                ['virsh', '-c', 'qemu:///system', 'start', name],
+                role='modify',
+                summary=f'Start VM {name} again after storage adoption',
+            )
         return
 
     stopped: list[str] = []
@@ -350,15 +288,7 @@ def _adopt_one_tree(
             approval_scope=f'host-permissions-adopt:{tree}',
         ):
             mgr.submit(
-                [
-                    'bash',
-                    '-c',
-                    Elided(
-                        _adopt_script(tree),
-                        f'python program adopting {tree} into the '
-                        f'{LIBVIRT_GROUP} group',
-                    ),
-                ],
+                _storage_adopt_command(tree),
                 sudo=True,
                 role='modify',
                 check=True,
@@ -778,16 +708,36 @@ def _prepare_machine_store_access(
     owns_group = group_name != LIBVIRT_GROUP
     if args.dry_run:
         if not group_exists and owns_group:
-            print(f'DRYRUN: sudo groupadd --system {group_name}')
+            mgr.preview(
+                ['groupadd', '--system', group_name],
+                sudo=True,
+                role='modify',
+                summary=f'Create the {group_name} group',
+            )
         if not listed and owns_group:
-            print(f'DRYRUN: sudo usermod -aG {group_name} {user}')
-        print(
-            f'DRYRUN: sudo install -d -o root -g root -m 0755 '
-            f'{layout.root.parent}'
+            mgr.preview(
+                ['usermod', '-aG', group_name, user],
+                sudo=True,
+                role='modify',
+                summary=f'Add {user} to the {group_name} group',
+            )
+        mgr.preview(
+            [
+                'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
+                str(layout.root.parent),
+            ],
+            sudo=True,
+            role='modify',
+            summary=f'Prepare root-owned {layout.root.parent}',
         )
-        print(
-            f'DRYRUN: sudo install -d -o root -g {group_name} '
-            f'-m 2770 {layout.root}'
+        mgr.preview(
+            [
+                'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
+                str(layout.root),
+            ],
+            sudo=True,
+            role='modify',
+            summary=f'Prepare shared AIVM state at {layout.root}',
         )
         return not listed and owns_group
     if not group_exists and not owns_group:
@@ -977,7 +927,12 @@ class HostPermissionsSetupCLI(_BaseCommand):
             # Under `sudo aivm ...`, the account that needs libvirt access
             # is the invoking user, not root.
             if args.dry_run:
-                print(f'DRYRUN: sudo usermod -aG {LIBVIRT_GROUP} {user}')
+                mgr.preview(
+                    ['usermod', '-aG', LIBVIRT_GROUP, user],
+                    sudo=True,
+                    role='modify',
+                    summary=f'Add {user} to the {LIBVIRT_GROUP} group',
+                )
             else:
                 with mgr.intent(
                     'Enable libvirt access without sudo',
@@ -1036,8 +991,16 @@ class HostPermissionsSetupCLI(_BaseCommand):
         config_gap = base_dir != resolved_default
 
         if args.dry_run:
-            print(
-                f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs'
+            mgr.preview(
+                ['mkdir', '-p', str(base_dir)],
+                ownership='tool',
+                role='modify',
+                summary='Create VM storage directory',
+            )
+            mgr.preview(
+                ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
+                role='modify',
+                summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
             )
         else:
             with mgr.intent(

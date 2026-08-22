@@ -660,9 +660,16 @@ def _ensure_shared_root_guest_bind(
         script,
     ]
     if dry_run:
-        from loguru import logger
-
-        logger.info('DRYRUN: {}', ' '.join(shlex.quote(c) for c in cmd))
+        mgr.preview(
+            cmd,
+            role='modify',
+            check=False,
+            summary='Bind guest destination to shared source and verify source/options',
+            detail=(
+                f'source={source_in_guest} destination={attachment.guest_dst} '
+                f'access={attachment.access}'
+            ),
+        )
         return
     mount_cmd = _shared_root_guest_mount_cmd(
         cfg,
@@ -818,12 +825,19 @@ def _detach_shared_root_guest_bind(
         context.ssh_target(ip),
         script,
     ]
+    mgr = CommandManager.current()
     if dry_run:
-        from loguru import logger
-
-        logger.info('DRYRUN: {}', ' '.join(shlex.quote(c) for c in cmd))
+        mgr.preview(
+            cmd,
+            role='modify',
+            check=False,
+            summary='Unmount shared-root attachment inside guest',
+            detail=(
+                f'source={source_in_guest} destination={attachment.guest_dst}'
+            ),
+        )
         return
-    res = CommandManager.current().run(
+    res = mgr.run(
         cmd, sudo=False, check=False, capture=True
     )
     if res.code != 0:

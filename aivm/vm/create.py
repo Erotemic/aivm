@@ -286,7 +286,12 @@ def create_or_start_vm(
                         return
                     if 'paused' in st or 'pmsuspended' in st:
                         if dry_run:
-                            log.info('DRYRUN: virsh resume {}', cfg.vm.name)
+                            mgr.preview(
+                                virsh_cmd('resume', cfg.vm.name),
+                                sudo=virsh_needs_sudo(),
+                                role='modify',
+                                summary=f'Resume existing VM {cfg.vm.name}',
+                            )
                             return
                         log.info(
                             'VM {} is {}; resuming instead of starting',
@@ -312,7 +317,12 @@ def create_or_start_vm(
                         )
                     if 'shut off' in st or 'crashed' in st or st == '':
                         if dry_run:
-                            log.info('DRYRUN: virsh start {}', cfg.vm.name)
+                            mgr.preview(
+                                virsh_cmd('start', cfg.vm.name),
+                                sudo=virsh_needs_sudo(),
+                                role='modify',
+                                summary=f'Start existing VM {cfg.vm.name}',
+                            )
                             return
                         mgr.submit(
                             virsh_cmd('start', cfg.vm.name),
@@ -330,7 +340,10 @@ def create_or_start_vm(
                         f'`virsh domstate {cfg.vm.name}` and recover manually.'
                     )
             if dry_run:
-                log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
+                log.info(
+                    'DRYRUN: would remove the existing VM definition before recreate: {}',
+                    cfg.vm.name,
+                )
             else:
                 # The same containment rule the deletion journal enforces:
                 # `virsh undefine --remove-all-storage` deletes every live
@@ -408,7 +421,12 @@ def create_or_start_vm(
             share_tag=share_tag,
         )
         if dry_run:
-            log.info('DRYRUN: {}', ' '.join(cmd))
+            CommandManager.current().preview(
+                cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Create VM {cfg.vm.name}',
+            )
             return
         try:
             first = CommandManager.current().run(

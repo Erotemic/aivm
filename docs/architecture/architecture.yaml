@@ -83,6 +83,12 @@ subsystems:
       - aivm.modes
     prefixes: []
 
+  - id: runtime-resources
+    label: Standalone runtime resources
+    exact: []
+    prefixes:
+      - aivm.rc
+
   - id: compatibility
     label: Pre-0.6 compatibility boundary
     exact:

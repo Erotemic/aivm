@@ -726,7 +726,7 @@ def test_marked_payload_logs_its_label_and_still_executes_in_full(
 
     run_lines = [m for m in messages if m.startswith('RUN')]
     assert run_lines == [
-        'RUN: ssh agent@10.0.0.2 <<OMITTED guest bootstrap script>>'
+        'RUN:\nssh agent@10.0.0.2 <<OMITTED guest bootstrap script>>'
     ]
     assert executed == [['ssh', 'agent@10.0.0.2', script]]
     # the shortening is announced rather than left for the reader to notice
@@ -755,7 +755,7 @@ def test_unmarked_long_payload_admits_it_is_unmarked(
     mgr.run(['ssh', 'agent@10.0.0.2', script], sudo=False, role='read')
 
     run_line = next(m for m in messages if m.startswith('RUN'))
-    assert run_line == 'RUN: ssh agent@10.0.0.2 <<OMITTED unmarked argument>>'
+    assert run_line == 'RUN:\nssh agent@10.0.0.2 <<OMITTED unmarked argument>>'
     assert 'payloadpayload' not in run_line
     # never asserts what the payload is, the way the old shape rules did
     assert 'remote command' not in run_line
@@ -793,7 +793,7 @@ def test_ordinary_command_is_logged_verbatim(
     ]
     mgr.run(cmd, sudo=False, role='read')
 
-    assert 'RUN: ' + ' '.join(cmd) in messages
+    assert 'RUN:\n' + ' '.join(cmd) in messages
 
 
 def test_only_an_unprivileged_read_is_held_back(
@@ -817,8 +817,8 @@ def test_only_an_unprivileged_read_is_held_back(
 
     shown = [m for m in info if m.startswith('RUN')]
     assert shown == [
-        'RUN: sudo qemu-img info /disk.qcow2',
-        'RUN: virsh setvcpus vm 8',
+        'RUN:\nsudo qemu-img info /disk.qcow2',
+        'RUN:\nvirsh setvcpus vm 8',
     ]
 
 
@@ -833,7 +833,7 @@ def test_reads_are_recoverable_at_debug(monkeypatch: MonkeyPatch) -> None:
 
     mgr.run(['virsh', 'dominfo', 'vm'], sudo=False, role='read')
 
-    assert 'RUN: virsh dominfo vm' in verbose
+    assert 'RUN:\nvirsh dominfo vm' in verbose
 
 
 def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
@@ -849,7 +849,7 @@ def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
 
     mgr.run(['some-tool', '--do-a-thing'], sudo=False)
 
-    assert 'RUN: some-tool --do-a-thing' in info
+    assert 'RUN:\nsome-tool --do-a-thing' in info
 
 
 def test_a_read_that_escalates_nothing_stays_quiet_as_root(
@@ -875,7 +875,7 @@ def test_a_read_that_escalates_nothing_stays_quiet_as_root(
 
     verbose = capture_logs(monkeypatch, 'aivm.commands.log', levels=('debug',))
     mgr.run(probe, sudo=True, role='read')
-    assert 'RUN: qemu-img info /disk.qcow2' in verbose
+    assert 'RUN:\nqemu-img info /disk.qcow2' in verbose
 
 
 def test_handing_the_terminal_to_the_user_is_not_a_write(
@@ -1004,3 +1004,149 @@ def test_secrets_are_kept_off_the_command_line_not_out_of_the_log(
 
     assert seen == [secret]
     assert not any(secret in m for m in messages)
+
+
+def test_preview_uses_command_renderer_without_execution(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, '', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    mgr.preview(
+        ['virsh', 'start', 'demo-vm'],
+        role='modify',
+        summary='Start demo VM',
+    )
+
+    assert executed == []
+    assert 'DRYRUN: Start demo VM' in messages
+    assert 'command:\nvirsh start demo-vm' in messages
+
+
+def test_replace_process_is_owned_by_command_manager(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class ExecCalled(RuntimeError):
+        pass
+
+    seen: list[tuple[str, list[str]]] = []
+
+    def fake_execvp(program: str, argv: list[str]) -> None:
+        seen.append((program, list(argv)))
+        raise ExecCalled
+
+    monkeypatch.setattr('aivm.commands.os.execvp', fake_execvp)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    with pytest.raises(ExecCalled):
+        mgr.replace_process(
+            ['ssh', '-t', 'agent@vm', 'tmux attach -t aivm-tunnel'],
+            role='read',
+            summary='Attach tunnel',
+        )
+
+    assert seen == [
+        ('ssh', ['ssh', '-t', 'agent@vm', 'tmux attach -t aivm-tunnel'])
+    ]
+    assert (
+        'RUN (exec, replaces this process):\n'
+        "ssh -t agent@vm 'tmux attach -t aivm-tunnel'"
+    ) in messages
+
+
+
+def test_manager_dry_run_renders_plan_without_execution_or_approval(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, 'should-not-run', '')
+
+    prompts = patch_command_runtime(monkeypatch, fake_run)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    with mgr.step('Change demo state'):
+        handle = mgr.submit(
+            ['virsh', 'start', 'demo-vm'],
+            sudo=True,
+            role='modify',
+            summary='Start demo VM',
+        )
+
+    assert executed == []
+    assert prompts == []
+    assert handle.done()
+    with pytest.raises(CommandNotExecutedError, match='dry run'):
+        handle.result()
+    assert 'DRYRUN: Step: Change demo state' in messages
+    assert any('command:\nsudo virsh start demo-vm' in m for m in messages)
+
+
+def test_manager_dry_run_stops_when_command_result_is_required(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, 'answer', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    handle = mgr.submit(
+        ['virsh', 'domstate', 'demo-vm'],
+        role='read',
+        summary='Inspect demo VM state',
+    )
+    with pytest.raises(CommandNotExecutedError, match='dry run'):
+        _ = handle.stdout
+    assert executed == []
+
+
+def test_replace_process_dry_run_does_not_exec(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def fail_exec(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr('aivm.commands.os.execvp', fail_exec)
+    monkeypatch.setattr('aivm.commands.os.execvpe', fail_exec)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    mgr.replace_process(
+        ['ssh', '-t', 'agent@vm'],
+        role='read',
+        summary='Attach tunnel',
+    )
+
+    assert 'DRYRUN: Attach tunnel' in messages
+    assert 'DRYRUN (exec skipped):\nssh -t agent@vm' in messages

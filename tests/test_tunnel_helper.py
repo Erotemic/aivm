@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from aivm import tunnel_helper
+from aivm.rc.guest import tunnel_helper
 
 
 def test_check_reports_missing_commands(

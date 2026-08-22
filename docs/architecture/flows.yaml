@@ -117,7 +117,7 @@ flows:
         kind: external
       - id: guest
         label: Add guest account, key, and constrained sudo fragment
-        symbol: aivm.guestctl.reconcile_guest_principal
+        symbol: aivm.rc.guest.guestctl.reconcile_guest_principal
         kind: external
       - id: verify
         label: Verify new personal SSH connection

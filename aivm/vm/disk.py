@@ -31,7 +31,12 @@ def _ensure_disk(
         raise _undetermined_existence_error(vm_disk, 'VM disk')
     if disk_exists and recreate:
         if dry_run:
-            log.info('DRYRUN: rm -f {}', vm_disk)
+            mgr.preview(
+                ['rm', '-f', str(vm_disk)],
+                sudo=use_sudo,
+                role='modify',
+                summary=f'Remove VM disk {vm_disk}',
+            )
         else:
             mgr.run(
                 ['rm', '-f', str(vm_disk)],
@@ -44,11 +49,22 @@ def _ensure_disk(
         log.info('VM disk exists: {}', vm_disk)
         return vm_disk
     if dry_run:
-        log.info(
-            'DRYRUN: qemu-img create -f qcow2 -F qcow2 -b {} {} {}G',
-            base_img,
-            vm_disk,
-            cfg.vm.disk_gb,
+        mgr.preview(
+            [
+                'qemu-img',
+                'create',
+                '-f',
+                'qcow2',
+                '-F',
+                'qcow2',
+                '-b',
+                str(base_img),
+                str(vm_disk),
+                f'{cfg.vm.disk_gb}G',
+            ],
+            sudo=use_sudo,
+            role='modify',
+            summary=f'Create VM disk {vm_disk}',
         )
         return vm_disk
     mgr.run(

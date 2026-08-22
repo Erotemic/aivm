@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +15,7 @@ from aivm.cli._common import _BaseCommand
 from aivm.cli.host_permissions import (
     _adopt_one_tree,
     _adopt_safety_error,
-    _adopt_script,
+    _storage_adopt_source,
 )
 from aivm.config import VirtiofsConfig
 
@@ -68,13 +67,12 @@ def test_adopt_rejects_broad_system_roots() -> None:
 def test_adopt_script_prunes_mounts_and_symlinks(tmp_path: Path) -> None:
     tree = tmp_path / 'vm-storage'
     tree.mkdir()
-    script = _adopt_script(tree)
-    assert '/proc/self/mountinfo' in script
-    assert 'followlinks=False' in script
-    assert 'path.is_symlink()' in script
-    argv = shlex.split(script)
-    assert argv[:2] == ['python3', '-c']
-    compile(argv[2], '<aivm-adopt-script>', 'exec')
+    del tree
+    source = _storage_adopt_source()
+    assert '/proc/self/mountinfo' in source
+    assert 'followlinks=False' in source
+    assert 'path.is_symlink()' in source
+    compile(source, '<aivm-storage-adopt-resource>', 'exec')
 
 
 def test_adopt_restarts_stopped_vm_after_handoff_failure(

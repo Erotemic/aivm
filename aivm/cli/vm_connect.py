@@ -342,9 +342,11 @@ def _attach_remote_tunnel_session(context: ResolvedVMContext, ip: str) -> int:
         context.ssh_target(ip),
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
-    log.info('RUN (exec, replaces this process): {}', shell_join(cmd))
-    os.execvp(cmd[0], cmd)
-    return 1  # unreachable; execvp replaces the process
+    CommandManager.current().replace_process(
+        cmd,
+        role='read',
+        summary='Attach to the guest VS Code tunnel session',
+    )
 
 
 def _print_remote_session_recipe(

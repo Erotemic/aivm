@@ -265,12 +265,16 @@ def _run_guest_ssh_script_with_retry(
         context.ssh_target(ip),
         script,
     ]
+    mgr = CommandManager.current()
     if dry_run:
-        print(
-            f'DRYRUN: would run guest reconcile command: {" ".join(shlex.quote(c) for c in cmd)}'
+        mgr.preview(
+            cmd,
+            role=role,
+            check=check,
+            summary=summary,
+            detail=detail,
         )
         return None
-    mgr = CommandManager.current()
     last_result: CommandResult | None = None
     for attempt in range(retries + 1):
         result = mgr.run(
@@ -318,12 +322,16 @@ def _run_rsync_with_retry(
     check: bool = True,
     retries: int = 3,
 ) -> CommandResult | None:
+    mgr = CommandManager.current()
     if dry_run:
-        print(
-            f'DRYRUN: would run rsync command: {" ".join(shlex.quote(c) for c in cmd)}'
+        mgr.preview(
+            cmd,
+            role='modify',
+            check=check,
+            summary=summary,
+            detail=detail,
         )
         return None
-    mgr = CommandManager.current()
     last_result: CommandResult | None = None
     for attempt in range(retries + 1):
         result = mgr.run(

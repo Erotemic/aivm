@@ -92,6 +92,7 @@ class _BaseCommand(kwconf.Config):
                 yes_sudo=effective_yes_sudo,
                 auto_approve_readonly_sudo=cfg_auto_approve_readonly_sudo,
                 privilege_mode=privilege_mode,
+                dry_run=bool(getattr(parsed, 'dry_run', False)),
             )
         )
         args_verbose = int(parsed.verbose or 0)

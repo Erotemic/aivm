@@ -243,8 +243,20 @@ def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Idempotently remove a network, accepting only recognized absence states."""
     name = cfg.network.name
     if dry_run:
-        log.info(
-            'DRYRUN: virsh net-destroy {}; virsh net-undefine {}', name, name
+        mgr = CommandManager.current()
+        mgr.preview(
+            pin_locale(virsh_cmd('net-destroy', name)),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            check=False,
+            summary=f'Stop libvirt network {name}',
+        )
+        mgr.preview(
+            pin_locale(virsh_cmd('net-undefine', name)),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            check=False,
+            summary=f'Undefine libvirt network {name}',
         )
         return
     if not _network_defined(name):

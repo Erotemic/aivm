@@ -63,7 +63,12 @@ def _maybe_restart_vm_after_update(
     if kind == RestartKind.SOFT:
         cmd = virsh_cmd('reboot', cfg.vm.name)
         if dry_run:
-            print(f'DRYRUN: {" ".join(cmd)}')
+            CommandManager.current().preview(
+                cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Reboot VM {cfg.vm.name}',
+            )
         else:
             CommandManager.current().run(
                 cmd, sudo=virsh_needs_sudo(), check=True, capture=True
@@ -76,10 +81,7 @@ def _maybe_restart_vm_after_update(
     from ..lifecycle import restart_vm
 
     if dry_run:
-        print(
-            f'DRYRUN: virsh shutdown {cfg.vm.name} (wait for off) && virsh '
-            f'start {cfg.vm.name}'
-        )
+        restart_vm(cfg, dry_run=True)
         return
     restart_vm(cfg, dry_run=False)
     print(f'Power-cycled VM {cfg.vm.name}.')

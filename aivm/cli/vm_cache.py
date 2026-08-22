@@ -9,7 +9,7 @@ import kwconf
 from loguru import logger as log
 
 from ..attachments.session import _resolve_ip_for_ssh_ops
-from ..commands import CommandManager, shell_join
+from ..commands import CommandManager
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import load_vm_context
@@ -162,7 +162,6 @@ class VMFlushCachesCLI(_BaseCommand):
                 context.ssh_target(ip),
                 remote_command,
             ]
-            log.debug('Running guest cache flush command: {}', shell_join(cmd))
             res = mgr.run(
                 cmd,
                 sudo=False,

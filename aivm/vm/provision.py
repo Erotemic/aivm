@@ -152,7 +152,11 @@ def provision(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         remote,
     ]
     if dry_run:
-        log.info('DRYRUN: {}', ' '.join(cmd))
+        CommandManager.current().preview(
+            cmd,
+            role='modify',
+            summary='Provision guest packages',
+        )
         return
     wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     log.info('Running provisioning apt installs (showing progress)')

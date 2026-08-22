@@ -16,7 +16,7 @@ from aivm.cli.host_permissions import (
 from aivm.config import AgentVMConfig
 from aivm.config_store import load_store, save_store, upsert_vm
 from aivm.config_store.models import Store, VMEntry
-from tests.helpers import FakeProc, activate_manager, command_recorder
+from tests.helpers import FakeProc, activate_manager, capture_logs, command_recorder
 
 
 def test_host_permissions_command_has_no_compatibility_alias() -> None:
@@ -448,7 +448,7 @@ def _adopt_env(
             'virsh domstate': domstate,
             'virsh shutdown': shutdown,
             'virsh start': FakeProc(0),
-            'bash -c': FakeProc(0),
+            'python3 -c': FakeProc(0),
         },
     )
     return cfg_path, tree, rec
@@ -473,17 +473,18 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     # The store is untouched: adoption changes ownership, not config.
     assert cfg_path.read_bytes() == before
 
-    script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
-    assert 'os.walk' in script
-    assert '/proc/self/mountinfo' in script
-    assert 'followlinks=False' in script
-    assert str(tree) in script
+    command = [c for c in rec.normalized if c[:2] == ['python3', '-c']][0]
+    source = command[2]
+    assert 'os.walk' in source
+    assert '/proc/self/mountinfo' in source
+    assert 'followlinks=False' in source
+    assert command[command.index('--tree') + 1] == str(tree)
     # The handoff runs escalated, between shutdown and restart.
-    raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
-    assert raw_bash[0] == 'sudo'
+    raw_python = [c for c in rec.calls if 'python3' in c[:3]][0]
+    assert raw_python[0] == 'sudo'
     order = [c[:2] for c in rec.normalized]
-    assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
-    assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
+    assert order.index(['virsh', 'shutdown']) < order.index(['python3', '-c'])
+    assert order.index(['python3', '-c']) < order.index(['virsh', 'start'])
     assert 'Stopping vm-a first' in out
     assert 'will be restarted even if' in out
 
@@ -502,7 +503,7 @@ def test_adopt_leaves_stopped_vm_alone(
     )
 
     assert rc == 0
-    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+    assert any(c[:2] == ['python3', '-c'] for c in rec.normalized)
     assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
     assert not any(c[:2] == ['virsh', 'start'] for c in rec.normalized)
 
@@ -581,6 +582,9 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
     """
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
     cfg_path = tmp_path / 'config.toml'
     _store_with_vm(cfg_path, privilege_mode='as-needed')
@@ -594,16 +598,17 @@ def test_setup_dry_run_describes_production_machine_store_bootstrap(
     )
 
     assert rc == 0
-    out = capsys.readouterr().out
+    capsys.readouterr()
+    rendered = '\n'.join(messages)
     # The parent is prepared separately and stays root-owned and non-group-
     # writable: it is the chain the root persistent-replay service reads from.
-    assert 'sudo install -d -o root -g root -m 0755 /var/lib/aivm\n' in out
+    assert 'install -d -o root -g root -m 0755 /var/lib/aivm' in rendered
     assert (
-        'sudo install -d -o root -g libvirt -m 2770 /var/lib/aivm/machine\n'
-        in out
+        'install -d -o root -g libvirt -m 2770 /var/lib/aivm/machine'
+        in rendered
     )
-    assert 'groupadd' not in out
-    assert 'usermod' not in out
+    assert 'groupadd' not in rendered
+    assert 'usermod' not in rendered
 
 
 def test_setup_dry_run_creates_an_overridden_machine_group(
@@ -614,6 +619,9 @@ def test_setup_dry_run_creates_an_overridden_machine_group(
     """A site-chosen group is ours to create, unlike the libvirt default."""
     activate_manager(monkeypatch, yes=True)
     _stub_host_probes(monkeypatch)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
     monkeypatch.setenv('AIVM_MACHINE_GROUP', 'aivm-admins')
     monkeypatch.setattr(
@@ -635,12 +643,13 @@ def test_setup_dry_run_creates_an_overridden_machine_group(
     )
 
     assert rc == 0
-    out = capsys.readouterr().out
-    assert 'sudo groupadd --system aivm-admins' in out
-    assert 'sudo usermod -aG aivm-admins' in out
+    capsys.readouterr()
+    rendered = '\n'.join(messages)
+    assert 'groupadd --system aivm-admins' in rendered
+    assert 'usermod -aG aivm-admins' in rendered
     assert (
-        'sudo install -d -o root -g aivm-admins -m 2770 /var/lib/aivm/machine\n'
-        in out
+        'install -d -o root -g aivm-admins -m 2770 /var/lib/aivm/machine'
+        in rendered
     )
 
 

@@ -63,8 +63,19 @@ def _apply_vm_update(
         )
         cmd = virsh_cmd('setvcpus', cfg.vm.name, str(want), '--config')
         if dry_run:
-            print(f'DRYRUN: {" ".join(max_cmd)}')
-            print(f'DRYRUN: {" ".join(cmd)}')
+            mgr = CommandManager.current()
+            mgr.preview(
+                max_cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Raise persistent vCPU maximum to {want}',
+            )
+            mgr.preview(
+                cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Set persistent vCPU count to {want}',
+            )
         else:
             mgr = CommandManager.current()
             sudo = virsh_needs_sudo()
@@ -104,8 +115,19 @@ def _apply_vm_update(
         max_cmd = virsh_cmd('setmaxmem', cfg.vm.name, str(kib), '--config')
         mem_cmd = virsh_cmd('setmem', cfg.vm.name, str(kib), '--config')
         if dry_run:
-            print(f'DRYRUN: {" ".join(max_cmd)}')
-            print(f'DRYRUN: {" ".join(mem_cmd)}')
+            mgr = CommandManager.current()
+            mgr.preview(
+                max_cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Raise persistent memory maximum to {want} MiB',
+            )
+            mgr.preview(
+                mem_cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                summary=f'Set persistent memory to {want} MiB',
+            )
         else:
             mgr = CommandManager.current()
             sudo = virsh_needs_sudo()
@@ -146,7 +168,12 @@ def _apply_vm_update(
         if want > cur:
             cmd = ['qemu-img', 'resize', drift.disk_path, f'{cfg.vm.disk_gb}G']
             if dry_run:
-                print(f'DRYRUN: {" ".join(cmd)}')
+                CommandManager.current().preview(
+                    cmd,
+                    sudo=file_write_needs_sudo(drift.disk_path),
+                    role='modify',
+                    summary=f'Expand VM disk to {cfg.vm.disk_gb}G',
+                )
             else:
                 try:
                     # qemu-img opens the image file directly, so escalation

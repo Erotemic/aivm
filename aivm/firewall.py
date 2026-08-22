@@ -219,10 +219,36 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     )
     script = _nft_script(cfg, inspect_live=not dry_run)
     table = effective_firewall_table(cfg)
-    if dry_run:
-        log.info('DRYRUN: nft -f - <<EOF\\n{}\\nEOF', script.rstrip())
-        return
     mgr = CommandManager.current()
+    if dry_run:
+        mgr.preview(
+            ['nft', 'delete', 'table', 'inet', table],
+            sudo=True,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Remove previous nftables table inet {table} if present',
+        )
+        legacy = table_to_remove(cfg, current_table=table)
+        if legacy:
+            mgr.preview(
+                ['nft', 'delete', 'table', 'inet', legacy],
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=True,
+                summary=f'Remove pre-upgrade nftables table inet {legacy} if present',
+            )
+        mgr.preview(
+            ['nft', '-f', '-'],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            input_text=script,
+            summary=f'Load rendered nftables rules into inet {table}',
+        )
+        return
     with mgr.intent(
         f'Apply firewall table {table}',
         why=(
@@ -654,10 +680,27 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         ),
     )
     table = effective_firewall_table(cfg)
-    if dry_run:
-        log.info('DRYRUN: nft delete table inet {}', table)
-        return
     mgr = CommandManager.current()
+    if dry_run:
+        mgr.preview(
+            ['nft', 'delete', 'table', 'inet', table],
+            sudo=True,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Remove nftables table inet {table}',
+        )
+        legacy = table_to_remove(cfg, current_table=table)
+        if legacy:
+            mgr.preview(
+                ['nft', 'delete', 'table', 'inet', legacy],
+                sudo=True,
+                role='modify',
+                check=False,
+                capture=True,
+                summary=f'Remove pre-upgrade nftables table inet {legacy}',
+            )
+        return
     # Whatever ensure_firewall_ready concluded earlier in this invocation is
     # about to stop being true.
     mgr.probe_cache.setdefault('firewall_ready', {}).pop(table, None)

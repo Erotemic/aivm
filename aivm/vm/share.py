@@ -604,7 +604,11 @@ def ensure_share_mounted(
         remote,
     ]
     if dry_run:
-        log.info('DRYRUN: {}', ' '.join(cmd))
+        CommandManager.current().preview(
+            cmd,
+            role='modify',
+            summary=f'Reconcile guest virtiofs share {tag}',
+        )
         return
     mgr = CommandManager.current()
     max_attempts = 12

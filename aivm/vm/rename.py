@@ -275,7 +275,12 @@ def rename_managed_vm(
         for source, destination, label in targets:
             if source.exists():
                 print(f'DRYRUN: move {label}: {source} -> {destination}')
-        print(f'DRYRUN: virsh domrename {old_name} {new_name}')
+        CommandManager.current().preview(
+            virsh_cmd('domrename', old_name, new_name),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            summary=f'Rename libvirt domain {old_name} to {new_name}',
+        )
         print(f'DRYRUN: repoint domain XML storage paths at {new_name}')
         print(f'DRYRUN: rewrite store records naming {old_name}')
         return

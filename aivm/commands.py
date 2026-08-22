@@ -195,8 +195,9 @@ class CommandError(AIVMError):
     def __init__(self, cmd: Sequence[str] | str, result: CommandResult) -> None:
         self.cmd = cmd
         self.result = result
+        rendered = cmd if isinstance(cmd, str) else shell_join(cmd)
         super().__init__(
-            f'Command failed (code={result.code}): {cmd}\n{result.stderr}'.strip()
+            f'Command failed (code={result.code}):\n{rendered}\n{result.stderr}'.strip()
         )
 
 
@@ -891,10 +892,15 @@ class CommandManager:
         yes_sudo: bool = False,
         auto_approve_readonly_sudo: bool = True,
         privilege_mode: str = str(DEFAULT_PRIVILEGE_MODE),
+        dry_run: bool = False,
     ) -> None:
         self.yes = yes
         self.yes_sudo = yes_sudo
         self.auto_approve_readonly_sudo = auto_approve_readonly_sudo
+        # Dry-run is an execution policy, not a parallel command renderer.
+        # Callers submit the same CommandSpec either way; this manager renders
+        # it and resolves the handle without invoking a process.
+        self.dry_run = bool(dry_run)
         # Under NEVER this manager refuses to execute any sudo command
         # (enforced in _execute_one and in confirm_sudo_scope) so no code
         # path can escalate silently; call sites consult aivm.privilege
@@ -998,8 +1004,12 @@ class CommandManager:
             plan.closed = True
             return
         try:
-            self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
-            self._flush_plan(plan, _stacklevel=_stacklevel + 1)
+            if self.dry_run:
+                self._render_plan_preview(plan, _stacklevel=_stacklevel + 1)
+                self._resolve_dry_run_commands(plan.commands)
+            else:
+                self._approve_plan_if_needed(plan, _stacklevel=_stacklevel + 1)
+                self._flush_plan(plan, _stacklevel=_stacklevel + 1)
         finally:
             self._resolve_abandoned_plan_commands(plan)
             plan.closed = True
@@ -1007,6 +1017,40 @@ class CommandManager:
     def current_plan(self) -> CommandPlan | None:
         """Return the currently active innermost plan, if any."""
         return self.plan_stack[-1] if self.plan_stack else None
+
+    def _make_spec(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandSpec:
+        """Normalize one command specification without executing it."""
+        return CommandSpec(
+            cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
+            sudo=sudo,
+            role=role,
+            ownership=ownership,
+            user_driven=user_driven,
+            check=check,
+            capture=capture,
+            text=text,
+            input_text=input_text,
+            env=env,
+            timeout=timeout,
+            summary=summary.strip(),
+            detail=detail.strip(),
+        )
 
     def submit(
         self,
@@ -1055,10 +1099,8 @@ class CommandManager:
         # TODO: ergonomic ubelt style string acceptence? Might be better to
         # keep it type strict though. Don't do this one yet. Need to think
         # about it more.
-        spec = CommandSpec(
-            # Coerce tokens to str, but never through Elided: str() would drop
-            # the label and silently restore the payload to previews.
-            cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
+        spec = self._make_spec(
+            cmd,
             sudo=sudo,
             role=role,
             ownership=ownership,
@@ -1069,8 +1111,8 @@ class CommandManager:
             input_text=input_text,
             env=env,
             timeout=timeout,
-            summary=summary.strip(),
-            detail=detail.strip(),
+            summary=summary,
+            detail=detail,
         )
         handle = CommandHandle(manager=self, command_id=self._next_command_id)
         planned = PlannedCommand(
@@ -1128,6 +1170,143 @@ class CommandManager:
             _stacklevel=2,
         ).result()
 
+    def preview_spec(
+        self, spec: CommandSpec, *, _stacklevel: int = 1
+    ) -> None:
+        """Render an already-normalized command specification without running it."""
+        local_log = log.opt(depth=_stacklevel)
+        if spec.summary:
+            local_log.info('DRYRUN: {}', spec.summary)
+        else:
+            local_log.info('DRYRUN: command would execute')
+        preview_cmd, omissions = self._render_preview(spec)
+        role_label = self._effective_role(spec)
+        command_label = 'command (read-only)' if role_label == 'read' else 'command'
+        local_log.info('{}:\n{}', command_label, preview_cmd)
+        self._announce_omissions(omissions, _stacklevel=_stacklevel)
+        if spec.detail:
+            local_log.debug('detail: {}', spec.detail)
+        raw_cmd = self._raw_command(spec)
+        if raw_cmd != preview_cmd:
+            local_log.debug('raw command:\n{}', raw_cmd)
+
+    def preview(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+        _stacklevel: int = 1,
+    ) -> None:
+        """Render one command through the normal command formatter without running it."""
+        spec = self._make_spec(
+            cmd,
+            sudo=sudo,
+            role=role,
+            ownership=ownership,
+            user_driven=user_driven,
+            check=check,
+            capture=capture,
+            text=text,
+            input_text=input_text,
+            env=env,
+            timeout=timeout,
+            summary=summary,
+            detail=detail,
+        )
+        self.preview_spec(spec, _stacklevel=_stacklevel + 1)
+
+    def replace_process(
+        self,
+        cmd: Sequence[str],
+        *,
+        role: CommandRole | None = None,
+        env: dict[str, str] | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> None:
+        """Replace this process, or only render the command during dry-run."""
+        if self.current_plan() is not None:
+            raise CommandManagerInvariantError(
+                'Process replacement cannot occur inside an open command step.'
+            )
+        spec = self._make_spec(
+            cmd,
+            role=role,
+            user_driven=True,
+            capture=False,
+            env=env,
+            summary=summary,
+            detail=detail,
+        )
+        local_log = log.opt(depth=1)
+        run_line, omissions = self._render_preview(spec)
+        if spec.summary:
+            local_log.info('{}{}', 'DRYRUN: ' if self.dry_run else '', spec.summary)
+        label = 'DRYRUN (exec skipped):' if self.dry_run else 'RUN (exec, replaces this process):'
+        local_log.info('{}\n{}', label, run_line)
+        self._announce_omissions(omissions, _stacklevel=1)
+        raw_line = self._raw_command(spec)
+        if raw_line != run_line:
+            local_log.debug('raw command:\n{}', raw_line)
+        if self.dry_run:
+            return
+        argv = [str(part) for part in spec.cmd]
+        try:
+            if env is None:
+                os.execvp(argv[0], argv)
+            os.execvpe(argv[0], argv, env)
+        except FileNotFoundError as ex:
+            missing = ex.filename or (argv[0] if argv else '<empty command>')
+            raise CommandError(
+                argv, CommandResult(127, '', f'command not found: {missing}')
+            ) from ex
+        except PermissionError as ex:
+            denied = ex.filename or (argv[0] if argv else '<empty command>')
+            raise CommandError(
+                argv,
+                CommandResult(126, '', f'command is not executable: {denied}'),
+            ) from ex
+        raise CommandManagerInvariantError('os.exec returned without replacing the process')
+
+    def _resolve_dry_run_commands(
+        self, commands: Sequence[PlannedCommand]
+    ) -> None:
+        """Resolve pending commands as previewed without fabricating results."""
+        for item in commands:
+            if item.attempted or item.handle.done():
+                continue
+            item.attempted = True
+            item.handle._set_not_executed(
+                'Command was previewed but not executed because this is a dry run: '
+                f'{self._preview_command(item.spec)}'
+            )
+
+    def _preview_dry_run_loose_commands(
+        self, *, through_command_id: int | None, _stacklevel: int
+    ) -> None:
+        """Render pending loose commands and resolve them without execution."""
+        for item in self._loose_commands:
+            if item.attempted:
+                continue
+            self.preview_spec(item.spec, _stacklevel=_stacklevel + 1)
+            self._resolve_dry_run_commands([item])
+            if (
+                through_command_id is not None
+                and item.command_id >= through_command_id
+            ):
+                break
+
     def flush_through(self, command_id: int, *, _stacklevel: int = 1) -> None:
         """Flush execution through the specified command id.
 
@@ -1139,6 +1318,22 @@ class CommandManager:
             command_id: Identifier of the last command that must be run.
         """
         # TODO: does this need to be public?
+        # Only ever flush a queue that actually holds the requested command.
+        if self.dry_run:
+            for plan in reversed(self.plan_stack):
+                if any(item.command_id == command_id for item in plan.commands):
+                    self._render_plan_preview(plan, _stacklevel=_stacklevel + 1)
+                    self._resolve_dry_run_commands(plan.commands)
+                    return
+            if any(item.command_id == command_id for item in self._loose_commands):
+                self._preview_dry_run_loose_commands(
+                    through_command_id=command_id,
+                    _stacklevel=_stacklevel + 1,
+                )
+                return
+            raise CommandManagerInvariantError(
+                f'No queue holds command {command_id}, so the manager cannot preview it.'
+            )
         # Only ever flush a queue that actually holds the requested command.
         # Substituting "whatever else is pending" is how re-reading a resolved
         # handle used to execute an unrelated command.
@@ -1261,7 +1456,7 @@ class CommandManager:
             local_log.info('  Planned sudo commands:')
             for idx, cmd in enumerate(preview_cmds, start=1):
                 rendered = shell_join(['sudo', *(str(part) for part in cmd)])
-                local_log.info('    {}. {}', idx, rendered)
+                local_log.info('    {}. sudo command:\n{}', idx, rendered)
         if auth_required:
             local_log.info(
                 '  Sudo authentication appears to be required before the next command can run.'
@@ -1534,7 +1729,7 @@ class CommandManager:
             return
         breadcrumb = self.render_breadcrumb()
         local_log = log.opt(depth=_stacklevel)
-        local_log.info('Step: {}', plan.title)
+        local_log.info('{}Step: {}', 'DRYRUN: ' if self.dry_run else '', plan.title)
         if breadcrumb:
             local_log.info('Context: {}', breadcrumb)
         if plan.why:
@@ -1548,13 +1743,13 @@ class CommandManager:
             command_label = (
                 'command (read-only)' if role == 'read' else 'command'
             )
-            local_log.info('     {}: {}', command_label, preview_cmd)
+            local_log.info('     {}:\n{}', command_label, preview_cmd)
             self._announce_omissions(omissions, _stacklevel=_stacklevel)
             if item.spec.detail:
                 local_log.debug('     detail: {}', item.spec.detail)
             raw_cmd = self._raw_command(item.spec)
             if raw_cmd != preview_cmd:
-                local_log.debug('     raw command: {}', raw_cmd)
+                local_log.debug('     raw command:\n{}', raw_cmd)
             local_log.trace('     role={} capture={}', role, item.spec.capture)
         plan.rendered_preview = True
 
@@ -1565,7 +1760,7 @@ class CommandManager:
         local_log = log.opt(depth=_stacklevel)
         local_log.info('Full commands for step: {}', plan.title)
         for idx, item in enumerate(plan.commands, start=1):
-            local_log.info('  {}. {}', idx, self._raw_command(item.spec))
+            local_log.info('  {}. full command:\n{}', idx, self._raw_command(item.spec))
 
     def _confirm_loose_command(
         self, spec: CommandSpec, *, _stacklevel: int = 1
@@ -1624,7 +1819,9 @@ class CommandManager:
             local_log.info('  Planned commands:')
             for idx, cmd in enumerate(preview_cmds, start=1):
                 local_log.info(
-                    '    {}. {}', idx, shell_join([str(p) for p in cmd])
+                    '    {}. command:\n{}',
+                    idx,
+                    shell_join([str(p) for p in cmd]),
                 )
         if not sys.stdin.isatty():
             raise ApprovalUnavailableError(
@@ -1883,14 +2080,14 @@ class CommandManager:
         emit = local_log.debug if quiet else local_log.info
         if within_plan and ordinal is not None:
             current, total = ordinal
-            emit('RUN [{}/{}]: {}', current, total, run_line)
+            emit('RUN [{}/{}]:\n{}', current, total, run_line)
         else:
-            emit('RUN: {}', run_line)
+            emit('RUN:\n{}', run_line)
         self._announce_omissions(
             omissions, quiet=quiet, _stacklevel=_stacklevel
         )
         if raw_line != run_line:
-            local_log.debug('  raw command: {}', raw_line)
+            local_log.debug('  raw command:\n{}', raw_line)
 
         try:
             proc = subprocess.run(
@@ -1909,7 +2106,7 @@ class CommandManager:
         except FileNotFoundError as ex:
             missing = ex.filename or (cmd[0] if cmd else '<empty command>')
             res = CommandResult(127, '', f'command not found: {missing}')
-            local_log.warning('Command executable not found cmd={}', run_line)
+            local_log.warning('Command executable not found:\n{}', run_line)
             if spec.check:
                 raise CommandError(cmd, res) from ex
             return res
@@ -1917,7 +2114,7 @@ class CommandManager:
             denied = ex.filename or (cmd[0] if cmd else '<empty command>')
             res = CommandResult(126, '', f'command is not executable: {denied}')
             local_log.warning(
-                'Command executable is not permitted cmd={}', run_line
+                'Command executable is not permitted:\n{}', run_line
             )
             if spec.check:
                 raise CommandError(cmd, res) from ex
@@ -1933,7 +2130,7 @@ class CommandManager:
                 124, stdout, (stderr + '\ncommand timed out').strip()
             )
             local_log.warning(
-                'Command timed out after {}s cmd={}',
+                'Command timed out after {}s:\n{}',
                 spec.timeout,
                 run_line,
             )
@@ -1949,7 +2146,7 @@ class CommandManager:
         )
         if spec.check and res.code != 0:
             local_log.error(
-                'Command failed code={} cmd={} stderr={} stdout={}',
+                'Command failed code={}:\n{}\nstderr={}\nstdout={}',
                 res.code,
                 run_line,
                 res.stderr.strip(),

@@ -352,7 +352,7 @@ def test_plan_preview_includes_summary_and_command(
 
     joined = '\n'.join(messages)
     assert '  1. Enable and start libvirtd service' in joined
-    assert 'command: sudo systemctl enable --now libvirtd' in joined
+    assert 'command:\nsudo systemctl enable --now libvirtd' in joined
 
 
 def test_run_logs_use_stacklevel_to_attribute_caller(
@@ -443,7 +443,7 @@ def test_plan_preview_labels_read_only_commands(
     joined = '\n'.join(messages)
     assert '  1. Inspect mount source' in joined
     assert (
-        'command (read-only): sudo findmnt -n -o SOURCE --target /tmp/demo'
+        'command (read-only):\nsudo findmnt -n -o SOURCE --target /tmp/demo'
         in joined
     )
 

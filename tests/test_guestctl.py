@@ -9,12 +9,15 @@ from typing import Any
 import pytest
 
 from aivm.guestctl import (
-    ChownPath,
+    GuestAccessRequest,
     GuestEnrollmentError,
     GuestEnrollmentRequest,
-    reconcile_guest_principal,
     restricted_bootstrap_authorized_key,
 )
+from aivm.rc.guest import guestctl as guestctl_program
+
+ChownPath = guestctl_program.ChownPath
+reconcile_guest_principal = guestctl_program.reconcile_guest_principal
 
 
 class FakeGuestSystem:
@@ -115,7 +118,7 @@ def test_restricted_bootstrap_key_forces_guestctl() -> None:
 
 def test_guest_enrollment_is_idempotent(tmp_path: Path) -> None:
     system = FakeGuestSystem()
-    request = GuestEnrollmentRequest(
+    request = guestctl_program.GuestEnrollmentRequest(
         guest_user='edward-wang-agent',
         uid=1201,
         gid=1201,
@@ -162,13 +165,15 @@ def test_guest_enrollment_rejects_uid_collision(tmp_path: Path) -> None:
         'home': '/home/somebody-else',
         'shell': '/bin/bash',
     }
-    request = GuestEnrollmentRequest(
+    request = guestctl_program.GuestEnrollmentRequest(
         guest_user='edward-wang-agent',
         uid=1201,
         gid=1201,
         public_key='ssh-ed25519 AAAAEDWARD edward@test',
     )
-    with pytest.raises(GuestEnrollmentError, match='uid 1201 is already used'):
+    with pytest.raises(
+        guestctl_program.GuestEnrollmentError, match='uid 1201 is already used'
+    ):
         reconcile_guest_principal(
             request,
             runner=system,
@@ -195,10 +200,11 @@ def test_guest_enrollment_rejects_invalid_usernames(guest_user: str) -> None:
 def test_guest_disable_removes_only_selected_key_and_sudoers(
     tmp_path: Path,
 ) -> None:
-    from aivm.guestctl import GuestAccessRequest, disable_guest_principal
+    GuestAccessRequest = guestctl_program.GuestAccessRequest
+    disable_guest_principal = guestctl_program.disable_guest_principal
 
     system = FakeGuestSystem()
-    enrollment = GuestEnrollmentRequest(
+    enrollment = guestctl_program.GuestEnrollmentRequest(
         guest_user='edward-wang-agent',
         uid=1201,
         gid=1201,
@@ -240,10 +246,40 @@ def test_guest_disable_removes_only_selected_key_and_sudoers(
 
 
 def test_guest_access_request_rejects_unknown_operation() -> None:
-    from aivm.guestctl import GuestAccessRequest
+    GuestAccessRequest = guestctl_program.GuestAccessRequest
 
-    with pytest.raises(GuestEnrollmentError, match='unsupported guest access'):
+    with pytest.raises(
+        guestctl_program.GuestEnrollmentError, match='unsupported guest access'
+    ):
         GuestAccessRequest.from_json(
             '{"operation":"delete-home","guest_user":"agent",'
             '"public_key":"ssh-ed25519 AAAATEST user@test"}'
         )
+
+
+
+def test_host_and_guest_enrollment_protocols_round_trip_identically() -> None:
+    host_request = GuestEnrollmentRequest(
+        guest_user='edward-wang-agent',
+        uid=1201,
+        gid=1201,
+        public_key='ssh-ed25519 AAAAEDWARD edward@test',
+        allow_sudo=False,
+        groups=('docker', 'video'),
+    )
+    guest_request = guestctl_program.GuestEnrollmentRequest.from_json(
+        host_request.to_json()
+    )
+    assert guest_request.to_json() == host_request.to_json()
+
+
+def test_host_and_guest_access_protocols_round_trip_identically() -> None:
+    host_request = GuestAccessRequest(
+        operation='disable-principal',
+        guest_user='edward-wang-agent',
+        public_key='ssh-ed25519 AAAAEDWARD edward@test',
+    )
+    guest_request = guestctl_program.GuestAccessRequest.from_json(
+        host_request.to_json()
+    )
+    assert guest_request.to_json() == host_request.to_json()

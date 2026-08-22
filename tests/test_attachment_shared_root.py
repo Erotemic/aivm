@@ -497,12 +497,12 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
     assert '  3. Bind requested host folder to shared-root target' in messages
     # base_dir is user-owned here, so creating the export directories needs no
     # privileges. Only `mount --bind`, which has no unprivileged form, does.
-    assert any(msg.startswith('     command: mkdir -p ') for msg in messages)
+    assert any(msg.startswith('     command:\nmkdir -p ') for msg in messages)
     assert not any(
-        msg.startswith('     command: sudo mkdir -p ') for msg in messages
+        msg.startswith('     command:\nsudo mkdir -p ') for msg in messages
     )
     assert any(
-        msg.startswith('     command: sudo mount --bind ') for msg in messages
+        msg.startswith('     command:\nsudo mount --bind ') for msg in messages
     )
 
 
@@ -679,7 +679,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
+            '     command (read-only):\nsudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )
@@ -742,7 +742,7 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
     )
     assert any(
         msg.startswith(
-            '     command: sudo virsh -c qemu:///system attach-device '
+            '     command:\nsudo virsh -c qemu:///system attach-device '
         )
         for msg in messages
     )
@@ -788,7 +788,7 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
         in messages
     )
     assert any(
-        msg.startswith('     command: ssh -i /tmp/id_ed25519 agent@10.0.0.2 ')
+        msg.startswith('     command:\nssh -i /tmp/id_ed25519 agent@10.0.0.2 ')
         for msg in messages
     )
     assert all('set -euo pipefail; if [ ! -d' not in msg for msg in messages)
