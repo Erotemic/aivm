@@ -2,30 +2,407 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import stat
 from pathlib import Path
 
 from loguru import logger as log
 
-from ...commands import CommandManager
+from ...commands import CommandError, CommandManager
 from ...config import AgentVMConfig
+from ...fs_identity import FilesystemIdentity
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
+    PERSISTENT_BIND_TOKEN_PATTERN,
+    PERSISTENT_REPLAY_DEGRADED_EXIT,
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     persistent_host_replay_python,
     persistent_host_replay_service_unit,
 )
+
+_TOKEN_RE = re.compile(PERSISTENT_BIND_TOKEN_PATTERN)
+_PROC_MOUNTINFO = Path('/proc/self/mountinfo')
 from ...privilege import path_needs_sudo
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
-from ...vm.share import AttachmentMode, ResolvedAttachment
-from ..resolve import _normalize_attachment_access
-from ..shared_root import (
-    _ensure_host_bind_access,
-    _needs_mkdir,
-    _shared_root_host_target,
-    _target_is_bind_of,
-)
+from ..shared_root import _needs_mkdir
 from . import manifest, transport
+
+
+def _ensure_persistent_root_parent_dir(
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool,
+) -> None:
+    """Create the trusted export root before it is attached to a VM."""
+    target = _persistent_root_host_dir(cfg)
+    if not _needs_mkdir(target):
+        return
+    if dry_run:
+        print(f'DRYRUN: would create persistent-root parent directory {target}')
+        return
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Prepare persistent-root parent directory',
+        why=(
+            'Create the host-side export directory that contains only '
+            'descriptor-pinned persistent bind targets.'
+        ),
+        approval_scope=f'persistent-root-parent:{cfg.vm.name}',
+    ):
+        mgr.submit(
+            ['mkdir', '-p', str(target)],
+            ownership='tool',
+            sudo=path_needs_sudo(target),
+            role='modify',
+            summary='Create persistent-root parent directory',
+            detail=f'target={target}',
+        )
+
+
+def _ensure_persistent_host_replay_helper(*, dry_run: bool) -> bool:
+    """Install the one privileged descriptor-pinned bind primitive."""
+    return transport._install_host_text_if_changed(
+        Path(PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN),
+        persistent_host_replay_python(),
+        '0755',
+        label='persistent host replay helper',
+        dry_run=dry_run,
+    )
+
+
+def _approved_binds_already_applied(
+    approved_manifest: Path,
+    export_root: Path,
+    *,
+    mountinfo: Path | None = None,
+    only_guest_dst: str = '',
+) -> bool:
+    """True when the live export root already matches the approved manifest.
+
+    The replay helper needs root, and on a shared machine the manifest spans
+    *every* principal's persistent attachments. Submitting it unconditionally
+    meant that any caller starting the VM -- including one who owns none of
+    those attachments and has no sudo -- had to escalate merely to re-assert
+    binds that were already in place. The privilege model gates on the
+    command, so the fix is not to run the command when there is nothing for
+    it to do.
+
+    Every check here is an unprivileged ``stat``-family call, and every
+    uncertainty answers False, because a wrong "converged" leaves a guest
+    with a silently missing bind. In particular a target that cannot be
+    read, a manifest that cannot be parsed, and a source whose identity no
+    longer matches all fall through to the privileged helper.
+
+    The identity test is the load-bearing one: a bind target *is* the source
+    directory, so ``lstat`` of the target returning the approved
+    ``(dev, ino)`` proves both that the bind exists and that it still points
+    at the approved object -- without needing any access to the source
+    itself, which on a shared machine usually lives in another user's home.
+
+    What is *mounted* is read from the kernel's mount table rather than
+    inferred, which matters most for the leftovers of a detach: see
+    :func:`_mounted_child_names`.
+    """
+    mounted = _mounted_child_names(export_root, mountinfo=mountinfo)
+    if mounted is None:
+        return False
+    try:
+        payload = json.loads(approved_manifest.read_text(encoding='utf-8'))
+        records = payload['records']
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if not isinstance(records, list):
+        return False
+    if only_guest_dst:
+        scoped = [
+            record
+            for record in records
+            if isinstance(record, dict)
+            and str(record.get('guest_dst') or '').strip() == only_guest_dst
+        ]
+        if len(scoped) != 1:
+            return False
+        records = scoped
+
+    desired_tokens: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            return False
+        token = str(record.get('shared_root_token') or '')
+        if not bool(record.get('enabled', True)):
+            if only_guest_dst and token and token in mounted:
+                return False
+            continue
+        if not token:
+            return False
+        desired_tokens.add(token)
+        if token not in mounted:
+            return False
+        target = export_root / token
+        try:
+            info = target.lstat()
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            # A symlink or file standing in for the bind target. The helper
+            # opens these with O_NOFOLLOW for exactly this reason.
+            return False
+        if (int(info.st_dev), int(info.st_ino)) != (
+            int(record.get('source_dev', -1)),
+            int(record.get('source_ino', -1)),
+        ):
+            return False
+        if not _bind_access_matches(target, str(record.get('access') or 'rw')):
+            return False
+
+    if only_guest_dst:
+        return True
+
+    # A detached or disabled record leaves a mount only the privileged helper
+    # can prune, and deciding "nothing to do" here is what lets the detach
+    # flow go on to delete the record and the manifest. Miss one and the host
+    # folder stays exported to the guest with the durable state that would
+    # have retried the cleanup already gone. Scoped to the names the helper
+    # itself acts on, so an unrelated mount it would skip cannot leave this
+    # permanently unconverged.
+    stale = {
+        name for name in mounted - desired_tokens if _TOKEN_RE.fullmatch(name)
+    }
+    return not stale
+
+
+def _mounted_child_names(
+    export_root: Path, *, mountinfo: Path | None = None
+) -> set[str] | None:
+    """Direct children of ``export_root`` the kernel reports as mount points.
+
+    Read from ``/proc/self/mountinfo`` rather than inferred, because
+    inference gets this wrong in the ordinary case.
+    :meth:`pathlib.Path.is_mount` decides by comparing a path's ``st_dev``
+    with its parent's, and a bind mount whose source shares a filesystem
+    with the export root -- both on the host root filesystem, which is the
+    normal AIVM layout -- produces no such change. It reports False for a
+    perfectly live bind. The privileged replay helper already consults the
+    real table via ``mountpoint(1)``; this is the unprivileged equivalent.
+
+    Returns None when the table cannot be read, which every caller must
+    treat as "assume there is work to do".
+    """
+    source = mountinfo or _PROC_MOUNTINFO
+    try:
+        root = Path(os.path.realpath(export_root))
+        text = source.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    names: set[str] = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        target = Path(_unescape_mountinfo_field(fields[4]))
+        if target.parent == root:
+            names.add(target.name)
+    return names
+
+
+def _unescape_mountinfo_field(text: str) -> str:
+    """Decode the octal escapes the kernel writes into mountinfo paths.
+
+    Space, tab, newline and backslash arrive as ``\\040``-style triples, so a
+    path containing any of them will not match a real one until decoded.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        chunk = text[index + 1 : index + 4]
+        if text[index] == '\\' and len(chunk) == 3 and chunk.isdigit():
+            out.append(chr(int(chunk, 8)))
+            index += 4
+        else:
+            out.append(text[index])
+            index += 1
+    return ''.join(out)
+
+
+def _bind_access_matches(target: Path, access: str) -> bool:
+    """Compare a mounted bind's read-only flag against the approved access.
+
+    ``statvfs`` reports the mount's own ``ST_RDONLY``, which is what the
+    helper's ``remount,bind,ro`` sets, so this needs neither ``findmnt`` nor
+    root.
+    """
+    try:
+        flags = os.statvfs(target).f_flag
+    except OSError:
+        return False
+    read_only = bool(flags & os.ST_RDONLY)
+    return read_only == (access.strip() == 'ro')
+
+
+def _source_unavailable_diagnostics(
+    stderr: str,
+) -> tuple[tuple[str, str, str], ...]:
+    """Parse machine-readable degraded-source diagnostics from the helper."""
+    prefix = 'AIVM_PERSISTENT_SOURCE_UNAVAILABLE '
+    found: list[tuple[str, str, str]] = []
+    for line in stderr.splitlines():
+        if not line.startswith(prefix):
+            continue
+        try:
+            payload = json.loads(line[len(prefix) :])
+            token = str(payload['token'])
+            source_dir = str(payload['source_dir'])
+            detail = str(payload['detail'])
+        except (ValueError, KeyError, TypeError):
+            continue
+        found.append((token, source_dir, detail))
+    return tuple(found)
+
+
+def _probe_persistent_source_identity_as_root(
+    path: Path,
+) -> FilesystemIdentity:
+    """Read one no-symlink source identity through the installed root helper."""
+    cmd = [PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN, '--probe-source', str(path)]
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Inspect persistent source identity as root',
+        why=(
+            'An administrative reauthorization may target another account\'s '
+            'private path, so read only its descriptor-pinned filesystem '
+            'identity through the same no-symlink helper used for replay.'
+        ),
+        approval_scope='persistent-source-identity-probe',
+    ):
+        handle = mgr.submit(
+            cmd,
+            sudo=True,
+            role='read',
+            capture=True,
+            summary='Inspect persistent source filesystem identity',
+            detail=f'source={path}',
+        )
+    result = handle.result()
+    try:
+        payload = json.loads(result.stdout)
+        dev = int(payload['dev'])
+        ino = int(payload['ino'])
+    except (ValueError, KeyError, TypeError) as ex:
+        raise RuntimeError(
+            f'Could not parse privileged source identity for {path}: '
+            f'{result.stdout!r}'
+        ) from ex
+    if dev < 0 or ino <= 0:
+        raise RuntimeError(
+            f'Privileged source identity was invalid for {path}: dev={dev} ino={ino}'
+        )
+    return FilesystemIdentity(dev=dev, ino=ino)
+
+
+def _run_persistent_host_replay(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    dry_run: bool,
+    prune_stale: bool = True,
+    only_guest_dst: str = '',
+    preserve_live_binds: bool = False,
+) -> tuple[tuple[str, str, str], ...]:
+    """Apply the approved manifest through the privileged pinned-FD helper."""
+    approved_manifest = manifest._sync_persistent_host_replay_manifest(
+        cfg, cfg_path, dry_run=dry_run
+    )
+    helper_changed = _ensure_persistent_host_replay_helper(dry_run=dry_run)
+    if dry_run:
+        print(
+            'DRYRUN: would replay approved persistent host bind manifest '
+            f'{approved_manifest}'
+        )
+        return ()
+    if not helper_changed and _approved_binds_already_applied(
+        approved_manifest,
+        _persistent_root_host_dir(cfg),
+        only_guest_dst=only_guest_dst,
+    ):
+        log.debug(
+            'Persistent host binds already match the approved manifest; '
+            'skipping the privileged replay for VM {}.',
+            cfg.vm.name,
+        )
+        return ()
+    cmd = [
+        PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN,
+        '--manifest',
+        str(approved_manifest),
+        '--export-root',
+        str(_persistent_root_host_dir(cfg)),
+        '--vm-name',
+        cfg.vm.name,
+    ]
+    if only_guest_dst:
+        cmd.extend(['--only-guest-dst', only_guest_dst])
+        if preserve_live_binds:
+            cmd.append('--preserve-live-binds')
+    elif prune_stale:
+        cmd.append('--prune-stale')
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Reconcile persistent host binds',
+        why=(
+            'Open approved source and target directories without following '
+            'symlinks, bind through held descriptors, and prune stale mounts.'
+        ),
+        approval_scope=f'persistent-host-replay:{cfg.vm.name}',
+    ):
+        handle = mgr.submit(
+            cmd,
+            sudo=True,
+            role='modify',
+            check=False,
+            capture=True,
+            summary='Replay approved persistent host bind manifest',
+            detail=f'manifest={approved_manifest}',
+        )
+    result = handle.result()
+    if result.code not in {0, PERSISTENT_REPLAY_DEGRADED_EXIT}:
+        raise CommandError(cmd, result)
+
+    unavailable = _source_unavailable_diagnostics(result.stderr)
+    if result.code == PERSISTENT_REPLAY_DEGRADED_EXIT and not unavailable:
+        raise RuntimeError(
+            'Persistent host replay reported degraded source state without '
+            'identifying the affected attachment.'
+        )
+    for token, source_dir, detail in unavailable:
+        if preserve_live_binds:
+            log.warning(
+                'Persistent attachment could not be reconciled without '
+                'disturbing live state; existing export was left untouched '
+                'when present: source={} token={} detail={}',
+                source_dir,
+                token,
+                detail,
+            )
+        else:
+            log.warning(
+                'Persistent attachment source is unavailable or no longer '
+                'matches its approved identity; left unmounted: source={} '
+                'token={} detail={}',
+                source_dir,
+                token,
+                detail,
+            )
+    if unavailable and not preserve_live_binds:
+        log.warning(
+            'To accept the filesystem objects currently present at your saved '
+            'paths, review and run: aivm vm persistent-host-replay --vm {} '
+            '--trust_current_paths',
+            cfg.vm.name,
+        )
+    return unavailable
 
 
 def _install_persistent_host_bind_replay(
@@ -44,13 +421,7 @@ def _install_persistent_host_bind_replay(
     approved_manifest_path = manifest._sync_persistent_host_replay_manifest(
         cfg, cfg_path, dry_run=dry_run
     )
-    helper_changed = transport._install_host_text_if_changed(
-        Path(PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN),
-        persistent_host_replay_python(),
-        '0755',
-        label='persistent host replay helper',
-        dry_run=dry_run,
-    )
+    helper_changed = _ensure_persistent_host_replay_helper(dry_run=dry_run)
     service_name = manifest._persistent_host_replay_service_name(cfg.vm.name)
     unit_changed = transport._install_host_text_if_changed(
         Path('/etc/systemd/system') / service_name,
@@ -89,75 +460,90 @@ def _install_persistent_host_bind_replay(
     return helper_changed or unit_changed
 
 
+def _cleanup_persistent_host_replay_artifacts(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    dry_run: bool,
+    force: bool = False,
+) -> bool:
+    """Disable and remove per-VM host replay artifacts when no longer needed."""
+    records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
+    if records and not force:
+        return False
+    service_name = manifest._persistent_host_replay_service_name(cfg.vm.name)
+    unit_path = Path('/etc/systemd/system') / service_name
+    approved_manifest = manifest._persistent_host_replay_manifest_path(cfg)
+    if dry_run:
+        print(
+            'DRYRUN: would disable and remove persistent host replay artifacts '
+            f'for VM {cfg.vm.name}'
+        )
+        return True
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Remove persistent host replay artifacts',
+        why=(
+            'No persistent attachment remains, so the per-VM root replay unit '
+            'and approved manifest must not outlive their desired state.'
+        ),
+        approval_scope=f'persistent-host-replay-cleanup:{cfg.vm.name}',
+    ):
+        mgr.submit(
+            ['systemctl', 'disable', '--now', service_name],
+            sudo=True,
+            role='modify',
+            check=False,
+            summary='Disable persistent host replay service',
+            detail=f'service={service_name}',
+        )
+        mgr.submit(
+            ['rm', '-f', '--', str(unit_path), str(approved_manifest)],
+            sudo=True,
+            role='modify',
+            summary='Remove persistent host replay unit and manifest',
+            detail=f'unit={unit_path} manifest={approved_manifest}',
+        )
+        mgr.submit(
+            ['systemctl', 'daemon-reload'],
+            sudo=True,
+            role='modify',
+            summary='Reload systemd after replay cleanup',
+        )
+    return True
+
+
 def _reconcile_persistent_host_binds(
     cfg: AgentVMConfig,
     cfg_path: Path,
     *,
     dry_run: bool,
     vm_running: bool | None = None,
-) -> None:
-    manifest._sync_persistent_host_replay_manifest(
-        cfg, cfg_path, dry_run=dry_run
-    )
+    only_guest_dst: str = '',
+    preserve_live_binds: bool = False,
+) -> tuple[tuple[str, str, str], ...]:
+    """Converge host binds and the VM's persistent-root mapping.
+
+    ``only_guest_dst`` scopes foreground attachment operations to the one
+    path the user asked for.  Full replay remains the boot/maintenance path
+    and is the only mode that prunes unrelated stale exports.
+    """
     records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
-    for record in records:
-        if not record.enabled:
-            continue
-        host_src = Path(record.source_dir).expanduser()
-        if not host_src.exists():
-            log.warning(
-                'Skipping persistent host bind replay for VM {} because host path is missing: {}',
-                cfg.vm.name,
-                host_src,
-            )
-            continue
-        if not host_src.is_dir():
-            log.warning(
-                'Skipping persistent host bind replay for VM {} because host path is not a directory: {}',
-                cfg.vm.name,
-                host_src,
-            )
-            continue
-        attachment = ResolvedAttachment(
-            vm_name=cfg.vm.name,
-            mode=AttachmentMode.PERSISTENT,
-            access=_normalize_attachment_access(str(record.access or 'rw')),
-            source_dir=str(host_src.resolve()),
-            guest_dst=str(record.guest_dst or ''),
-            tag=str(record.shared_root_token or ''),
-        )
-        _prepare_persistent_attachment_host_and_vm(
+    unavailable: tuple[tuple[str, str, str], ...] = ()
+    if records or manifest._persistent_host_replay_state_needed(cfg, cfg_path):
+        unavailable = _run_persistent_host_replay(
             cfg,
-            attachment,
+            cfg_path,
             dry_run=dry_run,
-            vm_running=vm_running,
+            prune_stale=not bool(only_guest_dst),
+            only_guest_dst=only_guest_dst,
+            preserve_live_binds=preserve_live_binds,
         )
-
-
-def _ensure_persistent_root_parent_dir(
-    cfg: AgentVMConfig,
-    *,
-    dry_run: bool,
-) -> None:
-    target = _persistent_root_host_dir(cfg)
-    if dry_run:
-        print(f'DRYRUN: would create persistent-root parent directory {target}')
-        return
-    if not _needs_mkdir(target):
-        return
-    mgr = CommandManager.current()
-    with mgr.step(
-        'Prepare persistent-root parent directory',
-        why='Create the host-side persistent-root export directory used by the persistent attachment virtiofs device.',
-        approval_scope=f'persistent-root-parent:{cfg.vm.name}',
-    ):
-        mgr.submit(
-            ['mkdir', '-p', str(target)], ownership='tool',
-            sudo=path_needs_sudo(target),
-            role='modify',
-            summary='Create persistent-root parent directory',
-            detail=f'target={target}',
+    if any(record.enabled for record in records):
+        _ensure_persistent_root_vm_mapping(
+            cfg, dry_run=dry_run, vm_running=vm_running
         )
+    return unavailable
 
 
 def _ensure_persistent_root_vm_mapping(
@@ -182,83 +568,18 @@ def _ensure_persistent_root_vm_mapping(
     )
 
 
-def _ensure_persistent_root_host_bind(
-    cfg: AgentVMConfig,
-    attachment: ResolvedAttachment,
-    *,
-    dry_run: bool,
-) -> Path:
-    # Reuse the shared-root target-token layout, but stage it under the
-    # dedicated persistent-root export tree so the two backends never share the
-    # same virtiofs device or host export directory.
-    source = Path(attachment.source_dir).resolve()
-    parent = _persistent_root_host_dir(cfg)
-    target = parent / Path(_shared_root_host_target(cfg, attachment.tag)).name
-    if dry_run:
-        print(
-            f'DRYRUN: would bind-mount {source} -> {target} for persistent mode'
-        )
-        return target
-    # Read-only fast path: when the target is already a bind of the requested
-    # source, the whole step is a no-op and the user does not need to be
-    # prompted for sudo. _target_is_bind_of is a pure stat check that doesn't
-    # need sudo and won't false-positive on unrelated mounts.
-    if _target_is_bind_of(source, target):
-        _ensure_host_bind_access(target, attachment.access)
-        return target
-    mgr = CommandManager.current()
-    needs_parent = _needs_mkdir(parent)
-    needs_target = _needs_mkdir(target)
-    with mgr.step(
-        'Prepare persistent-root host bind target',
-        why='Ensure the persistent-root staged bind exists without tearing down stable host-side state.',
-        approval_scope=f'persistent-root-host-bind:{cfg.vm.name}:{attachment.tag}',
-    ):
-        if needs_parent:
-            mgr.submit(
-                ['mkdir', '-p', str(parent)], ownership='tool',
-                sudo=path_needs_sudo(parent),
-                role='modify',
-                summary='Create persistent-root parent directory',
-                detail=f'target={parent}',
-            )
-        if needs_target:
-            mgr.submit(
-                ['mkdir', '-p', str(target)], ownership='tool',
-                sudo=path_needs_sudo(target),
-                role='modify',
-                summary='Create persistent-root bind target',
-                detail=f'target={target}',
-            )
-        mgr.submit(
-            ['mount', '--bind', str(source), str(target)],
-            sudo=True,
-            role='modify',
-            summary='Bind requested host folder into persistent-root target',
-            detail=f'source={source} target={target}',
-        )
-    # A newly created bind is writable by default; only ro requires a
-    # second host-side remount. Existing binds are always probed above.
-    if attachment.access == 'ro':
-        _ensure_host_bind_access(target, attachment.access)
-    return target
-
-
 def _prepare_persistent_attachment_host_and_vm(
     cfg: AgentVMConfig,
-    attachment: ResolvedAttachment,
+    attachment: object,
     *,
     dry_run: bool,
     vm_running: bool | None,
 ) -> None:
-    _ensure_persistent_root_parent_dir(cfg, dry_run=dry_run)
-    _ensure_persistent_root_host_bind(
-        cfg,
-        attachment,
-        dry_run=dry_run,
-    )
-    _ensure_persistent_root_vm_mapping(
-        cfg,
-        dry_run=dry_run,
-        vm_running=vm_running,
-    )
+    """Prepare only the VM mapping; binds require a persisted approved record.
+
+    The actual host bind is intentionally deferred until after the attachment
+    record and approved manifest exist, when ``_reconcile_persistent_host_binds``
+    invokes the descriptor-pinned privileged helper.
+    """
+    del cfg, attachment, dry_run, vm_running
+    # Host preparation starts only after the owner-scoped record is persisted.

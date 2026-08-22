@@ -9,7 +9,15 @@ from pathlib import Path
 import pytest
 
 from aivm.config import AgentVMConfig, dump_toml, load
-from aivm.vm.lifecycle import (
+from aivm.errors import AIVMError
+from aivm.status import probe_provisioned
+from aivm.util import CmdResult
+from aivm.vm.guest_tools import (
+    GUEST_TOOL_REGISTRY,
+    GuestToolRegistry,
+    GuestToolSpecError,
+    UnknownGuestToolError,
+    _build_claude_install_script,
     _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
@@ -19,6 +27,75 @@ from aivm.vm.lifecycle import (
     _guest_tool_uv_enabled,
     _uv_installer_url,
 )
+
+
+def test_guest_tool_registry_is_canonical_and_ordered() -> None:
+    assert GUEST_TOOL_REGISTRY.names() == ('uv', 'rust', 'code', 'claude')
+    assert [tool.name for tool in GUEST_TOOL_REGISTRY] == [
+        'uv',
+        'rust',
+        'code',
+        'claude',
+    ]
+    assert GUEST_TOOL_REGISTRY.require('rust').enable_default == 'stable'
+    with pytest.raises(
+        UnknownGuestToolError, match='Known tools: uv, rust, code, claude'
+    ):
+        GUEST_TOOL_REGISTRY.require('kubernetes')
+
+
+def test_guest_tool_registry_rejects_duplicate_names() -> None:
+    definition = GUEST_TOOL_REGISTRY.require('uv')
+    with pytest.raises(ValueError, match='duplicate guest tool definition'):
+        GuestToolRegistry((definition, definition))
+
+
+def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
+    cfg = AgentVMConfig()
+    resolved = {
+        tool.name: tool for tool in GUEST_TOOL_REGISTRY.resolve_all(cfg.tools)
+    }
+    assert resolved['uv'].enabled is True
+    assert resolved['uv'].effective_spec == 'latest'
+    assert resolved['rust'].enabled is False
+    assert resolved['code'].enabled is False
+    assert resolved['claude'].enabled is False
+
+    cfg.tools.rust = True
+    assert (
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'rust').effective_spec
+        == 'stable'
+    )
+    GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, ['code', 'claude'])
+    assert cfg.tools.code == 'latest'
+    assert cfg.tools.claude == 'latest'
+
+
+def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.packages = []
+    cfg.tools.rust = 'stable'
+    cfg.tools.code = 'latest'
+    cfg.tools.claude = 'latest'
+    packages = GUEST_TOOL_REGISTRY.required_packages(cfg.tools)
+    assert packages == (
+        'ca-certificates',
+        'curl',
+        'build-essential',
+        'pkg-config',
+        'libssl-dev',
+        'wget',
+        'gpg',
+        'apt-transport-https',
+    )
+    assert GUEST_TOOL_REGISTRY.command_requirements(cfg.tools) == (
+        ('uv', 'uv'),
+        ('rust', 'rustup'),
+        ('rust', 'cargo'),
+        ('rust', 'rustc'),
+        ('code', 'code'),
+        ('claude', 'claude'),
+    )
 
 
 def test_uv_installer_url_latest_and_versioned() -> None:
@@ -144,17 +221,48 @@ def test_guest_ensure_code_script_uses_microsoft_apt_repo_not_snap() -> None:
     assert 'snap' not in script.lower()
 
 
+def test_guest_claude_tool_default_off_and_opt_in() -> None:
+    cfg = AgentVMConfig()
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
+    assert resolved.enabled is False
+    assert resolved.effective_spec == 'off'
+
+    cfg.tools.claude = True
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
+    assert resolved.enabled is True
+    assert resolved.effective_spec == 'latest'
+
+    cfg.tools.claude = 'stable'
+    with pytest.raises(
+        GuestToolSpecError, match=r"accepted values are 'latest'"
+    ):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
+
+
+def test_guest_claude_script_uses_anthropic_installer() -> None:
+    cfg = AgentVMConfig()
+    script = _build_claude_install_script(cfg, 'latest', True)
+    assert 'curl -fsSL https://claude.ai/install.sh | bash' in script
+    assert 'apt-get install -y ca-certificates curl' in script
+    assert 'command -v claude' in script
+    assert 'CLAUDE_BIN_DIR="$HOME/.local/bin"' in script
+    assert '# >>> aivm claude PATH >>>' in script
+    assert 'claude --version' in script
+
+
 def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.tools.uv = '0.11.11'
     cfg.tools.rust = 'stable'
     cfg.tools.code = 'latest'  # opt in (default is "off")
+    cfg.tools.claude = 'latest'
     cfg.tools.bin_dir = '~/.local/aivm/bin'
     text = dump_toml(cfg)
     assert '[tools]' in text
     assert 'uv = "0.11.11"' in text
     assert 'rust = "stable"' in text
     assert 'code = "latest"' in text
+    assert 'claude = "latest"' in text
     assert 'bin_dir = "~/.local/aivm/bin"' in text
     assert 'install_uv' not in text
     assert 'uv_install_dir' not in text
@@ -165,6 +273,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert loaded.tools.uv == '0.11.11'
     assert loaded.tools.rust == 'stable'
     assert loaded.tools.code == 'latest'
+    assert loaded.tools.claude == 'latest'
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
 
 
@@ -172,6 +281,79 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     text = dump_toml(cfg)
     assert 'code = "off"' in text
+    assert 'claude = "off"' in text
     fpath = tmp_path / 'config.toml'
     fpath.write_text(text, encoding='utf-8')
-    assert load(fpath).tools.code == 'off'
+    loaded = load(fpath)
+    assert loaded.tools.code == 'off'
+    assert loaded.tools.claude == 'off'
+
+
+def test_tools_config_rejects_unknown_registry_name(tmp_path: Path) -> None:
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text(
+        '[tools]\nuv = "latest"\nkubernetes = "latest"\n',
+        encoding='utf-8',
+    )
+    with pytest.raises(UnknownGuestToolError, match='kubernetes'):
+        load(fpath)
+
+
+def test_tools_config_errors_are_domain_errors(tmp_path: Path) -> None:
+    """Regression: ``[tools]`` config mistakes raised bare ``ValueError``,
+    which escaped ``aivm.cli.main``'s ``AIVMError`` handler and crashed every
+    command with a traceback instead of a clean error message."""
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text('[tools]\nkubernetes = "latest"\n', encoding='utf-8')
+    with pytest.raises(AIVMError, match='kubernetes'):
+        load(fpath)
+
+    fpath.write_text('[tools]\nuv = 3\n', encoding='utf-8')
+    with pytest.raises(AIVMError, match='strings or booleans'):
+        load(fpath)
+
+
+def test_claude_pinned_version_is_domain_error() -> None:
+    """Regression: a pinned ``claude = "1.2.3"`` spec raised bare
+    ``ValueError`` at resolve time (status/provision) — also a traceback."""
+    cfg = AgentVMConfig()
+    cfg.tools.claude = '1.2.3'
+    with pytest.raises(AIVMError, match=r"\[tools\] claude = '1.2.3'"):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
+
+
+def test_probe_provisioned_uses_registry_command_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.provision.packages = []
+    cfg.provision.install_docker = False
+    cfg.tools.code = 'latest'
+    cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        'aivm.status.require_ssh_identity', lambda path: Path(path)
+    )
+
+    def fake_run(self: object, cmd: list[str], **kwargs: object) -> CmdResult:
+        del self, kwargs
+        captured['remote'] = cmd[-1]
+        return CmdResult(0, '', '')
+
+    monkeypatch.setattr('aivm.status.CommandManager.run', fake_run)
+    outcome = probe_provisioned(cfg, '10.77.0.100')
+
+    assert outcome.ok is True
+    assert 'command -v uv' in captured['remote']
+    assert 'command -v code' in captured['remote']
+    assert 'command -v rustup' not in captured['remote']
+
+
+def test_lifecycle_compatibility_exports_are_bound() -> None:
+    from aivm.vm import lifecycle
+
+    missing = [
+        name for name in lifecycle.__all__ if not hasattr(lifecycle, name)
+    ]
+    assert missing == []

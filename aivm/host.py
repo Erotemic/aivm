@@ -46,7 +46,11 @@ def check_commands_with_sudo() -> tuple[list[str], str | None]:
     """Check required commands in a non-interactive sudo environment."""
     mgr = CommandManager.current()
     sudo_probe = mgr.run(
-        ['sudo', '-n', 'true'], role='read', check=False, capture=True, text=True
+        ['sudo', '-n', 'true'],
+        role='read',
+        check=False,
+        capture=True,
+        text=True,
     )
     if sudo_probe.code != 0:
         return [], (
@@ -58,7 +62,8 @@ def check_commands_with_sudo() -> tuple[list[str], str | None]:
     for cmd in REQUIRED_CMDS:
         # Match sudo's effective PATH and shell command lookup behavior.
         probe = mgr.run(
-            ['sudo', '-n', 'sh', '-c', f'command -v {shlex.quote(cmd)}'], role='read',
+            ['sudo', '-n', 'sh', '-c', f'command -v {shlex.quote(cmd)}'],
+            role='read',
             check=False,
             capture=True,
             text=True,

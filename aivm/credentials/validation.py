@@ -24,9 +24,20 @@ def _reject_control_characters(field: str, value: str) -> None:
         )
 
 
-def credential_id(vm_name: str, canonical_repo: str) -> str:
-    """Return the deterministic id for one VM/repository authorization."""
-    payload = f'{vm_name}\0{canonical_repo}'.encode('utf-8')
+def credential_id(
+    vm_name: str, canonical_repo: str, principal_id: str = ''
+) -> str:
+    """Return the deterministic id for one principal/repository grant.
+
+    Legacy records omit ``principal_id`` and retain the released VM/repository
+    digest. Machine-store records include the persisted principal so two users
+    may hold independent deploy keys for the same repository.
+    """
+    principal = str(principal_id or '').strip()
+    if principal:
+        payload = f'{vm_name}\0{principal}\0{canonical_repo}'.encode('utf-8')
+    else:
+        payload = f'{vm_name}\0{canonical_repo}'.encode('utf-8')
     return 'git-' + hashlib.sha256(payload).hexdigest()[:12]
 
 
@@ -92,11 +103,12 @@ def validate_credential_identity(
     provider_host: str,
     owner: str,
     repository: str,
+    principal_id: str = '',
 ) -> GitRepository:
     """Validate and cross-check the persisted identity of a credential."""
     validated_id = validate_credential_id_format(cred_id)
     repo = validate_repository_identity(provider_host, owner, repository)
-    expected_id = credential_id(vm_name, repo.canonical)
+    expected_id = credential_id(vm_name, repo.canonical, principal_id)
     if validated_id != expected_id:
         raise CredentialValidationError(
             f'Credential id {validated_id!r} does not match VM {vm_name!r} '

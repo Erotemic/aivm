@@ -38,6 +38,36 @@ user's source tree.
 effectively root-equivalent. Reducing sudo prompts is not the same as reducing
 the account's host authority. See :doc:`security` for the full analysis.
 
+When escalation is not available at all
+----------------------------------------
+
+Host permissions and sudo are separate grants: on a shared workstation an
+administrator commonly gives users the ``libvirt`` and ``aivm`` groups and no
+sudoers entry. ``aivm host permissions check`` reports what that means for
+*your* account rather than for a privileged one, and the operations that still
+need root fail with a message naming what wanted it and what to ask an
+administrator for --- not a bare ``sudo -v`` error. Once an escalation attempt
+has failed, later steps in the same run degrade immediately instead of
+re-prompting an account that has already been shown to have no usable sudo.
+
+The firewall is the case worth understanding, because ``nft`` has no
+unprivileged read. Three states are kept distinct:
+
+* **present** --- nothing to do;
+* **missing** --- installed, or reported as missing-and-not-installable;
+* **unverifiable** --- reported as unverified, and *nothing is changed*.
+
+Conflating the last two is what makes an unprivileged account unusable: an
+administrator's correctly-installed table is invisible to an ordinary user, and
+treating that silence as "absent" schedules a repair they cannot perform. AIVM
+warns and continues instead. A firewall that cannot be checked is never allowed
+to be the thing that stops someone from working.
+
+The rules themselves are verified before a guest can use the bridge --- on
+``vm up`` and ``vm restart`` as well as at creation --- because the managed
+table lives only in the live kernel ruleset and a host reboot removes it while
+the VM definition survives. Pass ``--no-ensure_firewall`` to skip the check.
+
 What appears in the log
 -----------------------
 

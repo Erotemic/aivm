@@ -11,9 +11,14 @@ from ...config import dump_toml
 from ...config_store import (
     format_existing_config,
     load_config_document,
-    save_store,
+)
+from ...scoped_store import (
+    load_scope_store,
+    resolve_store_scope,
+    save_scope_store,
 )
 from ...services import cfg_path, load_cfg_with_path
+from ...terminal import highlight_code
 from .._common import _BaseCommand
 
 
@@ -21,8 +26,9 @@ class ConfigShowCLI(_BaseCommand):
     """Show AIVM config content.
 
     By default this prints the canonical source document.  For split layouts,
-    that source document is the deterministic concatenation of config.toml,
-    defaults.toml, networks.toml, and sorted vms/*.toml fragments.
+    that source document is the deterministic concatenation of
+    ``config.toml``, ``defaults.toml``, ``networks.toml``, and sorted
+    ``vms/*.toml`` fragments.
     """
 
     vm: str = kwconf.Value(
@@ -38,9 +44,10 @@ class ConfigShowCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        path = cfg_path(args.config)
+        scope = resolve_store_scope(args.config)
+        path = scope.store_path
         vm_name = str(args.vm or '').strip()
-        if bool(args.resolved) or vm_name:
+        if args.resolved or vm_name:
             cfg, resolved_store_path = load_cfg_with_path(
                 args.config, vm_opt=vm_name, host_src=Path.cwd()
             )
@@ -56,15 +63,17 @@ class ConfigShowCLI(_BaseCommand):
             if loaded.sources:
                 toml_text = loaded.source_text
             else:
-                store = loaded.store
-                save_store(store, path)
+                store = load_scope_store(scope)
+                save_scope_store(
+                    scope,
+                    store,
+                    reason='Create empty config document for display.',
+                )
                 loaded = load_config_document(path)
                 toml_text = loaded.source_text or path.read_text(
                     encoding='utf-8'
                 )
-        import ubelt as ub
-
-        text = ub.highlight_code(toml_text, lexer_name='toml')
+        text = highlight_code(toml_text, lexer_name='toml')
         print(text, end='')
         return 0
 
@@ -74,10 +83,12 @@ class ConfigFormatCLI(_BaseCommand):
 
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Show the files that would be written without modifying them.',
     )
     force: bool = kwconf.Flag(
         False,
+        short_alias=['f'],
         help='Rewrite existing formatted fragments from the loaded logical document.',
     )
     no_backup: bool = kwconf.Flag(
@@ -91,9 +102,9 @@ class ConfigFormatCLI(_BaseCommand):
         path = cfg_path(args.config)
         targets = format_existing_config(
             path,
-            backup=not bool(args.no_backup),
-            dry_run=bool(args.dry_run),
-            force=bool(args.force),
+            backup=not args.no_backup,
+            dry_run=args.dry_run,
+            force=args.force,
         )
         if args.dry_run:
             print('Would write formatted config paths:')

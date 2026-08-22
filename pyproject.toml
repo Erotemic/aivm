@@ -45,10 +45,10 @@ dynamic = [
   "version",
 ]
 dependencies = [
-  "loguru",
+  "loguru>=0.7.0",
   "rich>=13.7.0",
-  "kwconf>=0.10.0",
-  "ubelt>=1.3.6",
+  "kwconf>=0.11.0",
+  "PyYAML>=6.0.2",
 ]
 optional-dependencies.all = [
   "aivm[docs]",
@@ -56,9 +56,14 @@ optional-dependencies.all = [
   "aivm[tests]",
 ]
 optional-dependencies.docs = [
+  "PyYAML>=6.0.2",
+  "myst-parser>=0.18.0",
   "sphinx>=5.0.1",
   "sphinx-autobuild>=2021.3.14",
-  "sphinx-rtd-theme>=1.0.0",
+  "sphinx-reredirects>=0.0.1",
+  "sphinx-rtd-theme>=1.2.1",
+  "sphinxcontrib-jquery>=4.1",
+  "sphinxcontrib-mermaid>=1.0.0",
 ]
 optional-dependencies.optional = [
   "pygments>=2.19.2",
@@ -68,6 +73,7 @@ optional-dependencies.tests = [
   "pytest>=6.2.5",
   "pytest-cov>=3.0.0",
   "pytest-timeout>=1.4.2",
+  "PyYAML>=6.0.2",
   "xdoctest>=1.1.5",
 ]
 urls.Homepage = "https://github.com/Erotemic/aivm"
@@ -141,6 +147,7 @@ ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore
 ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
 ini_options.markers = [
   "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",
+  "claims_domains: migration tests that assert on the libvirt domain-ownership claim instead of stubbing it",
 ]
 ini_options.filterwarnings = [
   "default",

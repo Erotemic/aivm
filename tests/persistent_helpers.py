@@ -135,9 +135,7 @@ def _make_guest_replay_fake_run(
             return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
             if umount_busy:
-                return FakeProc(
-                    returncode=16, stderr='umount: target is busy'
-                )
+                return FakeProc(returncode=16, stderr='umount: target is busy')
             mounts.pop(cmd[-1], None)
             return FakeProc()
         raise AssertionError(f'unhandled fake command: {cmd}')

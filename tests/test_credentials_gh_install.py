@@ -55,7 +55,9 @@ def test_detect_backend(
     debian_like: bool,
     expected: str,
 ) -> None:
-    monkeypatch.setattr('aivm.credentials.gh_install.shutil.which', _only(present))
+    monkeypatch.setattr(
+        'aivm.credentials.gh_install.shutil.which', _only(present)
+    )
     monkeypatch.setattr(
         'aivm.credentials.gh_install.host_is_debian_like', lambda: debian_like
     )
@@ -94,15 +96,13 @@ def test_apt_plan_follows_the_official_repository_instructions(
 
     # The source line is written through stdin rather than a shell redirect,
     # and carries the probed architecture.
-    [source_step] = [
-        step
-        for step in plan.steps
-        if step.cmd[:1] == ['tee']
-    ]
+    [source_step] = [step for step in plan.steps if step.cmd[:1] == ['tee']]
     assert source_step.cmd == ['tee', '/etc/apt/sources.list.d/github-cli.list']
     assert source_step.input_text is not None
     assert f'arch=arm64 signed-by={keyring}' in source_step.input_text
-    assert 'https://cli.github.com/packages stable main' in source_step.input_text
+    assert (
+        'https://cli.github.com/packages stable main' in source_step.input_text
+    )
 
     # gh comes last, after the repository exists.
     assert 'gh' in commands[-1]
@@ -147,7 +147,12 @@ def test_apt_plan_without_a_downloader_is_an_actionable_error(
     [
         pytest.param(
             'dnf5',
-            ['dnf', 'config-manager', 'addrepo', '--from-repofile=' + gh_install._GH_RPM_REPO],
+            [
+                'dnf',
+                'config-manager',
+                'addrepo',
+                '--from-repofile=' + gh_install._GH_RPM_REPO,
+            ],
             id='dnf5',
         ),
         pytest.param(
@@ -227,7 +232,9 @@ def test_openssh_uses_the_backend_package_name(
 def test_unrecognized_backend_names_the_tools_and_the_docs(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr('aivm.credentials.gh_install.detect_backend', lambda: '')
+    monkeypatch.setattr(
+        'aivm.credentials.gh_install.detect_backend', lambda: ''
+    )
 
     with pytest.raises(AIVMError, match='install_linux.md') as excinfo:
         gh_install.plan_tool_install(

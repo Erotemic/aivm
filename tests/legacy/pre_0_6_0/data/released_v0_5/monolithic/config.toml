@@ -1,0 +1,118 @@
+schema_version = 8
+active_vm = "aivm-2404-fixture-host"
+
+[behavior]
+yes_sudo = false
+auto_approve_readonly_sudo = true
+verbose = 2
+privilege_mode = "as-needed"
+credential_directory_permission_policy = "warn"
+
+[defaults.vm]
+name = "aivm-2404-default-fixture"
+user = "agent"
+cpus = 4
+ram_mb = 8192
+disk_gb = 40
+allow_password_login = true
+password = "agent"
+timezone = ""
+match_host_user_ids = true
+mirror_shared_home_folders = false
+
+[defaults.network]
+name = "aivm-net"
+bridge = "virbr-aivm"
+subnet_cidr = "10.77.0.0/24"
+gateway_ip = "10.77.0.1"
+dhcp_start = "10.77.0.100"
+dhcp_end = "10.77.0.200"
+
+[defaults.firewall]
+enabled = true
+table = "aivm_sandbox"
+block_cidrs = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4"]
+extra_block_cidrs = []
+allow_tcp_ports = []
+allow_udp_ports = []
+
+[defaults.image]
+ubuntu_img_url = "https://cloud-images.ubuntu.com/releases/noble/release-20260225/ubuntu-24.04-server-cloudimg-amd64.img"
+cache_name = "noble-base.img"
+redownload = false
+
+[defaults.provision]
+enabled = true
+install_docker = true
+packages = ["git", "jq", "ripgrep", "fd-find", "tmux", "htop", "unzip", "ca-certificates", "curl"]
+
+[defaults.paths]
+base_dir = "/var/lib/libvirt/aivm"
+state_dir = "~/.cache/aivm"
+ssh_identity_file = ""
+ssh_pubkey_path = ""
+
+[defaults.virtiofs]
+inode_file_handles = ""
+fd_guard = true
+fd_guard_threshold = 500000
+fd_guard_emergency_threshold = 750000
+fd_guard_interval_sec = 600
+
+[[networks]]
+name = "aivm-net"
+[networks.network]
+bridge = "virbr-aivm"
+subnet_cidr = "10.77.0.0/24"
+gateway_ip = "10.77.0.1"
+dhcp_start = "10.77.0.100"
+dhcp_end = "10.77.0.200"
+[networks.firewall]
+enabled = true
+table = "aivm_sandbox"
+block_cidrs = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4"]
+extra_block_cidrs = []
+allow_tcp_ports = []
+allow_udp_ports = []
+
+[[vms]]
+name = "aivm-2404-fixture-host"
+network_name = "aivm-net"
+[vms.vm]
+name = "aivm-2404-fixture-host"
+user = "alice-agent"
+cpus = 6
+ram_mb = 12288
+disk_gb = 80
+allow_password_login = true
+password = "agent"
+timezone = ""
+match_host_user_ids = true
+mirror_shared_home_folders = false
+[vms.image]
+ubuntu_img_url = "https://cloud-images.ubuntu.com/releases/noble/release-20260225/ubuntu-24.04-server-cloudimg-amd64.img"
+cache_name = "noble-base.img"
+redownload = false
+[vms.provision]
+enabled = true
+install_docker = true
+packages = ["git", "jq", "ripgrep", "fd-find", "tmux", "htop", "unzip", "ca-certificates", "curl"]
+[vms.paths]
+base_dir = "/var/lib/libvirt/aivm"
+state_dir = "/home/alice/.local/state/aivm"
+ssh_identity_file = "/home/alice/.ssh/id_aivm_ed25519"
+ssh_pubkey_path = "/home/alice/.ssh/id_aivm_ed25519.pub"
+[vms.virtiofs]
+inode_file_handles = ""
+fd_guard = true
+fd_guard_threshold = 500000
+fd_guard_emergency_threshold = 750000
+fd_guard_interval_sec = 600
+
+[[attachments]]
+host_path = "/srv/aivm-fixture/alice-project"
+vm_name = "aivm-2404-fixture-host"
+mode = "shared"
+access = "rw"
+guest_dst = "/home/alice-agent/code/project"
+tag = "fixture-project"

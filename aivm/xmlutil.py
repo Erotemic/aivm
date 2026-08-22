@@ -3,7 +3,7 @@
 Every consumer of ``virsh dumpxml`` / ``net-dumpxml`` output parsed it with
 its own ``try: ET.fromstring(...) except ...`` guard.  :func:`parse_domain_xml`
 is that guard, extracted once so each caller keeps only its own on-failure
-default:
+default::
 
     root = parse_domain_xml(text)
     if root is None:

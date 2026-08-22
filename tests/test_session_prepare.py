@@ -33,6 +33,7 @@ from pytest import MonkeyPatch
 from aivm.attachments.session import ReconcileResult, _prepare_attached_session
 from aivm.cli.vm_connect import _bootstrap_vm_for_folder
 from aivm.config import AgentVMConfig
+from aivm.config_scopes import ResolvedVMContext
 from aivm.config_store import (
     Store,
     load_store,
@@ -41,7 +42,9 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.errors import AIVMError
-from aivm.services import resolve_cfg_for_code as real_resolve_cfg_for_code
+from aivm.services import (
+    resolve_context_for_code as real_resolve_context_for_code,
+)
 from aivm.status import ProbeOutcome
 from aivm.vm.paths import _paths
 from aivm.vm.share import AttachmentMode, ResolvedAttachment
@@ -52,6 +55,7 @@ from tests.helpers import (
     domain_xml_with_shares,
     make_cfg,
     noop,
+    resolved_test_context,
 )
 
 
@@ -132,14 +136,16 @@ def attached_session_harness(
         probe=probe,
     )
 
-    def fake_resolve_cfg_for_code(**kwargs: Any) -> tuple[AgentVMConfig, Path]:
+    def fake_resolve_context_for_code(
+        **kwargs: Any,
+    ) -> tuple[ResolvedVMContext, Path]:
         del kwargs
         if not harness.state['ready']:
             raise RuntimeError(
                 f'No VM definitions found in config store: {cfg_path}. '
                 'Run `aivm config init` then `aivm vm create` first.'
             )
-        return harness.cfg, cfg_path
+        return resolved_test_context(harness.cfg), cfg_path
 
     def fake_vm_create(*args: Any, **kwargs: Any) -> int:
         del args, kwargs
@@ -148,8 +154,8 @@ def attached_session_harness(
         return 0
 
     monkeypatch.setattr(
-        'aivm.attachments.session.resolve_cfg_for_code',
-        fake_resolve_cfg_for_code,
+        'aivm.attachments.session.resolve_context_for_code',
+        fake_resolve_context_for_code,
     )
     monkeypatch.setattr(
         'aivm.attachments.session._reconcile_attached_vm',
@@ -246,7 +252,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
     assert len(atts) == 1
     att = atts[0]
     assert att.host_path == str(harness.host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.access == 'rw'
     assert att.guest_dst == str(harness.host_src)
     assert att.tag == 'hostcode-proj'
@@ -455,8 +461,8 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
 
     # Resolve the VM from the real store instead of the bootstrap stub.
     monkeypatch.setattr(
-        'aivm.attachments.session.resolve_cfg_for_code',
-        real_resolve_cfg_for_code,
+        'aivm.attachments.session.resolve_context_for_code',
+        real_resolve_context_for_code,
     )
     # The heavy orchestrator stays faked but passes the resolved attachment
     # through, reporting a reachable, ssh-ready VM.
@@ -536,7 +542,7 @@ def test_prepare_attached_session_restores_saved_vm_attachments(
     assert str(host_src.resolve()) in by_path
     docs = by_path[str(other_src.resolve())]
     assert docs.vm_name == 'restore-vm'
-    assert docs.mode == 'shared'
+    assert docs.mode == 'direct-virtiofs'
     assert docs.guest_dst == '/workspace/docs'
 
 
@@ -581,8 +587,8 @@ def test_prepare_attached_session_restores_saved_shared_root_attachments(
     save_store(store, cfg_path)
 
     monkeypatch.setattr(
-        'aivm.attachments.session.resolve_cfg_for_code',
-        real_resolve_cfg_for_code,
+        'aivm.attachments.session.resolve_context_for_code',
+        real_resolve_context_for_code,
     )
     monkeypatch.setattr(
         'aivm.attachments.session._reconcile_attached_vm',

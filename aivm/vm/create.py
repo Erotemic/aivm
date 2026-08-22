@@ -10,16 +10,25 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..config_store import load_store
 from ..credentials.guards import require_vm_credentials_released
+from ..enrollment import ensure_bootstrap_identity
 from ..errors import AIVMError, CommandControlError
+from ..firewall import ensure_firewall_ready
+from ..machine_store import is_machine_store_path
 from ..privilege import virsh_needs_sudo
-from ..runtime import current_libvirt_uri, virsh_cmd
+from ..runtime import current_libvirt_uri, pin_locale, virsh_cmd
 from ..util import CmdError
 from .cloudinit import _write_cloud_init
 from .disk import _ensure_disk
-from .domain import _destroy_and_undefine_vm, vm_exists
+from .domain import (
+    _destroy_and_undefine_vm,
+    domain_file_storage_paths,
+    require_managed_storage_path,
+    vm_exists,
+)
 from .images import fetch_image
 
 log = logger
+
 
 def build_virt_install_cmd(
     cfg: AgentVMConfig,
@@ -90,16 +99,20 @@ def build_virt_install_cmd(
     cmd += ['--boot', boot_opts]
     return cmd
 
+
 def _is_missing_uefi_firmware_error(ex: Exception) -> bool:
     text = str(ex).lower()
     return "did not find any uefi binary path for arch 'x86_64'" in text
 
+
 def _is_missing_virtiofsd_error(ex: Exception) -> bool:
     return 'unable to find a satisfying virtiofsd' in str(ex).lower()
+
 
 def _is_guest_memory_allocation_error(ex: Exception) -> bool:
     text = str(ex).lower()
     return "cannot set up guest memory 'pc.ram': cannot allocate memory" in text
+
 
 def _is_missing_kvm_error(ex: Exception) -> bool:
     """Detect creates that fell back to TCG because /dev/kvm is unusable.
@@ -113,6 +126,7 @@ def _is_missing_kvm_error(ex: Exception) -> bool:
         or "cpu mode 'host-passthrough' for x86_64 qemu domain" in text
     )
 
+
 def _missing_kvm_failure_message() -> str:
     return (
         'VM creation failed because KVM hardware acceleration is not '
@@ -123,6 +137,7 @@ def _missing_kvm_failure_message() -> str:
         '`wsl --shutdown`.'
     )
 
+
 def _virtiofsd_failure_message(source_dir: str) -> str:
     return (
         'VM creation failed because virtiofsd is not available on this host, '
@@ -132,6 +147,7 @@ def _virtiofsd_failure_message(source_dir: str) -> str:
         'folder sharing for this run.'
     )
 
+
 def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
     return (
         'VM creation failed because QEMU could not allocate guest RAM on the host.\n'
@@ -139,6 +155,7 @@ def _memory_allocation_failure_message(cfg: AgentVMConfig) -> str:
         'This is common on nested/low-memory hosts. Try lowering VM resources '
         '(for example ram_mb=2048 and cpus=2) and retry.'
     )
+
 
 def _failed_command_name(ex: Exception) -> str | None:
     if isinstance(ex, FileNotFoundError):
@@ -157,6 +174,7 @@ def _failed_command_name(ex: Exception) -> str | None:
         return parts[1]
     return parts[0]
 
+
 def _is_missing_command_error(ex: Exception) -> bool:
     if isinstance(ex, FileNotFoundError):
         return True
@@ -167,6 +185,7 @@ def _is_missing_command_error(ex: Exception) -> bool:
     text = f'{ex.result.stderr}\n{ex.result.stdout}'.lower()
     return 'command not found' in text
 
+
 def create_or_start_vm(
     cfg: AgentVMConfig,
     *,
@@ -175,6 +194,7 @@ def create_or_start_vm(
     config_store_path: Path | None = None,
     share_source_dir: str = '',
     share_tag: str = '',
+    ensure_firewall: bool = True,
 ) -> None:
     """Ensure a VM exists and is running, creating/redefining when needed.
 
@@ -183,6 +203,15 @@ def create_or_start_vm(
     * existing stopped VM: start
     * recreate requested: destroy/undefine then define again
     * missing VM: create from base image + cloud-init artifacts
+
+    ``ensure_firewall`` verifies the managed nftables table before the guest
+    can reach the bridge. Creation has always installed it; a plain *start*
+    did not, and since the table lives only in the live kernel ruleset, the
+    first boot after a host reboot was the one way to run a guest with no
+    sandbox rules and no indication of it. Callers that already ran
+    :func:`aivm.firewall.ensure_firewall_ready` may leave it True --- the
+    guarantee is memoized per invocation --- and pass False only to honor a
+    user's explicit opt-out.
     """
     log.trace(
         'create_or_start_vm vm={} dry_run={} recreate={} share_source_dir={} share_tag={}',
@@ -193,6 +222,12 @@ def create_or_start_vm(
         share_tag or '(none)',
     )
     log.debug('Creating or starting VM {}', cfg.vm.name)
+    if config_store_path is not None:
+        from ..scoped_store import resolve_store_scope
+        from .deletion import require_vm_creation_not_blocked
+
+        scope = resolve_store_scope(str(config_store_path))
+        require_vm_creation_not_blocked(scope, cfg, scope.store_path)
     if recreate:
         if config_store_path is None:
             raise AIVMError(
@@ -200,10 +235,13 @@ def create_or_start_vm(
                 'verify that repository credentials have been revoked.'
             )
         store = load_store(config_store_path)
-        require_vm_credentials_released(
-            store, cfg.vm.name, action='recreated'
-        )
+        require_vm_credentials_released(store, cfg.vm.name, action='recreated')
     cfg = cfg.expanded_paths()
+    # After every preflight that can still refuse the whole operation, and
+    # before the domain is allowed to run: a refused start must not have
+    # touched the host firewall on its way to failing.
+    if ensure_firewall:
+        ensure_firewall_ready(cfg, dry_run=dry_run)
     mgr = CommandManager.current()
 
     with mgr.intent(
@@ -224,9 +262,11 @@ def create_or_start_vm(
                     ),
                     approval_scope=f'vm-start:{cfg.vm.name}',
                 ):
+                    # Every branch below matches English state names, so the
+                    # probe has to speak them regardless of the host locale.
                     st = (
                         mgr.submit(
-                            virsh_cmd('domstate', cfg.vm.name),
+                            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                             sudo=virsh_needs_sudo(),
                             role='read',
                             check=False,
@@ -245,15 +285,7 @@ def create_or_start_vm(
                         )
                         return
                     if 'paused' in st or 'pmsuspended' in st:
-                        if dry_run:
-                            log.info('DRYRUN: virsh resume {}', cfg.vm.name)
-                            return
-                        log.info(
-                            'VM {} is {}; resuming instead of starting',
-                            cfg.vm.name,
-                            st,
-                        )
-                        mgr.submit(
+                        resume_request = mgr.request(
                             virsh_cmd('resume', cfg.vm.name),
                             sudo=virsh_needs_sudo(),
                             role='modify',
@@ -261,20 +293,26 @@ def create_or_start_vm(
                             capture=True,
                             summary=f'Resume {st} VM {cfg.vm.name}',
                         )
+                        if dry_run:
+                            resume_request.preview()
+                            return
+                        log.info(
+                            'VM {} is {}; resuming instead of starting',
+                            cfg.vm.name,
+                            st,
+                        )
+                        resume_request.submit()
                         log.info('VM resumed: {}', cfg.vm.name)
                         return
                     if 'in shutdown' in st or 'shutting down' in st:
                         raise AIVMError(
                             f'VM {cfg.vm.name!r} is currently shutting down '
                             f'(state={st!r}). Wait for it to finish, or run '
-                            f'`aivm vm destroy {cfg.vm.name}` to force it off, '
+                            f'`aivm vm delete {cfg.vm.name}` to force it off, '
                             f'then retry.'
                         )
                     if 'shut off' in st or 'crashed' in st or st == '':
-                        if dry_run:
-                            log.info('DRYRUN: virsh start {}', cfg.vm.name)
-                            return
-                        mgr.submit(
+                        start_request = mgr.request(
                             virsh_cmd('start', cfg.vm.name),
                             sudo=virsh_needs_sudo(),
                             role='modify',
@@ -282,6 +320,10 @@ def create_or_start_vm(
                             capture=True,
                             summary=f'Start existing VM {cfg.vm.name}',
                         )
+                        if dry_run:
+                            start_request.preview()
+                            return
+                        start_request.submit()
                         log.info('VM started: {}', cfg.vm.name)
                         return
                     raise AIVMError(
@@ -290,13 +332,55 @@ def create_or_start_vm(
                         f'`virsh domstate {cfg.vm.name}` and recover manually.'
                     )
             if dry_run:
-                log.info('DRYRUN: virsh destroy/undefine {}', cfg.vm.name)
+                log.info(
+                    'DRYRUN: would remove the existing VM definition before recreate: {}',
+                    cfg.vm.name,
+                )
             else:
-                _destroy_and_undefine_vm(cfg.vm.name)
+                # The same containment rule the deletion journal enforces:
+                # `virsh undefine --remove-all-storage` deletes every live
+                # domain disk source (cdrom media included), so each one
+                # must sit inside the AIVM-managed tree before a recreate
+                # may remove the old domain.
+                live_storage = domain_file_storage_paths(cfg.vm.name)
+                for storage_path in live_storage:
+                    require_managed_storage_path(
+                        cfg,
+                        storage_path,
+                        action='recreate',
+                        recovery=(
+                            'Detach the external storage from the domain '
+                            'before recreating this VM.'
+                        ),
+                    )
+                removal = _destroy_and_undefine_vm(
+                    cfg.vm.name, storage_paths=live_storage
+                )
+                if removal.retained_storage_paths:
+                    rendered = '\n'.join(
+                        f'  - {path}' for path in removal.retained_storage_paths
+                    )
+                    raise AIVMError(
+                        f'Cannot recreate VM {cfg.vm.name!r}: the old domain '
+                        f'was undefined but storage remains:\n{rendered}'
+                    )
 
         base_img = fetch_image(cfg, dry_run=dry_run)
+        bootstrap_public_key = ''
+        if config_store_path is not None and is_machine_store_path(
+            Path(config_store_path)
+        ):
+            bootstrap = ensure_bootstrap_identity(
+                cfg.vm.name,
+                dry_run=dry_run,
+            )
+            bootstrap_public_key = bootstrap.public_key
         try:
-            ci = _write_cloud_init(cfg, dry_run=dry_run)
+            ci = _write_cloud_init(
+                cfg,
+                dry_run=dry_run,
+                bootstrap_public_key=bootstrap_public_key,
+            )
         # A declined prompt is the user answering the question, not a step
         # that went wrong. Best-effort recovery must not continue past it.
         except CommandControlError:
@@ -328,26 +412,26 @@ def create_or_start_vm(
             share_source_dir=share_source_dir,
             share_tag=share_tag,
         )
+        create_request = CommandManager.current().request(
+            cmd,
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Create VM {cfg.vm.name}',
+        )
         if dry_run:
-            log.info('DRYRUN: {}', ' '.join(cmd))
+            create_request.preview()
             return
         try:
-            first = CommandManager.current().run(
-                cmd,
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                check=False,
-                capture=True,
-            )
+            first = create_request.run()
         except CmdError as ex:
             # Some call sites/tests may still raise even when check=False.
             first = ex.result
         if first.code != 0:
             err = CmdError(cmd, first)
             if source_dir and _is_missing_virtiofsd_error(err):
-                raise AIVMError(
-                    _virtiofsd_failure_message(source_dir)
-                ) from err
+                raise AIVMError(_virtiofsd_failure_message(source_dir)) from err
             if _is_guest_memory_allocation_error(err):
                 raise AIVMError(
                     _memory_allocation_failure_message(cfg)
@@ -366,7 +450,10 @@ def create_or_start_vm(
                     pass
                 try:
                     CommandManager.current().run(
-                        cmd_no_uefi, sudo=virsh_needs_sudo(), check=True, capture=True
+                        cmd_no_uefi,
+                        sudo=virsh_needs_sudo(),
+                        check=True,
+                        capture=True,
                     )
                 except CmdError as ex2:
                     if source_dir and _is_missing_virtiofsd_error(ex2):

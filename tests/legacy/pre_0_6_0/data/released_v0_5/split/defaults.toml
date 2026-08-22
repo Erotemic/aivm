@@ -1,0 +1,50 @@
+[defaults.vm]
+name = "aivm-2404-default-fixture"
+user = "agent"
+cpus = 4
+ram_mb = 8192
+disk_gb = 40
+allow_password_login = true
+password = "agent"
+timezone = ""
+match_host_user_ids = true
+mirror_shared_home_folders = false
+
+[defaults.network]
+name = "aivm-net"
+bridge = "virbr-aivm"
+subnet_cidr = "10.77.0.0/24"
+gateway_ip = "10.77.0.1"
+dhcp_start = "10.77.0.100"
+dhcp_end = "10.77.0.200"
+
+[defaults.firewall]
+enabled = true
+table = "aivm_sandbox"
+block_cidrs = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4"]
+extra_block_cidrs = []
+allow_tcp_ports = []
+allow_udp_ports = []
+
+[defaults.image]
+ubuntu_img_url = "https://cloud-images.ubuntu.com/releases/noble/release-20260225/ubuntu-24.04-server-cloudimg-amd64.img"
+cache_name = "noble-base.img"
+redownload = false
+
+[defaults.provision]
+enabled = true
+install_docker = true
+packages = ["git", "jq", "ripgrep", "fd-find", "tmux", "htop", "unzip", "ca-certificates", "curl"]
+
+[defaults.paths]
+base_dir = "/var/lib/libvirt/aivm"
+state_dir = "~/.cache/aivm"
+ssh_identity_file = ""
+ssh_pubkey_path = ""
+
+[defaults.virtiofs]
+inode_file_handles = ""
+fd_guard = true
+fd_guard_threshold = 500000
+fd_guard_emergency_threshold = 750000
+fd_guard_interval_sec = 600

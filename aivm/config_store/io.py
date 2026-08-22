@@ -13,8 +13,6 @@ supported, and `aivm config format` can canonicalize a monolith into fragments.
 
 from __future__ import annotations
 
-import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -24,13 +22,23 @@ import tempfile
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from types import TracebackType
+from typing import Any, Callable, Iterable, Literal
 
 from loguru import logger as log
 
+from ..errors import AIVMError
+from ..legacy.pre_0_6_0 import compatibility_surface
+from ..legacy.pre_0_6_0.paths import store_path
+from .fs_policy import (
+    StoreFilesystemPolicy,
+    apply_store_file_descriptor_policy,
+    apply_store_file_policy,
+    ensure_store_directory,
+    exclusive_file_lock,
+)
 from .models import Store
 from .parse import parse_store_toml
-from .paths import store_path
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,
@@ -40,25 +48,67 @@ from .render import (
 )
 
 
-class ConcurrentStoreUpdateError(RuntimeError):
-    """Raised when saving a Store loaded from an older on-disk revision."""
+class ConcurrentStoreUpdateError(AIVMError):
+    """Raised when saving a Store loaded from an older on-disk revision.
+
+    On a shared machine store this is the *expected* two-principals-editing
+    collision, so it must render as a clean retry instruction, not a
+    traceback.
+    """
+
+
+def _resolve_io_policy(
+    root: Path, io_policy: StoreFilesystemPolicy | None
+) -> StoreFilesystemPolicy | None:
+    """Apply the configured machine-store policy when callers omit one."""
+    if io_policy is not None:
+        return io_policy
+    # Lazy import avoids making the generic store layer depend on the machine
+    # layout during module initialization.
+    from ..machine_store import (
+        current_machine_store_policy,
+        is_machine_store_path,
+    )
+
+    if is_machine_store_path(root):
+        return current_machine_store_policy()
+    return None
 
 
 def _lock_path(root: Path) -> Path:
     return root.parent / '.aivm-store.lock'
 
 
-@contextlib.contextmanager
-def _store_lock(root: Path) -> Iterator[None]:
-    """Serialize load/recovery/save operations for one physical store."""
-    root.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = _lock_path(root)
-    with lock_path.open('a+', encoding='utf-8') as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+class _StoreLock:
+    """Class-based scope for one store's configured advisory lock."""
+
+    def __init__(
+        self,
+        root: Path,
+        io_policy: StoreFilesystemPolicy | None = None,
+    ) -> None:
+        policy = io_policy or StoreFilesystemPolicy()
+        lock_path = policy.lock_path or _lock_path(root)
+        self.lock = exclusive_file_lock(lock_path, policy)
+
+    def __enter__(self) -> None:
+        self.lock.__enter__()
+        return None
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
+        return self.lock.__exit__(exc_type, exc, tb)
+
+
+def _store_lock(
+    root: Path, io_policy: StoreFilesystemPolicy | None = None
+) -> _StoreLock:
+    """Return the class-based lock scope for one config store."""
+    return _StoreLock(root, io_policy)
 
 
 def _fsync_dir(path: Path) -> None:
@@ -72,8 +122,16 @@ def _fsync_dir(path: Path) -> None:
         os.close(fd)
 
 
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _atomic_write_text(
+    path: Path,
+    text: str,
+    io_policy: StoreFilesystemPolicy | None = None,
+) -> None:
+    """Atomically replace text while preserving explicit shared-store metadata."""
+    policy = io_policy or StoreFilesystemPolicy()
+    ensure_store_directory(path.parent, policy)
+    if policy.reject_symlinks and path.is_symlink():
+        raise RuntimeError(f'Refusing to replace symlinked store file: {path}')
     with tempfile.NamedTemporaryFile(
         'w',
         encoding='utf-8',
@@ -83,10 +141,12 @@ def _atomic_write_text(path: Path, text: str) -> None:
     ) as file:
         file.write(text)
         file.flush()
+        apply_store_file_descriptor_policy(file.fileno(), policy)
         os.fsync(file.fileno())
         tmp = Path(file.name)
     try:
         os.replace(tmp, path)
+        apply_store_file_policy(path, policy)
         _fsync_dir(path.parent)
     finally:
         tmp.unlink(missing_ok=True)
@@ -135,7 +195,9 @@ def _safe_relative_path(raw: str) -> Path:
     return rel
 
 
-def _recover_split_transaction(root: Path) -> None:
+def _recover_split_transaction(
+    root: Path, io_policy: StoreFilesystemPolicy | None = None
+) -> None:
     """Complete an interrupted split-layout replacement before any read."""
     txn = _transaction_dir(root)
     meta_path = txn / 'metadata.json'
@@ -151,8 +213,9 @@ def _recover_split_transaction(root: Path) -> None:
         staged = txn / 'new' / rel
         target = root.parent / rel
         if staged.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
+            ensure_store_directory(target.parent, io_policy)
             os.replace(staged, target)
+            apply_store_file_policy(target, io_policy)
             _fsync_dir(target.parent)
     for raw in metadata.get('delete', []):
         rel = _safe_relative_path(str(raw))
@@ -167,20 +230,23 @@ def _stage_split_transaction(
     root: Path,
     target_paths: dict[str, Path],
     fragments: dict[str, str],
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> None:
     cfg_dir = root.parent
     txn = _transaction_dir(root)
-    _recover_split_transaction(root)
+    ensure_store_directory(cfg_dir, io_policy)
+    _recover_split_transaction(root, io_policy)
     temp_txn = Path(
         tempfile.mkdtemp(prefix='.aivm-store-transaction-', dir=str(cfg_dir))
     )
+    ensure_store_directory(temp_txn, io_policy)
     try:
         write_rels: list[str] = []
         for key in _fragment_write_order(fragments.keys()):
             target = target_paths[key]
             rel = target.relative_to(cfg_dir)
             staged = temp_txn / 'new' / rel
-            _atomic_write_text(staged, fragments[key])
+            _atomic_write_text(staged, fragments[key], io_policy)
             write_rels.append(str(rel))
         expected_vm_paths = {
             target_paths[key] for key in target_paths if key.startswith('vm:')
@@ -203,11 +269,12 @@ def _stage_split_transaction(
         _atomic_write_text(
             temp_txn / 'metadata.json',
             json.dumps(metadata, indent=2, sort_keys=True) + '\n',
+            io_policy,
         )
         _fsync_dir(temp_txn)
         os.replace(temp_txn, txn)
         _fsync_dir(cfg_dir)
-        _recover_split_transaction(root)
+        _recover_split_transaction(root, io_policy)
     finally:
         if temp_txn.exists():
             shutil.rmtree(temp_txn, ignore_errors=True)
@@ -239,6 +306,7 @@ def config_dir_from_path(path: Path | None = None) -> Path:
     return fpath.expanduser().resolve().parent
 
 
+@compatibility_surface
 def split_source_paths(path: Path | None = None) -> list[ConfigSource]:
     """Return existing split/monolith config sources in load order.
 
@@ -374,23 +442,34 @@ def _load_config_document_unlocked(
     )
 
 
+@compatibility_surface
 def load_config_document(
-    path: Path | None = None, *, logger: Any = log
+    path: Path | None = None,
+    *,
+    logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> LoadedStore:
     """Load one coherent store revision, recovering interrupted writes first."""
     fpath = (path or store_path()).expanduser().resolve()
-    with _store_lock(fpath):
-        _recover_split_transaction(fpath)
+    io_policy = _resolve_io_policy(fpath, io_policy)
+    with _store_lock(fpath, io_policy):
+        _recover_split_transaction(fpath, io_policy)
         loaded = _load_config_document_unlocked(fpath, logger=logger)
         _mark_loaded_store(loaded.store, fpath)
         return loaded
 
 
-def load_store(path: Path | None = None, *, logger: Any = log) -> Store:
+@compatibility_surface
+def load_store(
+    path: Path | None = None,
+    *,
+    logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
+) -> Store:
     # FIXME: This is called very often and touches the disk.
     # We likely can do something more elegant here where a store is loaded once
     # (with a real architectural change, not just a functools.cache patch).
-    return load_config_document(path, logger=logger).store
+    return load_config_document(path, logger=logger, io_policy=io_policy).store
 
 
 def _safe_fragment_stem(name: str) -> str:
@@ -451,7 +530,11 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             f'does not match a configured VM: {names}'
         )
     orphaned_credentials = sorted(
-        {cred.vm_name for cred in reg.credentials if cred.vm_name not in vm_names}
+        {
+            cred.vm_name
+            for cred in reg.credentials
+            if cred.vm_name not in vm_names
+        }
     )
     if orphaned_credentials:
         names = ', '.join(orphaned_credentials)
@@ -459,6 +542,69 @@ def _validate_no_orphaned_attachments(reg: Store) -> None:
             'Cannot write split config with credential records whose vm_name '
             f'does not match a configured VM: {names}'
         )
+    orphaned_principals = sorted(
+        {
+            principal.vm_name
+            for principal in reg.principals
+            if principal.vm_name not in vm_names
+        }
+    )
+    if orphaned_principals:
+        names = ', '.join(orphaned_principals)
+        raise ValueError(
+            'Cannot write split config with principal records whose vm_name '
+            f'does not match a configured VM: {names}'
+        )
+    if reg.store_kind == 'machine':
+        principal_keys = {(item.vm_name, item.id) for item in reg.principals}
+        dangling_owners = sorted(
+            {
+                (att.vm_name, att.owner_principal_id)
+                for att in reg.attachments
+                if att.owner_principal_id
+                and att.owner_principal_id != 'system'
+                and (att.vm_name, att.owner_principal_id) not in principal_keys
+            }
+        )
+        if dangling_owners:
+            details = ', '.join(
+                f'{vm}:{owner}' for vm, owner in dangling_owners
+            )
+            raise ValueError(
+                'Cannot write machine config with attachment records that '
+                f'reference unknown principals: {details}'
+            )
+        unattributed_credentials = sorted(
+            {
+                (cred.vm_name, cred.id)
+                for cred in reg.credentials
+                if not cred.principal_id
+            }
+        )
+        if unattributed_credentials:
+            details = ', '.join(
+                f'{vm}:{cred_id}' for vm, cred_id in unattributed_credentials
+            )
+            raise ValueError(
+                'Cannot write machine config with credential records that '
+                f'are missing principal_id: {details}'
+            )
+        dangling_credential_principals = sorted(
+            {
+                (cred.vm_name, cred.principal_id)
+                for cred in reg.credentials
+                if (cred.vm_name, cred.principal_id) not in principal_keys
+            }
+        )
+        if dangling_credential_principals:
+            details = ', '.join(
+                f'{vm}:{principal}'
+                for vm, principal in dangling_credential_principals
+            )
+            raise ValueError(
+                'Cannot write machine config with credential records that '
+                f'reference unknown principals: {details}'
+            )
 
 
 def render_split_fragments(reg: Store) -> dict[str, str]:
@@ -491,6 +637,7 @@ def _save_store_split_unlocked(
     reason: str = '',
     logger: Any = log,
     dry_run: bool = False,
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> list[Path]:
     """Save a store as split config fragments.
 
@@ -512,8 +659,8 @@ def _save_store_split_unlocked(
     if dry_run:
         return [target_paths[key] for key in ordered_keys]
 
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    _stage_split_transaction(root, target_paths, fragments)
+    ensure_store_directory(cfg_dir, io_policy)
+    _stage_split_transaction(root, target_paths, fragments, io_policy)
     written.extend(target_paths[key] for key in ordered_keys)
     _mark_loaded_store(reg, root)
     return written
@@ -526,10 +673,12 @@ def save_store_split(
     reason: str = '',
     logger: Any = log,
     dry_run: bool = False,
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> list[Path]:
     root = (path or store_path()).expanduser().resolve()
-    with _store_lock(root):
-        _recover_split_transaction(root)
+    io_policy = _resolve_io_policy(root, io_policy)
+    with _store_lock(root, io_policy):
+        _recover_split_transaction(root, io_policy)
         _check_store_revision(reg, root)
         return _save_store_split_unlocked(
             reg,
@@ -537,30 +686,97 @@ def save_store_split(
             reason=reason,
             logger=logger,
             dry_run=dry_run,
+            io_policy=io_policy,
         )
 
 
+def _save_store_unlocked(
+    reg: Store,
+    fpath: Path,
+    *,
+    reason: str = '',
+    logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
+    force_split: bool = False,
+) -> Path:
+    """Write a store while the caller holds the physical store lock."""
+    if force_split or is_split_layout(fpath):
+        _save_store_split_unlocked(
+            reg,
+            fpath,
+            reason=reason,
+            logger=logger,
+            io_policy=io_policy,
+        )
+        return fpath
+    ensure_store_directory(fpath.parent, io_policy)
+    logger.info('Writing config store to {}', fpath)
+    if reason.strip():
+        logger.info('  Reason: {}', reason.strip())
+    _atomic_write_text(fpath, render_store_toml(reg), io_policy)
+    _mark_loaded_store(reg, fpath)
+    return fpath
+
+
+@compatibility_surface
 def save_store(
     reg: Store,
     path: Path | None = None,
     *,
     reason: str = '',
     logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> Path:
     fpath = (path or store_path()).expanduser().resolve()
-    with _store_lock(fpath):
-        _recover_split_transaction(fpath)
+    io_policy = _resolve_io_policy(fpath, io_policy)
+    with _store_lock(fpath, io_policy):
+        _recover_split_transaction(fpath, io_policy)
         _check_store_revision(reg, fpath)
-        if is_split_layout(fpath):
-            _save_store_split_unlocked(reg, fpath, reason=reason, logger=logger)
-            return fpath
-        fpath.parent.mkdir(parents=True, exist_ok=True)
-        logger.info('Writing config store to {}', fpath)
-        if reason.strip():
-            logger.info('  Reason: {}', reason.strip())
-        _atomic_write_text(fpath, render_store_toml(reg))
-        _mark_loaded_store(reg, fpath)
-        return fpath
+        return _save_store_unlocked(
+            reg,
+            fpath,
+            reason=reason,
+            logger=logger,
+            io_policy=io_policy,
+        )
+
+
+def update_store(
+    mutate: Callable[[Store], Store | None],
+    path: Path | None = None,
+    *,
+    reason: str = '',
+    logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
+    force_split: bool = False,
+) -> Store:
+    """Load, mutate, and save one store revision under a single lock.
+
+    This is the safe primitive for read-modify-write operations on the future
+    machine store.  Separate ``load_store`` / ``save_store`` calls still retain
+    optimistic-concurrency protection, but callers that want concurrent edits
+    to merge must express the mutation through this transaction boundary.
+    """
+    fpath = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(fpath, io_policy)
+    with _store_lock(fpath, io_policy):
+        _recover_split_transaction(fpath, io_policy)
+        loaded = _load_config_document_unlocked(fpath, logger=logger)
+        reg = loaded.store
+        replacement = mutate(reg)
+        if replacement is not None:
+            reg = replacement
+        if not isinstance(reg, Store):
+            raise TypeError('Store mutator must return Store or None')
+        _save_store_unlocked(
+            reg,
+            fpath,
+            reason=reason,
+            logger=logger,
+            io_policy=io_policy,
+            force_split=force_split,
+        )
+        return reg
 
 
 def format_existing_config(
@@ -570,6 +786,7 @@ def format_existing_config(
     dry_run: bool = False,
     force: bool = False,
     logger: Any = log,
+    io_policy: StoreFilesystemPolicy | None = None,
 ) -> list[Path]:
     """Format the current logical store into canonical split fragments.
 
@@ -578,8 +795,9 @@ def format_existing_config(
     is accepted for API compatibility but is not required.
     """
     root = (path or store_path()).expanduser().resolve()
+    io_policy = _resolve_io_policy(root, io_policy)
     was_split = is_split_layout(root)
-    loaded = load_config_document(root, logger=logger)
+    loaded = load_config_document(root, logger=logger, io_policy=io_policy)
     reg = loaded.store
     fragments = render_split_fragments(reg)
     _validate_split_fragments(fragments)
@@ -587,7 +805,7 @@ def format_existing_config(
         paths = split_fragment_paths(reg, root)
         return [paths[key] for key in _fragment_write_order(fragments.keys())]
 
-    root.parent.mkdir(parents=True, exist_ok=True)
+    ensure_store_directory(root.parent, io_policy)
     if backup and root.exists() and not was_split:
         backup_path = root.with_suffix(root.suffix + '.bak')
         idx = 1
@@ -595,10 +813,12 @@ def format_existing_config(
             backup_path = root.with_suffix(root.suffix + f'.bak{idx}')
             idx += 1
         shutil.copy2(root, backup_path)
+        apply_store_file_policy(backup_path, io_policy)
         logger.info('Backed up monolithic config to {}', backup_path)
     return save_store_split(
         reg,
         root,
         reason='Format config store into canonical split layout.',
         logger=logger,
+        io_policy=io_policy,
     )

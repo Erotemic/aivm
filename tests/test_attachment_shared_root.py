@@ -22,6 +22,8 @@ from tests.helpers import (
     FakeProc,
     activate_manager,
     command_recorder,
+    normalize_cmd,
+    resolved_test_context,
 )
 
 
@@ -95,8 +97,8 @@ def test_vm_attach_shared_root_running_ensures_guest_ready(
     cfg_path = tmp_path / 'config.toml'
 
     monkeypatch.setattr(
-        'aivm.cli.vm_attach.load_cfg_with_path',
-        lambda *a, **k: (cfg, cfg_path),
+        'aivm.cli.vm_attach._resolve_attach_context',
+        lambda *a, **k: (resolved_test_context(cfg), cfg_path),
     )
     monkeypatch.setattr(
         'aivm.cli.vm_attach.record_vm', lambda *a, **k: cfg_path
@@ -178,7 +180,12 @@ def test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert rec.ran('mount', '--bind')
     assert not rec.ran('umount')
@@ -198,7 +205,8 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
         monkeypatch,
         {
             'findmnt -P -n': FakeProc(
-                0, f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"'
+                0,
+                f'SOURCE="{source_dir}[/sub]" FSROOT="" FSTYPE="" OPTIONS="rw"',
             ),
         },
     )
@@ -211,7 +219,12 @@ def test_shared_root_host_bind_accepts_findmnt_bind_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -243,7 +256,12 @@ def test_shared_root_host_bind_accepts_findmnt_device_subpath_source(
     )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -313,7 +331,12 @@ def test_shared_root_host_bind_refuses_disruptive_rebind_when_disabled(
         )
 
     assert rec.ran(
-        'findmnt', '-P', '-n', '-o', 'SOURCE,FSROOT,FSTYPE,OPTIONS', '--mountpoint'
+        'findmnt',
+        '-P',
+        '-n',
+        '-o',
+        'SOURCE,FSROOT,FSTYPE,OPTIONS',
+        '--mountpoint',
     )
     assert not rec.ran('umount')
     assert not rec.ran('mount', '--bind')
@@ -474,12 +497,12 @@ def test_shared_root_host_bind_prompts_once_per_privileged_step(
     assert '  3. Bind requested host folder to shared-root target' in messages
     # base_dir is user-owned here, so creating the export directories needs no
     # privileges. Only `mount --bind`, which has no unprivileged form, does.
-    assert any(msg.startswith('     command: mkdir -p ') for msg in messages)
+    assert any(msg.startswith('     command:\nmkdir -p ') for msg in messages)
     assert not any(
-        msg.startswith('     command: sudo mkdir -p ') for msg in messages
+        msg.startswith('     command:\nsudo mkdir -p ') for msg in messages
     )
     assert any(
-        msg.startswith('     command: sudo mount --bind ') for msg in messages
+        msg.startswith('     command:\nsudo mount --bind ') for msg in messages
     )
 
 
@@ -520,52 +543,6 @@ def test_shared_root_host_bind_creates_export_dirs_without_sudo(
     assert 'findmnt' in plain, raw
     assert 'mkdir' not in sudoed, raw
     assert sudoed == {'mount'}, raw
-
-
-def test_shared_root_host_bind_escalates_into_a_legacy_root_owned_export_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A pre-existing root-owned export root still escalates the child mkdir.
-
-    Hosts created before storage moved under the user keep a root-owned
-    ``<base_dir>/<vm>/shared-root``. The decision is per-path, so the export
-    root is skipped (it exists) and the per-project target below it still
-    escalates. Simulated with a directory the invoking user owns but cannot
-    write, which is what ``os.access(W_OK)`` reports for a root-owned one.
-    """
-    if os.geteuid() == 0:
-        pytest.skip('root can write through any mode bits')
-
-    cfg, source_dir, attachment = _shared_root_attachment(
-        tmp_path, name='vm-legacy'
-    )
-    export_root = Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
-    export_root.mkdir(parents=True)
-    export_root.chmod(0o555)
-
-    activate_manager(monkeypatch, yes_sudo=True, yes=True)
-    rec = command_recorder(
-        monkeypatch,
-        {'findmnt -P -n': FakeProc(1)},
-        default=FakeProc(0),
-    )
-    try:
-        _ensure_shared_root_host_bind(cfg, attachment, yes=True, dry_run=False)
-    finally:
-        export_root.chmod(0o755)
-
-    joined = [' '.join(p) for p in rec.calls]
-    # The export root already exists, so no mkdir is issued for it at all.
-    assert not any(
-        line.endswith(str(export_root)) for line in joined if 'mkdir' in line
-    )
-    # The project target below it is unwritable, so its mkdir escalates.
-    assert any(
-        line.startswith('sudo')
-        and 'mkdir -p' in line
-        and 'hostcode-source' in line
-        for line in joined
-    ), rec.calls
 
 
 def test_shared_root_host_bind_probes_a_read_only_target_without_sudo(
@@ -702,7 +679,7 @@ def test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached(
     assert 'Step: Inspect shared-root host bind state' in messages
     assert any(
         msg.startswith(
-            '     command (read-only): sudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
+            '     command (read-only):\nsudo findmnt -P -n -o SOURCE,FSROOT,FSTYPE,OPTIONS --mountpoint '
         )
         for msg in messages
     )
@@ -736,9 +713,7 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
             return FakeProc(1, '', 'sudo: a password is required')
         if parts[:2] == ['sudo', '-v']:
             return FakeProc(0, '', '')
-        normalized = parts[1:] if parts[:1] == ['sudo'] else parts
-        if normalized[:3] == ['virsh', '-c', 'qemu:///system']:
-            normalized = ['virsh'] + normalized[3:]
+        normalized = normalize_cmd(parts)
         if normalized[:2] == ['virsh', 'dumpxml']:
             return FakeProc(1, '', 'domain not visible')
         if normalized[:2] == ['virsh', 'attach-device']:
@@ -767,7 +742,7 @@ def test_shared_root_vm_mapping_uses_named_steps_and_per_step_prompts(
     )
     assert any(
         msg.startswith(
-            '     command: sudo virsh -c qemu:///system attach-device '
+            '     command:\nsudo virsh -c qemu:///system attach-device '
         )
         for msg in messages
     )
@@ -813,7 +788,7 @@ def test_shared_root_guest_bind_preview_uses_semantic_summaries(
         in messages
     )
     assert any(
-        msg.startswith('     command: ssh -i /tmp/id_ed25519 agent@10.0.0.2 ')
+        msg.startswith('     command:\nssh -i /tmp/id_ed25519 agent@10.0.0.2 ')
         for msg in messages
     )
     assert all('set -euo pipefail; if [ ! -d' not in msg for msg in messages)

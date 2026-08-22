@@ -8,6 +8,7 @@ in a sibling ``ops/`` module is needed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 import kwconf
@@ -15,6 +16,7 @@ import kwconf
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..operational_scope import announce_vm_machine_impact
 from ..services import load_cfg_with_path
 from ..vm.update import (
     RestartKind,
@@ -34,6 +36,7 @@ class VMUpdateRequest:
     restart_policy: str = 'auto'
     dry_run: bool = False
     yes: bool = False
+    store_path: Path | None = None
 
 
 def normalize_restart_policy(value: object) -> str:
@@ -47,7 +50,7 @@ def normalize_restart_policy(value: object) -> str:
 def run_vm_update(request: VMUpdateRequest) -> int:
     """Reconcile VM config drift against live libvirt settings."""
     cfg = request.cfg
-    drift, vm_running = _vm_update_drift(cfg, yes=bool(request.yes))
+    drift, vm_running = _vm_update_drift(cfg, yes=request.yes)
     if drift.notes:
         print('Detected diagnostics (not auto-applied):')
         for note in drift.notes:
@@ -55,6 +58,10 @@ def run_vm_update(request: VMUpdateRequest) -> int:
     if not drift.has_changes():
         print(f'VM {cfg.vm.name} is already in sync with config.')
         return 0
+    if request.store_path is not None:
+        announce_vm_machine_impact(
+            request.store_path, cfg.vm.name, action='update hardware'
+        )
     _print_vm_update_plan(cfg, drift)
     mgr = CommandManager.current()
     with mgr.intent(
@@ -63,15 +70,15 @@ def run_vm_update(request: VMUpdateRequest) -> int:
         role='modify',
     ):
         changed, restart_kind = _apply_vm_update(
-            cfg, drift, dry_run=bool(request.dry_run)
+            cfg, drift, dry_run=request.dry_run
         )
     if changed and restart_kind != RestartKind.NONE and vm_running:
         _maybe_restart_vm_after_update(
             cfg,
             kind=restart_kind,
             restart_policy=request.restart_policy,
-            dry_run=bool(request.dry_run),
-            yes=bool(request.yes),
+            dry_run=request.dry_run,
+            yes=request.yes,
         )
     elif changed:
         print('Update complete.')
@@ -87,19 +94,20 @@ class VMUpdateCLI(_BaseCommand):
         help='Restart policy when changes require reboot to take effect: auto, always, never.',
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         restart_policy = normalize_restart_policy(args.restart)
-        cfg, _ = load_cfg_with_path(args.config, vm_opt=args.vm)
+        cfg, store_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         return run_vm_update(
             VMUpdateRequest(
                 cfg=cfg,
                 restart_policy=restart_policy,
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
+                dry_run=args.dry_run,
+                yes=args.yes,
+                store_path=store_path,
             )
         )

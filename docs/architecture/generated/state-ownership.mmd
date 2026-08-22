@@ -1,0 +1,69 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 2
+flowchart LR
+    machine_store["Machine-global desired state"]
+    user_profile["Caller-owned profile"]
+    access_identity["Access identity record"]
+    attachment["Attachment declaration and replay state"]
+    credential["Guest-key credential metadata"]
+    ssh_agent_credential["SSH-agent credential metadata"]
+    host_private["Host-private material and provider sessions"]
+    bootstrap["Machine bootstrap identity"]
+    runtime_journal["Recoverable runtime and transaction journals"]
+    compatibility_view["Transitional aggregate compatibility view"]
+    item_00(("VM definitions and machine-owned VM settings<br/><code>aivm.config_store.models.Store.vms</code>"))
+    machine_store --> item_00
+    item_01(("Network definitions and firewall policy<br/><code>aivm.config_store.models.Store.networks</code>"))
+    machine_store --> item_01
+    item_02(("Access identity collection<br/><code>aivm.config_store.models.Store.principals</code>"))
+    machine_store --> item_02
+    item_03(("Attachment declarations<br/><code>aivm.config_store.models.Store.attachments</code>"))
+    machine_store --> item_03
+    item_04(("Guest-key credential metadata records<br/><code>aivm.config_store.models.Store.credentials</code>"))
+    machine_store --> item_04
+    item_05(("SSH-agent credential metadata records<br/><code>aivm.config_store.models.Store.agent_credentials</code>"))
+    machine_store --> item_05
+    item_06(("VM credential backend preference<br/><code>aivm.config.VMConfig.credential_backend</code>"))
+    machine_store --> item_06
+    item_07(("Active VM selection<br/><code>aivm.profile_store.UserProfileStore.active_vm</code>"))
+    user_profile --> item_07
+    item_08(("CLI behavior preferences<br/><code>aivm.profile_store.UserProfileStore.behavior</code>"))
+    user_profile --> item_08
+    item_09(("User credential backend preference<br/><code>aivm.profile_store.UserProfileStore.credential_backend</code>"))
+    user_profile --> item_09
+    item_10(("Personal SSH identity path references<br/><code>aivm.profile_store.UserProfileStore.ssh_identity_file</code>"))
+    user_profile --> item_10
+    item_11(("Host UID/GID, guest user, public key, and lifecycle state<br/><code>aivm.config_store.models.PrincipalEntry.state</code>"))
+    access_identity --> item_11
+    item_12(("Attachment owner, source identity, destination, mode, and state<br/><code>aivm.config_store.models.AttachmentEntry.state</code>"))
+    attachment --> item_12
+    item_13(("Guest-key credential owner, provider identity, access, and lifecycle state<br/><code>aivm.config_store.models.CredentialEntry.state</code>"))
+    credential --> item_13
+    item_14(("SSH-agent credential owner, provider identity, access, and lifecycle state<br/><code>aivm.config_store.models.AgentCredentialEntry.state</code>"))
+    ssh_agent_credential --> item_14
+    item_15(("Repository deploy-key private material<br/><code>aivm.credentials.keys.host_private_key_path</code>"))
+    host_private --> item_15
+    item_16(("Provider login/session state"))
+    host_private --> item_16
+    item_17(("Restricted enrollment keypair<br/><code>aivm.enrollment.bootstrap_identity_paths</code>"))
+    bootstrap --> item_17
+    item_18(("Canonical persistent attachment manifest<br/><code>aivm.attachments.persistent.manifest._persistent_host_manifest_path</code>"))
+    attachment --> item_18
+    item_19(("Privileged persistent replay manifest and service inputs<br/><code>aivm.attachments.persistent.manifest._persistent_host_replay_manifest_path</code>"))
+    attachment --> item_19
+    item_20(("VM deletion phases, storage coordinates, and last error<br/><code>aivm.vm.deletion.VMDeletionJournal.completed_phases</code>"))
+    runtime_journal --> item_20
+    item_21(("Released-store migration plan, backups, phases, and verification<br/><code>aivm.legacy.pre_0_6_0.migration_apply.MigrationJournal.completed_steps</code>"))
+    runtime_journal --> item_21
+    item_22(("VMEntry.cfg aggregate persisted compatibility shape<br/><code>aivm.config_store.models.VMEntry.cfg</code>"))
+    compatibility_view --> item_22
+    item_23(("ResolvedVMContext.effective_cfg aggregate runtime compatibility shape<br/><code>aivm.config_scopes.ResolvedVMContext.effective_cfg</code>"))
+    compatibility_view --> item_23
+    item_24(("Canonical machine-only runtime projection<br/><code>aivm.config_scopes.MachineConfig</code>"))
+    compatibility_view --> item_24
+    item_25(("Canonical caller-only runtime projection<br/><code>aivm.config_scopes.UserProfile</code>"))
+    compatibility_view --> item_25
+    item_26(("Aggregate join from VM plus network<br/><code>aivm.config_store.resolve.materialize_vm_cfg</code>"))
+    compatibility_view --> item_26
+    item_27(("Aggregate join from machine, access identity, and profile<br/><code>aivm.scoped_store.materialize_machine_cfg</code>"))
+    compatibility_view --> item_27

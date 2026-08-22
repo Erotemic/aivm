@@ -13,9 +13,7 @@ from .util import _bytes_to_gib
 from .virtiofs import _apply_virtiofs_binary_drift
 
 
-def _disk_resize_error(
-    drift: VMUpdateDrift, ex: CommandError
-) -> AIVMError:
+def _disk_resize_error(drift: VMUpdateDrift, ex: CommandError) -> AIVMError:
     """Translate a raw ``qemu-img resize`` failure into a domain error.
 
     The most common failure is a ``"write" lock`` contention: qemu-img cannot
@@ -54,6 +52,7 @@ def _apply_vm_update(
     """
     changed = False
     restart = RestartKind.NONE
+    mgr = CommandManager.current()
 
     # TODO: Should we check for network config drift here too?
     if drift.cpus is not None:
@@ -64,13 +63,37 @@ def _apply_vm_update(
             'setvcpus', cfg.vm.name, str(want), '--maximum', '--config'
         )
         cmd = virsh_cmd('setvcpus', cfg.vm.name, str(want), '--config')
+        sudo = virsh_needs_sudo()
+        max_request = mgr.request(
+            max_cmd,
+            sudo=sudo,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Raise persistent vCPU maximum to {want}',
+        )
+        count_request = mgr.request(
+            cmd,
+            sudo=sudo,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Set persistent vCPU count to {want}',
+        )
         if dry_run:
-            print(f'DRYRUN: {" ".join(max_cmd)}')
-            print(f'DRYRUN: {" ".join(cmd)}')
+            max_request.preview()
+            count_request.preview()
         else:
-            mgr = CommandManager.current()
-            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
-            mgr.run(cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            with mgr.step(
+                f'Update CPU count for VM {cfg.vm.name}',
+                why=(
+                    'Raise the persistent vCPU maximum before setting the '
+                    'configured vCPU count.'
+                ),
+                approval_scope=f'vm-update-cpu:{cfg.vm.name}',
+            ):
+                max_request.submit()
+                count_request.submit()
             print(f'Updated CPU count to {want}.')
         changed = True
         # --config writes the persistent XML only; live qemu keeps the old
@@ -80,17 +103,39 @@ def _apply_vm_update(
     if drift.ram_mb is not None:
         _, want = drift.ram_mb
         kib = int(want) * 1024
-        max_cmd = virsh_cmd(
-            'setmaxmem', cfg.vm.name, str(kib), '--config'
-        )
+        max_cmd = virsh_cmd('setmaxmem', cfg.vm.name, str(kib), '--config')
         mem_cmd = virsh_cmd('setmem', cfg.vm.name, str(kib), '--config')
+        sudo = virsh_needs_sudo()
+        max_request = mgr.request(
+            max_cmd,
+            sudo=sudo,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Raise persistent memory maximum to {want} MiB',
+        )
+        memory_request = mgr.request(
+            mem_cmd,
+            sudo=sudo,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Set persistent memory to {want} MiB',
+        )
         if dry_run:
-            print(f'DRYRUN: {" ".join(max_cmd)}')
-            print(f'DRYRUN: {" ".join(mem_cmd)}')
+            max_request.preview()
+            memory_request.preview()
         else:
-            mgr = CommandManager.current()
-            mgr.run(max_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
-            mgr.run(mem_cmd, sudo=virsh_needs_sudo(), check=True, capture=True)
+            with mgr.step(
+                f'Update RAM for VM {cfg.vm.name}',
+                why=(
+                    'Raise the persistent memory maximum before setting the '
+                    'configured memory size.'
+                ),
+                approval_scope=f'vm-update-ram:{cfg.vm.name}',
+            ):
+                max_request.submit()
+                memory_request.submit()
             print(f'Updated RAM to {want} MiB.')
         changed = True
         # Same reasoning as CPU: setmem --config is persistent-only.
@@ -103,18 +148,21 @@ def _apply_vm_update(
             )
         if want > cur:
             cmd = ['qemu-img', 'resize', drift.disk_path, f'{cfg.vm.disk_gb}G']
+            resize_request = mgr.request(
+                cmd,
+                sudo=file_write_needs_sudo(drift.disk_path),
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Expand VM disk to {cfg.vm.disk_gb}G',
+            )
             if dry_run:
-                print(f'DRYRUN: {" ".join(cmd)}')
+                resize_request.preview()
             else:
                 try:
                     # qemu-img opens the image file directly, so escalation
                     # depends on file writability, not libvirt-group access.
-                    CommandManager.current().run(
-                        cmd,
-                        sudo=file_write_needs_sudo(drift.disk_path),
-                        check=True,
-                        capture=True,
-                    )
+                    resize_request.run()
                 except CommandError as ex:
                     raise _disk_resize_error(drift, ex) from ex
                 print(

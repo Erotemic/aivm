@@ -1,5 +1,6 @@
 """Implementation modules for AIVM's desired-state config store."""
 
+from .fs_policy import StoreFilesystemPolicy
 from .io import (
     ConcurrentStoreUpdateError,
     ConfigSource,
@@ -13,32 +14,36 @@ from .io import (
     save_store_split,
     split_fragment_paths,
     split_source_paths,
+    update_store,
 )
 from .models import (
+    ATTACHMENT_SYSTEM_OWNER,
+    AgentCredentialEntry,
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
+    PrincipalEntry,
     Store,
     VMEntry,
 )
 from .mutate import (
+    remove_agent_credential,
     remove_attachment,
     remove_credential,
     remove_network,
+    remove_principal,
     remove_vm,
+    set_vm_credential_backend,
+    upsert_agent_credential,
     upsert_attachment,
     upsert_credential,
     upsert_network,
+    upsert_principal,
     upsert_vm,
     upsert_vm_with_network,
 )
 from .parse import parse_store_toml
-from .paths import (
-    app_data_dir,
-    app_data_path,
-    persistent_host_state_dir,
-    store_path,
-)
+from .paths import app_data_dir, app_data_path
 from .render import (
     render_store_defaults_toml,
     render_store_networks_toml,
@@ -48,12 +53,18 @@ from .render import (
 )
 from .resolve import (
     find_attachment,
+    find_attachment_by_guest_dst,
     find_attachment_for_vm,
     find_attachments,
     find_attachments_for_vm,
+    find_attachments_for_vm_path,
     find_credential,
     find_credentials_for_vm,
     find_network,
+    find_principal,
+    find_principal_for_host,
+    find_principal_for_host_identity,
+    find_principals_for_vm,
     find_vm,
     materialize_vm_cfg,
     network_users,
@@ -63,6 +74,8 @@ from .resolve import (
 )
 
 __all__ = [
+    'ATTACHMENT_SYSTEM_OWNER',
+    'AgentCredentialEntry',
     'AttachmentEntry',
     'CredentialEntry',
     'split_source_paths',
@@ -72,17 +85,25 @@ __all__ = [
     'ConcurrentStoreUpdateError',
     'ConfigSource',
     'NetworkEntry',
+    'PrincipalEntry',
     'Store',
+    'StoreFilesystemPolicy',
     'VMEntry',
     'app_data_dir',
     'app_data_path',
     'find_attachment',
+    'find_attachment_by_guest_dst',
     'find_attachment_for_vm',
+    'find_attachments_for_vm_path',
     'find_attachments',
     'find_attachments_for_vm',
     'find_credential',
     'find_credentials_for_vm',
     'find_network',
+    'find_principal',
+    'find_principal_for_host',
+    'find_principal_for_host_identity',
+    'find_principals_for_vm',
     'find_vm',
     'load_store',
     'materialize_vm_cfg',
@@ -91,11 +112,13 @@ __all__ = [
     'unknown_name_message',
     'network_users',
     'parse_store_toml',
-    'persistent_host_state_dir',
+    'remove_agent_credential',
     'remove_attachment',
     'remove_credential',
     'remove_network',
+    'remove_principal',
     'remove_vm',
+    'set_vm_credential_backend',
     'render_split_fragments',
     'save_store_split',
     'format_existing_config',
@@ -106,10 +129,12 @@ __all__ = [
     'render_store_vm_toml',
     'render_store_toml',
     'save_store',
-    'store_path',
+    'update_store',
+    'upsert_agent_credential',
     'upsert_attachment',
     'upsert_credential',
     'upsert_network',
+    'upsert_principal',
     'upsert_vm',
     'upsert_vm_with_network',
 ]

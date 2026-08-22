@@ -32,7 +32,9 @@ def test_credential_directory_permission_policy_values() -> None:
     assert normalize_credential_directory_permission_policy(None) == 'warn'
     assert normalize_credential_directory_permission_policy(' WARN ') == 'warn'
     assert normalize_credential_directory_permission_policy('error') == 'error'
-    assert normalize_credential_directory_permission_policy('ignore') == 'ignore'
+    assert (
+        normalize_credential_directory_permission_policy('ignore') == 'ignore'
+    )
     with pytest.raises(AIVMError, match='Unknown behavior'):
         normalize_credential_directory_permission_policy('sometimes')
 
@@ -56,7 +58,9 @@ def _write_policy_store(tmp_path: Path, policy: str) -> Path:
     return path
 
 
-def test_policy_is_read_from_the_store_the_command_bound(tmp_path: Path) -> None:
+def test_policy_is_read_from_the_store_the_command_bound(
+    tmp_path: Path,
+) -> None:
     # Core pushes nothing: it publishes which store is active and the
     # credential feature resolves its own setting from it.
     bind_active_config_option(str(_write_policy_store(tmp_path, 'ignore')))

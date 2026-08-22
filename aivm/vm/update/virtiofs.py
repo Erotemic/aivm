@@ -9,10 +9,10 @@ from pathlib import Path
 from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...errors import AIVMError
+from ...legacy.pre_0_6_0 import virtiofsd_wrapper
 from ...privilege import virsh_needs_sudo
 from ...runtime import virsh_cmd
 from ...xmlutil import parse_domain_xml
-from .. import virtiofsd_wrapper
 from .models import VirtiofsBinaryDrift, VMUpdateDrift
 
 
@@ -96,8 +96,8 @@ def _apply_virtiofs_binary_drift(
             cur = d.current or '(default)'
             new = d.desired or '(default)'
             print(
-                f"DRYRUN: would set <binary path={new!r}> on virtiofs "
-                f"device tag={d.tag!r} (was {cur!r})"
+                f'DRYRUN: would set <binary path={new!r}> on virtiofs '
+                f'device tag={d.tag!r} (was {cur!r})'
             )
         return True
 
@@ -112,7 +112,9 @@ def _apply_virtiofs_binary_drift(
     try:
         root = ET.fromstring(dumpxml.stdout)
     except ET.ParseError as ex:
-        raise RuntimeError(f'Could not parse domain XML for {cfg.vm.name}: {ex}')
+        raise RuntimeError(
+            f'Could not parse domain XML for {cfg.vm.name}: {ex}'
+        )
 
     drift_by_tag = {d.tag: d for d in drift.virtiofs_binary}
     touched = 0

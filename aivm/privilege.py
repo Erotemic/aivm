@@ -51,7 +51,6 @@ CommandManager._command_needs_approval).
 
 from __future__ import annotations
 
-import getpass
 import grp
 import os
 import pwd
@@ -62,6 +61,7 @@ from loguru import logger
 
 from .commands import CommandManager
 from .errors import SudoRequiredError
+from .host_identity import current_host_identity
 from .modes import (
     PRIVILEGE_MODES,
     PrivilegeMode,
@@ -336,7 +336,7 @@ def user_in_libvirt_group() -> bool:
     if group.gr_gid in os.getgroups():
         return True
     try:
-        return getpass.getuser() in (group.gr_mem or [])
+        return current_host_identity().username in (group.gr_mem or [])
     except Exception:
         return False
 

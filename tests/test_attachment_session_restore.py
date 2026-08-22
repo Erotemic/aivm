@@ -23,6 +23,7 @@ import pytest
 
 from aivm.cli.vm_connect import _bootstrap_vm_for_folder
 from aivm.config import AgentVMConfig
+from aivm.config_scopes import ResolvedVMContext
 from aivm.config_store import (
     Store,
     load_store,
@@ -37,6 +38,7 @@ from tests.helpers import (
     capture_logs,
     command_recorder,
     domain_xml_with_shares,
+    resolved_test_context,
 )
 
 
@@ -274,7 +276,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
 
     primary = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(host_src),
         guest_dst=str(host_src),
         tag='tag-primary',
@@ -290,7 +292,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
         reg,
         host_path=host_src,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(host_src),
         tag='tag-primary',
@@ -299,7 +301,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
         reg,
         host_path=secondary_src,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(secondary_src),
         tag='tag-secondary',
@@ -353,8 +355,7 @@ def test_restore_shared_attachment_applies_guest_derived_symlinks(
     # The secondary remains recorded in the store after restore.
     saved = load_store(cfg_path)
     assert any(
-        a.host_path == str(secondary_src.resolve())
-        for a in saved.attachments
+        a.host_path == str(secondary_src.resolve()) for a in saved.attachments
     )
 
 
@@ -455,7 +456,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
     primary_src.mkdir()
     primary = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(primary_src),
         guest_dst=str(primary_src),
         tag='tag-primary',
@@ -498,7 +499,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
         reg,
         host_path=shared_src,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst='/workspace/shared',
         tag='tag-shared',
@@ -507,7 +508,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
         reg,
         host_path=shared_fail_src,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst='/workspace/shared-fail',
         tag='tag-shared-fail',
@@ -516,7 +517,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
         reg,
         host_path=shared_noattach_src,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst='/workspace/noattach',
         tag='tag-noattach',
@@ -544,7 +545,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
         reg,
         host_path=tmp_path / 'gone',
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst='/workspace/gone',
         tag='tag-gone',
@@ -553,7 +554,7 @@ def test_restore_skips_unrestorable_entries_and_continues_past_failures(
         reg,
         host_path=not_a_dir,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst='/workspace/not-a-dir',
         tag='tag-not-a-dir',
@@ -691,7 +692,7 @@ def test_record_attachment_persists_lexical_path_for_symlink(
         cfg,
         cfg_path,
         host_src=link_dir,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(real_dir),
         tag='tag-lex',
@@ -728,7 +729,7 @@ def test_record_attachment_no_lexical_path_for_non_symlink(
         cfg,
         cfg_path,
         host_src=real_dir,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(real_dir),
         tag='tag-nolex',
@@ -738,37 +739,6 @@ def test_record_attachment_no_lexical_path_for_non_symlink(
     entries = [a for a in reg.attachments if a.vm_name == cfg.vm.name]
     assert len(entries) == 1
     assert entries[0].host_lexical_paths == []
-
-
-def test_store_backward_compat_missing_lexical_path(
-    tmp_path: Path,
-) -> None:
-    """Store loads cleanly from old TOML files that have no host_lexical_path field."""
-    cfg_path = tmp_path / 'config.toml'
-    # Minimal old-format store with no host_lexical_path
-    cfg_path.write_text(
-        'schema_version = 5\n'
-        'active_vm = ""\n'
-        '[behavior]\n'
-        'yes_sudo = false\n'
-        'auto_approve_readonly_sudo = true\n'
-        'verbose = 1\n'
-        'mirror_shared_home_folders = false\n'
-        '[[attachments]]\n'
-        'host_path = "/some/real/path"\n'
-        'vm_name = "oldvm"\n'
-        'mode = "shared"\n'
-        'access = "rw"\n'
-        'guest_dst = "/some/real/path"\n'
-        'tag = "hostcode-path-abcd1234"\n',
-        encoding='utf-8',
-    )
-
-    reg = load_store(cfg_path)
-    assert len(reg.attachments) == 1
-    att = reg.attachments[0]
-    assert att.host_path == '/some/real/path'
-    assert att.host_lexical_paths == []  # graceful default
 
 
 def test_restore_uses_lexical_path_for_companion_symlink(
@@ -801,7 +771,7 @@ def test_restore_uses_lexical_path_for_companion_symlink(
         reg,
         host_path=real_dir,  # resolved key
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(real_dir),
         tag='tag-lex-restore',
@@ -813,7 +783,7 @@ def test_restore_uses_lexical_path_for_companion_symlink(
     primary_src.mkdir()
     primary = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(primary_src),  # different source so secondary runs
         guest_dst=str(primary_src),
         tag='tag-primary',
@@ -888,7 +858,7 @@ def test_restore_non_symlink_attachment_unchanged(
         reg,
         host_path=real_dir,
         vm_name=cfg.vm.name,
-        mode='shared',
+        mode='direct-virtiofs',
         access='rw',
         guest_dst=str(real_dir),
         tag='tag-plain',
@@ -899,7 +869,7 @@ def test_restore_non_symlink_attachment_unchanged(
     primary_src.mkdir()
     primary = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(primary_src),
         guest_dst=str(primary_src),
         tag='tag-primary',
@@ -916,7 +886,9 @@ def test_restore_non_symlink_attachment_unchanged(
         {
             'virsh dumpxml': FakeProc(
                 0,
-                domain_xml_with_shares([(str(real_dir.resolve()), 'tag-plain')]),
+                domain_xml_with_shares(
+                    [(str(real_dir.resolve()), 'tag-plain')]
+                ),
             )
         },
     )
@@ -972,14 +944,16 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
 
     resolve_calls = {'count': 0}
 
-    def fake_resolve_cfg_for_code(**kwargs: Any) -> tuple[AgentVMConfig, Path]:
+    def fake_resolve_context_for_code(
+        **kwargs: Any,
+    ) -> tuple[ResolvedVMContext, Path]:
         resolve_calls['count'] += 1
         if resolve_calls['count'] == 1:
             raise RuntimeError(
                 f'No VM definitions found in config store: {cfg_path}. '
                 'Run `aivm config init` then `aivm vm create` first.'
             )
-        return cfg, cfg_path
+        return resolved_test_context(cfg), cfg_path
 
     create_calls: list[dict] = []
 
@@ -988,8 +962,8 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
         return 0
 
     monkeypatch.setattr(
-        'aivm.attachments.session.resolve_cfg_for_code',
-        fake_resolve_cfg_for_code,
+        'aivm.attachments.session.resolve_context_for_code',
+        fake_resolve_context_for_code,
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_vm_from_defaults',
@@ -1044,3 +1018,100 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
     assert create_kwargs['initial_attachment_guest_dst'] == '/workspace/proj'
     assert create_kwargs['initial_attachment_mode'] == 'persistent'
     assert create_kwargs['initial_attachment_access'] == 'ro'
+
+
+@pytest.mark.parametrize('vm_was_running', [True, False])
+def test_prepare_session_scopes_persistent_replay_to_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vm_was_running: bool
+) -> None:
+    """Foreground replay touches only the requested persistent attachment."""
+    from aivm.attachments.session import _prepare_attached_session
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-live-local-scope'
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'new-project'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst='/workspace/new-project',
+        tag='hostcode-new-project',
+    )
+
+    monkeypatch.setattr(
+        'aivm.attachments.session.resolve_context_for_code',
+        lambda **kwargs: (resolved_test_context(cfg), cfg_path),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._resolve_attachment',
+        lambda *a, **k: attachment,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_attached_vm',
+        lambda *a, **k: type(
+            'R',
+            (),
+            {
+                'attachment': attachment,
+                'cached_ip': '10.0.0.5',
+                'cached_ssh_ok': True,
+                'shared_root_host_side_ready': False,
+                'vm_was_running': vm_was_running,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_offer_create_ssh_identity',
+        lambda *a, **k: False,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.probe_ssh_ready',
+        lambda *a, **k: type('P', (), {'ok': True})(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._record_attachment',
+        lambda *a, **k: cfg_path,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._ensure_attachment_available_in_guest',
+        lambda *a, **k: None,
+    )
+
+    replay_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_persistent_attachments_in_guest',
+        lambda *a, **k: replay_calls.append(dict(k)),
+    )
+    restore_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session._restore_saved_vm_attachments',
+        lambda *a, **k: restore_calls.append(dict(k)),
+    )
+
+    session = _prepare_attached_session(
+        config_opt=str(cfg_path),
+        vm_opt='',
+        host_src=host_src,
+        guest_dst_opt='',
+        recreate_if_needed=False,
+        ensure_firewall_opt=False,
+        dry_run=False,
+        yes=True,
+    )
+
+    assert session.share_guest_dst == '/workspace/new-project'
+    assert replay_calls == [
+        {
+            'dry_run': False,
+            'only_guest_dst': '/workspace/new-project',
+            'preserve_live_mounts': vm_was_running,
+        }
+    ]
+    if vm_was_running:
+        assert restore_calls == []
+    else:
+        assert len(restore_calls) == 1
+        assert restore_calls[0]['primary_attachment'] is attachment

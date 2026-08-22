@@ -14,6 +14,7 @@ internal collaborator was called.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import shlex
 from pathlib import Path
@@ -22,8 +23,10 @@ from typing import Any, Callable
 import pytest
 
 from aivm.attachments.persistent import (
+    _approved_binds_already_applied,
     _install_guest_text_if_changed,
     _install_persistent_host_bind_replay,
+    _mounted_child_names,
     _persistent_attachment_manifest_text,
     _persistent_host_manifest_path,
     _reconcile_persistent_attachments_in_guest,
@@ -32,12 +35,17 @@ from aivm.attachments.persistent import (
     _sync_persistent_attachment_manifest_to_guest,
     _write_text_if_changed,
 )
+from aivm.attachments.persistent import (
+    manifest as persistent_manifest,
+)
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import AttachmentEntry, Store, save_store
+from aivm.fs_identity import directory_identity
 from aivm.persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
+    persistent_host_replay_python,
 )
 from tests.helpers import (
     CommandRecorder,
@@ -49,6 +57,26 @@ from tests.helpers import (
 
 REPLAY_INVOCATION = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
 """The exact remote script the reconcile flow runs to replay guest mounts."""
+
+
+def test_source_unavailable_diagnostics_parses_only_machine_records() -> None:
+    from aivm.attachments.persistent import host_bind
+
+    stderr = '\n'.join(
+        [
+            'WARNING: human readable detail',
+            (
+                'AIVM_PERSISTENT_SOURCE_UNAVAILABLE '
+                '{"detail": "identity changed", "source_dir": "/src/project", '
+                '"token": "hostcode-project"}'
+            ),
+            'AIVM_PERSISTENT_SOURCE_UNAVAILABLE not-json',
+        ]
+    )
+
+    assert host_bind._source_unavailable_diagnostics(stderr) == (
+        ('hostcode-project', '/src/project', 'identity changed'),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -93,21 +121,37 @@ def _redirect_replay_state_dir(
     return state_dir
 
 
+def _persistent_entry(
+    path: Path,
+    *,
+    vm_name: str,
+    access: str = 'rw',
+    guest_dst: str = '/workspace/proj',
+    tag: str = 'hostcode-proj',
+    aliases: list[str] | None = None,
+) -> AttachmentEntry:
+    path.mkdir(parents=True, exist_ok=True)
+    identity = directory_identity(path)
+    return AttachmentEntry(
+        host_path=str(path.resolve()),
+        vm_name=vm_name,
+        mode='persistent',
+        access=access,
+        guest_dst=guest_dst,
+        tag=tag,
+        source_dev=identity.dev,
+        source_ino=identity.ino,
+        host_lexical_paths=list(aliases or []),
+    )
+
+
 def _record_persistent_attachment(
     cfg: AgentVMConfig, cfg_path: Path, tmp_path: Path
 ) -> None:
     """Persist one enabled persistent attachment record for ``cfg``'s VM."""
     store = Store()
     store.attachments.append(
-        AttachmentEntry(
-            host_path=str((tmp_path / 'proj').resolve()),
-            vm_name=cfg.vm.name,
-            mode='persistent',
-            access='rw',
-            guest_dst='/workspace/proj',
-            tag='hostcode-proj',
-            host_lexical_paths=[],
-        )
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
     )
     save_store(store, cfg_path)
 
@@ -149,11 +193,11 @@ def _hash_route(
         if fail_when is not None and fail_proc is not None:
             if fail_when(script):
                 return fail_proc
-        if 'sha256sum' in script:
+        if 'sha256sum --check --status -' in script:
             count = seen.get(script, 0)
             seen[script] = count + 1
             status = initial_status if count == 0 else 'MATCH'
-            return FakeProc(stdout=f'{status}\n')
+            return FakeProc(returncode=0 if status == 'MATCH' else 1)
         return FakeProc()
 
     return route
@@ -174,23 +218,20 @@ def test_persistent_manifest_persists_records_and_access_modes(
     store = Store()
     store.attachments.extend(
         [
-            AttachmentEntry(
-                host_path=str((tmp_path / 'proj-rw').resolve()),
+            _persistent_entry(
+                tmp_path / 'proj-rw',
                 vm_name=cfg.vm.name,
-                mode='persistent',
                 access='rw',
                 guest_dst='/workspace/rw',
                 tag='hostcode-rw',
-                host_lexical_paths=[],
             ),
-            AttachmentEntry(
-                host_path=str((tmp_path / 'proj-ro').resolve()),
+            _persistent_entry(
+                tmp_path / 'proj-ro',
                 vm_name=cfg.vm.name,
-                mode='persistent',
                 access='ro',
                 guest_dst='/workspace/ro',
                 tag='hostcode-ro',
-                host_lexical_paths=[str(tmp_path / 'link-ro')],
+                aliases=[str(tmp_path / 'link-ro')],
             ),
             AttachmentEntry(
                 host_path=str((tmp_path / 'legacy').resolve()),
@@ -210,7 +251,7 @@ def test_persistent_manifest_persists_records_and_access_modes(
     # The manifest is a wire format: the host writes it, the in-guest replay
     # helper reads it. Nothing in the code validates schema_version, so pin
     # it here -- bumping it is a guest-compatibility decision, not a typo.
-    assert payload['schema_version'] == 1
+    assert payload['schema_version'] == 2
     assert payload['vm_name'] == cfg.vm.name
     assert payload['shared_root_mount'] == '/mnt/aivm-persistent'
     assert [item['shared_root_token'] for item in payload['records']] == [
@@ -223,6 +264,69 @@ def test_persistent_manifest_persists_records_and_access_modes(
     ]
 
 
+def test_legacy_unpinned_persistent_attachment_instructs_migration(
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-legacy-unpinned'
+    cfg_path = tmp_path / 'config.toml'
+    store = Store(
+        attachments=[
+            AttachmentEntry(
+                host_path='/data/audio-tools',
+                vm_name=cfg.vm.name,
+                mode='persistent',
+                guest_dst='/data/audio-tools',
+                tag='hostcode-audio-tools',
+            )
+        ]
+    )
+    save_store(store, cfg_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        persistent_manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
+
+    message = str(exc_info.value)
+    assert 'pre-0.6 legacy store' in message
+    assert 'aivm config migrate plan' in message
+    assert 'aivm config migrate apply --yes' in message
+    assert 'source is unavailable' in message
+
+
+def test_machine_unpinned_persistent_attachment_instructs_reattach(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-machine-unpinned'
+    cfg_path = tmp_path / 'machine-store.toml'
+    store = Store(
+        store_kind='machine',
+        attachments=[
+            AttachmentEntry(
+                host_path='/data/audio-tools',
+                vm_name=cfg.vm.name,
+                mode='persistent',
+                guest_dst='/data/audio-tools',
+                tag='hostcode-audio-tools',
+            )
+        ],
+    )
+    save_store(store, cfg_path)
+    monkeypatch.setattr(
+        persistent_manifest,
+        'is_machine_store_path',
+        lambda path: True,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        persistent_manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
+
+    message = str(exc_info.value)
+    assert 'Detach and reattach this attachment' in message
+    assert 'config migrate' not in message
+
+
 def test_persistent_manifest_write_is_byte_for_byte_noop(
     tmp_path: Path,
 ) -> None:
@@ -231,37 +335,6 @@ def test_persistent_manifest_write_is_byte_for_byte_noop(
     before = path.read_bytes()
     assert _write_text_if_changed(path, 'alpha\n') is False
     assert path.read_bytes() == before
-
-
-def test_persistent_host_manifest_path_uses_app_data_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-app-data'
-    cfg.paths.base_dir = '/var/lib/libvirt/aivm/aivm-2404'
-
-    calls: list[tuple[str, str, int]] = []
-
-    def fake_appdir(
-        appname: str, kind: str, *, mode: int = 0o777
-    ) -> Path:
-        calls.append((appname, kind, mode))
-        return tmp_path / kind
-
-    monkeypatch.setattr('aivm.config_store.paths._appdir', fake_appdir)
-
-    path = _persistent_host_manifest_path(cfg)
-
-    assert calls == [('aivm', 'data', 0o700)]
-    assert (
-        path
-        == tmp_path
-        / 'data'
-        / cfg.vm.name
-        / 'state'
-        / 'persistent-attachments.json'
-    )
-    assert str(cfg.paths.base_dir) not in str(path)
 
 
 def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
@@ -277,6 +350,31 @@ def test_persistent_host_replay_manifest_path_is_root_owned_namespace() -> None:
     assert path.parent == Path('/var/lib/aivm/persistent-host')
     assert '/' not in path.name
     assert path.suffix == '.json'
+
+
+def test_detaching_record_requires_host_replay_state_for_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A retry can rebuild replay state after cleanup removed its artifacts."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-detach-retry'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    entry = _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
+    entry.state = 'detaching'
+    store = Store(attachments=[entry])
+    save_store(store, cfg_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+
+    approved = persistent_manifest._persistent_host_replay_manifest_path(cfg)
+    assert not approved.exists()
+    assert persistent_manifest._persistent_host_replay_state_needed(
+        cfg, cfg_path
+    )
+    payload = json.loads(
+        persistent_manifest._persistent_attachment_manifest_text(cfg, cfg_path)
+    )
+    assert payload['records'][0]['enabled'] is False
 
 
 def test_persistent_manifest_sync_uses_checksum_rsync(
@@ -295,15 +393,7 @@ def test_persistent_manifest_sync_uses_checksum_rsync(
     cfg_path = tmp_path / 'config.toml'
     store = Store()
     store.attachments.append(
-        AttachmentEntry(
-            host_path=str((tmp_path / 'proj').resolve()),
-            vm_name=cfg.vm.name,
-            mode='persistent',
-            access='rw',
-            guest_dst='/workspace/proj',
-            tag='hostcode-proj',
-            host_lexical_paths=[],
-        )
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
     )
     save_store(store, cfg_path)
     _redirect_appdir(monkeypatch, tmp_path)
@@ -480,11 +570,13 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
         assert "printf '%s'" in install_script
     else:
         assert [_kind(s) for s in scripts] == ['check']
-    # Every check script really does a checksum comparison, not a byte cmp.
+    # The check remains an exact, copy/pasteable command rather than a
+    # multiline MATCH/MISMATCH mini-program hidden inside ssh.
     check_script = scripts[0]
-    assert 'sha256sum' in check_script
+    assert 'sha256sum --check --status -' in check_script
     assert 'cmp -s' not in check_script
-    assert all(
+    assert '\n' not in check_script
+    assert not any(
         token in check_script for token in ('MISSING', 'MATCH', 'MISMATCH')
     )
 
@@ -585,6 +677,58 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
     )
     # Replay is the final remote action.
     assert scripts[-1] == REPLAY_INVOCATION
+
+
+def test_persistent_reconcile_can_scope_foreground_guest_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Foreground replay tells the guest helper to touch only one path."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-reconcile-scoped'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': _hash_route('MATCH'),
+            'rsync': FakeProc(stdout=''),
+        },
+    )
+
+    host_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.replay.host_bind._reconcile_persistent_host_binds',
+        lambda *a, **k: host_calls.append(dict(k)) or (),
+    )
+
+    _reconcile_persistent_attachments_in_guest(
+        cfg,
+        cfg_path,
+        '10.0.0.5',
+        dry_run=False,
+        only_guest_dst='/workspace/proj',
+        preserve_live_mounts=True,
+    )
+
+    assert host_calls == [
+        {
+            'dry_run': False,
+            'vm_running': True,
+            'only_guest_dst': '/workspace/proj',
+            'preserve_live_binds': True,
+        }
+    ]
+    scripts = _ssh_scripts(rec)
+    assert scripts[-1] == (
+        f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj '
+        '--preserve-live-mounts'
+    )
 
 
 @pytest.mark.parametrize('phase', ['sync', 'install', 'replay'])
@@ -814,6 +958,36 @@ def test_persistent_replay_script_nonchecking_path_avoids_error_log(
     assert not errors
 
 
+def test_persistent_guest_root_script_accepts_degraded_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-degraded-replay'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    activate_manager(monkeypatch)
+    command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(returncode=3, stderr='source unavailable')},
+    )
+
+    result = _run_guest_root_script(
+        cfg,
+        '10.0.0.5',
+        script='echo replay',
+        summary='Replay degraded persistent attachments',
+        detail='',
+        dry_run=False,
+        check=True,
+        allowed_exit_codes=(0, 3),
+    )
+
+    assert result is not None
+    assert result.code == 3
+    assert result.stderr == 'source unavailable'
+
+
 def test_persistent_guest_root_script_retries_transient_banner_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -882,6 +1056,11 @@ def test_install_persistent_host_bind_replay_enables_service(
     cfg_path = tmp_path / 'config.toml'
     _redirect_appdir(monkeypatch, tmp_path)
     _redirect_replay_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind.'
+        'PERSISTENT_ATTACHMENT_HOST_REPLAY_BIN',
+        str(tmp_path / 'libexec' / 'aivm-persistent-host-bind-replay'),
+    )
     _record_persistent_attachment(cfg, cfg_path, tmp_path)
     activate_manager(monkeypatch)
 
@@ -932,9 +1111,7 @@ def test_persistent_host_replay_state_untouched_without_records(
 
     rec = command_recorder(monkeypatch, {})  # strict: any command raises
 
-    target = _sync_persistent_host_replay_manifest(
-        cfg, cfg_path, dry_run=False
-    )
+    target = _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
     installed = _install_persistent_host_bind_replay(
         cfg, cfg_path, dry_run=False
     )
@@ -944,6 +1121,74 @@ def test_persistent_host_replay_state_untouched_without_records(
     assert installed is False
     assert target.parent == state_dir
     assert not state_dir.exists()
+
+
+def test_persistent_host_replay_dry_run_executes_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--dry_run must not run the privileged replay (or anything else).
+
+    Regression: the replay submit had no dry-run gate, so `aivm vm
+    persistent_host_replay --dry_run` executed the real sudo bind replay
+    against a stale manifest and then printed DRYRUN.
+    """
+    from aivm.attachments.persistent import _reconcile_persistent_host_binds
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-replay-dry-run'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    store = Store()
+    store.attachments.append(
+        _persistent_entry(tmp_path / 'proj', vm_name=cfg.vm.name)
+    )
+    save_store(store, cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    # The virtiofs-mapping probe is a legitimate read; everything else --
+    # notably the sudo replay helper, mkdir, install, systemctl -- is strict.
+    rec = command_recorder(
+        monkeypatch, {'virsh': FakeProc(stdout='<domain/>')}
+    )
+
+    _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
+
+    assert [cmd for cmd in rec.normalized if cmd[0] != 'virsh'] == []
+
+
+def test_persistent_host_replay_can_scope_foreground_reconcile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Scoped host replay neither requests nor performs global stale pruning."""
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-replay-scoped'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg_path = tmp_path / 'config.toml'
+    _record_persistent_attachment(cfg, cfg_path, tmp_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    _redirect_replay_state_dir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(monkeypatch, default=FakeProc())
+
+    host_bind._run_persistent_host_replay(
+        cfg,
+        cfg_path,
+        dry_run=False,
+        only_guest_dst='/workspace/proj',
+    )
+
+    replay_cmd = next(
+        cmd
+        for cmd in rec.normalized
+        if cmd and cmd[0].endswith('aivm-persistent-host-bind-replay')
+    )
+    assert replay_cmd[-2:] == ['--only-guest-dst', '/workspace/proj']
+    assert '--prune-stale' not in replay_cmd
 
 
 def test_persistent_host_replay_manifest_still_updates_after_last_detach(
@@ -998,147 +1243,884 @@ def test_persistent_host_replay_manifest_still_updates_after_last_detach(
     assert json.loads(staged[0])['records'] == []
 
 
-def test_persistent_root_host_bind_short_circuits_when_already_bound(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def _load_host_replay_helper(tmp_path: Path) -> Any:
+    helper_path = tmp_path / 'aivm_persistent_host_replay.py'
+    helper_path.write_text(persistent_host_replay_python(), encoding='utf-8')
+    spec = importlib.util.spec_from_file_location(
+        'aivm_test_persistent_host_replay', helper_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_host_replay_rejects_source_replacement(
+    tmp_path: Path,
 ) -> None:
-    """An existing bind is probed for access mode but never re-mounted."""
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    info = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    source.rename(tmp_path / 'approved-source')
+    source.mkdir()
+    with pytest.raises(
+        helper.SourceUnavailableError, match='approved persistent source changed'
+    ):
+        helper.open_approved_source(record)
+
+
+def test_host_replay_rejects_symlink_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    info = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    approved = tmp_path / 'approved-source'
+    source.rename(approved)
+    source.symlink_to(approved, target_is_directory=True)
+    with pytest.raises(helper.SourceUnavailableError):
+        helper.open_approved_source(record)
+
+
+def test_host_replay_rejects_intermediate_symlink(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    real_parent = tmp_path / 'real-parent'
+    real_parent.mkdir()
+    source = real_parent / 'source'
+    source.mkdir()
+    info = source.stat()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(real_parent, target_is_directory=True)
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(alias / 'source'),
+        'source_dev': info.st_dev,
+        'source_ino': info.st_ino,
+    }
+    with pytest.raises(helper.SourceUnavailableError):
+        helper.open_approved_source(record)
+
+
+def test_held_source_descriptor_survives_path_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    approved = source.stat()
+    record = {
+        'shared_root_token': 'token',
+        'source_dir': str(source),
+        'source_dev': approved.st_dev,
+        'source_ino': approved.st_ino,
+    }
+    fd = helper.open_approved_source(record)
+    try:
+        source.rename(tmp_path / 'approved-source')
+        source.mkdir()
+        held = helper.os.fstat(fd)
+        replacement = source.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(fd)
+
+
+def test_host_replay_mounts_only_through_held_descriptors() -> None:
+    source = persistent_host_replay_python()
+    assert 'mount", "--bind", fd_path(source_fd), fd_path(target_fd)' in source
+    assert 'pass_fds=(source_fd, target_fd)' in source
+    assert 'expected_dev' in source and 'expected_ino' in source
+
+
+def test_host_replay_prunes_with_path_only_export_root_descriptor(
+    tmp_path: Path,
+) -> None:
+    """O_PATH pins the root, while procfs provides an enumerable view."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
     )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+    try:
+        helper.prune_stale_mounts(root_fd, set())
+    finally:
+        helper.os.close(root_fd)
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-bound'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
+
+def test_host_replay_unmounts_through_held_parent_not_open_child(
+    tmp_path: Path,
+) -> None:
+    """Closing the child descriptor avoids making its own mount look busy."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    target = export_root / 'token'
+    target.mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
     )
+    calls: list[tuple[list[str], tuple[int, ...]]] = []
 
-    activate_manager(monkeypatch)
+    class Result:
+        returncode = 0
+        stdout = ''
+        stderr = ''
 
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.host_bind._target_is_bind_of',
-        lambda *_a, **_k: True,
-    )
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool = True,
+        capture: bool = False,
+        pass_fds: tuple[int, ...] = (),
+    ) -> Result:
+        del check, capture
+        calls.append((cmd, pass_fds))
+        return Result()
 
-    # Strict recorder: the read-only findmnt access probe is the only
-    # subprocess allowed; a mount/remount would raise as unrouted.
-    rec = command_recorder(
-        monkeypatch,
-        {
-            'findmnt -P -n': FakeProc(
-                0,
-                'SOURCE="/source" FSROOT="" FSTYPE="none" OPTIONS="rw"',
-                '',
-            ),
-        },
-    )
+    helper.run = fake_run
+    try:
+        helper.unmount_child(root_fd, 'token')
+    finally:
+        helper.os.close(root_fd)
 
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
-
-    assert len(rec.normalized) == 1
-    assert rec.only('findmnt')[:6] == [
-        'findmnt',
-        '-P',
-        '-n',
-        '-o',
-        'SOURCE,FSROOT,FSTYPE,OPTIONS',
-        '--mountpoint',
+    assert calls == [
+        (
+            ['umount', f'/proc/self/fd/{root_fd}/token'],
+            (root_fd,),
+        )
     ]
 
 
-def test_persistent_root_host_bind_issues_direct_mount_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_host_replay_lazily_detaches_genuinely_busy_child(
+    tmp_path: Path,
 ) -> None:
-    """When binding is needed, use a plain `mount --bind` argv (no bash script)."""
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    (export_root / 'token').mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
     )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+    calls: list[list[str]] = []
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persistent-bind'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='hostcode-source',
-    )
+    class Result:
+        def __init__(
+            self,
+            returncode: int,
+            *,
+            stdout: str = '',
+            stderr: str = '',
+        ) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
 
-    activate_manager(monkeypatch)
-    monkeypatch.setattr(
-        'aivm.attachments.persistent.host_bind._target_is_bind_of',
-        lambda *_a, **_k: False,
-    )
+    def fake_run(
+        cmd: list[str],
+        *,
+        check: bool = True,
+        capture: bool = False,
+        pass_fds: tuple[int, ...] = (),
+    ) -> Result:
+        del check, capture, pass_fds
+        calls.append(cmd)
+        if cmd[:2] == ['umount', '--lazy']:
+            return Result(0)
+        if cmd[0] == 'umount':
+            return Result(32, stderr='target is busy')
+        if cmd[0] == 'mountpoint':
+            return Result(0)
+        raise AssertionError(cmd)
 
-    rec = command_recorder(monkeypatch, default=FakeProc(0, '', ''))
+    helper.run = fake_run
+    try:
+        helper.unmount_child(root_fd, 'token')
+    finally:
+        helper.os.close(root_fd)
 
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+    target = f'/proc/self/fd/{root_fd}/token'
+    assert calls == [
+        ['umount', target],
+        ['mountpoint', '-q', target],
+        ['umount', '--lazy', target],
+    ]
 
-    flat = [' '.join(c) for c in rec.normalized]
-    assert any(line.startswith('mount --bind ') for line in flat), flat
-    assert all(not line.startswith('bash -c ') for line in flat), flat
 
-
-def test_persistent_host_bind_escalates_only_for_the_bind_mount(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_host_replay_prune_closes_child_before_unmount(
+    tmp_path: Path,
 ) -> None:
-    """`persistent` is the default attachment mode, so this is the hot path.
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    (export_root / 'token').mkdir(parents=True)
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    opened_children: list[int] = []
+    real_open_child = helper.open_child_directory
 
-    On a user-owned storage tree the export directories are created without
-    privileges; only `mount --bind`, which has no unprivileged form, escalates.
+    def recording_open_child(*args: Any, **kwargs: Any) -> int:
+        fd = real_open_child(*args, **kwargs)
+        opened_children.append(fd)
+        return fd
+
+    def assert_closed_before_unmount(parent_fd: int, name: str) -> None:
+        assert parent_fd == root_fd
+        assert name == 'token'
+        with pytest.raises(OSError):
+            helper.os.fstat(opened_children[-1])
+
+    helper.open_child_directory = recording_open_child
+    helper.is_mountpoint_fd = lambda fd: True
+    helper.unmount_child = assert_closed_before_unmount
+    try:
+        helper.prune_stale_mounts(root_fd, set())
+    finally:
+        helper.os.close(root_fd)
+
+
+def test_held_export_root_descriptor_survives_path_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    approved = export_root.stat()
+    fd = helper.open_absolute_directory(str(export_root), label='export root')
+    try:
+        export_root.rename(tmp_path / 'approved-export-root')
+        export_root.mkdir()
+        held = helper.os.fstat(fd)
+        replacement = export_root.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(fd)
+
+
+def test_held_target_descriptor_survives_child_replacement(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export-root'
+    export_root.mkdir()
+    root_fd = helper.open_absolute_directory(
+        str(export_root), label='export root'
+    )
+    target_fd = helper.open_child_directory(root_fd, 'token', create=True)
+    try:
+        target = export_root / 'token'
+        approved = target.stat()
+        target.rename(export_root / 'approved-token')
+        target.mkdir()
+        held = helper.os.fstat(target_fd)
+        replacement = target.stat()
+        assert (held.st_dev, held.st_ino) == (
+            approved.st_dev,
+            approved.st_ino,
+        )
+        assert (held.st_dev, held.st_ino) != (
+            replacement.st_dev,
+            replacement.st_ino,
+        )
+    finally:
+        helper.os.close(target_fd)
+        helper.os.close(root_fd)
+
+
+def test_attachment_approval_rejects_intermediate_symlink(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / 'real-parent'
+    real_parent.mkdir()
+    source = real_parent / 'source'
+    source.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(real_parent, target_is_directory=True)
+
+    with pytest.raises((NotADirectoryError, OSError)):
+        directory_identity(alias / 'source')
+
+
+# ---------------------------------------------------------------------------
+# The privileged replay is skipped when there is nothing for it to do
+# ---------------------------------------------------------------------------
+
+
+def _write_mountinfo(path: Path, export_root: Path, *names: str) -> Path:
+    """Write a mountinfo table listing ``names`` as mounts under the export root.
+
+    Real bind mounts need root, so the kernel's answer is supplied rather
+    than produced. Crucially the fixture mirrors the same-filesystem case:
+    every entry shares one device with its parent, which is what defeats
+    ``st_dev``-based mount inference.
     """
-    from aivm.attachments.persistent.host_bind import (
-        _ensure_persistent_root_host_bind,
+    lines = [
+        # id parent major:minor root mountpoint options - fstype source opts
+        f'{40 + index} 30 259:2 /src/{name} {export_root}/{name} '
+        f'rw,relatime shared:1 - ext4 /dev/root rw'
+        for index, name in enumerate(names)
+    ]
+    path.write_text(
+        '\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8'
     )
-    from aivm.vm.share import AttachmentMode, ResolvedAttachment
+    return path
 
-    cfg = AgentVMConfig()
-    cfg.vm.name = 'vm-persist'
-    cfg.paths.base_dir = str(tmp_path / 'base')
-    source_dir = tmp_path / 'source'
-    source_dir.mkdir()
-    attachment = ResolvedAttachment(
-        vm_name=cfg.vm.name,
-        mode=AttachmentMode.PERSISTENT,
-        source_dir=str(source_dir.resolve()),
-        guest_dst='/workspace/source',
-        tag='proj',
+
+def _approved_manifest_for(
+    tmp_path: Path,
+    *,
+    access: str = 'rw',
+    bound: bool = True,
+    mounted: tuple[str, ...] = ('token-a',),
+) -> tuple[Path, Path, Path]:
+    """Write an approved manifest describing one already-applied bind.
+
+    A real bind target *is* its source directory, so a test can stand in for
+    one by recording the target's own identity as the approved source: that
+    is precisely the equality a live bind produces.
+    """
+    export_root = tmp_path / 'export'
+    target = export_root / 'token-a'
+    target.mkdir(parents=True)
+    info = target.stat()
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 2,
+                'vm_name': 'vm-shared',
+                'records': [
+                    {
+                        'shared_root_token': 'token-a',
+                        'guest_dst': '/workspace/a',
+                        'source_dev': info.st_dev,
+                        # An unbound target is some other directory, so its
+                        # inode is not the approved source's.
+                        'source_ino': info.st_ino if bound else info.st_ino + 1,
+                        'access': access,
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    mountinfo = _write_mountinfo(
+        tmp_path / 'mountinfo', export_root, *mounted
+    )
+    return manifest_path, export_root, mountinfo
+
+
+def test_converged_persistent_binds_need_no_privileged_replay(
+    tmp_path: Path,
+) -> None:
+    """An already-applied manifest is not re-applied through sudo.
+
+    On a shared machine this manifest covers every principal's persistent
+    attachments, so demanding root here meant any user starting the VM had
+    to escalate just to re-assert binds that were already in place.
+    """
+    manifest_path, export_root, mountinfo = _approved_manifest_for(tmp_path)
+
+    assert _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
     )
 
-    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
-    CommandManager.activate(
-        CommandManager(yes=True, yes_sudo=True, privilege_mode='as-needed')
+
+def test_unapplied_persistent_bind_still_requires_the_replay(
+    tmp_path: Path,
+) -> None:
+    """A target that is not the approved source is work the helper must do."""
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, bound=False
     )
-    raw: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
-        del kwargs
-        parts = [str(p) for p in cmd]
-        raw.append(parts)
-        return FakeProc(0, '', '')
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
-    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
 
-    _ensure_persistent_root_host_bind(cfg, attachment, dry_run=False)
+def test_missing_bind_target_requires_the_replay(tmp_path: Path) -> None:
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=()
+    )
+    (export_root / 'token-a').rmdir()
 
-    def program(parts: list[str]) -> str:
-        rest = parts[2:] if parts[:2] == ['sudo', '-n'] else parts
-        rest = rest[1:] if rest[:1] == ['sudo'] else rest
-        return rest[0] if rest else ''
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
 
-    real = [p for p in raw if p[-1:] != ['true']]
-    escalated = {program(p) for p in real if p[:1] == ['sudo']}
-    plain = {program(p) for p in real if p[:1] != ['sudo']}
-    assert 'mkdir' in plain, raw
-    assert escalated == {'mount'}, raw
+
+def test_readonly_mismatch_requires_the_replay(tmp_path: Path) -> None:
+    """A bind whose access no longer matches must be remounted."""
+    # The tmp_path filesystem is writable, so an 'ro' record cannot already
+    # be satisfied -- exactly the drift the helper exists to correct.
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, access='ro'
+    )
+
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
+
+
+def test_stale_mount_under_the_export_root_requires_the_replay(
+    tmp_path: Path,
+) -> None:
+    """A detached attachment leaves a mount only the helper can prune.
+
+    Regression: this was decided with ``Path.is_mount()``, which infers a
+    mount from a ``st_dev`` difference against the parent. A bind mount
+    whose source shares a filesystem with the export root -- both on the
+    host root filesystem, the normal layout -- shows no such difference, so
+    a live bind read as "not mounted". Detach then concluded there was no
+    privileged work to do and went on to delete the record, the manifest and
+    the replay unit, leaving the host folder still exported to the guest and
+    the state needed to retry the cleanup gone.
+    """
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=('token-a', 'token-detached')
+    )
+    (export_root / 'token-detached').mkdir()
+
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
+
+
+def test_scoped_convergence_ignores_unrelated_stale_host_mount(
+    tmp_path: Path,
+) -> None:
+    """Foreground attachment checks only the export it is about to use."""
+    manifest_path, export_root, mountinfo = _approved_manifest_for(
+        tmp_path, mounted=('token-a', 'token-unrelated')
+    )
+    (export_root / 'token-unrelated').mkdir()
+
+    assert _approved_binds_already_applied(
+        manifest_path,
+        export_root,
+        mountinfo=mountinfo,
+        only_guest_dst='/workspace/a',
+    )
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=mountinfo
+    )
+
+
+def test_mount_detection_sees_a_same_filesystem_bind(tmp_path: Path) -> None:
+    """The mount table is consulted, not a st_dev comparison.
+
+    Guards the specific inference that failed: every entry in this fixture
+    shares one device with its parent, exactly as a same-filesystem bind
+    mount does, and must still be reported as mounted.
+    """
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    (export_root / 'token-a').mkdir()
+    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root, 'token-a')
+
+    assert _mounted_child_names(export_root, mountinfo=mountinfo) == {'token-a'}
+    # The inference this replaced would answer False for the same directory.
+    assert not (export_root / 'token-a').is_mount()
+
+
+def test_mount_detection_decodes_escaped_mountinfo_paths(
+    tmp_path: Path,
+) -> None:
+    """A mount point containing a space arrives octal-escaped from the kernel."""
+    export_root = tmp_path / 'export root'
+    export_root.mkdir()
+    mountinfo = tmp_path / 'mountinfo'
+    escaped = str(export_root).replace(' ', r'\040')
+    mountinfo.write_text(
+        f'40 30 259:2 /src {escaped}/token-a rw - ext4 /dev/root rw\n',
+        encoding='utf-8',
+    )
+
+    assert _mounted_child_names(export_root, mountinfo=mountinfo) == {'token-a'}
+
+
+def test_unreadable_mount_table_requires_the_replay(tmp_path: Path) -> None:
+    """Not knowing what is mounted is never read as "nothing is mounted"."""
+    manifest_path, export_root, _mountinfo = _approved_manifest_for(tmp_path)
+
+    assert not _approved_binds_already_applied(
+        manifest_path, export_root, mountinfo=tmp_path / 'absent-mountinfo'
+    )
+
+
+def test_unreadable_approved_manifest_requires_the_replay(
+    tmp_path: Path,
+) -> None:
+    """Every uncertainty falls through to the privileged helper."""
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    mountinfo = _write_mountinfo(tmp_path / 'mountinfo', export_root)
+
+    assert not _approved_binds_already_applied(
+        tmp_path / 'never-written.json', export_root, mountinfo=mountinfo
+    )
+
+
+def test_host_replay_isolates_source_failure_and_continues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {'shared_root_token': 'bad', 'enabled': True},
+                    {'shared_root_token': 'good', 'enabled': True},
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    seen: list[str] = []
+    quarantined: list[str] = []
+
+    def ensure_record(_export_root_fd: int, record: dict[str, object], **_kwargs: object) -> None:
+        token = str(record['shared_root_token'])
+        seen.append(token)
+        if token == 'bad':
+            raise helper.SourceUnavailableError('approved persistent source changed')
+
+    helper.ensure_record = ensure_record
+    helper.quarantine_unavailable_token = (
+        lambda _export_root_fd, token: quarantined.append(str(token))
+    )
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+        ]
+    )
+
+    assert code == helper.DEGRADED_EXIT
+    assert seen == ['bad', 'good']
+    assert quarantined == ['bad']
+    assert (
+        'WARNING: skipping persistent host attachment bad: '
+        'approved persistent source changed'
+        in capsys.readouterr().err
+    )
+
+
+
+def test_host_replay_preserves_existing_export_on_source_failure_in_foreground(
+    tmp_path: Path,
+) -> None:
+    """A source-pin problem during session entry must not quarantine a live export."""
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {
+                        'shared_root_token': 'token',
+                        'guest_dst': '/workspace/proj',
+                        'source_dir': '/host/proj',
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
+
+    def unavailable(
+        _export_root_fd: int,
+        _record: dict[str, object],
+        **_kwargs: object,
+    ) -> None:
+        raise helper.SourceUnavailableError('approved source identity changed')
+
+    helper.ensure_record = unavailable
+    helper.quarantine_unavailable_token = lambda *_a, **_k: pytest.fail(
+        'foreground source failure must not quarantine a live export'
+    )
+
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+            '--only-guest-dst',
+            '/workspace/proj',
+            '--preserve-live-binds',
+        ]
+    )
+    assert code == helper.DEGRADED_EXIT
+
+
+def test_host_replay_reports_live_bind_conflict_as_degraded_in_foreground(
+    tmp_path: Path,
+) -> None:
+    """A preserved live host bind warns without aborting foreground entry."""
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {
+                        'shared_root_token': 'token',
+                        'guest_dst': '/workspace/proj',
+                        'source_dir': '/host/proj',
+                        'enabled': True,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(
+        path, helper.os.O_RDONLY
+    )
+
+    def conflict(
+        _export_root_fd: int,
+        _record: dict[str, object],
+        **_kwargs: object,
+    ) -> None:
+        raise helper.LiveBindConflictError(
+            'live export points at a different directory; '
+            'foreground session preparation leaves live binds untouched'
+        )
+
+    helper.ensure_record = conflict
+    helper.quarantine_unavailable_token = lambda *_a, **_k: pytest.fail(
+        'foreground live-bind conflict must not quarantine the live export'
+    )
+
+    code = helper.main(
+        [
+            '--manifest',
+            str(manifest_path),
+            '--export-root',
+            str(export_root),
+            '--vm-name',
+            'vm',
+            '--only-guest-dst',
+            '/workspace/proj',
+            '--preserve-live-binds',
+        ]
+    )
+    assert code == helper.DEGRADED_EXIT
+
+
+def test_host_replay_does_not_swallow_mount_or_access_failure(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    manifest_path = tmp_path / 'approved.json'
+    manifest_path.write_text(
+        json.dumps(
+            {
+                'vm_name': 'vm',
+                'records': [
+                    {'shared_root_token': 'bad', 'enabled': True},
+                    {'shared_root_token': 'good', 'enabled': True},
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+    export_root = tmp_path / 'export'
+    export_root.mkdir()
+    helper.open_validated_manifest = lambda path: helper.os.open(path, helper.os.O_RDONLY)
+    seen: list[str] = []
+
+    def ensure_record(_export_root_fd: int, record: dict[str, object], **_kwargs: object) -> None:
+        token = str(record['shared_root_token'])
+        seen.append(token)
+        if token == 'bad':
+            raise RuntimeError('remount,bind,ro failed')
+
+    helper.ensure_record = ensure_record
+
+    with pytest.raises(RuntimeError, match='remount,bind,ro failed'):
+        helper.main(
+            [
+                '--manifest',
+                str(manifest_path),
+                '--export-root',
+                str(export_root),
+                '--vm-name',
+                'vm',
+            ]
+        )
+
+    assert seen == ['bad']
+
+
+
+def test_host_replay_preserve_live_bind_never_unmounts_conflict(
+    tmp_path: Path,
+) -> None:
+    """Foreground host replay reports a conflict without replacing the live bind."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    source = tmp_path / 'source'
+    token_dir = export_root / 'token'
+    source.mkdir()
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
+    )
+    source_fd = helper.open_absolute_directory(source, label='source')
+    helper.open_approved_source = lambda _record: helper.os.dup(source_fd)
+    helper.is_mountpoint_fd = lambda _fd: True
+    helper.same_tree_fds = lambda _left, _right: False
+    helper.unmount_child = lambda *_a, **_k: pytest.fail(
+        'foreground replay must not unmount a live host bind'
+    )
+    try:
+        with pytest.raises(
+            helper.LiveBindConflictError,
+            match='leaves live binds untouched',
+        ):
+            helper.ensure_record(
+                export_root_fd,
+                {
+                    'shared_root_token': 'token',
+                    'enabled': True,
+                    'access': 'rw',
+                },
+                preserve_live_binds=True,
+            )
+    finally:
+        helper.os.close(source_fd)
+        helper.os.close(export_root_fd)
+
+
+
+def test_host_replay_preserve_live_bind_never_remounts_access(
+    tmp_path: Path,
+) -> None:
+    """Foreground host replay also preserves a live bind's access mode."""
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    source = tmp_path / 'source'
+    token_dir = export_root / 'token'
+    source.mkdir()
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
+    )
+    source_fd = helper.open_absolute_directory(source, label='source')
+    helper.open_approved_source = lambda _record: helper.os.dup(source_fd)
+    helper.is_mountpoint_fd = lambda _fd: True
+    helper.same_tree_fds = lambda _left, _right: True
+    helper.access_matches_fd = lambda _fd, _access: False
+    helper.enforce_access_fd = lambda *_a, **_k: pytest.fail(
+        'foreground replay must not remount a live host bind'
+    )
+    try:
+        with pytest.raises(
+            helper.LiveBindConflictError,
+            match='leaves live binds untouched',
+        ):
+            helper.ensure_record(
+                export_root_fd,
+                {
+                    'shared_root_token': 'token',
+                    'enabled': True,
+                    'access': 'ro',
+                },
+                preserve_live_binds=True,
+            )
+    finally:
+        helper.os.close(source_fd)
+        helper.os.close(export_root_fd)
+
+
+def test_host_replay_quarantines_unavailable_empty_token_directory(
+    tmp_path: Path,
+) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    export_root = tmp_path / 'export'
+    token_dir = export_root / 'stale-token'
+    token_dir.mkdir(parents=True)
+    export_root_fd = helper.open_absolute_directory(
+        export_root, label='export root'
+    )
+    helper.is_mountpoint_fd = lambda _fd: False
+    try:
+        helper.quarantine_unavailable_token(export_root_fd, 'stale-token')
+    finally:
+        helper.os.close(export_root_fd)
+
+    assert not token_dir.exists()
+
+
+def test_host_replay_probe_source_uses_descriptor_walk(tmp_path: Path) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+
+    assert helper.main(['--probe-source', str(source)]) == 0
+
+
+def test_host_replay_probe_source_rejects_symlink(tmp_path: Path) -> None:
+    helper = _load_host_replay_helper(tmp_path)
+    source = tmp_path / 'source'
+    source.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(source, target_is_directory=True)
+
+    with pytest.raises(OSError):
+        helper.main(['--probe-source', str(alias)])

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import kwconf
 
+from .vm_access import VMAccessModalCLI
 from .vm_attach import (
     VMAttachCLI,
     VMDetachCLI,
@@ -27,6 +28,7 @@ from .vm_lifecycle import (
     VMDownCLI,
     VMListCLI,
     VMProvisionCLI,
+    VMRenameCLI,
     VMRestartCLI,
     VMStatusCLI,
     VMUpCLI,
@@ -47,6 +49,7 @@ class VMModalCLI(kwconf.ModalCLI):
     update = VMUpdateCLI
     edit = VMEditCLI
     delete = VMDeleteCLI
+    rename = VMRenameCLI
     ssh_config = VMSshConfigCLI
     provision = VMProvisionCLI
     ssh = VMSSHCLI
@@ -60,6 +63,7 @@ class VMModalCLI(kwconf.ModalCLI):
     flush_caches = VMFlushCachesCLI
     fdguard = VMFdGuardCLI
     creds = VMCredsModalCLI
+    access = VMAccessModalCLI
 
 
 __all__ = [
@@ -71,6 +75,7 @@ __all__ = [
     'VMWaitIPCLI',
     'VMStatusCLI',
     'VMDeleteCLI',
+    'VMRenameCLI',
     'VMSshConfigCLI',
     'VMProvisionCLI',
     'VMCodeCLI',
@@ -85,4 +90,5 @@ __all__ = [
     'VMFlushCachesCLI',
     'VMFdGuardCLI',
     'VMCredsModalCLI',
+    'VMAccessModalCLI',
 ]

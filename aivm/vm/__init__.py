@@ -12,10 +12,8 @@ from __future__ import annotations
 from . import drift
 from .lifecycle import (
     create_or_start_vm,
-    destroy_vm,
     fetch_image,
     get_ip_cached,
-    provision,
     refresh_cloud_init_seed_for_next_boot,
     restart_vm,
     shutdown_vm,
@@ -24,6 +22,9 @@ from .lifecycle import (
     vm_status,
     wait_for_ip,
     wait_for_ssh,
+)
+from .lifecycle import (
+    provision as provision,
 )
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
@@ -46,13 +47,14 @@ __all__ = [
     'SHARED_ROOT_VIRTIOFS_TAG',
     'attach_vm_share',
     'create_or_start_vm',
-    'destroy_vm',
     'detach_vm_share',
     'drift',
     'ensure_share_mounted',
     'fetch_image',
     'get_ip_cached',
-    'provision',
+    # ``provision`` stays importable but out of ``__all__``: autodoc would
+    # otherwise document it as ``aivm.vm.provision``, colliding with the
+    # module of the same name.
     'refresh_cloud_init_seed_for_next_boot',
     'restart_vm',
     'shutdown_vm',

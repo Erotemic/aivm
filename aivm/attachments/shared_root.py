@@ -7,6 +7,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
@@ -37,7 +39,8 @@ def _shared_root_guest_mount_cmd(
     # coexist. Read-only policy is enforced on each host bind and guest child
     # bind, never by remounting the shared root.
     del read_only
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     mount_cmd = (
         f'sudo -n mount -t virtiofs {shlex.quote(SHARED_ROOT_VIRTIOFS_TAG)} '
         f'{shlex.quote(SHARED_ROOT_GUEST_MOUNT_ROOT)}'
@@ -61,7 +64,7 @@ def _shared_root_guest_mount_cmd(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
 
@@ -89,7 +92,8 @@ def _ensure_shared_root_parent_dir(
             approval_scope=f'shared-root-parent:{cfg.vm.name}',
         ):
             mgr.submit(
-                ['mkdir', '-p', str(target)], ownership='tool',
+                ['mkdir', '-p', str(target)],
+                ownership='tool',
                 sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create shared-root parent directory',
@@ -397,7 +401,8 @@ def _ensure_shared_root_host_bind(
     ):
         if needs_parent:
             mgr.submit(
-                ['mkdir', '-p', str(parent_dir)], ownership='tool',
+                ['mkdir', '-p', str(parent_dir)],
+                ownership='tool',
                 sudo=path_needs_sudo(parent_dir),
                 role='modify',
                 summary='Create shared-root parent directory',
@@ -405,7 +410,8 @@ def _ensure_shared_root_host_bind(
             )
         if needs_target:
             mgr.submit(
-                ['mkdir', '-p', str(target)], ownership='tool',
+                ['mkdir', '-p', str(target)],
+                ownership='tool',
                 sudo=path_needs_sudo(target),
                 role='modify',
                 summary='Create project-specific host bind target',
@@ -640,7 +646,8 @@ def _ensure_shared_root_guest_bind(
         'exit 2; '
         'esac'
     )
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     cmd = [
         'ssh',
         *ssh_base_args(
@@ -649,19 +656,43 @@ def _ensure_shared_root_guest_bind(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
-    if dry_run:
-        from loguru import logger
-
-        logger.info('DRYRUN: {}', ' '.join(shlex.quote(c) for c in cmd))
-        return
     mount_cmd = _shared_root_guest_mount_cmd(
         cfg,
         ip,
         read_only=(attachment.access == ATTACHMENT_ACCESS_RO),
     )
+    mount_request = mgr.request(
+        mount_cmd,
+        role='modify',
+        check=True,
+        capture=True,
+        timeout=20,
+        summary='Mount shared-root inside guest',
+        detail=(
+            f'tag={SHARED_ROOT_VIRTIOFS_TAG} '
+            f'destination={SHARED_ROOT_GUEST_MOUNT_ROOT} '
+            f'access={attachment.access}'
+        ),
+    )
+    bind_request = mgr.request(
+        cmd,
+        role='modify',
+        check=False,
+        capture=True,
+        timeout=20,
+        summary='Bind guest destination to shared source and verify source/options',
+        detail=(
+            f'source={source_in_guest} destination={attachment.guest_dst} '
+            f'access={attachment.access}'
+        ),
+    )
+    if dry_run:
+        mount_request.preview()
+        bind_request.preview()
+        return
     with mgr.step(
         'Mount and verify inside guest',
         why='Mount the shared-root export inside the guest, bind it to the requested destination, and verify the resulting source and access mode.',
@@ -669,33 +700,8 @@ def _ensure_shared_root_guest_bind(
             f'shared-root-guest-bind:{cfg.vm.name}:{attachment.guest_dst}'
         ),
     ):
-        mgr.submit(
-            mount_cmd,
-            sudo=False,
-            role='modify',
-            check=True,
-            capture=True,
-            timeout=20,
-            summary='Mount shared-root inside guest',
-            detail=(
-                f'tag={SHARED_ROOT_VIRTIOFS_TAG} '
-                f'destination={SHARED_ROOT_GUEST_MOUNT_ROOT} '
-                f'access={attachment.access}'
-            ),
-        )
-        res = mgr.submit(
-            cmd,
-            sudo=False,
-            role='modify',
-            check=False,
-            capture=True,
-            timeout=20,
-            summary='Bind guest destination to shared source and verify source/options',
-            detail=(
-                f'source={source_in_guest} destination={attachment.guest_dst} '
-                f'access={attachment.access}'
-            ),
-        ).result()
+        mount_request.submit()
+        res = bind_request.submit().result()
     if res.code != 0:
         raise AIVMError(
             'Failed to bind-mount shared-root attachment inside guest. You may need to stop the VM to run detatch\n'
@@ -790,7 +796,8 @@ def _detach_shared_root_guest_bind(
     *,
     dry_run: bool,
 ) -> None:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     source_in_guest = str(
         PurePosixPath(SHARED_ROOT_GUEST_MOUNT_ROOT)
         / (attachment.tag or '').strip()
@@ -807,17 +814,23 @@ def _detach_shared_root_guest_bind(
     cmd = [
         'ssh',
         *ssh_base_args(ident, strict_host_key_checking='accept-new'),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
-    if dry_run:
-        from loguru import logger
-
-        logger.info('DRYRUN: {}', ' '.join(shlex.quote(c) for c in cmd))
-        return
-    res = CommandManager.current().run(
-        cmd, sudo=False, check=False, capture=True
+    request = CommandManager.current().request(
+        cmd,
+        role='modify',
+        check=False,
+        capture=True,
+        summary='Unmount shared-root attachment inside guest',
+        detail=(
+            f'source={source_in_guest} destination={attachment.guest_dst}'
+        ),
     )
+    if dry_run:
+        request.preview()
+        return
+    res = request.run()
     if res.code != 0:
         raise RuntimeError(
             'Failed to unmount shared-root attachment inside guest.\n'

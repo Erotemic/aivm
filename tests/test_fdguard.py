@@ -33,7 +33,7 @@ from aivm.fdguard import (
 from aivm.vm.cloudinit import _render_user_data_text
 from aivm.vm.update import FdGuardDrift, VMUpdateDrift
 from aivm.vm.update.fdguard import _apply_fdguard_drift, _fdguard_drift
-from tests.helpers import run_cli
+from tests.helpers import resolved_test_context, run_cli
 
 STOCK_UPDATEDB_CONF = (
     'PRUNE_BIND_MOUNTS="yes"\n'
@@ -637,7 +637,10 @@ def test_vm_fdguard_install_runs_quoted_remote_command(
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_aivm'
 
-    monkeypatch.setattr('aivm.cli.vm_guard.load_cfg', lambda *a, **k: cfg)
+    monkeypatch.setattr(
+        'aivm.cli.vm_guard.load_vm_context',
+        lambda *a, **k: resolved_test_context(cfg),
+    )
     monkeypatch.setattr(
         'aivm.cli.vm_guard._resolve_ip_for_ssh_ops',
         lambda *a, **k: '10.77.0.123',

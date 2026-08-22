@@ -99,7 +99,6 @@ def guest_ssh_env(monkeypatch: pytest.MonkeyPatch) -> None:
     activate_manager(monkeypatch)
 
 
-
 def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Answer the write-approval prompt and return what the user was shown.
 
@@ -112,6 +111,10 @@ def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     import aivm.commands as commands_mod
 
     messages: list[str] = []
+    # Approval policy deliberately differs for root. Pin this helper to the
+    # ordinary unprivileged-user case so the test does not depend on the uid
+    # of the process running pytest (CI/container runners are often root).
+    monkeypatch.setattr(commands_mod.os, 'geteuid', lambda: 1000)
     monkeypatch.setattr(commands_mod.sys.stdin, 'isatty', lambda: True)
     monkeypatch.setattr(builtins, 'input', lambda prompt: 'y')
 
@@ -130,6 +133,7 @@ def _approve_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         commands_mod.CommandManager, '_confirm_unprivileged_mutation', spy
     )
     return messages
+
 
 def test_upsert_host_git_remote_adds_remote(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -366,7 +370,7 @@ def test_ensure_attachment_creates_mirror_home_symlink_when_enabled(
     guest_dst = str(host_src.expanduser().absolute())
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=guest_dst,
         guest_dst=guest_dst,
         tag='hostcode-foobar-abc12345',
@@ -420,7 +424,7 @@ def test_ensure_attachment_no_mirror_when_disabled(
     guest_dst = str(host_src.expanduser().absolute())
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=guest_dst,
         guest_dst=guest_dst,
         tag='hostcode-foobar-abc12345',
@@ -669,7 +673,7 @@ def test_apply_guest_derived_symlinks_companion_only(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag1',
@@ -711,7 +715,7 @@ def test_apply_guest_derived_symlinks_dual_mirror_for_symlink_host(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag2',
@@ -755,7 +759,7 @@ def test_apply_guest_derived_symlinks_no_dup_mirror_when_same(
     resolved_dst = str(real_dir)
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=resolved_dst,
         tag='tag3',
@@ -799,7 +803,7 @@ def test_apply_guest_derived_symlinks_custom_dst_suppresses_all_mirrors(
 
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=resolved_dst,
         guest_dst=custom_dst,
         tag='tag-custom',
@@ -928,3 +932,54 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     assert any(c['symlink_path'] == str(stale_link) for c in calls)
     # And a drift warning was emitted
     assert any('no longer resolves to canonical' in w for w in warnings)
+
+
+def test_explicit_no_removes_matching_prior_mirror_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicit attachment opt-out converges an old AIVM mirror away."""
+    from aivm.attachments.guest import _ensure_attachment_available_in_guest
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-no-mirror-cleanup'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/id'
+
+    host_src = tmp_path / 'code' / 'foobar'
+    host_src.mkdir(parents=True)
+    guest_dst = str(host_src.expanduser().absolute())
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
+        source_dir=guest_dst,
+        guest_dst=guest_dst,
+        tag='hostcode-foobar-cleanup',
+        mirror_home='no',
+    )
+
+    monkeypatch.setattr(
+        'aivm.attachments.guest.ensure_share_mounted', lambda *a, **k: None
+    )
+    monkeypatch.setattr('aivm.attachments.resolve.Path.home', lambda: tmp_path)
+    activate_manager(monkeypatch)
+    recorder = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(0, guest_dst + '\n', '')},
+    )
+
+    _ensure_attachment_available_in_guest(
+        cfg,
+        host_src,
+        attachment,
+        '10.0.0.1',
+        yes=True,
+        dry_run=False,
+        ensure_shared_root_host_side=False,
+        mirror_home=False,
+    )
+
+    expected_mirror = '/home/agent/code/foobar'
+    scripts = _ssh_scripts(recorder)
+    assert any(f'readlink -- {expected_mirror}' in script for script in scripts)
+    assert any(f'sudo -n rm -- {expected_mirror}' in script for script in scripts)
+    assert not any('ln -s' in script for script in scripts)

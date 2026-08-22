@@ -2,9 +2,266 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.5.1 - Unreleased
+## Version 0.6.0 - Unreleased
+
+### Fixed
+* Live ``ssh-agent`` grants no longer fail after the credential is active merely
+  because the guest cannot reach the provider SSH endpoint for the final
+  read-only repository probe. Clear transport failures such as connection
+  refusal, timeout, DNS failure, or no route are reported as warnings while
+  forwarding/authentication defects remain hard errors.
+* ssh-agent guest public selectors now use mode ``0600`` because OpenSSH
+  applies ``IdentityFile`` permission checks even when the file contains only
+  a public key used to select an identity from the forwarded agent. Guest file
+  reconciliation now repairs mode drift as well as content drift, so existing
+  ``0644`` selectors converge in place. Live ssh-agent grants also finish with
+  a read-only ``git ls-remote`` through the generated repository route, so the
+  command verifies Git rewriting, SSH selector loading, forwarded-agent
+  authentication, and repository access before reporting success.
+* Dedicated ssh-agent forwarding for AIVM-owned SSH processes now binds the
+  dedicated socket through a process-local ``SSH_AUTH_SOCK`` and ordinary
+  ``ssh -A`` instead of relying on the explicit-path ``ForwardAgent`` client
+  form. New VM cloud-init explicitly allows agent forwarding, and failed
+  forwarding preflights report the guest sshd forwarding policy to distinguish
+  client transport failures from server-side refusal.
+* ``aivm vm creds add --backend ssh-agent`` now makes its connection-scoped
+  behavior explicit and verifies the usable path when possible. After the
+  provider grant is active and the dedicated host agent is loaded, a live
+  SSH-ready VM gets its public selectors/routing reconciled and a temporary
+  forwarded-agent fingerprint preflight. Stopped or still-booting VMs defer
+  that guest activation without invalidating the grant, and the command always
+  points operators at a fresh ``aivm vm ssh`` or ``aivm vm code`` session as
+  the reliable way to use the credential.
+* Revoking a guest-key credential while its VM is stopped now reports a clean
+  recoverable error instead of an internal traceback. Provider revocation is
+  still verified and persisted first; the credential remains
+  ``revocation-pending`` until the VM is available, and the error explains that
+  repository authority is already gone and names the revoke command to rerun.
+* ``aivm code --tunnel`` now treats the tunnel request itself as a one-shot
+  opt-in for its guest prerequisites. Missing ``code`` or ``tmux`` is installed
+  narrowly after approval instead of failing with a separate provisioning
+  instruction, and the tunnel launcher uses the inspectable
+  ``/usr/local/libexec/aivm/code-tunnel`` helper rather than an anonymous inline
+  shell program. This also removes the shell-quoting bug where backticks in the
+  old missing-tool diagnostic attempted to execute ``aivm`` inside the guest.
+* Foreground ``aivm ssh`` and all ``aivm code`` launch modes now share one
+  startup pipeline and preserve live persistent mounts on an already-running
+  VM. Guest replay compares bind mounts by underlying directory identity rather
+  than ``findmnt``'s presentation-oriented ``SOURCE`` string, and foreground
+  replay reports genuine source/access conflicts as degraded warnings without
+  unmounting or remounting active workspaces, and foreground SSH/VS Code entry
+  continues against the preserved live workspace. Real-bind E2E coverage keeps
+  this behavior pinned against the kernel mount semantics that unit fakes can
+  miss.
+* Foreground ``aivm code``, ``aivm ssh``, and explicit attachment operations
+  on an already-running VM now reconcile only the requested persistent
+  attachment. Opening another project no longer performs global guest replay,
+  replaces unrelated mounts, or restores the VM's broader saved working set.
+  Full desired-state reconciliation remains the boot/start and explicit
+  maintenance behavior.
+* Persistent attachment replay now isolates only pre-mutation source
+  unavailability/identity failures, so one stale saved folder no longer aborts
+  every other persistent attachment or an otherwise healthy VM session.
+  Rejected host tokens are quarantined and old guest binds are removed rather
+  than exposing an empty placeholder. Bind, remount, access-mode, verification,
+  and cleanup failures still fail replay instead of being converted into
+  warnings. Degraded replay is surfaced to interactive callers with the
+  affected paths and an explicit recovery command. Operators can deliberately
+  accept the objects currently present at their own saved paths with ``aivm vm
+  persistent-host-replay --trust_current_paths`` (and preview that recovery
+  with ``--dry_run``); cross-principal reauthorization still requires the
+  explicit ``--admin_override`` and can descriptor-probe private paths through
+  the privileged replay helper.
+
+### Changed
+* Made command-log auditability an explicit product principle: ordinary logs
+  should expose enough concrete, reproducible operations for an operator to
+  understand and, where practical, imitate AIVM manually. Large guest symlink
+  and helper-install payloads are now deliberately labeled with ``Elided``
+  instead of tripping the unmarked-omission warning, while helper checksum
+  probes use a compact copy/pasteable ``sha256sum --check --status`` command
+  whose exit status is interpreted by Python instead of logging a multiline
+  ``MISSING``/``MATCH``/``MISMATCH`` shell program.
+* Renamed the `shared` attachment mode to `direct-virtiofs`, after its cost
+  rather than its behavior. Each such attachment gives its folder a dedicated
+  virtiofs device, and every device occupies one of the guest's limited PCIe
+  slots -- `No more available PCI slots` is how a large attachment set fails --
+  while `persistent` and `shared-root` multiplex any number of folders through
+  a single device. It remains the only mode needing no host bind mount, and so
+  the only one a caller without sudo can create; that is the reason to choose
+  it, and the new name is meant to stop it being chosen by default. `--mode
+  shared` is rejected with an explanation rather than aliased, so nobody keeps
+  selecting a per-folder device by habit. Released pre-0.6 stores still spell
+  it `shared`, and migration renames those records.
 
 ### Added
+* ``aivm vm creds revoke`` now supports bulk cleanup without a preceding list
+  step. ``revoke <repository> --all`` revokes every matching backend for that
+  repository, while bare ``revoke --all`` revokes every credential owned by
+  the current principal on the selected VM. ``--backend`` narrows either form.
+  Each selected credential keeps its existing provider-first lifecycle;
+  independent domain failures are reported after the remaining matches are
+  attempted, and a partial bulk revoke returns nonzero without undoing
+  successful revocations.
+* Unified repository credential commands under ``aivm vm creds`` while keeping
+  ``guest-key`` and ``ssh-agent`` as independently owned backends. New grants
+  use ``--backend auto`` by default: an explicit backend wins, then a VM-level
+  ``vm.credential_backend`` preference, then the caller profile
+  ``credential_backend`` preference, then the package fallback. The fallback
+  is intentionally ``guest-key`` for now; the backend name ``ssh-agent`` is
+  used throughout the public surface to avoid ambiguity with AI agents.
+  ``preference``, ``list``, ``status``, ``revoke``, ``doctor``, and YAML plans
+  operate over both backend stores, and the former public ``vm agent_creds``
+  modal is gone.
+* Added layered mirror-home attachment policy. ``aivm attach`` now accepts
+  ``--mirror_home auto|yes|no`` and persists explicit per-attachment overrides.
+  ``auto`` resolves through the invoking user's private profile preference and
+  then the VM's existing ``mirror_shared_home_folders`` policy. Existing
+  attachment records implicitly remain ``auto`` and require no rewrite; only
+  explicit attachment overrides require the new store schema field. Explicit
+  per-attachment opt-out also safely removes a matching AIVM-derived mirror
+  symlink instead of leaving stale presentation state behind.
+* Wired independent ``ssh-agent`` credentials into managed SSH and VS Code Remote-SSH
+  sessions. AIVM now lazily restores the VM/principal-scoped dedicated
+  ``ssh-agent``, forwards that exact socket instead of the caller's ordinary
+  agent, installs only public key selectors in the guest, and writes
+  repository-specific SSH/Git routing so multiple loaded deploy keys remain
+  deterministic. Session preparation preflights the forwarded fingerprints
+  before handing control to the shell/editor; private deploy-key material
+  remains host-only.
+* Added an experimental, independent ``aivm vm agent_creds`` subsystem for
+  repository deploy keys whose private halves remain host-only. Agent
+  credentials use their own ``agent_credentials`` store collection, separate
+  host-only key tree, and a distinct credential id namespace; existing ``aivm vm creds`` guest-key records are never adopted or
+  loaded into the dedicated agent. ``add`` creates a fresh provider deploy key,
+  ``revoke`` removes provider authority before local key cleanup, and normal
+  lifecycle operations converge the dedicated agent automatically.
+  ``agent_creds doctor`` is read-only by default; ``--fix`` repairs only derived
+  local agent state and refuses provider/key-authority changes. The guest
+  capability channel is intentionally deferred, so this release establishes and
+  tests the host-side security boundary without replacing the working guest-key
+  credential path.
+  VM deletion also refuses to proceed while independent host-agent records
+  remain, preventing provider deploy keys from being orphaned.
+* ``aivm vm provision docker`` now explicitly enables the existing Docker
+  provisioning path for that invocation. Docker can be combined with named
+  guest tools such as ``aivm vm provision docker rust``; it reuses
+  ``provision.install_docker`` rather than introducing a second Docker
+  installer or configuration switch.
+* Added ``aivm vm creds plan`` / ``apply`` for repositories with many
+  initialized submodules. The planner emits a comment-driven YAML document: each
+  repository choice is a self-contained one-line row with explicit ``ro``/``rw``
+  access, remote, provider, and an informational remote URL. Distinct remote
+  destinations are emitted as commented alternatives so choosing one is an
+  uncomment operation; apply re-resolves every selected remote and validates the
+  full plan before creating credentials.
+* `aivm --version` prints the package version. `kwconf.ModalCLI` already grows
+  the flag from a `__version__` class attribute, so this is that attribute
+  rather than a hand-rolled argument.
+* Gave the machine store a personal layout, so a host that never runs `aivm
+  host permissions setup` still works. 0.6 moved desired state out of the
+  caller's home into a root-owned, `libvirt`-group-writable
+  `/var/lib/aivm/machine`, which made trusted-group membership a prerequisite
+  for using AIVM at all -- including for a single user with no one to share
+  with. Membership in `libvirt` is root-equivalent, and declining it is a
+  reasonable position, not a misconfiguration. Sudo cannot stand in for it: the
+  store's `flock` scopes need a descriptor held open in-process, its atomic
+  replacement writes modes through file descriptors, and a store root written
+  by root for a non-member stays unreadable to them afterwards, so every later
+  read would escalate too. A host with no shared root therefore keeps its store at
+  `~/.local/share/aivm/machine`, owned by the caller at `0700`, with no group
+  and no privileged step to create, read, or write it -- including the
+  enrollment bootstrap keypair, which is root-owned only in a shared store
+  where other trusted-group members can reach it. Host operations that were
+  always privileged for a non-`libvirt` account, such as `virsh` and the
+  persistent-replay binds, still escalate exactly as before.
+  `aivm host permissions setup`
+  remains the way to share a host, and `aivm config migrate` moves a personal
+  store into a shared one. Only the root path, owning gid, and modes differ
+  between the two; the documents, lock order, and every consumer are the same.
+* Recorded which machine store owns a libvirt domain, in the domain's own
+  `<metadata>`. "One managed domain has at most one authoritative record" used
+  to be emergent -- a host held one store, so whatever appeared in it was
+  owned by it -- and two possible store layouts removes that guarantee. A
+  store now refuses to drive a domain another store stamped, and names the
+  owner. Domains created before the marker carry no stamp and are accepted; a
+  host with only one store on disk never runs the probe.
+* Made a shared workstation usable by host accounts that hold libvirt/machine
+  group membership but no sudo, which is the normal arrangement when one
+  administrator prepares a host for several users. An unverifiable firewall is
+  no longer treated as a missing one: `nft` has no unprivileged read, so an
+  ordinary user cannot see the table an administrator installed, and inferring
+  "absent" from that silence used to schedule a repair they could not perform
+  and abort the session. Such a run now warns that the rules are unverified and
+  continues. Starting a VM whose persistent binds are already in place no longer
+  invokes the privileged replay helper at all, so an ordinary `vm up` on a VM
+  carrying another user's attachments stops requiring root. Attachment modes
+  that need a host bind mount fail with the two ways forward named
+  (`--mode shared`, or an administrator declaring it), and an administrator can
+  now create an attachment *owned by another access identity* with
+  `--owner_principal ... --admin_override` instead of having to own it
+  themselves. `aivm host permissions check` reports what is unavailable to the
+  calling account rather than promising sudo it may not have, and failures to
+  obtain sudo say what needed root instead of surfacing a bare `sudo -v` error.
+  The shared-workstation setup and its division of labour are now documented in
+  the quickstart.
+* Added the final shared-machine access lifecycle and operational scope UX.
+  `aivm vm access disable` revokes one personal guest key and AIVM sudo policy
+  while retaining the account, home, attachments, credentials, and provider
+  evidence; `access remove` deletes the machine identity only after owned
+  records are resolved. Cross-user and last-access changes require explicit
+  overrides, disabled identities require `access reconcile --enable`, and
+  list/status plus VM/network lifecycle commands now show trust mode and
+  machine-wide impact using the operator-facing term “access identity”.
+* Added resumable released-store migration application. Reviewed plans are
+  revalidated before ownership-preserving backups, schema-11 machine/profile
+  writes, credential and persistent-state copies, restricted guest bootstrap
+  installation, and final runtime verification. Durable phase journals support
+  status, resume, verify, and reverse-order host rollback while retaining all
+  released inputs, provider state, VM disks, domain definitions, and legacy SSH
+  access.
+* Added a strictly read-only released-store migration planner at
+  `aivm config migrate plan`. It fingerprints monolithic or split source files,
+  proposes machine/profile records, attributes legacy attachments and
+  credentials to their creator identity, reports credential-directory and
+  persistent-state moves, and inventories libvirt resources. Multiple old
+  stores claiming one VM, divergent machine/profile state, missing identities
+  or SSH keys, target-store collisions, and missing runtime domains are
+  reported as blockers. Text and JSON reports perform no writes or guest/provider
+  operations. The corresponding apply command revalidates this reviewed
+  evidence before starting its durable migration transaction.
+* Added principal-scoped machine-store repository credentials. Credential
+  records now carry `principal_id`, stable IDs include the principal scope,
+  and machine writes reject unattributed or dangling owners. Ordinary
+  add/list/status/revoke/abandon operations select only the current principal;
+  `--all_principals` exposes non-secret machine-wide metadata without probing
+  another user's host key, provider login, or guest home. Guest reconciliation
+  regenerates Git/SSH routing from only the selected principal's credentials,
+  while disabled principals retain provider IDs and fingerprints needed for
+  later revocation. Legacy stores retain their released unattributed IDs until
+  explicit migration.
+* Added principal-owned machine-wide attachments. New machine-store records
+  carry `owner_principal_id`; path resolution and session restoration default
+  to the current principal, while list/status expose the complete inventory.
+  Updates and detaches cannot select another principal's record without an
+  explicit `--admin_override`. Persistent replay manifests now live in per-VM
+  machine state, contain every owner's declarations exactly once, and are
+  generated under the global store/VM lock. Legacy stores retain their
+  released unattributed and XDG replay behavior until migration.
+* `aivm config init` now creates or joins naturally in shared-machine mode. It
+  uses the hostname-qualified VM name as the onboarding key, initializes
+  creator defaults only when no managed machine exists, and enrolls a later
+  host user through the restricted bootstrap channel when an exact managed
+  record exists. Active joins are idempotent, stopped VMs retain a recoverable
+  pending principal, failed personal-key verification is not reported as
+  success, and unmanaged same-name libvirt domains are never adopted silently.
+* Added the restricted shared-machine enrollment channel. New machine-store
+  VMs receive a machine-owned bootstrap SSH key and a forced, non-interactive
+  `aivm-guestctl` account that can create/repair one guest identity or remove
+  that identity's exact key and AIVM sudo policy from a validated JSON request.
+  `aivm vm access reconcile` persists pending
+  and error states, verifies the caller's personal SSH key before activation,
+  and `aivm vm access list` shows the machine-wide access inventory.
 * Added ``aivm vm creds`` for VM-scoped repository credentials. The initial
   backend creates one GitHub deploy key per VM/repository pair, keeps a
   protected host copy, installs the private key in the guest, and supports
@@ -72,8 +329,61 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   perform. Installing an unregistered key is safe and deliberate: it
   authenticates against nothing until the provider holds its public half. See
   the policy note in `aivm/credentials/__init__.py`.
+* `CommandManager.attempt(...)` for steps whose failure is an expected
+  outcome. The block reports its result on an `Attempt` (`.failed`,
+  `.reason`) instead of raising, so callers declare that a step may fail
+  rather than wrapping manager calls in `try`/`except`, and the log says a
+  failure was handled instead of showing what looks like a fatal error.
+
 
 ### Changed
+* Hardened destructive and privileged shared-machine lifecycle paths. Caller
+  authorization now uses kernel UID/GID plus passwd identity; access disable
+  and remove serialize policy checks with verified guest revocation; reconcile
+  rejects silent key or guest-account rotation; persistent mount approval is
+  bound to held filesystem objects; detach retains a resumable `detaching`
+  record until host/guest exposure is gone; and VM deletion uses a durable
+  phase journal with strict, verified storage removal. Canonical 0.6 runtime
+  paths no longer synthesize pre-0.6 contexts.
+* Quarantined compatibility for released pre-0.6 installations under the
+  explicit `aivm.legacy.pre_0_6_0` namespace. Migration planning/execution,
+  legacy context materialization, store selection and paths, schema upgrades,
+  old firewall cleanup, and historical virtiofsd-wrapper recognition now live
+  behind that versioned boundary. Mixed parser/render/store surfaces carry a
+  searchable no-op compatibility marker, making the eventual removal scope
+  explicit. Tests and released fixtures for the same support window live under
+  `tests/legacy/pre_0_6_0`, so retiring compatibility removes one production
+  subtree and one matching test subtree.
+* Added the inactive machine-store filesystem foundation for the shared-host
+  architecture. AIVM now has an injectable `/var/lib/aivm` layout, explicit
+  `root:aivm`-style directory and file modes, metadata-preserving atomic
+  replacement, group-readable split-transaction recovery, a centralized store
+  lock, deterministic network/VM lock ordering, and a lock-spanning
+  `update_store` mutation primitive. Unit tests exercise real process-level
+  contention and interrupted recovery without changing the default per-user
+  persistence path.
+* Completed the stage 0/1 prerequisites for the shared-machine migration.
+  Tests now isolate all implicit HOME/XDG paths, provide Alice/Bob fixtures and
+  frozen released-store migration documents, and exercise a captured
+  two-principal session path from store loading through attachment resolution.
+  The service layer now exposes canonical `ResolvedVMContext` loaders and
+  `PreparedSession` retains that selected context through SSH and VS Code
+  entry points instead of reconstructing caller identity later.
+* Removed the runtime `ubelt` dependency. AIVM now owns the small XDG path
+  resolver it needs and calls Pygments directly when optional terminal syntax
+  highlighting is available. The replacement modules record the historical
+  ubelt symbols they replace and explicitly note that their implementations
+  are new rather than copied source.
+* Began the shared-machine architecture refactor by introducing explicit
+  runtime scopes for machine state, VM principals, and per-user access
+  profiles. The existing on-disk schema remains compatible, but post-creation
+  guest operations now resolve a `ResolvedVMContext` instead of treating
+  `vm.user` and SSH identity paths as intrinsic VM properties. SSH, guest
+  provisioning, status probes, credentials, attachment reconciliation,
+  persistent replay transport, shared-root operations, cache maintenance, and
+  fdguard management all pass through this boundary. Config editing,
+  detection, and cloud-init intentionally remain on the legacy schema until
+  the machine-global store and principal enrollment work lands.
 * A command that changes state now requires confirmation because it is a
   write, not because it needs sudo or happens to be a `virsh` command. The
   previous rule guarded `virsh undefine --remove-all-storage` only by the
@@ -126,8 +436,89 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `dominfo`, `domstate`, `dumpxml`, `domblkinfo`, and `qemu-img` probes were
   ungrouped, so each was classified as a state change and prompted separately
   under a header that called a read-only probe a hypervisor mutation.
+* `aivm vm creds add` no longer requires the GitHub CLI. Registering a deploy
+  key is automation, not a prerequisite: only `ssh` and `ssh-keygen` are
+  required, and a missing, outdated, or signed-out `gh` routes into the same
+  handoff used when the provider refuses.
+* The credential feature no longer sits on the shared CLI option path.
+  `cli._common` has no credential imports; it publishes which config store is
+  active and `credentials.policy` resolves its own setting from it. VM
+  lifecycle code reaches the feature only through `credentials.guards`. The
+  audit boundary is documented in `aivm/credentials/__init__.py` and enforced
+  by `tests/test_credentials_boundary.py`.
+* `aivm vm creds add` now takes `--access read|write` (default `read`) instead
+  of the `--write` flag, matching the `--access` option already used by
+  `vm attach` and `vm code` and the `read`/`write` values already reported by
+  `creds list` and `creds status`. `ro` and `rw` are accepted as aliases.
+  `--write` is gone rather than deprecated because it was never released.
+* Credential storage directory mode concerns now follow
+  ``behavior.credential_directory_permission_policy``: ``warn`` by default,
+  ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM
+  application-data root, VM data directory, credential parent, and credential
+  leaf directory. Ownership, symlink, file-type, and key-file permission
+  checks remain strict failures in every policy mode.
+
 
 ### Fixed
+* Fixed a guest starting without its sandbox firewall, silently. The managed
+  nftables table lives only in the live kernel ruleset, so a host reboot removes
+  it while the VM definition survives, and only *creation* ever installed it --
+  the first `aivm vm up` after a reboot booted an unprotected guest and said
+  nothing. Starting or restarting a VM now verifies the table first (skip with
+  `--no-ensure_firewall`), sharing one decision with the attached-session
+  reconcile so the two paths cannot drift.
+* Fixed a failed enrollment attempt durably weakening an access identity that
+  already had one. `vm access reconcile` recorded `error` whenever the guest
+  helper or the personal-key probe failed, but ssh answers the same status for
+  an unreachable guest and a rejected key, so a transient failure retired the
+  sole active identity from last-access accounting -- a later `access
+  disable`/`remove` stopped demanding `--allow_last_access` -- and locked its
+  owner out of ordinary commands until some later attempt happened to succeed.
+  The persisted state now records the last known grant, which only an
+  affirmative revocation lowers; an identity that never held one still records
+  the failure.
+* Fixed a shared machine store holding several VMs having no way in for a new
+  user. `aivm config init` gained `--vm NAME`, and the ambiguity error names it
+  instead of `aivm vm access reconcile --vm NAME`, which cannot run before
+  `config init` has created the caller's profile SSH key.
+* Completed the `LC_ALL=C` pin over the virsh probes whose output decides
+  behavior. VM start/resume, live-versus-config virtiofs attach and detach, the
+  non-sudo running probe, update planning, drift, discovery, IP discovery, and
+  the status probes all match English state names, field labels, or error text;
+  on a localized host they previously read an ordinary running VM as an
+  unexpected state, or attached a share config-only so it stayed missing until
+  the next boot. Every such probe now goes through `runtime.pin_locale`, whose
+  argv-level pin also survives the sudo retries that an `env=` override does
+  not.
+* Hardened destructive recovery against three fail-open/data-loss paths. VM
+  directory cleanup now refuses to run when mount enumeration fails; resumed
+  deletion recaptures the live libvirt disk inventory immediately before
+  `undefine --remove-all-storage` and stops if it differs from the journal;
+  and migration rollback now treats released stores and persistent sources as
+  evidence-only inputs. Rollback preflights every migration-owned target and
+  restores it only when its current digest still matches the exact state
+  produced by migration, preserving concurrent or operator edits for manual
+  recovery instead of overwriting them.
+* Fixed persistent host-bind removal on real Linux hosts. The replay helper no
+  longer tries to unmount through an open descriptor for the mountpoint itself,
+  which made `umount` report `EBUSY`. It closes that child descriptor, resolves
+  the root-owned token through the held export-root descriptor, and falls back
+  to a lazy detach only when an active reference keeps the normal unmount busy.
+  Running-guest detach now removes the guest bind before pruning the host bind.
+* Fixed persistent host replay pruning on real Linux hosts. The export root is
+  intentionally held with `O_PATH` to pin the approved directory, but Python
+  cannot enumerate an `O_PATH` descriptor directly. Stale-token discovery now
+  reopens that same pinned object through `/proc/self/fd` instead of failing
+  with `EBADF` or falling back to the mutable original pathname.
+* Fixed two recovery holes in the new destructive lifecycle machinery. A
+  persistent attachment left in `detaching` state can now rebuild an approved
+  disabled replay manifest after its per-VM replay artifacts were removed, so
+  retry can prove stale host binds are pruned before deleting the final record.
+  VM creation/start paths now refuse unfinished deletion journals, while a
+  completed or superseded journal is replaced before deleting a recreated VM
+  with the same name. Enrollment is serialized with access disable/remove for
+  the full guest transaction, and the shared-host policy is reported as
+  `kernel-identity` rather than implying blanket trust of local users.
 * Reading a failed command handle no longer executes an unrelated queued
   command. A raise skipped the bookkeeping that resolves the handle, so it
   stayed pending; asking for its result again flushed the queue and ran
@@ -184,37 +575,6 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   surfaced as `aivm vm creds add` dying inside an SSH probe that reported a
   `gh` error it never issued. Both queues now mark a command attempted before
   executing it.
-
-### Added
-* `CommandManager.attempt(...)` for steps whose failure is an expected
-  outcome. The block reports its result on an `Attempt` (`.failed`,
-  `.reason`) instead of raising, so callers declare that a step may fail
-  rather than wrapping manager calls in `try`/`except`, and the log says a
-  failure was handled instead of showing what looks like a fatal error.
-
-### Changed
-* `aivm vm creds add` no longer requires the GitHub CLI. Registering a deploy
-  key is automation, not a prerequisite: only `ssh` and `ssh-keygen` are
-  required, and a missing, outdated, or signed-out `gh` routes into the same
-  handoff used when the provider refuses.
-* The credential feature no longer sits on the shared CLI option path.
-  `cli._common` has no credential imports; it publishes which config store is
-  active and `credentials.policy` resolves its own setting from it. VM
-  lifecycle code reaches the feature only through `credentials.guards`. The
-  audit boundary is documented in `aivm/credentials/__init__.py` and enforced
-  by `tests/test_credentials_boundary.py`.
-* `aivm vm creds add` now takes `--access read|write` (default `read`) instead
-  of the `--write` flag, matching the `--access` option already used by
-  `vm attach` and `vm code` and the `read`/`write` values already reported by
-  `creds list` and `creds status`. `ro` and `rw` are accepted as aliases.
-  `--write` is gone rather than deprecated because it was never released.
-* Credential storage directory mode concerns now follow
-  ``behavior.credential_directory_permission_policy``: ``warn`` by default,
-  ``error`` for strict enforcement, or ``ignore``. The policy covers the AIVM
-  application-data root, VM data directory, credential parent, and credential
-  leaf directory. Ownership, symlink, file-type, and key-file permission
-  checks remain strict failures in every policy mode.
-
 
 ## Version 0.5.0 - Released 2026-07-18
 

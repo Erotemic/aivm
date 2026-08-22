@@ -17,6 +17,37 @@ from tests.helpers import written_cfg
 
 
 @pytest.fixture(autouse=True)
+def isolated_user_state(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> dict[str, Path]:
+    """Route every implicit user or future machine path into the test sandbox.
+
+    Subprocesses inherit these variables, so a missed explicit ``--config`` is
+    still contained.  The machine-root variable is established before the
+    production machine store exists so later tests cannot accidentally default
+    to ``/var/lib/aivm``.
+    """
+    root = tmp_path / 'process-scope'
+    paths = {
+        'home': root / 'home',
+        'config': root / 'xdg-config',
+        'data': root / 'xdg-data',
+        'cache': root / 'xdg-cache',
+        'state': root / 'xdg-state',
+        'machine': root / 'machine-state',
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('HOME', str(paths['home']))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(paths['config']))
+    monkeypatch.setenv('XDG_DATA_HOME', str(paths['data']))
+    monkeypatch.setenv('XDG_CACHE_HOME', str(paths['cache']))
+    monkeypatch.setenv('XDG_STATE_HOME', str(paths['state']))
+    monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(paths['machine']))
+    return paths
+
+
+@pytest.fixture(autouse=True)
 def _fresh_command_manager() -> None:
     """Drop any manager a previous test activated.
 
@@ -90,6 +121,4 @@ def _pin_privilege_probe(monkeypatch: MonkeyPatch) -> None:
     behave exactly like 'always' in tests; privilege-specific tests override this
     fixture explicitly.
     """
-    monkeypatch.setattr(
-        'aivm.privilege.libvirt_without_sudo_ok', lambda: False
-    )
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', lambda: False)

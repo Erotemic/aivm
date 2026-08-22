@@ -17,17 +17,9 @@ from ..attachments.session import (
     _resolve_ip_for_ssh_ops,
 )
 from ..commands import CommandManager
-from ..config_store import (
-    find_network,
-    load_store,
-    network_users,
-    remove_vm,
-    save_store,
-)
-from ..credentials.guards import (
-    discard_released_credential_material,
-    require_vm_credentials_released,
-)
+from ..firewall import ensure_firewall_ready
+from ..operational_scope import announce_vm_machine_impact
+from ..scoped_store import resolve_store_scope
 from ..services import (
     cfg_path,
     load_cfg,
@@ -38,14 +30,19 @@ from ..services import (
 )
 from ..vm import (
     create_or_start_vm,
-    destroy_vm,
     provision,
     restart_vm,
     shutdown_vm,
     vm_status,
 )
 from ..vm.create_ops import create_vm_from_defaults
+from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
+from ..vm.guest_tools import GUEST_TOOL_REGISTRY
+from ..vm.rename import rename_managed_vm, validate_vm_name
 from ._common import _BaseCommand
+
+
+PROVISION_TARGET_NAMES = ('docker', *GUEST_TOOL_REGISTRY.names())
 
 
 class VMUpCLI(_BaseCommand):
@@ -54,17 +51,22 @@ class VMUpCLI(_BaseCommand):
     recreate: bool = kwconf.Flag(
         False, help='Destroy and recreate if it exists.'
     )
+    ensure_firewall: bool = kwconf.Flag(
+        True,
+        help='Verify (and repair) firewall rules when firewall.enabled=true.',
+    )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
-        maybe_install_missing_host_deps(
-            yes=bool(args.yes), dry_run=bool(args.dry_run)
+        announce_vm_machine_impact(
+            cfg_path, cfg.vm.name, action='start or reconcile'
         )
+        maybe_install_missing_host_deps(yes=args.yes, dry_run=args.dry_run)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Create/start VM {cfg.vm.name}',
@@ -76,6 +78,7 @@ class VMUpCLI(_BaseCommand):
                 dry_run=args.dry_run,
                 recreate=args.recreate,
                 config_store_path=cfg_path,
+                ensure_firewall=args.ensure_firewall,
             )
         if not args.dry_run and not args.recreate:
             _maybe_warn_hardware_drift(cfg)
@@ -99,13 +102,14 @@ class VMDownCLI(_BaseCommand):
     """Gracefully shut down the VM."""
 
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='shut down')
         mgr = CommandManager.current()
         with mgr.intent(
             f'Shut down VM {cfg.vm.name}',
@@ -119,14 +123,21 @@ class VMDownCLI(_BaseCommand):
 class VMRestartCLI(_BaseCommand):
     """Gracefully restart the VM (shutdown then start)."""
 
+    ensure_firewall: bool = kwconf.Flag(
+        True,
+        help='Verify (and repair) firewall rules when firewall.enabled=true.',
+    )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         cfg, cfg_path = load_cfg_with_path(args.config)
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='restart')
+        if args.ensure_firewall:
+            ensure_firewall_ready(cfg, dry_run=args.dry_run)
         mgr = CommandManager.current()
         with mgr.intent(
             f'Restart VM {cfg.vm.name}',
@@ -147,10 +158,11 @@ class VMCreateCLI(_BaseCommand):
     )
     force: bool = kwconf.Flag(
         False,
+        short_alias=['f'],
         help='Overwrite existing VM entry and recreate VM definition if present.',
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
@@ -159,19 +171,19 @@ class VMCreateCLI(_BaseCommand):
         log.trace(
             'VMCreateCLI.main vm={} set_default={} force={} dry_run={} yes={}',
             args.vm,
-            bool(args.set_default),
-            bool(args.force),
-            bool(args.dry_run),
-            bool(args.yes),
+            args.set_default,
+            args.force,
+            args.dry_run,
+            args.yes,
         )
         store_fpath = cfg_path(args.config)
         return create_vm_from_defaults(
             store_fpath,
             vm_override=args.vm if args.vm else None,
-            set_default=bool(args.set_default),
-            force=bool(args.force),
-            dry_run=bool(args.dry_run),
-            yes=bool(args.yes),
+            set_default=args.set_default,
+            force=args.force,
+            dry_run=args.dry_run,
+            yes=args.yes,
         )
 
 
@@ -193,7 +205,7 @@ class VMStatusCLI(_BaseCommand):
 
 
 class VMDeleteCLI(_BaseCommand):
-    """Delete the managed VM domain (shared host directories are not deleted)."""
+    """Durably delete a managed VM and every AIVM-owned host artifact."""
 
     vm: str = kwconf.Value(
         '',
@@ -201,84 +213,52 @@ class VMDeleteCLI(_BaseCommand):
         help='Optional VM name override (positional).',
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        requested_vm = str(args.vm or '').strip()
+        if requested_vm and not args.dry_run:
+            requested_path = resolve_store_scope(args.config).store_path
+            requested_scope = resolve_store_scope(str(requested_path))
+            completed = complete_missing_vm_deletion(
+                requested_scope, requested_path, requested_vm
+            )
+            if completed is not None:
+                print(
+                    f'Completed deletion journal recovery for {requested_vm}; '
+                    'the VM was already absent from the machine store.'
+                )
+                return 0
         cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
-        reg = load_store(cfg_path)
-        credentials = require_vm_credentials_released(
-            reg, cfg.vm.name, action='deleted'
-        )
+        scope = resolve_store_scope(str(cfg_path))
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='delete')
         mgr = CommandManager.current()
-        if args.dry_run:
-            with mgr.intent(
-                f'Delete VM {cfg.vm.name}',
-                why=(
-                    'Preview removal of the managed VM domain while leaving '
-                    'host project directories intact.'
-                ),
-                role='modify',
-            ):
-                destroy_vm(cfg, dry_run=True)
-            return 0
-
         with mgr.approved_action(
             purpose=(
-                f'Delete VM {cfg.vm.name}, remove revoked credential key '
-                'material, and remove its AIVM configuration record.'
+                f'Create or resume the deletion journal for VM {cfg.vm.name}, '
+                'remove attachment exposure and host artifacts, delete the '
+                'domain with verified storage cleanup, and finalize the store.'
             )
         ):
-            with mgr.intent(
-                f'Delete VM {cfg.vm.name}',
-                why=(
-                    'Remove the managed VM domain while leaving host project '
-                    'directories intact.'
-                ),
-                role='modify',
-            ):
-                discard_released_credential_material(credentials)
-                destroy_vm(cfg, dry_run=False)
-                remove_vm(reg, cfg.vm.name, remove_attachments=True)
-                save_store(
-                    reg,
-                    cfg_path,
-                    reason=(
-                        f'Remove VM record for {cfg.vm.name} after deleting '
-                        'the managed libvirt domain.'
-                    ),
-                )
-        net_name = (cfg.network.name or '').strip()
-        if net_name:
-            net = find_network(reg, net_name)
-            if net is not None and not network_users(reg, net_name):
-                log.warning(
-                    "Network '{}' now has no VM users and remains defined. "
-                    'Destroy it explicitly if no longer needed: aivm host net destroy {}',
-                    net_name,
-                    net_name,
-                )
+            delete_managed_vm(
+                scope,
+                cfg,
+                cfg_path,
+                dry_run=args.dry_run,
+            )
         return 0
 
 
-_TOOL_OVERRIDE_DEFAULTS: dict[str, str] = {
-    'uv': 'latest',
-    'rust': 'stable',
-    'code': 'latest',
-}
-
-
 class VMProvisionCLI(_BaseCommand):
-    """Provision the VM with optional developer packages.
+    """Provision configured components plus one-shot named targets.
 
-    Positional ``tools`` arguments are tool names to enable for this
-    invocation in addition to whatever is already enabled in
-    ``[tools]`` config. Known tools: ``uv``, ``rust``, ``code``. Each
-    enables the tool at its sensible default (``latest`` for ``uv`` and
-    ``code``, ``stable`` for ``rust``). To pin a version, set the value
-    in config.toml instead.
+    ``docker`` reuses the existing ``provision.install_docker`` path. Other
+    positional names enable registry-defined guest tools for this invocation.
+    Version or channel pins remain config values; the registry supplies each
+    one-shot tool default.
     """
 
     tools: list[str] = kwconf.Value(
@@ -286,8 +266,8 @@ class VMProvisionCLI(_BaseCommand):
         position=1,
         nargs='*',
         help=(
-            'Names of additional tools to install for this run (e.g. '
-            '`aivm vm provision code`). Known tools: uv, rust, code.'
+            'Names of additional targets to provision for this run. Known '
+            'targets: ' + ', '.join(PROVISION_TARGET_NAMES) + '.'
         ),
     )
     vm: str = kwconf.Value(
@@ -295,7 +275,7 @@ class VMProvisionCLI(_BaseCommand):
         help='Optional VM name override.',
     )
     dry_run: bool = kwconf.Flag(
-        False, help='Print actions without running.'
+        False, short_alias=['n'], help='Print actions without running.'
     )
 
     @classmethod
@@ -310,21 +290,26 @@ class VMProvisionCLI(_BaseCommand):
                 host_src=Path.cwd(),
             )
         requested = list(args.tools or [])
-        unknown = [t for t in requested if t not in _TOOL_OVERRIDE_DEFAULTS]
-        if unknown:
-            known = ', '.join(sorted(_TOOL_OVERRIDE_DEFAULTS))
+        unknown = next(
+            (name for name in requested if name not in PROVISION_TARGET_NAMES),
+            None,
+        )
+        if unknown is not None:
             log.error(
-                'Unknown tool name(s): {}. Known tools: {}.',
-                ', '.join(unknown),
-                known,
+                "Unknown provisioning target {!r}. Known targets: {}.",
+                unknown,
+                ', '.join(PROVISION_TARGET_NAMES),
             )
             return 2
-        for name in requested:
-            setattr(cfg.tools, name, _TOOL_OVERRIDE_DEFAULTS[name])
+        if 'docker' in requested:
+            cfg.provision.install_docker = True
+        GUEST_TOOL_REGISTRY.apply_enable_overrides(
+            cfg.tools, (name for name in requested if name != 'docker')
+        )
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,
-                yes=bool(args.yes),
+                yes=args.yes,
                 purpose='Query VM networking state before SSH provisioning.',
             )
         provision(cfg, dry_run=args.dry_run)
@@ -347,3 +332,42 @@ class VMListCLI(_BaseCommand):
         return ListCLI.main(
             argv=False, section=args.section, config=args.config
         )
+
+
+class VMRenameCLI(_BaseCommand):
+    """Rename a managed VM and every AIVM-owned artifact naming it."""
+
+    to: str = kwconf.Value(
+        '',
+        position=1,
+        help='New VM name (positional).',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        cfg, cfg_path = load_cfg_with_path(args.config, vm_opt=args.vm)
+        scope = resolve_store_scope(str(cfg_path))
+        new_name = validate_vm_name(str(args.to or ''))
+        announce_vm_machine_impact(cfg_path, cfg.vm.name, action='rename')
+        mgr = CommandManager.current()
+        with mgr.approved_action(
+            purpose=(
+                f'Rename VM {cfg.vm.name} to {new_name}: move its storage '
+                'tree, machine state, and bootstrap identity, rename the '
+                'libvirt domain and repoint its storage paths, then rewrite '
+                'every store record naming it.'
+            )
+        ):
+            rename_managed_vm(
+                scope,
+                cfg,
+                cfg_path,
+                new_name,
+                dry_run=args.dry_run,
+            )
+        return 0

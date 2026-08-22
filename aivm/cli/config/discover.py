@@ -13,14 +13,16 @@ from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...config_store import (
     find_vm,
-    load_store,
-    save_store,
     upsert_network,
     upsert_vm_with_network,
 )
 from ...modes import PrivilegeMode
-from ...runtime import virsh_cmd
-from ...services import cfg_path
+from ...runtime import pin_locale, virsh_cmd
+from ...scoped_store import (
+    load_scope_store,
+    resolve_store_scope,
+    save_scope_store,
+)
 from .._common import _BaseCommand
 
 
@@ -29,6 +31,7 @@ class ConfigDiscoverCLI(_BaseCommand):
 
     dry_run: bool = kwconf.Flag(
         False,
+        short_alias=['n'],
         help='Print actions without writing config store.',
     )
 
@@ -39,7 +42,8 @@ class ConfigDiscoverCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
         names_res = mgr.run(
-            virsh_cmd('list', '--all', '--name'), role='read',
+            virsh_cmd('list', '--all', '--name'),
+            role='read',
             sudo=False,
             check=False,
             capture=True,
@@ -48,7 +52,8 @@ class ConfigDiscoverCLI(_BaseCommand):
         if names_res.code != 0 and mgr.privilege_mode != PrivilegeMode.NEVER:
             used_sudo = True
             names_res = mgr.run(
-                virsh_cmd('list', '--all', '--name'), role='read',
+                virsh_cmd('list', '--all', '--name'),
+                role='read',
                 sudo=True,
                 check=True,
                 capture=True,
@@ -58,8 +63,9 @@ class ConfigDiscoverCLI(_BaseCommand):
         vm_names = [
             n.strip() for n in names_res.stdout.splitlines() if n.strip()
         ]
-        store = cfg_path(args.config)
-        reg = load_store(store)
+        scope = resolve_store_scope(args.config)
+        store = scope.store_path
+        reg = load_scope_store(scope)
         managed_seen = 0
         added = 0
         updated = 0
@@ -68,7 +74,7 @@ class ConfigDiscoverCLI(_BaseCommand):
             rec = find_vm(reg, vm_name)
             vm_info = _discover_vm_info(vm_name, use_sudo=used_sudo)
             if rec is None and not _prompt_import_discovered_vm(
-                vm_info, yes=bool(args.yes)
+                vm_info, yes=args.yes
             ):
                 skipped_unmanaged += 1
                 continue
@@ -88,7 +94,11 @@ class ConfigDiscoverCLI(_BaseCommand):
                 updated += 1
 
         if not args.dry_run:
-            save_store(reg, store)
+            save_scope_store(
+                scope,
+                reg,
+                reason='Persist explicitly discovered libvirt VM records.',
+            )
 
         print(f'Discovered VMs: {len(vm_names)}')
         print(f'  already_managed_seen: {managed_seen}')
@@ -111,8 +121,11 @@ def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
         'memory_mib': 'unknown',
         'shares': [],
     }
+    # Every field below is selected by its English name, so this summary is
+    # read under the C locale rather than the operator's.
     dominfo = mgr.run(
-        virsh_cmd('dominfo', vm_name), role='read',
+        pin_locale(virsh_cmd('dominfo', vm_name)),
+        role='read',
         sudo=use_sudo,
         check=False,
         capture=True,
@@ -135,7 +148,8 @@ def _discover_vm_info(vm_name: str, *, use_sudo: bool) -> dict[str, object]:
                     kib = int(m.group(1))
                     info['memory_mib'] = str(kib // 1024)
     xml = mgr.run(
-        virsh_cmd('dumpxml', vm_name), role='read',
+        virsh_cmd('dumpxml', vm_name),
+        role='read',
         sudo=use_sudo,
         check=False,
         capture=True,

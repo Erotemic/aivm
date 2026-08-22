@@ -9,9 +9,11 @@ from loguru import logger as log
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
+from ...errors import CommandControlError
 from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
+    PERSISTENT_REPLAY_DEGRADED_EXIT,
     persistent_replay_python,
     persistent_replay_service_unit,
 )
@@ -74,26 +76,34 @@ def _reconcile_persistent_attachments_in_guest(
     dry_run: bool,
     replay_even_if_unchanged: bool = True,
     continue_on_error: bool = False,
+    reconcile_host: bool = True,
+    only_guest_dst: str = '',
+    preserve_live_mounts: bool = False,
 ) -> None:
     # Host writes the canonical desired-state manifest first. The guest-local
-    # manifest and helper are refreshed next. Explicit reconcile paths set
-    # ``replay_even_if_unchanged`` so we still repair live drift even when the
-    # sync steps were no-ops. Secondary restore paths can opt into
-    # ``continue_on_error`` so a single bad VM does not abort the broader pass.
+    # manifest and helper are refreshed next. Scoped foreground operations use
+    # ``only_guest_dst`` so they touch one attachment without reconciling
+    # unrelated live work. Code/ssh session entry additionally requests
+    # ``preserve_live_mounts``; explicit attach may still repair the selected
+    # mount. Boot/maintenance callers omit the scope and retain full replay.
     def _strict_reconcile() -> None:
         manifest._sync_persistent_attachment_manifest_on_host(
             cfg, cfg_path, dry_run=dry_run
         )
-        host_bind._reconcile_persistent_host_binds(
-            cfg,
-            cfg_path,
-            dry_run=dry_run,
-            vm_running=True,
-        )
+        if reconcile_host:
+            host_bind._reconcile_persistent_host_binds(
+                cfg,
+                cfg_path,
+                dry_run=dry_run,
+                vm_running=True,
+                only_guest_dst=only_guest_dst,
+                preserve_live_binds=preserve_live_mounts,
+            )
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
                 cfg,
                 ip,
+                cfg_path=cfg_path,
                 dry_run=dry_run,
                 check=not continue_on_error,
             )
@@ -107,16 +117,29 @@ def _reconcile_persistent_attachments_in_guest(
         if dry_run:
             return
         if replay_even_if_unchanged or guest_manifest_changed or replay_changed:
+            replay_script = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
+            if only_guest_dst:
+                replay_script += (
+                    ' --only-guest-dst ' + shlex.quote(only_guest_dst)
+                )
+                if preserve_live_mounts:
+                    replay_script += ' --preserve-live-mounts'
             replay_result = transport._run_guest_root_script(
                 cfg,
                 ip,
-                script=f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}',
+                script=replay_script,
                 summary='Replay persistent attachment mounts inside guest',
-                detail='Verify and repair guest-visible persistent attachment bind mounts from the persisted manifest.',
+                detail=(
+                    'Verify and repair the requested guest-visible persistent '
+                    f'attachment only: {only_guest_dst}'
+                    if only_guest_dst
+                    else 'Verify and repair guest-visible persistent attachment bind mounts from the persisted manifest.'
+                ),
                 dry_run=dry_run,
                 check=not continue_on_error,
+                allowed_exit_codes=(0, PERSISTENT_REPLAY_DEGRADED_EXIT),
             )
-            if continue_on_error and replay_result is not None:
+            if replay_result is not None:
                 code = int(
                     getattr(
                         replay_result,
@@ -124,10 +147,20 @@ def _reconcile_persistent_attachments_in_guest(
                         getattr(replay_result, 'returncode', 0),
                     )
                 )
-                if code != 0:
-                    stderr = str(
-                        getattr(replay_result, 'stderr', '') or ''
-                    ).strip()
+                stderr = str(
+                    getattr(replay_result, 'stderr', '') or ''
+                ).strip()
+                if stderr:
+                    for line in stderr.splitlines():
+                        log.warning('guest-persistent-replay: {}', line)
+                if code == PERSISTENT_REPLAY_DEGRADED_EXIT:
+                    log.warning(
+                        'Guest persistent attachment replay completed in '
+                        'degraded mode for VM {}; conflicting or unavailable '
+                        'live state was left non-destructively as encountered.',
+                        cfg.vm.name,
+                    )
+                elif code != 0:
                     stdout = str(
                         getattr(replay_result, 'stdout', '') or ''
                     ).strip()
@@ -147,6 +180,10 @@ def _reconcile_persistent_attachments_in_guest(
     CommandManager.activate(isolated_manager)
     try:
         _strict_reconcile()
+    except CommandControlError:
+        # A declined or unapproved prompt is the user's decision, not a
+        # recoverable guest failure; best-effort must not continue past it.
+        raise
     except Exception as ex:  # pragma: no cover - guest runtime path
         log.warning(
             'persistent-reconcile: VM {} ip={} failed but restore will continue: {}',

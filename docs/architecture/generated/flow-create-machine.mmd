@@ -1,0 +1,20 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 2
+flowchart TD
+    init["config init creator path<br/><code>aivm.cli.config.init.initialize_config_defaults</code>"]
+    scope["Select fresh machine scope<br/><code>aivm.scoped_store.resolve_store_scope</code>"]
+    defaults[("Persist machine defaults and caller profile<br/><code>aivm.scoped_store.save_scope_store</code>")]
+    create["vm create from reviewed defaults<br/><code>aivm.vm.create_ops.create_vm_from_defaults</code>"]
+    locks[["Hold machine store, network, and VM locks<br/><code>aivm.machine_store.machine_resource_locks</code>"]]
+    persist[("Persist VM, network, creator access identity, and profile<br/><code>aivm.scoped_store.persist_creator_vm</code>")]
+    libvirt{"Create or start libvirt domain<br/><code>aivm.vm.create.create_or_start_vm</code>"}
+    bootstrap{"Create restricted machine bootstrap identity<br/><code>aivm.enrollment.ensure_bootstrap_identity</code>"}
+    failure>"Failed creation leaves reviewed defaults; no unmanaged adoption"]
+    init -->|fresh install| scope
+    scope -->|machine + user state| defaults
+    defaults -->|later vm create| create
+    create -->|serialize global mutation| locks
+    locks -->|creator desired state| persist
+    persist -->|external realization| libvirt
+    libvirt -->|enrollment capability| bootstrap
+    create -->|validation or host failure| failure

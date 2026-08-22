@@ -1,0 +1,12 @@
+{
+  "backends": [
+    "claude",
+    "codex"
+  ],
+  "installation": {
+    "modeling": false,
+    "storage": "local",
+    "tool_format": "zipapp",
+    "tool_path": ".llm_resource_tally/tool"
+  }
+}

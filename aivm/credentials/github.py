@@ -290,7 +290,9 @@ def find_added_key_by_public_key(
         if item.key and normalized_public_key(item.key) == wanted
     ]
     if len(by_key) > 1:
-        raise AIVMError('GitHub returned duplicate deploy keys for one SSH key.')
+        raise AIVMError(
+            'GitHub returned duplicate deploy keys for one SSH key.'
+        )
     if by_key:
         return by_key[0]
     by_title = [item for item in keys if item.title == title]
@@ -329,9 +331,7 @@ def select_recorded_provider_key(
         )
 
     if entry.provider_key_id:
-        by_id = [
-            item for item in keys if item.key_id == entry.provider_key_id
-        ]
+        by_id = [item for item in keys if item.key_id == entry.provider_key_id]
         if len(by_id) > 1:
             raise AIVMError(
                 'GitHub returned duplicate deploy-key id '
@@ -379,9 +379,7 @@ def find_recorded_provider_key(
 ) -> ProviderDeployKey | None:
     """Inspect the provider using the immutable identity recorded by AIVM."""
     if entry.provider_key_id:
-        exact = get_deploy_key(
-            repo, entry.provider_key_id, manager=manager
-        )
+        exact = get_deploy_key(repo, entry.provider_key_id, manager=manager)
         if exact is not None:
             return select_recorded_provider_key(entry, [exact])
         # GitHub deliberately uses 404 for some authorization failures on

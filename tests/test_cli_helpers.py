@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
+import aivm
 import aivm.cli._common as common_mod
 import aivm.services as services_mod
 from aivm.attachments.guest import (
@@ -25,7 +26,7 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import Store, save_store, upsert_attachment, upsert_vm
 from aivm.services import maybe_offer_create_ssh_identity
 from aivm.vm.share import _auto_share_tag_for_path
-from tests.helpers import make_cfg, write_store
+from tests.helpers import make_cfg, run_cli, write_store
 
 
 def test_auto_share_tag_collision() -> None:
@@ -51,6 +52,26 @@ def test_upsert_ssh_config_no_confirm_when_unchanged(
     path2, changed2 = _upsert_ssh_config_entry(cfg, dry_run=False, yes=False)
     assert path2 == path1
     assert changed2 is False
+
+
+def test_upsert_ssh_config_names_dedicated_forwarded_agent(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('HOME', str(tmp_path))
+    cfg = AgentVMConfig()
+    socket_path = '/tmp/aivm-agent-credentials-1000/scope-test.sock'
+
+    path, changed = _upsert_ssh_config_entry(
+        cfg,
+        dry_run=False,
+        yes=True,
+        forward_agent_socket=socket_path,
+    )
+
+    assert changed is True
+    text = path.read_text(encoding='utf-8')
+    assert f'  ForwardAgent {socket_path}\n' in text
+    assert 'SSH_AUTH_SOCK' not in text
 
 
 def test_plan_omits_default_config_flag(
@@ -96,7 +117,7 @@ def test_cli_yes_sudo_defaults_from_config(
         argv=False,
         data={'config': str(cfg_path), 'yes': False, 'yes_sudo': False},
     )
-    assert bool(parsed.yes_sudo) is True  # type: ignore
+    assert parsed.yes_sudo is True  # type: ignore
 
 
 def test_cli_auto_approve_readonly_sudo_defaults_from_config(
@@ -127,6 +148,18 @@ def test_cli_verbose_defaults_from_behavior_config(tmp_path: Path) -> None:
     assert common_mod._resolve_cfg_verbosity(str(cfg_path)) == 4
 
 
+@pytest.mark.parametrize('flag', ['--version', '-V'])
+def test_version_flag_reports_package_version(
+    capsys: pytest.CaptureFixture[str], flag: str
+) -> None:
+    # The modal version flag only exists while the CLI class carries a
+    # ``__version__``, so this also guards the package-init import order that
+    # lets ``aivm.cli.main`` read it back.
+    rc = run_cli([flag])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == aivm.__version__
+
+
 def test_help_raw_outputs_direct_system_commands(
     monkeypatch: MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -138,7 +171,7 @@ def test_help_raw_outputs_direct_system_commands(
                 'vm.name': 'vm-raw',
                 'network.name': 'net-raw',
                 'firewall.table': 'fw-raw',
-            }
+            },
         ),
     )
     monkeypatch.setattr('aivm.cli.help.cfg_path', lambda p: cfg_path)

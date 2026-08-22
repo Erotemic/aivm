@@ -3,12 +3,27 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from loguru import logger as log
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from ..attachment_schema import (
+    MIRROR_HOME_AUTO,
+    normalize_mirror_home_policy,
+)
 from ..config import AgentVMConfig
-from ..config_store import find_attachment_for_vm, load_store
+from ..config_store import (
+    AttachmentEntry,
+    Store,
+    find_attachment_by_guest_dst,
+    find_attachment_for_vm,
+    find_attachments_for_vm_path,
+    find_principal,
+    find_principals_for_vm,
+    load_store,
+)
 from ..errors import AIVMError
 from ..vm.share import (
     AttachmentAccess,
@@ -16,6 +31,7 @@ from ..vm.share import (
     ResolvedAttachment,
     _ensure_share_tag_len,
 )
+from .ownership import require_attachment_mutation_permission
 
 
 def logical_absolute_path(raw: str | Path) -> Path:
@@ -50,7 +66,9 @@ def logical_absolute_path(raw: str | Path) -> Path:
     if pwd:
         try:
             pwd_path = Path(pwd)
-            if pwd_path.is_absolute() and pwd_path.resolve() == Path(os.getcwd()):
+            if pwd_path.is_absolute() and pwd_path.resolve() == Path(
+                os.getcwd()
+            ):
                 return (pwd_path / p).expanduser()
         except OSError:
             # PWD points at something we can't stat — fall through.
@@ -61,8 +79,9 @@ def logical_absolute_path(raw: str | Path) -> Path:
             )
     return p.absolute()
 
+
 # Attachment mode constants (string aliases for mode values)
-ATTACHMENT_MODE_SHARED = AttachmentMode.SHARED.value
+ATTACHMENT_MODE_DIRECT_VIRTIOFS = AttachmentMode.DIRECT_VIRTIOFS.value
 ATTACHMENT_MODE_SHARED_ROOT = AttachmentMode.SHARED_ROOT.value
 ATTACHMENT_MODE_PERSISTENT = AttachmentMode.PERSISTENT.value
 ATTACHMENT_MODE_GIT = AttachmentMode.GIT.value
@@ -73,7 +92,7 @@ ATTACHMENT_ACCESS_RO = AttachmentAccess.RO.value
 
 # Attachment mode and access sets for validation
 ATTACHMENT_MODES = {
-    ATTACHMENT_MODE_SHARED,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_SHARED_ROOT,
     ATTACHMENT_MODE_PERSISTENT,
     ATTACHMENT_MODE_GIT,
@@ -148,7 +167,7 @@ def _compute_mirror_home_symlink(
     if not is_default_dst:
         return None
     host_home = Path.home()
-    guest_home = PurePosixPath('/home') / cfg.vm.user
+    guest_home = guest_transport_from_effective_cfg(cfg).guest_home
     if str(guest_home) == str(host_home):
         return None
     lexical = host_src.expanduser().absolute()
@@ -175,10 +194,26 @@ def _normalize_attachment_mode(mode: str) -> AttachmentMode:
         'shared_root': ATTACHMENT_MODE_SHARED_ROOT,
         'root': ATTACHMENT_MODE_SHARED_ROOT,
         'persistent': ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED: ATTACHMENT_MODE_SHARED,
+        'direct': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        'direct_virtiofs': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        'directvirtiofs': ATTACHMENT_MODE_DIRECT_VIRTIOFS,
+        ATTACHMENT_MODE_DIRECT_VIRTIOFS: ATTACHMENT_MODE_DIRECT_VIRTIOFS,
         ATTACHMENT_MODE_SHARED_ROOT: ATTACHMENT_MODE_SHARED_ROOT,
         ATTACHMENT_MODE_PERSISTENT: ATTACHMENT_MODE_PERSISTENT,
     }
+    if raw == 'shared':
+        # Deliberately not an alias. 'shared' was this mode's name before it
+        # was renamed for its cost, and silently accepting it would keep
+        # selecting a per-folder PCIe device for anyone following old notes.
+        raise AIVMError(
+            "--mode 'shared' was renamed to "
+            f"'{ATTACHMENT_MODE_DIRECT_VIRTIOFS}', because each such "
+            "attachment consumes one of the guest's limited PCIe slots. "
+            f'Use --mode {ATTACHMENT_MODE_SHARED_ROOT} or '
+            f'--mode {ATTACHMENT_MODE_PERSISTENT} unless you specifically '
+            'need a folder mapped on its own device (for example when you '
+            'have no host sudo).'
+        )
     resolved = aliases.get(raw, raw)
     if resolved not in ATTACHMENT_MODES:
         allowed = ', '.join(sorted(ATTACHMENT_MODES))
@@ -207,6 +242,29 @@ def _normalize_attachment_access(access: str) -> AttachmentAccess:
     return AttachmentAccess(resolved)
 
 
+def _require_known_principal(
+    reg: Store, vm_name: str, principal_id: str
+) -> None:
+    """Reject an administrative owner that names nobody on this VM.
+
+    Creating a record for a principal that does not exist would produce a
+    dangling owner the machine store rejects later, at a point far from the
+    typo that caused it.
+    """
+    if find_principal(reg, vm_name=vm_name, principal_id=principal_id):
+        return
+    known = find_principals_for_vm(reg, vm_name)
+    listed = (
+        ', '.join(f'{item.host_user} ({item.id})' for item in known)
+        or '(none recorded)'
+    )
+    raise AIVMError(
+        f'No access identity {principal_id!r} exists on VM {vm_name!r}, so an '
+        'attachment cannot be declared on its behalf.\n'
+        f'Known access identities: {listed}'
+    )
+
+
 def _resolve_attachment(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -214,17 +272,92 @@ def _resolve_attachment(
     guest_dst_opt: str,
     mode_opt: str = '',
     access_opt: str = '',
+    mirror_home_opt: str = '',
+    *,
+    owner_principal_id: str = '',
+    administrative_override: bool = False,
+    administrative_owner_principal_id: str = '',
 ) -> ResolvedAttachment:
     source_dir = str(host_src.resolve())
     guest_dst = _resolve_guest_dst(host_src, guest_dst_opt)
     tag = _ensure_share_tag_len('', host_src, set())
     mode = _normalize_attachment_mode(mode_opt)
     access = _normalize_attachment_access(access_opt)
+    mirror_home = normalize_mirror_home_policy(
+        mirror_home_opt if mirror_home_opt else MIRROR_HOME_AUTO
+    )
     reg = load_store(cfg_path)
-    att = find_attachment_for_vm(reg, host_src, cfg.vm.name)
+    current_owner = str(owner_principal_id or '').strip()
+    requested_owner = str(administrative_owner_principal_id or '').strip()
+    att: AttachmentEntry | None = None
+    if requested_owner and not administrative_override:
+        raise AIVMError(
+            '--owner_principal requires --admin_override when targeting an '
+            'attachment owner explicitly.'
+        )
+    if requested_owner:
+        targeted = [
+            item
+            for item in find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
+            if item.owner_principal_id == requested_owner
+        ]
+        if len(targeted) > 1:
+            raise AIVMError(
+                f'No unique attachment record for owner {requested_owner!r} '
+                f'matches {host_src} on VM {cfg.vm.name!r}.'
+            )
+        if targeted:
+            att = targeted[0]
+            require_attachment_mutation_permission(
+                reg,
+                att,
+                current_principal_id=current_owner,
+                administrative_override=True,
+            )
+        else:
+            # Declaring a *new* attachment on another principal's behalf.
+            # Only an administrator can create the host bind that persistent
+            # and shared-root modes need, so without this an admin could set
+            # one up only by owning it themselves -- which records the wrong
+            # owner and hands the guest-side folder to the wrong account.
+            _require_known_principal(reg, cfg.vm.name, requested_owner)
+    else:
+        att = find_attachment_for_vm(
+            reg,
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(current_owner if current_owner else None),
+        )
+        if att is None and current_owner:
+            foreign = find_attachments_for_vm_path(reg, host_src, cfg.vm.name)
+            if foreign:
+                if len(foreign) > 1:
+                    owners = ', '.join(
+                        sorted(
+                            item.owner_principal_id or '(legacy)'
+                            for item in foreign
+                        )
+                    )
+                    raise AIVMError(
+                        'Multiple principals own attachment records for this '
+                        'host path; retry with --owner_principal and '
+                        f'--admin_override. Owners: {owners}'
+                    )
+                candidate = foreign[0]
+                require_attachment_mutation_permission(
+                    reg,
+                    candidate,
+                    current_principal_id=current_owner,
+                    administrative_override=administrative_override,
+                )
+                att = candidate
+    selected_owner = requested_owner or current_owner
+    if att is not None and att.owner_principal_id:
+        selected_owner = att.owner_principal_id
     if att is not None:
         saved_mode = _normalize_attachment_mode(att.mode)
         saved_access = _normalize_attachment_access(att.access)
+        saved_mirror_home = normalize_mirror_home_policy(att.mirror_home)
         if mode_opt and mode != saved_mode:
             raise AIVMError(
                 'Attachment mode mismatch for existing folder attachment.\n'
@@ -253,14 +386,33 @@ def _resolve_attachment(
             mode = saved_mode
         if not access_opt:
             access = saved_access
+        if not mirror_home_opt:
+            mirror_home = saved_mirror_home
         if not guest_dst_opt and att.guest_dst:
             guest_dst = att.guest_dst
         if att.tag:
             tag = att.tag
+    if reg.store_kind == 'machine':
+        conflict = find_attachment_by_guest_dst(
+            reg,
+            vm_name=cfg.vm.name,
+            guest_dst=guest_dst,
+        )
+        if conflict is not None and conflict is not att:
+            raise AIVMError(
+                'Attachment guest destination is already owned by another '
+                'machine-wide record.\n'
+                f'VM: {cfg.vm.name}\n'
+                f'Guest destination: {guest_dst}\n'
+                f'Owner principal: '
+                f'{conflict.owner_principal_id or "legacy/unattributed"}\n'
+                f'Host path: {conflict.host_path}\n'
+                'Choose a different --guest_dst or detach the existing record.'
+            )
     if access == ATTACHMENT_ACCESS_RO and mode == ATTACHMENT_MODE_GIT:
         raise NotImplementedError(
             'Read-only attachments are currently only implemented for '
-            f"'{ATTACHMENT_MODE_SHARED}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
+            f"'{ATTACHMENT_MODE_DIRECT_VIRTIOFS}' and '{ATTACHMENT_MODE_SHARED_ROOT}' modes. "
             f'Requested mode: {mode}'
         )
     if mode == ATTACHMENT_MODE_GIT:
@@ -272,4 +424,6 @@ def _resolve_attachment(
         source_dir=source_dir,
         guest_dst=guest_dst,
         tag=tag,
+        owner_principal_id=selected_owner,
+        mirror_home=mirror_home,
     )
