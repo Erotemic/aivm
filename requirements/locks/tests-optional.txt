@@ -10,7 +10,7 @@ coverage==7.15.2
     #   pytest-cov
 iniconfig==2.3.0
     # via pytest
-kwconf==0.10.1
+kwconf==0.11.0
     # via aivm
 loguru==0.7.3
     # via aivm

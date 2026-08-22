@@ -45,7 +45,7 @@ dynamic = [
   "version",
 ]
 dependencies = [
-  "loguru",
+  "loguru>=0.7.0",
   "rich>=13.7.0",
   "kwconf>=0.11.0",
   "PyYAML>=6.0.2",

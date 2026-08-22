@@ -6,10 +6,6 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
-[options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-exclude-newer-span = "P1D"
-
 [[package]]
 name = "aivm"
 source = { editable = "." }
@@ -67,8 +63,8 @@ requires-dist = [
     { name = "aivm", extras = ["optional"], marker = "extra == 'all'" },
     { name = "aivm", extras = ["tests"], marker = "extra == 'all'" },
     { name = "coverage", marker = "extra == 'tests'", specifier = ">=6.1.1" },
-    { name = "kwconf", specifier = ">=0.10.0" },
-    { name = "loguru" },
+    { name = "kwconf", specifier = ">=0.11.0" },
+    { name = "loguru", specifier = ">=0.7.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=0.18.0" },
     { name = "pygments", marker = "extra == 'optional'", specifier = ">=2.19.2" },
     { name = "pytest", marker = "extra == 'tests'", specifier = ">=6.2.5" },
@@ -371,11 +367,11 @@ wheels = [
 
 [[package]]
 name = "kwconf"
-version = "0.10.1"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ae/73/467aa6ef5071e33a6e3db047f8dd70ec2b274f48cc3c3821b365e41d046e/kwconf-0.10.1.tar.gz", hash = "sha256:9d1dc620a9e424c69a850d9a0870475e316796d559ded93c45e91f57ec93f5d6", size = 168497, upload-time = "2026-07-28T01:48:24.495Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/77/20ce9cf65bc20e769db9a506e72e291f7a38ee766393110858a15e93ea1b/kwconf-0.11.0.tar.gz", hash = "sha256:cd8e9192a3c0e54750368980f9bf6b02676f75b76ac3830b656e977cc55f988f", size = 172077, upload-time = "2026-08-07T15:25:34.385Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/0a/fa4ca66a2651a02c45203cef2676c425f572b8f554809ccad650f28ae0d2/kwconf-0.10.1-py3-none-any.whl", hash = "sha256:49bf20000c2ec45f9ec74494ee0e9654dc50ed844d4396b5a21ca8ffcbcd9dc6", size = 109169, upload-time = "2026-07-28T01:48:22.703Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/7a/4b4a1c503cc621eb2256e5d18385ccfb546f536008cdb4db0189426f5e77/kwconf-0.11.0-py3-none-any.whl", hash = "sha256:4691afdf7173ca0d42302a2cf17910917ac3bd02729e0b2f2cb2aa1e3b2ee18b", size = 110488, upload-time = "2026-08-07T15:25:32.964Z" },
 ]
 
 [[package]]

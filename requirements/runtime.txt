@@ -1,2 +1,4 @@
 rich>=13.7.0
 PyYAML>=6.0.2
+kwconf>=0.11.0
+loguru>=0.7.0
