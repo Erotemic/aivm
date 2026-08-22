@@ -60,7 +60,6 @@ from ..util import expand, which
 from ..vm.domain import (
     _get_vm_state,
     _is_vm_active,
-    _start_vm,
     _wait_for_vm_state,
     shutdown_vm,
 )
@@ -251,21 +250,31 @@ def _adopt_one_tree(
             'that reaches the shut-off state will be restarted even if the '
             'metadata handoff fails.'
         )
+    adopt_request = mgr.request(
+        _storage_adopt_command(tree),
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
+        detail=f'tree={tree}; descendant mounts and symlinks pruned',
+    )
+    start_requests = {
+        name: mgr.request(
+            ['virsh', '-c', 'qemu:///system', 'start', name],
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Start VM {name} again after storage adoption',
+        )
+        for name in running
+    }
     if args.dry_run:
         for name in running:
             shutdown_vm(_cfg_for_stored_vm(args.config, name), dry_run=True)
-        mgr.preview(
-            _storage_adopt_command(tree),
-            sudo=True,
-            role='modify',
-            summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
-        )
+        adopt_request.preview()
         for name in running:
-            mgr.preview(
-                ['virsh', '-c', 'qemu:///system', 'start', name],
-                role='modify',
-                summary=f'Start VM {name} again after storage adoption',
-            )
+            start_requests[name].preview()
         return
 
     stopped: list[str] = []
@@ -287,15 +296,7 @@ def _adopt_one_tree(
             ),
             approval_scope=f'host-permissions-adopt:{tree}',
         ):
-            mgr.submit(
-                _storage_adopt_command(tree),
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
-                detail=f'tree={tree}; descendant mounts and symlinks pruned',
-            )
+            adopt_request.submit()
     except BaseException as ex:
         pending_error = ex
 
@@ -303,7 +304,7 @@ def _adopt_one_tree(
     for name in stopped:
         try:
             print(f'Starting VM {name} again ...')
-            _start_vm(name)
+            start_requests[name].run()
         except Exception as ex:
             restart_errors.append(f'{name}: {ex}')
 
@@ -706,39 +707,59 @@ def _prepare_machine_store_access(
     # libvirt group that grants no libvirt access, or issue a second identical
     # usermod.
     owns_group = group_name != LIBVIRT_GROUP
+    group_request = (
+        mgr.request(
+            ['groupadd', '--system', group_name],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Create the {group_name} group',
+        )
+        if not group_exists and owns_group
+        else None
+    )
+    member_request = (
+        mgr.request(
+            ['usermod', '-aG', group_name, user],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Add {user} to the {group_name} group',
+        )
+        if not listed and owns_group
+        else None
+    )
+    parent_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
+            str(layout.root.parent),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare root-owned {layout.root.parent}',
+    )
+    root_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
+            str(layout.root),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare shared AIVM state at {layout.root}',
+    )
     if args.dry_run:
-        if not group_exists and owns_group:
-            mgr.preview(
-                ['groupadd', '--system', group_name],
-                sudo=True,
-                role='modify',
-                summary=f'Create the {group_name} group',
-            )
-        if not listed and owns_group:
-            mgr.preview(
-                ['usermod', '-aG', group_name, user],
-                sudo=True,
-                role='modify',
-                summary=f'Add {user} to the {group_name} group',
-            )
-        mgr.preview(
-            [
-                'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
-                str(layout.root.parent),
-            ],
-            sudo=True,
-            role='modify',
-            summary=f'Prepare root-owned {layout.root.parent}',
-        )
-        mgr.preview(
-            [
-                'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
-                str(layout.root),
-            ],
-            sudo=True,
-            role='modify',
-            summary=f'Prepare shared AIVM state at {layout.root}',
-        )
+        if group_request is not None:
+            group_request.preview()
+        if member_request is not None:
+            member_request.preview()
+        parent_request.preview()
+        root_request.preview()
         return not listed and owns_group
     if not group_exists and not owns_group:
         # Fail before the install below writes a root owned by a group that
@@ -760,28 +781,16 @@ def _prepare_machine_store_access(
                 why='The machine store is shared by trusted local AIVM users.',
                 approval_scope='host-permissions-setup-aivm-group',
             ):
-                mgr.submit(
-                    ['groupadd', '--system', group_name],
-                    sudo=True,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary=f'Create the {group_name} group',
-                )
+                assert group_request is not None
+                group_request.submit()
         if not listed and owns_group:
             with mgr.step(
                 'Add the invoking user to the AIVM host group',
                 why='Group membership permits shared machine-store updates.',
                 approval_scope='host-permissions-setup-aivm-member',
             ):
-                mgr.submit(
-                    ['usermod', '-aG', group_name, user],
-                    sudo=True,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary=f'Add {user} to the {group_name} group',
-                )
+                assert member_request is not None
+                member_request.submit()
             membership_added = True
         with mgr.step(
             'Create the shared AIVM machine-store root',
@@ -796,42 +805,8 @@ def _prepare_machine_store_access(
             # one call would hand the group write access to the parent too --
             # which is the chain the root persistent-replay service requires
             # nobody but root can write.
-            mgr.submit(
-                [
-                    'install',
-                    '-d',
-                    '-o',
-                    'root',
-                    '-g',
-                    'root',
-                    '-m',
-                    '0755',
-                    str(layout.root.parent),
-                ],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                summary=f'Prepare root-owned {layout.root.parent}',
-            )
-            mgr.submit(
-                [
-                    'install',
-                    '-d',
-                    '-o',
-                    'root',
-                    '-g',
-                    group_name,
-                    '-m',
-                    '2770',
-                    str(layout.root),
-                ],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                summary=f'Prepare shared AIVM state at {layout.root}',
-            )
+            parent_request.submit()
+            root_request.submit()
     if membership_added:
         print(
             f'👉 Added {user} to {group_name}. Log out and back in before '
@@ -926,13 +901,16 @@ class HostPermissionsSetupCLI(_BaseCommand):
         if not user_in_libvirt_group():
             # Under `sudo aivm ...`, the account that needs libvirt access
             # is the invoking user, not root.
+            libvirt_group_request = mgr.request(
+                ['usermod', '-aG', LIBVIRT_GROUP, user],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Add {user} to the {LIBVIRT_GROUP} group',
+            )
             if args.dry_run:
-                mgr.preview(
-                    ['usermod', '-aG', LIBVIRT_GROUP, user],
-                    sudo=True,
-                    role='modify',
-                    summary=f'Add {user} to the {LIBVIRT_GROUP} group',
-                )
+                libvirt_group_request.preview()
             else:
                 with mgr.intent(
                     'Enable libvirt access without sudo',
@@ -951,14 +929,7 @@ class HostPermissionsSetupCLI(_BaseCommand):
                         ),
                         approval_scope='host-permissions-setup-group',
                     ):
-                        mgr.submit(
-                            ['usermod', '-aG', LIBVIRT_GROUP, user],
-                            sudo=True,
-                            role='modify',
-                            check=True,
-                            capture=True,
-                            summary=f'Add {user} to the {LIBVIRT_GROUP} group',
-                        )
+                        libvirt_group_request.submit()
                 group_added = True
 
         if args.adopt:
@@ -990,18 +961,25 @@ class HostPermissionsSetupCLI(_BaseCommand):
             return 2
         config_gap = base_dir != resolved_default
 
+        mkdir_request = mgr.request(
+            ['mkdir', '-p', str(base_dir)],
+            ownership='tool',
+            role='modify',
+            check=True,
+            capture=True,
+            summary='Create VM storage directory',
+            detail=f'target={base_dir}',
+        )
+        acl_request = mgr.request(
+            ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
+        )
         if args.dry_run:
-            mgr.preview(
-                ['mkdir', '-p', str(base_dir)],
-                ownership='tool',
-                role='modify',
-                summary='Create VM storage directory',
-            )
-            mgr.preview(
-                ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
-                role='modify',
-                summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
-            )
+            mkdir_request.preview()
+            acl_request.preview()
         else:
             with mgr.intent(
                 'Prepare VM storage permissions',
@@ -1020,29 +998,8 @@ class HostPermissionsSetupCLI(_BaseCommand):
                     ),
                     approval_scope=f'host-permissions-setup-storage:{base_dir}',
                 ):
-                    mgr.submit(
-                        ['mkdir', '-p', str(base_dir)],
-                        ownership='tool',
-                        sudo=False,
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary='Create VM storage directory',
-                        detail=f'target={base_dir}',
-                    )
-                    mgr.submit(
-                        [
-                            'setfacl',
-                            '-m',
-                            f'u:{LIBVIRT_QEMU_USER}:x',
-                            str(base_dir),
-                        ],
-                        sudo=False,
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
-                    )
+                    mkdir_request.submit()
+                    acl_request.submit()
             blockers = qemu_traversal_blockers(base_dir) or []
             own_blockers = [b for b in blockers if user_can_write_path(b)]
             foreign = [b for b in blockers if not user_can_write_path(b)]

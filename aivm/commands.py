@@ -263,25 +263,23 @@ class IntentFrame:
     visible: bool = True
 
 
-@dataclass
-class CommandSpec:
-    """Normalized specification for a queued command.
+@dataclass(frozen=True)
+class CommandRequest:
+    """Immutable description of one managed command request.
 
-    A ``CommandSpec`` stores the execution parameters associated with one
-    command submission. These specs are later previewed, approved, and
-    executed by :class:`CommandManager`.
+    A request is the single source of truth for preview and execution. It
+    stores the command together with the execution, approval, and presentation
+    metadata that :class:`CommandManager` needs. Requests returned by
+    :meth:`CommandManager.request` are bound to that manager and can be
+    previewed, submitted, or run directly.
 
     Attributes:
         cmd: Command tokens to execute.
         sudo: If True, execute through ``sudo`` when needed.
         role: Optional explicit command role. When omitted, the role is
             inferred from the surrounding intent context.
-        ownership: Whose state a write touches. Defaults to ``user``, which
-            confirms; ``tool`` is the declared exemption for aivm's own
-            regenerable bookkeeping.
-        user_driven: True when the command hands the terminal to the user --
-            an editor, a shell, an IDE. Any change is authored by them, in
-            front of them, so there is nothing left to confirm.
+        ownership: Whose state a write touches.
+        user_driven: True when the command hands the terminal to the user.
         check: If True, raise :class:`CommandError` on non-zero exit.
         capture: If True, capture stdout and stderr.
         text: If True, run the subprocess in text mode.
@@ -290,6 +288,8 @@ class CommandSpec:
         timeout: Optional timeout in seconds.
         summary: Short human-facing summary shown in previews.
         detail: Optional longer preview detail.
+
+    ``CommandSpec`` remains as a compatibility alias.
     """
 
     cmd: Sequence[str]
@@ -305,19 +305,60 @@ class CommandSpec:
     timeout: float | None = None
     summary: str = ''
     detail: str = ''
+    _manager: 'CommandManager | None' = field(
+        default=None, repr=False, compare=False
+    )
+
+    def _bound_manager(self) -> 'CommandManager':
+        manager = self._manager
+        if manager is None:
+            raise CommandManagerInvariantError(
+                'This CommandRequest is not bound to a CommandManager. '
+                'Create requests with mgr.request(...).'
+            )
+        return manager
+
+    def preview(self) -> None:
+        """Render this request without executing it."""
+        self._bound_manager()._preview_request(self, _stacklevel=2)
+
+    def submit(self, *, eager: bool = False) -> 'CommandExecution':
+        """Submit this request and return its execution record."""
+        return self._bound_manager()._submit_request(
+            self, eager=eager, _stacklevel=2
+        )
+
+    def run(self) -> CommandResult:
+        """Execute this request and return its result immediately."""
+        manager = self._bound_manager()
+        # Keep the long-standing manager entry point observable by existing
+        # instrumentation. Every option still comes from this request.
+        return manager.run(
+            list(self.cmd),
+            sudo=self.sudo,
+            role=self.role,
+            ownership=self.ownership,
+            user_driven=self.user_driven,
+            check=self.check,
+            capture=self.capture,
+            text=self.text,
+            input_text=self.input_text,
+            env=self.env,
+            timeout=self.timeout,
+            summary=self.summary,
+            detail=self.detail,
+        )
 
 
 @dataclass
-class CommandHandle:
-    """Lazy handle for one submitted command.
+class CommandExecution:
+    """Lifecycle record for one submitted :class:`CommandRequest`.
 
-    Handles are returned from :meth:`CommandManager.submit`. They let the
-    caller defer execution until a later flush, or force execution on
-    demand by asking for the result.
-
-    Attributes:
-        manager: The owning command manager.
-        command_id: Monotonic identifier assigned at submission time.
+    Executions let callers defer work until a later flush, or force execution
+    on demand by asking for the result. Once terminal, an execution answers
+    from stored state forever: success replays its result, failure re-raises
+    the original exception, and dry-run or abandoned work raises
+    :class:`CommandNotExecutedError`.
     """
 
     manager: 'CommandManager'
@@ -327,33 +368,15 @@ class CommandHandle:
     _error: BaseException | None = None
 
     def done(self) -> bool:
-        """Return True once this command has reached a terminal state.
-
-        Terminal means resolved, not successful: a command that failed or was
-        never executed is as finished as one that succeeded.
-        """
+        """Return True once this execution has reached a terminal state."""
         return self._state != 'pending'
 
     def result(self, *, _stacklevel: int = 1) -> CommandResult:
-        """Return the command result, executing through this handle if needed.
+        """Return the result, resolving this execution if still pending.
 
-        Only a pending handle triggers execution. Once a handle is terminal it
-        answers from stored state forever: a success replays its result, a
-        failure re-raises its exception, and a command that never ran raises
-        :class:`CommandNotExecutedError`.
-
-        Reading a result must never be a way to *cause* work. Before handles
-        owned their outcome, a failed one stayed pending, so re-reading it
-        flushed the queue again and ran whatever unrelated command happened to
-        be waiting there -- including state-changing ones.
-
-        Returns:
-            The normalized command result.
-
-        Raises:
-            CommandError: If the command ran and failed. The original
-                exception object is re-raised, not a reconstruction.
-            CommandNotExecutedError: If the command never ran.
+        Reading an already-terminal execution never causes more work. This
+        invariant prevents a failed or abandoned execution from reopening its
+        queue and running unrelated pending commands.
         """
         if self._state == 'pending':
             self.manager.flush_through(
@@ -371,62 +394,51 @@ class CommandHandle:
         )
 
     def _set_result(self, result: CommandResult) -> None:
-        """Record a successful execution on this handle."""
+        """Record a successful execution."""
         self._result = result
         self._state = 'succeeded'
 
     def _set_failure(self, error: BaseException) -> None:
-        """Record that execution was attempted and raised.
-
-        Stores :class:`BaseException` deliberately. A ``KeyboardInterrupt``
-        mid-command must leave the handle terminal like any other outcome; it
-        is re-raised untouched rather than translated into a domain failure.
-        """
+        """Record an attempted execution that raised."""
         self._error = error
         self._state = 'failed'
 
     def _set_not_executed(self, reason: str) -> None:
-        """Record that this command will never run."""
+        """Record that this execution will never run."""
         self._error = CommandNotExecutedError(reason)
         self._state = 'not-executed'
 
     @property
     def stdout(self) -> str:
-        """Return captured standard output for this command."""
         return self.result().stdout
 
     @property
     def stderr(self) -> str:
-        """Return captured standard error for this command."""
         return self.result().stderr
 
     @property
     def returncode(self) -> int:
-        """Return the process exit status for this command."""
         return self.result().code
 
     @property
     def code(self) -> int:
-        """Alias for :attr:`returncode`."""
         return self.result().code
+
+
+# Backward-compatible names for callers that imported the earlier API.
+CommandSpec = CommandRequest
+CommandHandle = CommandExecution
 
 
 @dataclass
 class PlannedCommand:
-    """Command record stored inside a plan or loose-command queue.
-
-    This ties together a submitted specification, its public handle, and
-    the manager-assigned command id used to control partial flushing.
-    """
+    """A request and execution record stored in a manager queue."""
 
     command_id: int
-    spec: CommandSpec
-    handle: CommandHandle
-    # Set immediately before execution, so it means *attempted*, not
-    # *succeeded*. A command that raised has still been attempted, and this is
-    # the single invariant that keeps a later flush from re-running it: queue
-    # position and cursors cannot express that, because a raise skips whatever
-    # bookkeeping follows the call.
+    request: CommandRequest
+    execution: CommandExecution
+    # Set immediately before execution, so it means attempted rather than
+    # succeeded. A raised command must never remain eligible for a later flush.
     attempted: bool = False
 
 
@@ -898,8 +910,8 @@ class CommandManager:
         self.yes_sudo = yes_sudo
         self.auto_approve_readonly_sudo = auto_approve_readonly_sudo
         # Dry-run is an execution policy, not a parallel command renderer.
-        # Callers submit the same CommandSpec either way; this manager renders
-        # it and resolves the handle without invoking a process.
+        # Callers submit the same CommandRequest either way; this manager renders
+        # it and resolves the execution without invoking a process.
         self.dry_run = bool(dry_run)
         # Under NEVER this manager refuses to execute any sudo command
         # (enforced in _execute_one and in confirm_sudo_scope) so no code
@@ -978,10 +990,10 @@ class CommandManager:
         abandoned.
         """
         for item in plan.commands:
-            if not item.attempted and not item.handle.done():
-                item.handle._set_not_executed(
+            if not item.attempted and not item.execution.done():
+                item.execution._set_not_executed(
                     f'Step {plan.title!r} was abandoned before this command '
-                    f'ran: {self._preview_command(item.spec)}'
+                    f'ran: {self._preview_command(item.request)}'
                 )
 
     def abort_plan(self, plan: CommandPlan) -> None:
@@ -1018,7 +1030,7 @@ class CommandManager:
         """Return the currently active innermost plan, if any."""
         return self.plan_stack[-1] if self.plan_stack else None
 
-    def _make_spec(
+    def request(
         self,
         cmd: Sequence[str],
         *,
@@ -1034,9 +1046,9 @@ class CommandManager:
         timeout: float | None = None,
         summary: str = '',
         detail: str = '',
-    ) -> CommandSpec:
-        """Normalize one command specification without executing it."""
-        return CommandSpec(
+    ) -> CommandRequest:
+        """Declare one managed command without previewing or executing it."""
+        return CommandRequest(
             cmd=tuple(c if isinstance(c, Elided) else str(c) for c in cmd),
             sudo=sudo,
             role=role,
@@ -1046,11 +1058,50 @@ class CommandManager:
             capture=capture,
             text=text,
             input_text=input_text,
-            env=env,
+            env=dict(env) if env is not None else None,
             timeout=timeout,
             summary=summary.strip(),
             detail=detail.strip(),
+            _manager=self,
         )
+
+    def _submit_request(
+        self,
+        request: CommandRequest,
+        *,
+        eager: bool = False,
+        _stacklevel: int = 1,
+    ) -> CommandExecution:
+        """Submit a previously declared request."""
+        if request._manager not in {None, self}:
+            raise CommandManagerInvariantError(
+                'Cannot submit a CommandRequest through a different manager.'
+            )
+        execution = CommandExecution(
+            manager=self, command_id=self._next_command_id
+        )
+        planned = PlannedCommand(
+            command_id=self._next_command_id,
+            request=request,
+            execution=execution,
+        )
+        self._next_command_id += 1
+
+        plan = self.current_plan()
+        if plan is not None:
+            plan.add(planned)
+            if eager:
+                self.flush_through(
+                    planned.command_id, _stacklevel=_stacklevel + 1
+                )
+            return execution
+
+        self._loose_commands.append(planned)
+        if eager:
+            self.flush_through(
+                planned.command_id, _stacklevel=_stacklevel + 1
+            )
+        return execution
 
     def submit(
         self,
@@ -1070,36 +1121,9 @@ class CommandManager:
         detail: str = '',
         eager: bool = False,
         _stacklevel: int = 1,
-    ) -> CommandHandle:
-        """Submit one command and return a handle to its eventual result.
-
-        If a plan is currently open, the command is appended to that plan.
-        Otherwise it is queued as a loose command. When ``eager`` is True,
-        execution is flushed through this command immediately.
-
-        Args:
-            cmd: Command tokens to execute.
-            sudo: If True, execute through ``sudo`` when needed.
-            role: Optional explicit command role.
-            check: If True, raise :class:`CommandError` on non-zero exit.
-            capture: If True, capture stdout and stderr.
-            text: If True, run the subprocess in text mode.
-            input_text: Optional standard input text.
-            env: Optional process environment override.
-            timeout: Optional timeout in seconds.
-            summary: Short human-facing summary for previews.
-            detail: Optional longer preview detail.
-            eager: If True, execute through this command immediately.
-            _stacklevel: Number of frames between this call and user code,
-                used to attribute log lines to the real caller.
-
-        Returns:
-            A handle that can be used to inspect the eventual result.
-        """
-        # TODO: ergonomic ubelt style string acceptence? Might be better to
-        # keep it type strict though. Don't do this one yet. Need to think
-        # about it more.
-        spec = self._make_spec(
+    ) -> CommandExecution:
+        """Compatibility shortcut for ``request(...).submit()``."""
+        request = self.request(
             cmd,
             sudo=sudo,
             role=role,
@@ -1114,25 +1138,9 @@ class CommandManager:
             summary=summary,
             detail=detail,
         )
-        handle = CommandHandle(manager=self, command_id=self._next_command_id)
-        planned = PlannedCommand(
-            command_id=self._next_command_id, spec=spec, handle=handle
+        return self._submit_request(
+            request, eager=eager, _stacklevel=_stacklevel + 1
         )
-        self._next_command_id += 1
-
-        plan = self.current_plan()
-        if plan is not None:
-            plan.add(planned)
-            if eager:
-                self.flush_through(
-                    planned.command_id, _stacklevel=_stacklevel + 1
-                )
-            return handle
-
-        self._loose_commands.append(planned)
-        if eager:
-            self.flush_through(planned.command_id, _stacklevel=_stacklevel + 1)
-        return handle
 
     def run(
         self,
@@ -1151,8 +1159,8 @@ class CommandManager:
         summary: str = '',
         detail: str = '',
     ) -> CommandResult:
-        """Submit one command and return its result immediately."""
-        return self.submit(
+        """Compatibility shortcut for ``request(...).run()``."""
+        request = self.request(
             cmd,
             sudo=sudo,
             role=role,
@@ -1166,29 +1174,42 @@ class CommandManager:
             timeout=timeout,
             summary=summary,
             detail=detail,
-            eager=True,
-            _stacklevel=2,
-        ).result()
+        )
+        return self._submit_request(
+            request, eager=True, _stacklevel=2
+        ).result(_stacklevel=2)
 
-    def preview_spec(
-        self, spec: CommandSpec, *, _stacklevel: int = 1
+    def _preview_request(
+        self, request: CommandRequest, *, _stacklevel: int = 1
     ) -> None:
-        """Render an already-normalized command specification without running it."""
+        """Render a declared request without running it."""
+        if request._manager not in {None, self}:
+            raise CommandManagerInvariantError(
+                'Cannot preview a CommandRequest through a different manager.'
+            )
         local_log = log.opt(depth=_stacklevel)
-        if spec.summary:
-            local_log.info('DRYRUN: {}', spec.summary)
+        if request.summary:
+            local_log.info('DRYRUN: {}', request.summary)
         else:
             local_log.info('DRYRUN: command would execute')
-        preview_cmd, omissions = self._render_preview(spec)
-        role_label = self._effective_role(spec)
-        command_label = 'command (read-only)' if role_label == 'read' else 'command'
+        preview_cmd, omissions = self._render_preview(request)
+        role_label = self._effective_role(request)
+        command_label = (
+            'command (read-only)' if role_label == 'read' else 'command'
+        )
         local_log.info('{}:\n{}', command_label, preview_cmd)
         self._announce_omissions(omissions, _stacklevel=_stacklevel)
-        if spec.detail:
-            local_log.debug('detail: {}', spec.detail)
-        raw_cmd = self._raw_command(spec)
+        if request.detail:
+            local_log.debug('detail: {}', request.detail)
+        raw_cmd = self._raw_command(request)
         if raw_cmd != preview_cmd:
             local_log.debug('raw command:\n{}', raw_cmd)
+
+    def preview_spec(
+        self, spec: CommandRequest, *, _stacklevel: int = 1
+    ) -> None:
+        """Compatibility alias for :meth:`CommandRequest.preview`."""
+        self._preview_request(spec, _stacklevel=_stacklevel + 1)
 
     def preview(
         self,
@@ -1208,8 +1229,8 @@ class CommandManager:
         detail: str = '',
         _stacklevel: int = 1,
     ) -> None:
-        """Render one command through the normal command formatter without running it."""
-        spec = self._make_spec(
+        """Compatibility shortcut for ``request(...).preview()``."""
+        request = self.request(
             cmd,
             sudo=sudo,
             role=role,
@@ -1224,7 +1245,7 @@ class CommandManager:
             summary=summary,
             detail=detail,
         )
-        self.preview_spec(spec, _stacklevel=_stacklevel + 1)
+        self._preview_request(request, _stacklevel=_stacklevel + 1)
 
     def replace_process(
         self,
@@ -1240,7 +1261,7 @@ class CommandManager:
             raise CommandManagerInvariantError(
                 'Process replacement cannot occur inside an open command step.'
             )
-        spec = self._make_spec(
+        spec = self.request(
             cmd,
             role=role,
             user_driven=True,
@@ -1284,12 +1305,12 @@ class CommandManager:
     ) -> None:
         """Resolve pending commands as previewed without fabricating results."""
         for item in commands:
-            if item.attempted or item.handle.done():
+            if item.attempted or item.execution.done():
                 continue
             item.attempted = True
-            item.handle._set_not_executed(
+            item.execution._set_not_executed(
                 'Command was previewed but not executed because this is a dry run: '
-                f'{self._preview_command(item.spec)}'
+                f'{self._preview_command(item.request)}'
             )
 
     def _preview_dry_run_loose_commands(
@@ -1299,7 +1320,7 @@ class CommandManager:
         for item in self._loose_commands:
             if item.attempted:
                 continue
-            self.preview_spec(item.spec, _stacklevel=_stacklevel + 1)
+            self.preview_spec(item.request, _stacklevel=_stacklevel + 1)
             self._resolve_dry_run_commands([item])
             if (
                 through_command_id is not None
@@ -1363,7 +1384,7 @@ class CommandManager:
             return 'read'
         return 'modify'
 
-    def _effective_role(self, spec: CommandSpec) -> CommandRole:
+    def _effective_role(self, spec: CommandRequest) -> CommandRole:
         """Infer the effective role for a command specification."""
         if spec.role is not None:
             return self._normalize_role(spec.role)
@@ -1610,7 +1631,7 @@ class CommandManager:
         if ans not in {'y', 'yes'}:
             raise UserDeclinedError('Aborted by user.')
 
-    def _is_confirmable_write(self, spec: CommandSpec) -> bool:
+    def _is_confirmable_write(self, spec: CommandRequest) -> bool:
         """Return True for a state change the user has to consent to.
 
         The write itself is the guard. This deliberately does not consult the
@@ -1630,7 +1651,7 @@ class CommandManager:
             return False
         return spec.ownership != 'tool'
 
-    def _command_needs_approval(self, spec: CommandSpec) -> bool:
+    def _command_needs_approval(self, spec: CommandRequest) -> bool:
         """Return True when ``spec`` must be confirmed before executing.
 
         Two independent triggers: the command changes state, or it escalates
@@ -1657,7 +1678,7 @@ class CommandManager:
     def _plan_needs_approval(self, plan: CommandPlan) -> bool:
         """Return True if any command in ``plan`` requires approval."""
         return any(
-            self._command_needs_approval(item.spec) for item in plan.commands
+            self._command_needs_approval(item.request) for item in plan.commands
         )
 
     def _approve_plan_if_needed(
@@ -1670,14 +1691,14 @@ class CommandManager:
             # Reject sudo work before any approval side effect (previews,
             # prompts, `sudo -n true` probes, `sudo -v`) can run.
             self._reject_sudo_if_forbidden(
-                item.spec.cmd, needs_sudo=item.spec.sudo
+                item.request.cmd, needs_sudo=item.request.sudo
             )
         self._render_plan_preview(plan, _stacklevel=_stacklevel + 1)
         readonly_autoapproved_sudo = [
             item
             for item in plan.commands
-            if item.spec.sudo
-            and self._effective_role(item.spec) == 'read'
+            if item.request.sudo
+            and self._effective_role(item.request) == 'read'
             and self.auto_approve_readonly_sudo
         ]
         if (
@@ -1736,21 +1757,21 @@ class CommandManager:
             local_log.info('Why: {}', plan.why)
         local_log.info('Planned commands: {}', len(plan.commands))
         for idx, item in enumerate(plan.commands, start=1):
-            summary = item.spec.summary or shell_join(item.spec.cmd)
-            role = self._effective_role(item.spec)
-            preview_cmd, omissions = self._render_preview(item.spec)
+            summary = item.request.summary or shell_join(item.request.cmd)
+            role = self._effective_role(item.request)
+            preview_cmd, omissions = self._render_preview(item.request)
             local_log.info('  {}. {}', idx, summary)
             command_label = (
                 'command (read-only)' if role == 'read' else 'command'
             )
             local_log.info('     {}:\n{}', command_label, preview_cmd)
             self._announce_omissions(omissions, _stacklevel=_stacklevel)
-            if item.spec.detail:
-                local_log.debug('     detail: {}', item.spec.detail)
-            raw_cmd = self._raw_command(item.spec)
+            if item.request.detail:
+                local_log.debug('     detail: {}', item.request.detail)
+            raw_cmd = self._raw_command(item.request)
             if raw_cmd != preview_cmd:
                 local_log.debug('     raw command:\n{}', raw_cmd)
-            local_log.trace('     role={} capture={}', role, item.spec.capture)
+            local_log.trace('     role={} capture={}', role, item.request.capture)
         plan.rendered_preview = True
 
     def _render_plan_full_commands(
@@ -1760,10 +1781,10 @@ class CommandManager:
         local_log = log.opt(depth=_stacklevel)
         local_log.info('Full commands for step: {}', plan.title)
         for idx, item in enumerate(plan.commands, start=1):
-            local_log.info('  {}. full command:\n{}', idx, self._raw_command(item.spec))
+            local_log.info('  {}. full command:\n{}', idx, self._raw_command(item.request))
 
     def _confirm_loose_command(
-        self, spec: CommandSpec, *, _stacklevel: int = 1
+        self, spec: CommandRequest, *, _stacklevel: int = 1
     ) -> None:
         """Confirm one approval-needing command outside a plan's approval.
 
@@ -1856,7 +1877,7 @@ class CommandManager:
             if (
                 plan.approved
                 and idx >= plan.approved_command_count
-                and (item.spec.sudo or self._is_confirmable_write(item.spec))
+                and (item.request.sudo or self._is_confirmable_write(item.request))
             ):
                 # This command was appended after the step cleared approval
                 # (e.g. a sudo escalation fallback), so the plan prompt never
@@ -1864,13 +1885,13 @@ class CommandManager:
                 # have: confirm when approval is required, otherwise make
                 # sure auto-approved read-only sudo is authenticated up
                 # front so it cannot fail (or prompt) mid-plan.
-                role = self._effective_role(item.spec)
-                if self._command_needs_approval(item.spec):
+                role = self._effective_role(item.request)
+                if self._command_needs_approval(item.request):
                     self._confirm_loose_command(
-                        item.spec, _stacklevel=_stacklevel + 1
+                        item.request, _stacklevel=_stacklevel + 1
                     )
                 elif (
-                    item.spec.sudo
+                    item.request.sudo
                     and role == 'read'
                     and self.auto_approve_readonly_sudo
                     and not (
@@ -1883,15 +1904,15 @@ class CommandManager:
             item.attempted = True
             try:
                 res = self._execute_one(
-                    item.spec,
+                    item.request,
                     ordinal=(idx + 1, len(plan.commands)),
                     within_plan=True,
                     _stacklevel=_stacklevel + 1,
                 )
             except BaseException as ex:
-                item.handle._set_failure(ex)
+                item.execution._set_failure(ex)
                 raise
-            item.handle._set_result(res)
+            item.execution._set_result(res)
             plan.executed_upto = idx
             if (
                 through_command_id is not None
@@ -1926,26 +1947,26 @@ class CommandManager:
             item.attempted = True
             try:
                 res = self._execute_one(
-                    item.spec, within_plan=False, _stacklevel=_stacklevel + 1
+                    item.request, within_plan=False, _stacklevel=_stacklevel + 1
                 )
             except BaseException as ex:
-                item.handle._set_failure(ex)
+                item.execution._set_failure(ex)
                 raise
-            item.handle._set_result(res)
+            item.execution._set_result(res)
             if (
                 through_command_id is not None
                 and item.command_id >= through_command_id
             ):
                 break
 
-    def _raw_command(self, spec: CommandSpec) -> str:
+    def _raw_command(self, spec: CommandRequest) -> str:
         """Return the full shell-rendered command that would be executed."""
         cmd = list(spec.cmd)
         if spec.sudo and os.geteuid() != 0:
             cmd = ['sudo', *cmd] if sys.stdin.isatty() else ['sudo', '-n', *cmd]
         return shell_join(cmd)
 
-    def _render_preview(self, spec: CommandSpec) -> tuple[str, list[str]]:
+    def _render_preview(self, spec: CommandRequest) -> tuple[str, list[str]]:
         """Return ``(preview, omissions)`` for ``spec``.
 
         Arguments render verbatim, so the line stays the command the user
@@ -1986,7 +2007,7 @@ class CommandManager:
             display_parts.append(shlex.quote(text))
         return ' '.join(display_parts), omissions
 
-    def _preview_command(self, spec: CommandSpec) -> str:
+    def _preview_command(self, spec: CommandRequest) -> str:
         """Return only the rendered preview line for ``spec``."""
         return self._render_preview(spec)[0]
 
@@ -2030,7 +2051,7 @@ class CommandManager:
 
     def _execute_one(
         self,
-        spec: CommandSpec,
+        spec: CommandRequest,
         *,
         ordinal: tuple[int, int] | None = None,
         within_plan: bool = False,

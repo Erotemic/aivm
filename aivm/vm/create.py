@@ -285,20 +285,7 @@ def create_or_start_vm(
                         )
                         return
                     if 'paused' in st or 'pmsuspended' in st:
-                        if dry_run:
-                            mgr.preview(
-                                virsh_cmd('resume', cfg.vm.name),
-                                sudo=virsh_needs_sudo(),
-                                role='modify',
-                                summary=f'Resume existing VM {cfg.vm.name}',
-                            )
-                            return
-                        log.info(
-                            'VM {} is {}; resuming instead of starting',
-                            cfg.vm.name,
-                            st,
-                        )
-                        mgr.submit(
+                        resume_request = mgr.request(
                             virsh_cmd('resume', cfg.vm.name),
                             sudo=virsh_needs_sudo(),
                             role='modify',
@@ -306,6 +293,15 @@ def create_or_start_vm(
                             capture=True,
                             summary=f'Resume {st} VM {cfg.vm.name}',
                         )
+                        if dry_run:
+                            resume_request.preview()
+                            return
+                        log.info(
+                            'VM {} is {}; resuming instead of starting',
+                            cfg.vm.name,
+                            st,
+                        )
+                        resume_request.submit()
                         log.info('VM resumed: {}', cfg.vm.name)
                         return
                     if 'in shutdown' in st or 'shutting down' in st:
@@ -316,15 +312,7 @@ def create_or_start_vm(
                             f'then retry.'
                         )
                     if 'shut off' in st or 'crashed' in st or st == '':
-                        if dry_run:
-                            mgr.preview(
-                                virsh_cmd('start', cfg.vm.name),
-                                sudo=virsh_needs_sudo(),
-                                role='modify',
-                                summary=f'Start existing VM {cfg.vm.name}',
-                            )
-                            return
-                        mgr.submit(
+                        start_request = mgr.request(
                             virsh_cmd('start', cfg.vm.name),
                             sudo=virsh_needs_sudo(),
                             role='modify',
@@ -332,6 +320,10 @@ def create_or_start_vm(
                             capture=True,
                             summary=f'Start existing VM {cfg.vm.name}',
                         )
+                        if dry_run:
+                            start_request.preview()
+                            return
+                        start_request.submit()
                         log.info('VM started: {}', cfg.vm.name)
                         return
                     raise AIVMError(
@@ -420,22 +412,19 @@ def create_or_start_vm(
             share_source_dir=share_source_dir,
             share_tag=share_tag,
         )
+        create_request = CommandManager.current().request(
+            cmd,
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Create VM {cfg.vm.name}',
+        )
         if dry_run:
-            CommandManager.current().preview(
-                cmd,
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                summary=f'Create VM {cfg.vm.name}',
-            )
+            create_request.preview()
             return
         try:
-            first = CommandManager.current().run(
-                cmd,
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                check=False,
-                capture=True,
-            )
+            first = create_request.run()
         except CmdError as ex:
             # Some call sites/tests may still raise even when check=False.
             first = ex.result

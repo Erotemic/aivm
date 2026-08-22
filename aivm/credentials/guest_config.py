@@ -13,7 +13,7 @@ from pathlib import Path
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
-from ..commands import CommandHandle, CommandManager, CommandResult
+from ..commands import CommandExecution, CommandManager, CommandResult
 from ..config import AgentVMConfig
 from ..runtime import require_ssh_identity, ssh_base_args
 
@@ -72,7 +72,7 @@ def submit_guest(
     input_text: str | None = None,
     check: bool = True,
     forward_agent_socket: Path | str | None = None,
-) -> CommandHandle:
+) -> CommandExecution:
     return manager.submit(
         guest_ssh_command(
             cfg,

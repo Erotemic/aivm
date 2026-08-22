@@ -270,22 +270,25 @@ def rename_managed_vm(
     preflight_rename(cfg, reg, new_name)
     targets = _rename_targets(cfg, new_name)
 
+    mgr = CommandManager.current()
+    rename_request = mgr.request(
+        virsh_cmd('domrename', old_name, new_name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Rename libvirt domain {old_name} to {new_name}',
+    )
     if dry_run:
         print(f'DRYRUN: rename VM {old_name} -> {new_name}')
         for source, destination, label in targets:
             if source.exists():
                 print(f'DRYRUN: move {label}: {source} -> {destination}')
-        CommandManager.current().preview(
-            virsh_cmd('domrename', old_name, new_name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            summary=f'Rename libvirt domain {old_name} to {new_name}',
-        )
+        rename_request.preview()
         print(f'DRYRUN: repoint domain XML storage paths at {new_name}')
         print(f'DRYRUN: rewrite store records naming {old_name}')
         return
 
-    mgr = CommandManager.current()
     moved: list[tuple[Path, Path, str]] = []
     with mgr.intent(
         f'Rename VM {old_name} to {new_name}',
@@ -319,14 +322,7 @@ def rename_managed_vm(
                 approval_scope=f'vm-rename-domain:{old_name}',
             ):
                 if vm_exists(cfg):
-                    mgr.submit(
-                        virsh_cmd('domrename', old_name, new_name),
-                        sudo=virsh_needs_sudo(),
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary=f'Rename domain {old_name} to {new_name}',
-                    )
+                    rename_request.submit()
                     _repoint_domain_paths(mgr, cfg, new_name)
         except Exception:
             _undo_moves(mgr, moved)

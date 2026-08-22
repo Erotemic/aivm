@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandError, CommandManager, Elided
+from aivm.commands import CommandError, CommandManager, CommandResult, Elided
 from aivm.errors import (
     AIVMError,
     ApprovalUnavailableError,
@@ -1004,6 +1005,68 @@ def test_secrets_are_kept_off_the_command_line_not_out_of_the_log(
 
     assert seen == [secret]
     assert not any(secret in m for m in messages)
+
+
+def test_request_is_single_source_for_preview_and_run(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    seen: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(
+        self: CommandManager, cmd: list[str], **kwargs: Any
+    ) -> CommandResult:
+        del self
+        seen.append((list(cmd), dict(kwargs)))
+        return CommandResult(0, 'ok', '')
+
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(yes=True)
+    request = mgr.request(
+        ['demo-tool', '--flag'],
+        role='read',
+        check=False,
+        capture=True,
+        env={'DEMO': '1'},
+        summary='Inspect demo state',
+    )
+
+    request.preview()
+    assert seen == []
+    assert 'DRYRUN: Inspect demo state' in messages
+    assert 'command (read-only):\ndemo-tool --flag' in messages
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+    result = request.run()
+    assert result.stdout == 'ok'
+    assert seen == [
+        (
+            ['demo-tool', '--flag'],
+            {
+                'sudo': False,
+                'role': 'read',
+                'ownership': 'user',
+                'user_driven': False,
+                'check': False,
+                'capture': True,
+                'text': True,
+                'input_text': None,
+                'env': {'DEMO': '1'},
+                'timeout': None,
+                'summary': 'Inspect demo state',
+                'detail': '',
+            },
+        )
+    ]
+
+
+def test_command_request_is_frozen() -> None:
+    mgr = CommandManager()
+    request = mgr.request(['true'], role='read')
+
+    with pytest.raises(FrozenInstanceError):
+        request.role = 'modify'  # type: ignore[misc]
 
 
 def test_preview_uses_command_renderer_without_execution(

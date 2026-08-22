@@ -220,34 +220,48 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     script = _nft_script(cfg, inspect_live=not dry_run)
     table = effective_firewall_table(cfg)
     mgr = CommandManager.current()
-    if dry_run:
-        mgr.preview(
-            ['nft', 'delete', 'table', 'inet', table],
+    delete_request = mgr.request(
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Remove previous nftables table inet {table} if present',
+    )
+    legacy = table_to_remove(cfg, current_table=table)
+    legacy_request = (
+        mgr.request(
+            ['nft', 'delete', 'table', 'inet', legacy],
             sudo=True,
             role='modify',
             check=False,
             capture=True,
-            summary=f'Remove previous nftables table inet {table} if present',
+            summary=(
+                f'Remove pre-upgrade nftables table inet {legacy} if present'
+            ),
+            detail=(
+                'Older aivm versions installed rules under the configured '
+                'table name directly; a leftover copy would keep filtering '
+                'alongside the new table.'
+            ),
         )
-        legacy = table_to_remove(cfg, current_table=table)
-        if legacy:
-            mgr.preview(
-                ['nft', 'delete', 'table', 'inet', legacy],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove pre-upgrade nftables table inet {legacy} if present',
-            )
-        mgr.preview(
-            ['nft', '-f', '-'],
-            sudo=True,
-            role='modify',
-            check=True,
-            capture=True,
-            input_text=script,
-            summary=f'Load rendered nftables rules into inet {table}',
-        )
+        if legacy
+        else None
+    )
+    load_request = mgr.request(
+        ['nft', '-f', '-'],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        input_text=script,
+        summary=f'Load rendered nftables rules into inet {table}',
+    )
+    if dry_run:
+        delete_request.preview()
+        if legacy_request is not None:
+            legacy_request.preview()
+        load_request.preview()
         return
     with mgr.intent(
         f'Apply firewall table {table}',
@@ -265,41 +279,10 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             ),
             approval_scope=f'firewall:{table}',
         ):
-            mgr.submit(
-                ['nft', 'delete', 'table', 'inet', table],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove previous nftables table inet {table} if present',
-            )
-            legacy = table_to_remove(cfg, current_table=table)
-            if legacy:
-                mgr.submit(
-                    ['nft', 'delete', 'table', 'inet', legacy],
-                    sudo=True,
-                    role='modify',
-                    check=False,
-                    capture=True,
-                    summary=(
-                        f'Remove pre-upgrade nftables table inet {legacy} '
-                        'if present'
-                    ),
-                    detail=(
-                        'Older aivm versions installed rules under the '
-                        'configured table name directly; a leftover copy '
-                        'would keep filtering alongside the new table.'
-                    ),
-                )
-            mgr.submit(
-                ['nft', '-f', '-'],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                input_text=script,
-                summary=f'Load rendered nftables rules into inet {table}',
-            )
+            delete_request.submit()
+            if legacy_request is not None:
+                legacy_request.submit()
+            load_request.submit()
     log.info('Firewall rules applied (table=inet {}).', table)
 
 
@@ -681,25 +664,31 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     )
     table = effective_firewall_table(cfg)
     mgr = CommandManager.current()
-    if dry_run:
-        mgr.preview(
-            ['nft', 'delete', 'table', 'inet', table],
+    delete_request = mgr.request(
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Remove nftables table inet {table}',
+    )
+    legacy = table_to_remove(cfg, current_table=table)
+    legacy_request = (
+        mgr.request(
+            ['nft', 'delete', 'table', 'inet', legacy],
             sudo=True,
             role='modify',
             check=False,
             capture=True,
-            summary=f'Remove nftables table inet {table}',
+            summary=f'Remove pre-upgrade nftables table inet {legacy}',
         )
-        legacy = table_to_remove(cfg, current_table=table)
-        if legacy:
-            mgr.preview(
-                ['nft', 'delete', 'table', 'inet', legacy],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove pre-upgrade nftables table inet {legacy}',
-            )
+        if legacy
+        else None
+    )
+    if dry_run:
+        delete_request.preview()
+        if legacy_request is not None:
+            legacy_request.preview()
         return
     # Whatever ensure_firewall_ready concluded earlier in this invocation is
     # about to stop being true.
@@ -714,25 +703,7 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             why='Remove the nftables table created by aivm for this VM bridge.',
             approval_scope=f'firewall-remove:{table}',
         ):
-            mgr.submit(
-                ['nft', 'delete', 'table', 'inet', table],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove nftables table inet {table}',
-            )
-            legacy = table_to_remove(cfg, current_table=table)
-            if legacy:
-                mgr.submit(
-                    ['nft', 'delete', 'table', 'inet', legacy],
-                    sudo=True,
-                    role='modify',
-                    check=False,
-                    capture=True,
-                    summary=(
-                        f'Remove pre-upgrade nftables table inet {legacy} '
-                        'if present'
-                    ),
-                )
+            delete_request.submit()
+            if legacy_request is not None:
+                legacy_request.submit()
     log.info('Firewall removed (table=inet {}).', table)

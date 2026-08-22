@@ -6,7 +6,7 @@ import shlex
 
 from aivm.config_scopes import guest_transport_from_effective_cfg
 
-from ..commands import CommandHandle, CommandManager, CommandResult
+from ..commands import CommandExecution, CommandManager, CommandResult
 from ..config import AgentVMConfig
 from ..config_store import CredentialEntry
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -85,7 +85,7 @@ def _submit_guest(
     summary: str,
     input_text: str | None = None,
     check: bool = True,
-) -> CommandHandle:
+) -> CommandExecution:
     return manager.submit(
         _ssh_command(cfg, ip, script),
         sudo=False,

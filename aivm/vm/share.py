@@ -603,18 +603,21 @@ def ensure_share_mounted(
         context.ssh_target(ip),
         remote,
     ]
+    request = CommandManager.current().request(
+        cmd,
+        role='modify',
+        check=False,
+        capture=True,
+        timeout=20,
+        summary=f'Reconcile guest virtiofs share {tag}',
+    )
     if dry_run:
-        CommandManager.current().preview(
-            cmd,
-            role='modify',
-            summary=f'Reconcile guest virtiofs share {tag}',
-        )
+        request.preview()
         return
-    mgr = CommandManager.current()
     max_attempts = 12
     retry_sleep_s = 2.0
     for attempt in range(1, max_attempts + 1):
-        res = mgr.run(cmd, sudo=False, check=False, capture=True, timeout=20)
+        res = request.run()
         if res.code == 0:
             if attempt > 1:
                 log.info(

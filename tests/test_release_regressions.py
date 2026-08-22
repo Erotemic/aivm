@@ -18,6 +18,7 @@ from aivm.cli.host_permissions import (
     _storage_adopt_source,
 )
 from aivm.config import VirtiofsConfig
+from aivm.util import CmdResult
 
 
 @pytest.mark.parametrize(
@@ -91,16 +92,32 @@ def test_adopt_restarts_stopped_vm_after_handoff_failure(
     monkeypatch.setattr(
         'aivm.cli.host_permissions._wait_for_vm_state', lambda *a, **k: None
     )
-    monkeypatch.setattr('aivm.cli.host_permissions._start_vm', restarted.append)
+
+    class FakeRequest:
+        def __init__(self, cmd: list[str]) -> None:
+            self.cmd = cmd
+
+        def preview(self) -> None:
+            raise AssertionError('not a dry run')
+
+        def submit(self) -> None:
+            raise RuntimeError('handoff failed')
+
+        def run(self) -> CmdResult:
+            restarted.append(self.cmd[-1])
+            return CmdResult(0, '', '')
 
     class FailingManager:
+        def request(
+            self, cmd: list[str], **kwargs: object
+        ) -> FakeRequest:
+            del kwargs
+            return FakeRequest(cmd)
+
         def step(
             self, *args: object, **kwargs: object
         ) -> contextlib.AbstractContextManager[None]:
             return contextlib.nullcontext()
-
-        def submit(self, *args: object, **kwargs: object) -> None:
-            raise RuntimeError('handoff failed')
 
     args = SimpleNamespace(dry_run=False, config=None)
     with pytest.raises(RuntimeError, match='handoff failed'):

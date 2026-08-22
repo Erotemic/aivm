@@ -265,27 +265,20 @@ def _run_guest_ssh_script_with_retry(
         context.ssh_target(ip),
         script,
     ]
-    mgr = CommandManager.current()
+    request = CommandManager.current().request(
+        cmd,
+        role=role,
+        check=False,
+        capture=True,
+        summary=summary,
+        detail=detail,
+    )
     if dry_run:
-        mgr.preview(
-            cmd,
-            role=role,
-            check=check,
-            summary=summary,
-            detail=detail,
-        )
+        request.preview()
         return None
     last_result: CommandResult | None = None
     for attempt in range(retries + 1):
-        result = mgr.run(
-            cmd,
-            sudo=False,
-            role=role,
-            check=False,
-            capture=True,
-            summary=summary,
-            detail=detail,
-        )
+        result = request.run()
         last_result = result
         code = int(getattr(result, 'code', getattr(result, 'returncode', 0)))
         if code in allowed_exit_codes:
@@ -322,27 +315,20 @@ def _run_rsync_with_retry(
     check: bool = True,
     retries: int = 3,
 ) -> CommandResult | None:
-    mgr = CommandManager.current()
+    request = CommandManager.current().request(
+        cmd,
+        role='modify',
+        check=False,
+        capture=True,
+        summary=summary,
+        detail=detail,
+    )
     if dry_run:
-        mgr.preview(
-            cmd,
-            role='modify',
-            check=check,
-            summary=summary,
-            detail=detail,
-        )
+        request.preview()
         return None
     last_result: CommandResult | None = None
     for attempt in range(retries + 1):
-        result = mgr.run(
-            cmd,
-            sudo=False,
-            role='modify',
-            check=False,
-            capture=True,
-            summary=summary,
-            detail=detail,
-        )
+        result = request.run()
         last_result = result
         code = int(getattr(result, 'code', getattr(result, 'returncode', 0)))
         if code == 0:

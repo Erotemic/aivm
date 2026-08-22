@@ -242,37 +242,34 @@ def _network_defined(name: str) -> bool:
 def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Idempotently remove a network, accepting only recognized absence states."""
     name = cfg.network.name
-    if dry_run:
-        mgr = CommandManager.current()
-        mgr.preview(
-            pin_locale(virsh_cmd('net-destroy', name)),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            check=False,
-            summary=f'Stop libvirt network {name}',
-        )
-        mgr.preview(
-            pin_locale(virsh_cmd('net-undefine', name)),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            check=False,
-            summary=f'Undefine libvirt network {name}',
-        )
-        return
-    if not _network_defined(name):
-        log.info('Network already absent: {}', name)
-        return
-
     mgr = CommandManager.current()
     # Both teardown commands below have their stderr string-matched against
     # the recognized absence/inactive diagnostics, so pin the C locale.
-    stopped = mgr.run(
+    stop_request = mgr.request(
         pin_locale(virsh_cmd('net-destroy', name)),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
+        summary=f'Stop libvirt network {name}',
     )
+    undefine_request = mgr.request(
+        pin_locale(virsh_cmd('net-undefine', name)),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Undefine libvirt network {name}',
+    )
+    if dry_run:
+        stop_request.preview()
+        undefine_request.preview()
+        return
+    if not _network_defined(name):
+        log.info('Network already absent: {}', name)
+        return
+
+    stopped = stop_request.run()
     if stopped.code != 0:
         detail = (stopped.stderr or stopped.stdout or '').strip()
         if not (
@@ -283,13 +280,7 @@ def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                 f'{detail or f"virsh net-destroy exited with status {stopped.code}"}'
             )
 
-    undefined = mgr.run(
-        pin_locale(virsh_cmd('net-undefine', name)),
-        sudo=virsh_needs_sudo(),
-        role='modify',
-        check=False,
-        capture=True,
-    )
+    undefined = undefine_request.run()
     if undefined.code != 0:
         detail = (undefined.stderr or undefined.stdout or '').strip()
         if not _network_missing_error(detail):

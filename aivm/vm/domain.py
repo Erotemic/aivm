@@ -445,15 +445,18 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     forced power-off (``virsh destroy``).
     """
     name = cfg.vm.name
-    if dry_run:
-        CommandManager.current().preview(
-            virsh_cmd('shutdown', name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            summary=f'Send ACPI shutdown signal to VM {name}',
-        )
-        return
     mgr = CommandManager.current()
+    shutdown_request = mgr.request(
+        virsh_cmd('shutdown', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Send ACPI shutdown signal to VM {name}',
+    )
+    if dry_run:
+        shutdown_request.preview()
+        return
     with mgr.intent(
         f'Shut down VM {name}',
         why='Gracefully stop the VM by sending an ACPI shutdown signal to the guest OS.',
@@ -509,14 +512,7 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             log.info('VM {} resumed (state={})', name, state)
 
         # Send ACPI shutdown signal
-        res = mgr.run(
-            virsh_cmd('shutdown', name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            check=False,
-            capture=True,
-            summary=f'Send ACPI shutdown signal to VM {name}',
-        )
+        res = shutdown_request.run()
         if res.code != 0:
             msg = (res.stderr or res.stdout or '').strip()
             raise RuntimeError(
@@ -537,20 +533,26 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     a new VM.
     """
     name = cfg.vm.name
+    mgr = CommandManager.current()
+    shutdown_request = mgr.request(
+        virsh_cmd('shutdown', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Shut down VM {name}',
+    )
+    start_request = mgr.request(
+        virsh_cmd('start', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Start VM {name}',
+    )
     if dry_run:
-        mgr = CommandManager.current()
-        mgr.preview(
-            virsh_cmd('shutdown', name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            summary=f'Shut down VM {name}',
-        )
-        mgr.preview(
-            virsh_cmd('start', name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            summary=f'Start VM {name}',
-        )
+        shutdown_request.preview()
+        start_request.preview()
         return
 
     # Verify the VM exists before attempting restart
@@ -560,7 +562,6 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             f'use `aivm vm up` to create and start it.'
         )
 
-    mgr = CommandManager.current()
     with mgr.intent(
         f'Restart VM {name}',
         why='Gracefully stop and then start the VM to apply changes or recover from transient issues.',
@@ -607,21 +608,14 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                         name,
                         state,
                     )
-                    _start_vm(name)
+                    start_request.run()
                     log.info('VM {} restarted', name)
                     return
                 log.info('VM {} resumed (state={})', name, state)
 
             log.info('Sending shutdown signal to VM {} (state={})', name, state)
             # Send ACPI shutdown signal
-            res = mgr.run(
-                virsh_cmd('shutdown', name),
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                check=False,
-                capture=True,
-                summary='Send ACPI shutdown signal to VM',
-            )
+            res = shutdown_request.run()
             if res.code != 0:
                 msg = (res.stderr or res.stdout or '').strip()
                 raise RuntimeError(
@@ -640,7 +634,7 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
         # Start the VM (use start_vm helper, not create_or_start_vm)
         log.info('Starting VM {}', name)
-        _start_vm(name)
+        start_request.run()
         log.info('VM {} restarted', name)
 
 

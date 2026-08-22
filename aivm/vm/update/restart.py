@@ -61,18 +61,18 @@ def _maybe_restart_vm_after_update(
         return
 
     if kind == RestartKind.SOFT:
-        cmd = virsh_cmd('reboot', cfg.vm.name)
+        request = CommandManager.current().request(
+            virsh_cmd('reboot', cfg.vm.name),
+            sudo=virsh_needs_sudo(),
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Reboot VM {cfg.vm.name}',
+        )
         if dry_run:
-            CommandManager.current().preview(
-                cmd,
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                summary=f'Reboot VM {cfg.vm.name}',
-            )
+            request.preview()
         else:
-            CommandManager.current().run(
-                cmd, sudo=virsh_needs_sudo(), check=True, capture=True
-            )
+            request.run()
             print(f'Rebooted VM {cfg.vm.name}.')
         return
 
