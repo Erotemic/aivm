@@ -414,22 +414,33 @@ def _prepare_foreground_agent_forwarding(
 
     The credential feature remains opt-in: sessions with no active
     ``agent_credentials`` records perform no agent-related guest work and
-    forward nothing.
+    forward nothing. Credential setup failures never block VM access.
     """
     if session.ip is None:
         return None
-    store_path = session.reg_path
-    if store_path is None:
-        raise AIVMError(
-            'Prepared foreground session has no persisted store path for '
-            'ssh-agent credential forwarding.'
+    try:
+        store_path = session.reg_path
+        if store_path is None:
+            raise AIVMError(
+                'Prepared foreground session has no persisted store path for '
+                'ssh-agent credential forwarding.'
+            )
+        forwarding = prepare_agent_forwarding(
+            session.context,
+            Path(store_path),
+            session.ip,
+            manager=CommandManager.current(),
         )
-    forwarding = prepare_agent_forwarding(
-        session.context,
-        Path(store_path),
-        session.ip,
-        manager=CommandManager.current(),
-    )
+    except Exception as ex:
+        log.opt(exception=True).trace(
+            'Repository ssh-agent preparation failed for foreground session'
+        )
+        log.warning(
+            'Repository ssh-agent setup failed; continuing without credential '
+            'forwarding: {}',
+            ex,
+        )
+        return None
     if forwarding is not None:
         log.info(
             'Forwarding dedicated AIVM repository agent into {} '

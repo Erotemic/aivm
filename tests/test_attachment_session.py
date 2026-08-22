@@ -735,6 +735,64 @@ def test_code_and_ssh_share_identical_foreground_preparation(
 
 
 
+def test_vm_ssh_continues_when_repository_agent_setup_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Repository credential failures do not prevent VM access."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ssh-agent-failure'
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, []),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.prepare_agent_forwarding',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AIVMError('forwarded agent is unavailable')
+        ),
+    )
+    ssh_config_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (
+            ssh_config_calls.append(k) or (tmp_path / 'ssh_config', False)
+        ),
+    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+
+    rc = VMSSHCLI.main(
+        argv=False, config=str(cfg_path), host_src=str(host_src), yes=True
+    )
+
+    assert rc == 0
+    assert ssh_config_calls[0]['forward_agent_socket'] == ''
+    ssh_cmd = recorder.only('ssh')
+    assert '-A' not in ssh_cmd
+    assert not any(part.startswith('SSH_AUTH_SOCK=') for part in ssh_cmd)
+    assert warnings == [
+        'Repository ssh-agent setup failed; continuing without credential '
+        'forwarding: forwarded agent is unavailable'
+    ]
+
+
 @pytest.mark.parametrize(
     ('ssh_exit', 'expect_rc', 'expect_error'),
     [
