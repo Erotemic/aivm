@@ -71,7 +71,7 @@ class _FakeManager(CommandManager):
         )
         tokens = tuple(str(part) for part in cmd)
         self.commands.append(tokens)
-        env = env or os.environ
+        run_env = env if env else dict(os.environ)
         if tokens[:2] == ('ssh-keygen', '-q'):
             private = Path(tokens[tokens.index('-f') + 1])
             private.write_text('fake-private-key\n', encoding='utf-8')
@@ -100,10 +100,10 @@ class _FakeManager(CommandManager):
             )
             return CommandResult(0, stdout, '')
         if tokens == ('ssh-agent', '-k'):
-            self.drop_agent(env['SSH_AUTH_SOCK'])
+            self.drop_agent(run_env['SSH_AUTH_SOCK'])
             return CommandResult(0, 'Agent pid killed\n', '')
         if tokens == ('ssh-add', '-l', '-E', 'sha256'):
-            socket_path = env.get('SSH_AUTH_SOCK', '')
+            socket_path = run_env.get('SSH_AUTH_SOCK', '')
             if socket_path not in self.servers:
                 return CommandResult(2, '', 'Could not open agent.\n')
             loaded = self.loaded[socket_path]
@@ -115,14 +115,14 @@ class _FakeManager(CommandManager):
             )
             return CommandResult(0, stdout, '')
         if tokens == ('ssh-add', '-D'):
-            self.loaded[env['SSH_AUTH_SOCK']] = []
+            self.loaded[run_env['SSH_AUTH_SOCK']] = []
             return CommandResult(0, '', '')
         if tokens[:1] == ('ssh-add',):
             fingerprints: list[str] = []
             for private_text in tokens[1:]:
                 public = self.public_by_private[private_text]
                 fingerprints.append(public_key_fingerprint(public))
-            self.loaded[env['SSH_AUTH_SOCK']] = fingerprints
+            self.loaded[run_env['SSH_AUTH_SOCK']] = fingerprints
             return CommandResult(0, '', '')
         raise AssertionError(f'unexpected command: {tokens!r}')
 
