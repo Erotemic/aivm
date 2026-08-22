@@ -7,7 +7,7 @@ must remain independent of VM/runtime implementation details.
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 
 MirrorHomePolicy = Literal['auto', 'yes', 'no']
 
@@ -50,7 +50,7 @@ def normalize_mirror_home_policy(value: object) -> MirrorHomePolicy:
         raise ValueError(
             f'Invalid mirror_home policy {value!r}; expected one of: {allowed}'
         )
-    return cast(MirrorHomePolicy, normalized)
+    return normalized
 
 
 def resolve_mirror_home_enabled(

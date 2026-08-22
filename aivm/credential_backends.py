@@ -58,7 +58,7 @@ def resolve_credential_backend(
 
     if requested_norm != CREDENTIAL_BACKEND_AUTO:
         return CredentialBackendResolution(
-            backend=cast(CredentialBackend, requested_norm),
+            backend=requested_norm,
             source='explicit',
             requested=requested_norm,
             vm_preference=vm_norm,
@@ -66,7 +66,7 @@ def resolve_credential_backend(
         )
     if vm_norm != CREDENTIAL_BACKEND_AUTO:
         return CredentialBackendResolution(
-            backend=cast(CredentialBackend, vm_norm),
+            backend=vm_norm,
             source='vm',
             requested=requested_norm,
             vm_preference=vm_norm,
@@ -74,7 +74,7 @@ def resolve_credential_backend(
         )
     if user_norm != CREDENTIAL_BACKEND_AUTO:
         return CredentialBackendResolution(
-            backend=cast(CredentialBackend, user_norm),
+            backend=user_norm,
             source='user',
             requested=requested_norm,
             vm_preference=vm_norm,

@@ -67,20 +67,20 @@ def test_host_external_execution_is_owned_by_command_manager() -> None:
                 for item in node.names:
                     if item.name == 'subprocess':
                         violations.append(
-                            f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                            f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                             'imports subprocess'
                         )
             elif isinstance(node, ast.ImportFrom):
                 if node.module == 'subprocess':
                     violations.append(
-                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                         'imports from subprocess'
                     )
             elif isinstance(node, ast.Call):
                 name = _call_name(node, aliases)
                 if name is not None and _is_external_execution(name):
                     violations.append(
-                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                         f'calls {name}'
                     )
     assert violations == [], '\n'.join(violations)
@@ -103,7 +103,7 @@ def test_runtime_resource_modules_are_not_imported_by_host_code() -> None:
             for name in names:
                 if name == 'aivm.rc' or name.startswith('aivm.rc.'):
                     violations.append(
-                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                         f'imports runtime resource module {name}'
                     )
     assert violations == [], '\n'.join(violations)
@@ -121,20 +121,20 @@ def test_runtime_resource_programs_are_standalone() -> None:
                 for item in node.names:
                     if item.name == 'aivm' or item.name.startswith('aivm.'):
                         violations.append(
-                            f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                            f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                             f'imports {item.name}'
                         )
             elif isinstance(node, ast.ImportFrom):
                 if node.level:
                     violations.append(
-                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                         'uses a relative import'
                     )
                 elif node.module == 'aivm' or (node.module or '').startswith(
                     'aivm.'
                 ):
                     violations.append(
-                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{node.lineno}: '
+                        f'{path.relative_to(_PACKAGE_ROOT.parent)}:{getattr(node, "lineno", 0)}: '
                         f'imports {node.module}'
                     )
     assert violations == [], '\n'.join(violations)

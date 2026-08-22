@@ -33,11 +33,16 @@ import builtins
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence, cast
 
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
+from aivm.commands import (
+    CommandManager,
+    CommandOwnership,
+    CommandResult,
+    CommandRole,
+)
 from aivm.runtime import SYSTEM_LIBVIRT_URI
 
 
@@ -186,37 +191,62 @@ def capture_logs(
     return messages
 
 
-class FakeCommandManager:
-    """Scripted stand-in for ``CommandManager.current()`` call sites.
+class FakeCommandManager(CommandManager):
+    """CommandManager with scripted in-process command results for tests.
 
-    ``handler`` receives each command (as a list) and returns the result
-    object; when it returns ``None`` (or no handler is given) a bare
-    ``SimpleNamespace(stdout='')`` is returned.  Commands are recorded on
-    ``self.calls``; pass ``calls=`` to share an external list.
+    The fake keeps the real manager's planning and scope behavior and replaces
+    only external command execution. ``handler`` receives each command as a
+    list and may return a scripted result; commands are recorded on ``calls``.
     """
 
     def __init__(
         self,
-        handler: Callable[[list[Any]], Any] | None = None,
+        handler: Callable[[list[str]], Any] | None = None,
         *,
-        calls: list[list[Any]] | None = None,
+        calls: list[list[str]] | None = None,
     ) -> None:
+        super().__init__(yes=True)
         self.calls = calls if calls is not None else []
         self._handler = handler
 
-    def step(self, *args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        return nullcontext()
-
-    def run(self, cmd: list[Any], **kwargs: Any) -> Any:
-        del kwargs
-        cmd = list(cmd)
-        self.calls.append(cmd)
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            ownership,
+            user_driven,
+            check,
+            capture,
+            text,
+            input_text,
+            env,
+            timeout,
+            summary,
+            detail,
+        )
+        command = list(cmd)
+        self.calls.append(command)
         if self._handler is not None:
-            result = self._handler(cmd)
+            result = self._handler(command)
             if result is not None:
-                return result
-        return SimpleNamespace(stdout='')
+                return cast(CommandResult, result)
+        return CommandResult(0, '', '')
 
 
 # ---------------------------------------------------------------------------

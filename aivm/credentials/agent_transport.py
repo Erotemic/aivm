@@ -170,6 +170,10 @@ def prepare_agent_grant_forwarding(
                 f'VM {cfg.vm.name} is reachable at {ip}, but SSH is not ready yet.'
             ),
         )
+    if ip is None:
+        raise AIVMError(
+            f'VM {cfg.vm.name} reported ready SSH without a resolved IP address.'
+        )
 
     forwarding = prepare_agent_forwarding(
         context,

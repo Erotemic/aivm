@@ -327,12 +327,8 @@ def _start_remote_tunnel_session(
 def _attach_remote_tunnel_session(context: ResolvedVMContext, ip: str) -> int:
     """Interactively attach to the ``aivm-tunnel`` tmux session in the guest.
 
-    Replaces the current process so stdio, signals, and TTY handling match
-    a plain ``ssh -t`` invocation. Returns nonzero only if exec fails.
-
-    This is the one deliberate exception to routing commands through
-    :class:`CommandManager`: a subprocess cannot hand the caller's TTY back
-    cleanly, so the command is logged here for auditability and then exec'd.
+    Replaces the current process through :class:`CommandManager` so stdio,
+    signals, and TTY handling match a plain ``ssh -t`` invocation.
     """
     ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
@@ -347,6 +343,7 @@ def _attach_remote_tunnel_session(context: ResolvedVMContext, ip: str) -> int:
         role='read',
         summary='Attach to the guest VS Code tunnel session',
     )
+    return 0
 
 
 def _print_remote_session_recipe(

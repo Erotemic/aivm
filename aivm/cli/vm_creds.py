@@ -43,7 +43,11 @@ from ..credentials.gitlab import host_token_envvar
 from ..credentials.models import GitRepository
 from ..credentials.ownership import credential_principal_label
 from ..credentials.resolve import resolve_repository
-from ..credentials.schema import CredentialKind, normalize_credential_access
+from ..credentials.schema import (
+    CredentialAccess,
+    CredentialKind,
+    normalize_credential_access,
+)
 from ..credentials.service import (
     abandon_repository_credential,
     describe_unregistered_credential,
@@ -378,7 +382,7 @@ def _grant_repository(
     store_path: Path,
     principal_id: str,
     repo: GitRepository,
-    access: str,
+    access: CredentialAccess,
     kind: CredentialKind,
     manager: CommandManager,
 ) -> CredentialEntry | AgentCredentialEntry:

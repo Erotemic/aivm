@@ -1066,7 +1066,7 @@ def test_command_request_is_frozen() -> None:
     request = mgr.request(['true'], role='read')
 
     with pytest.raises(FrozenInstanceError):
-        request.role = 'modify'  # type: ignore[misc]
+        setattr(request, 'role', 'modify')
 
 
 def test_preview_uses_command_renderer_without_execution(

@@ -713,7 +713,7 @@ def test_code_and_ssh_share_identical_foreground_preparation(
         _fake_prepare_session(cfg, cfg_path, host_src, attachment, captured),
     )
 
-    common = dict(
+    common: dict[str, Any] = dict(
         argv=False,
         config=str(cfg_path),
         host_src=str(host_src),

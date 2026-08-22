@@ -52,7 +52,7 @@ from .agent_store import (
 )
 from .keys import normalized_public_key, public_key_fingerprint
 from .models import GitRepository, ProviderDeployKey
-from .schema import normalize_credential_access
+from .schema import CredentialKind, normalize_credential_access
 from .setup import require_supported_gh
 from .validation import validate_metadata_text
 
@@ -324,7 +324,7 @@ def _find_remote(
     return None
 
 
-def _require_agent_tools(kind: str, *, manager: CommandManager) -> None:
+def _require_agent_tools(kind: CredentialKind, *, manager: CommandManager) -> None:
     names = ('ssh-keygen', 'ssh-agent', 'ssh-add', *providers.required_tools(kind))
     missing = [name for name in names if shutil.which(name) is None]
     if missing:
@@ -741,7 +741,7 @@ def grant_agent_credential(
     repo: GitRepository,
     *,
     access: str,
-    kind: str,
+    kind: CredentialKind,
     manager: CommandManager,
 ) -> AgentCredentialEntry:
     """Create or resume one independent host-only deploy-key grant."""

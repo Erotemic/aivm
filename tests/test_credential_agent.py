@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 from dataclasses import replace
 import os
 import shutil
 import socket
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
-from aivm.commands import CommandResult
+from aivm.commands import (
+    CommandManager,
+    CommandOwnership,
+    CommandResult,
+    CommandRole,
+)
 from aivm.config_store import Store
 from aivm.credentials import agent, agent_store
 from aivm.credentials.guards import require_vm_credentials_released
@@ -24,23 +28,50 @@ from aivm.credentials.validation import credential_id
 from aivm.errors import AIVMError
 
 
-class _FakeManager:
+class _FakeManager(CommandManager):
     """Command-manager fake with an in-process ssh-agent and fake keygen."""
 
     def __init__(self) -> None:
+        super().__init__(yes=True)
         self.next_pid = 47000
         self.servers: dict[str, socket.socket] = {}
         self.loaded: dict[str, list[str]] = {}
         self.public_by_private: dict[str, str] = {}
         self.commands: list[tuple[str, ...]] = []
 
-    def step(self, *args: Any, **kwargs: Any) -> contextlib.nullcontext[None]:
-        return contextlib.nullcontext()
-
-    def run(self, cmd: list[str], **kwargs: Any) -> CommandResult:
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            ownership,
+            user_driven,
+            check,
+            capture,
+            text,
+            input_text,
+            timeout,
+            summary,
+            detail,
+        )
         tokens = tuple(str(part) for part in cmd)
         self.commands.append(tokens)
-        env = kwargs.get('env') or os.environ
+        env = env or os.environ
         if tokens[:2] == ('ssh-keygen', '-q'):
             private = Path(tokens[tokens.index('-f') + 1])
             private.write_text('fake-private-key\n', encoding='utf-8')
