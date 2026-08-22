@@ -222,6 +222,12 @@ def test_stopped_vm_is_started_before_confirming_share(
     """
     cfg, host_src, attachment = _make_env(tmp_path)
     activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: pytest.fail(
+            'starting a defined VM must not require creation dependencies'
+        ),
+    )
     xml = _domain_xml(
         filesystems=((str(host_src.resolve()), PROJ_TAG),),
         shared_memory=True,
@@ -358,6 +364,11 @@ def test_running_vm_missing_share_recreates_when_allowed(
         },
     )
     calls: list[dict[str, Any]] = []
+    dependency_checks: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.create_or_start_vm',
         lambda _cfg, **k: calls.append(k) or None,
@@ -371,6 +382,7 @@ def test_running_vm_missing_share_recreates_when_allowed(
     assert calls[0]['recreate'] is True
     assert calls[0]['share_source_dir'] == str(host_src.resolve())
     assert calls[0]['share_tag'] == PROJ_TAG
+    assert dependency_checks == [{'yes': True, 'dry_run': False}]
     # The recreate decision replaces the live attach.
     assert not rec.ran('virsh', 'attach-device')
 
@@ -398,10 +410,16 @@ def test_stale_virtiofs_source_recreates_vm(
             LIBVIRT_PROBE: FakeProc(0),
             'virsh domstate': _states('shut off', 'running'),
             'virsh net-info': _active_net(),
+            'virsh dominfo': FakeProc(0, f'Name:           {VM_NAME}\n'),
             'virsh dumpxml': FakeProc(0, xml),
         },
     )
     calls: list[dict[str, Any]] = []
+    dependency_checks: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+    )
 
     def fake_create(_cfg: Any, **k: Any) -> None:
         calls.append(k)
@@ -421,6 +439,7 @@ def test_stale_virtiofs_source_recreates_vm(
     assert len(calls) == 2
     assert calls[0]['recreate'] is False
     assert calls[1]['recreate'] is True
+    assert dependency_checks == [{'yes': True, 'dry_run': False}]
     assert any('stale virtiofs source' in m for m in warnings)
     assert result.attachment.tag == PROJ_TAG
 

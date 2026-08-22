@@ -793,6 +793,118 @@ def test_vm_ssh_continues_when_repository_agent_setup_fails(
     ]
 
 
+def test_vm_ssh_continues_when_ssh_config_update_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Managed SSH alias maintenance is optional for a direct shell."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ssh-config-failure'
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, []),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
+        lambda session: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('ssh config is read-only')
+        ),
+    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+
+    rc = VMSSHCLI.main(
+        argv=False, config=str(cfg_path), host_src=str(host_src), yes=True
+    )
+
+    assert rc == 0
+    assert recorder.only('ssh')
+    assert warnings == [
+        'Could not update the managed SSH config entry for '
+        'vm-ssh-config-failure; continuing without it: ssh config is read-only'
+    ]
+
+
+def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tunnel startup does not depend on the workstation SSH alias."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-code-config-failure'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    session = _fake_prepare_session(
+        cfg, cfg_path, host_src, attachment, []
+    )(host_src=host_src)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session', lambda args: session
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
+        lambda session: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('ssh config is read-only')
+        ),
+    )
+    tunnel_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._start_remote_tunnel_session',
+        lambda *a: tunnel_calls.append(a),
+    )
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+
+    rc = VMCodeCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        host_src=str(host_src),
+        yes=True,
+        tunnel=True,
+        no_attach=True,
+    )
+
+    assert rc == 0
+    assert len(tunnel_calls) == 1
+    assert warnings == [
+        'Could not update the managed SSH config entry for '
+        'vm-code-config-failure; continuing without it: ssh config is read-only'
+    ]
+
+
 @pytest.mark.parametrize(
     ('ssh_exit', 'expect_rc', 'expect_error'),
     [

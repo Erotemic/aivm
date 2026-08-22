@@ -44,6 +44,7 @@ from ..vm import (
     get_ip_cached,
     vm_has_virtiofs_shared_memory,
     vm_share_mappings,
+    vm_exists,
     wait_for_ip,
     wait_for_ssh,
 )
@@ -669,9 +670,13 @@ def _reconcile_attached_vm(
 
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
-            maybe_install_missing_host_deps(
-                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+            vm_is_defined = (
+                False if policy.dry_run else vm_exists(cfg, dry_run=False)
             )
+            if not vm_is_defined:
+                maybe_install_missing_host_deps(
+                    yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+                )
             if attachment.mode in {
                 ATTACHMENT_MODE_SHARED_ROOT,
                 ATTACHMENT_MODE_PERSISTENT,
@@ -706,6 +711,9 @@ def _reconcile_attached_vm(
                         'VM {} has stale virtiofs source {}; recreating VM definition',
                         cfg.vm.name,
                         missing_virtiofs_dir,
+                    )
+                    maybe_install_missing_host_deps(
+                        yes=bool(policy.yes), dry_run=False
                     )
                     create_or_start_vm(
                         cfg,
@@ -867,6 +875,9 @@ def _reconcile_attached_vm(
                     )
 
         if recreate:
+            maybe_install_missing_host_deps(
+                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+            )
             create_or_start_vm(
                 cfg,
                 dry_run=policy.dry_run,
@@ -1112,7 +1123,7 @@ def _prepare_attached_session(
                 cfg_path,
                 ip,
                 dry_run=False,
-                only_guest_dst=(attachment.guest_dst if vm_was_running else ''),
+                only_guest_dst=attachment.guest_dst,
                 preserve_live_mounts=vm_was_running,
             )
         if not vm_was_running:

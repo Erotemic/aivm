@@ -1020,10 +1020,11 @@ def test_prepare_session_fresh_create_passes_initial_attachment_to_create(
     assert create_kwargs['initial_attachment_access'] == 'ro'
 
 
-def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize('vm_was_running', [True, False])
+def test_prepare_session_scopes_persistent_replay_to_primary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vm_was_running: bool
 ) -> None:
-    """Opening another project in a live VM must not reconcile siblings."""
+    """Foreground replay touches only the requested persistent attachment."""
     from aivm.attachments.session import _prepare_attached_session
 
     cfg = AgentVMConfig()
@@ -1058,7 +1059,7 @@ def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
                 'cached_ip': '10.0.0.5',
                 'cached_ssh_ok': True,
                 'shared_root_host_side_ready': False,
-                'vm_was_running': True,
+                'vm_was_running': vm_was_running,
             },
         )(),
     )
@@ -1084,11 +1085,10 @@ def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
         'aivm.attachments.session._reconcile_persistent_attachments_in_guest',
         lambda *a, **k: replay_calls.append(dict(k)),
     )
+    restore_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         'aivm.attachments.session._restore_saved_vm_attachments',
-        lambda *a, **k: pytest.fail(
-            'live foreground session must not restore unrelated attachments'
-        ),
+        lambda *a, **k: restore_calls.append(dict(k)),
     )
 
     session = _prepare_attached_session(
@@ -1107,6 +1107,11 @@ def test_prepare_session_on_running_vm_scopes_persistent_replay_to_primary(
         {
             'dry_run': False,
             'only_guest_dst': '/workspace/new-project',
-            'preserve_live_mounts': True,
+            'preserve_live_mounts': vm_was_running,
         }
     ]
+    if vm_was_running:
+        assert restore_calls == []
+    else:
+        assert len(restore_calls) == 1
+        assert restore_calls[0]['primary_attachment'] is attachment

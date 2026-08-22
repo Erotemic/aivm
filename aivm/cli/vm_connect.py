@@ -452,6 +452,31 @@ def _prepare_foreground_agent_forwarding(
     return forwarding
 
 
+def _best_effort_upsert_ssh_config_entry(
+    cfg: Any,
+    *,
+    yes: bool,
+    forward_agent_socket: str = '',
+) -> tuple[Path, bool]:
+    """Update the managed SSH alias without making direct access depend on it."""
+    try:
+        return _upsert_ssh_config_entry(
+            cfg,
+            dry_run=False,
+            yes=yes,
+            forward_agent_socket=forward_agent_socket,
+        )
+    except Exception as ex:
+        log.opt(exception=True).trace('Managed SSH config update failed')
+        log.warning(
+            'Could not update the managed SSH config entry for {}; '
+            'continuing without it: {}',
+            cfg.vm.name,
+            ex,
+        )
+        return Path.home() / '.ssh' / 'config', False
+
+
 def _prepare_foreground_session(args: Any) -> PreparedSession:
     """Run the one shared startup pipeline for SSH and editor sessions.
 
@@ -578,16 +603,16 @@ class VMCodeCLI(_BaseCommand):
         assert ip is not None
         agent_forwarding = _prepare_foreground_agent_forwarding(session)
 
-        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg,
-            dry_run=False,
-            yes=args.yes,
-            forward_agent_socket=(
-                str(agent_forwarding.socket_path) if agent_forwarding else ''
-            ),
+        forward_agent_socket = (
+            str(agent_forwarding.socket_path) if agent_forwarding else ''
         )
 
         if args.tunnel:
+            ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
+                cfg,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
             if agent_forwarding is not None:
                 log.warning(
                     'SSH-agent repository credentials are available only '
@@ -621,10 +646,33 @@ class VMCodeCLI(_BaseCommand):
 
         can_open_local, reason = _vscode_can_open_locally()
         if not can_open_local:
+            ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
+                cfg,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
             _print_remote_session_recipe(
                 context, session, ssh_cfg, ssh_cfg_updated, reason or ''
             )
             return 0
+
+        try:
+            ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
+                cfg,
+                dry_run=False,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
+        except Exception as ex:
+            log.opt(exception=True).trace(
+                'Required VS Code Remote-SSH config update failed'
+            )
+            log.error(
+                'Could not update the SSH config required for VS Code '
+                'Remote-SSH: {}',
+                ex,
+            )
+            return 1
 
         remote_target = f'ssh-remote+{cfg.vm.name}'
         CommandManager.current().run(
@@ -712,9 +760,8 @@ class VMSSHCLI(_BaseCommand):
         ip = session.ip
         assert ip is not None
         agent_forwarding = _prepare_foreground_agent_forwarding(session)
-        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
+        ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
             cfg,
-            dry_run=False,
             yes=args.yes,
             forward_agent_socket=(
                 str(agent_forwarding.socket_path) if agent_forwarding else ''
