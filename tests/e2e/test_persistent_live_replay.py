@@ -170,6 +170,19 @@ def _mount_tmpfs_or_skip(target: Path) -> None:
     raise AssertionError(f'Could not create E2E tmpfs mount: {detail}')
 
 
+def _make_mount_private(target: Path) -> None:
+    """Keep the one-namespace E2E faithful to the real host/guest boundary."""
+    proc = subprocess.run(
+        ['sudo', '-n', 'mount', '--make-private', str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or '').strip()
+        raise AssertionError(f'Could not make E2E mount private: {detail}')
+
+
 def _umount_if_mounted(target: Path) -> None:
     probe = subprocess.run(
         ['mountpoint', '-q', str(target)],
@@ -199,6 +212,12 @@ def test_foreground_replay_repairs_reboot_stale_same_token_bind(
     token.mkdir()
     (token / 'sentinel.txt').write_text('pre-replay', encoding='utf-8')
     _mount_bind_or_skip(token, target)
+    # The real guest bind lives in a separate mount namespace behind virtiofs.
+    # This E2E models host and guest in one namespace, so make the simulated
+    # guest mount private before changing the host-side token. Otherwise mount
+    # propagation can update ``target`` too and erase the stale-bind condition
+    # the test is intended to reproduce.
+    _make_mount_private(target)
     try:
         # Host replay replaces the token with the real source after the guest
         # has already bound the old token directory into the workspace.
@@ -206,6 +225,13 @@ def test_foreground_replay_repairs_reboot_stale_same_token_bind(
         try:
             ns = _exec_guest_replay_helper(persistent_replay_python())
             ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+
+            # Prove the fixture actually reproduced the reboot race before
+            # asking the replay helper to classify or repair it.
+            assert not ns['same_directory_object'](str(token), str(target))
+            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'pre-replay'
+            assert (token / 'sentinel.txt').read_text(encoding='utf-8') == 'current'
+
             info = ns['current_mount_info'](str(target))
             assert info is not None
             assert ns['mount_is_same_persistent_token'](
@@ -214,9 +240,7 @@ def test_foreground_replay_repairs_reboot_stale_same_token_bind(
                     'guest_dst': str(target),
                     'shared_root_token': 'token',
                 },
-            )
-            assert not ns['same_directory_object'](str(token), str(target))
-            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'pre-replay'
+            ), info
 
             ns['ensure_record'](
                 {
