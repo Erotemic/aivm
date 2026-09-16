@@ -8,8 +8,10 @@ the same kernel mount primitives it uses inside a guest.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,51 @@ def _sudo(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def _ensure_record_as_guest_root(
+    helper_source: str,
+    *,
+    persistent_root: Path,
+    record: dict[str, object],
+    preserve_live_mounts: bool,
+) -> None:
+    """Run one replay operation with the privilege used by the guest service."""
+    driver = r"""
+import json
+import sys
+
+source = sys.stdin.read()
+namespace = {"__name__": "aivm_e2e_guest_replay"}
+exec(compile(source, "<aivm-persistent-attachment-replay>", "exec"), namespace)
+namespace["PERSISTENT_ROOT_MOUNT"] = sys.argv[1]
+namespace["ensure_record"](
+    json.loads(sys.argv[2]),
+    preserve_live_mounts=(sys.argv[3] == "1"),
+)
+"""
+    proc = subprocess.run(
+        [
+            'sudo',
+            '-n',
+            sys.executable,
+            '-c',
+            driver,
+            str(persistent_root),
+            json.dumps(record, sort_keys=True),
+            '1' if preserve_live_mounts else '0',
+        ],
+        input=helper_source,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or '').strip()
+        raise AssertionError(
+            'Privileged guest replay operation failed: '
+            f'rc={proc.returncode}: {detail}'
+        )
 
 
 def _mount_bind_or_skip(source: Path, target: Path) -> None:
@@ -242,8 +289,10 @@ def test_foreground_replay_repairs_reboot_stale_same_token_bind(
                 },
             ), info
 
-            ns['ensure_record'](
-                {
+            _ensure_record_as_guest_root(
+                persistent_replay_python(),
+                persistent_root=persistent_root,
+                record={
                     'guest_dst': str(target),
                     'shared_root_token': 'token',
                     'access': 'rw',
