@@ -9,7 +9,9 @@ import kwconf
 from loguru import logger as log
 
 from ..attachments.persistent import (
+    _ensure_persistent_root_vm_mapping,
     _reconcile_persistent_host_binds,
+    _reconcile_persistent_host_exports,
     _sync_persistent_attachment_manifest_on_host,
 )
 from ..attachments.session import (
@@ -67,6 +69,14 @@ class VMUpCLI(_BaseCommand):
             cfg_path, cfg.vm.name, action='start or reconcile'
         )
         maybe_install_missing_host_deps(yes=args.yes, dry_run=args.dry_run)
+        host_exports = None
+        if not args.dry_run and not args.recreate:
+            # Stage saved host exports before a stopped VM can boot its guest
+            # replay unit. This moves existing replay work earlier; it does not
+            # add a second reconciliation pass after startup.
+            host_exports = _reconcile_persistent_host_exports(
+                cfg, cfg_path, dry_run=False
+            )
         mgr = CommandManager.current()
         with mgr.intent(
             f'Create/start VM {cfg.vm.name}',
@@ -88,12 +98,17 @@ class VMUpCLI(_BaseCommand):
                 cfg_path,
                 dry_run=False,
             )
-            _reconcile_persistent_host_binds(
-                cfg,
-                cfg_path,
-                dry_run=False,
-                vm_running=True,
-            )
+            if host_exports is None:
+                _reconcile_persistent_host_binds(
+                    cfg,
+                    cfg_path,
+                    dry_run=False,
+                    vm_running=True,
+                )
+            elif host_exports.enabled_tokens:
+                _ensure_persistent_root_vm_mapping(
+                    cfg, dry_run=False, vm_running=True
+                )
             record_vm(cfg, cfg_path)
         return 0
 

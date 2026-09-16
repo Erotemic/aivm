@@ -61,6 +61,17 @@ def _make_guest_replay_fake_run(
     """
     tracked_root: str = ''
 
+    def _findmnt_line(target: str, info: dict[str, str]) -> str:
+        fields = [
+            f'TARGET="{target}"',
+            f'SOURCE="{info["source"]}"',
+        ]
+        if 'fsroot' in info:
+            fields.append(f'FSROOT="{info["fsroot"]}"')
+        if 'options' in info:
+            fields.append(f'OPTIONS="{info["options"]}"')
+        return ' '.join(fields)
+
     def fake_run(
         cmd: list,
         check: bool = False,
@@ -85,12 +96,7 @@ def _make_guest_replay_fake_run(
             info = mounts.get(target)
             if info is None:
                 return FakeProc(returncode=1)
-            return FakeProc(
-                stdout=(
-                    f'TARGET="{target}" SOURCE="{info["source"]}" '
-                    f'OPTIONS="{info["options"]}"'
-                )
-            )
+            return FakeProc(stdout=_findmnt_line(target, info))
         if cmd[:2] == ['mount', '-t']:
             tracked_root = cmd[-1]
             if register_root_mount:
@@ -121,17 +127,9 @@ def _make_guest_replay_fake_run(
                 return FakeProc(
                     stdout='TARGET="/" SOURCE="/dev/vda1" OPTIONS="rw"'
                 )
-            return FakeProc(
-                stdout=(
-                    f'TARGET="{target}" SOURCE="{info["source"]}" '
-                    f'OPTIONS="{info["options"]}"'
-                )
-            )
+            return FakeProc(stdout=_findmnt_line(target, info))
         if cmd and cmd[0] == 'findmnt':
-            lines = [
-                f'TARGET="{target}" SOURCE="{info["source"]}"'
-                for target, info in mounts.items()
-            ]
+            lines = [_findmnt_line(target, info) for target, info in mounts.items()]
             return FakeProc(stdout='\n'.join(lines))
         if cmd and cmd[0] == 'umount':
             if umount_busy:

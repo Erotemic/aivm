@@ -895,3 +895,46 @@ Added layered mirror-home policy without turning it into an attachment migration
 The caller-owned profile now has its own tri-state `mirror_shared_home_folders` preference. Attachment `auto` resolves first through that private user preference and then through the VM's existing boolean policy. This keeps machine policy and user preference separate while allowing one attachment to opt in or out without redefining either broader default. Session restore and foreground preparation carry the saved attachment policy forward so ordinary `ssh`/`code` reconciliation cannot accidentally erase a per-attachment override.
 
 Explicit per-attachment opt-out also converges the guest presentation state: when `mirror_home=no`, AIVM probes the derived mirror path read-only and removes it only if it is still a symlink to that attachment's canonical guest destination. The ordinary inherited `auto` false path does not perform this cleanup probe, so the common default does not acquire another SSH round trip.
+
+## 2026-09-16 14:26:43 -0400
+
+I investigated the persistent-attachment regression where a host reboot can
+leave a saved workspace mounted but empty until the operator reruns `aivm
+attach`. The runtime trace and replay topology point to an ordering race rather
+than lost desired state: guest replay can bind the persistent-root token before
+the host has rebound that token onto its approved source, so the guest bind
+pins the old empty directory object. The later host replay fixes the token but
+cannot retroactively change the already-created guest bind. The recent
+non-destructive foreground policy then sees an inode mismatch and deliberately
+preserves that stale mount.
+
+I kept the non-destructive policy and narrowed the repair instead of weakening
+it. Guest replay now uses FSROOT from the same existing `findmnt` probe to
+recognize only an AIVM persistent-root bind for the exact requested token. If
+that exact-token bind has stale object identity, foreground replay may attempt
+one ordinary `umount` and rebind; a busy mount is preserved, and foreign or
+different-token mounts are never touched. I am confident this preserves the
+reason the safer semantics were introduced while making the reboot-stale state
+self-healing. The remaining kernel-specific uncertainty is the exact `findmnt`
+presentation across supported hosts, which is why the E2E reproduction uses
+real mounts rather than mocks.
+
+I also moved existing host-export replay ahead of AIVM-controlled VM startup.
+This is deliberately not another systemd service and not a second replay pass:
+`vm up` carries the preboot result forward, while foreground startup carries
+the approved source identity forward and reuses the staged exports only if the
+source identity still matches after the attachment record is refreshed. If the
+identity changed in that window, the normal post-start full reconcile remains
+the fallback. This adds no network round trip to the healthy path; the only
+extra local check in that stopped-VM foreground case is the source directory
+identity recheck needed to avoid reusing stale authorization.
+
+Focused persistent/session/architecture tests pass (136 tests). After regenerating
+the architecture inventory, the broader AIVM test tree passes 1281 tests with
+14 skips when the four assertions that require a non-root runner are excluded.
+Those four fail in this root container because root can write paths and files
+that their privilege models intentionally expect an ordinary user to be unable
+to write. The real-mount E2E is collected but cannot run here because this
+container lacks mount capability. Python compilation and `git diff --check`
+pass. Ruff could not be launched from the locked environment because an
+uncached Pygments wheel is unavailable offline.

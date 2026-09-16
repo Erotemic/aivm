@@ -105,7 +105,7 @@ def current_mount_info(target: str) -> MountInfo | None:
             "-P",
             "-n",
             "-o",
-            "TARGET,SOURCE,OPTIONS",
+            "TARGET,SOURCE,FSROOT,OPTIONS",
             "--mountpoint",
             target,
         ],
@@ -124,13 +124,40 @@ def current_mount_info(target: str) -> MountInfo | None:
     return {
         "target": normalized_target,
         "source": info.get("SOURCE", ""),
+        "fsroot": info.get("FSROOT", ""),
         "options": info.get("OPTIONS", ""),
     }
 
-def unmount_guest_dst(guest_dst: str, *, ignore_busy: bool = False) -> None:
+def mount_is_same_persistent_token(current: MountInfo, record: Record) -> bool:
+    """Return whether mount provenance names this exact AIVM token.
+
+    A bind made from a subdirectory of the persistent-root virtiofs mount can
+    outlive replacement of that subdirectory on the host.  In that reboot
+    race, object identity differs even though mountinfo still proves the live
+    bind came from this attachment's exact persistent-root token.  SOURCE and
+    FSROOT are kernel mount provenance; unlike a lexical path comparison they
+    remain meaningful for the stale bind.
+    """
+    token = str(record.get("shared_root_token") or "").strip()
+    if not token or "/" in token or token in {".", ".."}:
+        return False
+    source = str(current.get("source") or "").strip()
+    fsroot = str(current.get("fsroot") or "").strip()
+    expected_root = "/" + token
+
+    if fsroot != expected_root:
+        return False
+    if source == PERSISTENT_ROOT_TAG:
+        return True
+    prefix = PERSISTENT_ROOT_TAG + "["
+    if source.startswith(prefix) and source.endswith("]"):
+        return source[len(prefix) : -1] == expected_root
+    return False
+
+def unmount_guest_dst(guest_dst: str, *, ignore_busy: bool = False) -> bool:
     probe = subprocess.run(["mountpoint", "-q", guest_dst])
     if probe.returncode != 0:
-        return
+        return True
     result = subprocess.run(
         ["umount", guest_dst],
         text=True,
@@ -138,16 +165,16 @@ def unmount_guest_dst(guest_dst: str, *, ignore_busy: bool = False) -> None:
         stderr=subprocess.PIPE,
     )
     if result.returncode == 0:
-        return
+        return True
     message = ((result.stderr or "") + "\n" + (result.stdout or "")).lower()
     if "not mounted" in message:
-        return
+        return True
     if ignore_busy and "busy" in message:
         print(
             f"WARNING: skipping busy stale persistent attachment mount {guest_dst}: {(result.stderr or result.stdout).strip()}",
             file=sys.stderr,
         )
-        return
+        return False
     raise RuntimeError(
         f"could not unmount {guest_dst}: {(result.stderr or result.stdout).strip()}"
     )
@@ -302,13 +329,26 @@ def ensure_record(
                     "foreground session preparation leaves live mounts untouched"
                 )
         else:
-            if preserve_live_mounts:
+            stale_same_token = mount_is_same_persistent_token(current, record)
+            if preserve_live_mounts and not stale_same_token:
                 raise LiveMountConflictError(
                     f"live persistent attachment at {guest_dst} is a different directory "
                     f"(findmnt source={current_source or '<unknown>'} desired={source}); "
                     "foreground session preparation leaves live mounts untouched"
                 )
-            unmount_guest_dst(guest_dst, ignore_busy=False)
+            if preserve_live_mounts:
+                # This is AIVM's own bind for the exact requested token, but it
+                # points at the pre-replay directory object. A plain umount is
+                # safe to attempt; a busy mount is preserved rather than forced.
+                unmounted = unmount_guest_dst(guest_dst, ignore_busy=True)
+                if not unmounted:
+                    raise LiveMountConflictError(
+                        f"stale AIVM persistent attachment at {guest_dst} belongs "
+                        "to the requested token but is busy; foreground session "
+                        "preparation leaves the live mount untouched"
+                    )
+            else:
+                unmount_guest_dst(guest_dst, ignore_busy=False)
             current = current_mount_info(guest_dst)
             if current is not None:
                 current_source = str(current.get("source") or "").strip()

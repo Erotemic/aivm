@@ -77,6 +77,7 @@ def _reconcile_persistent_attachments_in_guest(
     replay_even_if_unchanged: bool = True,
     continue_on_error: bool = False,
     reconcile_host: bool = True,
+    host_exports_ready: bool = False,
     only_guest_dst: str = '',
     preserve_live_mounts: bool = False,
 ) -> None:
@@ -91,14 +92,22 @@ def _reconcile_persistent_attachments_in_guest(
             cfg, cfg_path, dry_run=dry_run
         )
         if reconcile_host:
-            host_bind._reconcile_persistent_host_binds(
-                cfg,
-                cfg_path,
-                dry_run=dry_run,
-                vm_running=True,
-                only_guest_dst=only_guest_dst,
-                preserve_live_binds=preserve_live_mounts,
-            )
+            if host_exports_ready:
+                # A stopped-VM start path may have staged the saved exports
+                # before boot so guest replay cannot bind empty token holders.
+                # Only the VM-level persistent-root mapping remains here.
+                host_bind._ensure_persistent_root_vm_mapping(
+                    cfg, dry_run=dry_run, vm_running=True
+                )
+            else:
+                host_bind._reconcile_persistent_host_binds(
+                    cfg,
+                    cfg_path,
+                    dry_run=dry_run,
+                    vm_running=True,
+                    only_guest_dst=only_guest_dst,
+                    preserve_live_binds=preserve_live_mounts,
+                )
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
                 cfg,

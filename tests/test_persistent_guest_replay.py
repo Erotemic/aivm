@@ -767,6 +767,132 @@ def test_persistent_replay_helper_preserves_conflicting_live_mount_in_foreground
     assert mounts['/workspace/proj']['source'] == 'none'
     assert not any(call and call[0] == 'umount' for call in calls)
 
+
+def test_persistent_replay_helper_repairs_stale_same_token_bind_in_foreground(
+    tmp_path: Path,
+) -> None:
+    """A reboot-stale bind for the exact AIVM token may be replaced when idle."""
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_replay_python())
+    ns['PERSISTENT_ROOT_MOUNT'] = str(tmp_path / 'mnt')
+    desired_source = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'desired-token')
+    guest_dst = str(tmp_path / 'workspace' / 'proj')
+    Path(desired_source).mkdir(parents=True)
+    Path(guest_dst).mkdir(parents=True)
+    calls: list[list[object]] = []
+    mounts = {
+        guest_dst: {
+            'source': 'aivm-persistent-root[/desired-token]',
+            'fsroot': '/desired-token',
+            'options': 'rw',
+        }
+    }
+    ns['subprocess'].run = _make_guest_replay_fake_run(mounts, calls=calls)
+    ns['same_directory_object'] = lambda _left, _right: False
+
+    ns['ensure_record'](
+        {
+            'guest_dst': guest_dst,
+            'shared_root_token': 'desired-token',
+            'access': 'rw',
+            'enabled': True,
+        },
+        preserve_live_mounts=True,
+    )
+
+    assert any(call and call[0] == 'umount' for call in calls)
+    assert mounts[guest_dst]['source'] == desired_source
+
+
+def test_persistent_replay_helper_preserves_busy_stale_same_token_bind(
+    tmp_path: Path,
+) -> None:
+    """Same-token provenance permits only a normal unmount, never forced repair."""
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_replay_python())
+    ns['PERSISTENT_ROOT_MOUNT'] = str(tmp_path / 'mnt')
+    desired_source = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'desired-token')
+    guest_dst = str(tmp_path / 'workspace' / 'proj')
+    Path(desired_source).mkdir(parents=True)
+    Path(guest_dst).mkdir(parents=True)
+    calls: list[list[object]] = []
+    stale = {
+        'source': 'aivm-persistent-root[/desired-token]',
+        'fsroot': '/desired-token',
+        'options': 'rw',
+    }
+    mounts = {guest_dst: dict(stale)}
+    ns['subprocess'].run = _make_guest_replay_fake_run(
+        mounts, calls=calls, umount_busy=True
+    )
+    ns['same_directory_object'] = lambda _left, _right: False
+
+    with pytest.raises(
+        ns['LiveMountConflictError'],
+        match='belongs to the requested token but is busy',
+    ):
+        ns['ensure_record'](
+            {
+                'guest_dst': guest_dst,
+                'shared_root_token': 'desired-token',
+                'access': 'rw',
+                'enabled': True,
+            },
+            preserve_live_mounts=True,
+        )
+
+    assert any(call and call[0] == 'umount' for call in calls)
+    assert mounts[guest_dst] == stale
+
+
+@pytest.mark.parametrize(
+    'live_mount',
+    [
+        {
+            'source': 'aivm-persistent-root[/other-token]',
+            'fsroot': '/other-token',
+            'options': 'rw',
+        },
+        {
+            'source': 'aivm-persistent-root[/desired-token]',
+            'options': 'rw',
+        },
+    ],
+    ids=['different-token', 'missing-fsroot'],
+)
+def test_persistent_replay_helper_requires_exact_same_token_provenance(
+    tmp_path: Path, live_mount: dict[str, str]
+) -> None:
+    """AIVM-looking SOURCE text alone cannot authorize foreground replacement."""
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_replay_python())
+    ns['PERSISTENT_ROOT_MOUNT'] = str(tmp_path / 'mnt')
+    desired_source = str(Path(ns['PERSISTENT_ROOT_MOUNT']) / 'desired-token')
+    guest_dst = str(tmp_path / 'workspace' / 'proj')
+    Path(desired_source).mkdir(parents=True)
+    Path(guest_dst).mkdir(parents=True)
+    calls: list[list[object]] = []
+    mounts = {guest_dst: dict(live_mount)}
+    ns['subprocess'].run = _make_guest_replay_fake_run(mounts, calls=calls)
+    ns['same_directory_object'] = lambda _left, _right: False
+
+    with pytest.raises(ns['LiveMountConflictError'], match='different directory'):
+        ns['ensure_record'](
+            {
+                'guest_dst': guest_dst,
+                'shared_root_token': 'desired-token',
+                'access': 'rw',
+                'enabled': True,
+            },
+            preserve_live_mounts=True,
+        )
+
+    assert not any(call and call[0] == 'umount' for call in calls)
+
+
 def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:
     from aivm.persistent_replay import persistent_replay_python
 

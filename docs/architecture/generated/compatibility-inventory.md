@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (256)
+## Canonical `AgentVMConfig` references (257)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -38,7 +38,7 @@ compatibility view while canonical runtime consumers are narrowed.
 |---|---|---:|
 | `aivm.access_control` | `aivm/access_control.py` | 2 |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py` | 9 |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py` | 7 |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py` | 8 |
 | `aivm.attachments.persistent.identity` | `aivm/attachments/persistent/identity.py` | 1 |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py` | 11 |
 | `aivm.attachments.persistent.replay` | `aivm/attachments/persistent/replay.py` | 2 |

@@ -40,6 +40,10 @@ from aivm.attachments.session import (
     ReconcilePolicy,
     _reconcile_attached_vm,
 )
+from aivm.attachments.persistent import (
+    PERSISTENT_ROOT_VIRTIOFS_TAG,
+    _persistent_root_host_dir,
+)
 from aivm.attachments.shared_root import (
     _shared_root_host_dir,
     _shared_root_host_target,
@@ -251,6 +255,92 @@ def test_stopped_vm_is_started_before_confirming_share(
     assert not rec.ran('virsh', 'attach-device')
     assert result.attachment.tag == PROJ_TAG
     assert result.vm_was_running is False
+
+
+def test_persistent_exports_are_staged_before_starting_stopped_vm(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Saved persistent exports must exist before guest boot replay can run."""
+    from aivm.fs_identity import directory_identity
+
+    cfg, host_src, attachment = _make_env(
+        tmp_path, mode=AttachmentMode.PERSISTENT
+    )
+    activate_manager(monkeypatch)
+    events: list[str] = []
+    states = iter([False, True])
+    identity = directory_identity(host_src.resolve())
+    record = type(
+        'Record',
+        (),
+        {
+            'enabled': True,
+            'shared_root_token': attachment.tag,
+            'guest_dst': attachment.guest_dst,
+            'source_dir': attachment.source_dir,
+            'access': attachment.access,
+            'source_dev': identity.dev,
+            'source_ino': identity.ino,
+        },
+    )()
+    export_result = type(
+        'ExportResult',
+        (),
+        {
+            'records': (record,),
+            'unavailable_tokens': frozenset(),
+        },
+    )()
+
+    monkeypatch.setattr(
+        'aivm.attachments.session.get_ip_cached', lambda _cfg: None
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._probe_vm_running_nonsudo',
+        lambda _name: next(states),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.probe_network',
+        lambda *a, **k: type('Probe', (), {'ok': True})(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.vm_exists', lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent._ensure_persistent_root_parent_dir',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_persistent_host_exports',
+        lambda *a, **k: events.append('exports') or export_result,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.create_or_start_vm',
+        lambda *a, **k: events.append('start'),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.vm_share_mappings',
+        lambda *a, **k: [
+            (
+                str(_persistent_root_host_dir(cfg)),
+                PERSISTENT_ROOT_VIRTIOFS_TAG,
+            )
+        ],
+    )
+
+    result = _reconcile_attached_vm(
+        cfg,
+        host_src,
+        attachment,
+        policy=_policy(),
+        config_store_path=tmp_path / 'config.toml',
+    )
+
+    assert events == ['exports', 'start']
+    assert result.persistent_host_export_identity == (
+        identity.dev,
+        identity.ino,
+    )
 
 
 def test_running_vm_attaches_missing_share_live(

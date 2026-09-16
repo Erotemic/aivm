@@ -6,6 +6,7 @@ import json
 import os
 import re
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger as log
@@ -21,14 +22,30 @@ from ...persistent_replay import (
     persistent_host_replay_python,
     persistent_host_replay_service_unit,
 )
-
-_TOKEN_RE = re.compile(PERSISTENT_BIND_TOKEN_PATTERN)
-_PROC_MOUNTINFO = Path('/proc/self/mountinfo')
 from ...privilege import path_needs_sudo
 from ...vm import attach_vm_share, vm_share_mappings
 from ...vm.paths import persistent_root_host_dir as _persistent_root_host_dir
 from ..shared_root import _needs_mkdir
 from . import manifest, transport
+
+_TOKEN_RE = re.compile(PERSISTENT_BIND_TOKEN_PATTERN)
+_PROC_MOUNTINFO = Path('/proc/self/mountinfo')
+
+
+@dataclass(frozen=True)
+class _HostExportReconcileResult:
+    unavailable: tuple[tuple[str, str, str], ...]
+    records: tuple[manifest.PersistentAttachmentRecord, ...]
+
+    @property
+    def enabled_tokens(self) -> frozenset[str]:
+        return frozenset(
+            record.shared_root_token for record in self.records if record.enabled
+        )
+
+    @property
+    def unavailable_tokens(self) -> frozenset[str]:
+        return frozenset(item[0] for item in self.unavailable)
 
 
 def _ensure_persistent_root_parent_dir(
@@ -513,21 +530,15 @@ def _cleanup_persistent_host_replay_artifacts(
     return True
 
 
-def _reconcile_persistent_host_binds(
+def _reconcile_persistent_host_exports(
     cfg: AgentVMConfig,
     cfg_path: Path,
     *,
     dry_run: bool,
-    vm_running: bool | None = None,
     only_guest_dst: str = '',
     preserve_live_binds: bool = False,
-) -> tuple[tuple[str, str, str], ...]:
-    """Converge host binds and the VM's persistent-root mapping.
-
-    ``only_guest_dst`` scopes foreground attachment operations to the one
-    path the user asked for.  Full replay remains the boot/maintenance path
-    and is the only mode that prunes unrelated stale exports.
-    """
+) -> _HostExportReconcileResult:
+    """Converge descriptor-pinned host exports without touching VM state."""
     records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
     unavailable: tuple[tuple[str, str, str], ...] = ()
     if records or manifest._persistent_host_replay_state_needed(cfg, cfg_path):
@@ -539,11 +550,39 @@ def _reconcile_persistent_host_binds(
             only_guest_dst=only_guest_dst,
             preserve_live_binds=preserve_live_binds,
         )
-    if any(record.enabled for record in records):
+    return _HostExportReconcileResult(
+        unavailable=unavailable,
+        records=tuple(records),
+    )
+
+
+def _reconcile_persistent_host_binds(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    *,
+    dry_run: bool,
+    vm_running: bool | None = None,
+    only_guest_dst: str = '',
+    preserve_live_binds: bool = False,
+) -> tuple[tuple[str, str, str], ...]:
+    """Converge host exports and the VM's persistent-root mapping.
+
+    ``only_guest_dst`` scopes foreground attachment operations to the one
+    path the user asked for. Full replay remains the boot/maintenance path
+    and is the only mode that prunes unrelated stale exports.
+    """
+    export_result = _reconcile_persistent_host_exports(
+        cfg,
+        cfg_path,
+        dry_run=dry_run,
+        only_guest_dst=only_guest_dst,
+        preserve_live_binds=preserve_live_binds,
+    )
+    if export_result.enabled_tokens:
         _ensure_persistent_root_vm_mapping(
             cfg, dry_run=dry_run, vm_running=vm_running
         )
-    return unavailable
+    return export_result.unavailable
 
 
 def _ensure_persistent_root_vm_mapping(

@@ -65,7 +65,11 @@ Guidance for contributors (human or AI agents) working in this repository.
   or add the requested attachment, but it must not unmount, remount, replace,
   or globally reconcile an existing live workspace. Diagnose genuine conflicts
   and leave live state untouched; destructive convergence belongs to explicit
-  attach/maintenance/lifecycle operations.
+  attach/maintenance/lifecycle operations. The narrow exception is an idle
+  stale persistent bind whose kernel mount provenance proves that it belongs to
+  the exact requested AIVM token after host replay. Foreground recovery may try
+  one ordinary unmount/rebind for that same token, but must preserve it if the
+  normal unmount reports busy and must never force or lazily unmount it.
 - Launcher-specific preparation starts only after the shared foreground session
   pipeline. In particular, ``aivm code --tunnel`` treats the tunnel request as
   a one-shot opt-in to install only missing tunnel prerequisites; it must not

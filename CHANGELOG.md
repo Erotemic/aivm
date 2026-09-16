@@ -5,6 +5,14 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.0 - Unreleased
 
 ### Fixed
+* Persistent attachments now recover safely from the host-reboot ordering case
+  where guest replay bound an AIVM token before the host replaced that token
+  with its approved source directory. Foreground replay may repair only an
+  idle stale bind whose ``findmnt`` provenance names the exact requested token;
+  busy, foreign, and different-token mounts remain untouched. AIVM-controlled
+  starts also stage already-saved host exports before booting the VM, reusing
+  that work after startup rather than adding another replay pass or host
+  service.
 * Live ``ssh-agent`` grants no longer fail after the credential is active merely
   because the guest cannot reach the provider SSH endpoint for the final
   read-only repository probe. Clear transport failures such as connection

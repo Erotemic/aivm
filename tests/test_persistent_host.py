@@ -38,6 +38,7 @@ from aivm.attachments.persistent import (
 from aivm.attachments.persistent import (
     manifest as persistent_manifest,
 )
+from aivm.cli.vm_lifecycle import VMUpCLI
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
 from aivm.config_store import AttachmentEntry, Store, save_store
@@ -53,10 +54,77 @@ from tests.helpers import (
     activate_manager,
     capture_logs,
     command_recorder,
+    make_cfg,
+    write_store,
 )
 
 REPLAY_INVOCATION = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
 """The exact remote script the reconcile flow runs to replay guest mounts."""
+
+
+def test_vm_up_stages_persistent_exports_before_start_without_second_replay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Move the existing host replay before boot rather than adding another pass."""
+    cfg = make_cfg(tmp_path, **{'vm.name': 'vm-persistent-order'})
+    cfg_path = write_store(tmp_path / 'config.toml', cfg)
+    activate_manager(monkeypatch)
+    events: list[str] = []
+    export_result = type(
+        'ExportResult',
+        (),
+        {'enabled_tokens': frozenset({'hostcode-proj'})},
+    )()
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.announce_vm_machine_impact',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.maybe_install_missing_host_deps',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle._reconcile_persistent_host_exports',
+        lambda *a, **k: events.append('exports') or export_result,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.create_or_start_vm',
+        lambda *a, **k: events.append('start'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle._maybe_warn_hardware_drift',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle._sync_persistent_attachment_manifest_on_host',
+        lambda *a, **k: events.append('manifest'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle._ensure_persistent_root_vm_mapping',
+        lambda *a, **k: events.append('mapping'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle._reconcile_persistent_host_binds',
+        lambda *a, **k: pytest.fail('host exports must not replay twice'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_lifecycle.record_vm', lambda *a, **k: None
+    )
+
+    assert (
+        VMUpCLI.main(
+            argv=False,
+            config=str(cfg_path),
+            dry_run=False,
+            recreate=False,
+            ensure_firewall=False,
+            yes=True,
+        )
+        == 0
+    )
+
+    assert events == ['exports', 'start', 'manifest', 'mapping']
 
 
 def test_source_unavailable_diagnostics_parses_only_machine_records() -> None:
@@ -677,6 +745,50 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
     )
     # Replay is the final remote action.
     assert scripts[-1] == REPLAY_INVOCATION
+
+
+def test_persistent_reconcile_reuses_preboot_host_exports(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Preboot host replay leaves only VM mapping work after startup."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-persistent-preboot-ready'
+    cfg.paths.base_dir = str(tmp_path / 'base')
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg.vm.user = 'agent'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch)
+
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'ssh': _hash_route('MATCH'),
+            'rsync': FakeProc(stdout=''),
+        },
+    )
+    mapping_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.replay.host_bind._ensure_persistent_root_vm_mapping',
+        lambda *a, **k: mapping_calls.append(dict(k)),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.replay.host_bind._reconcile_persistent_host_binds',
+        lambda *a, **k: pytest.fail('preboot-ready exports must not replay again'),
+    )
+
+    _reconcile_persistent_attachments_in_guest(
+        cfg,
+        cfg_path,
+        '10.0.0.5',
+        dry_run=False,
+        host_exports_ready=True,
+        only_guest_dst='/workspace/proj',
+    )
+
+    assert mapping_calls == [{'dry_run': False, 'vm_running': True}]
+    assert rec.ran('rsync')
 
 
 def test_persistent_reconcile_can_scope_foreground_guest_replay(

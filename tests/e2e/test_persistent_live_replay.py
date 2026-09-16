@@ -140,3 +140,98 @@ def test_foreground_replay_refuses_to_replace_different_busy_bind(
         holder.terminate()
         holder.wait(timeout=5)
         _sudo('umount', str(target))
+
+
+def _mount_tmpfs_or_skip(target: Path) -> None:
+    proc = subprocess.run(
+        [
+            'sudo',
+            '-n',
+            'mount',
+            '-t',
+            'tmpfs',
+            '-o',
+            f'uid={os.getuid()},gid={os.getgid()},mode=0755',
+            'aivm-persistent-root',
+            str(target),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return
+    detail = (proc.stderr or proc.stdout or '').strip()
+    if (
+        'permission denied' in detail.lower()
+        or 'operation not permitted' in detail.lower()
+    ):
+        pytest.skip(f'E2E runner lacks mount capability: {detail}')
+    raise AssertionError(f'Could not create E2E tmpfs mount: {detail}')
+
+
+def _umount_if_mounted(target: Path) -> None:
+    probe = subprocess.run(
+        ['mountpoint', '-q', str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode == 0:
+        _sudo('umount', str(target))
+
+
+def test_foreground_replay_repairs_reboot_stale_same_token_bind(
+    tmp_path: Path,
+) -> None:
+    """Reproduce host-replay ordering and repair only the stale AIVM bind."""
+    _require_e2e()
+    persistent_root = tmp_path / 'persistent-root'
+    persistent_root.mkdir()
+    target = tmp_path / 'workspace'
+    target.mkdir()
+    live_source = tmp_path / 'live-source'
+    live_source.mkdir()
+    (live_source / 'sentinel.txt').write_text('current', encoding='utf-8')
+
+    _mount_tmpfs_or_skip(persistent_root)
+    token = persistent_root / 'token'
+    token.mkdir()
+    (token / 'sentinel.txt').write_text('pre-replay', encoding='utf-8')
+    _mount_bind_or_skip(token, target)
+    try:
+        # Host replay replaces the token with the real source after the guest
+        # has already bound the old token directory into the workspace.
+        _mount_bind_or_skip(live_source, token)
+        try:
+            ns = _exec_guest_replay_helper(persistent_replay_python())
+            ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+            info = ns['current_mount_info'](str(target))
+            assert info is not None
+            assert ns['mount_is_same_persistent_token'](
+                info,
+                {
+                    'guest_dst': str(target),
+                    'shared_root_token': 'token',
+                },
+            )
+            assert not ns['same_directory_object'](str(token), str(target))
+            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'pre-replay'
+
+            ns['ensure_record'](
+                {
+                    'guest_dst': str(target),
+                    'shared_root_token': 'token',
+                    'access': 'rw',
+                    'enabled': True,
+                },
+                preserve_live_mounts=True,
+            )
+
+            assert ns['same_directory_object'](str(token), str(target))
+            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'current'
+        finally:
+            _umount_if_mounted(token)
+    finally:
+        _umount_if_mounted(target)
+        _umount_if_mounted(persistent_root)

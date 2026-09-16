@@ -68,6 +68,7 @@ from .persistent import (
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_attachments_in_guest,
+    _reconcile_persistent_host_exports,
 )
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
@@ -103,6 +104,7 @@ class ReconcileResult:
     cached_ssh_ok: bool
     shared_root_host_side_ready: bool = False
     vm_was_running: bool = False
+    persistent_host_export_identity: tuple[int, int] | None = None
 
 
 def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
@@ -646,6 +648,7 @@ def _reconcile_attached_vm(
         mappings: list[tuple[str, str]] = []
         has_share = False
         shared_root_host_side_ready = False
+        persistent_host_export_identity: tuple[int, int] | None = None
         virtiofs_mapping = _virtiofs_mapping_for_attachment(cfg, attachment)
         if vm_running is None and cached_ssh_ok:
             vm_running = True
@@ -688,6 +691,25 @@ def _reconcile_attached_vm(
                         )
 
                         _ensure_persistent_root_parent_dir(cfg, dry_run=False)
+                        if config_store_path is not None:
+                            export_result = _reconcile_persistent_host_exports(
+                                cfg, config_store_path, dry_run=False
+                            )
+                            for record in export_result.records:
+                                if (
+                                    record.enabled
+                                    and record.shared_root_token == attachment.tag
+                                    and record.guest_dst == attachment.guest_dst
+                                    and record.source_dir == attachment.source_dir
+                                    and record.access == attachment.access
+                                    and record.shared_root_token
+                                    not in export_result.unavailable_tokens
+                                ):
+                                    persistent_host_export_identity = (
+                                        record.source_dev,
+                                        record.source_ino,
+                                    )
+                                    break
                     else:
                         _ensure_shared_root_parent_dir(cfg, dry_run=False)
             try:
@@ -896,6 +918,7 @@ def _reconcile_attached_vm(
             cached_ssh_ok=cached_ssh_ok,
             shared_root_host_side_ready=shared_root_host_side_ready,
             vm_was_running=vm_was_running,
+            persistent_host_export_identity=persistent_host_export_identity,
         )
 
 
@@ -1118,11 +1141,18 @@ def _prepare_attached_session(
             host_lexical_paths=_primary_aliases,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
+            host_exports_ready = False
+            if reconcile.persistent_host_export_identity is not None:
+                current_identity = directory_identity(str(host_src.resolve()))
+                host_exports_ready = (
+                    current_identity.dev, current_identity.ino
+                ) == reconcile.persistent_host_export_identity
             _reconcile_persistent_attachments_in_guest(
                 cfg,
                 cfg_path,
                 ip,
                 dry_run=False,
+                host_exports_ready=host_exports_ready,
                 only_guest_dst=attachment.guest_dst,
                 preserve_live_mounts=vm_was_running,
             )

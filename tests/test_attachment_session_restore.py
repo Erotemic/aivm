@@ -1060,6 +1060,7 @@ def test_prepare_session_scopes_persistent_replay_to_primary(
                 'cached_ssh_ok': True,
                 'shared_root_host_side_ready': False,
                 'vm_was_running': vm_was_running,
+                'persistent_host_export_identity': None,
             },
         )(),
     )
@@ -1106,6 +1107,7 @@ def test_prepare_session_scopes_persistent_replay_to_primary(
     assert replay_calls == [
         {
             'dry_run': False,
+            'host_exports_ready': False,
             'only_guest_dst': '/workspace/new-project',
             'preserve_live_mounts': vm_was_running,
         }

@@ -41,6 +41,7 @@ from .host_bind import (
     _mounted_child_names,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_host_binds,
+    _reconcile_persistent_host_exports,
 )
 from .manifest import (
     PersistentAttachmentRecord,
@@ -95,6 +96,7 @@ __all__ = [
     '_prepare_persistent_attachment_host_and_vm',
     '_reconcile_persistent_attachments_in_guest',
     '_reconcile_persistent_host_binds',
+    '_reconcile_persistent_host_exports',
     '_run_guest_root_script',
     '_run_guest_ssh_script_with_retry',
     '_run_rsync_with_retry',
