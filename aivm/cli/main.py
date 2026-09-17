@@ -15,6 +15,9 @@ from typing import Any, Literal
 import kwconf
 from loguru import logger as log
 
+from .. import __version__
+from ..access_control import TRUST_MODE
+from ..attachments.ownership import attachment_owner_label
 from ..commands import CommandManager
 from ..config_store import load_store
 from ..errors import AIVMError, NoVMContextError
@@ -54,19 +57,32 @@ class ListCLI(_BaseCommand):
 
         if want in {'all', 'vms'}:
             print('Managed VMs')
+            if reg.store_kind == 'machine':
+                print(f'  Trust mode: {TRUST_MODE}')
             if not reg.vms:
                 print('  (none)')
             else:
                 by_net = {n.name: n for n in reg.networks}
                 for vm in sorted(reg.vms, key=lambda x: x.name):
                     strict = (
-                        bool(by_net[vm.network_name].firewall.enabled)
+                        by_net[vm.network_name].firewall.enabled
                         if vm.network_name in by_net
                         else False
+                    )
+                    identities = [
+                        item
+                        for item in reg.principals
+                        if item.vm_name == vm.name
+                    ]
+                    active_identities = sum(
+                        1
+                        for item in identities
+                        if item.state in {'active', 'legacy'}
                     )
                     print(
                         f'  - {vm.name} | network={vm.network_name} '
                         f'| strict_firewall={"yes" if strict else "no"} '
+                        f'| access={active_identities}/{len(identities)} active '
                         f'| store={reg_path}'
                     )
 
@@ -94,10 +110,16 @@ class ListCLI(_BaseCommand):
                 print('  (none)')
             else:
                 for att in sorted(
-                    reg.attachments, key=lambda x: (x.vm_name, x.host_path)
+                    reg.attachments,
+                    key=lambda x: (
+                        x.vm_name,
+                        x.owner_principal_id,
+                        x.host_path,
+                    ),
                 ):
                     print(
                         f'  - {att.host_path} | vm={att.vm_name} '
+                        f'| owner={attachment_owner_label(reg, att.owner_principal_id)} '
                         f'| mode={att.mode} | access={att.access} '
                         f'| guest_dst={att.guest_dst or "(default)"}'
                     )
@@ -156,25 +178,59 @@ class StatusCLI(_BaseCommand):
         ):
             if args.sudo:
                 mgr.confirm_sudo_scope(
-                    yes=bool(args.yes),
+                    yes=args.yes,
                     purpose=(
                         f"Inspect host/libvirt/firewall/VM state for status of '{cfg.vm.name}'."
                     ),
                     role='read',
                     preview_cmds=anticipated_status_sudo_commands(
-                        cfg, detail=bool(args.detail)
+                        cfg, detail=args.detail
                     ),
                 )
             print(
-                render_status(
-                    cfg, path, detail=args.detail, use_sudo=bool(args.sudo)
-                )
+                render_status(cfg, path, detail=args.detail, use_sudo=args.sudo)
             )
         return 0
 
 
 class AgentVMModalCLI(kwconf.ModalCLI):
     """Local libvirt/KVM sandbox VM manager for coding agents."""
+
+    def argparse(
+        self,
+        parser: Any = None,
+        special_options: Any = ...,
+        fuzzy_hyphens: int | None = None,
+    ) -> Any:
+        # kwconf 0.10.x hardcodes the modal version option as ``--version``.
+        # Build the normal command tree without that one action, then restore
+        # the same destination with the conventional ``-V`` spelling as well.
+        version = self.version
+        self.version = None
+        try:
+            parser = super().argparse(
+                parser=parser,
+                special_options=special_options,
+                fuzzy_hyphens=fuzzy_hyphens,
+            )
+        finally:
+            self.version = version
+        if version is not None:
+            parser.add_argument(
+                '-V',
+                '--version',
+                action='store_true',
+                dest='__modal_version_request__',
+                help='show version number and exit',
+            )
+        return parser
+
+    build_parser = argparse
+
+    # Keep the package version on the root modal. ``argparse`` above exposes
+    # it as ``-V`` / ``--version`` without giving nested modals a version flag,
+    # so ``aivm vm --version`` remains an unrecognized argument.
+    __version__ = __version__
 
     help = HelpModalCLI
     status = StatusCLI

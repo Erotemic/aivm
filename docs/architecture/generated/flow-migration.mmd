@@ -1,0 +1,21 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 2
+flowchart TD
+    plan["Read-only plan fingerprints released inputs and target store<br/><code>aivm.legacy.pre_0_6_0.migration.build_migration_plan</code>"]
+    locks[["Hold migration, store, network, and VM locks<br/><code>aivm.legacy.pre_0_6_0.migration_apply.apply_migration</code>"]]
+    revalidate["Revalidate sources, missing destinations, and target revision<br/><code>aivm.legacy.pre_0_6_0.migration_apply._verify_target_machine_store_revision</code>"]
+    journal[("Freeze plan, backups, outputs, and resumable phases<br/><code>aivm.legacy.pre_0_6_0.migration_apply.MigrationJournal</code>")]
+    machine[("Write canonical machine store and user profiles<br/><code>aivm.legacy.pre_0_6_0.migration_apply._write_machine_store</code>")]
+    data[("Copy reviewed credential and persistent-state trees<br/><code>aivm.legacy.pre_0_6_0.migration_apply._copy_persistent_state</code>")]
+    guest{"Install restricted bootstrap through existing creator access<br/><code>aivm.legacy.pre_0_6_0.migration_apply.install_bootstrap_through_legacy_access</code>"}
+    verify["Verify local outputs and runtime access under the same locks<br/><code>aivm.legacy.pre_0_6_0.migration_apply.verify_applied_migration</code>"]
+    recoverable>"Failed apply remains resumable or rollback-capable<br/><code>aivm.legacy.pre_0_6_0.migration_apply.resume_migration</code>"]
+    plan -->|reviewed plan| locks
+    locks -->|transaction-wide| revalidate
+    revalidate -->|before first write| journal
+    journal -->|phased apply| machine
+    machine -->|copied state| data
+    data -->|bootstrap| guest
+    guest -->|local + runtime| verify
+    revalidate -->|mismatch/failure| recoverable
+    recoverable -->|resume| locks

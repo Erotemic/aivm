@@ -178,7 +178,7 @@ def detect_host_timezone() -> str:
         marker = 'zoneinfo/'
         idx = target.find(marker)
         if idx != -1:
-            candidate = target[idx + len(marker):].strip('/')
+            candidate = target[idx + len(marker) :].strip('/')
             if _looks_like_iana_tz(candidate):
                 return candidate
     except OSError:

@@ -1,0 +1,15 @@
+[[networks]]
+name = "aivm-net"
+[networks.network]
+bridge = "virbr-aivm"
+subnet_cidr = "10.77.0.0/24"
+gateway_ip = "10.77.0.1"
+dhcp_start = "10.77.0.100"
+dhcp_end = "10.77.0.200"
+[networks.firewall]
+enabled = true
+table = "aivm_sandbox"
+block_cidrs = ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4"]
+extra_block_cidrs = []
+allow_tcp_ports = []
+allow_udp_ports = []

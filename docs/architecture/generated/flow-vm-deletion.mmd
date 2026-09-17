@@ -1,0 +1,23 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 2
+flowchart TD
+    command["vm delete resolves managed VM<br/><code>aivm.cli.vm_lifecycle.VMDeleteCLI.main</code>"]
+    lock[["Hold store, network, and VM resources<br/><code>aivm.vm.deletion._DeletionLockScope</code>"]]
+    journal[("Create or resume deletion journal<br/><code>aivm.vm.deletion.VMDeletionJournal</code>")]
+    preflight["Prove domain, storage, paths, and mounts safe before deletion<br/><code>aivm.vm.deletion._revalidate_domain_storage_paths</code>"]
+    attachments["Clean attachment and replay artifacts<br/><code>aivm.vm.deletion._cleanup_attachment_artifacts</code>"]
+    credentials[("Require released credentials and discard released material<br/><code>aivm.credentials.guards.require_vm_credentials_released</code>")]
+    libvirt{"Destroy and undefine domain with reviewed storage<br/><code>aivm.vm.domain._destroy_and_undefine_vm</code>"}
+    trees["Remove bootstrap, machine-state, and VM-owned trees<br/><code>aivm.vm.deletion._cleanup_owned_trees</code>"]
+    store[("Remove VM and finalize machine store/profile<br/><code>aivm.vm.deletion.delete_managed_vm</code>")]
+    recoverable>"Failure records last_error and completed phases for resume<br/><code>aivm.vm.deletion.VMDeletionJournal.last_error</code>"]
+    command -->|global mutation| lock
+    lock -->|durable recovery| journal
+    journal -->|inspect first| preflight
+    preflight -->|safe| attachments
+    attachments -->|phase| credentials
+    credentials -->|phase| libvirt
+    libvirt -->|domain absent| trees
+    trees -->|finalize| store
+    preflight -->|any failure| recoverable
+    recoverable -->|retry| journal

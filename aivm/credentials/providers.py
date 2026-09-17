@@ -263,8 +263,7 @@ def _select_recorded_key(
     by_fingerprint = [
         item
         for item in keys
-        if _provider_key_fingerprint(item, label=label)
-        == entry.key_fingerprint
+        if _provider_key_fingerprint(item, label=label) == entry.key_fingerprint
     ]
     if len(by_fingerprint) > 1:
         raise AIVMError(

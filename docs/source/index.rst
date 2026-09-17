@@ -17,6 +17,8 @@ See the repository README for current CLI usage and safety notes.
    quickstart
    privilege-modes
    workflows
+   architecture/index
+   api
    wsl
    virtiofs
    security

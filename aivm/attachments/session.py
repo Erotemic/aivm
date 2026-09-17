@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -13,27 +12,27 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..config_store import (
+    Store,
     find_attachment_for_vm,
     find_attachments_for_vm,
     load_store,
-    save_store,
+    update_store,
     upsert_attachment,
     upsert_network,
     upsert_vm_with_network,
 )
 from ..errors import AIVMError, CommandControlError
-from ..firewall import apply_firewall, effective_firewall_table
+from ..firewall import ensure_firewall_ready
+from ..fs_identity import directory_identity
 from ..net import ensure_network
-from ..privilege import sudo_allowed
 from ..services import (
     PreparedSession,
     maybe_install_missing_host_deps,
     maybe_offer_create_ssh_identity,
     record_vm,
-    resolve_cfg_for_code,
+    resolve_context_for_code,
 )
 from ..status import (
-    probe_firewall,
     probe_network,
     probe_ssh_ready,
 )
@@ -45,6 +44,7 @@ from ..vm import (
     get_ip_cached,
     vm_has_virtiofs_shared_memory,
     vm_share_mappings,
+    vm_exists,
     wait_for_ip,
     wait_for_ssh,
 )
@@ -63,19 +63,22 @@ from .guest import (
     _ensure_attachment_available_in_guest,
     _ensure_git_clone_attachment,
 )
+from .ownership import attachment_owner_for_context
 from .persistent import (
     PERSISTENT_ROOT_VIRTIOFS_TAG,
     _prepare_persistent_attachment_host_and_vm,
     _reconcile_persistent_attachments_in_guest,
+    _reconcile_persistent_host_exports,
 )
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _normalize_attachment_mode,
     _resolve_attachment,
 )
+from ..attachment_schema import MIRROR_HOME_AUTO, resolve_mirror_home_enabled
 from .shared_root import (
     _ensure_shared_root_host_bind,
     _ensure_shared_root_parent_dir,
@@ -100,6 +103,8 @@ class ReconcileResult:
     cached_ip: str | None
     cached_ssh_ok: bool
     shared_root_host_side_ready: bool = False
+    vm_was_running: bool = False
+    persistent_host_export_identity: tuple[int, int] | None = None
 
 
 def _missing_virtiofs_dir_from_error(ex: Exception) -> str | None:
@@ -168,51 +173,64 @@ def _record_attachment(
     access: str,
     guest_dst: str,
     tag: str,
+    owner_principal_id: str = '',
+    mirror_home: str = MIRROR_HOME_AUTO,
 ) -> Path:
-    # The canonical attachment key (host_path) is always the resolved real
-    # path so that re-attaching via a different symlink chain (or via the
-    # canonical path itself) updates the same record. The lexical form the
-    # user typed — if it differs — is recorded as an alias so the guest can
-    # mirror it via a symlink. Aliases accumulate across re-attaches.
+    """Persist one owner-scoped attachment under the store lock."""
     lexical_str = str(host_src.expanduser().absolute())
     resolved_str = str(host_src.resolve())
-    reg = load_store(cfg_path)
-    existing = find_attachment_for_vm(reg, host_src, cfg.vm.name)
-    aliases: list[str] = []
-    if existing is not None:
-        aliases = list(existing.host_lexical_paths or [])
-    if lexical_str != resolved_str and lexical_str not in aliases:
-        aliases.append(lexical_str)
+    owner = str(owner_principal_id or '').strip()
+    source_dev = 0
+    source_ino = 0
+    if mode == ATTACHMENT_MODE_PERSISTENT:
+        identity = directory_identity(resolved_str)
+        source_dev = identity.dev
+        source_ino = identity.ino
 
-    before = deepcopy(reg)
-    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
-    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-    upsert_attachment(
-        reg,
-        host_path=resolved_str,
-        vm_name=cfg.vm.name,
-        mode=mode,
-        access=access,
-        guest_dst=guest_dst,
-        tag=tag,
-        host_lexical_paths=aliases,
-    )
-    if reg == before:
-        log.debug(
-            'Attachment record already up to date for vm={} host_src={} in {}',
-            cfg.vm.name,
+    def mutate(reg: Store) -> None:
+        existing = find_attachment_for_vm(
+            reg,
             host_src,
-            cfg_path,
+            cfg.vm.name,
+            owner_principal_id=(owner if owner else None),
         )
-        return cfg_path
-    return save_store(
-        reg,
+        aliases = list(existing.host_lexical_paths or []) if existing else []
+        if lexical_str != resolved_str and lexical_str not in aliases:
+            aliases.append(lexical_str)
+        upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+        upsert_attachment(
+            reg,
+            host_path=resolved_str,
+            vm_name=cfg.vm.name,
+            owner_principal_id=owner,
+            mode=mode,
+            access=access,
+            guest_dst=guest_dst,
+            tag=tag,
+            mirror_home=mirror_home,
+            source_dev=source_dev,
+            source_ino=source_ino,
+            host_lexical_paths=aliases,
+        )
+        return None
+
+    update_store(
+        mutate,
         cfg_path,
         reason=(
             f'Persist attachment record for {host_src} on VM {cfg.vm.name} '
-            f'(mode={mode}, access={access}, guest_dst={guest_dst}).'
+            f'(owner={owner or "legacy"}, mode={mode}, access={access}, '
+            f'guest_dst={guest_dst}'
+            + (
+                f', mirror_home={mirror_home}'
+                if str(mirror_home) != MIRROR_HOME_AUTO
+                else ''
+            )
+            + ').'
         ),
     )
+    return cfg_path
 
 
 def _saved_vm_attachments(
@@ -220,6 +238,7 @@ def _saved_vm_attachments(
     cfg_path: Path,
     *,
     primary_attachment: ResolvedAttachment | None = None,
+    owner_principal_id: str = '',
 ) -> list[ResolvedAttachment]:
     """Return persisted share-like attachments that should be present for this VM.
 
@@ -239,11 +258,15 @@ def _saved_vm_attachments(
 
     # Restore any other folders already associated with this VM so a rebooted
     # guest comes back with the broader working set the user previously chose.
-    for att in find_attachments_for_vm(reg, cfg.vm.name):
+    for att in find_attachments_for_vm(
+        reg,
+        cfg.vm.name,
+        owner_principal_id=(owner_principal_id or None),
+    ):
         mode = _normalize_attachment_mode(att.mode)
         if mode not in {
             ATTACHMENT_MODE_PERSISTENT,
-            ATTACHMENT_MODE_SHARED,
+            ATTACHMENT_MODE_DIRECT_VIRTIOFS,
             ATTACHMENT_MODE_SHARED_ROOT,
         }:
             continue
@@ -268,7 +291,15 @@ def _saved_vm_attachments(
                 host_src,
             )
             continue
-        attachments.append(_resolve_attachment(cfg, cfg_path, host_src, ''))
+        attachments.append(
+            _resolve_attachment(
+                cfg,
+                cfg_path,
+                host_src,
+                '',
+                owner_principal_id=owner_principal_id,
+            )
+        )
         seen_sources.add(source_dir)
     return attachments
 
@@ -280,13 +311,18 @@ def _restore_saved_vm_attachments(
     ip: str,
     primary_attachment: ResolvedAttachment | None,
     yes: bool,
-    mirror_home: bool = False,
+    user_mirror_home_policy: str = MIRROR_HOME_AUTO,
+    mirror_home: bool | None = None,
+    owner_principal_id: str = '',
 ) -> None:
-    """Best-effort restore saved non-primary attachments for a running VM session.
+    """Best-effort restore saved non-primary attachments after VM startup.
 
-    After the primary folder for the current command has been reconciled, this
-    helper walks the other persisted attachments for the VM and attempts to make
-    them available inside the guest again. Standard shared attachments are
+    Session preparation calls this only when the VM was not already live at the
+    start of the foreground operation.  ``aivm code``/``ssh`` against an
+    already-running VM are attachment-local and must not disturb unrelated
+    work.  After a start/recovery, this helper walks the other persisted
+    attachments for the VM and attempts to make them available inside the
+    guest again. Standard shared attachments are
     restored by ensuring the virtiofs mapping exists and then mounting it in the
     guest. Shared-root attachments reuse the shared-root reconciliation path but
     disable disruptive host-side rebinds, because automatic restore should not
@@ -303,6 +339,7 @@ def _restore_saved_vm_attachments(
         cfg,
         cfg_path,
         primary_attachment=primary_attachment,
+        owner_principal_id=owner_principal_id,
     )
     if len(saved_attachments) <= 1:
         return
@@ -341,13 +378,17 @@ def _restore_saved_vm_attachments(
     _restore_reg = load_store(cfg_path)
     _lexical_by_source: dict[str, list[str]] = {
         e.host_path: list(e.host_lexical_paths)
-        for e in find_attachments_for_vm(_restore_reg, cfg.vm.name)
+        for e in find_attachments_for_vm(
+            _restore_reg,
+            cfg.vm.name,
+            owner_principal_id=(owner_principal_id or None),
+        )
         if e.host_lexical_paths
     }
     shared_secondary = [
         att
         for att in secondary_attachments
-        if att.mode == ATTACHMENT_MODE_SHARED
+        if att.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS
     ]
     mappings: list[tuple[str, str]] = []
     if shared_secondary:
@@ -357,6 +398,15 @@ def _restore_saved_vm_attachments(
 
     restored = 0
     for att in secondary_attachments:
+        effective_mirror_home = (
+            bool(mirror_home)
+            if mirror_home is not None
+            else resolve_mirror_home_enabled(
+                att.mirror_home,
+                user_mirror_home_policy,
+                cfg.vm.mirror_shared_home_folders,
+            )
+        )
         if att.mode == ATTACHMENT_MODE_PERSISTENT:
             continue
         if att.mode == ATTACHMENT_MODE_SHARED_ROOT:
@@ -373,7 +423,7 @@ def _restore_saved_vm_attachments(
                     dry_run=False,
                     ensure_shared_root_host_side=True,
                     allow_disruptive_shared_root_rebind=False,
-                    mirror_home=mirror_home,
+                    mirror_home=effective_mirror_home,
                     host_lexical_paths=_lx,
                 )
                 _record_attachment(
@@ -384,6 +434,8 @@ def _restore_saved_vm_attachments(
                     access=aligned.access,
                     guest_dst=aligned.guest_dst,
                     tag=aligned.tag,
+                    owner_principal_id=aligned.owner_principal_id,
+                    mirror_home=aligned.mirror_home,
                 )
                 restored += 1
             except CommandControlError:
@@ -467,7 +519,7 @@ def _restore_saved_vm_attachments(
                 ip,
                 _restore_src,
                 aligned,
-                mirror_home=mirror_home,
+                mirror_home=effective_mirror_home,
             )
             _record_attachment(
                 cfg,
@@ -477,6 +529,8 @@ def _restore_saved_vm_attachments(
                 access=aligned.access,
                 guest_dst=aligned.guest_dst,
                 tag=aligned.tag,
+                owner_principal_id=aligned.owner_principal_id,
+                mirror_home=aligned.mirror_home,
             )
             restored += 1
         except CommandControlError:
@@ -501,7 +555,7 @@ def _restore_saved_vm_attachments(
 def _virtiofs_mapping_for_attachment(
     cfg: AgentVMConfig, attachment: ResolvedAttachment
 ) -> tuple[str, str] | None:
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag
     if attachment.mode in {
         ATTACHMENT_MODE_SHARED_ROOT,
@@ -524,10 +578,13 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
         True if the VM is running, False if not defined/running,
         None if the probe is inconclusive (e.g., permission denied).
     """
-    from ..runtime import virsh_cmd
+    from ..runtime import pin_locale, virsh_cmd
 
+    # Both the inconclusive-permission stderr match and the running-state
+    # match below read English text, so the probe pins the C locale.
     res = CommandManager.current().run(
-        virsh_cmd('domstate', vm_name), role='read',
+        pin_locale(virsh_cmd('domstate', vm_name)),
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -542,37 +599,6 @@ def _probe_vm_running_nonsudo(vm_name: str) -> bool | None:
         return False
     state = res.stdout.strip().lower()
     return 'running' in state
-
-
-def _note_unavoidable_firewall_sudo(cfg: AgentVMConfig) -> None:
-    """Explain the firewall probe's sudo prompt before it appears.
-
-    This one is not avoidable and not a symptom of anything being wrong, so
-    say that up front rather than letting it read as a stray escalation:
-    ``nft`` offers no unprivileged read, and the managed table lives only in
-    the kernel's live ruleset, so a host reboot always takes it with it.
-
-    Quiet when sudo is already authenticated -- with no prompt coming, the
-    explanation is just noise.
-    """
-    if not CommandManager.current().sudo_authentication_required():
-        return
-    log.info(
-        'The next step needs sudo and there is no way around it: reading '
-        'nftables state ({}) requires root, with no unprivileged fallback.',
-        f'table inet {effective_firewall_table(cfg)}',
-    )
-    log.info(
-        'The managed table exists only in the live kernel ruleset, so it is '
-        'gone after every host reboot and has to be checked (and usually '
-        'reinstalled) before the first session.'
-    )
-    log.info(
-        'Expect this roughly once per boot: later runs skip the firewall '
-        'check entirely while the VM stays reachable over SSH. Pass '
-        '--no-ensure_firewall to skip it, at the cost of running the '
-        'session without the sandbox rules.'
-    )
 
 
 def _reconcile_attached_vm(
@@ -607,39 +633,22 @@ def _reconcile_attached_vm(
             if not policy.dry_run
             else None
         )
+        vm_was_running = bool(cached_ssh_ok or vm_running_probe is True)
 
         net_probe = probe_network(cfg, use_sudo=False).ok
         need_network_ensure = (net_probe is False) and (not cached_ssh_ok)
         if need_network_ensure:
             ensure_network(cfg, recreate=False, dry_run=policy.dry_run)
 
-        need_firewall_apply = False
-        if (
-            cfg.firewall.enabled
-            and policy.ensure_firewall_opt
-            and (not cached_ssh_ok)
-        ):
-            if not sudo_allowed():
-                log.warning(
-                    'Skipping firewall reconciliation: privilege_mode = '
-                    'never and nftables requires root. Set firewall.enabled '
-                    '= false to silence this warning.'
-                )
-            else:
-                # nft reads need root on almost every host, so probing
-                # without sudo first would just submit a doomed command; go
-                # straight to the read-only sudo probe.
-                _note_unavoidable_firewall_sudo(cfg)
-                fw_probe = probe_firewall(cfg, use_sudo=True).ok
-                need_firewall_apply = fw_probe is not True
-        if need_firewall_apply:
-            apply_firewall(cfg, dry_run=policy.dry_run)
+        if policy.ensure_firewall_opt and not cached_ssh_ok:
+            ensure_firewall_ready(cfg, dry_run=policy.dry_run)
 
         recreate = False
         vm_running = vm_running_probe
         mappings: list[tuple[str, str]] = []
         has_share = False
         shared_root_host_side_ready = False
+        persistent_host_export_identity: tuple[int, int] | None = None
         virtiofs_mapping = _virtiofs_mapping_for_attachment(cfg, attachment)
         if vm_running is None and cached_ssh_ok:
             vm_running = True
@@ -649,7 +658,7 @@ def _reconcile_attached_vm(
             and vm_running is True
         ):
             mappings = vm_share_mappings(cfg, use_sudo=False)
-            if attachment.mode == ATTACHMENT_MODE_SHARED:
+            if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
                 attachment = drift_align_attachment_tag_with_mappings(
                     attachment, host_src, mappings
                 )
@@ -664,9 +673,13 @@ def _reconcile_attached_vm(
 
         need_vm_start_or_create = policy.dry_run or (vm_running is not True)
         if need_vm_start_or_create:
-            maybe_install_missing_host_deps(
-                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+            vm_is_defined = (
+                False if policy.dry_run else vm_exists(cfg, dry_run=False)
             )
+            if not vm_is_defined:
+                maybe_install_missing_host_deps(
+                    yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+                )
             if attachment.mode in {
                 ATTACHMENT_MODE_SHARED_ROOT,
                 ATTACHMENT_MODE_PERSISTENT,
@@ -678,6 +691,25 @@ def _reconcile_attached_vm(
                         )
 
                         _ensure_persistent_root_parent_dir(cfg, dry_run=False)
+                        if config_store_path is not None:
+                            export_result = _reconcile_persistent_host_exports(
+                                cfg, config_store_path, dry_run=False
+                            )
+                            for record in export_result.records:
+                                if (
+                                    record.enabled
+                                    and record.shared_root_token == attachment.tag
+                                    and record.guest_dst == attachment.guest_dst
+                                    and record.source_dir == attachment.source_dir
+                                    and record.access == attachment.access
+                                    and record.shared_root_token
+                                    not in export_result.unavailable_tokens
+                                ):
+                                    persistent_host_export_identity = (
+                                        record.source_dev,
+                                        record.source_ino,
+                                    )
+                                    break
                     else:
                         _ensure_shared_root_parent_dir(cfg, dry_run=False)
             try:
@@ -690,6 +722,7 @@ def _reconcile_attached_vm(
                         virtiofs_mapping[0] if virtiofs_mapping else ''
                     ),
                     share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
+                    ensure_firewall=policy.ensure_firewall_opt,
                 )
             except CommandControlError:
                 raise
@@ -700,6 +733,9 @@ def _reconcile_attached_vm(
                         'VM {} has stale virtiofs source {}; recreating VM definition',
                         cfg.vm.name,
                         missing_virtiofs_dir,
+                    )
+                    maybe_install_missing_host_deps(
+                        yes=bool(policy.yes), dry_run=False
                     )
                     create_or_start_vm(
                         cfg,
@@ -712,6 +748,7 @@ def _reconcile_attached_vm(
                         share_tag=(
                             virtiofs_mapping[1] if virtiofs_mapping else ''
                         ),
+                        ensure_firewall=policy.ensure_firewall_opt,
                     )
                 else:
                     raise
@@ -726,7 +763,7 @@ def _reconcile_attached_vm(
                 and vm_running is True
             ):
                 mappings = vm_share_mappings(cfg, use_sudo=False)
-                if attachment.mode == ATTACHMENT_MODE_SHARED:
+                if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
                     attachment = drift_align_attachment_tag_with_mappings(
                         attachment, host_src, mappings
                     )
@@ -860,6 +897,9 @@ def _reconcile_attached_vm(
                     )
 
         if recreate:
+            maybe_install_missing_host_deps(
+                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+            )
             create_or_start_vm(
                 cfg,
                 dry_run=policy.dry_run,
@@ -869,6 +909,7 @@ def _reconcile_attached_vm(
                     virtiofs_mapping[0] if virtiofs_mapping else ''
                 ),
                 share_tag=(virtiofs_mapping[1] if virtiofs_mapping else ''),
+                ensure_firewall=policy.ensure_firewall_opt,
             )
 
         return ReconcileResult(
@@ -876,6 +917,8 @@ def _reconcile_attached_vm(
             cached_ip=cached_ip,
             cached_ssh_ok=cached_ssh_ok,
             shared_root_host_side_ready=shared_root_host_side_ready,
+            vm_was_running=vm_was_running,
+            persistent_host_export_identity=persistent_host_export_identity,
         )
 
 
@@ -910,7 +953,7 @@ def _prepare_attached_session(
     # bootstrap a brand-new VM — refusing here avoids creating a VM only to
     # block on the attachment. Overlap checks run later, once we know which
     # VM and store we're targeting.
-    from .safety import attachment_safety_preflight
+    from .safety import attachment_safety_preflight, warn_shared_home_attachment
 
     ok, _report = attachment_safety_preflight(
         host_src,
@@ -923,11 +966,12 @@ def _prepare_attached_session(
         )
 
     try:
-        cfg, cfg_path = resolve_cfg_for_code(
+        context, cfg_path = resolve_context_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
+        cfg = context.effective_cfg
     except RuntimeError as ex:
         if (
             'No VM definitions found in config store' not in str(ex)
@@ -935,13 +979,26 @@ def _prepare_attached_session(
         ):
             raise
         bootstrap_missing_vm(ex)
-        cfg, cfg_path = resolve_cfg_for_code(
+        context, cfg_path = resolve_context_for_code(
             config_opt=config_opt,
             vm_opt=vm_opt,
             host_src=host_src,
         )
+        cfg = context.effective_cfg
 
+    owner_principal_id = attachment_owner_for_context(context, cfg_path)
     existing_store = load_store(cfg_path)
+    warn_shared_home_attachment(
+        host_src,
+        shared_vm=(
+            sum(
+                1
+                for item in existing_store.principals
+                if item.vm_name == cfg.vm.name
+            )
+            > 1
+        ),
+    )
     ok, _report = attachment_safety_preflight(
         host_src,
         existing_attachments=existing_store.attachments,
@@ -962,9 +1019,16 @@ def _prepare_attached_session(
             guest_dst_opt,
             attach_mode_opt,
             attach_access_opt,
+            owner_principal_id=owner_principal_id,
         )
     else:
-        attachment = _resolve_attachment(cfg, cfg_path, host_src, guest_dst_opt)
+        attachment = _resolve_attachment(
+            cfg,
+            cfg_path,
+            host_src,
+            guest_dst_opt,
+            owner_principal_id=owner_principal_id,
+        )
     reconcile = _reconcile_attached_vm(
         cfg,
         host_src,
@@ -996,10 +1060,19 @@ def _prepare_attached_session(
                 f'{cfg.vm.name} before preparing the attached session.'
             ),
         )
+        # The profile snapshot predates key creation; reload the persisted
+        # principal/profile context rather than synthesizing a legacy identity.
+        from ..services import load_vm_context_with_path
+
+        context, _ = load_vm_context_with_path(
+            str(cfg_path), vm_opt=cfg.vm.name, host_src=host_src
+        )
+        cfg = context.effective_cfg
+        owner_principal_id = attachment_owner_for_context(context, cfg_path)
 
     if dry_run:
         return PreparedSession(
-            cfg=cfg,
+            context=context,
             cfg_path=cfg_path,
             host_src=host_src,
             attachment_mode=attachment.mode,
@@ -1019,6 +1092,8 @@ def _prepare_attached_session(
         access=attachment.access,
         guest_dst=attachment.guest_dst,
         tag=attachment.tag,
+        owner_principal_id=attachment.owner_principal_id,
+        mirror_home=attachment.mirror_home,
     )
 
     ip = cached_ip if cached_ip else get_ip_cached(cfg)
@@ -1031,14 +1106,24 @@ def _prepare_attached_session(
         wait_for_ssh(cfg, ip, timeout_s=300, dry_run=False)
     if not ip:
         raise RuntimeError('Could not resolve VM IP address.')
-    mirror_home = bool(cfg.vm.mirror_shared_home_folders)
+    mirror_home = resolve_mirror_home_enabled(
+        attachment.mirror_home,
+        context.profile.mirror_shared_home_folders,
+        cfg.vm.mirror_shared_home_folders,
+    )
+    vm_was_running = bool(getattr(reconcile, 'vm_was_running', False))
     if attachment.mode in {
         ATTACHMENT_MODE_PERSISTENT,
-        ATTACHMENT_MODE_SHARED,
+        ATTACHMENT_MODE_DIRECT_VIRTIOFS,
         ATTACHMENT_MODE_SHARED_ROOT,
     }:
         _reg_for_aliases = load_store(cfg_path)
-        _saved = find_attachment_for_vm(_reg_for_aliases, host_src, cfg.vm.name)
+        _saved = find_attachment_for_vm(
+            _reg_for_aliases,
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(owner_principal_id or None),
+        )
         _primary_aliases = list(_saved.host_lexical_paths) if _saved else []
         _ensure_attachment_available_in_guest(
             cfg,
@@ -1056,20 +1141,31 @@ def _prepare_attached_session(
             host_lexical_paths=_primary_aliases,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
+            host_exports_ready = False
+            if reconcile.persistent_host_export_identity is not None:
+                current_identity = directory_identity(str(host_src.resolve()))
+                host_exports_ready = (
+                    current_identity.dev, current_identity.ino
+                ) == reconcile.persistent_host_export_identity
             _reconcile_persistent_attachments_in_guest(
                 cfg,
                 cfg_path,
                 ip,
                 dry_run=False,
+                host_exports_ready=host_exports_ready,
+                only_guest_dst=attachment.guest_dst,
+                preserve_live_mounts=vm_was_running,
             )
-        _restore_saved_vm_attachments(
-            cfg,
-            cfg_path,
-            ip=ip,
-            primary_attachment=attachment,
-            yes=bool(yes),
-            mirror_home=mirror_home,
-        )
+        if not vm_was_running:
+            _restore_saved_vm_attachments(
+                cfg,
+                cfg_path,
+                ip=ip,
+                primary_attachment=attachment,
+                yes=bool(yes),
+                user_mirror_home_policy=context.profile.mirror_shared_home_folders,
+                owner_principal_id=owner_principal_id,
+            )
     else:
         _ensure_git_clone_attachment(
             cfg,
@@ -1088,16 +1184,18 @@ def _prepare_attached_session(
             attachment,
             mirror_home=mirror_home,
         )
-        _restore_saved_vm_attachments(
-            cfg,
-            cfg_path,
-            ip=ip,
-            primary_attachment=None,
-            yes=bool(yes),
-            mirror_home=mirror_home,
-        )
+        if not vm_was_running:
+            _restore_saved_vm_attachments(
+                cfg,
+                cfg_path,
+                ip=ip,
+                primary_attachment=None,
+                yes=bool(yes),
+                user_mirror_home_policy=context.profile.mirror_shared_home_folders,
+                owner_principal_id=owner_principal_id,
+            )
     return PreparedSession(
-        cfg=cfg,
+        context=context,
         cfg_path=cfg_path,
         host_src=host_src,
         attachment_mode=attachment.mode,

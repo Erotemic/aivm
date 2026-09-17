@@ -20,6 +20,7 @@ from aivm.config_store import (
     Store,
     save_store,
 )
+from aivm.errors import AIVMError
 from aivm.vm.share import AttachmentAccess, AttachmentMode
 
 
@@ -128,14 +129,14 @@ def test_resolve_attachment_reuses_saved_shared_mode_when_mode_omitted(
         cfg_path,
         host_src,
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         guest_dst='/workspace/proj',
         tag='hostcode-proj',
     )
 
     resolved = _resolve_attachment(cfg, cfg_path, host_src, '', '')
 
-    assert resolved.mode == AttachmentMode.SHARED
+    assert resolved.mode == AttachmentMode.DIRECT_VIRTIOFS
     assert resolved.guest_dst == '/workspace/proj'
     assert resolved.tag == 'hostcode-proj'
 
@@ -153,7 +154,7 @@ def test_resolve_attachment_reuses_saved_access_when_access_omitted(
         cfg_path,
         host_src,
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         access=AttachmentAccess.RO,
         guest_dst='/workspace/proj',
         tag='hostcode-proj',
@@ -161,7 +162,7 @@ def test_resolve_attachment_reuses_saved_access_when_access_omitted(
 
     resolved = _resolve_attachment(cfg, cfg_path, host_src, '', '')
 
-    assert resolved.mode == AttachmentMode.SHARED
+    assert resolved.mode == AttachmentMode.DIRECT_VIRTIOFS
     assert resolved.access == AttachmentAccess.RO
 
 
@@ -178,7 +179,7 @@ def test_resolve_attachment_rejects_mode_change_for_existing_attachment(
         cfg_path,
         host_src,
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         guest_dst='/workspace/proj',
         tag='hostcode-proj',
     )
@@ -208,7 +209,7 @@ def test_resolve_attachment_rejects_access_change_for_existing_attachment(
         cfg_path,
         host_src,
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         access=AttachmentAccess.RW,
         guest_dst='/workspace/proj',
         tag='hostcode-proj',
@@ -322,7 +323,8 @@ def test_resolve_attachment_git_preserves_saved_guest_dst(
     'mode',
     [
         pytest.param(
-            AttachmentMode.SHARED, id='shared_defaults_to_exact_host_path'
+            AttachmentMode.DIRECT_VIRTIOFS,
+            id='shared_defaults_to_exact_host_path',
         ),
         pytest.param(
             AttachmentMode.SHARED_ROOT,
@@ -358,7 +360,7 @@ def test_resolve_attachment_explicit_guest_dst_is_preserved(
     save_store(Store(), cfg_path)
 
     for mode in (
-        AttachmentMode.SHARED,
+        AttachmentMode.DIRECT_VIRTIOFS,
         AttachmentMode.SHARED_ROOT,
         AttachmentMode.GIT,
     ):
@@ -383,10 +385,49 @@ def test_resolve_attachment_preserves_existing_saved_tag(
         cfg_path,
         host_src,
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         guest_dst='/workspace/proj',
         tag=saved_tag,
     )
 
     resolved = _resolve_attachment(cfg, cfg_path, host_src, '', '')
     assert resolved.tag == saved_tag
+
+
+def test_old_shared_mode_name_is_refused_with_the_reason(
+    tmp_path: Path,
+) -> None:
+    """``--mode shared`` must not quietly keep selecting a per-folder device.
+
+    The mode was renamed to ``direct-virtiofs`` for its cost: each such
+    attachment occupies one of the guest's limited PCIe slots. Accepting the
+    old spelling as an alias would leave anyone following older notes -- or
+    an agent reproducing them -- picking it by habit, which is exactly what
+    the rename is meant to stop.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-renamed-mode'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    save_store(Store(), cfg_path)
+
+    with pytest.raises(AIVMError) as excinfo:
+        _resolve_attachment(cfg, cfg_path, host_src, '', 'shared')
+
+    message = str(excinfo.value)
+    assert 'direct-virtiofs' in message
+    assert 'PCIe' in message
+
+
+def test_direct_virtiofs_accepts_its_short_aliases(tmp_path: Path) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-direct-aliases'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    save_store(Store(), cfg_path)
+
+    for spelling in ('direct-virtiofs', 'direct', 'direct_virtiofs'):
+        resolved = _resolve_attachment(cfg, cfg_path, host_src, '', spelling)
+        assert resolved.mode == AttachmentMode.DIRECT_VIRTIOFS

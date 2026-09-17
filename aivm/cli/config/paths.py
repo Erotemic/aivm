@@ -13,13 +13,14 @@ from ...config_store import (
     find_vm,
     load_config_document,
     materialize_vm_cfg,
-    persistent_host_state_dir,
     require_vm,
     split_fragment_paths,
 )
 from ...errors import AIVMError
+from ...legacy.pre_0_6_0.paths import persistent_host_state_dir
+from ...machine_store import machine_store_layout
 from ...persistent_replay import PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME
-from ...services import cfg_path
+from ...scoped_store import load_scope_profile, resolve_store_scope
 from ...vm.paths import _paths as _vm_runtime_paths
 from .._common import _BaseCommand
 
@@ -37,7 +38,8 @@ class ConfigPathsCLI(_BaseCommand):
         'all',
         help=(
             'Path group to show: all, config, global, defaults, networks, '
-            'vms, vm, libvirt, data. `vm` defaults to active_vm.'
+            'profile, vms, vm, libvirt, data. `vm` defaults to the '
+            'current profile selection.'
         ),
         position=1,
     )
@@ -51,14 +53,19 @@ class ConfigPathsCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        root = cfg_path(args.config)
+        scope = resolve_store_scope(args.config)
+        root = scope.store_path
         loaded = load_config_document(root)
+        profile = load_scope_profile(scope) if scope.is_machine else None
+        active_vm = (
+            profile.active_vm if profile is not None else loaded.store.active_vm
+        )
         target = str(args.target or 'all').strip().lower().replace('_', '-')
         vm_name = str(args.vm or args.name or '').strip()
         if target in {'active', 'active-vm'}:
             target = 'vm'
         if target == 'vm' and not vm_name:
-            vm_name = loaded.store.active_vm
+            vm_name = active_vm
         if target == 'libvirt' and not vm_name:
             # Without an explicit VM, libvirt output includes global paths plus
             # all configured VM-specific paths.
@@ -70,6 +77,7 @@ class ConfigPathsCLI(_BaseCommand):
             'global',
             'root',
             'defaults',
+            'profile',
             'networks',
             'network',
             'vms',
@@ -84,8 +92,9 @@ class ConfigPathsCLI(_BaseCommand):
             )
 
         print('AIVM paths')
+        print(f'scope: {scope.mode}')
         print(f'layout: {loaded.layout}')
-        print(f'active_vm: {loaded.store.active_vm or "(unset)"}')
+        print(f'active_vm: {active_vm or "(unset)"}')
 
         show_config = target in {
             'all',
@@ -93,6 +102,7 @@ class ConfigPathsCLI(_BaseCommand):
             'global',
             'root',
             'defaults',
+            'profile',
             'networks',
             'network',
             'vms',
@@ -102,7 +112,13 @@ class ConfigPathsCLI(_BaseCommand):
         show_libvirt = target in {'all', 'libvirt', 'vms', 'vm'}
 
         if show_config:
-            _print_config_paths(root, loaded, target=target, vm_name=vm_name)
+            _print_config_paths(
+                root,
+                loaded,
+                target=target,
+                vm_name=vm_name,
+                profile_path=scope.profile_path,
+            )
         if show_data:
             _print_data_paths(loaded, vm_name=vm_name)
         if show_libvirt:
@@ -150,13 +166,20 @@ def _vm_config_source(root: Path, loaded: Any, vm_name: str) -> Path:
 
 
 def _print_config_paths(
-    root: Path, loaded: Any, *, target: str, vm_name: str
+    root: Path,
+    loaded: Any,
+    *,
+    target: str,
+    vm_name: str,
+    profile_path: Path | None,
 ) -> None:
     cfg_dir = root.parent
     show_all = target in {'all', 'config'}
     print('config:')
     if show_all or target in {'global', 'root'}:
         _print_path('global', root, kind='file')
+    if profile_path is not None and (show_all or target == 'profile'):
+        _print_path('profile', profile_path, kind='file')
     if show_all or target == 'defaults':
         _print_path(
             'defaults',
@@ -190,18 +213,26 @@ def _print_config_paths(
         )
 
 
+def _persistent_state_dir_for_store(loaded: Any, vm_name: str) -> Path:
+    if getattr(loaded.store, 'store_kind', 'legacy') == 'machine':
+        return machine_store_layout().vm_state_dir(vm_name) / 'persistent'
+    return persistent_host_state_dir(vm_name)
+
+
 def _print_data_paths(loaded: Any, *, vm_name: str) -> None:
     print('data:')
     _print_path('app_data_dir', app_data_dir(), kind='dir')
     names = (
         [vm_name]
         if vm_name
-        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+        else [
+            rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)
+        ]
     )
     for name in names:
         if not name:
             continue
-        state_dir = persistent_host_state_dir(name)
+        state_dir = _persistent_state_dir_for_store(loaded, name)
         _print_path(
             f'vm:{name}:persistent_host_state_dir', state_dir, kind='dir'
         )
@@ -218,7 +249,9 @@ def _print_libvirt_paths(
     names = (
         [vm_name]
         if vm_name
-        else [rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)]
+        else [
+            rec.name for rec in sorted(loaded.store.vms, key=lambda r: r.name)
+        ]
     )
     cfgs = []
     for name in names:
@@ -263,11 +296,13 @@ def _print_libvirt_paths(
         _print_path('ip_file', p['ip_file'], kind='file')
         _print_path('known_hosts', p['known_hosts'], kind='file')
         _print_path(
-            'persistent_host_state_dir', persistent_host_state_dir(vm), kind='dir'
+            'persistent_host_state_dir',
+            _persistent_state_dir_for_store(loaded, vm),
+            kind='dir',
         )
         _print_path(
             'persistent_host_manifest',
-            persistent_host_state_dir(vm)
+            _persistent_state_dir_for_store(loaded, vm)
             / PERSISTENT_ATTACHMENT_HOST_MANIFEST_NAME,
             kind='file',
         )

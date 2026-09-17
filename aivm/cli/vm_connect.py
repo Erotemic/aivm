@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import socket
@@ -14,17 +15,28 @@ import kwconf
 from loguru import logger as log
 
 from ..attachments.guest import _upsert_ssh_config_entry
+from ..attachments.persistent.transport import _install_guest_text_if_changed
 from ..attachments.resolve import logical_absolute_path
 from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
+from ..config_scopes import ResolvedVMContext
 from ..config_store import load_store
+from ..credentials.agent_transport import (
+    AgentForwarding,
+    prepare_agent_forwarding,
+)
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
-from ..services import cfg_path, load_cfg
+from ..services import PreparedSession, cfg_path, load_cfg
+from ..tunnel_helper import (
+    DEFAULT_TMUX_SESSION,
+    TUNNEL_HELPER_PATH,
+    tunnel_helper_source,
+)
 from ..util import which
-from ..vm import create_ops, wait_for_ip
-from ..vm import ssh_config as mk_ssh_config
+from ..vm import create_ops, ssh_config as mk_ssh_config, wait_for_ip
+from ..vm.provision import provision_guest_requirements
 from ._common import _BaseCommand
 
 
@@ -76,8 +88,8 @@ def _bootstrap_vm_for_folder(
 
         init_rc = initialize_config_defaults(
             config_opt=str(missing_store_path),
-            yes=bool(yes),
-            defaults=bool(yes),
+            yes=yes,
+            defaults=yes,
             force=False,
             standalone_guidance=False,
         )
@@ -90,9 +102,9 @@ def _bootstrap_vm_for_folder(
         vm_override=vm_opt if vm_opt else None,
         set_default=False,
         force=False,
-        dry_run=bool(dry_run),
-        yes=bool(yes),
-        configuration_reviewed=bool(need_init and not yes),
+        dry_run=dry_run,
+        yes=yes,
+        configuration_reviewed=need_init and not yes,
         initial_attachment_host_src=host_src,
         initial_attachment_guest_dst=guest_dst_opt,
         initial_attachment_mode=attach_mode_opt,
@@ -104,7 +116,9 @@ class VMWaitIPCLI(_BaseCommand):
     """Wait for and print the VM IPv4 address."""
 
     timeout: int = kwconf.Value(360, parser=int, help='Timeout seconds.')
-    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -173,94 +187,175 @@ def _remote_tunnel_name(cfg: Any) -> str:
     return f'{vm_name}-{safe_host}'
 
 
-_TUNNEL_TMUX_SESSION = 'aivm-tunnel'
+_TUNNEL_TMUX_SESSION = DEFAULT_TMUX_SESSION
 
 
-def _build_tunnel_remote_script(guest_path: str, tunnel_name: str) -> str:
-    """Build the remote shell snippet that ensures the tunnel tmux session is up.
-
-    Idempotent: if the session already exists, the script exits 0 without
-    starting a second ``code tunnel``. Otherwise it starts ``code tunnel`` in a
-    detached tmux session running in ``guest_path``.
-    """
-    qpath = shlex.quote(guest_path)
-    qname = shlex.quote(tunnel_name)
-    qsession = shlex.quote(_TUNNEL_TMUX_SESSION)
-    inner = (
-        f'cd {qpath} && '
-        f'exec code tunnel --name {qname} --accept-server-license-terms'
+def _ensure_guest_tunnel_helper(
+    context: ResolvedVMContext,
+    ip: str,
+) -> None:
+    """Install the inspectable guest tunnel helper when its content changed."""
+    _install_guest_text_if_changed(
+        context.effective_cfg,
+        ip,
+        target=TUNNEL_HELPER_PATH,
+        text=tunnel_helper_source(),
+        mode='0755',
+        label='VS Code tunnel helper',
+        dry_run=False,
     )
-    return (
-        'set -eu\n'
-        'if ! command -v tmux >/dev/null 2>&1; then\n'
-        '    echo "tmux is not installed in the guest; run `aivm vm provision` first" >&2\n'
-        '    exit 1\n'
-        'fi\n'
-        'if ! command -v code >/dev/null 2>&1; then\n'
-        '    echo "VS Code CLI is not installed in the guest; run `aivm vm provision code` first" >&2\n'
-        '    exit 1\n'
-        f'fi\n'
-        f'if tmux has-session -t {qsession} 2>/dev/null; then\n'
-        '    echo "aivm-tunnel session already running"\n'
-        '    exit 0\n'
-        'fi\n'
-        f'tmux new-session -d -s {qsession} {shlex.quote(inner)}\n'
-        f'echo "Started aivm-tunnel session running: code tunnel --name {tunnel_name}"\n'
+
+
+def _remote_tunnel_missing_commands(
+    context: ResolvedVMContext,
+    ip: str,
+) -> tuple[str, ...]:
+    """Return missing guest commands required by ``code --tunnel``."""
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    remote = f'{shlex.quote(TUNNEL_HELPER_PATH)} check'
+    result = CommandManager.current().run(
+        [
+            'ssh',
+            *ssh_base_args(ident),
+            context.ssh_target(ip),
+            remote,
+        ],
+        sudo=False,
+        role='read',
+        user_driven=True,
+        check=True,
+        capture=True,
+        summary='Check VS Code tunnel prerequisites',
+        detail=f'guest_helper={TUNNEL_HELPER_PATH}',
     )
+    try:
+        payload = json.loads(result.stdout.strip())
+        missing_raw = payload['missing']
+        if not isinstance(missing_raw, list):
+            raise TypeError('missing is not a list')
+        missing = tuple(str(name) for name in missing_raw)
+    except (json.JSONDecodeError, KeyError, TypeError) as ex:
+        raise AIVMError(
+            'Guest VS Code tunnel helper returned an invalid prerequisite report.'
+        ) from ex
+    unexpected = sorted(set(missing) - {'tmux', 'code'})
+    if unexpected:
+        raise AIVMError(
+            'Guest VS Code tunnel helper reported unknown prerequisite(s): '
+            + ', '.join(unexpected)
+        )
+    return missing
+
+
+def _ensure_remote_tunnel_prerequisites(
+    context: ResolvedVMContext,
+    ip: str,
+) -> None:
+    """One-shot provision only what the requested tunnel workflow is missing."""
+    missing = _remote_tunnel_missing_commands(context, ip)
+    if not missing:
+        return
+
+    cfg = context.effective_cfg
+    if not cfg.provision.enabled:
+        raise AIVMError(
+            'VS Code tunnel prerequisites are missing in the guest ('
+            + ', '.join(missing)
+            + '), but guest provisioning is disabled. Install them manually '
+            'or enable [provision].enabled.'
+        )
+
+    log.info(
+        'VS Code tunnel prerequisites missing in guest: {}. Installing them '
+        'for this tunnel request.',
+        ', '.join(missing),
+    )
+    provision_guest_requirements(
+        cfg,
+        ip,
+        packages=('tmux',) if 'tmux' in missing else (),
+        tools=('code',) if 'code' in missing else (),
+        dry_run=False,
+    )
+    remaining = _remote_tunnel_missing_commands(context, ip)
+    if remaining:
+        raise AIVMError(
+            'VS Code tunnel prerequisites are still missing after install: '
+            + ', '.join(remaining)
+        )
 
 
 def _start_remote_tunnel_session(
-    cfg: Any,
+    context: ResolvedVMContext,
     ip: str,
     guest_path: str,
     tunnel_name: str,
 ) -> None:
-    """Idempotently start the ``code tunnel`` tmux session inside the guest."""
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
-    remote = _build_tunnel_remote_script(guest_path, tunnel_name)
+    """Idempotently ensure prerequisites and start the guest tunnel session."""
+    _ensure_guest_tunnel_helper(context, ip)
+    _ensure_remote_tunnel_prerequisites(context, ip)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
+    remote = shell_join(
+        [
+            TUNNEL_HELPER_PATH,
+            'start',
+            '--guest-path',
+            guest_path,
+            '--name',
+            tunnel_name,
+            '--session',
+            _TUNNEL_TMUX_SESSION,
+        ]
+    )
     cmd = [
         'ssh',
         *ssh_base_args(ident),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     CommandManager.current().run(
-        cmd, sudo=False, user_driven=True, check=True, capture=False
+        cmd,
+        sudo=False,
+        user_driven=True,
+        check=True,
+        capture=False,
+        summary='Start VS Code tunnel session',
+        detail=f'guest_helper={TUNNEL_HELPER_PATH} guest_path={guest_path}',
     )
 
 
-def _attach_remote_tunnel_session(cfg: Any, ip: str) -> int:
+def _attach_remote_tunnel_session(context: ResolvedVMContext, ip: str) -> int:
     """Interactively attach to the ``aivm-tunnel`` tmux session in the guest.
 
-    Replaces the current process so stdio, signals, and TTY handling match
-    a plain ``ssh -t`` invocation. Returns nonzero only if exec fails.
-
-    This is the one deliberate exception to routing commands through
-    :class:`CommandManager`: a subprocess cannot hand the caller's TTY back
-    cleanly, so the command is logged here for auditability and then exec'd.
+    Replaces the current process through :class:`CommandManager` so stdio,
+    signals, and TTY handling match a plain ``ssh -t`` invocation.
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    ident = require_ssh_identity(context.profile.ssh_identity_file)
     cmd = [
         'ssh',
         '-t',
         *ssh_base_args(ident),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         f'tmux attach -t {shlex.quote(_TUNNEL_TMUX_SESSION)}',
     ]
-    log.info('RUN (exec, replaces this process): {}', shell_join(cmd))
-    os.execvp(cmd[0], cmd)
-    return 1  # unreachable; execvp replaces the process
+    CommandManager.current().replace_process(
+        cmd,
+        role='read',
+        summary='Attach to the guest VS Code tunnel session',
+    )
+    return 0
 
 
 def _print_remote_session_recipe(
-    cfg: Any,
+    context: ResolvedVMContext,
     session: Any,
     ssh_cfg: Any,
     ssh_cfg_updated: bool,
     reason: str,
 ) -> None:
     """Print a connect-from-workstation recipe in lieu of launching code."""
-    vm_name = cfg.vm.name
+    cfg = context.effective_cfg
+    vm_name = context.machine.vm.name
     guest_path = session.share_guest_dst
     tunnel_name = _remote_tunnel_name(cfg)
     tunnel_cmd = (
@@ -303,12 +398,115 @@ def _print_remote_session_recipe(
     print()
     print(f'  VM:      {vm_name}')
     print(f'  Host:    {session.ip}')
-    print(f'  User:    {cfg.vm.user}')
+    print(f'  User:    {context.guest_user}')
     print(f'  Path:    {guest_path}')
     print(f'  Tunnel:  {tunnel_name}')
     if ssh_cfg_updated:
         print(f'SSH entry updated on this host in {ssh_cfg}')
     print(f'Folder registered in {session.reg_path}')
+
+
+def _prepare_foreground_agent_forwarding(
+    session: PreparedSession,
+) -> AgentForwarding | None:
+    """Prepare the optional dedicated repository agent for this connection.
+
+    The credential feature remains opt-in: sessions with no active
+    ``agent_credentials`` records perform no agent-related guest work and
+    forward nothing. Credential setup failures never block VM access.
+    """
+    if session.ip is None:
+        return None
+    try:
+        store_path = session.reg_path
+        if store_path is None:
+            raise AIVMError(
+                'Prepared foreground session has no persisted store path for '
+                'ssh-agent credential forwarding.'
+            )
+        forwarding = prepare_agent_forwarding(
+            session.context,
+            Path(store_path),
+            session.ip,
+            manager=CommandManager.current(),
+        )
+    except Exception as ex:
+        log.opt(exception=True).trace(
+            'Repository ssh-agent preparation failed for foreground session'
+        )
+        log.warning(
+            'Repository ssh-agent setup failed; continuing without credential '
+            'forwarding: {}',
+            ex,
+        )
+        return None
+    if forwarding is not None:
+        log.info(
+            'Forwarding dedicated AIVM repository agent into {} '
+            '(credentials={}, socket={})',
+            session.context.effective_cfg.vm.name,
+            forwarding.credential_count,
+            forwarding.socket_path,
+        )
+    return forwarding
+
+
+def _best_effort_upsert_ssh_config_entry(
+    cfg: Any,
+    *,
+    yes: bool,
+    forward_agent_socket: str = '',
+) -> tuple[Path, bool]:
+    """Update the managed SSH alias without making direct access depend on it."""
+    try:
+        return _upsert_ssh_config_entry(
+            cfg,
+            dry_run=False,
+            yes=yes,
+            forward_agent_socket=forward_agent_socket,
+        )
+    except Exception as ex:
+        log.opt(exception=True).trace('Managed SSH config update failed')
+        log.warning(
+            'Could not update the managed SSH config entry for {}; '
+            'continuing without it: {}',
+            cfg.vm.name,
+            ex,
+        )
+        return Path.home() / '.ssh' / 'config', False
+
+
+def _prepare_foreground_session(args: Any) -> PreparedSession:
+    """Run the one shared startup pipeline for SSH and editor sessions.
+
+    ``aivm ssh`` and every ``aivm code`` launcher intentionally share this
+    exact preparation path.  The launcher is the only behavior that differs
+    after the VM, attachment, and live-state checks are complete.
+    """
+    host_src = logical_absolute_path(args.host_src)
+    return _prepare_attached_session(
+        config_opt=args.config,
+        vm_opt=args.vm,
+        host_src=host_src,
+        guest_dst_opt=args.guest_dst,
+        attach_mode_opt=args.mode,
+        attach_access_opt=args.access,
+        recreate_if_needed=args.recreate_if_needed,
+        ensure_firewall_opt=args.ensure_firewall,
+        dry_run=args.dry_run,
+        yes=args.yes,
+        bootstrap_missing_vm=partial(
+            _bootstrap_vm_for_folder,
+            config_opt=args.config,
+            vm_opt=args.vm,
+            host_src=host_src,
+            guest_dst_opt=args.guest_dst,
+            attach_mode_opt=args.mode,
+            attach_access_opt=args.access,
+            yes=args.yes,
+            dry_run=args.dry_run,
+        ),
+    )
 
 
 class VMCodeCLI(_BaseCommand):
@@ -327,15 +525,19 @@ class VMCodeCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+    mode: Literal['', 'direct-virtiofs', 'shared-root', 'persistent', 'git'] = (
         kwconf.Value(
             '',
-            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+            help=(
+                'Override. Attachment mode: persistent, shared-root, git, or direct-virtiofs (default: saved mode or persistent; mode changes require detach+reattach). direct-virtiofs gives the folder its own virtiofs device and so consumes one of the guest PCIe slots -- prefer it only when a per-folder device is actually needed, such as when you have no host sudo.'
+            ),
         )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
-        help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
+        help=(
+            'Override. Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
+        ),
     )
     recreate_if_needed: bool = kwconf.Flag(
         False,
@@ -360,7 +562,9 @@ class VMCodeCLI(_BaseCommand):
             'attach. Useful for scripts / non-interactive callers.'
         ),
     )
-    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -370,39 +574,18 @@ class VMCodeCLI(_BaseCommand):
             args.host_src,
             args.vm,
             args.guest_dst,
-            bool(args.dry_run),
-            bool(args.yes),
-            bool(args.tunnel),
+            args.dry_run,
+            args.yes,
+            args.tunnel,
         )
         try:
-            session = _prepare_attached_session(
-                config_opt=args.config,
-                vm_opt=args.vm,
-                host_src=logical_absolute_path(args.host_src),
-                guest_dst_opt=args.guest_dst,
-                attach_mode_opt=args.mode,
-                attach_access_opt=args.access,
-                recreate_if_needed=bool(args.recreate_if_needed),
-                ensure_firewall_opt=bool(args.ensure_firewall),
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
-                bootstrap_missing_vm=partial(
-                    _bootstrap_vm_for_folder,
-                    config_opt=args.config,
-                    vm_opt=args.vm,
-                    host_src=logical_absolute_path(args.host_src),
-                    guest_dst_opt=args.guest_dst,
-                    attach_mode_opt=args.mode,
-                    attach_access_opt=args.access,
-                    yes=bool(args.yes),
-                    dry_run=bool(args.dry_run),
-                ),
-            )
+            session = _prepare_foreground_session(args)
         except RuntimeError as ex:
             log.opt(exception=True).trace('Failed preparing code session')
             log.error(str(ex))
             return 1
-        cfg = session.cfg
+        context = session.context
+        cfg = context.effective_cfg
         if args.dry_run:
             if args.tunnel:
                 print(
@@ -417,15 +600,28 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
+        agent_forwarding = _prepare_foreground_agent_forwarding(session)
 
-        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=bool(args.yes)
+        forward_agent_socket = (
+            str(agent_forwarding.socket_path) if agent_forwarding else ''
         )
 
         if args.tunnel:
+            ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
+                cfg,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
+            if agent_forwarding is not None:
+                log.warning(
+                    'SSH-agent repository credentials are available only '
+                    'while an AIVM-managed SSH/Remote-SSH connection is '
+                    'forwarding the dedicated agent. Detached `code --tunnel` '
+                    'work does not retain that SSH forwarding channel.'
+                )
             tunnel_name = _remote_tunnel_name(cfg)
             _start_remote_tunnel_session(
-                cfg, ip, session.share_guest_dst, tunnel_name
+                context, ip, session.share_guest_dst, tunnel_name
             )
             print(f'Tunnel name: {tunnel_name}')
             print(f'VM:          {cfg.vm.name}')
@@ -445,14 +641,37 @@ class VMCodeCLI(_BaseCommand):
                 return 0
             # Replaces this process with `ssh -t` so the tmux UI is interactive
             # (device-code auth on first run; tunnel log thereafter).
-            return _attach_remote_tunnel_session(cfg, ip)
+            return _attach_remote_tunnel_session(context, ip)
 
         can_open_local, reason = _vscode_can_open_locally()
         if not can_open_local:
+            ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
+                cfg,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
             _print_remote_session_recipe(
-                cfg, session, ssh_cfg, ssh_cfg_updated, reason or ''
+                context, session, ssh_cfg, ssh_cfg_updated, reason or ''
             )
             return 0
+
+        try:
+            ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
+                cfg,
+                dry_run=False,
+                yes=args.yes,
+                forward_agent_socket=forward_agent_socket,
+            )
+        except Exception as ex:
+            log.opt(exception=True).trace(
+                'Required VS Code Remote-SSH config update failed'
+            )
+            log.error(
+                'Could not update the SSH config required for VS Code '
+                'Remote-SSH: {}',
+                ex,
+            )
+            return 1
 
         remote_target = f'ssh-remote+{cfg.vm.name}'
         CommandManager.current().run(
@@ -487,15 +706,19 @@ class VMSSHCLI(_BaseCommand):
         '',
         help='Guest mount path override (default: mirrors host_src path).',
     )
-    mode: Literal['', 'shared', 'shared-root', 'persistent', 'git'] = (
+    mode: Literal['', 'direct-virtiofs', 'shared-root', 'persistent', 'git'] = (
         kwconf.Value(
             '',
-            help='Attachment mode override: shared, shared-root, persistent, or git (default: saved mode or persistent; mode changes require detach+reattach).',
+            help=(
+                'Override. Attachment mode: persistent, shared-root, git, or direct-virtiofs (default: saved mode or persistent; mode changes require detach+reattach). direct-virtiofs gives the folder its own virtiofs device and so consumes one of the guest PCIe slots -- prefer it only when a per-folder device is actually needed, such as when you have no host sudo.'
+            ),
         )
     )
     access: Literal['', 'rw', 'ro'] = kwconf.Value(
         '',
-        help='Attachment access override: rw or ro (default: saved access or rw). ro is supported for shared, shared-root, and persistent modes.',
+        help=(
+            'Override. Attachment access: rw or ro (default: saved access or rw). ro is supported for direct-virtiofs, shared-root, and persistent modes.'
+        ),
     )
     recreate_if_needed: bool = kwconf.Flag(
         False,
@@ -505,7 +728,9 @@ class VMSSHCLI(_BaseCommand):
         True,
         help='Apply firewall rules when firewall.enabled=true.',
     )
-    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
@@ -515,63 +740,60 @@ class VMSSHCLI(_BaseCommand):
             args.host_src,
             args.vm,
             args.guest_dst,
-            bool(args.dry_run),
-            bool(args.yes),
+            args.dry_run,
+            args.yes,
         )
         try:
-            session = _prepare_attached_session(
-                config_opt=args.config,
-                vm_opt=args.vm,
-                host_src=logical_absolute_path(args.host_src),
-                guest_dst_opt=args.guest_dst,
-                attach_mode_opt=args.mode,
-                attach_access_opt=args.access,
-                recreate_if_needed=bool(args.recreate_if_needed),
-                ensure_firewall_opt=bool(args.ensure_firewall),
-                dry_run=bool(args.dry_run),
-                yes=bool(args.yes),
-                bootstrap_missing_vm=partial(
-                    _bootstrap_vm_for_folder,
-                    config_opt=args.config,
-                    vm_opt=args.vm,
-                    host_src=logical_absolute_path(args.host_src),
-                    guest_dst_opt=args.guest_dst,
-                    attach_mode_opt=args.mode,
-                    attach_access_opt=args.access,
-                    yes=bool(args.yes),
-                    dry_run=bool(args.dry_run),
-                ),
-            )
+            session = _prepare_foreground_session(args)
         except RuntimeError as ex:
             log.error(str(ex))
             return 1
-        cfg = session.cfg
+        context = session.context
+        cfg = context.effective_cfg
         if args.dry_run:
             print(
-                f'DRYRUN: would SSH to {cfg.vm.user}@<ip> and cd {session.share_guest_dst}'
+                f'DRYRUN: would SSH to {context.guest_user}@<ip> and cd {session.share_guest_dst}'
             )
             return 0
 
         ip = session.ip
         assert ip is not None
-        ssh_cfg, ssh_cfg_updated = _upsert_ssh_config_entry(
-            cfg, dry_run=False, yes=bool(args.yes)
+        agent_forwarding = _prepare_foreground_agent_forwarding(session)
+        ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
+            cfg,
+            yes=args.yes,
+            forward_agent_socket=(
+                str(agent_forwarding.socket_path) if agent_forwarding else ''
+            ),
         )
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.profile.ssh_identity_file)
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        ssh_result = CommandManager.current().run(
+        ssh_cmd: list[str] = []
+        if agent_forwarding is not None:
+            ssh_cmd.extend(
+                [
+                    'env',
+                    f'SSH_AUTH_SOCK={agent_forwarding.socket_path}',
+                ]
+            )
+        ssh_cmd.append('ssh')
+        if agent_forwarding is not None:
+            ssh_cmd.append('-A')
+        ssh_cmd.extend(
             [
-                'ssh',
                 '-t',
                 *ssh_base_args(
                     ident,
                     strict_host_key_checking='accept-new',
                 ),
-                f'{cfg.vm.user}@{ip}',
+                context.ssh_target(ip),
                 remote_cmd,
-            ],
+            ]
+        )
+        ssh_result = CommandManager.current().run(
+            ssh_cmd,
             sudo=False,
             user_driven=True,
             check=False,
@@ -585,11 +807,11 @@ class VMSSHCLI(_BaseCommand):
             log.error(
                 'SSH connection to {}@{} failed; check that the VM is '
                 'running and reachable (aivm status).',
-                cfg.vm.user,
+                context.guest_user,
                 ip,
             )
             return 1
-        print(f'SSH session ended for {cfg.vm.user}@{ip}')
+        print(f'SSH session ended for {context.ssh_target(ip)}')
         if ssh_result.code:
             log.debug(
                 'Interactive shell exited with status {}', ssh_result.code

@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import cast
 
-from .models import AttachmentEntry, CredentialEntry, Store
+from ..attachment_schema import MIRROR_HOME_AUTO
+from ..config import agent_vm_config_asdict
+from ..legacy.pre_0_6_0 import compatibility_surface
+from .models import (
+    AgentCredentialEntry,
+    AttachmentEntry,
+    CredentialEntry,
+    PrincipalEntry,
+    Store,
+)
 
 
 def _toml_escape(s: str) -> str:
@@ -29,20 +39,35 @@ def _emit_attachment(
     lines.append(f'host_path = "{_toml_escape(att.host_path)}"')
     if include_vm_name:
         lines.append(f'vm_name = "{_toml_escape(att.vm_name)}"')
+    if att.owner_principal_id:
+        lines.append(
+            f'owner_principal_id = "{_toml_escape(att.owner_principal_id)}"'
+        )
     lines.append(f'mode = "{_toml_escape(att.mode)}"')
     lines.append(f'access = "{_toml_escape(att.access)}"')
     lines.append(f'guest_dst = "{_toml_escape(att.guest_dst)}"')
     lines.append(f'tag = "{_toml_escape(att.tag)}"')
+    # ``auto`` is the compatibility default and is intentionally omitted so
+    # pre-feature attachment records stay byte-shape compatible until a user
+    # chooses an explicit per-attachment override.
+    if att.mirror_home != MIRROR_HOME_AUTO:
+        lines.append(f'mirror_home = "{_toml_escape(att.mirror_home)}"')
+    if att.state != 'active':
+        lines.append(f'state = "{_toml_escape(att.state)}"')
+    if att.source_dev:
+        lines.append(f'source_dev = {att.source_dev}')
+    if att.source_ino:
+        lines.append(f'source_ino = {att.source_ino}')
     if att.host_lexical_paths:
-        parts = [
-            f'"{_toml_escape(p)}"' for p in att.host_lexical_paths
-        ]
+        parts = [f'"{_toml_escape(p)}"' for p in att.host_lexical_paths]
         lines.append(f'host_lexical_paths = [{", ".join(parts)}]')
 
 
 def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
+    lines.append(f'id = "{_toml_escape(cred.id)}"')
+    if cred.principal_id:
+        lines.append(f'principal_id = "{_toml_escape(cred.principal_id)}"')
     for key in (
-        'id',
         'kind',
         'provider_host',
         'owner',
@@ -60,12 +85,86 @@ def _emit_credential(lines: list[str], cred: CredentialEntry) -> None:
         lines.append('provider_managed = false')
 
 
+
+def _emit_agent_credential(
+    lines: list[str], cred: AgentCredentialEntry
+) -> None:
+    lines.append(f'id = "{_toml_escape(cred.id)}"')
+    if cred.principal_id:
+        lines.append(f'principal_id = "{_toml_escape(cred.principal_id)}"')
+    for key in (
+        'kind',
+        'provider_host',
+        'owner',
+        'repository',
+        'access',
+        'provider_key_id',
+        'provider_key_title',
+        'key_fingerprint',
+        'state',
+    ):
+        lines.append(f'{key} = "{_toml_escape(str(getattr(cred, key)))}"')
+
+def _emit_principal(lines: list[str], principal: PrincipalEntry) -> None:
+    for key in (
+        'id',
+        'host_user',
+        'host_uid',
+        'host_gid',
+        'guest_user',
+        'ssh_public_key',
+        'state',
+    ):
+        _emit_toml_kv(lines, key, getattr(principal, key))
+
+
+def _config_verbosity(data: dict[str, object]) -> int:
+    """Return the statically typed top-level config verbosity."""
+    value = data.get('verbosity', 1)
+    if not isinstance(value, int):
+        raise TypeError(
+            f'config verbosity must be an integer, not {type(value).__name__}'
+        )
+    return value
+
+
+def _config_section(
+    data: dict[str, object], section: str
+) -> dict[str, object] | None:
+    """Return one serialized config section with its key type narrowed."""
+    body = data.get(section)
+    if not isinstance(body, dict):
+        return None
+    if not all(isinstance(key, str) for key in body):
+        raise TypeError(f'config section {section!r} contains a non-string key')
+    return cast(dict[str, object], body)
+
+
+def _section_items(
+    reg: Store, section: str, body: dict[str, object]
+) -> list[tuple[str, object]]:
+    """Return serialized fields for one config section.
+
+    Machine stores deliberately omit caller identity and user-owned paths.
+    Those values are materialized from the selected principal and profile at
+    runtime.
+    """
+    items = list(body.items())
+    if reg.store_kind != 'machine':
+        return items
+    if section == 'vm':
+        return [(key, val) for key, val in items if key != 'user']
+    if section == 'paths':
+        return [(key, val) for key, val in items if key == 'base_dir']
+    return items
+
+
 def _emit_defaults(lines: list[str], reg: Store) -> None:
     """Append ``[defaults.*]`` tables for ``reg`` to ``lines``."""
     if reg.defaults is None:
         return
-    d = asdict(reg.defaults)
-    verbosity = int(d.get('verbosity', 1))
+    d = agent_vm_config_asdict(reg.defaults)
+    verbosity = _config_verbosity(d)
     if verbosity != 1:
         lines.append('[defaults]')
         lines.append(f'verbosity = {verbosity}')
@@ -76,22 +175,21 @@ def _emit_defaults(lines: list[str], reg: Store) -> None:
         'firewall',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
     ):
-        body = d.get(section, {})
-        if not isinstance(body, dict):
+        body = _config_section(d, section)
+        if body is None:
             continue
         lines.append(f'[defaults.{section}]')
-        for k, v in body.items():
+        for k, v in _section_items(reg, section, body):
             _emit_toml_kv(lines, k, v)
         lines.append('')
 
 
-
-def render_store_toml(
-    reg: Store, *, attachment_style: str = 'legacy'
-) -> str:
+@compatibility_surface
+def render_store_toml(reg: Store, *, attachment_style: str = 'legacy') -> str:
     """Render a Store as TOML.
 
     ``attachment_style='legacy'`` preserves the current top-level
@@ -108,25 +206,31 @@ def render_store_toml(
         )
 
     lines: list[str] = [f'schema_version = {reg.schema_version}']
-    lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
-    lines.append('')
-    lines.append('[behavior]')
-    _emit_toml_kv(lines, 'yes_sudo', bool(reg.behavior.yes_sudo))
-    _emit_toml_kv(
-        lines,
-        'auto_approve_readonly_sudo',
-        bool(reg.behavior.auto_approve_readonly_sudo),
-    )
-    _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
-    _emit_toml_kv(
-        lines, 'privilege_mode', str(reg.behavior.privilege_mode or 'as-needed')
-    )
-    _emit_toml_kv(
-        lines,
-        'credential_directory_permission_policy',
-        str(reg.behavior.credential_directory_permission_policy or 'warn'),
-    )
-    lines.append('')
+    if reg.store_kind == 'machine':
+        lines.append('store_kind = "machine"')
+        lines.append('')
+    else:
+        lines.append(f'active_vm = "{_toml_escape(reg.active_vm)}"')
+        lines.append('')
+        lines.append('[behavior]')
+        _emit_toml_kv(lines, 'yes_sudo', reg.behavior.yes_sudo)
+        _emit_toml_kv(
+            lines,
+            'auto_approve_readonly_sudo',
+            reg.behavior.auto_approve_readonly_sudo,
+        )
+        _emit_toml_kv(lines, 'verbose', int(reg.behavior.verbose))
+        _emit_toml_kv(
+            lines,
+            'privilege_mode',
+            str(reg.behavior.privilege_mode or 'as-needed'),
+        )
+        _emit_toml_kv(
+            lines,
+            'credential_directory_permission_policy',
+            str(reg.behavior.credential_directory_permission_policy or 'warn'),
+        )
+        lines.append('')
 
     _emit_defaults(lines, reg)
 
@@ -150,16 +254,23 @@ def render_store_toml(
         lines.append('[[vms]]')
         lines.append(f'name = "{_toml_escape(vm.name)}"')
         lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
-        d = asdict(vm.cfg)
-        verbosity = int(d.get('verbosity', 1))
+        d = agent_vm_config_asdict(vm.cfg)
+        verbosity = _config_verbosity(d)
         if verbosity != 1:
             lines.append(f'verbosity = {verbosity}')
-        for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
-            body = d.get(section, {})
-            if not isinstance(body, dict):
+        for section in (
+            'vm',
+            'image',
+            'provision',
+            'tools',
+            'paths',
+            'virtiofs',
+        ):
+            body = _config_section(d, section)
+            if body is None:
                 continue
             lines.append(f'[vms.{section}]')
-            for k, v in body.items():
+            for k, v in _section_items(reg, section, body):
                 _emit_toml_kv(lines, k, v)
 
         if attachment_style == 'nested':
@@ -177,6 +288,20 @@ def render_store_toml(
         for cred in nested_creds:
             lines.append('[[vms.credentials]]')
             _emit_credential(lines, cred)
+        nested_agent_creds = sorted(
+            (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
+            key=lambda cred: cred.id,
+        )
+        for cred in nested_agent_creds:
+            lines.append('[[vms.agent_credentials]]')
+            _emit_agent_credential(lines, cred)
+        nested_principals = sorted(
+            (item for item in reg.principals if item.vm_name == vm.name),
+            key=lambda item: (item.host_user, item.id),
+        )
+        for principal in nested_principals:
+            lines.append('[[vms.principals]]')
+            _emit_principal(lines, principal)
         lines.append('')
 
     legacy_atts = reg.attachments
@@ -206,6 +331,7 @@ def render_store_root_toml(reg: Store) -> str:
     """
     root = Store(
         schema_version=reg.schema_version,
+        store_kind=reg.store_kind,
         active_vm=reg.active_vm,
         behavior=reg.behavior,
         defaults=None,
@@ -259,16 +385,16 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     lines.append('[[vms]]')
     lines.append(f'name = "{_toml_escape(vm.name)}"')
     lines.append(f'network_name = "{_toml_escape(vm.network_name)}"')
-    d = asdict(vm.cfg)
-    verbosity = int(d.get('verbosity', 1))
+    d = agent_vm_config_asdict(vm.cfg)
+    verbosity = _config_verbosity(d)
     if verbosity != 1:
         lines.append(f'verbosity = {verbosity}')
-    for section in ('vm', 'image', 'provision', 'paths', 'virtiofs'):
-        body = d.get(section, {})
-        if not isinstance(body, dict):
+    for section in ('vm', 'image', 'provision', 'tools', 'paths', 'virtiofs'):
+        body = _config_section(d, section)
+        if body is None:
             continue
         lines.append(f'[vms.{section}]')
-        for k, v in body.items():
+        for k, v in _section_items(reg, section, body):
             _emit_toml_kv(lines, k, v)
 
     nested = sorted(
@@ -285,5 +411,19 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
     for cred in nested_creds:
         lines.append('[[vms.credentials]]')
         _emit_credential(lines, cred)
+    nested_agent_creds = sorted(
+        (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
+        key=lambda cred: cred.id,
+    )
+    for cred in nested_agent_creds:
+        lines.append('[[vms.agent_credentials]]')
+        _emit_agent_credential(lines, cred)
+    nested_principals = sorted(
+        (item for item in reg.principals if item.vm_name == vm.name),
+        key=lambda item: (item.host_user, item.id),
+    )
+    for principal in nested_principals:
+        lines.append('[[vms.principals]]')
+        _emit_principal(lines, principal)
     lines.append('')
     return '\n'.join(lines).rstrip() + '\n'

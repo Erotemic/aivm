@@ -33,11 +33,16 @@ import builtins
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Sequence, cast
 
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandManager
+from aivm.commands import (
+    CommandManager,
+    CommandOwnership,
+    CommandResult,
+    CommandRole,
+)
 from aivm.runtime import SYSTEM_LIBVIRT_URI
 
 
@@ -186,37 +191,62 @@ def capture_logs(
     return messages
 
 
-class FakeCommandManager:
-    """Scripted stand-in for ``CommandManager.current()`` call sites.
+class FakeCommandManager(CommandManager):
+    """CommandManager with scripted in-process command results for tests.
 
-    ``handler`` receives each command (as a list) and returns the result
-    object; when it returns ``None`` (or no handler is given) a bare
-    ``SimpleNamespace(stdout='')`` is returned.  Commands are recorded on
-    ``self.calls``; pass ``calls=`` to share an external list.
+    The fake keeps the real manager's planning and scope behavior and replaces
+    only external command execution. ``handler`` receives each command as a
+    list and may return a scripted result; commands are recorded on ``calls``.
     """
 
     def __init__(
         self,
-        handler: Callable[[list[Any]], Any] | None = None,
+        handler: Callable[[list[str]], Any] | None = None,
         *,
-        calls: list[list[Any]] | None = None,
+        calls: list[list[str]] | None = None,
     ) -> None:
+        super().__init__(yes=True)
         self.calls = calls if calls is not None else []
         self._handler = handler
 
-    def step(self, *args: Any, **kwargs: Any) -> Any:
-        del args, kwargs
-        return nullcontext()
-
-    def run(self, cmd: list[Any], **kwargs: Any) -> Any:
-        del kwargs
-        cmd = list(cmd)
-        self.calls.append(cmd)
+    def run(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        user_driven: bool = False,
+        check: bool = True,
+        capture: bool = True,
+        text: bool = True,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> CommandResult:
+        del (
+            sudo,
+            role,
+            ownership,
+            user_driven,
+            check,
+            capture,
+            text,
+            input_text,
+            env,
+            timeout,
+            summary,
+            detail,
+        )
+        command = list(cmd)
+        self.calls.append(command)
         if self._handler is not None:
-            result = self._handler(cmd)
+            result = self._handler(command)
             if result is not None:
-                return result
-        return SimpleNamespace(stdout='')
+                return cast(CommandResult, result)
+        return CommandResult(0, '', '')
 
 
 # ---------------------------------------------------------------------------
@@ -225,29 +255,60 @@ class FakeCommandManager:
 
 
 def normalize_cmd(cmd: Iterable[Any]) -> list[str]:
-    """Strip the sudo and libvirt-URI noise from a command list.
+    """Strip the sudo, locale-pin, and libvirt-URI noise from a command list.
 
-    ``sudo``/``sudo -n`` prefixes and an explicit ``-c <uri>`` connection
+    ``sudo``/``sudo -n`` prefixes, an ``env LC_ALL=C`` locale pin (see
+    ``aivm.runtime.pin_locale``), and an explicit ``-c <uri>`` connection
     flag are how the command layer spells things, not what a test is
-    trying to assert.  Reducing ``['sudo', '-n', 'virsh', '-c',
-    'qemu:///system', 'domstate', 'vm']`` to ``['virsh', 'domstate',
-    'vm']`` lets a test say what it means.
+    trying to assert.  Reducing ``['sudo', '-n', 'env', 'LC_ALL=C',
+    'virsh', '-c', 'qemu:///system', 'domstate', 'vm']`` to ``['virsh',
+    'domstate', 'vm']`` lets a test say what it means.  A test asserting
+    the locale pin itself should look at the raw ``calls`` instead.
 
     Example:
         >>> normalize_cmd(['sudo', '-n', 'virsh', '-c', 'qemu:///system',
         ...                'domstate', 'vm'])
         ['virsh', 'domstate', 'vm']
+        >>> normalize_cmd(['env', 'LC_ALL=C', 'virsh', '-c',
+        ...                'qemu:///system', 'dominfo', 'vm'])
+        ['virsh', 'dominfo', 'vm']
         >>> normalize_cmd(['sudo', 'mount', '--bind', '/a', '/b'])
         ['mount', '--bind', '/a', '/b']
     """
-    parts = [str(part) for part in cmd]
-    if parts[:2] == ['sudo', '-n']:
+    parts = _without_sudo(cmd)
+    if parts[:2] == ['env', 'LC_ALL=C']:
         parts = parts[2:]
-    elif parts[:1] == ['sudo']:
-        parts = parts[1:]
     if parts[:1] == ['virsh'] and parts[1:3] == ['-c', SYSTEM_LIBVIRT_URI]:
         parts = ['virsh'] + parts[3:]
     return parts
+
+
+def _without_sudo(cmd: Iterable[Any]) -> list[str]:
+    parts = [str(part) for part in cmd]
+    if parts[:2] == ['sudo', '-n']:
+        return parts[2:]
+    if parts[:1] == ['sudo']:
+        return parts[1:]
+    return parts
+
+
+def is_locale_pinned(cmd: Iterable[Any]) -> bool:
+    """Return True when the command carries a working ``env LC_ALL=C`` pin.
+
+    Position matters, so this checks it rather than searching for the
+    string: the pin has to sit directly in front of the program (after any
+    ``sudo`` prefix) or it does not reach the process whose output is being
+    string-matched.  Use it wherever a decision reads English text out of a
+    command -- see ``aivm.runtime.pin_locale``.
+
+    Example:
+        >>> is_locale_pinned(['sudo', '-n', 'env', 'LC_ALL=C', 'virsh',
+        ...                   'domstate', 'vm'])
+        True
+        >>> is_locale_pinned(['sudo', '-n', 'virsh', 'domstate', 'vm'])
+        False
+    """
+    return _without_sudo(cmd)[:2] == ['env', 'LC_ALL=C']
 
 
 Route = Any
@@ -290,7 +351,9 @@ class CommandRecorder:
 
     def route(self, prefix: Any, result: Route) -> 'CommandRecorder':
         """Add or override a route; returns self so calls can chain."""
-        key = tuple(prefix.split()) if isinstance(prefix, str) else tuple(prefix)
+        key = (
+            tuple(prefix.split()) if isinstance(prefix, str) else tuple(prefix)
+        )
         self._routes = [(p, r) for (p, r) in self._routes if p != key]
         self._routes.append((key, result))
         self._routes.sort(key=lambda item: len(item[0]), reverse=True)
@@ -328,8 +391,12 @@ class CommandRecorder:
 
     def only(self, *prefix: str) -> list[str]:
         """The single normalized command starting with ``prefix``."""
-        matches = [c for c in self.normalized if c[: len(prefix)] == list(prefix)]
-        assert len(matches) == 1, f'expected exactly one {prefix!r}: {matches!r}'
+        matches = [
+            c for c in self.normalized if c[: len(prefix)] == list(prefix)
+        ]
+        assert len(matches) == 1, (
+            f'expected exactly one {prefix!r}: {matches!r}'
+        )
         return matches[0]
 
 
@@ -442,6 +509,49 @@ def make_cfg(tmp_path: Path | None = None, **overrides: Any) -> Any:
             target = getattr(target, section)
         setattr(target, leaf, value)
     return cfg
+
+
+def resolved_test_context(
+    cfg: Any,
+    *,
+    host_user: str = 'test-user',
+    host_uid: int = 1000,
+    host_gid: int = 1000,
+    guest_user: str | None = None,
+    principal_id: str | None = None,
+    state: str = 'active',
+) -> Any:
+    """Build a canonical persisted-user runtime context for ordinary tests.
+
+    Tests outside ``tests/legacy`` should use this helper instead of importing
+    a versioned compatibility adapter merely to obtain a ``ResolvedVMContext``.
+    """
+    from aivm.config_scopes import resolve_persisted_vm_context
+    from aivm.config_store import PrincipalEntry
+    from aivm.profile_store import UserProfileStore
+
+    selected_guest_user = guest_user or cfg.vm.user or 'agent'
+    principal = PrincipalEntry(
+        id=principal_id or f'principal-test-{host_user}',
+        vm_name=cfg.vm.name,
+        host_user=host_user,
+        host_uid=host_uid,
+        host_gid=host_gid,
+        guest_user=selected_guest_user,
+        state=state,
+    )
+    profile = UserProfileStore(
+        active_vm=cfg.vm.name,
+        ssh_identity_file=cfg.paths.ssh_identity_file,
+        ssh_pubkey_path=cfg.paths.ssh_pubkey_path,
+        state_dir=cfg.paths.state_dir,
+        default_guest_user=selected_guest_user,
+    )
+    return resolve_persisted_vm_context(
+        cfg,
+        principal_entry=principal,
+        profile_store=profile,
+    )
 
 
 def write_store(

@@ -158,9 +158,7 @@ class GitLabCredentialSetupReport:
         return not self.missing_tools and self.auth_ok and repository_ready
 
 
-def _auth_status(
-    hostname: str, *, manager: CommandManager
-) -> CommandResult:
+def _auth_status(hostname: str, *, manager: CommandManager) -> CommandResult:
     """Return a non-raising ``gh auth status`` result for one host."""
     return manager.run(
         ['gh', 'auth', 'status', '--hostname', hostname],
@@ -219,7 +217,9 @@ def inspect_credential_setup(
     repository_detail = ''
     if repository is not None:
         if not auth_ok:
-            repository_detail = 'Not checked because authentication is unavailable.'
+            repository_detail = (
+                'Not checked because authentication is unavailable.'
+            )
         else:
             try:
                 github.list_deploy_keys(repository, manager=manager)
@@ -250,9 +250,7 @@ def inspect_gitlab_credential_setup(
 ) -> GitLabCredentialSetupReport:
     """Inspect OpenSSH, GitLab token authentication, and project access."""
     del manager  # REST calls do not execute host commands.
-    tool_paths = {
-        name: shutil.which(name) for name in GITLAB_CREDENTIAL_TOOLS
-    }
+    tool_paths = {name: shutil.which(name) for name in GITLAB_CREDENTIAL_TOOLS}
     if any(not path for path in tool_paths.values()):
         return GitLabCredentialSetupReport(
             hostname=hostname,
@@ -342,7 +340,7 @@ def install_missing_credential_tools(
         )
     if include_gh and plan.backend in {'apt', 'dnf5', 'dnf', 'zypper'}:
         why += (
-            ' Installing from GitHub\'s own package repository, because '
+            " Installing from GitHub's own package repository, because "
             'distribution packages of gh are often too old to manage deploy '
             f'keys ({GH_INSTALL_DOCS}).'
         )
@@ -365,7 +363,9 @@ def install_missing_credential_tools(
                     detail=step.detail,
                 )
     except CommandError as ex:
-        docs = f' (see {GH_INSTALL_DOCS} for the GitHub CLI)' if include_gh else ''
+        docs = (
+            f' (see {GH_INSTALL_DOCS} for the GitHub CLI)' if include_gh else ''
+        )
         raise AIVMError(
             'Could not install host credential tools with the '
             f'{plan.backend} backend. Install them manually{docs}, then rerun '

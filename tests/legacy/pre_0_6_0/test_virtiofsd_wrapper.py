@@ -14,7 +14,8 @@ import pytest
 
 from aivm import config
 from aivm import config_store as store
-from aivm.vm import update, virtiofsd_wrapper
+from aivm.legacy.pre_0_6_0 import virtiofsd_wrapper
+from aivm.vm import update
 
 BASE = '/var/lib/libvirt/aivm'
 PREFER_PATH = f'{BASE}/virtiofsd-wrapper-prefer.sh'
@@ -73,7 +74,9 @@ def test_is_managed_wrapper_path_recognizes_historical_default_base() -> None:
 
 
 def test_wrapper_content_is_disabled() -> None:
-    with pytest.raises(RuntimeError, match='host-side virtiofsd wrappers are disabled'):
+    with pytest.raises(
+        RuntimeError, match='host-side virtiofsd wrappers are disabled'
+    ):
         virtiofsd_wrapper.wrapper_content('prefer')
 
 
@@ -117,9 +120,7 @@ def test_store_round_trips_virtiofs_per_vm(tmp_path: Path) -> None:
 
 
 def _xml_with_two_virtiofs_devices(wrapper_path: str | None) -> str:
-    second_binary = (
-        f"<binary path='{wrapper_path}'/>" if wrapper_path else ''
-    )
+    second_binary = f"<binary path='{wrapper_path}'/>" if wrapper_path else ''
     return textwrap.dedent(
         f"""\
         <domain>
@@ -149,7 +150,9 @@ def _cfg_with_mode(mode: str) -> config.AgentVMConfig:
     return cfg
 
 
-def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> None:
+def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> (
+    None
+):
     cfg = _cfg_with_mode('prefer')
     mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=None)
@@ -158,7 +161,9 @@ def test_drift_detection_ignores_requested_prefer_when_no_wrapper_present() -> N
     assert drift == ()
 
 
-def test_drift_detection_removes_old_wrapper_even_if_config_requests_prefer() -> None:
+def test_drift_detection_removes_old_wrapper_even_if_config_requests_prefer() -> (
+    None
+):
     cfg = _cfg_with_mode('prefer')
     mode, drift = update._virtiofs_binary_drift(
         cfg, _xml_with_two_virtiofs_devices(wrapper_path=PREFER_PATH)
@@ -182,7 +187,6 @@ def test_drift_detection_reverse_when_wrapper_disabled() -> None:
     assert tags == ['aivm-persistent-root']
     assert drift[0].current == NEVER_PATH
     assert drift[0].desired == ''
-
 
 
 def test_drift_detection_repairs_wrapper_even_when_base_dir_changed() -> None:

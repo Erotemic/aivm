@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -12,9 +11,7 @@ from .commands import CommandError as CmdError
 from .commands import CommandResult as CmdResult
 from .commands import shell_join
 
-# Keep these aliases so existing tests/helpers can still monkeypatch the
-# underlying runtime modules through ``aivm.util`` when needed.
-# Re-export the standard library modules for convenience.
+# Re-export a few long-standing compatibility aliases used by tests/helpers.
 
 __all__ = [
     'CmdError',
@@ -25,7 +22,6 @@ __all__ = [
     'expand',
     'os',
     'sys',
-    'subprocess',
 ]
 
 

@@ -40,10 +40,14 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     cfg.vm.name = 'vm-a'
     upsert_vm(store, cfg)
     store.attachments.append(
-        AttachmentEntry(host_path='/tmp/z', vm_name='vm-b', mode='shared')
+        AttachmentEntry(
+            host_path='/tmp/z', vm_name='vm-b', mode='direct-virtiofs'
+        )
     )
     store.attachments.append(
-        AttachmentEntry(host_path='/tmp/a', vm_name='vm-a', mode='shared')
+        AttachmentEntry(
+            host_path='/tmp/a', vm_name='vm-a', mode='direct-virtiofs'
+        )
     )
     fpath = tmp_path / 'config.toml'
     save_store(store, fpath)
@@ -58,6 +62,30 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     assert [a.host_path for a in loaded.attachments] == ['/tmp/a', '/tmp/z']
     assert find_vm(loaded, 'vm-a') is not None
     assert find_vm(loaded, 'missing') is None
+
+
+def test_store_roundtrips_registry_backed_tools(tmp_path: Path) -> None:
+    store = Store()
+    store.defaults = AgentVMConfig()
+    store.defaults.tools.rust = 'stable'
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-tools'
+    cfg.tools.uv = '0.11.11'
+    cfg.tools.code = 'latest'
+    upsert_vm(store, cfg)
+
+    fpath = tmp_path / 'config.toml'
+    save_store(store, fpath)
+    text = fpath.read_text(encoding='utf-8')
+    assert '[defaults.tools]' in text
+    assert '[vms.tools]' in text
+
+    loaded = load_store(fpath)
+    assert loaded.defaults is not None
+    assert loaded.defaults.tools.rust == 'stable'
+    vm = require_vm(loaded, 'vm-tools')
+    assert vm.cfg.tools.uv == '0.11.11'
+    assert vm.cfg.tools.code == 'latest'
 
 
 def test_save_store_logs_reason(
@@ -232,6 +260,29 @@ host_path = "{project}"
 
     with raises(ValueError, match='vm_name mismatch'):
         parse_store_toml(text)
+
+
+def test_machine_store_rejects_future_schema_version() -> None:
+    """An older build must not re-render a newer shared document.
+
+    A machine store may be edited by several aivm versions; silently
+    parsing (and later re-rendering) a newer schema would drop the fields
+    a newer principal wrote, for everyone on the machine.
+    """
+    from pytest import raises
+
+    from aivm.config_store import parse_store_toml
+    from aivm.config_store.models import STORE_SCHEMA_VERSION
+
+    future = STORE_SCHEMA_VERSION + 1
+    text = f'schema_version = {future}\nstore_kind = "machine"\n'
+    with raises(ValueError, match='Unsupported machine store schema'):
+        parse_store_toml(text)
+
+    # The per-user legacy document keeps its released tolerance: it is not
+    # shared, so no other principal's data is at stake.
+    legacy = parse_store_toml(f'schema_version = {future}\n')
+    assert legacy.schema_version == future
 
 
 def test_load_split_layout_by_literal_concatenation(tmp_path: Path) -> None:
@@ -699,14 +750,19 @@ def test_unknown_name_offers_nothing_when_nothing_is_close() -> None:
 
 def test_unknown_name_lists_what_the_store_actually_has() -> None:
     """The listing is what tells a user they are on the wrong host."""
-    message = unknown_name_message('VM', 'aivm-2404', ['scratch', 'yardrat-dev'])
+    message = unknown_name_message(
+        'VM', 'aivm-2404', ['scratch', 'yardrat-dev']
+    )
     assert 'Known VMs: scratch, yardrat-dev.' in message
 
 
 def test_unknown_name_in_an_empty_store_says_so_and_points_forward() -> None:
     """'No VMs are defined' is a different problem from 'wrong name'."""
     message = unknown_name_message(
-        'VM', 'aivm-2404', [], empty_hint='Run `aivm config init` to define one.'
+        'VM',
+        'aivm-2404',
+        [],
+        empty_hint='Run `aivm config init` to define one.',
     )
     assert 'No VMs are defined in this config store.' in message
     assert 'aivm config init' in message
@@ -725,3 +781,67 @@ def test_require_vm_names_the_alternatives(tmp_path: Path) -> None:
     assert require_vm(store, 'aivm-2404-workstation').name == (
         'aivm-2404-workstation'
     )
+
+
+def test_attachment_lookup_uses_saved_alias_after_source_disappears(
+    tmp_path: Path,
+) -> None:
+    store = Store()
+    canonical = tmp_path / 'canonical-gone'
+    alias = tmp_path / 'typed-alias-gone'
+    upsert_attachment(
+        store,
+        host_path=canonical,
+        vm_name='vm1',
+        host_lexical_paths=[str(alias)],
+    )
+
+    matches = find_attachments(store, alias)
+
+    assert len(matches) == 1
+    assert matches[0].host_path == str(canonical)
+
+
+def test_attachment_lookup_reports_ambiguous_absent_path(
+    tmp_path: Path,
+) -> None:
+    store = Store()
+    missing = tmp_path / 'gone'
+    upsert_attachment(
+        store,
+        host_path=missing,
+        vm_name='vm1',
+        owner_principal_id='principal-alice',
+        guest_dst='/work/alice',
+        tag='alice',
+    )
+    upsert_attachment(
+        store,
+        host_path=missing,
+        vm_name='vm1',
+        owner_principal_id='principal-bob',
+        guest_dst='/work/bob',
+        tag='bob',
+    )
+
+    with pytest.raises(AIVMError, match='Multiple attachment records') as info:
+        find_attachment_for_vm(store, missing, 'vm1')
+
+    text = str(info.value)
+    assert 'principal-alice' in text
+    assert '/work/alice' in text
+    assert 'principal-bob' in text
+    assert '/work/bob' in text
+
+
+def test_stored_default_mode_matches_the_attachment_vocabulary() -> None:
+    """The store's fallback mode and the mode enum must not drift apart.
+
+    ``DEFAULT_ATTACHMENT_MODE`` is spelled in the store models rather than
+    imported from the VM layer, to keep the persistence format free of that
+    dependency. That is only safe while the two agree, so pin them.
+    """
+    from aivm.config_store.models import DEFAULT_ATTACHMENT_MODE
+    from aivm.vm.share import AttachmentMode
+
+    assert DEFAULT_ATTACHMENT_MODE == AttachmentMode.DIRECT_VIRTIOFS.value

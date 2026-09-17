@@ -11,6 +11,10 @@ class MissingSSHIdentityError(AIVMError):
     """Raised when SSH identity configuration is required but missing."""
 
 
+class VMNotRunningError(AIVMError):
+    """Raised when an operation requires a VM that is currently stopped."""
+
+
 class NoVMContextError(AIVMError):
     """Raised when the store names no single VM for this invocation.
 

@@ -7,11 +7,14 @@ import time
 
 from loguru import logger
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ..commands import CommandManager
 from ..config import AgentVMConfig
-from ..errors import AIVMError
+from ..errors import AIVMError, VMNotRunningError
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -20,6 +23,7 @@ from ..util import ensure_dir
 from .paths import _paths
 
 log = logger
+
 
 def _mac_for_vm(cfg: AgentVMConfig) -> str:
     mgr = CommandManager.current()
@@ -33,7 +37,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             approval_scope=f'vm-network-interfaces:{cfg.vm.name}',
         ):
             res = mgr.submit(
-                virsh_cmd('domiflist', cfg.vm.name),
+                pin_locale(virsh_cmd('domiflist', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -43,13 +47,15 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
             ).result()
     else:
         res = mgr.run(
-            virsh_cmd('domiflist', cfg.vm.name),
+            pin_locale(virsh_cmd('domiflist', cfg.vm.name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
             summary=f'Inspect network interfaces for VM {cfg.vm.name}',
         )
+    # The row filter below tells the interface table's header apart from its
+    # body by English words, so both probes above pin the C locale.
     for line in res.stdout.splitlines():
         if (
             'network' in line.lower()
@@ -61,6 +67,7 @@ def _mac_for_vm(cfg: AgentVMConfig) -> str:
                 return parts[-1].strip()
     return ''
 
+
 def get_ip_cached(cfg: AgentVMConfig) -> str | None:
     p = _paths(cfg, dry_run=False)
     ip_file = p['ip_file']
@@ -68,10 +75,12 @@ def get_ip_cached(cfg: AgentVMConfig) -> str | None:
         return ip_file.read_text(encoding='utf-8').strip() or None
     return None
 
+
 def wait_for_ip(
     cfg: AgentVMConfig, *, timeout_s: int = 360, dry_run: bool = False
 ) -> str:
     log.debug('Waiting for VM IP via DHCP lease')
+    context = guest_transport_from_effective_cfg(cfg)
     p = _paths(cfg, dry_run=dry_run)
     ip_file = p['ip_file']
     if dry_run:
@@ -80,7 +89,7 @@ def wait_for_ip(
     ensure_dir(p['state_dir'])
     mac = _mac_for_vm(cfg)
     cached_ip = get_ip_cached(cfg)
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    ident = require_ssh_identity(context.ssh_identity_file)
     if not mac:
         log.warning(
             'Could not determine VM MAC; DHCP lease lookup may fail. Falling back to domifaddr.'
@@ -158,7 +167,7 @@ def wait_for_ip(
                             connect_timeout=3,
                             strict_host_key_checking='accept-new',
                         ),
-                        f'{cfg.vm.user}@{cached_ip}',
+                        context.ssh_target(cached_ip),
                         'true',
                     ],
                     sudo=False,
@@ -176,8 +185,10 @@ def wait_for_ip(
                     return cached_ip
             now = time.time()
             if now >= next_status_at:
+                # The wait gives up early when this state stops saying
+                # 'running', so it must not arrive translated.
                 st = mgr.run(
-                    virsh_cmd('domstate', cfg.vm.name),
+                    pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                     sudo=virsh_needs_sudo(),
                     role='read',
                     check=False,
@@ -217,8 +228,9 @@ def wait_for_ip(
                         cfg.vm.name,
                     )
                 if 'running' not in last_state.lower():
-                    raise RuntimeError(
-                        f'VM {cfg.vm.name} is not running while waiting for IP (state={last_state!r}).'
+                    raise VMNotRunningError(
+                        f'VM {cfg.vm.name} is not running while waiting for IP '
+                        f'(state={last_state!r}).'
                     )
                 next_status_at = now + 10
             time.sleep(2)
@@ -228,18 +240,30 @@ def wait_for_ip(
         f'Try: sudo virsh net-dhcp-leases {cfg.network.name}'
     )
 
-def ssh_config(cfg: AgentVMConfig) -> str:
+
+def ssh_config(
+    cfg: AgentVMConfig, *, forward_agent_socket: str = ''
+) -> str:
     cfg = cfg.expanded_paths()
-    ident = cfg.paths.ssh_identity_file or '~/.ssh/id_ed25519'
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = context.ssh_identity_file or '~/.ssh/id_ed25519'
     host = cfg.vm.name
     ip = get_ip_cached(cfg) or 'VM_IP_UNKNOWN'
-    return f"""Host {host}
-  HostName {ip}
-  User {cfg.vm.user}
-  IdentityFile {ident}
-  IdentitiesOnly yes
-  StrictHostKeyChecking accept-new
-"""
+    lines = [
+        f'Host {host}',
+        f'  HostName {ip}',
+        f'  User {context.guest_user}',
+        f'  IdentityFile {ident}',
+        '  IdentitiesOnly yes',
+        '  StrictHostKeyChecking accept-new',
+    ]
+    if forward_agent_socket:
+        # Name the dedicated AIVM socket explicitly.  This forwards only the
+        # VM/principal-scoped credential agent rather than inheriting the
+        # caller's ordinary SSH_AUTH_SOCK.
+        lines.append(f'  ForwardAgent {forward_agent_socket}')
+    return '\n'.join(lines) + '\n'
+
 
 def _is_ssh_host_key_mismatch(stderr: str) -> bool:
     text = stderr.lower()
@@ -255,6 +279,7 @@ def _is_ssh_host_key_mismatch(stderr: str) -> bool:
     ]
     return any(pattern in text for pattern in patterns)
 
+
 def _ssh_host_key_mismatch_message(cfg: AgentVMConfig, ip: str) -> str:
     return textwrap.dedent(
         f"""
@@ -266,6 +291,7 @@ def _ssh_host_key_mismatch_message(cfg: AgentVMConfig, ip: str) -> str:
         """
     ).strip()
 
+
 def wait_for_ssh(
     cfg: AgentVMConfig,
     ip: str,
@@ -274,9 +300,10 @@ def wait_for_ssh(
     dry_run: bool = False,
 ) -> None:
     cfg = cfg.expanded_paths()
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     if dry_run:
-        log.info('DRYRUN: wait for SSH on {}@{}', cfg.vm.user, ip)
+        log.info('DRYRUN: wait for SSH on {}', context.ssh_target(ip))
         return
     deadline = time.time() + timeout_s
     # SSH can come up slowly on first boot, especially under nested
@@ -285,31 +312,38 @@ def wait_for_ssh(
     # handshake to finish before declaring the guest unreachable.
     probe_timeout_s = 30
     last_stderr = ''
-    while time.time() < deadline:
-        cmd = [
-            'ssh',
-            *ssh_base_args(
-                ident,
-                batch_mode=True,
-                connect_timeout=3,
-                strict_host_key_checking='accept-new',
-            ),
-            f'{cfg.vm.user}@{ip}',
-            'true',
-        ]
-        res = CommandManager.current().run(
-            cmd,
-            sudo=False,
-            check=False,
-            capture=True,
-            timeout=probe_timeout_s,
-        )
-        if res.code == 0:
-            log.info('SSH is ready on {}', ip)
-            return
-        last_stderr = (res.stderr or '').strip()
-        if _is_ssh_host_key_mismatch(last_stderr):
-            raise AIVMError(_ssh_host_key_mismatch_message(cfg, ip))
-        time.sleep(2)
+    mgr = CommandManager.current()
+    with mgr.intent(
+        f'Wait for SSH on {cfg.vm.name}',
+        why='Poll guest SSH readiness until a login probe succeeds.',
+        role='read',
+    ):
+        while time.time() < deadline:
+            cmd = [
+                'ssh',
+                *ssh_base_args(
+                    ident,
+                    batch_mode=True,
+                    connect_timeout=3,
+                    strict_host_key_checking='accept-new',
+                ),
+                context.ssh_target(ip),
+                'true',
+            ]
+            res = mgr.run(
+                cmd,
+                sudo=False,
+                check=False,
+                capture=True,
+                timeout=probe_timeout_s,
+                summary=f'Probe SSH readiness for VM {cfg.vm.name}',
+            )
+            if res.code == 0:
+                log.info('SSH is ready on {}', ip)
+                return
+            last_stderr = (res.stderr or '').strip()
+            if _is_ssh_host_key_mismatch(last_stderr):
+                raise AIVMError(_ssh_host_key_mismatch_message(cfg, ip))
+            time.sleep(2)
     detail = f' Last SSH error: {last_stderr}' if last_stderr else ''
     raise TimeoutError(f'Timed out waiting for SSH on {ip}.{detail}')

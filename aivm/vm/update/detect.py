@@ -8,7 +8,7 @@ from ...commands import CommandManager
 from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...privilege import sudo_allowed, virsh_needs_sudo
-from ...runtime import virsh_cmd
+from ...runtime import pin_locale, virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
 from .fdguard import _fdguard_drift
 from .models import VMUpdateDrift
@@ -32,7 +32,8 @@ def _resolve_vm_disk_path(
         / f'{cfg.vm.name}.qcow2'
     )
     res = CommandManager.current().run(
-        virsh_cmd('dumpxml', cfg.vm.name), role='read',
+        virsh_cmd('dumpxml', cfg.vm.name),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -72,7 +73,9 @@ def _virsh_domblk_capacity_bytes(
     cfg: AgentVMConfig, path_or_target: str, *, use_sudo: bool
 ) -> int | None:
     res = CommandManager.current().run(
-        virsh_cmd('domblkinfo', cfg.vm.name, path_or_target), role='read',
+        # _parse_domblkinfo_capacity selects the English 'Capacity:' field.
+        pin_locale(virsh_cmd('domblkinfo', cfg.vm.name, path_or_target)),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -88,6 +91,7 @@ def _vm_update_drift(
     """Compute editable drift between config and live libvirt VM state.
 
     The update flow is intentionally conservative:
+
     * prefer non-sudo probes first,
     * escalate to sudo only when required,
     * gather diagnostics in ``notes`` instead of failing hard when a probe is
@@ -104,8 +108,12 @@ def _vm_update_drift(
         ),
         role='read',
     ):
+        # Both probes are parsed by English field name ('CPU(s)', 'Max
+        # memory') or state name, so each invocation pins the C locale --
+        # including the sudo retry, which is where an env= override would be
+        # at the mercy of the host's sudoers env policy.
         dominfo = mgr.run(
-            virsh_cmd('dominfo', cfg.vm.name),
+            pin_locale(virsh_cmd('dominfo', cfg.vm.name)),
             sudo=False,
             check=False,
             capture=True,
@@ -113,7 +121,7 @@ def _vm_update_drift(
         )
         if dominfo.code != 0:
             dominfo = mgr.run(
-                virsh_cmd('dominfo', cfg.vm.name),
+                pin_locale(virsh_cmd('dominfo', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 check=False,
                 capture=True,
@@ -137,14 +145,14 @@ def _vm_update_drift(
         )
 
         state_res = mgr.run(
-            virsh_cmd('domstate', cfg.vm.name),
+            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
             sudo=False,
             check=False,
             capture=True,
         )
         if state_res.code != 0:
             state_res = mgr.run(
-                virsh_cmd('domstate', cfg.vm.name),
+                pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 check=False,
                 capture=True,
@@ -162,7 +170,9 @@ def _vm_update_drift(
             and not sudo_confirmed
         ):
             sudo_confirmed = True
-            disk_path, disk_notes = _resolve_vm_disk_path(cfg, use_sudo=virsh_needs_sudo())
+            disk_path, disk_notes = _resolve_vm_disk_path(
+                cfg, use_sudo=virsh_needs_sudo()
+            )
         notes.extend(disk_notes)
         cur_disk, qemu_img_err = _qemu_img_virtual_size_bytes(
             disk_path, use_sudo=False
@@ -184,7 +194,7 @@ def _vm_update_drift(
                     'qemu-img could not inspect disk while VM was running (shared write lock); falling back to virsh domblkinfo.'
                 )
             domblk = _virsh_domblk_capacity_bytes(
-                cfg, str(disk_path), use_sudo=bool(sudo_confirmed)
+                cfg, str(disk_path), use_sudo=sudo_confirmed
             )
             if domblk is None and not sudo_confirmed:
                 sudo_confirmed = True

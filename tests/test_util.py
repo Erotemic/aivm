@@ -39,9 +39,7 @@ def test_manager_run_success_and_failure(monkeypatch: MonkeyPatch) -> None:
     )
     assert bad.code == 7
     with pytest.raises(CmdError):
-        mgr.run(
-            ['bash', '-c', 'exit 9'], role='read', check=True, capture=True
-        )
+        mgr.run(['bash', '-c', 'exit 9'], role='read', check=True, capture=True)
 
 
 def test_nested_intent_breadcrumb_rendering(monkeypatch: MonkeyPatch) -> None:
@@ -354,7 +352,7 @@ def test_plan_preview_includes_summary_and_command(
 
     joined = '\n'.join(messages)
     assert '  1. Enable and start libvirtd service' in joined
-    assert 'command: sudo systemctl enable --now libvirtd' in joined
+    assert 'command:\nsudo systemctl enable --now libvirtd' in joined
 
 
 def test_run_logs_use_stacklevel_to_attribute_caller(
@@ -445,7 +443,7 @@ def test_plan_preview_labels_read_only_commands(
     joined = '\n'.join(messages)
     assert '  1. Inspect mount source' in joined
     assert (
-        'command (read-only): sudo findmnt -n -o SOURCE --target /tmp/demo'
+        'command (read-only):\nsudo findmnt -n -o SOURCE --target /tmp/demo'
         in joined
     )
 

@@ -16,7 +16,7 @@ from .commands import CommandManager
 from .config import AgentVMConfig
 from .errors import AIVMError
 from .privilege import virsh_needs_sudo
-from .runtime import virsh_cmd
+from .runtime import pin_locale, virsh_cmd
 from .util import which
 
 log = logger
@@ -61,9 +61,7 @@ def ensure_network(
     prefix = subnet_net.prefixlen
 
     if len(bridge) > 15:
-        raise AIVMError(
-            f'Bridge name too long ({len(bridge)} > 15): {bridge}'
-        )
+        raise AIVMError(f'Bridge name too long ({len(bridge)} > 15): {bridge}')
 
     overlap = _route_overlap(subnet)
     if overlap:
@@ -200,26 +198,99 @@ def network_status(cfg: AgentVMConfig) -> str:
     return info.stdout + '\n' + dump.stdout
 
 
+def _network_missing_error(detail: str) -> bool:
+    lowered = detail.lower()
+    return (
+        'failed to get network' in lowered
+        or 'network not found' in lowered
+        or 'no network with matching name' in lowered
+    )
+
+
+def _network_inactive_error(detail: str) -> bool:
+    lowered = detail.lower()
+    return 'network is not active' in lowered or (
+        "network '" in lowered and ' is not active' in lowered
+    )
+
+
+def _network_defined(name: str) -> bool:
+    """Return a definitive libvirt-network presence answer or fail closed.
+
+    The stderr is string-matched by :func:`_network_missing_error`, so the
+    invocation pins the C locale.
+    """
+    result = CommandManager.current().run(
+        pin_locale(virsh_cmd('net-info', name)),
+        sudo=virsh_needs_sudo(),
+        role='read',
+        check=False,
+        capture=True,
+        summary=f'Inspect libvirt network {name}',
+    )
+    if result.code == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    if _network_missing_error(detail):
+        return False
+    raise AIVMError(
+        f'Could not determine whether libvirt network {name!r} exists: '
+        f'{detail or f"virsh net-info exited with status {result.code}"}'
+    )
+
+
 def destroy_network(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    """Idempotently remove a network, accepting only recognized absence states."""
     name = cfg.network.name
-    if dry_run:
-        log.info(
-            'DRYRUN: virsh net-destroy {}; virsh net-undefine {}', name, name
-        )
-        return
     mgr = CommandManager.current()
-    mgr.run(
-        virsh_cmd('net-destroy', name),
+    # Both teardown commands below have their stderr string-matched against
+    # the recognized absence/inactive diagnostics, so pin the C locale.
+    stop_request = mgr.request(
+        pin_locale(virsh_cmd('net-destroy', name)),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
+        summary=f'Stop libvirt network {name}',
     )
-    mgr.run(
-        virsh_cmd('net-undefine', name),
+    undefine_request = mgr.request(
+        pin_locale(virsh_cmd('net-undefine', name)),
         sudo=virsh_needs_sudo(),
         role='modify',
         check=False,
         capture=True,
+        summary=f'Undefine libvirt network {name}',
     )
+    if dry_run:
+        stop_request.preview()
+        undefine_request.preview()
+        return
+    if not _network_defined(name):
+        log.info('Network already absent: {}', name)
+        return
+
+    stopped = stop_request.run()
+    if stopped.code != 0:
+        detail = (stopped.stderr or stopped.stdout or '').strip()
+        if not (
+            _network_inactive_error(detail) or _network_missing_error(detail)
+        ):
+            raise AIVMError(
+                f'Could not stop libvirt network {name!r}: '
+                f'{detail or f"virsh net-destroy exited with status {stopped.code}"}'
+            )
+
+    undefined = undefine_request.run()
+    if undefined.code != 0:
+        detail = (undefined.stderr or undefined.stdout or '').strip()
+        if not _network_missing_error(detail):
+            raise AIVMError(
+                f'Could not undefine libvirt network {name!r}: '
+                f'{detail or f"virsh net-undefine exited with status {undefined.code}"}'
+            )
+
+    if _network_defined(name):
+        raise AIVMError(
+            f'Libvirt network {name!r} is still defined after teardown.'
+        )
     log.info('Network removed: {}', name)

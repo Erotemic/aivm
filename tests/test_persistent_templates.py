@@ -59,7 +59,9 @@ def test_persistent_replay_service_unit_waits_for_guest_manifest() -> None:
 
     unit = persistent_replay_service_unit()
 
-    assert f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    assert (
+        f'ConditionPathExists={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}' in unit
+    )
 
 
 def test_persistent_host_replay_service_unit_renders_values() -> None:
@@ -111,3 +113,25 @@ def test_persistent_host_replay_service_is_root_scoped() -> None:
     assert 'NoNewPrivileges=yes' in unit
     assert '--vm-name "vm-safe"' in unit
     assert '--manifest "/var/lib/aivm/persistent-host/vm-safe.json"' in unit
+
+
+def test_host_replay_token_pattern_matches_the_shared_constant() -> None:
+    """The unprivileged convergence check must scope names exactly as the helper does.
+
+    ``host_bind._approved_binds_already_applied`` decides whether the
+    privileged replay can be skipped, and it only looks at children the
+    helper would actually act on. If the two patterns drifted, either a
+    mount the helper prunes would be ignored, or one it skips would keep
+    the fast path permanently disabled. The helper is a standalone script
+    and cannot import the constant, so pin the copy here.
+    """
+    from aivm.persistent_replay import (
+        PERSISTENT_BIND_TOKEN_PATTERN,
+        persistent_host_replay_python,
+    )
+
+    script = persistent_host_replay_python()
+
+    assert (
+        f'TOKEN_RE = re.compile(r"{PERSISTENT_BIND_TOKEN_PATTERN}")' in script
+    )

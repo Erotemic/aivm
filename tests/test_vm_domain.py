@@ -8,12 +8,20 @@ that libvirt failures surface as clear ``RuntimeError`` messages.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 import pytest
 from pytest import MonkeyPatch
 
+from aivm.errors import AIVMError
 from aivm.vm import restart_vm, shutdown_vm
+from aivm.vm.domain import (
+    _destroy_and_undefine_vm,
+    _host_path_exists,
+    _vm_defined,
+    domain_file_storage_paths,
+)
 from tests.helpers import (
     FakeProc,
     activate_manager,
@@ -275,3 +283,251 @@ def test_restart_vm_error(
 
     with pytest.raises(RuntimeError, match=match):
         restart_vm(cfg, dry_run=False)
+
+
+@pytest.mark.parametrize(
+    ('vm_name', 'disk_xml'),
+    [
+        pytest.param(
+            'vm-block-storage',
+            '<disk type="block" device="disk">'
+            '<source dev="/dev/vg0/vm-disk"/></disk>',
+            id='rejects_non_file_disk',
+        ),
+        pytest.param(
+            'vm-block-cdrom',
+            '<disk type="block" device="cdrom"><source dev="/dev/sr0"/></disk>',
+            id='rejects_non_file_cdrom_media',
+        ),
+    ],
+)
+def test_domain_storage_capture_rejects_non_file_disk(
+    monkeypatch: MonkeyPatch, vm_name: str, disk_xml: str
+) -> None:
+    """Deletion must not proceed when libvirt storage cannot be enumerated.
+
+    ``--remove-all-storage`` acts on every ``<disk>`` source, so an
+    unverifiable source fails closed whether it is a writable disk or
+    inserted cdrom media.
+    """
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    xml = f'<domain><devices>{disk_xml}</devices></domain>'
+    command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
+
+    with pytest.raises(AIVMError, match='non-file or otherwise unverifiable'):
+        domain_file_storage_paths(vm_name)
+
+
+def test_domain_storage_capture_includes_cdrom_media(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """File-backed cdrom media is inventoried alongside writable disks.
+
+    ``virsh undefine --remove-all-storage`` deletes an attached ISO exactly
+    like a qcow2, so the containment/journal inventory must include it.  An
+    empty removable drive (no ``<source>``) has nothing to delete and is
+    skipped rather than failing the capture.
+    """
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    xml = """
+    <domain>
+      <devices>
+        <disk type="file" device="disk">
+          <source file="/managed/vm/images/vm.qcow2"/>
+        </disk>
+        <disk type="file" device="cdrom">
+          <source file="/managed/vm/cloud-init/seed.iso"/>
+        </disk>
+        <disk type="file" device="cdrom"/>
+      </devices>
+    </domain>
+    """
+    command_recorder(monkeypatch, {'virsh dumpxml': FakeProc(0, xml, '')})
+
+    assert domain_file_storage_paths('vm-with-cdrom') == (
+        Path('/managed/vm/images/vm.qcow2'),
+        Path('/managed/vm/cloud-init/seed.iso'),
+    )
+
+
+def test_domain_undefine_never_retries_without_storage_removal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Every undefine attempt preserves the remove-all-storage contract."""
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.vm.domain.domain_file_storage_paths',
+        lambda name: (Path('/tmp/vm.qcow2'),),
+    )
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh destroy': FakeProc(0, '', ''),
+            'virsh undefine': FakeProc(1, '', 'metadata flag rejected'),
+        },
+    )
+
+    with pytest.raises(AIVMError, match='domain is still present'):
+        _destroy_and_undefine_vm(
+            'vm-storage-contract', storage_paths=(Path('/tmp/vm.qcow2'),)
+        )
+
+    undefines = [
+        cmd for cmd in rec.normalized if cmd[:2] == ['virsh', 'undefine']
+    ]
+    assert len(undefines) == 3
+    assert all('--remove-all-storage' in cmd for cmd in undefines)
+
+
+def test_domain_undefine_refuses_changed_explicit_storage_inventory(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.vm.domain.domain_file_storage_paths',
+        lambda name: (Path('/tmp/replacement.qcow2'),),
+    )
+    rec = command_recorder(monkeypatch, {})
+
+    with pytest.raises(
+        AIVMError, match='storage inventory changed before undefine'
+    ):
+        _destroy_and_undefine_vm(
+            'vm-storage-changed',
+            storage_paths=(Path('/tmp/original.qcow2'),),
+        )
+
+    assert not any(cmd[:2] == ['virsh', 'destroy'] for cmd in rec.normalized)
+    assert not any(cmd[:2] == ['virsh', 'undefine'] for cmd in rec.normalized)
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'error: failed to connect to the hypervisor',
+        'error: authentication unavailable: permission denied',
+    ],
+)
+def test_vm_defined_fails_closed_on_libvirt_inspection_errors(
+    monkeypatch: MonkeyPatch, detail: str
+) -> None:
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch, {'virsh dominfo': FakeProc(1, '', detail)}
+    )
+
+    with pytest.raises(AIVMError, match='Could not determine whether VM'):
+        _vm_defined('inspect-me')
+
+    assert ['virsh', 'dominfo', 'inspect-me'] in rec.normalized
+
+
+def test_vm_defined_accepts_only_recognized_missing_domain(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    command_recorder(
+        monkeypatch,
+        {'virsh dominfo': FakeProc(1, '', 'error: failed to get domain')},
+    )
+    assert _vm_defined('missing-vm') is False
+
+
+def test_vm_defined_pins_c_locale_on_dominfo(monkeypatch: MonkeyPatch) -> None:
+    """The dominfo stderr is string-matched, so the raw argv pins LC_ALL=C.
+
+    Localized libvirt diagnostics would otherwise turn every probe of a
+    missing VM into a hard 'Could not determine' error.
+    """
+    activate_manager(monkeypatch, euid=0)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'virsh dominfo': FakeProc(
+                1, '', "error: failed to get domain 'missing-vm'"
+            )
+        },
+    )
+
+    assert _vm_defined('missing-vm') is False
+
+    raw = rec.calls[rec.normalized.index(['virsh', 'dominfo', 'missing-vm'])]
+    assert raw[:2] == ['env', 'LC_ALL=C']
+
+
+def test_vm_state_probe_pins_c_locale_on_domstate(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """State probes match English names ('running', 'shut off'), so the
+    raw domstate argv pins LC_ALL=C; a translated state name would make
+    shutdown flows misread an active VM as inactive."""
+    cfg = make_cfg(None, **{'vm.name': 'vm-locale-state'})
+    activate_manager(monkeypatch, euid=0)
+    rec = command_recorder(
+        monkeypatch, {'virsh domstate': FakeProc(0, 'shut off\n', '')}
+    )
+
+    shutdown_vm(cfg, dry_run=False)
+
+    raw = rec.calls[
+        rec.normalized.index(['virsh', 'domstate', 'vm-locale-state'])
+    ]
+    assert raw[:2] == ['env', 'LC_ALL=C']
+
+
+def test_domain_storage_capture_fails_closed_on_dumpxml_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    activate_manager(monkeypatch)
+    monkeypatch.setattr('aivm.vm.domain._vm_defined', lambda _name: True)
+    command_recorder(
+        monkeypatch,
+        {'virsh dumpxml': FakeProc(1, '', 'error: permission denied')},
+    )
+
+    with pytest.raises(AIVMError, match='Could not capture storage paths'):
+        domain_file_storage_paths('inspect-me')
+
+
+@pytest.mark.parametrize(
+    'detail',
+    [
+        'stat: cannot statx /managed/disk: Permission denied',
+        'stat: cannot statx /managed/disk: Input/output error',
+        'env: stat: command execution failed',
+    ],
+)
+def test_host_storage_probe_fails_closed(
+    monkeypatch: MonkeyPatch, detail: str
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.vm.domain.CommandManager.run',
+        lambda self, *args, **kwargs: CommandResult(1, '', detail),
+    )
+
+    with pytest.raises(AIVMError, match='Could not determine whether managed'):
+        _host_path_exists(Path('/managed/disk'))
+
+
+def test_host_storage_probe_accepts_confirmed_enoent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.vm.domain.CommandManager.run',
+        lambda self, *args, **kwargs: CommandResult(
+            1,
+            '',
+            "stat: cannot statx '/managed/disk': No such file or directory",
+        ),
+    )
+    assert _host_path_exists(Path('/managed/disk')) is False

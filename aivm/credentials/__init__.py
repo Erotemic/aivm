@@ -1,4 +1,4 @@
-"""VM-scoped, host-managed credentials.
+"""Principal-scoped, host-managed VM credentials.
 
 The lifecycle functions are imported lazily so config-store parsing can use the
 credential validation helpers without creating a config-store/service cycle.
@@ -9,22 +9,33 @@ Audit boundary
 This package is optional: nothing here runs unless a user grants a VM access
 to a repository. It is deliberately kept off the path of the core VM, network,
 firewall, and privilege code so that a review of *those* never has to reason
-about deploy keys. Core modules reference this package in exactly four places,
-and that list is the thing to check when reviewing the boundary:
+about deploy keys. Core modules reference this package through a deliberately small set of pure
+or guard seams, and that list is the thing to check when reviewing the boundary:
 
-- ``config_store.models`` / ``config_store.parse`` import :mod:`.schema` and
-  :mod:`.validation`. The store persists credential records, so it must
-  validate them; both modules are pure and import nothing outward.
+- ``config_store.models`` imports :mod:`.schema`, while ``config_store.parse``
+  imports :mod:`.schema`, :mod:`.validation`, and the pure
+  :mod:`.agent_schema`. The store persists both independent credential record
+  collections, so it must validate their serialized identities; these modules
+  are pure and import no provider, key, agent-process, or guest lifecycle code.
 - ``cli.vm_lifecycle`` and ``vm.create`` import :mod:`.guards` -- and only
   :mod:`.guards` -- so a VM cannot be deleted or recreated out from under a
   live deploy key.
 - ``cli.config.lint`` imports :mod:`.schema` and :mod:`.validation` to lint
   credential blocks in the store.
-- ``cli.vm_creds`` is the feature's own command surface.
+- ``migration`` imports only :mod:`.validation` so the explicit released-store
+  planner can preserve repository identity while assigning principal-scoped
+  credential IDs. Planning remains read-only and does not import key/provider
+  lifecycle code.
+- ``cli.vm_connect`` imports only :mod:`.agent_transport`, the narrow runtime
+  seam that exposes an explicitly selected dedicated agent during managed
+  SSH/Remote-SSH sessions.
+- ``cli.vm_creds`` is the feature's single public command surface; it
+  dispatches to independently owned guest-key and ssh-agent backends.
 
 The shared CLI option surface (``cli._common``) must stay free of credential
-imports. Settings this feature needs are resolved by :mod:`.policy` from the
-store the running command bound, rather than pushed in by core.
+imports. Backend naming and preference precedence live in the neutral
+:mod:`aivm.credential_backends` config-policy module; credential authority and
+runtime behavior remain inside this package.
 
 Dependencies point inward only: modules here import ``commands``, ``config``,
 ``config_store``, ``errors``, ``host``, ``runtime``, and ``services``. No core

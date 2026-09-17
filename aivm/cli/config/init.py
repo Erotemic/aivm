@@ -14,7 +14,7 @@ from typing import Any, cast
 import kwconf
 from loguru import logger
 
-from ...config import AgentVMConfig
+from ...config import AgentVMConfig, default_vm_name
 from ...config_review import (
     ConfigReviewItem,
     agent_vm_review_items,
@@ -24,15 +24,36 @@ from ...config_review import (
 )
 from ...config_store import (
     Store,
-    load_store,
+    find_principal_for_host_identity,
+    find_vm,
+    materialize_vm_cfg,
     parse_store_toml,
     render_store_defaults_toml,
     save_store,
 )
 from ...detect import auto_defaults
-from ...errors import AIVMError
+from ...enrollment import normalized_guest_username, reconcile_current_principal
+from ...errors import AIVMError, CommandControlError
+from ...host_identity import current_host_identity
+from ...profile_store import save_user_profile
 from ...resource_checks import vm_resource_warning_lines
-from ...services import cfg_path, maybe_offer_create_ssh_identity
+from ...scoped_store import (
+    StoreScope,
+    ensure_machine_scope_ready,
+    load_scope_profile,
+    load_scope_store,
+    profile_from_effective_cfg,
+    resolve_store_scope,
+    save_scope_store,
+)
+from ...services import (
+    cfg_path,
+    hydrate_ssh_identity_defaults,
+    maybe_offer_create_ssh_identity,
+)
+from ...ssh_keys import same_ssh_public_key
+from ...vm.domain import domain_is_defined
+from ...vm.guest_tools import GUEST_TOOL_REGISTRY
 from .._common import _BaseCommand
 from .editor import edit_path, select_editor_command
 
@@ -44,21 +65,37 @@ _EDITABLE_SECTIONS = (
     'firewall',
     'image',
     'provision',
+    'tools',
     'paths',
     'virtiofs',
 )
 
 
 class InitCLI(_BaseCommand):
-    """Initialize global config-store defaults (without creating a VM)."""
+    """Initialize a new machine or join this user to an existing one."""
 
     force: bool = kwconf.Flag(
         False,
-        help='Overwrite existing VM definition if the same name already exists.',
+        short_alias=['f'],
+        help=(
+            'Overwrite existing defaults when initializing a new machine; '
+            'ignored when joining an existing managed VM.'
+        ),
     )
     defaults: bool = kwconf.Flag(
         False,
-        help='Accept detected defaults without interactive review.',
+        help=(
+            'Accept detected creator defaults or an exact managed-machine '
+            'join without interactive review.'
+        ),
+    )
+    vm: str = kwconf.Value(
+        '',
+        help=(
+            'Managed VM to join, for a shared machine store that holds more '
+            'than one. Only an already managed VM may be named; use '
+            '`aivm vm create` to add one.'
+        ),
     )
 
     @classmethod
@@ -66,10 +103,11 @@ class InitCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         return initialize_config_defaults(
             config_opt=args.config,
-            yes=bool(args.yes),
-            defaults=bool(args.defaults),
-            force=bool(args.force),
+            yes=args.yes,
+            defaults=args.defaults,
+            force=args.force,
             standalone_guidance=True,
+            vm_opt=str(args.vm or ''),
         )
 
 
@@ -80,11 +118,87 @@ def initialize_config_defaults(
     defaults: bool,
     force: bool,
     standalone_guidance: bool,
+    vm_opt: str = '',
 ) -> int:
-    """Initialize defaults, with wording appropriate to the calling workflow."""
+    """Initialize creator defaults or join the caller to a managed machine."""
     path = cfg_path(config_opt)
-    reg = load_store(path)
-    cfg = auto_defaults(AgentVMConfig(), project_dir=Path.cwd())
+    scope = resolve_store_scope(str(path), for_init=True)
+    path = scope.store_path
+    requested_vm = str(vm_opt or '').strip()
+    if requested_vm and not scope.is_machine:
+        raise AIVMError(
+            f'`aivm config init --vm` selects one VM from a shared machine '
+            f'store, but this invocation uses the per-user store at {path}.'
+        )
+    if scope.is_machine:
+        ensure_machine_scope_ready(scope)
+    reg = load_scope_store(scope)
+
+    if scope.is_machine:
+        canonical_vm_name = default_vm_name()
+        # Join any managed VM this machine already has, not only the
+        # canonical host-derived name: the creator may have renamed the VM
+        # during interactive review, and a second user's init must still
+        # land in the join flow instead of the create-defaults flow.
+        join_vm_name = ''
+        if requested_vm:
+            # `config init` is where a joining user's profile and SSH keypair
+            # come from, so selecting the VM has to be possible here. Sending
+            # them to `vm access reconcile --vm` instead would deadlock: that
+            # command requires the profile key this command creates.
+            if find_vm(reg, requested_vm) is None:
+                names = ', '.join(sorted(vm.name for vm in reg.vms))
+                raise AIVMError(
+                    f'--vm {requested_vm!r} does not name a VM managed by '
+                    f'{path}. Managed VMs: {names or "none"}. Use '
+                    '`aivm vm create` to add a new one.'
+                )
+            join_vm_name = requested_vm
+        elif find_vm(reg, canonical_vm_name) is not None:
+            join_vm_name = canonical_vm_name
+        elif len(reg.vms) == 1:
+            join_vm_name = reg.vms[0].name
+        elif reg.vms:
+            names = ', '.join(sorted(vm.name for vm in reg.vms))
+            raise AIVMError(
+                f'This machine store already manages several VMs ({names}) '
+                f'and none matches the canonical name {canonical_vm_name!r}. '
+                'Join one explicitly with `aivm config init --vm NAME`.'
+            )
+        if join_vm_name:
+            return _join_existing_machine(
+                scope=scope,
+                reg=reg,
+                vm_name=join_vm_name,
+                yes=yes,
+                defaults=defaults,
+                force=force,
+            )
+        if domain_is_defined(canonical_vm_name):
+            raise AIVMError(
+                f'A libvirt domain named {canonical_vm_name!r} exists, but the '
+                f'shared machine store {path} has no matching managed record. '
+                'Refusing to adopt or overwrite an unmanaged domain. Run '
+                '`aivm config discover` for explicit review/import, or rename '
+                'the conflicting domain.'
+            )
+    else:
+        canonical_vm_name = ''
+
+    if reg.defaults is not None and not force:
+        # Refuse before the SSH-keypair offer and the interactive review, so
+        # the user is not walked through every default only to be told the
+        # work was discarded.
+        print(
+            f'Config defaults already exist in store: {path}',
+            file=sys.stderr,
+        )
+        print('Use --force to overwrite defaults.', file=sys.stderr)
+        return 2
+    seed = AgentVMConfig()
+    if canonical_vm_name:
+        seed.vm.name = canonical_vm_name
+    cfg = auto_defaults(seed, project_dir=Path.cwd())
     maybe_offer_create_ssh_identity(
         cfg,
         yes=yes,
@@ -97,21 +211,186 @@ def initialize_config_defaults(
         cfg = _review_init_defaults_interactive(cfg, path)
     else:
         _show_init_advisories(cfg)
-    if reg.defaults is not None and not force:
-        print(
-            f'Config defaults already exist in store: {path}',
-            file=sys.stderr,
-        )
-        print('Use --force to overwrite defaults.', file=sys.stderr)
-        return 2
     reg.defaults = cfg
-    save_store(reg, path)
-    print(f'Updated config defaults: {path}')
+    if scope.is_machine:
+        save_scope_store(
+            scope,
+            reg,
+            reason='Initialize shared machine defaults.',
+        )
+        profile = profile_from_effective_cfg(
+            cfg,
+            existing=load_scope_profile(scope),
+        )
+        assert scope.profile_path is not None
+        save_user_profile(profile, scope.profile_path)
+        print(f'Initialized machine defaults: {path}')
+        print(f'Initialized user profile: {scope.profile_path}')
+    else:
+        save_store(reg, path)
+        print(f'Updated config defaults: {path}')
     if standalone_guidance:
         print(
             'No VM created. Use `aivm vm create` to create one from defaults.'
         )
     return 0
+
+
+def _join_existing_machine(
+    *,
+    scope: StoreScope,
+    reg: Store,
+    vm_name: str,
+    yes: bool,
+    defaults: bool,
+    force: bool,
+) -> int:
+    """Create/update only the caller profile, then enroll its principal."""
+    profile = load_scope_profile(scope)
+    host_identity = current_host_identity()
+    host_user = host_identity.username
+    existing = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=host_identity
+    )
+    profile_guest = profile.default_guest_user.strip()
+    guest_user = (
+        existing.guest_user
+        if existing is not None
+        else (
+            profile_guest
+            if profile_guest and profile_guest != 'agent'
+            else normalized_guest_username(host_user)
+        )
+    )
+    cfg = materialize_vm_cfg(reg, vm_name)
+    cfg.vm.user = guest_user
+    cfg.paths.ssh_identity_file = profile.ssh_identity_file
+    cfg.paths.ssh_pubkey_path = profile.ssh_pubkey_path
+    cfg.paths.state_dir = profile.state_dir
+    cfg.verbosity = int(profile.behavior.verbose)
+    hydrate_ssh_identity_defaults(cfg)
+    maybe_offer_create_ssh_identity(
+        cfg,
+        yes=yes,
+        prompt_reason=(
+            f'Generate a personal SSH keypair before joining managed VM '
+            f'{vm_name} as {guest_user}.'
+        ),
+    )
+    profile = profile_from_effective_cfg(cfg, existing=profile)
+    assert scope.profile_path is not None
+
+    current_key = _read_public_key_text(cfg.paths.ssh_pubkey_path)
+    already_active = (
+        existing is not None
+        and existing.state in {'active', 'legacy'}
+        and existing.guest_user == guest_user
+        and bool(current_key)
+        and same_ssh_public_key(existing.ssh_public_key, current_key)
+    )
+    print(f'Existing managed machine found: {vm_name}')
+    print(f'Joining host user {host_user} as guest user {guest_user}.')
+    if force:
+        print(
+            '--force does not overwrite machine configuration while joining; '
+            'only this user profile and principal may change.'
+        )
+    if already_active:
+        profile.active_vm = vm_name
+        save_user_profile(profile, scope.profile_path)
+        print(f'Already enrolled and active: {host_user} -> {guest_user}')
+        print(f'Updated user profile: {scope.profile_path}')
+        return 0
+
+    _confirm_managed_join(
+        vm_name=vm_name,
+        guest_user=guest_user,
+        yes=yes,
+        defaults=defaults,
+    )
+    # Persist the caller profile only after the user confirmed the join;
+    # declining must leave no durable state behind.
+    save_user_profile(profile, scope.profile_path)
+    try:
+        report = reconcile_current_principal(
+            scope,
+            vm_name=vm_name,
+            guest_user=guest_user,
+        )
+    except CommandControlError:
+        # A declined or unavailable approval is the user's decision, not an
+        # unreachable VM; reporting it as a successful pending join would
+        # exit 0 against that decision.
+        raise
+    except AIVMError as ex:
+        refreshed = load_scope_store(scope)
+        pending = find_principal_for_host_identity(
+            refreshed, vm_name=vm_name, identity=host_identity
+        )
+        if pending is not None and pending.state == 'pending':
+            profile.active_vm = vm_name
+            save_user_profile(profile, scope.profile_path)
+            print(
+                f'Enrollment is pending for {host_user} -> '
+                f'{pending.guest_user}: {ex}',
+                file=sys.stderr,
+            )
+            print(
+                f'Run `aivm vm access reconcile --vm {vm_name}` when the VM '
+                'is reachable.'
+            )
+            print(f'Updated user profile: {scope.profile_path}')
+            return 0
+        raise
+
+    if report.principal.state != 'active':
+        raise AIVMError(
+            f'Enrollment for {host_user!r} returned state '
+            f'{report.principal.state!r}; refusing to report a successful join.'
+        )
+    profile.active_vm = vm_name
+    save_user_profile(profile, scope.profile_path)
+    print(
+        f'Joined managed machine: {host_user} -> '
+        f'{report.principal.guest_user} (active)'
+    )
+    print(f'Updated user profile: {scope.profile_path}')
+    return 0
+
+
+def _confirm_managed_join(
+    *,
+    vm_name: str,
+    guest_user: str,
+    yes: bool,
+    defaults: bool,
+) -> None:
+    """Confirm a principal enrollment without reviewing machine settings."""
+    if yes or defaults:
+        return
+    if not sys.stdin.isatty():
+        raise AIVMError(
+            'Joining an existing managed machine requires confirmation. '
+            'Re-run with --yes or --defaults.'
+        )
+    answer = (
+        input(f'Join managed VM {vm_name!r} as guest {guest_user!r}? [Y/n]: ')
+        .strip()
+        .lower()
+    )
+    if answer not in {'', 'y', 'yes'}:
+        raise AIVMError('Aborted by user.')
+
+
+def _read_public_key_text(path: str) -> str:
+    """Read the profile public key for idempotent join detection."""
+    raw = str(path or '').strip()
+    if not raw:
+        return ''
+    try:
+        return Path(raw).expanduser().read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
 
 
 def _init_review_items(
@@ -223,7 +502,7 @@ def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
     while True:
         raw = input(f'{prompt} [{default_label}]: ').strip().lower()
         if not raw:
-            return bool(default)
+            return default
         if raw in {'1', 'true', 't', 'y', 'yes', 'on'}:
             return True
         if raw in {'0', 'false', 'f', 'n', 'no', 'off'}:
@@ -297,7 +576,10 @@ def _validate_editor_document(
         if not isinstance(body, dict):
             raise ValueError(f'defaults.{section} must be a TOML table')
         body = cast(dict[str, object], body)
-        valid = {field.name for field in fields(getattr(template, section))}
+        if section == 'tools':
+            valid = {*GUEST_TOOL_REGISTRY.names(), 'bin_dir'}
+        else:
+            valid = {field.name for field in fields(getattr(template, section))}
         unknown = sorted(str(key) for key in set(body) - valid)
         if unknown:
             raise ValueError(

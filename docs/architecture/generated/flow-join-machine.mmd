@@ -1,0 +1,19 @@
+%% GENERATED FILE - DO NOT EDIT
+%% generation schema: 2
+flowchart TD
+    init["config init detects existing managed VM<br/><code>aivm.cli.config.init._join_existing_machine</code>"]
+    profile[("Write only caller SSH paths and preferences<br/><code>aivm.profile_store.save_user_profile</code>")]
+    pending[("Persist pending access identity before guest mutation<br/><code>aivm.enrollment._save_principal_state</code>")]
+    bootstrap{"Restricted bootstrap SSH invokes aivm-guestctl<br/><code>aivm.enrollment.require_bootstrap_identity</code>"}
+    guest{"Add guest account, key, and constrained sudo fragment<br/><code>aivm.rc.guest.guestctl.reconcile_guest_principal</code>"}
+    verify["Verify new personal SSH connection<br/><code>aivm.enrollment.reconcile_current_principal</code>"]
+    active[("Mark access identity active and select VM in caller profile<br/><code>aivm.config_store.models.PrincipalEntry.state</code>")]
+    recoverable>"Unreachable guest leaves pending identity for reconcile"]
+    init -->|caller-owned state| profile
+    profile -->|enroll| pending
+    pending -->|forced command| bootstrap
+    bootstrap -->|narrow mutation| guest
+    guest -->|personal key| verify
+    verify -->|success| active
+    bootstrap -->|transport failure| recoverable
+    recoverable -->|vm access reconcile| verify

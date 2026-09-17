@@ -135,6 +135,9 @@ class VMConfig:
     # same host-side filesystem location. Off by default for backwards
     # compatibility with existing setups.
     mirror_shared_home_folders: bool = False
+    # Backend preference used when `aivm vm creds ... --backend auto` is used.
+    # `auto` defers to the caller profile, then the stable package fallback.
+    credential_backend: str = 'auto'
 
 
 @dataclass
@@ -156,29 +159,83 @@ class ProvisionConfig:
     )
 
 
+ToolSpec = str | bool
+
+
 @dataclass
 class ToolsConfig:
-    """Guest developer tools managed outside apt/snap packaging.
+    """Configuration values for registry-defined guest developer tools.
 
-    Tool fields are compact declarative specs:
-      * ``"off"`` disables management.
-      * ``"latest"`` means the upstream default current release.
-      * a version/channel string pins the requested tool.
-
-    ``uv`` uses Astral's standalone installer. ``rust`` uses rustup, not
-    distro Rust packages or snap. Rust is off by default because it is a
-    larger toolchain; set ``rust = "stable"`` to manage it. ``code`` installs
-    the VS Code CLI from Microsoft's apt repository (not snap) so
-    ``code tunnel`` workflows can run inside the VM; it is off by default
-    because it is only useful for VS Code Remote Tunnels users. Enable it
-    persistently with ``code = "latest"`` in this section, or one-shot via
-    ``aivm vm provision code``.
+    The registry owns the set of known tools and their defaults. This object
+    stores only explicit overrides plus shared settings, so adding a tool does
+    not require another dataclass field. Attribute access such as
+    ``cfg.tools.rust`` remains supported and resolves through the registry.
     """
 
-    uv: str = 'latest'
-    rust: str = 'off'
-    code: str = 'off'
+    specs: dict[str, ToolSpec] = field(default_factory=dict, repr=False)
     bin_dir: str = '~/.local/bin'
+
+    def get(self, name: str, default: ToolSpec) -> ToolSpec:
+        """Return an explicit tool spec or the registry-provided default."""
+        return self.specs.get(name, default)
+
+    def set(self, name: str, value: ToolSpec) -> None:
+        """Set one known tool override, rejecting misspelled names."""
+        from .vm.guest_tools import GUEST_TOOL_REGISTRY
+
+        definition = GUEST_TOOL_REGISTRY.require(name)
+        if value == definition.config_default:
+            self.specs.pop(name, None)
+        else:
+            self.specs[name] = value
+
+    def update(self, values: dict[str, object]) -> None:
+        """Load flattened ``[tools]`` values from TOML."""
+        from .vm.guest_tools import GuestToolSpecError
+
+        for name, value in values.items():
+            if name == 'bin_dir':
+                self.bin_dir = str(value or '~/.local/bin')
+            else:
+                if not isinstance(value, (str, bool)):
+                    raise GuestToolSpecError(
+                        f'Invalid config value [tools] {name} = {value!r}: '
+                        'guest tool specs must be strings or booleans, '
+                        f'not {type(value).__name__}'
+                    )
+                self.set(name, value)
+
+    def as_flat_dict(self) -> dict[str, ToolSpec]:
+        """Return the released flat ``[tools]`` TOML representation."""
+        from .vm.guest_tools import GUEST_TOOL_REGISTRY
+
+        result = GUEST_TOOL_REGISTRY.config_values(self)
+        result['bin_dir'] = self.bin_dir
+        return result
+
+    def __getattr__(self, name: str) -> ToolSpec:
+        """Preserve ``cfg.tools.<name>`` for registry-defined tools."""
+        from .vm.guest_tools import GUEST_TOOL_REGISTRY
+
+        definition = GUEST_TOOL_REGISTRY.get(name)
+        if definition is None:
+            raise AttributeError(name)
+        return self.get(name, definition.config_default)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in {'specs', 'bin_dir'} or 'specs' not in self.__dict__:
+            object.__setattr__(self, name, value)
+            return
+        from .vm.guest_tools import GUEST_TOOL_REGISTRY
+
+        if GUEST_TOOL_REGISTRY.get(name) is None:
+            raise AttributeError(name)
+        if not isinstance(value, (str, bool)):
+            raise TypeError(
+                f'guest tool {name!r} must be a string or boolean, '
+                f'not {type(value).__name__}'
+            )
+        self.set(name, value)
 
 
 @dataclass
@@ -274,8 +331,15 @@ def _toml_escape(s: str) -> str:
     return s.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def dump_toml(cfg: AgentVMConfig) -> str:
+def agent_vm_config_asdict(cfg: AgentVMConfig) -> dict[str, object]:
+    """Serialize config while preserving the flat registry-backed tools table."""
     d = asdict(cfg)
+    d['tools'] = cfg.tools.as_flat_dict()
+    return d
+
+
+def dump_toml(cfg: AgentVMConfig) -> str:
+    d = agent_vm_config_asdict(cfg)
     lines: list[str] = []
     verbosity = d.get('verbosity', 1)
     if isinstance(verbosity, int) and verbosity != 1:
@@ -316,6 +380,9 @@ def load(path: Path) -> AgentVMConfig:
         if section in raw and isinstance(raw[section], dict):
             sec = raw[section]
             obj = getattr(cfg, section)
+            if section == 'tools':
+                obj.update(sec)
+                continue
             for k, v in sec.items():
                 if hasattr(obj, k):
                     setattr(obj, k, v)

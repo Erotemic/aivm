@@ -18,10 +18,9 @@ ACLs are granted on), and writes nothing else.
 
 from __future__ import annotations
 
-import getpass
 import os
-import shlex
-import textwrap
+import pwd
+import importlib.resources
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +30,20 @@ from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
+from ..host_identity import current_host_identity
+from ..machine_store import (
+    DEFAULT_MACHINE_STORE_ROOT,
+    MACHINE_STORE_ROOT_ENV,
+    MachineStoreAccessError,
+    MachineStoreLayout,
+    current_machine_group_name,
+    ensure_machine_store_layout,
+    machine_group_exists,
+    machine_store_layout,
+    machine_store_root_ready,
+    resolve_machine_group_gid,
+    user_in_machine_group,
+)
 from ..modes import PrivilegeMode
 from ..privilege import (
     LIBVIRT_GROUP,
@@ -47,7 +60,6 @@ from ..util import expand, which
 from ..vm.domain import (
     _get_vm_state,
     _is_vm_active,
-    _start_vm,
     _wait_for_vm_state,
     shutdown_vm,
 )
@@ -190,100 +202,31 @@ def _cfg_for_stored_vm(config_opt: str | None, name: str) -> AgentVMConfig:
         return cfg
 
 
-def _adopt_script(tree: Path) -> str:
-    """Render the privileged in-place storage metadata handoff.
-
-    The walk never follows symlinks and prunes every descendant mount point
-    listed in ``/proc/self/mountinfo``. That second rule is essential: a bind
-    mount can live on the same filesystem, so ``find -xdev`` is not sufficient.
-    """
-    program = textwrap.dedent(
-        f"""\
-        import grp
-        import os
-        import stat
-        import subprocess
-        from pathlib import Path
-
-        tree = Path(os.path.realpath({str(tree)!r}))
-        libvirt_gid = grp.getgrnam({LIBVIRT_GROUP!r}).gr_gid
-
-        def decode_mount_field(text):
-            out = []
-            index = 0
-            while index < len(text):
-                if (
-                    ord(text[index]) == 92
-                    and index + 3 < len(text)
-                    and text[index + 1:index + 4].isdigit()
-                ):
-                    out.append(chr(int(text[index + 1:index + 4], 8)))
-                    index += 4
-                else:
-                    out.append(text[index])
-                    index += 1
-            return ''.join(out)
-
-        mountpoints = set()
-        with open('/proc/self/mountinfo', encoding='utf-8') as file:
-            for line in file:
-                fields = line.split()
-                if len(fields) >= 5:
-                    mountpoint = Path(decode_mount_field(fields[4]))
-                    if mountpoint != tree and tree in mountpoint.parents:
-                        mountpoints.add(mountpoint)
-
-        directories = []
-        for root_text, dirnames, filenames in os.walk(
-            tree, topdown=True, followlinks=False
-        ):
-            root = Path(root_text)
-            kept = []
-            for name in dirnames:
-                path = root / name
-                if path.is_symlink() or path in mountpoints:
-                    continue
-                kept.append(name)
-            dirnames[:] = kept
-
-            directories.append(root)
-            paths = [root]
-            paths.extend(root / name for name in filenames)
-            for path in paths:
-                if path.is_symlink():
-                    continue
-                info = path.stat(follow_symlinks=False)
-                mode = stat.S_IMODE(info.st_mode)
-                mode |= stat.S_IRGRP | stat.S_IWGRP
-                if path.is_dir() or mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
-                    mode |= stat.S_IXGRP
-                if path.is_dir():
-                    mode |= stat.S_ISGID
-                os.chown(path, -1, libvirt_gid, follow_symlinks=False)
-                os.chmod(path, mode, follow_symlinks=False)
-
-        if subprocess.run(
-            ['sh', '-c', 'command -v setfacl >/dev/null 2>&1']
-        ).returncode == 0:
-            for offset in range(0, len(directories), 128):
-                chunk = [str(path) for path in directories[offset:offset + 128]]
-                subprocess.run(
-                    [
-                        'setfacl',
-                        '-m',
-                        'u:{LIBVIRT_QEMU_USER}:x',
-                        '-m',
-                        'default:group:{LIBVIRT_GROUP}:rwX',
-                        '-m',
-                        'default:user:{LIBVIRT_QEMU_USER}:x',
-                        '--',
-                        *chunk,
-                    ],
-                    check=True,
-                )
-        """
+def _storage_adopt_source() -> str:
+    """Return the standalone privileged storage-adoption program."""
+    return (
+        importlib.resources.files('aivm')
+        .joinpath('rc', 'host', 'storage_adopt.py')
+        .read_text(encoding='utf-8')
     )
-    return f'python3 -c {shlex.quote(program)}'
+
+
+def _storage_adopt_command(tree: Path) -> list[str | Elided]:
+    """Build the resource-backed storage-adoption command."""
+    return [
+        'python3',
+        '-c',
+        Elided(
+            _storage_adopt_source(),
+            'privileged storage-adoption resource',
+        ),
+        '--tree',
+        str(tree),
+        '--group',
+        LIBVIRT_GROUP,
+        '--qemu-user',
+        LIBVIRT_QEMU_USER,
+    ]
 
 
 def _adopt_one_tree(
@@ -307,13 +250,31 @@ def _adopt_one_tree(
             'that reaches the shut-off state will be restarted even if the '
             'metadata handoff fails.'
         )
+    adopt_request = mgr.request(
+        _storage_adopt_command(tree),
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
+        detail=f'tree={tree}; descendant mounts and symlinks pruned',
+    )
+    start_requests = {
+        name: mgr.request(
+            ['virsh', '-c', 'qemu:///system', 'start', name],
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Start VM {name} again after storage adoption',
+        )
+        for name in running
+    }
     if args.dry_run:
         for name in running:
-            print(f'DRYRUN: virsh shutdown {name} (start again afterwards)')
-        print(
-            f'DRYRUN: recursively grant {LIBVIRT_GROUP} access under {tree}; '
-            'prune mounted subtrees and symlinks; set setgid/default ACLs'
-        )
+            shutdown_vm(_cfg_for_stored_vm(args.config, name), dry_run=True)
+        adopt_request.preview()
+        for name in running:
+            start_requests[name].preview()
         return
 
     stopped: list[str] = []
@@ -335,23 +296,7 @@ def _adopt_one_tree(
             ),
             approval_scope=f'host-permissions-adopt:{tree}',
         ):
-            mgr.submit(
-                [
-                    'bash',
-                    '-c',
-                    Elided(
-                        _adopt_script(tree),
-                        f'python program adopting {tree} into the '
-                        f'{LIBVIRT_GROUP} group',
-                    ),
-                ],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                summary=f'Grant {LIBVIRT_GROUP} access to {tree}',
-                detail=f'tree={tree}; descendant mounts and symlinks pruned',
-            )
+            adopt_request.submit()
     except BaseException as ex:
         pending_error = ex
 
@@ -359,7 +304,7 @@ def _adopt_one_tree(
     for name in stopped:
         try:
             print(f'Starting VM {name} again ...')
-            _start_vm(name)
+            start_requests[name].run()
         except Exception as ex:
             restart_errors.append(f'{name}: {ex}')
 
@@ -422,7 +367,14 @@ def _print_base_dir_toml(base_dir: Path) -> None:
 def _configured_privilege_mode(config_opt: str | None) -> PrivilegeMode:
     """Return the persisted privilege mode."""
     try:
-        path = cfg_path(config_opt)
+        from ..scoped_store import load_scope_profile, resolve_store_scope
+
+        scope = resolve_store_scope(config_opt)
+        if scope.is_machine:
+            return normalize_privilege_mode(
+                load_scope_profile(scope).behavior.privilege_mode
+            )
+        path = scope.store_path
         if not path.exists():
             return normalize_privilege_mode(BehaviorConfig().privilege_mode)
         reg = load_store(path)
@@ -440,9 +392,13 @@ def _print_policy_report(config_opt: str | None, *, group_added: bool) -> None:
         print("  nothing until you switch to 'as-needed'.")
     else:
         print(f"behavior.privilege_mode = '{mode}', unchanged and correct:")
-        print('  once the libvirt group is active, aivm stops invoking sudo for')
+        print(
+            '  once the libvirt group is active, aivm stops invoking sudo for'
+        )
         print('  libvirt and image operations on its own. Sudo remains for')
-        print('  managed nftables, apt-get, and establishing a new host bind mount.')
+        print(
+            '  managed nftables, apt-get, and establishing a new host bind mount.'
+        )
     if group_added:
         print(
             f'👉 Group membership added. Log out and back in (or run `newgrp '
@@ -489,13 +445,58 @@ class HostPermissionsCheckCLI(_BaseCommand):
         broken: list[str] = []  # breaks VMs regardless of privilege mode
         sudo_needs: list[str] = []
 
-        def friction_line(
-            ok: bool, label: str, detail: str, need: str
-        ) -> str:
+        def friction_line(ok: bool, label: str, detail: str, need: str) -> str:
             """Render an operation that still costs sudo as a warning."""
             if not ok:
                 sudo_needs.append(need)
             return status_line(ok, label, detail, warn_only=True)
+
+        machine_group = current_machine_group_name()
+        try:
+            active_layout: MachineStoreLayout | None = machine_store_layout()
+        except MachineStoreAccessError as ex:
+            # The one row this command exists to explain: a shared store is
+            # present and out of reach. Report it as broken rather than as
+            # friction, because no privilege mode makes it usable.
+            active_layout = None
+            broken.append(str(ex).splitlines()[0])
+        if active_layout is not None and not active_layout.shared:
+            # Nothing to report about a group that this layout never consults.
+            lines.append(
+                status_line(
+                    True,
+                    'personal machine-store root',
+                    f'{active_layout.root} (no trusted group needed; '
+                    '`aivm host permissions setup` shares this host)',
+                )
+            )
+        elif active_layout is not None:
+            machine_group_ok = machine_group_exists(
+                machine_group
+            ) and user_in_machine_group(group_name=machine_group)
+            # The store group is normally the libvirt group, which gets its
+            # own line below. Reporting the same membership twice under two
+            # names reads as two separate things to fix.
+            if machine_group != LIBVIRT_GROUP:
+                lines.append(
+                    friction_line(
+                        machine_group_ok,
+                        f'{machine_group} machine-store membership',
+                        'permits shared desired-state updates'
+                        if machine_group_ok
+                        else 'run `aivm host permissions setup`, then log '
+                        'out/in',
+                        'shared machine-store access',
+                    )
+                )
+            lines.append(
+                friction_line(
+                    machine_store_root_ready(active_layout),
+                    'shared machine-store root',
+                    str(active_layout.root),
+                    'shared machine-store access',
+                )
+            )
 
         in_group = user_in_libvirt_group()
         lines.append(
@@ -504,7 +505,7 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 f'{LIBVIRT_GROUP} group membership',
                 'grants direct qemu:///system access without sudo'
                 if in_group
-                else f'run `sudo usermod -aG {LIBVIRT_GROUP} {getpass.getuser()}` '
+                else f'run `sudo usermod -aG {LIBVIRT_GROUP} {current_host_identity().username}` '
                 'or `aivm host permissions setup`',
                 'libvirt access (virsh)',
             )
@@ -513,14 +514,11 @@ class HostPermissionsCheckCLI(_BaseCommand):
         live_access = libvirt_without_sudo_ok()
         live_detail = 'virsh reaches qemu:///system without sudo'
         if not live_access:
-            live_detail = (
-                'virsh cannot reach qemu:///system without sudo'
-                + (
-                    ' (group added but not active in this session; log out/in '
-                    f'or use `newgrp {LIBVIRT_GROUP}`)'
-                    if in_group
-                    else ''
-                )
+            live_detail = 'virsh cannot reach qemu:///system without sudo' + (
+                ' (group added but not active in this session; log out/in '
+                f'or use `newgrp {LIBVIRT_GROUP}`)'
+                if in_group
+                else ''
             )
         lines.append(
             friction_line(
@@ -647,14 +645,202 @@ class HostPermissionsCheckCLI(_BaseCommand):
             )
             return 2
         if needs:
+            # Whether this account *can* sudo decides whether the remaining
+            # list is friction or a wall, and the old summary asserted
+            # "Ready" either way -- which reads as an all-clear to the one
+            # reader it is wrong for, an ordinary user on a shared host.
+            if CommandManager.current().sudo_escalation_possible():
+                print(
+                    f'✅ Ready under privilege_mode {str(mode)!r}; sudo will '
+                    'be used for: ' + '; '.join(needs) + '.'
+                )
+                print('   `aivm host permissions setup` trims that list.')
+                return 0
             print(
-                f'✅ Ready under privilege_mode {str(mode)!r}; sudo will be '
-                'used for: ' + '; '.join(needs) + '.'
+                '⚠️ Ready except where root is required, and this account '
+                'cannot obtain sudo here. Unavailable to you: '
+                + '; '.join(needs)
+                + '.'
             )
-            print('   `aivm host permissions setup` trims that list.')
+            print(
+                '   Everything else works. Ask a host administrator to '
+                'perform those steps once (see `aivm host permissions setup '
+                '--user <you>`); routine VM use does not need them again.'
+            )
             return 0
         print('✅ Host permissions are ready for routine VM operation.')
         return 0
+
+
+def _prepare_machine_store_access(
+    args: Any,
+    mgr: CommandManager,
+    *,
+    user: str,
+) -> bool:
+    """Prepare the shared config root; return whether membership was added."""
+    # Setup is how a host *becomes* shared, so it always targets the host-wide
+    # root. Resolving the active layout instead would make it a no-op on the
+    # very hosts it exists to promote: an unshared host resolves to the
+    # caller's own personal root, which needs no privileged preparation.
+    configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    layout = machine_store_layout(
+        None if configured_root else DEFAULT_MACHINE_STORE_ROOT
+    )
+    if configured_root:
+        if args.dry_run:
+            print(
+                f'DRYRUN: prepare caller-owned AIVM machine store at '
+                f'{layout.root}'
+            )
+        else:
+            ensure_machine_store_layout(layout, group_gid=os.getgid())
+        return False
+
+    group_name = current_machine_group_name()
+    group_exists = machine_group_exists(group_name)
+    listed = group_exists and user_in_machine_group(user, group_name=group_name)
+    # The store group is the libvirt group unless a site overrode it. Both the
+    # group itself and membership in it are then libvirt's to manage: the
+    # group ships with the package, and the caller below adds membership for
+    # qemu:///system access. Creating or joining it here would either forge a
+    # libvirt group that grants no libvirt access, or issue a second identical
+    # usermod.
+    owns_group = group_name != LIBVIRT_GROUP
+    group_request = (
+        mgr.request(
+            ['groupadd', '--system', group_name],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Create the {group_name} group',
+        )
+        if not group_exists and owns_group
+        else None
+    )
+    member_request = (
+        mgr.request(
+            ['usermod', '-aG', group_name, user],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Add {user} to the {group_name} group',
+        )
+        if not listed and owns_group
+        else None
+    )
+    parent_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
+            str(layout.root.parent),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare root-owned {layout.root.parent}',
+    )
+    root_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
+            str(layout.root),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare shared AIVM state at {layout.root}',
+    )
+    if args.dry_run:
+        if group_request is not None:
+            group_request.preview()
+        if member_request is not None:
+            member_request.preview()
+        parent_request.preview()
+        root_request.preview()
+        return not listed and owns_group
+    if not group_exists and not owns_group:
+        # Fail before the install below writes a root owned by a group that
+        # cannot exist; resolve_machine_group_gid explains how to get libvirt.
+        resolve_machine_group_gid(group_name)
+
+    membership_added = False
+    with mgr.intent(
+        'Prepare the shared AIVM machine store',
+        why=(
+            'Machine definitions, principals, and attachments need one '
+            'group-writable host-wide authority.'
+        ),
+        role='modify',
+    ):
+        if not group_exists and owns_group:
+            with mgr.step(
+                'Create the trusted AIVM host group',
+                why='The machine store is shared by trusted local AIVM users.',
+                approval_scope='host-permissions-setup-aivm-group',
+            ):
+                assert group_request is not None
+                group_request.submit()
+        if not listed and owns_group:
+            with mgr.step(
+                'Add the invoking user to the AIVM host group',
+                why='Group membership permits shared machine-store updates.',
+                approval_scope='host-permissions-setup-aivm-member',
+            ):
+                assert member_request is not None
+                member_request.submit()
+            membership_added = True
+        with mgr.step(
+            'Create the shared AIVM machine-store root',
+            why=(
+                'The setgid root preserves trusted-group ownership on '
+                'atomic replacements and split config fragments.'
+            ),
+            approval_scope='host-permissions-setup-aivm-root',
+        ):
+            # The parent is created first and separately: `install -d` applies
+            # its mode to every directory it creates, so folding these into
+            # one call would hand the group write access to the parent too --
+            # which is the chain the root persistent-replay service requires
+            # nobody but root can write.
+            parent_request.submit()
+            root_request.submit()
+    if membership_added:
+        print(
+            f'👉 Added {user} to {group_name}. Log out and back in before '
+            'running `aivm config init` against the shared machine store.'
+        )
+    return membership_added
+
+
+def _resolve_setup_target_user(requested: str) -> str:
+    """Resolve host setup ownership without trusting sudo environment text."""
+    explicit = str(requested or '').strip()
+    caller = current_host_identity()
+    if os.geteuid() == 0:
+        if not explicit:
+            raise AIVMError(
+                'Whole-command root/sudo execution requires an explicit '
+                '`--user <login>` target. Prefer running `aivm host '
+                'permissions setup` as that user and allowing AIVM to '
+                'escalate only the required steps.'
+            )
+        target = explicit
+    else:
+        if explicit and explicit != caller.username:
+            raise AIVMError(
+                f'Only root may prepare permissions for another account; '
+                f'current kernel identity is {caller.username!r} '
+                f'(uid={caller.uid}).'
+            )
+        target = caller.username
+    try:
+        pwd.getpwnam(target)
+    except KeyError as ex:
+        raise AIVMError(f'Host account does not exist: {target!r}') from ex
+    return target
 
 
 class HostPermissionsSetupCLI(_BaseCommand):
@@ -667,6 +853,14 @@ class HostPermissionsSetupCLI(_BaseCommand):
     ``defaults.paths.base_dir`` is written.
     """
 
+    user: str = kwconf.Value(
+        '',
+        help=(
+            'Host login whose memberships and storage access should be '
+            'prepared. Required for whole-command root/sudo execution; '
+            'ordinary users may omit it.'
+        ),
+    )
     base_dir: str = kwconf.Value(
         '',
         help=(
@@ -692,20 +886,31 @@ class HostPermissionsSetupCLI(_BaseCommand):
             'symlinks are pruned. Running VMs are briefly stopped and restarted.'
         ),
     )
-    dry_run: bool = kwconf.Flag(False, help='Print actions without running.')
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Print actions without running.'
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
+        user = _resolve_setup_target_user(str(args.user or ''))
+        _prepare_machine_store_access(args, mgr, user=user)
 
         group_added = False
         if not user_in_libvirt_group():
             # Under `sudo aivm ...`, the account that needs libvirt access
             # is the invoking user, not root.
-            user = os.environ.get('SUDO_USER') or getpass.getuser()
+            libvirt_group_request = mgr.request(
+                ['usermod', '-aG', LIBVIRT_GROUP, user],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Add {user} to the {LIBVIRT_GROUP} group',
+            )
             if args.dry_run:
-                print(f'DRYRUN: sudo usermod -aG {LIBVIRT_GROUP} {user}')
+                libvirt_group_request.preview()
             else:
                 with mgr.intent(
                     'Enable libvirt access without sudo',
@@ -724,14 +929,7 @@ class HostPermissionsSetupCLI(_BaseCommand):
                         ),
                         approval_scope='host-permissions-setup-group',
                     ):
-                        mgr.submit(
-                            ['usermod', '-aG', LIBVIRT_GROUP, user],
-                            sudo=True,
-                            role='modify',
-                            check=True,
-                            capture=True,
-                            summary=f'Add {user} to the {LIBVIRT_GROUP} group',
-                        )
+                        libvirt_group_request.submit()
                 group_added = True
 
         if args.adopt:
@@ -763,8 +961,25 @@ class HostPermissionsSetupCLI(_BaseCommand):
             return 2
         config_gap = base_dir != resolved_default
 
+        mkdir_request = mgr.request(
+            ['mkdir', '-p', str(base_dir)],
+            ownership='tool',
+            role='modify',
+            check=True,
+            capture=True,
+            summary='Create VM storage directory',
+            detail=f'target={base_dir}',
+        )
+        acl_request = mgr.request(
+            ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
+        )
         if args.dry_run:
-            print(f'DRYRUN: mkdir -p {base_dir}; grant {LIBVIRT_QEMU_USER} ACLs')
+            mkdir_request.preview()
+            acl_request.preview()
         else:
             with mgr.intent(
                 'Prepare VM storage permissions',
@@ -783,23 +998,8 @@ class HostPermissionsSetupCLI(_BaseCommand):
                     ),
                     approval_scope=f'host-permissions-setup-storage:{base_dir}',
                 ):
-                    mgr.submit(
-                        ['mkdir', '-p', str(base_dir)], ownership='tool',
-                        sudo=False,
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary='Create VM storage directory',
-                        detail=f'target={base_dir}',
-                    )
-                    mgr.submit(
-                        ['setfacl', '-m', f'u:{LIBVIRT_QEMU_USER}:x', str(base_dir)],
-                        sudo=False,
-                        role='modify',
-                        check=True,
-                        capture=True,
-                        summary=f'Allow {LIBVIRT_QEMU_USER} to traverse {base_dir}',
-                    )
+                    mkdir_request.submit()
+                    acl_request.submit()
             blockers = qemu_traversal_blockers(base_dir) or []
             own_blockers = [b for b in blockers if user_can_write_path(b)]
             foreign = [b for b in blockers if not user_can_write_path(b)]

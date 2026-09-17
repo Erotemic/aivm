@@ -7,19 +7,27 @@ rendering so other CLI flows can reuse tri-state outcomes (``True`` /
 
 from __future__ import annotations
 
-import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from .access_control import TRUST_MODE, access_ownership_summary
+from .attachments.ownership import attachment_owner_label
 from .commands import CommandManager
 from .config import AgentVMConfig
-from .config_store import AttachmentEntry, load_store
+from .config_store import (
+    AttachmentEntry,
+    find_principals_for_vm,
+    load_store,
+)
 from .firewall import effective_firewall_table
 from .host import check_commands
 from .modes import PrivilegeMode
 from .privilege import sudo_allowed, virsh_needs_sudo
 from .runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -28,6 +36,7 @@ from .runtime import (
 from .util import which
 from .vm import get_ip_cached, vm_share_mappings
 from .vm.drift import saved_vm_drift_report
+from .vm.guest_tools import GUEST_TOOL_REGISTRY
 from .vm.host_access import _local_stat_answer
 
 
@@ -125,7 +134,7 @@ class _StatusChecklist:
         conclusiveness but prints a separate, more nuanced line).
         """
         self.total += 1
-        self.done += int(bool(ok))
+        self.done += int(ok)
 
 
 def probe_cwd_shared_with_vm(
@@ -177,7 +186,11 @@ def probe_runtime_environment() -> ProbeOutcome:
     mgr = CommandManager.current()
     if which('systemd-detect-virt'):
         det = mgr.run(
-            ['systemd-detect-virt'], role='read', sudo=False, check=False, capture=True
+            ['systemd-detect-virt'],
+            role='read',
+            sudo=False,
+            check=False,
+            capture=True,
         )
         raw = (det.stdout or det.stderr).strip()
         if raw:
@@ -263,7 +276,9 @@ def probe_network(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
     can show it without re-running the probe.
     """
     info = CommandManager.current().run(
-        virsh_cmd('net-info', cfg.network.name), role='read',
+        # Failures are classified by their English stderr text below.
+        pin_locale(virsh_cmd('net-info', cfg.network.name)),
+        role='read',
         sudo=use_sudo and virsh_needs_sudo(),
         check=False,
         capture=True,
@@ -342,7 +357,8 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             ).result()
     else:
         res = mgr.run(
-            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)], role='read',
+            ['nft', 'list', 'table', 'inet', effective_firewall_table(cfg)],
+            role='read',
             sudo=use_sudo,
             check=False,
             capture=True,
@@ -362,8 +378,37 @@ def probe_firewall(cfg: AgentVMConfig, *, use_sudo: bool) -> ProbeOutcome:
             'requires privileges (run status --sudo for firewall checks)',
             raw,
         )
+    if _sudo_itself_failed(detail):
+        # sudo refused before nft ever ran, so nothing was observed about
+        # the table. Reporting "missing" here is how an unreadable firewall
+        # turns into a bogus repair: the caller would try to reinstall a
+        # table that may be present and correct.
+        return ProbeOutcome(
+            None,
+            'could not read nftables: sudo is unavailable for this account',
+            raw,
+        )
     return ProbeOutcome(
         False, f'table inet {effective_firewall_table(cfg)} missing', raw
+    )
+
+
+def _sudo_itself_failed(lowered_stderr: str) -> bool:
+    """Recognize sudo declining before the wrapped program ever started.
+
+    Keyed on sudo's own diagnostics rather than the exit status, because
+    sudo exits 1 for "you may not run this" exactly as ``nft`` exits 1 for
+    "no such table"."""
+    return any(
+        marker in lowered_stderr
+        for marker in (
+            'a password is required',
+            'sudo: a terminal is required',
+            'is not in the sudoers file',
+            'sudo: no askpass program',
+            'incorrect password attempt',
+            'account is locked',
+        )
     )
 
 
@@ -385,19 +430,20 @@ def probe_vm_state(
     re-running the commands.
     """
     mgr = CommandManager.current()
-    dominfo_cmd = virsh_cmd('dominfo', cfg.vm.name)
-    sudo_used = False
     # Closed stdin keeps the unprivileged probe from blocking on a polkit
-    # password prompt outside the manager's approval flow, and LC_ALL=C
-    # keeps error/state string matching locale-independent.
-    probe_env = {**os.environ, 'LC_ALL': 'C'}
+    # password prompt outside the manager's approval flow, and the locale pin
+    # keeps error/state string matching locale-independent. The pin rides in
+    # the argv rather than in env= so the sudo retry below cannot lose it to
+    # the host's sudoers environment policy.
+    dominfo_cmd = pin_locale(virsh_cmd('dominfo', cfg.vm.name))
+    sudo_used = False
     dom = mgr.run(
-        dominfo_cmd, role='read',
+        dominfo_cmd,
+        role='read',
         sudo=False,
         check=False,
         capture=True,
         input_text='',
-        env=probe_env,
         summary=f'Inspect VM definition {cfg.vm.name}',
     )
     if (
@@ -408,11 +454,11 @@ def probe_vm_state(
     ):
         sudo_used = True
         dom = mgr.run(
-            dominfo_cmd, role='read',
+            dominfo_cmd,
+            role='read',
             sudo=True,
             check=False,
             capture=True,
-            env=probe_env,
             summary=f'Inspect VM definition {cfg.vm.name}',
         )
     if dom.code != 0:
@@ -443,13 +489,13 @@ def probe_vm_state(
                 None,
             )
         return ProbeOutcome(False, f'{cfg.vm.name} not defined', diag), False
-    domstate_cmd = virsh_cmd('domstate', cfg.vm.name)
+    domstate_cmd = pin_locale(virsh_cmd('domstate', cfg.vm.name))
     state_res = mgr.run(
-        domstate_cmd, role='read',
+        domstate_cmd,
+        role='read',
         sudo=sudo_used,
         check=False,
         capture=True,
-        env=probe_env,
         summary=f'Inspect VM runtime state {cfg.vm.name}',
     )
     state = state_res.stdout.strip()
@@ -470,8 +516,9 @@ def probe_vm_state(
 
 def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Best-effort SSH readiness probe to the guest."""
+    context = guest_transport_from_effective_cfg(cfg)
     try:
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.ssh_identity_file)
     except Exception as ex:
         return ProbeOutcome(False, str(ex), '')
     cmd = [
@@ -483,7 +530,7 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         'true',
     ]
     res = CommandManager.current().run(
@@ -494,35 +541,13 @@ def probe_ssh_ready(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     return ProbeOutcome(res.code == 0, detail, diag)
 
 
-_TOOL_DISABLED_SPECS = {'', '0', 'false', 'no', 'none', 'off', 'disabled'}
-
-
-def _guest_tool_enabled(cfg: AgentVMConfig, name: str, *, default: str) -> bool:
-    """Return whether status should expect a managed guest tool."""
-    tools = getattr(cfg, 'tools', None)
-    raw = getattr(tools, name, default)
-    if isinstance(raw, bool):
-        return raw
-    spec = str(raw or '').strip().lower()
-    return spec not in _TOOL_DISABLED_SPECS
-
-
-def _guest_tool_uv_enabled(cfg: AgentVMConfig) -> bool:
-    """Return whether status should expect uv in the guest."""
-    return _guest_tool_enabled(cfg, 'uv', default='latest')
-
-
-def _guest_tool_rust_enabled(cfg: AgentVMConfig) -> bool:
-    """Return whether status should expect Rust in the guest."""
-    return _guest_tool_enabled(cfg, 'rust', default='off')
-
-
 def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
     """Check whether configured guest packages appear to be installed."""
+    context = guest_transport_from_effective_cfg(cfg)
     if not cfg.provision.enabled:
         return ProbeOutcome(None, 'disabled in config', '')
     try:
-        ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+        ident = require_ssh_identity(context.ssh_identity_file)
     except Exception as ex:
         return ProbeOutcome(False, str(ex), '')
     needed = list(cfg.provision.packages)
@@ -536,13 +561,15 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             "dpkg-query -W -f='${Status}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || exit 10; "
             'done'
         )
-    if _guest_tool_uv_enabled(cfg):
-        checks.append('command -v uv >/dev/null 2>&1 || exit 11')
-    if _guest_tool_rust_enabled(cfg):
+    for tool_name, command in GUEST_TOOL_REGISTRY.command_requirements(
+        cfg.tools
+    ):
+        message = shlex.quote(
+            f'missing configured guest tool command: {tool_name}:{command}'
+        )
         checks.append(
-            'command -v rustup >/dev/null 2>&1 || exit 12; '
-            'command -v cargo >/dev/null 2>&1 || exit 13; '
-            'command -v rustc >/dev/null 2>&1 || exit 14'
+            f'command -v {shlex.quote(command)} >/dev/null 2>&1 '
+            f'|| {{ echo {message} >&2; exit 11; }}'
         )
     remote = '; '.join(checks)
     cmd = [
@@ -554,7 +581,7 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             strict_host_key_checking='no',
             user_known_hosts_file='/dev/null',
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
     res = CommandManager.current().run(
@@ -624,6 +651,7 @@ def render_status(
     sudo-only checks as inconclusive instead of failing hard.
     """
     privilege_mode = CommandManager.current().privilege_mode
+    selected_guest_user = guest_transport_from_effective_cfg(cfg).guest_user
     lines: list[str] = [
         '🧭 AgentVM Status',
         f'📄 Config: {path}',
@@ -664,7 +692,8 @@ def render_status(
         img_ok = (
             CommandManager.current()
             .run(
-                ['test', '-f', str(base_img)], role='read',
+                ['test', '-f', str(base_img)],
+                role='read',
                 sudo=True,
                 check=False,
                 capture=True,
@@ -729,6 +758,57 @@ def render_status(
     else:
         report.check(None, 'VM shared folders', 'VM not defined', counted=False)
 
+    reg = load_store(path)
+    if reg.store_kind == 'machine':
+        report.check(True, 'Trust mode', TRUST_MODE, counted=False)
+        identities = find_principals_for_vm(reg, cfg.vm.name)
+        active_count = sum(
+            1 for item in identities if item.state in {'active', 'legacy'}
+        )
+        report.check(
+            bool(active_count),
+            'Access identities',
+            f'{active_count}/{len(identities)} active',
+            counted=False,
+        )
+        for identity in identities:
+            owned = access_ownership_summary(
+                reg, vm_name=cfg.vm.name, principal_id=identity.id
+            )
+            marker = '*' if identity.guest_user == selected_guest_user else ' '
+            report.lines.append(
+                f'  {marker} {identity.host_user} -> {identity.guest_user} '
+                f'state={identity.state} attachments={owned.attachment_count} '
+                f'credentials={owned.credential_count} id={identity.id}'
+            )
+    desired_attachments = sorted(
+        (item for item in reg.attachments if item.vm_name == cfg.vm.name),
+        key=lambda item: (
+            item.owner_principal_id,
+            item.guest_dst,
+            item.host_path,
+        ),
+    )
+    if desired_attachments:
+        report.check(
+            True,
+            'Attachment inventory',
+            f'{len(desired_attachments)} machine-wide record(s)',
+            counted=False,
+        )
+        for attachment in desired_attachments:
+            report.lines.append(
+                '  - '
+                f'owner={attachment_owner_label(reg, attachment.owner_principal_id)} '
+                f'host={attachment.host_path} '
+                f'guest={attachment.guest_dst or "(default)"} '
+                f'mode={attachment.mode} access={attachment.access}'
+            )
+    else:
+        report.check(
+            True, 'Attachment inventory', 'none configured', counted=False
+        )
+
     # TODO: we probably want to clean up the detail that is shown here, but do want more than just
     # the path that is shared. We want what mode it is shared in, which VMs if is shared with, what its access is.
     # It could be the case that it is shared with more than 1 VM in different modes, maybe we only print the first
@@ -743,7 +823,6 @@ def render_status(
 
     # Config drift check: compare saved VM config against actual libvirt state
     if vm_defined is True:
-        reg = load_store(path)
         drift = saved_vm_drift_report(cfg, reg, use_sudo=use_sudo)
         if drift.available:
             if drift.ok is True:
@@ -760,9 +839,10 @@ def render_status(
                 )
                 if detail:
                     report.lines.append('Config Drift Details:')
-                    for item in drift.items:
+                    for drift_item in drift.items:
                         report.lines.append(
-                            f'  - {item.key}: expected={item.expected}, actual={item.actual}'
+                            f'  - {drift_item.key}: expected={drift_item.expected}, '
+                            f'actual={drift_item.actual}'
                         )
         else:
             # drift.available is False here (unavailable)
@@ -841,7 +921,8 @@ def render_status(
         # re-running the same (often privileged) commands.
         mgr = CommandManager.current()
         net_xml = mgr.run(
-            virsh_cmd('net-dumpxml', cfg.network.name), role='read',
+            virsh_cmd('net-dumpxml', cfg.network.name),
+            role='read',
             sudo=use_sudo and virsh_needs_sudo(),
             check=False,
             capture=True,
@@ -867,7 +948,8 @@ def render_status(
 
         lines.append('Image')
         img_stat = mgr.run(
-            ['ls', '-lh', str(base_img)], role='read',
+            ['ls', '-lh', str(base_img)],
+            role='read',
             sudo=use_sudo and sudo_allowed(),
             check=False,
             capture=True,
@@ -892,7 +974,8 @@ def render_status(
         vm_detail_cmds.append(virsh_cmd('net-dhcp-leases', cfg.network.name))
         for cmd in vm_detail_cmds:
             vm_raw = mgr.run(
-                cmd, role='read',
+                cmd,
+                role='read',
                 sudo=use_sudo and virsh_needs_sudo(),
                 check=False,
                 capture=True,
@@ -986,6 +1069,18 @@ def render_global_status(store_cfg_path: Path) -> str:
 
     reg = load_store(store_cfg_path)
     lines.append(status_line(True, 'Config store', str(store_cfg_path)))
+    if reg.store_kind == 'machine':
+        active_identities = sum(
+            1 for item in reg.principals if item.state in {'active', 'legacy'}
+        )
+        lines.append(status_line(True, 'Trust mode', TRUST_MODE))
+        lines.append(
+            status_line(
+                True,
+                'Access identities',
+                f'{active_identities}/{len(reg.principals)} active',
+            )
+        )
     lines.append('')
     lines.append('📦 Managed Resources')
     lines.append(f'- VMs: {len(reg.vms)}')
@@ -994,6 +1089,25 @@ def render_global_status(store_cfg_path: Path) -> str:
         vm_names = ', '.join(sorted(v.name for v in reg.vms[:8]))
         extra = '' if len(reg.vms) <= 8 else f' (+{len(reg.vms) - 8} more)'
         lines.append(f'- VM names: {vm_names}{extra}')
+    if reg.attachments:
+        lines.append('- Attachment inventory:')
+        for item in sorted(
+            reg.attachments,
+            key=lambda item: (
+                item.vm_name,
+                item.owner_principal_id,
+                item.guest_dst,
+                item.host_path,
+            ),
+        ):
+            lines.append(
+                '  - '
+                f'vm={item.vm_name} '
+                f'owner={attachment_owner_label(reg, item.owner_principal_id)} '
+                f'host={item.host_path} '
+                f'guest={item.guest_dst or "(default)"} '
+                f'mode={item.mode} access={item.access}'
+            )
 
     lines.append('')
     lines.append('ℹ️ No VM context resolved for this directory.')
