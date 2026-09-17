@@ -364,6 +364,56 @@ claude --version
     return textwrap.dedent(script).strip()
 
 
+def _build_codex_install_script(
+    cfg: AgentVMConfig, spec: str, ensure_transport: bool
+) -> str:
+    """Build an idempotent script using OpenAI's official installer."""
+    install_dir = str(cfg.tools.bin_dir or '~/.local/bin').strip()
+    release = str(spec or 'latest').strip() or 'latest'
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    script = f"""
+set -euo pipefail
+INSTALL_DIR={shlex.quote(install_dir)}
+case "$INSTALL_DIR" in
+    '~') INSTALL_DIR="$HOME" ;;
+    '~/'*) INSTALL_DIR="$HOME/${{INSTALL_DIR#'~/'}}" ;;
+esac
+CODEX_RELEASE={shlex.quote(release)}
+{transport_bootstrap}
+mkdir -p "$INSTALL_DIR"
+export PATH="$INSTALL_DIR:$PATH"
+if [ "$CODEX_RELEASE" != "latest" ] || [ ! -x "$INSTALL_DIR/codex" ]; then
+    curl -fsSL https://chatgpt.com/codex/install.sh | env CODEX_NON_INTERACTIVE=1 CODEX_INSTALL_DIR="$INSTALL_DIR" CODEX_RELEASE="$CODEX_RELEASE" sh
+fi
+if [ ! -x "$INSTALL_DIR/codex" ]; then
+    echo "Codex installer completed, but codex was not found in $INSTALL_DIR." >&2
+    exit 1
+fi
+PROFILE="$HOME/.profile"
+if ! grep -Fq '# >>> aivm tools PATH >>>' "$PROFILE" 2>/dev/null; then
+    {{
+        echo ''
+        echo '# >>> aivm tools PATH >>>'
+        printf '%s\\n' "case ':\\$PATH:' in"
+        printf '%s\\n' "  *':$INSTALL_DIR:'*) ;;"
+        printf '%s\\n' "  *) PATH='$INSTALL_DIR':\\$PATH ;;"
+        printf '%s\\n' 'esac'
+        printf '%s\\n' 'export PATH'
+        echo '# <<< aivm tools PATH <<<'
+    }} >> "$PROFILE"
+fi
+"$INSTALL_DIR/codex" --version
+"""
+    return textwrap.dedent(script).strip()
+
+
 def _build_rust_install_script(
     cfg: AgentVMConfig, spec: str, ensure_transport: bool
 ) -> str:
@@ -486,6 +536,19 @@ GUEST_TOOL_REGISTRY = GuestToolRegistry(
             required_commands=('claude',),
             normalize_spec=_claude_spec,
             build_install_script=_build_claude_install_script,
+        ),
+        GuestToolDefinition(
+            name='codex',
+            display_name='Codex CLI',
+            description=(
+                "Codex CLI installed with OpenAI's official standalone installer"
+            ),
+            config_default='off',
+            enable_default='latest',
+            required_packages=('ca-certificates', 'curl'),
+            required_commands=('codex',),
+            normalize_spec=_identity_spec,
+            build_install_script=_build_codex_install_script,
         ),
     )
 )

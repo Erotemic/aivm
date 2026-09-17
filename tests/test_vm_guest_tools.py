@@ -18,6 +18,7 @@ from aivm.vm.guest_tools import (
     GuestToolSpecError,
     UnknownGuestToolError,
     _build_claude_install_script,
+    _build_codex_install_script,
     _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
@@ -30,16 +31,17 @@ from aivm.vm.guest_tools import (
 
 
 def test_guest_tool_registry_is_canonical_and_ordered() -> None:
-    assert GUEST_TOOL_REGISTRY.names() == ('uv', 'rust', 'code', 'claude')
+    assert GUEST_TOOL_REGISTRY.names() == ('uv', 'rust', 'code', 'claude', 'codex')
     assert [tool.name for tool in GUEST_TOOL_REGISTRY] == [
         'uv',
         'rust',
         'code',
         'claude',
+        'codex',
     ]
     assert GUEST_TOOL_REGISTRY.require('rust').enable_default == 'stable'
     with pytest.raises(
-        UnknownGuestToolError, match='Known tools: uv, rust, code, claude'
+        UnknownGuestToolError, match='Known tools: uv, rust, code, claude, codex'
     ):
         GUEST_TOOL_REGISTRY.require('kubernetes')
 
@@ -60,15 +62,19 @@ def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
     assert resolved['rust'].enabled is False
     assert resolved['code'].enabled is False
     assert resolved['claude'].enabled is False
+    assert resolved['codex'].enabled is False
 
     cfg.tools.rust = True
     assert (
         GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'rust').effective_spec
         == 'stable'
     )
-    GUEST_TOOL_REGISTRY.apply_enable_overrides(cfg.tools, ['code', 'claude'])
+    GUEST_TOOL_REGISTRY.apply_enable_overrides(
+        cfg.tools, ['code', 'claude', 'codex']
+    )
     assert cfg.tools.code == 'latest'
     assert cfg.tools.claude == 'latest'
+    assert cfg.tools.codex == 'latest'
 
 
 def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
@@ -77,6 +83,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
     cfg.tools.rust = 'stable'
     cfg.tools.code = 'latest'
     cfg.tools.claude = 'latest'
+    cfg.tools.codex = 'latest'
     packages = GUEST_TOOL_REGISTRY.required_packages(cfg.tools)
     assert packages == (
         'ca-certificates',
@@ -95,6 +102,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
         ('rust', 'rustc'),
         ('code', 'code'),
         ('claude', 'claude'),
+        ('codex', 'codex'),
     )
 
 
@@ -250,12 +258,44 @@ def test_guest_claude_script_uses_anthropic_installer() -> None:
     assert 'claude --version' in script
 
 
+def test_guest_codex_tool_default_off_and_opt_in() -> None:
+    cfg = AgentVMConfig()
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'codex')
+    assert resolved.enabled is False
+    assert resolved.effective_spec == 'off'
+
+    cfg.tools.codex = True
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'codex')
+    assert resolved.enabled is True
+    assert resolved.effective_spec == 'latest'
+
+    cfg.tools.codex = '0.150.0'
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'codex')
+    assert resolved.enabled is True
+    assert resolved.effective_spec == '0.150.0'
+
+
+def test_guest_codex_script_uses_openai_standalone_installer() -> None:
+    cfg = AgentVMConfig()
+    cfg.tools.bin_dir = '~/.local/aivm/bin'
+    script = _build_codex_install_script(cfg, '0.150.0', True)
+    assert 'curl -fsSL https://chatgpt.com/codex/install.sh' in script
+    assert 'CODEX_NON_INTERACTIVE=1' in script
+    assert 'CODEX_INSTALL_DIR="$INSTALL_DIR"' in script
+    assert 'CODEX_RELEASE=0.150.0' in script
+    assert 'apt-get install -y ca-certificates curl' in script
+    assert '~/.local/aivm/bin' in script
+    assert '# >>> aivm tools PATH >>>' in script
+    assert '"$INSTALL_DIR/codex" --version' in script
+
+
 def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.tools.uv = '0.11.11'
     cfg.tools.rust = 'stable'
     cfg.tools.code = 'latest'  # opt in (default is "off")
     cfg.tools.claude = 'latest'
+    cfg.tools.codex = '0.150.0'
     cfg.tools.bin_dir = '~/.local/aivm/bin'
     text = dump_toml(cfg)
     assert '[tools]' in text
@@ -263,6 +303,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert 'rust = "stable"' in text
     assert 'code = "latest"' in text
     assert 'claude = "latest"' in text
+    assert 'codex = "0.150.0"' in text
     assert 'bin_dir = "~/.local/aivm/bin"' in text
     assert 'install_uv' not in text
     assert 'uv_install_dir' not in text
@@ -274,6 +315,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert loaded.tools.rust == 'stable'
     assert loaded.tools.code == 'latest'
     assert loaded.tools.claude == 'latest'
+    assert loaded.tools.codex == '0.150.0'
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
 
 
@@ -282,11 +324,13 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     text = dump_toml(cfg)
     assert 'code = "off"' in text
     assert 'claude = "off"' in text
+    assert 'codex = "off"' in text
     fpath = tmp_path / 'config.toml'
     fpath.write_text(text, encoding='utf-8')
     loaded = load(fpath)
     assert loaded.tools.code == 'off'
     assert loaded.tools.claude == 'off'
+    assert loaded.tools.codex == 'off'
 
 
 def test_tools_config_rejects_unknown_registry_name(tmp_path: Path) -> None:
@@ -329,6 +373,7 @@ def test_probe_provisioned_uses_registry_command_requirements(
     cfg.provision.packages = []
     cfg.provision.install_docker = False
     cfg.tools.code = 'latest'
+    cfg.tools.codex = 'latest'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
     captured: dict[str, str] = {}
 
@@ -347,6 +392,7 @@ def test_probe_provisioned_uses_registry_command_requirements(
     assert outcome.ok is True
     assert 'command -v uv' in captured['remote']
     assert 'command -v code' in captured['remote']
+    assert 'command -v codex' in captured['remote']
     assert 'command -v rustup' not in captured['remote']
 
 
