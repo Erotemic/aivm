@@ -10,13 +10,16 @@ from pytest import MonkeyPatch
 
 from aivm.cli.vm_update import VMUpdateCLI
 from aivm.config import AgentVMConfig
+from aivm.firewall import FirewallLiveState, _firewall_policy_fingerprint
 from aivm.util import CmdResult
 from aivm.vm.update import (
+    FirewallDrift,
     RestartKind,
     VirtiofsBinaryDrift,
     VMUpdateDrift,
     _apply_vm_update,
     _escalate,
+    _firewall_update_drift,
     _parse_qemu_img_virtual_size,
     _parse_vm_disk_path_from_dumpxml,
     _parse_vm_network_from_dumpxml,
@@ -142,6 +145,89 @@ def test_escalate_orders_none_soft_hard() -> None:
     assert _escalate(RestartKind.SOFT, RestartKind.HARD) == RestartKind.HARD
     assert _escalate(RestartKind.HARD, RestartKind.SOFT) == RestartKind.HARD
     assert _escalate(RestartKind.HARD, RestartKind.HARD) == RestartKind.HARD
+
+
+def test_firewall_update_detects_legacy_policy_even_when_ports_match(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_ports = [14042]
+    monkeypatch.setattr(
+        'aivm.vm.update.firewall.read_firewall_live_state',
+        lambda _cfg, *, use_sudo: (
+            FirewallLiveState(
+                present=True,
+                bridge='virbr-aivm-net',
+                gateway='10.77.0.1',
+                tcp_ports=(14042,),
+                policy_fingerprint=None,
+            ),
+            '',
+        ),
+    )
+
+    drift, notes = _firewall_update_drift(cfg)
+
+    assert notes == ()
+    assert drift is not None
+    assert drift.action == 'apply'
+    assert drift.current_tcp_ports == (14042,)
+    assert 'predates' in drift.reason
+
+
+def test_firewall_update_is_clean_with_current_policy_marker(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_ports = [14042]
+    bridge = 'virbr-aivm-net'
+    gateway = '10.77.0.1'
+    fingerprint = _firewall_policy_fingerprint(
+        cfg, bridge=bridge, gateway=gateway
+    )
+    monkeypatch.setattr(
+        'aivm.vm.update.firewall.read_firewall_live_state',
+        lambda _cfg, *, use_sudo: (
+            FirewallLiveState(
+                present=True,
+                bridge=bridge,
+                gateway=gateway,
+                tcp_ports=(14042,),
+                policy_fingerprint=fingerprint,
+            ),
+            '',
+        ),
+    )
+
+    drift, notes = _firewall_update_drift(cfg)
+
+    assert notes == ()
+    assert drift is None
+
+
+def test_apply_vm_update_reconciles_firewall_without_restart(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    applied: list[bool] = []
+    monkeypatch.setattr(
+        'aivm.vm.update.firewall.apply_firewall',
+        lambda _cfg, *, dry_run: applied.append(dry_run),
+    )
+    drift = VMUpdateDrift(
+        firewall=FirewallDrift(
+            action='apply',
+            current_tcp_ports=(),
+            desired_tcp_ports=(14042,),
+            reason='ports differ',
+        )
+    )
+
+    changed, restart = _apply_vm_update(cfg, drift, dry_run=False)
+
+    assert changed is True
+    assert restart == RestartKind.NONE
+    assert applied == [False]
 
 
 @pytest.mark.parametrize(
@@ -393,6 +479,9 @@ def test_vm_update_drift_escalates_for_disk_probe(
     monkeypatch.setattr(
         'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
     )
+    monkeypatch.setattr(
+        'aivm.vm.update.detect._firewall_update_drift', lambda _cfg: (None, ())
+    )
     drift, running = _vm_update_drift(cfg, yes=False)
     assert running is True
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -444,6 +533,9 @@ def test_vm_update_drift_falls_back_to_domblkinfo_on_lock(
 
     monkeypatch.setattr(
         'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
+    monkeypatch.setattr(
+        'aivm.vm.update.detect._firewall_update_drift', lambda _cfg: (None, ())
     )
     drift, _running = _vm_update_drift(cfg, yes=True)
     assert drift.disk_bytes == (40 * 1024**3, 60 * 1024**3)
@@ -497,6 +589,9 @@ def test_vm_update_planning_pins_c_locale_for_parsed_probes(
 
     monkeypatch.setattr(
         'aivm.vm.update.detect.CommandManager.run', fake_run_cmd
+    )
+    monkeypatch.setattr(
+        'aivm.vm.update.detect._firewall_update_drift', lambda _cfg: (None, ())
     )
     drift, running = _vm_update_drift(cfg, yes=True)
 

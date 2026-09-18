@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (257)
+## Canonical `AgentVMConfig` references (263)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -65,7 +65,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.credentials.service` | `aivm/credentials/service.py` | 5 |
 | `aivm.detect` | `aivm/detect.py` | 1 |
 | `aivm.enrollment` | `aivm/enrollment.py` | 2 |
-| `aivm.firewall` | `aivm/firewall.py` | 8 |
+| `aivm.firewall` | `aivm/firewall.py` | 11 |
 | `aivm.net` | `aivm/net.py` | 3 |
 | `aivm.resource_checks` | `aivm/resource_checks.py` | 2 |
 | `aivm.scoped_store` | `aivm/scoped_store.py` | 4 |
@@ -79,7 +79,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.disk` | `aivm/vm/disk.py` | 1 |
 | `aivm.vm.domain` | `aivm/vm/domain.py` | 5 |
 | `aivm.vm.drift` | `aivm/vm/drift.py` | 10 |
-| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 18 |
+| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 19 |
 | `aivm.vm.host_access` | `aivm/vm/host_access.py` | 1 |
 | `aivm.vm.images` | `aivm/vm/images.py` | 1 |
 | `aivm.vm.paths` | `aivm/vm/paths.py` | 3 |
@@ -89,6 +89,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.apply` | `aivm/vm/update/apply.py` | 1 |
 | `aivm.vm.update.detect` | `aivm/vm/update/detect.py` | 3 |
 | `aivm.vm.update.fdguard` | `aivm/vm/update/fdguard.py` | 3 |
+| `aivm.vm.update.firewall` | `aivm/vm/update/firewall.py` | 2 |
 | `aivm.vm.update.render` | `aivm/vm/update/render.py` | 1 |
 | `aivm.vm.update.restart` | `aivm/vm/update/restart.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py` | 2 |

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
@@ -12,6 +14,8 @@ from aivm.firewall import (
     effective_firewall_table,
     ensure_firewall_ready,
     firewall_status,
+    read_firewall_live_state,
+    read_firewall_tcp_ports,
 )
 from tests.helpers import (
     CommandRecorder,
@@ -74,9 +78,99 @@ def test_nft_script_allows_configured_ports(
     script = _nft_script(cfg)
     assert 'iifname "virbr-aivm" tcp dport {22, 2222} accept' in script
     assert 'iifname "virbr-aivm" udp dport {53} accept' in script
-    assert ('iifname "virbr-aivm" ip daddr {' in script) and (
-        'tcp dport {22, 2222} accept' in script
+    assert ('iifname "virbr-aivm" ct original ip daddr {' in script) and (
+        'ct original proto-dst {22, 2222} accept' in script
     )
+
+
+def test_nft_script_filters_forward_policy_on_pre_dnat_tuple(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_ports = [14042]
+    cfg.firewall.allow_udp_ports = [14043]
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm-net', '10.77.0.1'),
+    )
+
+    script = _nft_script(cfg)
+
+    assert (
+        'ct original ip daddr {' in script
+        and 'meta l4proto tcp ct original proto-dst {14042} accept' in script
+    )
+    assert (
+        'ct original ip daddr {' in script
+        and 'meta l4proto udp ct original proto-dst {14043} accept' in script
+    )
+    assert 'iifname "virbr-aivm-net" ct original ip daddr {' in script
+    assert 'counter comment "aivm-policy-sha256:' in script
+
+
+def test_read_firewall_ports_uses_live_bridge_and_reads_policy_marker(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.network.bridge = 'virbr-stale'
+    cfg.firewall.allow_tcp_ports = [14042]
+    table = effective_firewall_table(cfg)
+    live_bridge = 'virbr-aivm-net'
+    marker = 'abc123'
+    payload = {
+        'nftables': [
+            {
+                'rule': {
+                    'family': 'inet',
+                    'table': table,
+                    'chain': 'input',
+                    'comment': f'aivm-policy-sha256:{marker}',
+                    'expr': [
+                        {
+                            'match': {
+                                'op': '==',
+                                'left': {'meta': {'key': 'iifname'}},
+                                'right': live_bridge,
+                            }
+                        },
+                        {
+                            'match': {
+                                'op': '==',
+                                'left': {
+                                    'payload': {
+                                        'protocol': 'tcp',
+                                        'field': 'dport',
+                                    }
+                                },
+                                'right': 14042,
+                            }
+                        },
+                        {'accept': None},
+                    ],
+                }
+            }
+        ]
+    }
+
+    activate_manager(monkeypatch, euid=0)
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: (live_bridge, '10.77.0.1'),
+    )
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: FakeProc(stdout=json.dumps(payload)),
+    )
+
+    state, error = read_firewall_live_state(cfg, use_sudo=True)
+    assert error == ''
+    assert state is not None
+    assert state.bridge == live_bridge
+    assert state.tcp_ports == (14042,)
+    assert state.policy_fingerprint == marker
+    ports, error = read_firewall_tcp_ports(cfg, use_sudo=True)
+    assert error == ''
+    assert ports == (14042,)
 
 
 def test_nft_script_invalid_port_raises(

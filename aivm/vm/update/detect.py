@@ -11,6 +11,7 @@ from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...runtime import pin_locale, virsh_cmd
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
 from .fdguard import _fdguard_drift
+from .firewall import _firewall_update_drift
 from .models import VMUpdateDrift
 from .util import (
     _parse_domblkinfo_capacity,
@@ -251,6 +252,9 @@ def _vm_update_drift(
         fd_guard, fd_guard_notes = _fdguard_drift(cfg, vm_running=vm_running)
         notes.extend(fd_guard_notes)
 
+        firewall, firewall_notes = _firewall_update_drift(cfg)
+        notes.extend(firewall_notes)
+
         return (
             VMUpdateDrift(
                 cpus=cpus,
@@ -260,6 +264,7 @@ def _vm_update_drift(
                 virtiofs_binary=virtiofs_binary,
                 virtiofsd_mode=virtiofsd_mode,
                 fd_guard=fd_guard,
+                firewall=firewall,
                 notes=tuple(notes),
             ),
             vm_running,

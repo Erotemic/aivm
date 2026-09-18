@@ -7,8 +7,10 @@ restricted" behavior unless caller config loosens/tightens policy.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TypeAlias, TypeGuard
 
 from loguru import logger
@@ -24,6 +26,20 @@ from .xmlutil import parse_domain_xml
 JsonObj: TypeAlias = Mapping[str, object]
 
 log = logger
+
+_FIREWALL_POLICY_VERSION = 2
+_FIREWALL_POLICY_COMMENT_PREFIX = 'aivm-policy-sha256:'
+
+
+@dataclass(frozen=True)
+class FirewallLiveState:
+    """Observed state of the AIVM-managed nftables table."""
+
+    present: bool
+    bridge: str
+    gateway: str
+    tcp_ports: tuple[int, ...] = ()
+    policy_fingerprint: str | None = None
 
 
 def effective_firewall_table(cfg: AgentVMConfig) -> str:
@@ -72,6 +88,49 @@ def _normalize_port_list(ports: list[int]) -> list[int]:
         seen.add(p)
         out.append(p)
     return out
+
+
+def _normalized_block_cidrs(cfg: AgentVMConfig) -> list[str]:
+    """Return the configured block list with whitespace/duplicates removed."""
+    raw_blocks = list(cfg.firewall.block_cidrs) + list(
+        cfg.firewall.extra_block_cidrs or []
+    )
+    seen: set[str] = set()
+    blocks: list[str] = []
+    for raw in raw_blocks:
+        cidr = raw.strip()
+        if not cidr or cidr in seen:
+            continue
+        seen.add(cidr)
+        blocks.append(cidr)
+    return blocks
+
+
+def _firewall_policy_fingerprint(
+    cfg: AgentVMConfig, *, bridge: str, gateway: str
+) -> str:
+    """Fingerprint every input that changes the generated firewall policy.
+
+    The version makes generator-semantics changes visible even when user
+    config is unchanged.  That lets ``aivm vm update`` repair an existing
+    table after an AIVM upgrade instead of only noticing port-list changes.
+    """
+    payload = {
+        'version': _FIREWALL_POLICY_VERSION,
+        'bridge': bridge,
+        'gateway': gateway,
+        'block_cidrs': _normalized_block_cidrs(cfg),
+        'allow_tcp_ports': _normalize_port_list(
+            cfg.firewall.allow_tcp_ports
+        ),
+        'allow_udp_ports': _normalize_port_list(
+            cfg.firewall.allow_udp_ports
+        ),
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
@@ -143,20 +202,14 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
         br, gw = _effective_bridge_and_gateway(cfg)
     else:
         br, gw = cfg.network.bridge, cfg.network.gateway_ip
-    blocks = list(cfg.firewall.block_cidrs) + list(
-        cfg.firewall.extra_block_cidrs or []
-    )
-    seen = set()
-    blocks2 = []
-    for b in blocks:
-        b = b.strip()
-        if not b or b in seen:
-            continue
-        seen.add(b)
-        blocks2.append(b)
+    blocks2 = _normalized_block_cidrs(cfg)
     block_set = ', '.join(blocks2)
     allow_tcp = _normalize_port_list(cfg.firewall.allow_tcp_ports)
     allow_udp = _normalize_port_list(cfg.firewall.allow_udp_ports)
+    policy_fingerprint = _firewall_policy_fingerprint(
+        cfg, bridge=br, gateway=gw
+    )
+    policy_comment = _FIREWALL_POLICY_COMMENT_PREFIX + policy_fingerprint
     host_allow_lines: list[str] = []
     blocked_allow_lines: list[str] = []
     if allow_tcp:
@@ -165,7 +218,8 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
             f'    iifname "{br}" tcp dport {{{ports}}} accept'
         )
         blocked_allow_lines.append(
-            f'    iifname "{br}" ip daddr {{{block_set}}} tcp dport {{{ports}}} accept'
+            f'    iifname "{br}" ct original ip daddr {{{block_set}}} '
+            f'meta l4proto tcp ct original proto-dst {{{ports}}} accept'
         )
     if allow_udp:
         ports = ', '.join(str(p) for p in allow_udp)
@@ -173,7 +227,8 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
             f'    iifname "{br}" udp dport {{{ports}}} accept'
         )
         blocked_allow_lines.append(
-            f'    iifname "{br}" ip daddr {{{block_set}}} udp dport {{{ports}}} accept'
+            f'    iifname "{br}" ct original ip daddr {{{block_set}}} '
+            f'meta l4proto udp ct original proto-dst {{{ports}}} accept'
         )
     host_allow = '\n'.join(host_allow_lines)
     blocked_allow = '\n'.join(blocked_allow_lines)
@@ -185,6 +240,7 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
 table inet {table} {{
   chain input {{
     type filter hook input priority 0; policy accept;
+    iifname "{br}" counter comment "{policy_comment}"
     ct state established,related accept
     # DHCP client traffic may be broadcast (255.255.255.255), not just gateway-directed.
     iifname "{br}" udp dport {{67,68}} accept
@@ -198,7 +254,9 @@ table inet {table} {{
     type filter hook forward priority 0; policy accept;
     ct state established,related accept
 {blocked_allow}    # Default blocklist for VM->LAN/private ranges.
-    iifname "{br}" ip daddr {{{block_set}}} drop
+    # Filter on the pre-DNAT destination. Docker and other host NAT rules may
+    # rewrite a published host port to a private backend before this hook.
+    iifname "{br}" ct original ip daddr {{{block_set}}} drop
     iifname "{br}" accept
   }}
 }}
@@ -482,18 +540,92 @@ def firewall_status(cfg: AgentVMConfig) -> str:
     return result.stdout + (result.stderr or '')
 
 
-def read_firewall_tcp_ports(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[tuple[int, ...] | None, str]:
-    # TODO: this function can be a lot cleaner and server other use-cases
-    # currently only used in drift detection.
+def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
+    if not _is_json_obj(expr):
+        return False
+    match = expr.get('match')
+    if not _is_json_obj(match):
+        return False
+    if match.get('op') != '==':
+        return False
+    if match.get('left') != {'meta': {'key': 'iifname'}}:
+        return False
+    return match.get('right') == want_ifname
 
+
+def _extract_tcp_dports(expr: object) -> tuple[int, ...]:
+    """Extract a plain ``tcp dport`` match from nft JSON."""
+    if not _is_json_obj(expr):
+        return ()
+    match = expr.get('match')
+    if not _is_json_obj(match):
+        return ()
+    left = match.get('left')
+    if not _is_json_obj(left):
+        return ()
+    payload = left.get('payload')
+    if not _is_json_obj(payload):
+        return ()
+    if payload.get('protocol') != 'tcp' or payload.get('field') != 'dport':
+        return ()
+
+    right = match.get('right')
+    vals: list[int] = []
+    if isinstance(right, int):
+        vals.append(right)
+    elif isinstance(right, str) and right.isdigit():
+        vals.append(int(right))
+    elif _is_json_obj(right):
+        set_items = right.get('set')
+        if isinstance(set_items, list):
+            for item in set_items:
+                if isinstance(item, int):
+                    vals.append(item)
+                elif isinstance(item, str) and item.isdigit():
+                    vals.append(int(item))
+    return tuple(sorted(set(vals)))
+
+
+def _rule_has_ip_daddr_constraint(exprs: Sequence[object]) -> bool:
+    """Return whether a rule has a packet-payload IPv4 destination match."""
+    for expr in exprs:
+        if not _is_json_obj(expr):
+            continue
+        match = expr.get('match')
+        if not _is_json_obj(match):
+            continue
+        left = match.get('left')
+        if not _is_json_obj(left):
+            continue
+        payload = left.get('payload')
+        if not _is_json_obj(payload):
+            continue
+        if payload.get('protocol') == 'ip' and payload.get('field') == 'daddr':
+            return True
+    return False
+
+
+def read_firewall_live_state(
+    cfg: AgentVMConfig, *, use_sudo: bool
+) -> tuple[FirewallLiveState | None, str]:
+    """Inspect the managed firewall table and the policy marker it carries.
+
+    ``present=False`` is a known missing table. ``None`` means the table could
+    not be inspected reliably (for example because sudo is unavailable).
+    """
     table = effective_firewall_table(cfg)
     bridge = cfg.network.bridge
+    gateway = cfg.network.gateway_ip
 
     if not sudo_allowed():
-        # nft reads require root; report unavailable instead of escalating.
         return None, 'firewall checks need privileges (privilege_mode = never)'
+
+    # A privileged firewall inspection can also read libvirt's live network
+    # identity. Use the same bridge/gateway source as the writer so stale
+    # config cannot make a correctly installed rule disappear from drift
+    # detection.
+    if use_sudo:
+        bridge, gateway = _effective_bridge_and_gateway(cfg)
 
     res = CommandManager.current().run(
         ['nft', '--json', 'list', 'table', 'inet', table],
@@ -501,157 +633,102 @@ def read_firewall_tcp_ports(
         sudo=use_sudo,
         check=False,
         capture=True,
+        summary=f'Inspect managed nftables policy in table inet {table}',
     )
 
     if res.code != 0:
         raw = (res.stderr or res.stdout or 'nft list table failed').strip()
-        if 'you must be root' in res.stderr or 'not permitted' in res.stderr:
-            return None, raw
+        lowered = raw.lower()
+        if 'no such file or directory' in lowered or 'no such table' in lowered:
+            return FirewallLiveState(
+                present=False,
+                bridge=bridge,
+                gateway=gateway,
+            ), ''
         return None, raw
 
-    import json
-
-    text = res.stdout or ''
-    data = json.loads(text)
-
-    def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
-        if not _is_json_obj(expr):
-            return False
-
-        match = expr.get('match')
-        if not _is_json_obj(match):
-            return False
-
-        op = match.get('op')
-        left = match.get('left')
-        right = match.get('right')
-
-        if op != '==':
-            return False
-        if left != {'meta': {'key': 'iifname'}}:
-            return False
-        return right == want_ifname
-
-    def _extract_tcp_dports(expr: object) -> tuple[int, ...]:
-        """
-        Handles forms like:
-            {"match": {"left": {"payload": {...}}, "op": "==", "right": 22}}
-            {"match": {"left": {"payload": {...}}, "op": "==", "right": {"set": [22, 80]}}}
-        """
-        if not _is_json_obj(expr):
-            return ()
-
-        match = expr.get('match')
-        if not _is_json_obj(match):
-            return ()
-
-        left = match.get('left')
-        if not _is_json_obj(left):
-            return ()
-
-        payload = left.get('payload')
-        if not _is_json_obj(payload):
-            return ()
-
-        if payload.get('protocol') != 'tcp' or payload.get('field') != 'dport':
-            return ()
-
-        right = match.get('right')
-        vals: list[int] = []
-
-        if isinstance(right, int):
-            vals.append(right)
-        elif isinstance(right, str) and right.isdigit():
-            vals.append(int(right))
-        elif _is_json_obj(right):
-            set_items = right.get('set')
-            if isinstance(set_items, list):
-                for item in set_items:
-                    if isinstance(item, int):
-                        vals.append(item)
-                    elif isinstance(item, str) and item.isdigit():
-                        vals.append(int(item))
-
-        return tuple(sorted(set(vals)))
-
-    def _rule_has_ip_daddr_constraint(exprs: Sequence[object]) -> bool:
-        """
-        Reject rules with any explicit ip daddr match, because those are
-        infrastructure/special-case rules (e.g. gateway DNS), not the user
-        allow_tcp_ports rule we want.
-        """
-        for expr in exprs:
-            if not _is_json_obj(expr):
-                continue
-
-            match = expr.get('match')
-            if not _is_json_obj(match):
-                continue
-
-            left = match.get('left')
-            if not _is_json_obj(left):
-                continue
-
-            payload = left.get('payload')
-            if not _is_json_obj(payload):
-                continue
-
-            if (
-                payload.get('protocol') == 'ip'
-                and payload.get('field') == 'daddr'
-            ):
-                return True
-        return False
+    try:
+        data = json.loads(res.stdout or '')
+    except (TypeError, ValueError) as ex:
+        return None, f'Could not parse nftables JSON: {ex}'
+    if not _is_json_obj(data):
+        return (
+            None,
+            'Could not parse nftables JSON: top-level value is not an object',
+        )
 
     ports: set[int] = set()
+    policy_fingerprint: str | None = None
+    nftables = data.get('nftables', [])
+    if not isinstance(nftables, list):
+        return None, 'Could not parse nftables JSON: nftables is not a list'
 
-    for item in data.get('nftables', []):
+    for item in nftables:
         if not _is_json_obj(item):
             continue
-
         rule = item.get('rule')
         if not _is_json_obj(rule):
             continue
-
         if rule.get('family') != 'inet' or rule.get('table') != table:
             continue
+
+        comment = rule.get('comment')
+        if isinstance(comment, str) and comment.startswith(
+            _FIREWALL_POLICY_COMMENT_PREFIX
+        ):
+            policy_fingerprint = comment.removeprefix(
+                _FIREWALL_POLICY_COMMENT_PREFIX
+            )
 
         exprs = rule.get('expr')
         if not isinstance(exprs, list) or not exprs:
             continue
-
-        # Only consider rules bound to the VM bridge.
         if not any(_expr_is_iifname_match(expr, bridge) for expr in exprs):
             continue
-
-        # Exclude gateway/service-specific rules like tcp dport 53 to gateway.
+        # Gateway DNS and other infrastructure exceptions are not user
+        # allow_tcp_ports entries.
         if _rule_has_ip_daddr_constraint(exprs):
             continue
 
-        # Find a plain tcp dport match in the rule.
         rule_ports: tuple[int, ...] = ()
         for expr in exprs:
             extracted = _extract_tcp_dports(expr)
             if extracted:
                 rule_ports = extracted
                 break
-
         if not rule_ports:
             continue
-
-        # Require terminal verdict accept.
         has_accept = any(
             _is_json_obj(expr)
             and 'accept' in expr
             and expr.get('accept') is None
             for expr in exprs
         )
-        if not has_accept:
-            continue
+        if has_accept:
+            ports.update(rule_ports)
 
-        ports.update(rule_ports)
+    return (
+        FirewallLiveState(
+            present=True,
+            bridge=bridge,
+            gateway=gateway,
+            tcp_ports=tuple(sorted(ports)),
+            policy_fingerprint=policy_fingerprint,
+        ),
+        '',
+    )
 
-    return tuple(sorted(ports)), ''
+
+def read_firewall_tcp_ports(
+    cfg: AgentVMConfig, *, use_sudo: bool
+) -> tuple[tuple[int, ...] | None, str]:
+    """Read configured user-facing TCP exceptions from the live table."""
+    state, error = read_firewall_live_state(cfg, use_sudo=use_sudo)
+    if state is None:
+        return None, error
+    if not state.present:
+        return None, 'managed firewall table is missing'
+    return state.tcp_ports, ''
 
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:

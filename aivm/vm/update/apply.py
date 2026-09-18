@@ -8,6 +8,7 @@ from ...errors import AIVMError
 from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...runtime import virsh_cmd
 from .fdguard import _apply_fdguard_drift
+from .firewall import _apply_firewall_drift
 from .models import RestartKind, VMUpdateDrift, _escalate
 from .util import _bytes_to_gib
 from .virtiofs import _apply_virtiofs_binary_drift
@@ -54,7 +55,6 @@ def _apply_vm_update(
     restart = RestartKind.NONE
     mgr = CommandManager.current()
 
-    # TODO: Should we check for network config drift here too?
     if drift.cpus is not None:
         _, want = drift.cpus
         # setvcpus rejects counts above the persistent <vcpu> maximum, so
@@ -184,4 +184,8 @@ def _apply_vm_update(
             changed = True
             # The guard is reconciled live inside the guest over SSH
             # (systemd daemon-reload + enable --now); no restart needed.
+    if drift.firewall is not None:
+        if _apply_firewall_drift(cfg, drift.firewall, dry_run=dry_run):
+            changed = True
+            # nftables policy is host-side and takes effect immediately.
     return changed, restart

@@ -66,6 +66,16 @@ class FdGuardDrift:
 
 
 @dataclass(frozen=True)
+class FirewallDrift:
+    """Host-side managed firewall state that differs from config."""
+
+    action: str
+    current_tcp_ports: tuple[int, ...] | None
+    desired_tcp_ports: tuple[int, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
 class VMUpdateDrift:
     cpus: tuple[int, int] | None = None
     ram_mb: tuple[int, int] | None = None
@@ -74,6 +84,7 @@ class VMUpdateDrift:
     virtiofs_binary: tuple[VirtiofsBinaryDrift, ...] = ()
     virtiofsd_mode: str = ''
     fd_guard: FdGuardDrift | None = None
+    firewall: FirewallDrift | None = None
     notes: tuple[str, ...] = ()
 
     def has_changes(self) -> bool:
@@ -84,5 +95,6 @@ class VMUpdateDrift:
                 self.disk_bytes,
                 self.virtiofs_binary,
                 self.fd_guard,
+                self.firewall,
             )
         )

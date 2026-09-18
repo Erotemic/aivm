@@ -48,7 +48,7 @@ def normalize_restart_policy(value: object) -> str:
 
 
 def run_vm_update(request: VMUpdateRequest) -> int:
-    """Reconcile VM config drift against live libvirt settings."""
+    """Reconcile VM config drift against live host/libvirt state."""
     cfg = request.cfg
     drift, vm_running = _vm_update_drift(cfg, yes=request.yes)
     if drift.notes:
@@ -60,13 +60,16 @@ def run_vm_update(request: VMUpdateRequest) -> int:
         return 0
     if request.store_path is not None:
         announce_vm_machine_impact(
-            request.store_path, cfg.vm.name, action='update hardware'
+            request.store_path, cfg.vm.name, action='update configuration'
         )
     _print_vm_update_plan(cfg, drift)
     mgr = CommandManager.current()
     with mgr.intent(
         f'Update VM {cfg.vm.name}',
-        why='Apply editable libvirt hardware changes so the VM matches config.',
+        why=(
+            'Apply editable host and libvirt changes so the VM environment '
+            'matches config.'
+        ),
         role='modify',
     ):
         changed, restart_kind = _apply_vm_update(
@@ -86,7 +89,7 @@ def run_vm_update(request: VMUpdateRequest) -> int:
 
 
 class VMUpdateCLI(_BaseCommand):
-    """Reconcile VM config drift against live libvirt settings."""
+    """Reconcile VM config drift against live host/libvirt state."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
     restart: Literal['auto', 'always', 'never'] = kwconf.Value(

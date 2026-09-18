@@ -938,3 +938,45 @@ to write. The real-mount E2E is collected but cannot run here because this
 container lacks mount capability. Python compilation and `git diff --check`
 pass. Ruff could not be launched from the locked environment because an
 uncached Pygments wheel is unavailable offline.
+
+## 2026-09-18 13:25:26 -0400
+
+Fixed two firewall reconciliation gaps found from a live VM-to-host Docker
+published-port failure. The forward sandbox now evaluates the connection's
+original pre-DNAT destination address and port, so a configured exception such
+as host port 14042 remains authorized after Docker rewrites it to a private
+container address/port. I also made privileged firewall drift inspection use
+the same live libvirt bridge/gateway resolution as firewall generation; this
+removes the false `actual=()` report when saved bridge metadata is stale.
+
+For `aivm vm update`, I added a first-class firewall drift dimension. Generated
+rules now carry a policy fingerprint over the generator version, live network
+identity, block CIDRs, and allowed TCP/UDP ports. Update planning compares that
+marker and the observed port list, so it catches config changes, missing tables,
+and pre-fix tables that have the right port but older semantics. Applying that
+drift replaces (or removes, when disabled) the managed table live and requires
+no VM restart.
+
+State of mind / reflection: the important design choice was not to special-case
+Docker's current container address. The sandbox policy should be about what the
+VM attempted to reach, so conntrack's original tuple is the stable boundary.
+The fingerprint also avoids a one-time upgrade trap where old rules would look
+current merely because their visible allow-port list matched config.
+
+Uncertainties / risks: I could not invoke a local `nft` parser in this container
+because the binary is absent, so nft syntax is covered by generated-script tests
+and checked against documented conntrack forms rather than an executable syntax
+check here. The full Python test suite passes as an unprivileged user. The new
+policy marker intentionally causes one firewall reapply on the first `vm update`
+after this upgrade.
+
+Tradeoffs: `vm update` now performs a privileged nftables read when firewall
+state is part of the managed configuration. If that inspection is unavailable,
+it records a diagnostic rather than guessing. I kept network rebinding as a
+separate unsupported drift dimension; this change only reconciles the firewall
+policy attached to the current network.
+
+What I am confident about: 1301 repository tests pass (19 skipped), the focused
+status/firewall/update regression suite passes, architecture generated docs are
+current, and the fix directly covers the observed path where
+`10.77.0.1:14042` was DNATed to `172.19.0.3:4000` before AIVM's forward filter.

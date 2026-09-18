@@ -229,7 +229,10 @@ Reconcile VM drift
 .. code-block:: bash
 
    aivm vm edit     # change the saved VM config fragment in $EDITOR
-   aivm vm update   # reconcile the live libvirt domain against saved config
+   aivm vm update   # reconcile live host/libvirt state against saved config
+
+``vm update`` includes the managed nftables firewall. Changes to firewall
+ports or policy are applied live and do not require restarting the VM.
 
 Run without sudo
 ----------------

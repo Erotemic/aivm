@@ -3054,6 +3054,12 @@
         },
         {
           "imported": "aivm.config",
+          "importer": "aivm.vm.update.firewall",
+          "occurrences": 1,
+          "path": "aivm/vm/update/firewall.py"
+        },
+        {
+          "imported": "aivm.config",
           "importer": "aivm.vm.update.render",
           "occurrences": 1,
           "path": "aivm/vm/update/render.py"
