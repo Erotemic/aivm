@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (263)
+## Canonical `AgentVMConfig` references (264)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -79,7 +79,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.disk` | `aivm/vm/disk.py` | 1 |
 | `aivm.vm.domain` | `aivm/vm/domain.py` | 5 |
 | `aivm.vm.drift` | `aivm/vm/drift.py` | 10 |
-| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 19 |
+| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 20 |
 | `aivm.vm.host_access` | `aivm/vm/host_access.py` | 1 |
 | `aivm.vm.images` | `aivm/vm/images.py` | 1 |
 | `aivm.vm.paths` | `aivm/vm/paths.py` | 3 |

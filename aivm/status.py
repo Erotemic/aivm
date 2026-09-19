@@ -561,16 +561,22 @@ def probe_provisioned(cfg: AgentVMConfig, ip: str) -> ProbeOutcome:
             "dpkg-query -W -f='${Status}' \"$p\" 2>/dev/null | grep -q 'install ok installed' || exit 10; "
             'done'
         )
-    for tool_name, command in GUEST_TOOL_REGISTRY.command_requirements(
-        cfg.tools
-    ):
-        message = shlex.quote(
-            f'missing configured guest tool command: {tool_name}:{command}'
-        )
-        checks.append(
-            f'command -v {shlex.quote(command)} >/dev/null 2>&1 '
-            f'|| {{ echo {message} >&2; exit 11; }}'
-        )
+    for resolved in GUEST_TOOL_REGISTRY.enabled(cfg.tools):
+        definition = resolved.definition
+        if definition.status_check is not None:
+            # Identity-aware probe (e.g. pi verifies the owning npm
+            # package, not just the bare binary name); self-contained
+            # shell fragment appended to the set -e command list.
+            checks.append(definition.status_check)
+            continue
+        for command in definition.required_commands:
+            message = shlex.quote(
+                f'missing configured guest tool command: {resolved.name}:{command}'
+            )
+            checks.append(
+                f'command -v {shlex.quote(command)} >/dev/null 2>&1 '
+                f'|| {{ echo {message} >&2; exit 11; }}'
+            )
     remote = '; '.join(checks)
     cmd = [
         'ssh',

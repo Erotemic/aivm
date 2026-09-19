@@ -19,6 +19,7 @@ from aivm.vm.guest_tools import (
     UnknownGuestToolError,
     _build_claude_install_script,
     _build_codex_install_script,
+    _build_pi_install_script,
     _guest_ensure_code_script,
     _guest_ensure_rust_script,
     _guest_ensure_uv_script,
@@ -31,17 +32,26 @@ from aivm.vm.guest_tools import (
 
 
 def test_guest_tool_registry_is_canonical_and_ordered() -> None:
-    assert GUEST_TOOL_REGISTRY.names() == ('uv', 'rust', 'code', 'claude', 'codex')
+    assert GUEST_TOOL_REGISTRY.names() == (
+        'uv',
+        'rust',
+        'code',
+        'claude',
+        'codex',
+        'pi',
+    )
     assert [tool.name for tool in GUEST_TOOL_REGISTRY] == [
         'uv',
         'rust',
         'code',
         'claude',
         'codex',
+        'pi',
     ]
     assert GUEST_TOOL_REGISTRY.require('rust').enable_default == 'stable'
     with pytest.raises(
-        UnknownGuestToolError, match='Known tools: uv, rust, code, claude, codex'
+        UnknownGuestToolError,
+        match='Known tools: uv, rust, code, claude, codex, pi',
     ):
         GUEST_TOOL_REGISTRY.require('kubernetes')
 
@@ -63,6 +73,7 @@ def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
     assert resolved['code'].enabled is False
     assert resolved['claude'].enabled is False
     assert resolved['codex'].enabled is False
+    assert resolved['pi'].enabled is False
 
     cfg.tools.rust = True
     assert (
@@ -84,6 +95,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
     cfg.tools.code = 'latest'
     cfg.tools.claude = 'latest'
     cfg.tools.codex = 'latest'
+    cfg.tools.pi = 'latest'
     packages = GUEST_TOOL_REGISTRY.required_packages(cfg.tools)
     assert packages == (
         'ca-certificates',
@@ -103,6 +115,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
         ('code', 'code'),
         ('claude', 'claude'),
         ('codex', 'codex'),
+        ('pi', 'pi'),
     )
 
 
@@ -289,6 +302,75 @@ def test_guest_codex_script_uses_openai_standalone_installer() -> None:
     assert '"$INSTALL_DIR/codex" --version' in script
 
 
+def test_guest_pi_tool_default_off_and_opt_in() -> None:
+    cfg = AgentVMConfig()
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'pi')
+    assert resolved.enabled is False
+    assert resolved.effective_spec == 'off'
+
+    cfg.tools.pi = True
+    resolved = GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'pi')
+    assert resolved.enabled is True
+    assert resolved.effective_spec == 'latest'
+
+    # pi.dev's installer always installs the latest release and offers no
+    # version pinning, so pinned and channel specs must be rejected.
+    cfg.tools.pi = '0.42.0'
+    with pytest.raises(GuestToolSpecError):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'pi')
+    cfg.tools.pi = 'stable'
+    with pytest.raises(GuestToolSpecError):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'pi')
+
+
+def test_guest_pi_script_uses_official_installer() -> None:
+    cfg = AgentVMConfig()
+    script = _build_pi_install_script(cfg, 'latest', True)
+    assert 'curl -fsSL https://pi.dev/install.sh | sh' in script
+    # The Node prerequisite is checked in pure shell (node --version
+    # against the 22.19.0 floor the installer preflights), and NodeSource
+    # is the bootstrap when it is unmet.
+    assert 'aivm_node_ok' in script
+    assert '22.19.0' in script
+    assert 'deb.nodesource.com/setup_22.x' in script
+    assert 'apt-get install -y nodejs' in script
+    assert 'apt-get install -y ca-certificates curl' in script
+    # The NodeSource install must take precedence over a leftover
+    # user-managed node on PATH.
+    assert 'AIVM_SYSTEM_NODE_DIR' in script
+    # The deprecated @mariozechner/pi-coding-agent package (frozen with an
+    # unpatched credential-exposure advisory) is uninstalled before the
+    # installer runs, and a foreign `pi` is refused rather than clobbered.
+    assert '@mariozechner/pi-coding-agent' in script
+    assert 'refusing to install pi' in script
+    # After the (possibly skipped) install the on-PATH identity is
+    # re-verified against the expected package and version floor.
+    assert '@earendil-works/pi-coding-agent' in script
+    assert '0.78.1' in script
+    assert 'post-install verification failed' in script
+    # The tty-less installer never updates shell profiles, so the script adds
+    # a guarded PATH block for wherever pi actually landed.
+    assert '# >>> aivm pi PATH >>>' in script
+    assert 'PI_BIN_DIR' in script
+    assert 'pi --version' in script
+
+
+def test_pi_status_check_is_identity_aware() -> None:
+    check = GUEST_TOOL_REGISTRY.get('pi').status_check
+    assert check is not None
+    # The probe must attribute the pi binary to its npm package rather
+    # than trusting the bare binary name or `pi --version` output.
+    assert 'aivm_pi_identity' in check
+    assert '@earendil-works/pi-coding-agent' in check
+    assert '@mariozechner/pi-coding-agent' in check
+    assert '0.78.1' in check
+    assert 'exit 11' in check
+    assert 'exit 12' in check
+    # Every other tool keeps the generic command -v probe.
+    for name in ('uv', 'rust', 'code', 'claude', 'codex'):
+        assert GUEST_TOOL_REGISTRY.get(name).status_check is None
+
+
 def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.tools.uv = '0.11.11'
@@ -296,6 +378,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg.tools.code = 'latest'  # opt in (default is "off")
     cfg.tools.claude = 'latest'
     cfg.tools.codex = '0.150.0'
+    cfg.tools.pi = 'latest'
     cfg.tools.bin_dir = '~/.local/aivm/bin'
     text = dump_toml(cfg)
     assert '[tools]' in text
@@ -304,6 +387,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert 'code = "latest"' in text
     assert 'claude = "latest"' in text
     assert 'codex = "0.150.0"' in text
+    assert 'pi = "latest"' in text
     assert 'bin_dir = "~/.local/aivm/bin"' in text
     assert 'install_uv' not in text
     assert 'uv_install_dir' not in text
@@ -316,6 +400,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert loaded.tools.code == 'latest'
     assert loaded.tools.claude == 'latest'
     assert loaded.tools.codex == '0.150.0'
+    assert loaded.tools.pi == 'latest'
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
 
 
@@ -325,12 +410,14 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     assert 'code = "off"' in text
     assert 'claude = "off"' in text
     assert 'codex = "off"' in text
+    assert 'pi = "off"' in text
     fpath = tmp_path / 'config.toml'
     fpath.write_text(text, encoding='utf-8')
     loaded = load(fpath)
     assert loaded.tools.code == 'off'
     assert loaded.tools.claude == 'off'
     assert loaded.tools.codex == 'off'
+    assert loaded.tools.pi == 'off'
 
 
 def test_tools_config_rejects_unknown_registry_name(tmp_path: Path) -> None:
@@ -366,6 +453,15 @@ def test_claude_pinned_version_is_domain_error() -> None:
         GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'claude')
 
 
+def test_pi_pinned_version_is_domain_error() -> None:
+    """Regression: a pinned ``pi = "0.42.0"`` spec must fail as a domain
+    error with the config value named, not as a bare ``ValueError``."""
+    cfg = AgentVMConfig()
+    cfg.tools.pi = '0.42.0'
+    with pytest.raises(AIVMError, match=r"\[tools\] pi = '0.42.0'"):
+        GUEST_TOOL_REGISTRY.resolve(cfg.tools, 'pi')
+
+
 def test_probe_provisioned_uses_registry_command_requirements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -374,6 +470,7 @@ def test_probe_provisioned_uses_registry_command_requirements(
     cfg.provision.install_docker = False
     cfg.tools.code = 'latest'
     cfg.tools.codex = 'latest'
+    cfg.tools.pi = 'latest'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
     captured: dict[str, str] = {}
 
@@ -394,6 +491,12 @@ def test_probe_provisioned_uses_registry_command_requirements(
     assert 'command -v code' in captured['remote']
     assert 'command -v codex' in captured['remote']
     assert 'command -v rustup' not in captured['remote']
+    # pi contributes its identity-aware fragment, not a bare command -v
+    # check (the generic pattern is ``command -v pi >/dev/null 2>&1``;
+    # the fragment's own probe writes ``command -v pi 2>/dev/null``).
+    assert 'aivm_pi_check_rc' in captured['remote']
+    assert 'aivm_pi_identity' in captured['remote']
+    assert 'command -v pi >/dev/null' not in captured['remote']
 
 
 def test_lifecycle_compatibility_exports_are_bound() -> None:
@@ -403,3 +506,541 @@ def test_lifecycle_compatibility_exports_are_bound() -> None:
         name for name in lifecycle.__all__ if not hasattr(lifecycle, name)
     ]
     assert missing == []
+
+
+# ------------------------------------------------------------------
+# Hermetic shell-execution tests for the pi install script and the pi
+# status probe fragment.
+#
+# The substring assertions above prove the generated shell *contains* the
+# right pieces, but they cannot prove the shell *works*: the identity
+# walk, the NodeSource bootstrap, the PATH prepend that defeats a
+# shadowing user node, the deprecated-package migration, and the
+# refusal path all only make sense when executed.  Each test below
+# builds a fake guest tree in a temp dir and runs the generated script
+# with a fully custom environment whose PATH exposes only stub
+# npm/curl/sudo/apt-get, the node/pi fixtures the case installs, and
+# real coreutils symlinked into ``core/``.
+# ------------------------------------------------------------------
+
+
+_PI_HARNESS_COREUTILS = (
+    'bash', 'sh', 'sed', 'head', 'dirname', 'readlink', 'grep', 'env',
+    'cat', 'mkdir', 'ln', 'chmod', 'cp', 'rm',
+)
+
+# The npm fake models the subcommands the pi script uses (prefix/ls/
+# uninstall/--version); any other invocation is logged, so a regression
+# that introduces an unexpected npm call is visible instead of silently
+# succeeding.
+_PI_STUB_NPM = r"""\
+#!/bin/sh
+set -eu
+cmd=$1; shift
+args=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --depth=0|-g) : ;;
+        *) args=$1 ;;
+    esac
+    shift
+done
+case "$cmd" in
+    prefix) echo "$NPM_PREFIX" ;;
+    ls)
+        dir="$NPM_PREFIX/lib/node_modules/$args"
+        if [ -f "$dir/package.json" ]; then
+            ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/package.json" | head -n 1)
+            echo "$args@$ver"
+        else
+            exit 1
+        fi
+        ;;
+    uninstall)
+        echo "uninstall -g $args" >> "$STUB_LOG"
+        rm -rf "$NPM_PREFIX/lib/node_modules/$args"
+        link="$NPM_PREFIX/bin/pi"
+        if [ -L "$link" ]; then
+            case "$(readlink -f "$link")" in
+                "$NPM_PREFIX/lib/node_modules/$args"/*) rm -f "$link" ;;
+            esac
+        fi
+        ;;
+    --version) echo 10.9.2 ;;
+    *) echo "npm $cmd $args" >> "$STUB_LOG" ;;
+esac
+"""
+
+# curl stands in for the two remote fetches the script makes; anything
+# else is an error, which catches regressions that fetch new URLs.
+_PI_STUB_CURL = r"""\
+#!/bin/sh
+set -eu
+url=$2
+case "$url" in
+    https://pi.dev/install.sh)
+        echo "request $url" >> "$STUB_LOG"
+        cat "$INSTALLER_SCRIPT"
+        ;;
+    https://deb.nodesource.com/setup_22.x)
+        echo "request $url" >> "$STUB_LOG"
+        ;;
+    *)
+        echo "unexpected curl $url" >> "$STUB_LOG"
+        exit 1
+        ;;
+esac
+"""
+
+# sudo is a plain pass-through (the stubs run as the current user).
+_PI_STUB_SUDO = """\
+#!/bin/sh
+while [ $# -gt 0 ] && [ "$1" = '-E' ]; do shift; done
+exec "$@"
+"""
+
+# apt-get update is a no-op; `apt-get install -y nodejs` simulates the
+# NodeSource package by installing the staging node/npm into the
+# AIVM_SYSTEM_NODE_DIR.
+_PI_STUB_APT_GET = """\
+#!/bin/sh
+set -eu
+if [ "$1" = 'update' ]; then
+    echo "apt-get update" >> "$STUB_LOG"
+    exit 0
+fi
+if [ "$1" = 'install' ]; then
+    echo "apt-get $*" >> "$STUB_LOG"
+    sysdir=$AIVM_SYSTEM_NODE_DIR
+    mkdir -p "$sysdir"
+    cp "$STAGING/node" "$sysdir/node"
+    cp "$STAGING/npm" "$sysdir/npm"
+    chmod +x "$sysdir/node" "$sysdir/npm"
+    exit 0
+fi
+echo "apt-get unhandled: $*" >> "$STUB_LOG"
+exit 1
+"""
+
+# The staging node is the fresh NodeSource toolchain (22.x).
+_PI_STAGING_NODE = """\
+#!/bin/sh
+if [ "$1" = '--version' ]; then echo v22.23.2; exit 0; fi
+echo "node unhandled: $*" >&2
+exit 1
+"""
+
+# The pi.dev installer payload: installs the current earendil release
+# into the npm global prefix the way the real installer does.
+_PI_STUB_INSTALLER = """\
+#!/bin/sh
+set -eu
+echo "stub installer started" >> "$STUB_LOG"
+prefix=$(npm prefix -g)
+dir="$prefix/lib/node_modules/@earendil-works/pi-coding-agent"
+mkdir -p "$dir/bin" "$prefix/bin"
+printf '%s\n' '{"name": "@earendil-works/pi-coding-agent", "version": "0.85.1", "bin": {"pi": "bin/pi.js"}}' > "$dir/package.json"
+printf '%s\n' '#!/bin/sh' 'echo 0.85.1' > "$dir/bin/pi.js"
+chmod +x "$dir/bin/pi.js"
+ln -sf "$dir/bin/pi.js" "$prefix/bin/pi"
+"""
+
+
+class _PiShellHarness:
+    """Fake guest tree for executing the generated pi shell.
+
+    Layout under ``base``: ``home/`` (the fake $HOME), ``sysbin/``
+    (where the NodeSource nodejs lands, i.e. AIVM_SYSTEM_NODE_DIR),
+    ``stub/`` (fake npm/curl/sudo/apt-get), ``core/`` (real coreutils
+    as symlinks), ``prefix/`` (npm global prefix), ``staging/`` (fresh
+    NodeSource toolchain plus the npm fake), plus ``log`` (STUB_LOG)
+    and ``installer.sh`` (the pi.dev payload).  The child environment
+    is a fully custom dict, so nothing outside this tree is reachable.
+    """
+
+    def __init__(
+        self,
+        base: Path,
+        *,
+        npm_in_stub: bool = True,
+        sysbin_node: str | None = None,
+    ) -> None:
+        self.base = base
+        self.home = base / 'home'
+        self.sysbin = base / 'sysbin'
+        self.stub = base / 'stub'
+        self.core = base / 'core'
+        self.prefix = base / 'prefix'
+        self.staging = base / 'staging'
+        self.log = base / 'log'
+        for d in (
+            self.home / '.local' / 'bin',
+            self.sysbin,
+            self.stub,
+            self.core,
+            self.prefix / 'bin',
+            self.prefix / 'lib' / 'node_modules',
+            self.staging,
+        ):
+            d.mkdir(parents=True)
+        for name in _PI_HARNESS_COREUTILS:
+            (self.core / name).symlink_to('/usr/bin/' + name)
+        self._write(self.stub / 'curl', _PI_STUB_CURL)
+        self._write(self.stub / 'sudo', _PI_STUB_SUDO)
+        self._write(self.stub / 'apt-get', _PI_STUB_APT_GET)
+        if npm_in_stub:
+            self._write(self.stub / 'npm', _PI_STUB_NPM)
+        self._write(self.staging / 'node', _PI_STAGING_NODE)
+        self._write(self.staging / 'npm', _PI_STUB_NPM)
+        if sysbin_node is not None:
+            self.seed_sysbin(sysbin_node)
+        self.log.touch()
+        self._write(base / 'installer.sh', _PI_STUB_INSTALLER)
+        self.run_script = base / 'run.sh'
+
+    @staticmethod
+    def _write(path: Path, body: str) -> None:
+        path.write_text(body)
+        path.chmod(0o755)
+
+    def seed_sysbin(self, node_version: str) -> None:
+        """Preseed the system dir with a NodeSource-style toolchain."""
+        node = self.sysbin / 'node'
+        node.write_text(
+            '#!/bin/sh\n'
+            f'if [ "$1" = --version ]; then echo v{node_version}; exit 0; fi\n'
+            'echo "node unhandled: $*" >&2\nexit 1\n'
+        )
+        node.chmod(0o755)
+        npm = self.sysbin / 'npm'
+        npm.write_text(_PI_STUB_NPM)
+        npm.chmod(0o755)
+
+    def add_user_node(self, version: str) -> Path:
+        """A user-managed node in ~/.local/bin (typically earlier in
+        PATH than the system dir)."""
+        path = self.home / '.local' / 'bin' / 'node'
+        path.write_text(
+            '#!/bin/sh\n'
+            f'if [ "$1" = --version ]; then echo v{version}; exit 0; fi\n'
+            'echo "node unhandled: $*" >&2\nexit 1\n'
+        )
+        path.chmod(0o755)
+        return path
+
+    def install_pi_package(self, name: str, version: str) -> Path:
+        """Install an npm global package providing ``pi`` with the
+        shape real ``npm install -g`` produces: package.json, a bin
+        script, and a prefix/bin symlink the identity walk resolves."""
+        pkg = self.prefix / 'lib' / 'node_modules' / name
+        (pkg / 'bin').mkdir(parents=True)
+        (pkg / 'package.json').write_text(
+            '{"name": "%s", "version": "%s", "bin": {"pi": "bin/pi.js"}}\n'
+            % (name, version)
+        )
+        pi = pkg / 'bin' / 'pi.js'
+        pi.write_text(f'#!/bin/sh\necho {version}\n')
+        pi.chmod(0o755)
+        link = self.prefix / 'bin' / 'pi'
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(pi)
+        return pi
+
+    def add_unattributable_pi(self, version: str) -> Path:
+        """A plain script named pi with no package.json in any
+        ancestor: it is on PATH but cannot be attributed to an npm
+        package."""
+        path = self.home / '.local' / 'bin' / 'pi'
+        path.write_text(f'#!/bin/sh\necho {version}\n')
+        path.chmod(0o755)
+        return path
+
+    def write_run_script(self, script: str) -> None:
+        self.run_script.write_text('#!/bin/sh\n' + script)
+        self.run_script.chmod(0o755)
+
+    def _path(self, dirs: tuple[str, ...]) -> str:
+        return ':'.join(str(self.base / d) for d in dirs)
+
+    def default_path_dirs(self) -> tuple[str, ...]:
+        # The system dir is ahead of the user dir here; the shadowing
+        # test (case 3) passes an explicit ordering instead.
+        return ('stub', 'sysbin', 'home/.local/bin', 'prefix/bin', 'core')
+
+    def run(
+        self,
+        path_dirs: tuple[str, ...] | None = None,
+        timeout: float = 30.0,
+    ) -> subprocess.CompletedProcess:
+        env = {
+            'PATH': self._path(path_dirs or self.default_path_dirs()),
+            'HOME': str(self.home),
+            'NPM_PREFIX': str(self.prefix),
+            'STUB_LOG': str(self.log),
+            'STAGING': str(self.staging),
+            'INSTALLER_SCRIPT': str(self.base / 'installer.sh'),
+            'AIVM_SYSTEM_NODE_DIR': str(self.sysbin),
+            'LC_ALL': 'C',
+        }
+        bash = shutil.which('bash') or '/usr/bin/bash'
+        return subprocess.run(
+            [bash, str(self.run_script)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def log_text(self) -> str:
+        return self.log.read_text()
+
+    def assert_no_unhandled_stub_calls(self) -> None:
+        """The stubs log anything they do not model; none may appear."""
+        log = self.log_text()
+        assert 'unhandled' not in log, log
+        assert 'unexpected curl' not in log, log
+        for line in log.splitlines():
+            # The npm fake only logs non-modeled invocations.
+            assert not line.startswith('npm '), log
+
+
+def _run_pi_install_script(
+    harness: _PiShellHarness,
+    *,
+    ensure_transport: bool = True,
+    path_dirs: tuple[str, ...] | None = None,
+) -> subprocess.CompletedProcess:
+    """Build the install script from the *current* guest_tools code and
+    execute it inside the harness's hermetic guest."""
+    script = _build_pi_install_script(
+        AgentVMConfig(), 'latest', ensure_transport
+    )
+    harness.write_run_script(script)
+    return harness.run(path_dirs=path_dirs)
+
+
+def test_pi_install_clean_machine_bootstraps_node(tmp_path: Path) -> None:
+    """Case 1: no node or npm at all -> NodeSource bootstrap ->
+    installer -> healthy end state with the profile PATH block."""
+    harness = _PiShellHarness(tmp_path / 'base')
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 0, res.stderr
+    # The final `pi --version` is the success signal (0.85.1 is the
+    # version the stub installer records).
+    assert res.stdout.strip() == '0.85.1'
+    log = harness.log_text()
+    # The NodeSource bootstrap runs exactly once: the post-bootstrap
+    # aivm_node_ok passes, so no second fetch happens.
+    assert log.count('request https://deb.nodesource.com/setup_22.x') == 1
+    assert log.count('apt-get install -y nodejs') == 1
+    assert 'request https://pi.dev/install.sh' in log
+    assert 'stub installer started' in log
+    harness.assert_no_unhandled_stub_calls()
+    # The PATH block is written to $HOME/.profile and points at the
+    # npm global bin dir.
+    profile = (harness.home / '.profile').read_text()
+    assert profile.count('# >>> aivm pi PATH >>>') == 1
+    assert str(harness.prefix / 'bin') in profile
+    # The fresh NodeSource toolchain landed in the system dir.
+    assert (harness.sysbin / 'node').exists()
+    assert (harness.sysbin / 'npm').exists()
+
+
+def test_pi_install_node_without_npm_bootstraps(tmp_path: Path) -> None:
+    """Case 2: a sufficient user node (v22.19.0) but no npm anywhere ->
+    the NodeSource bootstrap still fires, and the user's node file is
+    left byte-identical."""
+    harness = _PiShellHarness(tmp_path / 'base', npm_in_stub=False)
+    user_node = harness.add_user_node('22.19.0')
+    before = user_node.read_text()
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == '0.85.1'
+    log = harness.log_text()
+    assert 'request https://deb.nodesource.com/setup_22.x' in log
+    assert 'request https://pi.dev/install.sh' in log
+    harness.assert_no_unhandled_stub_calls()
+    assert user_node.read_text() == before
+
+
+def test_pi_install_old_user_node_shadowed_by_nodesource(tmp_path: Path) -> None:
+    """Case 3: an old user node (v18) earlier in PATH -> the
+    bootstrap's PATH prepend makes the fresh NodeSource node win, so
+    the install succeeds without touching the user's node."""
+    harness = _PiShellHarness(tmp_path / 'base')
+    user_node = harness.add_user_node('18.0.0')
+    before = user_node.read_text()
+    res = _run_pi_install_script(
+        harness,
+        path_dirs=('stub', 'home/.local/bin', 'sysbin', 'prefix/bin', 'core'),
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == '0.85.1'
+    log = harness.log_text()
+    assert log.count('request https://deb.nodesource.com/setup_22.x') == 1
+    assert 'request https://pi.dev/install.sh' in log
+    harness.assert_no_unhandled_stub_calls()
+    # The user's v18 node is still there and byte-identical.  rc 0 also
+    # proves the v22 node won the PATH race: had the v18 still shadowed
+    # it, the post-bootstrap aivm_node_ok would have exited 1.
+    assert user_node.read_text() == before
+
+
+def test_pi_install_migrates_deprecated_mariozechner_package(tmp_path: Path) -> None:
+    """Case 4: the deprecated @mariozechner/pi-coding-agent is
+    uninstalled before the installer runs, so its old pi shim cannot
+    shadow the new install."""
+    harness = _PiShellHarness(tmp_path / 'base', sysbin_node='22.23.2')
+    old = harness.install_pi_package(
+        '@mariozechner/pi-coding-agent', '0.73.1'
+    )
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 0, res.stderr
+    # The migration announces itself, then the final `pi --version` is
+    # the success signal.
+    assert 'Removing deprecated @mariozechner/pi-coding-agent...' in res.stdout
+    assert res.stdout.strip().splitlines()[-1] == '0.85.1'
+    log = harness.log_text()
+    assert 'uninstall -g @mariozechner/pi-coding-agent' in log
+    assert 'request https://pi.dev/install.sh' in log
+    # The seeded Node was adequate, so no NodeSource bootstrap.
+    assert 'deb.nodesource.com' not in log
+    harness.assert_no_unhandled_stub_calls()
+    # The deprecated package is gone (an empty scope dir is harmless
+    # residue, as with real npm); pi now resolves to earendil.
+    assert not (
+        harness.prefix / 'lib' / 'node_modules' / '@mariozechner'
+        / 'pi-coding-agent'
+    ).exists()
+    assert str((harness.prefix / 'bin' / 'pi').resolve()).startswith(
+        str(harness.prefix / 'lib' / 'node_modules' / '@earendil-works')
+    )
+
+
+def test_pi_install_healthy_package_is_noop_and_idempotent(tmp_path: Path) -> None:
+    """Case 5: earendil 0.85.1 is already installed -> no install,
+    the profile block is still ensured, and a second run adds nothing
+    (the marker appears exactly once)."""
+    harness = _PiShellHarness(tmp_path / 'base', sysbin_node='22.23.2')
+    harness.install_pi_package('@earendil-works/pi-coding-agent', '0.85.1')
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 0, res.stderr
+    assert 'pi 0.85.1 is already installed.' in res.stdout
+    assert res.stdout.strip().splitlines()[-1] == '0.85.1'
+    assert 'request https://pi.dev/install.sh' not in harness.log_text()
+    harness.assert_no_unhandled_stub_calls()
+    profile = harness.home / '.profile'
+    assert profile.read_text().count('# >>> aivm pi PATH >>>') == 1
+    # Second run: still a no-op, and the profile block is not
+    # duplicated.
+    res2 = _run_pi_install_script(harness)
+    assert res2.returncode == 0, res2.stderr
+    assert profile.read_text().count('# >>> aivm pi PATH >>>') == 1
+    log = harness.log_text()
+    assert log.count('request https://pi.dev/install.sh') == 0
+    harness.assert_no_unhandled_stub_calls()
+
+
+def test_pi_install_refuses_foreign_pi(tmp_path: Path) -> None:
+    """Case 6: a pi owned by an unrelated package is refused (exit 1,
+    naming the package); the installer is not run and the fixture is
+    untouched."""
+    harness = _PiShellHarness(tmp_path / 'base', sysbin_node='22.23.2')
+    foreign = harness.install_pi_package('@example/foreign', '1.2.3')
+    before = foreign.read_text()
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 1
+    assert 'refusing to install pi' in res.stderr
+    assert '@example/foreign' in res.stderr
+    assert 'request https://pi.dev/install.sh' not in harness.log_text()
+    harness.assert_no_unhandled_stub_calls()
+    assert foreign.read_text() == before
+    assert (harness.prefix / 'bin' / 'pi').resolve() == foreign.resolve()
+
+
+def test_pi_install_updates_below_floor_earendil(tmp_path: Path) -> None:
+    """Case 7: earendil below the 0.78.1 floor -> the installer runs to
+    update it, and the post-install verification passes with the new
+    version."""
+    harness = _PiShellHarness(tmp_path / 'base', sysbin_node='22.23.2')
+    harness.install_pi_package('@earendil-works/pi-coding-agent', '0.77.0')
+    res = _run_pi_install_script(harness)
+    assert res.returncode == 0, res.stderr
+    assert 'pi 0.77.0 is older than 0.78.1; updating.' in res.stdout
+    assert res.stdout.strip().splitlines()[-1] == '0.85.1'
+    log = harness.log_text()
+    assert 'request https://pi.dev/install.sh' in log
+    # Updating an existing healthy-shaped install does not re-bootstrap
+    # node.
+    assert 'deb.nodesource.com' not in log
+    harness.assert_no_unhandled_stub_calls()
+    pkg_json = (
+        harness.prefix / 'lib' / 'node_modules'
+        / '@earendil-works/pi-coding-agent' / 'package.json'
+    ).read_text()
+    assert '"version": "0.85.1"' in pkg_json
+
+
+def _run_pi_status_check(
+    harness: _PiShellHarness,
+    path_dirs: tuple[str, ...] | None = None,
+) -> subprocess.CompletedProcess:
+    """Execute the pi status fragment exactly the way aivm/status.py
+    does (as a standalone remote command under set -e)."""
+    fragment = GUEST_TOOL_REGISTRY.get('pi').status_check
+    assert fragment is not None
+    harness.write_run_script('set -e\n' + fragment)
+    return harness.run(path_dirs=path_dirs)
+
+
+def test_pi_status_check_reports_healthy_identity(tmp_path: Path) -> None:
+    """Healthy: exit 0, and stdout carries the verified package
+    identity (the line aivm status --detail shows as probe evidence)."""
+    harness = _PiShellHarness(tmp_path / 'healthy')
+    harness.install_pi_package('@earendil-works/pi-coding-agent', '0.85.1')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == '@earendil-works/pi-coding-agent 0.85.1'
+    harness.assert_no_unhandled_stub_calls()
+
+
+def test_pi_status_check_missing_exits_11(tmp_path: Path) -> None:
+    harness = _PiShellHarness(tmp_path / 'missing')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 11
+    assert 'missing configured guest tool command: pi:pi' in res.stderr
+
+
+def test_pi_status_check_deprecated_exits_12(tmp_path: Path) -> None:
+    harness = _PiShellHarness(tmp_path / 'deprecated')
+    harness.install_pi_package('@mariozechner/pi-coding-agent', '0.73.1')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 12
+    assert 'the deprecated @mariozechner/pi-coding-agent' in res.stderr
+
+
+def test_pi_status_check_below_floor_exits_12(tmp_path: Path) -> None:
+    harness = _PiShellHarness(tmp_path / 'below-floor')
+    harness.install_pi_package('@earendil-works/pi-coding-agent', '0.77.0')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 12
+    assert 'older than 0.78.1' in res.stderr
+
+
+def test_pi_status_check_foreign_exits_12(tmp_path: Path) -> None:
+    harness = _PiShellHarness(tmp_path / 'foreign')
+    harness.install_pi_package('@example/foreign', '1.2.3')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 12
+    assert "owned by '@example/foreign'" in res.stderr
+
+
+def test_pi_status_check_unattributable_exits_12(tmp_path: Path) -> None:
+    """A plain script named pi (no package.json anywhere in its
+    ancestor chain) cannot be attributed and is reported as such."""
+    harness = _PiShellHarness(tmp_path / 'unattributable')
+    harness.add_unattributable_pi('9.9.9')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 12
+    assert 'not an install of @earendil-works/pi-coding-agent' in res.stderr

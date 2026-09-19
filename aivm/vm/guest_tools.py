@@ -48,6 +48,9 @@ class GuestToolDefinition:
     required_commands: tuple[str, ...]
     normalize_spec: SpecNormalizer
     build_install_script: InstallScriptBuilder
+    # Optional identity-aware status probe shell fragment; when unset,
+    # aivm/status.py falls back to a generic `command -v` check.
+    status_check: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,17 @@ def _claude_spec(spec: str) -> str:
         f'Invalid config value [tools] claude = {spec!r}: the official '
         'installer cannot pin a Claude Code version, so the accepted values '
         "are 'latest' (or true) to enable and 'off' (or false) to disable."
+    )
+
+
+def _pi_spec(spec: str) -> str:
+    normalized = str(spec or '').strip().lower()
+    if normalized in {'', 'latest'}:
+        return 'latest'
+    raise GuestToolSpecError(
+        f'Invalid config value [tools] pi = {spec!r}: the official '
+        'installer cannot pin a pi version, so the accepted values are '
+        "'latest' (or true) to enable and 'off' (or false) to disable."
     )
 
 
@@ -414,6 +428,301 @@ fi
     return textwrap.dedent(script).strip()
 
 
+# Shared shell helpers that identify the npm package providing ``pi`` on
+# PATH, embedded in both the install script and the status probe so that
+# "is pi installed?" is answered identically in both places: by the owning
+# package's name, never by the bare binary name.  ``aivm_version_at_least``
+# compares dotted versions numerically, failing closed on non-numeric
+# components (e.g. pre-release suffixes).  ``aivm_pi_identity`` resolves the
+# ``pi`` executable to its real file, walks up to the nearest package.json,
+# and prints "<name> <version>" (exit 0); it exits 3 when ``pi`` is not on
+# PATH and 1 when ``pi`` exists but cannot be attributed to an npm package.
+_PI_IDENTITY_PROBE = textwrap.dedent(r"""
+    aivm_version_at_least() {
+        aivm_va=$1
+        aivm_vb=$2
+        aivm_vi=0
+        while [ "$aivm_vi" -lt 3 ] && { [ -n "$aivm_va" ] || [ -n "$aivm_vb" ]; }; do
+            aivm_pa=${aivm_va%%.*}
+            if [ "$aivm_pa" = "$aivm_va" ]; then aivm_va=''; else aivm_va=${aivm_va#*.}; fi
+            aivm_pb=${aivm_vb%%.*}
+            if [ "$aivm_pb" = "$aivm_vb" ]; then aivm_vb=''; else aivm_vb=${aivm_vb#*.}; fi
+            aivm_pa=${aivm_pa:-0}
+            aivm_pb=${aivm_pb:-0}
+            case "$aivm_pa$aivm_pb" in
+                *[!0-9]*) return 1 ;;
+            esac
+            if [ "$aivm_pa" -gt "$aivm_pb" ]; then return 0; fi
+            if [ "$aivm_pa" -lt "$aivm_pb" ]; then return 1; fi
+            aivm_vi=$((aivm_vi + 1))
+        done
+        return 0
+    }
+
+    aivm_pi_identity() {
+        aivm_pi_bin=$(command -v pi 2>/dev/null) || return 3
+        aivm_pi_file=$(readlink -f "$aivm_pi_bin" 2>/dev/null) || return 1
+        aivm_pi_dir=$(dirname "$aivm_pi_file")
+        while [ -n "$aivm_pi_dir" ] && [ "$aivm_pi_dir" != '/' ]; do
+            if [ -f "$aivm_pi_dir/package.json" ]; then
+                aivm_pi_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$aivm_pi_dir/package.json" | head -n 1)
+                aivm_pi_version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$aivm_pi_dir/package.json" | head -n 1)
+                if [ -n "$aivm_pi_name" ] && [ -n "$aivm_pi_version" ]; then
+                    printf '%s %s\n' "$aivm_pi_name" "$aivm_pi_version"
+                    return 0
+                fi
+                return 1
+            fi
+            aivm_pi_dir=$(dirname "$aivm_pi_dir")
+        done
+        return 1
+    }
+""").strip()
+
+
+# Body of the pi install script (after the shared probe header).  Kept as
+# one plain string — not an f-string — so shell ${...} and brace groups
+# stay literal; the two dynamic parts (transport bootstrap, shared probe)
+# are joined in _build_pi_install_script.  The Node prerequisite check is
+# pure shell (node --version) so the script stays testable with a stub
+# node, and AIVM_SYSTEM_NODE_DIR (default /usr/bin) is a test seam naming
+# where NodeSource's nodejs package lands.
+_PI_INSTALL_BODY = textwrap.dedent("""
+# pi's official installer preflights for Node.js 22.19.0+ and npm; its
+# own Node bootstrap is interactive-only, so in a no-tty session like
+# aivm's ssh transport it fails when the toolchain is missing or old.
+aivm_node_ok() {
+    command -v node >/dev/null 2>&1 || return 1
+    command -v npm >/dev/null 2>&1 || return 1
+    aivm_node_version=$(node --version 2>/dev/null | sed 's/^v//') || return 1
+    [ -n "$aivm_node_version" ] || return 1
+    aivm_version_at_least "$aivm_node_version" 22.19.0
+}
+# Global npm operations need write access to the npm prefix; use sudo
+# only when the current user cannot write it directly.
+aivm_npm_global() {
+    if [ -w "$(npm prefix -g 2>/dev/null)" ]; then
+        npm "$@"
+    else
+        sudo npm "$@"
+    fi
+}
+# Distro apt nodejs packages are too old on common Ubuntu and Debian
+# guests, so Node 22 comes from NodeSource's apt repo when needed.
+if ! aivm_node_ok; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+    # Prefer the just-installed node for the rest of this script, so a
+    # leftover user-managed node earlier in PATH cannot shadow it for
+    # the installer.
+    export PATH="${AIVM_SYSTEM_NODE_DIR:-/usr/bin}:$PATH"
+fi
+if ! aivm_node_ok; then
+    echo 'Node.js 22.19.0+ and npm are required to install pi, but no suitable toolchain was found after the NodeSource bootstrap.' >&2
+    exit 1
+fi
+# pi moved from @mariozechner/pi-coding-agent (frozen at 0.73.1, with an
+# unpatched credential-exposure advisory) to
+# @earendil-works/pi-coding-agent (0.78.1+).  Remove the deprecated
+# package before installing so its old `pi` shim cannot shadow the new
+# install.
+if npm ls -g --depth=0 @mariozechner/pi-coding-agent 2>/dev/null | grep -q '@mariozechner/pi-coding-agent'; then
+    echo 'Removing deprecated @mariozechner/pi-coding-agent...'
+    aivm_npm_global uninstall -g @mariozechner/pi-coding-agent
+fi
+# Decide whether the installer must run from what actually provides `pi`
+# on PATH, not merely whether an executable named pi exists: a missing,
+# deprecated, or too-old install all need it, but a foreign `pi` (an
+# unrelated tool) is refused rather than clobbered.
+aivm_need_install=1
+aivm_identity_rc=0
+aivm_pi_id=$(aivm_pi_identity) || aivm_identity_rc=$?
+case $aivm_identity_rc in
+    0)
+        aivm_pi_name=${aivm_pi_id%% *}
+        aivm_pi_version=${aivm_pi_id##* }
+        case $aivm_pi_name in
+            @earendil-works/pi-coding-agent)
+                if aivm_version_at_least "$aivm_pi_version" 0.78.1; then
+                    aivm_need_install=0
+                    echo "pi $aivm_pi_version is already installed."
+                else
+                    echo "pi $aivm_pi_version is older than 0.78.1; updating."
+                fi
+                ;;
+            @mariozechner/pi-coding-agent)
+                echo "pi $aivm_pi_version is the deprecated @mariozechner package; migrating."
+                ;;
+            *)
+                echo "refusing to install pi: the pi on PATH is owned by package '$aivm_pi_name', not @earendil-works/pi-coding-agent" >&2
+                echo 'remove or rename that pi, then re-run: aivm provision pi' >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    3)
+        ;;
+    *)
+        echo 'refusing to install pi: the pi on PATH is not an install of @earendil-works/pi-coding-agent (or its deprecated predecessor)' >&2
+        echo 'remove or rename that pi, then re-run: aivm provision pi' >&2
+        exit 1
+        ;;
+esac
+if [ "$aivm_need_install" -eq 1 ]; then
+    curl -fsSL https://pi.dev/install.sh | sh
+fi
+# Verify the identity of what actually provides `pi` on PATH after the
+# (possibly skipped) install: a `pi` that is not
+# @earendil-works/pi-coding-agent 0.78.1+ is a failure, not a success.
+aivm_identity_rc=0
+aivm_pi_id=$(aivm_pi_identity) || aivm_identity_rc=$?
+if [ "$aivm_identity_rc" -eq 3 ]; then
+    echo 'Pi installer completed, but pi was not found in PATH.' >&2
+    exit 1
+elif [ "$aivm_identity_rc" -ne 0 ]; then
+    echo 'Pi installer completed, but the pi on PATH cannot be attributed to an npm package.' >&2
+    exit 1
+fi
+aivm_pi_name=${aivm_pi_id%% *}
+aivm_pi_version=${aivm_pi_id##* }
+if [ "$aivm_pi_name" != '@earendil-works/pi-coding-agent' ] || ! aivm_version_at_least "$aivm_pi_version" 0.78.1; then
+    echo "post-install verification failed: pi on PATH is '$aivm_pi_name' $aivm_pi_version, expected @earendil-works/pi-coding-agent 0.78.1 or newer" >&2
+    exit 1
+fi
+# The no-tty installer never updates shell profiles, so add a guarded
+# PATH block for wherever pi actually landed: ~/.local/bin by default,
+# or the npm global prefix bin dir when the installer used a
+# user-writable prefix (e.g. a user-managed node install).
+PI_BIN_DIR="$HOME/.local/bin"
+if [ ! -x "$HOME/.local/bin/pi" ]; then
+    NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
+    if [ -n "$NPM_GLOBAL_BIN" ] && [ -x "$NPM_GLOBAL_BIN/pi" ]; then
+        PI_BIN_DIR="$NPM_GLOBAL_BIN"
+    fi
+fi
+export PATH="$PI_BIN_DIR:$PATH"
+if ! command -v pi >/dev/null 2>&1; then
+    echo 'Pi installer completed, but pi was not found in PATH.' >&2
+    exit 1
+fi
+PROFILE="$HOME/.profile"
+if ! grep -Fq '# >>> aivm pi PATH >>>' "$PROFILE" 2>/dev/null; then
+    {
+        echo ''
+        echo '# >>> aivm pi PATH >>>'
+        printf '%s\\n' "case ':\\$PATH:' in"
+        printf '%s\\n' "  *':$PI_BIN_DIR:'*) ;;"
+        printf '%s\\n' "  *) PATH='$PI_BIN_DIR':\\$PATH ;;"
+        printf '%s\\n' 'esac'
+        printf '%s\\n' 'export PATH'
+        echo '# <<< aivm pi PATH <<<'
+    } >> "$PROFILE"
+fi
+pi --version
+""").strip()
+
+
+def _build_pi_install_script(
+    cfg: AgentVMConfig, spec: str, ensure_transport: bool
+) -> str:
+    """Build a script that installs pi's current package with identity
+    gating around the official installer.
+
+    ``curl -fsSL https://pi.dev/install.sh | sh`` remains the package
+    install mechanism (it wraps ``npm install -g
+    @earendil-works/pi-coding-agent``), but aivm gates it on the *identity*
+    of whatever ``pi`` is on PATH rather than the bare binary name:
+
+    * a missing, deprecated (``@mariozechner/pi-coding-agent``, frozen at
+      0.73.1 with an unpatched credential-exposure advisory), or too-old
+      install runs the installer, with the deprecated package uninstalled
+      first so its old shim cannot shadow the new install;
+    * a healthy ``@earendil-works/pi-coding-agent`` 0.78.1+ is a no-op;
+    * a foreign ``pi`` (an unrelated tool) is refused, never clobbered;
+    * after the (possibly skipped) install, the on-PATH identity is
+      re-verified, so a ``pi`` that is not the expected package and
+      version is a failure, not a success.
+
+    The installer's Node prerequisite (Node.js 22.19.0+ *and* npm) is
+    checked in pure shell (``node --version``) so the whole script stays
+    testable with a stub ``node``; when it is unmet, Node 22 is installed
+    from NodeSource's apt repo.  The 0.78.1 and 22.19.0 floors mirror the
+    package history / installer preflight; verify them against pi.dev's
+    docs and https://pi.dev/install.sh when they change.
+
+    pi.dev's installer always installs the latest release and offers no
+    version pinning, so ``spec`` is 'latest' only (enforced by
+    ``_pi_spec``).
+    """
+    del cfg, spec  # No versioned install path exists; latest is the only spec.
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    return textwrap.dedent('\n'.join((
+        'set -euo pipefail',
+        transport_bootstrap,
+        _PI_IDENTITY_PROBE,
+        _PI_INSTALL_BODY,
+    ))).strip()
+
+
+def _pi_status_check() -> str:
+    """Build the identity-aware status probe for pi.
+
+    A bare ``command -v pi`` would pass for the deprecated
+    ``@mariozechner/pi-coding-agent`` package (frozen at 0.73.1 with an
+    unpatched credential-exposure advisory) or any unrelated tool that
+    happens to share the name ``pi``.  This fragment reuses the same
+    identity helpers as the install script: it passes only when ``pi``
+    is provided by ``@earendil-works/pi-coding-agent`` 0.78.1 or newer and
+    otherwise exits nonzero with an actionable stderr diagnostic.  It is
+    appended to the status probe's ``set -e`` command list, so the exits
+    here terminate the whole remote command with that status.
+    """
+    check = textwrap.dedent("""
+{
+    aivm_pi_check_rc=0
+    aivm_pi_id=$(aivm_pi_identity 2>/dev/null) || aivm_pi_check_rc=$?
+    case $aivm_pi_check_rc in
+        0)
+            aivm_pi_name=${aivm_pi_id%% *}
+            aivm_pi_version=${aivm_pi_id##* }
+            if [ "$aivm_pi_name" = '@earendil-works/pi-coding-agent' ] && aivm_version_at_least "$aivm_pi_version" 0.78.1; then
+                # Surface the verified identity on stdout: in ``aivm status
+                # --detail`` this line is the evidence that ``pi`` is the
+                # expected package at the expected version, not just an
+                # executable with the right name.
+                echo "$aivm_pi_id"
+                exit 0
+            fi
+            if [ "$aivm_pi_name" = '@mariozechner/pi-coding-agent' ]; then
+                echo "pi $aivm_pi_version on PATH is the deprecated @mariozechner/pi-coding-agent; run 'aivm provision pi' to migrate to @earendil-works/pi-coding-agent" >&2
+            elif [ "$aivm_pi_name" = '@earendil-works/pi-coding-agent' ]; then
+                echo "pi $aivm_pi_version on PATH is older than 0.78.1; run 'aivm provision pi' to update" >&2
+            else
+                echo "pi on PATH is owned by '$aivm_pi_name', not @earendil-works/pi-coding-agent" >&2
+            fi
+            exit 12
+            ;;
+        3)
+            echo 'missing configured guest tool command: pi:pi' >&2
+            exit 11
+            ;;
+        *)
+            echo 'pi on PATH is not an install of @earendil-works/pi-coding-agent' >&2
+            exit 12
+            ;;
+    esac
+}
+""")
+    return _PI_IDENTITY_PROBE + '\n' + check.strip()
+
+
 def _build_rust_install_script(
     cfg: AgentVMConfig, spec: str, ensure_transport: bool
 ) -> str:
@@ -549,6 +858,22 @@ GUEST_TOOL_REGISTRY = GuestToolRegistry(
             required_commands=('codex',),
             normalize_spec=_identity_spec,
             build_install_script=_build_codex_install_script,
+        ),
+        GuestToolDefinition(
+            name='pi',
+            display_name='pi',
+            description=(
+                'Terminal coding agent (pi.dev; Node 22.19+ required; '
+                'verifies the @earendil-works/pi-coding-agent package '
+                'identity and migrates the deprecated @mariozechner package)'
+            ),
+            config_default='off',
+            enable_default='latest',
+            required_packages=('ca-certificates', 'curl'),
+            required_commands=('pi',),
+            normalize_spec=_pi_spec,
+            build_install_script=_build_pi_install_script,
+            status_check=_pi_status_check(),
         ),
     )
 )
