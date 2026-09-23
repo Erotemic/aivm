@@ -1016,3 +1016,44 @@ passes 12 tests. The broader non-E2E tree passes 1307 tests with 14 skips; its
 four failures under the root test runner are the existing permission-model
 assertions, and those same four pass when rerun as an unprivileged user. Python
 compilation and `git diff --check` also pass.
+
+## 2026-09-23 17:54:53 -0400
+
+The targeted Pi provisioning fix exposed a second compatibility issue with the
+current pi.dev installer. The APT-independent path worked and Pi 0.87.1
+installed successfully, but the installer now uses Pi's managed release layout
+and places the launcher at `~/.pi/agent/bin/pi` without changing PATH in the
+non-interactive SSH shell. AIVM's post-install verification still modeled the
+older npm-global installer, so it immediately reported "pi was not found in
+PATH" after a successful managed install.
+
+I updated Pi identity discovery to support both generations. It still prefers
+an existing `pi` on PATH so a foreign command cannot be silently bypassed, but
+when no command is present it checks the managed launcher under the configured
+Pi agent directory. Managed identity is verified from Pi's own
+`managed-install.json`, `current-version`, and the active release's
+`@earendil-works/pi-coding-agent/package.json`, rather than trusting an
+executable name or version string. After running the installer, AIVM prepends
+the managed bin directory for the current provisioning process, which also
+ensures a newly installed managed Pi wins over an older npm-global Pi that
+triggered the update. The verified launcher's directory is what gets persisted
+to `.profile`.
+
+The same resolver is shared by the status probe. This matters because later
+AIVM SSH commands are non-login shells and cannot assume `.profile` has put
+`~/.pi/agent/bin` on PATH. Status can now recognize a healthy managed install
+from its atomic release metadata without executing the launcher, matching the
+previous npm-global probe's package-metadata style.
+
+The main risk was weakening the foreign-`pi` refusal while adding a fallback.
+I kept PATH precedence deliberately: if `command -v pi` finds anything, that
+binary must pass identity checks; AIVM only falls back to the managed launcher
+when no `pi` is on PATH. The hermetic installer fixture now mirrors the current
+managed layout and deliberately leaves its launcher off PATH, reproducing the
+reported failure. The focused guest-tool/provisioning suite passes 53 tests.
+
+Validation for this follow-up is 53/53 focused guest-tool/provisioning tests.
+The broader non-E2E `tests/` suite reports 1308 passed, 14 skipped, and four
+permission-model failures under the root-like runner; those same four tests pass
+when rerun as an unprivileged user. `compileall` and `git diff --check` pass, and
+the resource tally reports no unpublished accounting rows.

@@ -350,13 +350,18 @@ def test_guest_pi_script_uses_official_installer() -> None:
     # installer runs, and a foreign `pi` is refused rather than clobbered.
     assert '@mariozechner/pi-coding-agent' in script
     assert 'refusing to install pi' in script
-    # After the (possibly skipped) install the on-PATH identity is
-    # re-verified against the expected package and version floor.
+    # After the (possibly skipped) install the resolved identity is
+    # re-verified against the expected package and version floor. Current
+    # pi.dev managed installs live outside the non-login SSH PATH, so the
+    # probe must also understand ~/.pi/agent/bin and its release marker.
     assert '@earendil-works/pi-coding-agent' in script
     assert '0.78.1' in script
+    assert 'aivm_pi_resolve_bin' in script
+    assert 'managed-install.json' in script
+    assert 'releases-v1' in script
     assert 'post-install verification failed' in script
-    # The tty-less installer never updates shell profiles, so the script adds
-    # a guarded PATH block for wherever pi actually landed.
+    # The tty-less installer does not update PATH for the running shell, so
+    # AIVM selects the verified launcher directory and persists it.
     assert '# >>> aivm pi PATH >>>' in script
     assert 'PI_BIN_DIR' in script
     assert 'pi --version' in script
@@ -365,9 +370,11 @@ def test_guest_pi_script_uses_official_installer() -> None:
 def test_pi_status_check_is_identity_aware() -> None:
     check = GUEST_TOOL_REGISTRY.get('pi').status_check
     assert check is not None
-    # The probe must attribute the pi binary to its npm package rather
-    # than trusting the bare binary name or `pi --version` output.
+    # The probe must attribute npm-global installs to their package and
+    # understand Pi's managed release layout without trusting a bare binary.
     assert 'aivm_pi_identity' in check
+    assert 'aivm_pi_managed_identity' in check
+    assert 'managed-install.json' in check
     assert '@earendil-works/pi-coding-agent' in check
     assert '@mariozechner/pi-coding-agent' in check
     assert '0.78.1' in check
@@ -688,13 +695,17 @@ _PI_STUB_INSTALLER = """\
 #!/bin/sh
 set -eu
 echo "stub installer started" >> "$STUB_LOG"
-prefix=$(npm prefix -g)
-dir="$prefix/lib/node_modules/@earendil-works/pi-coding-agent"
-mkdir -p "$dir/bin" "$prefix/bin"
-printf '%s\n' '{"name": "@earendil-works/pi-coding-agent", "version": "0.85.1", "bin": {"pi": "bin/pi.js"}}' > "$dir/package.json"
-printf '%s\n' '#!/bin/sh' 'echo 0.85.1' > "$dir/bin/pi.js"
-chmod +x "$dir/bin/pi.js"
-ln -sf "$dir/bin/pi.js" "$prefix/bin/pi"
+version=0.87.1
+agent_dir=${PI_CODING_AGENT_DIR:-"$HOME/.pi/agent"}
+managed_root="$agent_dir/install"
+release="$managed_root/releases/$version"
+pkg="$release/node_modules/@earendil-works/pi-coding-agent"
+mkdir -p "$agent_dir/bin" "$pkg"
+printf '%s\n' '{"kind":"pi-managed-install","schemaVersion":1,"layout":"releases-v1"}' > "$managed_root/managed-install.json"
+printf '%s\n' "$version" > "$managed_root/current-version"
+printf '%s\n' '{"name": "@earendil-works/pi-coding-agent", "version": "0.87.1"}' > "$pkg/package.json"
+printf '%s\n' '#!/bin/sh' 'echo 0.87.1' > "$agent_dir/bin/pi"
+chmod +x "$agent_dir/bin/pi"
 """
 
 
@@ -807,6 +818,30 @@ class _PiShellHarness:
         path.chmod(0o755)
         return path
 
+    def install_managed_pi(self, version: str) -> Path:
+        """Install the managed layout produced by current pi.dev installers."""
+        agent_dir = self.home / '.pi' / 'agent'
+        managed_root = agent_dir / 'install'
+        package = (
+            managed_root / 'releases' / version / 'node_modules'
+            / '@earendil-works' / 'pi-coding-agent'
+        )
+        package.mkdir(parents=True)
+        (managed_root / 'managed-install.json').write_text(
+            '{"kind":"pi-managed-install","schemaVersion":1,'
+            '"layout":"releases-v1"}\n'
+        )
+        (managed_root / 'current-version').write_text(version + '\n')
+        (package / 'package.json').write_text(
+            '{"name":"@earendil-works/pi-coding-agent",'
+            f'"version":"{version}"}}\n'
+        )
+        launcher = agent_dir / 'bin' / 'pi'
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.write_text(f'#!/bin/sh\necho {version}\n')
+        launcher.chmod(0o755)
+        return launcher
+
     def write_run_script(self, script: str) -> None:
         self.run_script.write_text('#!/bin/sh\n' + script)
         self.run_script.chmod(0o755)
@@ -873,27 +908,27 @@ def _run_pi_install_script(
 
 
 def test_pi_install_clean_machine_bootstraps_node(tmp_path: Path) -> None:
-    """Case 1: no node or npm -> verified user-local Node bootstrap ->
-    installer -> healthy end state with persistent PATH blocks."""
+    """Clean guest: managed Pi installs outside PATH yet provisioning succeeds."""
     harness = _PiShellHarness(tmp_path / 'base')
     res = _run_pi_install_script(harness)
     assert res.returncode == 0, res.stderr
-    # The final `pi --version` is the success signal (0.85.1 is the
-    # version the stub installer records).
-    assert res.stdout.strip() == '0.85.1'
+    # The stub mirrors the current pi.dev managed installer: it creates
+    # ~/.pi/agent/bin/pi but deliberately does not add that directory to PATH.
+    assert res.stdout.strip() == '0.87.1'
     log = harness.log_text()
-    # The official archive and checksum are fetched once; apt is never touched.
     assert log.count('request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz') == 1
     assert log.count('request https://nodejs.org/dist/v22.19.0/SHASUMS256.txt') == 1
     assert 'apt-get' not in log
     assert 'request https://pi.dev/install.sh' in log
     assert 'stub installer started' in log
     harness.assert_no_unhandled_stub_calls()
-    # The PATH block is written to $HOME/.profile and points at the
-    # npm global bin dir.
+    managed_bin = harness.home / '.pi' / 'agent' / 'bin'
+    assert (managed_bin / 'pi').exists()
+    # AIVM discovers that launcher after the installer exits and persists the
+    # directory for interactive shells.
     profile = (harness.home / '.profile').read_text()
     assert profile.count('# >>> aivm pi PATH >>>') == 1
-    assert str(harness.prefix / 'bin') in profile
+    assert str(managed_bin) in profile
     # The fresh Node toolchain landed under AIVM's user-owned data root.
     local_node = harness.node_root / 'node-v22.19.0-linux-x64'
     assert (local_node / 'bin' / 'node').exists()
@@ -910,7 +945,7 @@ def test_pi_install_node_without_npm_bootstraps(tmp_path: Path) -> None:
     before = user_node.read_text()
     res = _run_pi_install_script(harness)
     assert res.returncode == 0, res.stderr
-    assert res.stdout.strip() == '0.85.1'
+    assert res.stdout.strip() == '0.87.1'
     log = harness.log_text()
     assert 'request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz' in log
     assert 'request https://pi.dev/install.sh' in log
@@ -929,7 +964,7 @@ def test_pi_install_old_user_node_shadowed_by_local_bootstrap(tmp_path: Path) ->
         path_dirs=('stub', 'home/.local/bin', 'sysbin', 'prefix/bin', 'core'),
     )
     assert res.returncode == 0, res.stderr
-    assert res.stdout.strip() == '0.85.1'
+    assert res.stdout.strip() == '0.87.1'
     log = harness.log_text()
     assert log.count('request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz') == 1
     assert 'request https://pi.dev/install.sh' in log
@@ -953,7 +988,7 @@ def test_pi_install_migrates_deprecated_mariozechner_package(tmp_path: Path) -> 
     # The migration announces itself, then the final `pi --version` is
     # the success signal.
     assert 'Removing deprecated @mariozechner/pi-coding-agent...' in res.stdout
-    assert res.stdout.strip().splitlines()[-1] == '0.85.1'
+    assert res.stdout.strip().splitlines()[-1] == '0.87.1'
     log = harness.log_text()
     assert 'uninstall -g @mariozechner/pi-coding-agent' in log
     assert 'request https://pi.dev/install.sh' in log
@@ -966,9 +1001,9 @@ def test_pi_install_migrates_deprecated_mariozechner_package(tmp_path: Path) -> 
         harness.prefix / 'lib' / 'node_modules' / '@mariozechner'
         / 'pi-coding-agent'
     ).exists()
-    assert str((harness.prefix / 'bin' / 'pi').resolve()).startswith(
-        str(harness.prefix / 'lib' / 'node_modules' / '@earendil-works')
-    )
+    managed_pi = harness.home / '.pi' / 'agent' / 'bin' / 'pi'
+    assert managed_pi.exists()
+    assert not (harness.prefix / 'bin' / 'pi').exists()
 
 
 def test_pi_install_healthy_package_is_noop_and_idempotent(tmp_path: Path) -> None:
@@ -1021,17 +1056,18 @@ def test_pi_install_updates_below_floor_earendil(tmp_path: Path) -> None:
     res = _run_pi_install_script(harness)
     assert res.returncode == 0, res.stderr
     assert 'pi 0.77.0 is older than 0.78.1; updating.' in res.stdout
-    assert res.stdout.strip().splitlines()[-1] == '0.85.1'
+    assert res.stdout.strip().splitlines()[-1] == '0.87.1'
     log = harness.log_text()
     assert 'request https://pi.dev/install.sh' in log
     # Updating an existing healthy-shaped install does not re-bootstrap Node.
     assert 'nodejs.org/dist/' not in log
     harness.assert_no_unhandled_stub_calls()
-    pkg_json = (
-        harness.prefix / 'lib' / 'node_modules'
-        / '@earendil-works/pi-coding-agent' / 'package.json'
+    managed_pkg = (
+        harness.home / '.pi' / 'agent' / 'install' / 'releases' / '0.87.1'
+        / 'node_modules' / '@earendil-works' / 'pi-coding-agent'
+        / 'package.json'
     ).read_text()
-    assert '"version": "0.85.1"' in pkg_json
+    assert '"version": "0.87.1"' in managed_pkg
 
 
 def _run_pi_status_check(
@@ -1054,6 +1090,15 @@ def test_pi_status_check_reports_healthy_identity(tmp_path: Path) -> None:
     res = _run_pi_status_check(harness)
     assert res.returncode == 0, res.stderr
     assert res.stdout.strip() == '@earendil-works/pi-coding-agent 0.85.1'
+    harness.assert_no_unhandled_stub_calls()
+
+def test_pi_status_check_finds_managed_install_outside_path(tmp_path: Path) -> None:
+    """Non-login SSH PATH need not contain ~/.pi/agent/bin."""
+    harness = _PiShellHarness(tmp_path / 'managed')
+    harness.install_managed_pi('0.87.1')
+    res = _run_pi_status_check(harness)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == '@earendil-works/pi-coding-agent 0.87.1'
     harness.assert_no_unhandled_stub_calls()
 
 

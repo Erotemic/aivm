@@ -459,8 +459,63 @@ _PI_IDENTITY_PROBE = textwrap.dedent(r"""
         return 0
     }
 
+    aivm_pi_agent_dir() {
+        printf '%s\n' "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+    }
+
+    aivm_pi_resolve_bin() {
+        if aivm_pi_bin=$(command -v pi 2>/dev/null); then
+            printf '%s\n' "$aivm_pi_bin"
+            return 0
+        fi
+        aivm_pi_agent=$(aivm_pi_agent_dir)
+        aivm_pi_managed_bin="$aivm_pi_agent/bin/pi"
+        if [ -x "$aivm_pi_managed_bin" ]; then
+            printf '%s\n' "$aivm_pi_managed_bin"
+            return 0
+        fi
+        return 3
+    }
+
+    aivm_pi_managed_identity() {
+        aivm_pi_bin=$1
+        aivm_pi_agent=$(aivm_pi_agent_dir)
+        aivm_pi_managed_bin="$aivm_pi_agent/bin/pi"
+        [ -x "$aivm_pi_managed_bin" ] || return 1
+        aivm_pi_file=$(readlink -f "$aivm_pi_bin" 2>/dev/null) || return 1
+        aivm_pi_managed_file=$(readlink -f "$aivm_pi_managed_bin" 2>/dev/null) || return 1
+        [ "$aivm_pi_file" = "$aivm_pi_managed_file" ] || return 1
+
+        # Current Pi installers use a managed release layout rooted at
+        # ~/.pi/agent/install (or PI_CODING_AGENT_DIR/install). Verify the
+        # marker and active package metadata instead of assuming the launcher
+        # itself lives under an npm package.json.
+        aivm_pi_managed_root="$aivm_pi_agent/install"
+        aivm_pi_marker="$aivm_pi_managed_root/managed-install.json"
+        aivm_pi_current="$aivm_pi_managed_root/current-version"
+        [ -f "$aivm_pi_marker" ] && [ -f "$aivm_pi_current" ] || return 1
+        grep -Eq '"kind"[[:space:]]*:[[:space:]]*"pi-managed-install"' "$aivm_pi_marker" || return 1
+        grep -Eq '"schemaVersion"[[:space:]]*:[[:space:]]*1' "$aivm_pi_marker" || return 1
+        grep -Eq '"layout"[[:space:]]*:[[:space:]]*"releases-v1"' "$aivm_pi_marker" || return 1
+        aivm_pi_version=$(sed -n '1{s/[[:space:]]*$//;p;}' "$aivm_pi_current")
+        [ -n "$aivm_pi_version" ] || return 1
+        aivm_pi_package="$aivm_pi_managed_root/releases/$aivm_pi_version/node_modules/@earendil-works/pi-coding-agent/package.json"
+        [ -f "$aivm_pi_package" ] || return 1
+        aivm_pi_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$aivm_pi_package" | head -n 1)
+        aivm_pi_package_version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$aivm_pi_package" | head -n 1)
+        if [ "$aivm_pi_name" = '@earendil-works/pi-coding-agent' ] && [ "$aivm_pi_package_version" = "$aivm_pi_version" ]; then
+            printf '%s %s\n' "$aivm_pi_name" "$aivm_pi_version"
+            return 0
+        fi
+        return 1
+    }
+
     aivm_pi_identity() {
-        aivm_pi_bin=$(command -v pi 2>/dev/null) || return 3
+        aivm_pi_bin=$(aivm_pi_resolve_bin) || return 3
+        if aivm_pi_managed_id=$(aivm_pi_managed_identity "$aivm_pi_bin" 2>/dev/null); then
+            printf '%s\n' "$aivm_pi_managed_id"
+            return 0
+        fi
         aivm_pi_file=$(readlink -f "$aivm_pi_bin" 2>/dev/null) || return 1
         aivm_pi_dir=$(dirname "$aivm_pi_file")
         while [ -n "$aivm_pi_dir" ] && [ "$aivm_pi_dir" != '/' ]; do
@@ -635,10 +690,17 @@ case $aivm_identity_rc in
 esac
 if [ "$aivm_need_install" -eq 1 ]; then
     aivm_fetch_stdout https://pi.dev/install.sh | sh
+    # The managed installer intentionally does not modify PATH in a no-tty
+    # shell. Prefer its launcher for this process when present so the
+    # just-installed release wins over a missing or older npm-global shim.
+    aivm_pi_agent=$(aivm_pi_agent_dir)
+    if [ -x "$aivm_pi_agent/bin/pi" ]; then
+        export PATH="$aivm_pi_agent/bin:$PATH"
+    fi
 fi
-# Verify the identity of what actually provides `pi` on PATH after the
-# (possibly skipped) install: a `pi` that is not
-# @earendil-works/pi-coding-agent 0.78.1+ is a failure, not a success.
+# Verify the identity of what actually provides `pi` after the (possibly
+# skipped) install. The resolver understands both npm-global installs and
+# Pi's managed ~/.pi/agent/bin launcher.
 aivm_identity_rc=0
 aivm_pi_id=$(aivm_pi_identity) || aivm_identity_rc=$?
 if [ "$aivm_identity_rc" -eq 3 ]; then
@@ -654,22 +716,14 @@ if [ "$aivm_pi_name" != '@earendil-works/pi-coding-agent' ] || ! aivm_version_at
     echo "post-install verification failed: pi on PATH is '$aivm_pi_name' $aivm_pi_version, expected @earendil-works/pi-coding-agent 0.78.1 or newer" >&2
     exit 1
 fi
-# The no-tty installer never updates shell profiles, so add a guarded
-# PATH block for wherever pi actually landed: ~/.local/bin by default,
-# or the npm global prefix bin dir when the installer used a
-# user-writable prefix (e.g. a user-managed node install).
-PI_BIN_DIR="$HOME/.local/bin"
-if [ ! -x "$HOME/.local/bin/pi" ]; then
-    NPM_GLOBAL_BIN="$(npm prefix -g 2>/dev/null)/bin"
-    if [ -n "$NPM_GLOBAL_BIN" ] && [ -x "$NPM_GLOBAL_BIN/pi" ]; then
-        PI_BIN_DIR="$NPM_GLOBAL_BIN"
-    fi
-fi
-export PATH="$PI_BIN_DIR:$PATH"
-if ! command -v pi >/dev/null 2>&1; then
-    echo 'Pi installer completed, but pi was not found in PATH.' >&2
+# Persist the directory of the verified launcher. Current pi.dev installs
+# use ~/.pi/agent/bin; older npm-global installs remain supported.
+PI_BIN=$(aivm_pi_resolve_bin) || {
+    echo 'Pi installer completed, but pi was not found.' >&2
     exit 1
-fi
+}
+PI_BIN_DIR=$(dirname "$PI_BIN")
+export PATH="$PI_BIN_DIR:$PATH"
 PROFILE="$HOME/.profile"
 if [ -n "${AIVM_PI_NODE_BIN_DIR:-}" ] && ! grep -Fq '# >>> aivm pi node PATH >>>' "$PROFILE" 2>/dev/null; then
     {
@@ -706,9 +760,10 @@ def _build_pi_install_script(
     gating around the official installer.
 
     The official ``https://pi.dev/install.sh`` script remains the package
-    install mechanism (it wraps ``npm install -g
-    @earendil-works/pi-coding-agent``), but aivm gates it on the *identity*
-    of whatever ``pi`` is on PATH rather than the bare binary name:
+    install mechanism. Current releases use Pi's managed install under
+    ``~/.pi/agent`` while older installations may still be npm-global. AIVM
+    gates both layouts on the *identity* of the resolved ``pi`` rather than
+    the bare binary name:
 
     * a missing, deprecated (``@mariozechner/pi-coding-agent``, frozen at
       0.73.1 with an unpatched credential-exposure advisory), or too-old
@@ -716,9 +771,10 @@ def _build_pi_install_script(
       first so its old shim cannot shadow the new install;
     * a healthy ``@earendil-works/pi-coding-agent`` 0.78.1+ is a no-op;
     * a foreign ``pi`` (an unrelated tool) is refused, never clobbered;
-    * after the (possibly skipped) install, the on-PATH identity is
-      re-verified, so a ``pi`` that is not the expected package and
-      version is a failure, not a success.
+    * after the (possibly skipped) install, the resolved identity is
+      re-verified, including Pi's managed launcher even when the no-tty
+      installer did not modify PATH, so the wrong package/version remains a
+      failure rather than a false success.
 
     The installer's Node prerequisite (Node.js 22.19.0+ *and* npm) is
     checked in pure shell (``node --version``) so the whole script stays
@@ -754,7 +810,8 @@ fi
 def _pi_status_check() -> str:
     """Build the identity-aware status probe for pi.
 
-    A bare ``command -v pi`` would pass for the deprecated
+    A bare ``command -v pi`` would both miss Pi's managed launcher when
+    ``~/.pi/agent/bin`` is not in a non-login SSH PATH and pass for the deprecated
     ``@mariozechner/pi-coding-agent`` package (frozen at 0.73.1 with an
     unpatched credential-exposure advisory) or any unrelated tool that
     happens to share the name ``pi``.  This fragment reuses the same
