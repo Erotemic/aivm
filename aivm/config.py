@@ -98,7 +98,11 @@ class FirewallConfig:
         ]
     )
     extra_block_cidrs: list[str] = field(default_factory=list)
+    # Broad escape hatch: these ports are allowed to the host and every
+    # otherwise-blocked destination. Prefer allow_tcp_endpoints for narrow
+    # destination-specific exceptions.
     allow_tcp_ports: list[int] = field(default_factory=list)
+    allow_tcp_endpoints: list[str] = field(default_factory=list)
     allow_udp_ports: list[int] = field(default_factory=list)
 
 

@@ -20,6 +20,7 @@ def test_dump_load_roundtrip(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'my "vm"'
     cfg.paths.state_dir = '~/code/${USER}/state'
+    cfg.firewall.allow_tcp_endpoints = ['10.50.56.23:14042']
     cfg.verbosity = 3
     fpath = tmp_path / '.aivm.toml'
     save(fpath, cfg)
@@ -27,6 +28,7 @@ def test_dump_load_roundtrip(tmp_path: Path) -> None:
     cfg2 = load(fpath)
     assert cfg2.vm.name == cfg.vm.name
     assert cfg2.paths.state_dir == cfg.paths.state_dir
+    assert cfg2.firewall.allow_tcp_endpoints == ['10.50.56.23:14042']
     assert cfg2.verbosity == 3
 
 

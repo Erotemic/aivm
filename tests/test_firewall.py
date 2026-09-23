@@ -83,6 +83,53 @@ def test_nft_script_allows_configured_ports(
     )
 
 
+def test_nft_script_allows_only_configured_tcp_endpoints(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_endpoints = [
+        '10.50.56.23:14042',
+        ' 10.50.56.23:14042 ',
+    ]
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm-net', '10.77.0.1'),
+    )
+
+    script = _nft_script(cfg)
+
+    host_rule = (
+        'iifname "virbr-aivm-net" ip daddr 10.50.56.23 '
+        'tcp dport 14042 accept'
+    )
+    forward_rule = (
+        'iifname "virbr-aivm-net" ct original ip daddr 10.50.56.23 '
+        'meta l4proto tcp ct original proto-dst 14042 accept'
+    )
+    assert script.count(host_rule) == 1
+    assert script.count(forward_rule) == 1
+    assert 'tcp dport {14042} accept' not in script
+    assert 'ct original proto-dst {14042} accept' not in script
+
+
+def test_nft_script_rejects_invalid_tcp_endpoint(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_endpoints = ['10.50.56.23']
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
+    )
+
+    try:
+        _nft_script(cfg)
+    except RuntimeError as ex:
+        assert 'expected IPv4:port' in str(ex)
+    else:
+        raise AssertionError('Expected RuntimeError for invalid TCP endpoint')
+
+
 def test_nft_script_filters_forward_policy_on_pre_dnat_tuple(
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -35,6 +35,7 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     store.behavior.auto_approve_readonly_sudo = False
     store.behavior.verbose = 4
     cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_endpoints = ['10.50.56.23:14042']
     cfg.vm.name = 'vm-b'
     upsert_vm(store, cfg)
     cfg.vm.name = 'vm-a'
@@ -59,6 +60,10 @@ def test_store_roundtrip(tmp_path: Path) -> None:
     assert loaded.behavior.auto_approve_readonly_sudo is False
     assert loaded.behavior.verbose == 4
     assert [v.name for v in loaded.vms] == ['vm-a', 'vm-b']
+    assert len(loaded.networks) == 1
+    assert loaded.networks[0].firewall.allow_tcp_endpoints == [
+        '10.50.56.23:14042'
+    ]
     assert [a.host_path for a in loaded.attachments] == ['/tmp/a', '/tmp/z']
     assert find_vm(loaded, 'vm-a') is not None
     assert find_vm(loaded, 'missing') is None

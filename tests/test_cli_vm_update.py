@@ -205,6 +205,39 @@ def test_firewall_update_is_clean_with_current_policy_marker(
     assert drift is None
 
 
+def test_firewall_update_detects_tcp_endpoint_policy_change(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    bridge = 'virbr-aivm-net'
+    gateway = '10.77.0.1'
+    old_cfg = AgentVMConfig()
+    old_fingerprint = _firewall_policy_fingerprint(
+        old_cfg, bridge=bridge, gateway=gateway
+    )
+    cfg.firewall.allow_tcp_endpoints = ['10.50.56.23:14042']
+    monkeypatch.setattr(
+        'aivm.vm.update.firewall.read_firewall_live_state',
+        lambda _cfg, *, use_sudo: (
+            FirewallLiveState(
+                present=True,
+                bridge=bridge,
+                gateway=gateway,
+                tcp_ports=(),
+                policy_fingerprint=old_fingerprint,
+            ),
+            '',
+        ),
+    )
+
+    drift, notes = _firewall_update_drift(cfg)
+
+    assert notes == ()
+    assert drift is not None
+    assert drift.action == 'apply'
+    assert 'policy differs' in drift.reason
+
+
 def test_apply_vm_update_reconciles_firewall_without_restart(
     monkeypatch: MonkeyPatch,
 ) -> None:

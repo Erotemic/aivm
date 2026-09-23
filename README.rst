@@ -908,7 +908,7 @@ Safety Notes
 * This tool assumes **Linux + libvirt**. It focuses on Debian/Ubuntu hosts for dependency installation.
 * Security model and threat model details: the `Security Model <docs/source/security.rst>`_.
 * NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want "internet-only" access.
-* To allow specific VM->host or VM->blocked-LAN service ports while firewall isolation is enabled, set ``[firewall].allow_tcp_ports`` / ``allow_udp_ports`` in config (for example ``allow_tcp_ports = [22, 5432]``).
+* To allow one TCP destination while firewall isolation is enabled, use ``[firewall].allow_tcp_endpoints`` (for example ``allow_tcp_endpoints = ["10.50.56.23:14042"]``). ``allow_tcp_ports`` / ``allow_udp_ports`` remain broad exceptions: a listed port is allowed to the host and every otherwise-blocked destination.
 * virtiofs sharing is optional; it's powerful, but it intentionally exposes that host directory to the VM.
 * ``aivm vm code`` requires VS Code's ``code`` CLI and the Remote - SSH extension.
 

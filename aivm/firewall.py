@@ -7,6 +7,7 @@ restricted" behavior unless caller config loosens/tightens policy.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -27,7 +28,7 @@ JsonObj: TypeAlias = Mapping[str, object]
 
 log = logger
 
-_FIREWALL_POLICY_VERSION = 2
+_FIREWALL_POLICY_VERSION = 3
 _FIREWALL_POLICY_COMMENT_PREFIX = 'aivm-policy-sha256:'
 
 
@@ -90,6 +91,55 @@ def _normalize_port_list(ports: list[int]) -> list[int]:
     return out
 
 
+def _normalize_tcp_endpoints(
+    endpoints: Sequence[str] | None,
+) -> list[tuple[str, int]]:
+    """Normalize ``IPv4:port`` firewall exceptions, preserving order."""
+    seen: set[tuple[str, int]] = set()
+    out: list[tuple[str, int]] = []
+    for raw in endpoints or ():
+        if not isinstance(raw, str):
+            raise AIVMError(
+                'Invalid firewall TCP endpoint value: '
+                f'{raw!r}; expected IPv4:port.'
+            )
+        value = raw.strip()
+        try:
+            host, raw_port = value.rsplit(':', 1)
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        try:
+            address = ipaddress.ip_address(host.strip())
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        if not isinstance(address, ipaddress.IPv4Address):
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; IPv6 is not '
+                'supported by this IPv4 isolation policy.'
+            )
+        try:
+            port = int(raw_port.strip())
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        if port < 1 or port > 65535:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint port {port}; expected range '
+                '1..65535.'
+            )
+        endpoint = (str(address), port)
+        if endpoint in seen:
+            continue
+        seen.add(endpoint)
+        out.append(endpoint)
+    return out
+
+
 def _normalized_block_cidrs(cfg: AgentVMConfig) -> list[str]:
     """Return the configured block list with whitespace/duplicates removed."""
     raw_blocks = list(cfg.firewall.block_cidrs) + list(
@@ -123,6 +173,12 @@ def _firewall_policy_fingerprint(
         'allow_tcp_ports': _normalize_port_list(
             cfg.firewall.allow_tcp_ports
         ),
+        'allow_tcp_endpoints': [
+            f'{address}:{port}'
+            for address, port in _normalize_tcp_endpoints(
+                cfg.firewall.allow_tcp_endpoints
+            )
+        ],
         'allow_udp_ports': _normalize_port_list(
             cfg.firewall.allow_udp_ports
         ),
@@ -205,6 +261,9 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
     blocks2 = _normalized_block_cidrs(cfg)
     block_set = ', '.join(blocks2)
     allow_tcp = _normalize_port_list(cfg.firewall.allow_tcp_ports)
+    allow_tcp_endpoints = _normalize_tcp_endpoints(
+        cfg.firewall.allow_tcp_endpoints
+    )
     allow_udp = _normalize_port_list(cfg.firewall.allow_udp_ports)
     policy_fingerprint = _firewall_policy_fingerprint(
         cfg, bridge=br, gateway=gw
@@ -212,6 +271,16 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
     policy_comment = _FIREWALL_POLICY_COMMENT_PREFIX + policy_fingerprint
     host_allow_lines: list[str] = []
     blocked_allow_lines: list[str] = []
+    for address, port in allow_tcp_endpoints:
+        # Apply the same endpoint exception whether the destination resolves
+        # to this host (input hook) or a routed/NATed LAN peer (forward hook).
+        host_allow_lines.append(
+            f'    iifname "{br}" ip daddr {address} tcp dport {port} accept'
+        )
+        blocked_allow_lines.append(
+            f'    iifname "{br}" ct original ip daddr {address} '
+            f'meta l4proto tcp ct original proto-dst {port} accept'
+        )
     if allow_tcp:
         ports = ', '.join(str(p) for p in allow_tcp)
         host_allow_lines.append(
