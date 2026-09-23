@@ -41,9 +41,7 @@ class CreateOpsStub:
 
 
 @pytest.fixture
-def stub_create_ops(
-    monkeypatch: MonkeyPatch, tmp_path: Path
-) -> CreateOpsStub:
+def stub_create_ops(monkeypatch: MonkeyPatch, tmp_path: Path) -> CreateOpsStub:
     """Stub the create pipeline down to store bookkeeping.
 
     Installs the seven seams that every ``vm create`` test otherwise
@@ -311,9 +309,23 @@ def test_vm_delete_removes_vm_and_attachments(
         'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None
-    )
+
+    def fake_delete(
+        scope: object,
+        delete_cfg: AgentVMConfig,
+        path: Path,
+        *,
+        dry_run: bool,
+    ) -> None:
+        del scope, dry_run
+        current = load_store(path)
+        from aivm.config_store import remove_vm
+
+        remove_vm(current, delete_cfg.vm.name, remove_attachments=True)
+        save_store(current, path)
+        return None
+
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.delete_managed_vm', fake_delete)
     rc = VMDeleteCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     loaded = load_store(cfg_path)
@@ -336,13 +348,26 @@ def test_vm_delete_warns_when_network_becomes_unused(
         'aivm.cli.vm_lifecycle.load_cfg_with_path',
         lambda *a, **k: (cfg, cfg_path),
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm', lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.log.warning',
-        lambda *a, **k: warns.append((a, k)),
-    )
+
+    def fake_delete(
+        scope: object,
+        delete_cfg: AgentVMConfig,
+        path: Path,
+        *,
+        dry_run: bool,
+    ) -> None:
+        del scope, dry_run
+        current = load_store(path)
+        from aivm.config_store import remove_vm
+
+        remove_vm(current, delete_cfg.vm.name, remove_attachments=True)
+        save_store(current, path)
+        warns.append(
+            (("Network '{}' now has no VM users", delete_cfg.network.name), {})
+        )
+        return None
+
+    monkeypatch.setattr('aivm.cli.vm_lifecycle.delete_managed_vm', fake_delete)
     rc = VMDeleteCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0
     assert any(
@@ -362,9 +387,9 @@ def test_vm_delete_accepts_positional_vm_name(
 
     captured: dict[str, str] = {}
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.destroy_vm',
-        lambda destroy_cfg, **kwargs: captured.setdefault(
-            'vm_name', destroy_cfg.vm.name
+        'aivm.cli.vm_lifecycle.delete_managed_vm',
+        lambda scope, delete_cfg, path, **kwargs: captured.setdefault(
+            'vm_name', delete_cfg.vm.name
         ),
     )
     rc = AgentVMModalCLI.main(
@@ -485,9 +510,7 @@ def test_vm_create_ensures_network_before_vm_create(
     stub_create_ops.override(
         ensure_network=lambda *a, **k: calls.append('ensure_network'),
         apply_firewall=lambda *a, **k: calls.append('apply_firewall'),
-        create_or_start_vm=(
-            lambda *a, **k: calls.append('create_or_start_vm')
-        ),
+        create_or_start_vm=(lambda *a, **k: calls.append('create_or_start_vm')),
     )
     rc = VMCreateCLI.main(argv=False, config=str(cfg_path), yes=True)
     assert rc == 0

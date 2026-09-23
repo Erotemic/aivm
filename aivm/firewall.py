@@ -7,8 +7,11 @@ restricted" behavior unless caller config loosens/tightens policy.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TypeAlias, TypeGuard
 
 from loguru import logger
@@ -16,6 +19,7 @@ from loguru import logger
 from .commands import CommandManager
 from .config import AgentVMConfig
 from .errors import AIVMError
+from .legacy.pre_0_6_0.firewall import table_to_remove
 from .privilege import require_sudo_allowed, sudo_allowed
 from .runtime import virsh_cmd
 from .xmlutil import parse_domain_xml
@@ -23,6 +27,20 @@ from .xmlutil import parse_domain_xml
 JsonObj: TypeAlias = Mapping[str, object]
 
 log = logger
+
+_FIREWALL_POLICY_VERSION = 3
+_FIREWALL_POLICY_COMMENT_PREFIX = 'aivm-policy-sha256:'
+
+
+@dataclass(frozen=True)
+class FirewallLiveState:
+    """Observed state of the AIVM-managed nftables table."""
+
+    present: bool
+    bridge: str
+    gateway: str
+    tcp_ports: tuple[int, ...] = ()
+    policy_fingerprint: str | None = None
 
 
 def effective_firewall_table(cfg: AgentVMConfig) -> str:
@@ -50,20 +68,6 @@ def effective_firewall_table(cfg: AgentVMConfig) -> str:
     return f'{base[:max_base]}_{suffix}'
 
 
-def _legacy_firewall_table(cfg: AgentVMConfig) -> str | None:
-    """The pre-namespacing table name, when it differs from the derived one.
-
-    Before tables were namespaced per network, the managed table was
-    exactly ``cfg.firewall.table``. An upgraded host can still carry that
-    table with active drop rules, silently filtering alongside (and
-    shadowing) the new one, so apply/remove must clean it up.
-    """
-    legacy = str(cfg.firewall.table or '').strip()
-    if legacy and legacy != effective_firewall_table(cfg):
-        return legacy
-    return None
-
-
 def _is_json_obj(value: object) -> TypeGuard[JsonObj]:
     return isinstance(value, Mapping)
 
@@ -85,6 +89,104 @@ def _normalize_port_list(ports: list[int]) -> list[int]:
         seen.add(p)
         out.append(p)
     return out
+
+
+def _normalize_tcp_endpoints(
+    endpoints: Sequence[str] | None,
+) -> list[tuple[str, int]]:
+    """Normalize ``IPv4:port`` firewall exceptions, preserving order."""
+    seen: set[tuple[str, int]] = set()
+    out: list[tuple[str, int]] = []
+    for raw in endpoints or ():
+        if not isinstance(raw, str):
+            raise AIVMError(
+                'Invalid firewall TCP endpoint value: '
+                f'{raw!r}; expected IPv4:port.'
+            )
+        value = raw.strip()
+        try:
+            host, raw_port = value.rsplit(':', 1)
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        try:
+            address = ipaddress.ip_address(host.strip())
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        if not isinstance(address, ipaddress.IPv4Address):
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; IPv6 is not '
+                'supported by this IPv4 isolation policy.'
+            )
+        try:
+            port = int(raw_port.strip())
+        except ValueError as ex:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint {raw!r}; expected IPv4:port.'
+            ) from ex
+        if port < 1 or port > 65535:
+            raise AIVMError(
+                f'Invalid firewall TCP endpoint port {port}; expected range '
+                '1..65535.'
+            )
+        endpoint = (str(address), port)
+        if endpoint in seen:
+            continue
+        seen.add(endpoint)
+        out.append(endpoint)
+    return out
+
+
+def _normalized_block_cidrs(cfg: AgentVMConfig) -> list[str]:
+    """Return the configured block list with whitespace/duplicates removed."""
+    raw_blocks = list(cfg.firewall.block_cidrs) + list(
+        cfg.firewall.extra_block_cidrs or []
+    )
+    seen: set[str] = set()
+    blocks: list[str] = []
+    for raw in raw_blocks:
+        cidr = raw.strip()
+        if not cidr or cidr in seen:
+            continue
+        seen.add(cidr)
+        blocks.append(cidr)
+    return blocks
+
+
+def _firewall_policy_fingerprint(
+    cfg: AgentVMConfig, *, bridge: str, gateway: str
+) -> str:
+    """Fingerprint every input that changes the generated firewall policy.
+
+    The version makes generator-semantics changes visible even when user
+    config is unchanged.  That lets ``aivm vm update`` repair an existing
+    table after an AIVM upgrade instead of only noticing port-list changes.
+    """
+    payload = {
+        'version': _FIREWALL_POLICY_VERSION,
+        'bridge': bridge,
+        'gateway': gateway,
+        'block_cidrs': _normalized_block_cidrs(cfg),
+        'allow_tcp_ports': _normalize_port_list(
+            cfg.firewall.allow_tcp_ports
+        ),
+        'allow_tcp_endpoints': [
+            f'{address}:{port}'
+            for address, port in _normalize_tcp_endpoints(
+                cfg.firewall.allow_tcp_endpoints
+            )
+        ],
+        'allow_udp_ports': _normalize_port_list(
+            cfg.firewall.allow_udp_ports
+        ),
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _effective_bridge_and_gateway(cfg: AgentVMConfig) -> tuple[str, str]:
@@ -156,29 +258,37 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
         br, gw = _effective_bridge_and_gateway(cfg)
     else:
         br, gw = cfg.network.bridge, cfg.network.gateway_ip
-    blocks = list(cfg.firewall.block_cidrs) + list(
-        cfg.firewall.extra_block_cidrs or []
-    )
-    seen = set()
-    blocks2 = []
-    for b in blocks:
-        b = b.strip()
-        if not b or b in seen:
-            continue
-        seen.add(b)
-        blocks2.append(b)
+    blocks2 = _normalized_block_cidrs(cfg)
     block_set = ', '.join(blocks2)
     allow_tcp = _normalize_port_list(cfg.firewall.allow_tcp_ports)
+    allow_tcp_endpoints = _normalize_tcp_endpoints(
+        cfg.firewall.allow_tcp_endpoints
+    )
     allow_udp = _normalize_port_list(cfg.firewall.allow_udp_ports)
+    policy_fingerprint = _firewall_policy_fingerprint(
+        cfg, bridge=br, gateway=gw
+    )
+    policy_comment = _FIREWALL_POLICY_COMMENT_PREFIX + policy_fingerprint
     host_allow_lines: list[str] = []
     blocked_allow_lines: list[str] = []
+    for address, port in allow_tcp_endpoints:
+        # Apply the same endpoint exception whether the destination resolves
+        # to this host (input hook) or a routed/NATed LAN peer (forward hook).
+        host_allow_lines.append(
+            f'    iifname "{br}" ip daddr {address} tcp dport {port} accept'
+        )
+        blocked_allow_lines.append(
+            f'    iifname "{br}" ct original ip daddr {address} '
+            f'meta l4proto tcp ct original proto-dst {port} accept'
+        )
     if allow_tcp:
         ports = ', '.join(str(p) for p in allow_tcp)
         host_allow_lines.append(
             f'    iifname "{br}" tcp dport {{{ports}}} accept'
         )
         blocked_allow_lines.append(
-            f'    iifname "{br}" ip daddr {{{block_set}}} tcp dport {{{ports}}} accept'
+            f'    iifname "{br}" ct original ip daddr {{{block_set}}} '
+            f'meta l4proto tcp ct original proto-dst {{{ports}}} accept'
         )
     if allow_udp:
         ports = ', '.join(str(p) for p in allow_udp)
@@ -186,7 +296,8 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
             f'    iifname "{br}" udp dport {{{ports}}} accept'
         )
         blocked_allow_lines.append(
-            f'    iifname "{br}" ip daddr {{{block_set}}} udp dport {{{ports}}} accept'
+            f'    iifname "{br}" ct original ip daddr {{{block_set}}} '
+            f'meta l4proto udp ct original proto-dst {{{ports}}} accept'
         )
     host_allow = '\n'.join(host_allow_lines)
     blocked_allow = '\n'.join(blocked_allow_lines)
@@ -198,6 +309,7 @@ def _nft_script(cfg: AgentVMConfig, *, inspect_live: bool = True) -> str:
 table inet {table} {{
   chain input {{
     type filter hook input priority 0; policy accept;
+    iifname "{br}" counter comment "{policy_comment}"
     ct state established,related accept
     # DHCP client traffic may be broadcast (255.255.255.255), not just gateway-directed.
     iifname "{br}" udp dport {{67,68}} accept
@@ -211,7 +323,9 @@ table inet {table} {{
     type filter hook forward priority 0; policy accept;
     ct state established,related accept
 {blocked_allow}    # Default blocklist for VM->LAN/private ranges.
-    iifname "{br}" ip daddr {{{block_set}}} drop
+    # Filter on the pre-DNAT destination. Docker and other host NAT rules may
+    # rewrite a published host port to a private backend before this hook.
+    iifname "{br}" ct original ip daddr {{{block_set}}} drop
     iifname "{br}" accept
   }}
 }}
@@ -232,10 +346,50 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     )
     script = _nft_script(cfg, inspect_live=not dry_run)
     table = effective_firewall_table(cfg)
-    if dry_run:
-        log.info('DRYRUN: nft -f - <<EOF\\n{}\\nEOF', script.rstrip())
-        return
     mgr = CommandManager.current()
+    delete_request = mgr.request(
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Remove previous nftables table inet {table} if present',
+    )
+    legacy = table_to_remove(cfg, current_table=table)
+    legacy_request = (
+        mgr.request(
+            ['nft', 'delete', 'table', 'inet', legacy],
+            sudo=True,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=(
+                f'Remove pre-upgrade nftables table inet {legacy} if present'
+            ),
+            detail=(
+                'Older aivm versions installed rules under the configured '
+                'table name directly; a leftover copy would keep filtering '
+                'alongside the new table.'
+            ),
+        )
+        if legacy
+        else None
+    )
+    load_request = mgr.request(
+        ['nft', '-f', '-'],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        input_text=script,
+        summary=f'Load rendered nftables rules into inet {table}',
+    )
+    if dry_run:
+        delete_request.preview()
+        if legacy_request is not None:
+            legacy_request.preview()
+        load_request.preview()
+        return
     with mgr.intent(
         f'Apply firewall table {table}',
         why=(
@@ -252,42 +406,177 @@ def apply_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             ),
             approval_scope=f'firewall:{table}',
         ):
-            mgr.submit(
-                ['nft', 'delete', 'table', 'inet', table],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove previous nftables table inet {table} if present',
-            )
-            legacy = _legacy_firewall_table(cfg)
-            if legacy:
-                mgr.submit(
-                    ['nft', 'delete', 'table', 'inet', legacy],
-                    sudo=True,
-                    role='modify',
-                    check=False,
-                    capture=True,
-                    summary=(
-                        f'Remove pre-upgrade nftables table inet {legacy} '
-                        'if present'
-                    ),
-                    detail=(
-                        'Older aivm versions installed rules under the '
-                        'configured table name directly; a leftover copy '
-                        'would keep filtering alongside the new table.'
-                    ),
-                )
-            mgr.submit(
-                ['nft', '-f', '-'],
-                sudo=True,
-                role='modify',
-                check=True,
-                capture=True,
-                input_text=script,
-                summary=f'Load rendered nftables rules into inet {table}',
-            )
+            delete_request.submit()
+            if legacy_request is not None:
+                legacy_request.submit()
+            load_request.submit()
     log.info('Firewall rules applied (table=inet {}).', table)
+
+
+def ensure_firewall_ready(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
+    """Verify the managed nftables table before a guest runs, and repair it.
+
+    The one place that decides what to do about the sandbox firewall when a
+    VM is about to carry a workload. Both the attached-session reconcile and
+    plain ``vm up``/``vm restart`` call it, because a guest that boots
+    without the table is equally unprotected either way and the two paths
+    drifting apart is how that goes unnoticed.
+
+    Three outcomes, and the distinction between the last two is the whole
+    point:
+
+    * the table is present -- nothing to do;
+    * the table is *known* missing -- install it, or say clearly that it is
+      missing and could not be installed;
+    * the table could not be *checked* -- say exactly that and change
+      nothing.
+
+    Unverifiable is not the same as missing. ``nft`` has no unprivileged
+    read, so on a shared workstation every non-administrator lands in the
+    third case permanently: their account cannot inspect the table an admin
+    already installed correctly. Treating that silence as "absent" would
+    schedule a repair they cannot perform and abort a session that had
+    nothing wrong with it. The honest answer is to report the blind spot and
+    let the guest run, which is also why this never raises: a firewall that
+    cannot be checked must not be the thing that stops a user from working.
+    """
+    if not cfg.firewall.enabled:
+        return
+    table = effective_firewall_table(cfg)
+    if dry_run:
+        # No guest is about to run, so there is nothing to guarantee -- and
+        # a privileged nftables read would be a real escalation inside a
+        # command whose whole promise is that it changes nothing.
+        log.info('DRYRUN: would verify firewall table inet {}', table)
+        return
+    mgr = CommandManager.current()
+    # One start-time guarantee per invocation. Both the session reconcile
+    # and the VM start path call this, and re-reading nftables for the
+    # second one only buys a duplicate sudo prompt.
+    #
+    # Deliberately not keyed on mutation_generation, unlike the probe caches
+    # that convention covers: "this table is installed" is not invalidated
+    # by an unrelated mutation, and starting a VM bumps that counter, which
+    # would expire the memo every single time and defeat it. The only local
+    # commands that can falsify it are in this module, and remove_firewall
+    # drops the entry itself.
+    cache: dict[str, bool] = mgr.probe_cache.setdefault('firewall_ready', {})
+    if cache.get(table):
+        return
+    if not sudo_allowed():
+        log.warning(
+            'Skipping firewall reconciliation: privilege_mode = never and '
+            'nftables requires root. Set firewall.enabled = false to '
+            'silence this warning.'
+        )
+        return
+    from .status import probe_firewall
+
+    # The read is attempted even when `sudo -n true` says credentials are
+    # cold: a host may carry a NOPASSWD rule scoped to nft alone, and
+    # pre-judging from a generic sudo probe would skip the check on exactly
+    # the hosts that configured it most carefully.
+    _note_unavoidable_firewall_sudo(table)
+    present: bool | None = None
+    with mgr.attempt(
+        f'Verify managed firewall table inet {table}',
+        why=(
+            'Reading nftables requires root; when that read is unavailable '
+            'the session continues with the firewall unverified rather than '
+            'assuming the table is missing.'
+        ),
+    ) as checking:
+        present = probe_firewall(cfg, use_sudo=True).ok
+    if checking.failed:
+        _warn_firewall_unverified(table, checking.reason)
+        return
+    if present:
+        cache[table] = True
+        return
+    if present is None:
+        _warn_firewall_unverified(
+            table, 'the privileged nftables read returned no usable answer'
+        )
+        return
+
+    # Only here is the table known to be absent. Repairing it is likewise
+    # attempted rather than gated on a sudo capability guess, so a host with
+    # a narrowly scoped NOPASSWD rule still gets its rules installed.
+    with mgr.attempt(
+        f'Install managed firewall table inet {table}',
+        why=(
+            'A guest must not silently lose its sandbox rules, but a caller '
+            'without root cannot install them either.'
+        ),
+    ) as applying:
+        apply_firewall(cfg)
+    if applying.failed:
+        _warn_firewall_missing(table, detail=applying.reason)
+        return
+    cache[table] = True
+
+
+def _warn_firewall_unverified(table: str, reason: str) -> None:
+    log.warning(
+        'Could not verify the managed firewall table inet {}: {}.',
+        table,
+        reason,
+    )
+    log.warning(
+        '  The guest is starting with its sandbox rules UNVERIFIED. They may '
+        'be installed and working, or absent; reading nftables needs root '
+        'and this run could not.'
+    )
+    log.warning(
+        '  A host administrator can confirm with `sudo aivm firewall status` '
+        'and install them with `sudo aivm firewall apply`.'
+    )
+
+
+def _warn_firewall_missing(table: str, *, detail: str = '') -> None:
+    log.warning(
+        'The managed firewall table inet {} is MISSING and could not be '
+        'installed from this account.',
+        table,
+    )
+    if detail:
+        log.warning('  Reason: {}', detail)
+    log.warning(
+        '  The guest is starting WITHOUT its sandbox network rules. Ask a '
+        'host administrator to run `sudo aivm firewall apply`.'
+    )
+
+
+def _note_unavoidable_firewall_sudo(table: str) -> None:
+    """Explain the firewall probe's sudo prompt before it appears.
+
+    This one is not avoidable and not a symptom of anything being wrong, so
+    say that up front rather than letting it read as a stray escalation:
+    ``nft`` offers no unprivileged read, and the managed table lives only in
+    the kernel's live ruleset, so a host reboot always takes it with it.
+
+    Quiet when sudo is already authenticated -- with no prompt coming, the
+    explanation is just noise.
+    """
+    if not CommandManager.current().sudo_authentication_required():
+        return
+    log.info(
+        'The next step needs sudo and there is no way around it: reading '
+        'nftables state (table inet {}) requires root, with no unprivileged '
+        'fallback.',
+        table,
+    )
+    log.info(
+        'The managed table exists only in the live kernel ruleset, so it is '
+        'gone after every host reboot and has to be checked (and usually '
+        'reinstalled) before the first session.'
+    )
+    log.info(
+        'Expect this roughly once per boot: later runs skip the firewall '
+        'check entirely while the VM stays reachable over SSH. Pass '
+        '--no-ensure_firewall to skip it, at the cost of running the '
+        'session without verified sandbox rules.'
+    )
 
 
 def firewall_status(cfg: AgentVMConfig) -> str:
@@ -320,175 +609,195 @@ def firewall_status(cfg: AgentVMConfig) -> str:
     return result.stdout + (result.stderr or '')
 
 
-def read_firewall_tcp_ports(
-    cfg: AgentVMConfig, *, use_sudo: bool
-) -> tuple[tuple[int, ...] | None, str]:
-    # TODO: this function can be a lot cleaner and server other use-cases
-    # currently only used in drift detection.
+def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
+    if not _is_json_obj(expr):
+        return False
+    match = expr.get('match')
+    if not _is_json_obj(match):
+        return False
+    if match.get('op') != '==':
+        return False
+    if match.get('left') != {'meta': {'key': 'iifname'}}:
+        return False
+    return match.get('right') == want_ifname
 
+
+def _extract_tcp_dports(expr: object) -> tuple[int, ...]:
+    """Extract a plain ``tcp dport`` match from nft JSON."""
+    if not _is_json_obj(expr):
+        return ()
+    match = expr.get('match')
+    if not _is_json_obj(match):
+        return ()
+    left = match.get('left')
+    if not _is_json_obj(left):
+        return ()
+    payload = left.get('payload')
+    if not _is_json_obj(payload):
+        return ()
+    if payload.get('protocol') != 'tcp' or payload.get('field') != 'dport':
+        return ()
+
+    right = match.get('right')
+    vals: list[int] = []
+    if isinstance(right, int):
+        vals.append(right)
+    elif isinstance(right, str) and right.isdigit():
+        vals.append(int(right))
+    elif _is_json_obj(right):
+        set_items = right.get('set')
+        if isinstance(set_items, list):
+            for item in set_items:
+                if isinstance(item, int):
+                    vals.append(item)
+                elif isinstance(item, str) and item.isdigit():
+                    vals.append(int(item))
+    return tuple(sorted(set(vals)))
+
+
+def _rule_has_ip_daddr_constraint(exprs: Sequence[object]) -> bool:
+    """Return whether a rule has a packet-payload IPv4 destination match."""
+    for expr in exprs:
+        if not _is_json_obj(expr):
+            continue
+        match = expr.get('match')
+        if not _is_json_obj(match):
+            continue
+        left = match.get('left')
+        if not _is_json_obj(left):
+            continue
+        payload = left.get('payload')
+        if not _is_json_obj(payload):
+            continue
+        if payload.get('protocol') == 'ip' and payload.get('field') == 'daddr':
+            return True
+    return False
+
+
+def read_firewall_live_state(
+    cfg: AgentVMConfig, *, use_sudo: bool
+) -> tuple[FirewallLiveState | None, str]:
+    """Inspect the managed firewall table and the policy marker it carries.
+
+    ``present=False`` is a known missing table. ``None`` means the table could
+    not be inspected reliably (for example because sudo is unavailable).
+    """
     table = effective_firewall_table(cfg)
     bridge = cfg.network.bridge
+    gateway = cfg.network.gateway_ip
 
     if not sudo_allowed():
-        # nft reads require root; report unavailable instead of escalating.
         return None, 'firewall checks need privileges (privilege_mode = never)'
 
+    # A privileged firewall inspection can also read libvirt's live network
+    # identity. Use the same bridge/gateway source as the writer so stale
+    # config cannot make a correctly installed rule disappear from drift
+    # detection.
+    if use_sudo:
+        bridge, gateway = _effective_bridge_and_gateway(cfg)
+
     res = CommandManager.current().run(
-        ['nft', '--json', 'list', 'table', 'inet', table], role='read',
+        ['nft', '--json', 'list', 'table', 'inet', table],
+        role='read',
         sudo=use_sudo,
         check=False,
         capture=True,
+        summary=f'Inspect managed nftables policy in table inet {table}',
     )
 
     if res.code != 0:
         raw = (res.stderr or res.stdout or 'nft list table failed').strip()
-        if 'you must be root' in res.stderr or 'not permitted' in res.stderr:
-            return None, raw
+        lowered = raw.lower()
+        if 'no such file or directory' in lowered or 'no such table' in lowered:
+            return FirewallLiveState(
+                present=False,
+                bridge=bridge,
+                gateway=gateway,
+            ), ''
         return None, raw
 
-    import json
-
-    text = res.stdout or ''
-    data = json.loads(text)
-
-    def _expr_is_iifname_match(expr: object, want_ifname: str) -> bool:
-        if not _is_json_obj(expr):
-            return False
-
-        match = expr.get('match')
-        if not _is_json_obj(match):
-            return False
-
-        op = match.get('op')
-        left = match.get('left')
-        right = match.get('right')
-
-        if op != '==':
-            return False
-        if left != {'meta': {'key': 'iifname'}}:
-            return False
-        return right == want_ifname
-
-    def _extract_tcp_dports(expr: object) -> tuple[int, ...]:
-        """
-        Handles forms like:
-            {"match": {"left": {"payload": {...}}, "op": "==", "right": 22}}
-            {"match": {"left": {"payload": {...}}, "op": "==", "right": {"set": [22, 80]}}}
-        """
-        if not _is_json_obj(expr):
-            return ()
-
-        match = expr.get('match')
-        if not _is_json_obj(match):
-            return ()
-
-        left = match.get('left')
-        if not _is_json_obj(left):
-            return ()
-
-        payload = left.get('payload')
-        if not _is_json_obj(payload):
-            return ()
-
-        if payload.get('protocol') != 'tcp' or payload.get('field') != 'dport':
-            return ()
-
-        right = match.get('right')
-        vals: list[int] = []
-
-        if isinstance(right, int):
-            vals.append(right)
-        elif isinstance(right, str) and right.isdigit():
-            vals.append(int(right))
-        elif _is_json_obj(right):
-            set_items = right.get('set')
-            if isinstance(set_items, list):
-                for item in set_items:
-                    if isinstance(item, int):
-                        vals.append(item)
-                    elif isinstance(item, str) and item.isdigit():
-                        vals.append(int(item))
-
-        return tuple(sorted(set(vals)))
-
-    def _rule_has_ip_daddr_constraint(exprs: Sequence[object]) -> bool:
-        """
-        Reject rules with any explicit ip daddr match, because those are
-        infrastructure/special-case rules (e.g. gateway DNS), not the user
-        allow_tcp_ports rule we want.
-        """
-        for expr in exprs:
-            if not _is_json_obj(expr):
-                continue
-
-            match = expr.get('match')
-            if not _is_json_obj(match):
-                continue
-
-            left = match.get('left')
-            if not _is_json_obj(left):
-                continue
-
-            payload = left.get('payload')
-            if not _is_json_obj(payload):
-                continue
-
-            if (
-                payload.get('protocol') == 'ip'
-                and payload.get('field') == 'daddr'
-            ):
-                return True
-        return False
+    try:
+        data = json.loads(res.stdout or '')
+    except (TypeError, ValueError) as ex:
+        return None, f'Could not parse nftables JSON: {ex}'
+    if not _is_json_obj(data):
+        return (
+            None,
+            'Could not parse nftables JSON: top-level value is not an object',
+        )
 
     ports: set[int] = set()
+    policy_fingerprint: str | None = None
+    nftables = data.get('nftables', [])
+    if not isinstance(nftables, list):
+        return None, 'Could not parse nftables JSON: nftables is not a list'
 
-    for item in data.get('nftables', []):
+    for item in nftables:
         if not _is_json_obj(item):
             continue
-
         rule = item.get('rule')
         if not _is_json_obj(rule):
             continue
-
         if rule.get('family') != 'inet' or rule.get('table') != table:
             continue
+
+        comment = rule.get('comment')
+        if isinstance(comment, str) and comment.startswith(
+            _FIREWALL_POLICY_COMMENT_PREFIX
+        ):
+            policy_fingerprint = comment.removeprefix(
+                _FIREWALL_POLICY_COMMENT_PREFIX
+            )
 
         exprs = rule.get('expr')
         if not isinstance(exprs, list) or not exprs:
             continue
-
-        # Only consider rules bound to the VM bridge.
         if not any(_expr_is_iifname_match(expr, bridge) for expr in exprs):
             continue
-
-        # Exclude gateway/service-specific rules like tcp dport 53 to gateway.
+        # Gateway DNS and other infrastructure exceptions are not user
+        # allow_tcp_ports entries.
         if _rule_has_ip_daddr_constraint(exprs):
             continue
 
-        # Find a plain tcp dport match in the rule.
         rule_ports: tuple[int, ...] = ()
         for expr in exprs:
             extracted = _extract_tcp_dports(expr)
             if extracted:
                 rule_ports = extracted
                 break
-
         if not rule_ports:
             continue
-
-        # Require terminal verdict accept.
         has_accept = any(
             _is_json_obj(expr)
             and 'accept' in expr
             and expr.get('accept') is None
             for expr in exprs
         )
-        if not has_accept:
-            continue
+        if has_accept:
+            ports.update(rule_ports)
 
-        ports.update(rule_ports)
+    return (
+        FirewallLiveState(
+            present=True,
+            bridge=bridge,
+            gateway=gateway,
+            tcp_ports=tuple(sorted(ports)),
+            policy_fingerprint=policy_fingerprint,
+        ),
+        '',
+    )
 
-    return tuple(sorted(ports)), ''
+
+def read_firewall_tcp_ports(
+    cfg: AgentVMConfig, *, use_sudo: bool
+) -> tuple[tuple[int, ...] | None, str]:
+    """Read configured user-facing TCP exceptions from the live table."""
+    state, error = read_firewall_live_state(cfg, use_sudo=use_sudo)
+    if state is None:
+        return None, error
+    if not state.present:
+        return None, 'managed firewall table is missing'
+    return state.tcp_ports, ''
 
 
 def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
@@ -500,10 +809,36 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
         ),
     )
     table = effective_firewall_table(cfg)
-    if dry_run:
-        log.info('DRYRUN: nft delete table inet {}', table)
-        return
     mgr = CommandManager.current()
+    delete_request = mgr.request(
+        ['nft', 'delete', 'table', 'inet', table],
+        sudo=True,
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Remove nftables table inet {table}',
+    )
+    legacy = table_to_remove(cfg, current_table=table)
+    legacy_request = (
+        mgr.request(
+            ['nft', 'delete', 'table', 'inet', legacy],
+            sudo=True,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Remove pre-upgrade nftables table inet {legacy}',
+        )
+        if legacy
+        else None
+    )
+    if dry_run:
+        delete_request.preview()
+        if legacy_request is not None:
+            legacy_request.preview()
+        return
+    # Whatever ensure_firewall_ready concluded earlier in this invocation is
+    # about to stop being true.
+    mgr.probe_cache.setdefault('firewall_ready', {}).pop(table, None)
     with mgr.intent(
         f'Remove firewall table {table}',
         why='Delete the managed nftables table for this VM network.',
@@ -514,25 +849,7 @@ def remove_firewall(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             why='Remove the nftables table created by aivm for this VM bridge.',
             approval_scope=f'firewall-remove:{table}',
         ):
-            mgr.submit(
-                ['nft', 'delete', 'table', 'inet', table],
-                sudo=True,
-                role='modify',
-                check=False,
-                capture=True,
-                summary=f'Remove nftables table inet {table}',
-            )
-            legacy = _legacy_firewall_table(cfg)
-            if legacy:
-                mgr.submit(
-                    ['nft', 'delete', 'table', 'inet', legacy],
-                    sudo=True,
-                    role='modify',
-                    check=False,
-                    capture=True,
-                    summary=(
-                        f'Remove pre-upgrade nftables table inet {legacy} '
-                        'if present'
-                    ),
-                )
+            delete_request.submit()
+            if legacy_request is not None:
+                legacy_request.submit()
     log.info('Firewall removed (table=inet {}).', table)

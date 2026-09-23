@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from aivm.cli.config.show import ConfigFormatCLI
 from tests.helpers import run_cli
 
 
@@ -19,9 +20,7 @@ from tests.helpers import run_cli
     [
         pytest.param(['help', 'plan', '--yes'], id='help-plan'),
         pytest.param(['help', 'tree', '--yes'], id='help-tree'),
-        pytest.param(
-            ['help', 'completion', '--yes'], id='help-completion'
-        ),
+        pytest.param(['help', 'completion', '--yes'], id='help-completion'),
         pytest.param(
             ['host', 'net', 'create', '--yes', '--dry_run'],
             id='host-net-create',
@@ -38,16 +37,12 @@ from tests.helpers import run_cli
             ['host', 'fw', 'remove', '--yes', '--dry_run'],
             id='host-fw-remove',
         ),
-        pytest.param(
-            ['vm', 'wait_ip', '--yes', '--dry_run'], id='vm-wait_ip'
-        ),
+        pytest.param(['vm', 'wait_ip', '--yes', '--dry_run'], id='vm-wait_ip'),
         pytest.param(
             ['vm', 'flush_caches', '--yes', '--dry_run'],
             id='vm-flush_caches',
         ),
-        pytest.param(
-            ['vm', 'delete', '--yes', '--dry_run'], id='vm-delete'
-        ),
+        pytest.param(['vm', 'delete', '--yes', '--dry_run'], id='vm-delete'),
         pytest.param(
             ['vm', 'provision', '--yes', '--dry_run'], id='vm-provision'
         ),
@@ -77,3 +72,12 @@ def test_help_tree_includes_one_line_descriptions(
         'aivm vm ssh - SSH into the VM and start a shell in the mapped guest directory.'
         in out
     )
+
+
+def test_common_short_aliases_parse_together(cfg_path: Path) -> None:
+    """The conventional short forms map to the same CLI fields."""
+    args = ConfigFormatCLI.cli(argv=['-n', '-y', '-c', str(cfg_path), '-f'])
+    assert args.dry_run is True
+    assert args.yes is True
+    assert args.config == str(cfg_path)
+    assert args.force is True

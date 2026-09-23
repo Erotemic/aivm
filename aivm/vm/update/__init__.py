@@ -13,8 +13,10 @@ from .detect import (
     _vm_update_drift,
 )
 from .fdguard import _apply_fdguard_drift, _fdguard_drift
+from .firewall import _apply_firewall_drift, _firewall_update_drift
 from .models import (
     FdGuardDrift,
+    FirewallDrift,
     RestartKind,
     VirtiofsBinaryDrift,
     VMUpdateDrift,
@@ -33,12 +35,15 @@ from .virtiofs import _apply_virtiofs_binary_drift, _virtiofs_binary_drift
 
 __all__ = [
     'FdGuardDrift',
+    'FirewallDrift',
     'RestartKind',
     'VirtiofsBinaryDrift',
     'VMUpdateDrift',
     '_apply_fdguard_drift',
+    '_apply_firewall_drift',
     '_apply_virtiofs_binary_drift',
     '_fdguard_drift',
+    '_firewall_update_drift',
     '_apply_vm_update',
     '_bytes_to_gib',
     '_escalate',

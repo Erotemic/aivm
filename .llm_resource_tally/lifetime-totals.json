@@ -1,0 +1,75 @@
+{
+  "schema": "llm-resource-tally/v3",
+  "through": "2026-08-13T21:07:08.722721+00:00",
+  "ledger_rows": 11,
+  "commits_accounted": 8,
+  "turns": 1143,
+  "tokens": {
+    "input": 2810777,
+    "cache_write": 885165,
+    "cache_read": 170566629,
+    "output": 547146,
+    "billable_input": 174262571
+  },
+  "by_model": {
+    "gpt-5.3-codex": {
+      "input": 1781682,
+      "cache_write": 0,
+      "cache_read": 47044096,
+      "output": 163183
+    },
+    "gpt-5.4": {
+      "input": 438394,
+      "cache_write": 0,
+      "cache_read": 6238848,
+      "output": 41605
+    },
+    "claude-opus-5": {
+      "input": 1805,
+      "cache_write": 885165,
+      "cache_read": 97419493,
+      "output": 303025
+    },
+    "gpt-5.5": {
+      "input": 588896,
+      "cache_write": 0,
+      "cache_read": 19864192,
+      "output": 39333
+    }
+  },
+  "by_activity": {
+    "unlabeled": {
+      "input": 2810777,
+      "cache_write": 885165,
+      "cache_read": 170566629,
+      "output": 547146
+    }
+  },
+  "by_agent": {
+    "codex": {
+      "input": 2808972,
+      "cache_write": 0,
+      "cache_read": 73147136,
+      "output": 244121
+    },
+    "claude-code": {
+      "input": 1805,
+      "cache_write": 885165,
+      "cache_read": 97419493,
+      "output": 303025
+    }
+  },
+  "server_tool_calls": {
+    "web_search": 0,
+    "web_fetch": 0
+  },
+  "time": {
+    "wall_clock_s": 48759.6
+  },
+  "compaction_signals": {
+    "events": 0,
+    "peak_context_tokens": 0,
+    "summary_chars": 0
+  },
+  "modeled_post_hoc": "inference_seconds, energy_kwh, carbon_gco2e, usd — derived from the measurements above by `estimate`; not stored here."
+}

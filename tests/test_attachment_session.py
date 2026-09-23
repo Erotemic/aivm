@@ -16,6 +16,7 @@ import pytest
 from aivm.attachments.session import _record_attachment
 from aivm.cli.vm_attach import VMAttachCLI
 from aivm.cli.vm_connect import VMSSHCLI, VMCodeCLI
+from aivm.commands import SudoUnavailableError
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     AttachmentEntry,
@@ -26,9 +27,19 @@ from aivm.config_store import (
     upsert_network,
     upsert_vm_with_network,
 )
+from aivm.errors import AIVMError
 from aivm.status import ProbeOutcome
+from aivm.util import CmdResult
 from aivm.vm.share import AttachmentAccess, AttachmentMode, ResolvedAttachment
-from tests.helpers import patch_ns, returns
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    command_recorder,
+    is_locale_pinned,
+    patch_ns,
+    resolved_test_context,
+    returns,
+)
 
 AttachEnv = tuple[AgentVMConfig, Path, Path, ResolvedAttachment]
 
@@ -60,7 +71,7 @@ def make_attach_env(tmp_path: Path) -> Callable[..., AttachEnv]:
         *,
         name: str,
         dirname: str = 'proj',
-        mode: AttachmentMode = AttachmentMode.SHARED,
+        mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS,
         guest_dst: str = '/workspace/proj',
         tag: str = 'hostcode-proj',
     ) -> AttachEnv:
@@ -91,12 +102,15 @@ def patch_vm_attach_env(
 ) -> None:
     """Stub the four ``aivm.cli.vm_attach`` seams every attach test shares.
 
-    Patches ``load_cfg_with_path``/``record_vm``/``_resolve_attachment``
+    Patches the resolved-context, persistence, and attachment seams
     unconditionally; ``probe_vm_state`` reports ``running`` unless it is
     ``None`` (the caller installs its own probe to inspect kwargs).
     """
+
     mapping: dict[str, Any] = {
-        'load_cfg_with_path': returns((cfg, cfg_path)),
+        '_resolve_attach_context': returns(
+            (resolved_test_context(cfg), cfg_path)
+        ),
         'record_vm': returns(cfg_path),
         '_resolve_attachment': returns(attachment),
     }
@@ -118,7 +132,7 @@ def _fake_prepare_session(
     def fake_prepare(**kw: Any) -> PreparedSession:
         captured.append(kw)
         return PreparedSession(
-            cfg=cfg,
+            context=resolved_test_context(cfg),
             cfg_path=cfg_path,
             host_src=kw['host_src'],
             attachment_mode=attachment.mode,
@@ -178,7 +192,7 @@ def test_vm_attach_mounts_share_when_vm_running(
     # The real _record_attachment persisted the share; the store is the artifact.
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.access == 'rw'
     assert att.guest_dst == '/workspace/proj'
     assert att.tag == 'hostcode-proj'
@@ -225,7 +239,7 @@ def test_vm_attach_skips_guest_mount_when_vm_not_running(
     # Even with the VM stopped, the attachment is still persisted.
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
     assert att.guest_dst == '/workspace/proj'
     assert att.tag == 'hostcode-proj'
 
@@ -255,6 +269,11 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
         'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
         lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
     )
+    host_replays: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._reconcile_persistent_host_binds',
+        lambda *a, **k: host_replays.append((a, k)) or None,
+    )
     guest_mounts: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
         'aivm.cli.vm_attach._ensure_attachment_available_in_guest',
@@ -277,13 +296,64 @@ def test_vm_attach_persistent_syncs_manifest_and_replays_when_running(
     assert rc == 0
     assert syncs
     assert replay_syncs
+    assert host_replays
+    assert host_replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert guest_mounts
     assert replays
+    assert replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert guest_mounts[0][1]['ensure_shared_root_host_side'] is True
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
     assert att.mode == 'persistent'
+    assert att.source_dev > 0
+    assert att.source_ino > 0
     assert att.guest_dst == '/workspace/proj'
+
+
+def test_attach_without_sudo_names_both_ways_out(
+    monkeypatch: pytest.MonkeyPatch,
+    make_attach_env: Callable[..., AttachEnv],
+) -> None:
+    """A sudo-less caller learns which knob to turn, not just that sudo failed.
+
+    Persistent mode needs a host bind mount, so an ordinary user on a shared
+    workstation cannot create one. The bare credential failure says nothing
+    about ``--mode shared`` or about asking an administrator, which are the
+    only two things that actually get them unstuck.
+    """
+    cfg, cfg_path, host_src, attachment = make_attach_env(
+        name='vm-no-sudo', mode=AttachmentMode.PERSISTENT
+    )
+    patch_vm_attach_env(monkeypatch, cfg, cfg_path, attachment, running=False)
+
+    def refuse_sudo(*_a: Any, **_k: Any) -> None:
+        raise SudoUnavailableError(
+            ['sudo', '-v'],
+            CmdResult(1, '', 'sudo: a password is required'),
+            purpose='Reconcile persistent host binds',
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_host_replay_manifest', refuse_sudo
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._sync_persistent_attachment_manifest_on_host',
+        lambda *a, **k: cfg_path,
+    )
+
+    with pytest.raises(AIVMError) as excinfo:
+        VMAttachCLI.main(
+            argv=False,
+            config=str(cfg_path),
+            host_src=str(host_src),
+            mode='persistent',
+            yes=True,
+        )
+
+    message = str(excinfo.value)
+    assert 'could not obtain sudo credentials' in message
+    assert '--mode direct-virtiofs' in message
+    assert '--admin_override' in message
 
 
 def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
@@ -305,6 +375,11 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     monkeypatch.setattr(
         'aivm.cli.vm_attach._sync_persistent_host_replay_manifest',
         lambda *a, **k: replay_syncs.append((a, k)) or cfg_path,
+    )
+    host_replays: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_attach._reconcile_persistent_host_binds',
+        lambda *a, **k: host_replays.append((a, k)) or None,
     )
     prepares: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(
@@ -336,10 +411,14 @@ def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
     assert prepares[0][1]['vm_running'] is False
     assert syncs
     assert replay_syncs
+    assert host_replays
+    assert host_replays[0][1]['only_guest_dst'] == '/workspace/proj'
     assert refreshes
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
     assert att.mode == 'persistent'
+    assert att.source_dev > 0
+    assert att.source_ino > 0
 
 
 def test_vm_attach_uses_single_escalating_probe(
@@ -389,7 +468,7 @@ def test_vm_attach_uses_single_escalating_probe(
     assert probe_calls == [{'use_sudo': True}]
     att = _only_attachment(cfg_path)
     assert att.host_path == str(host_src.resolve())
-    assert att.mode == 'shared'
+    assert att.mode == 'direct-virtiofs'
 
 
 def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
@@ -443,9 +522,7 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
     assert att.tag == ''
 
 
-def test_record_attachment_skips_save_when_unchanged(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_record_attachment_is_idempotent_when_unchanged(tmp_path: Path) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
@@ -466,16 +543,6 @@ def test_record_attachment_skips_save_when_unchanged(
     )
     save_store(reg, cfg_path)
 
-    # save_store stays faked here: an unchanged record renders byte-identically,
-    # so the persisted file cannot distinguish "skipped the save" from
-    # "re-saved identical content". Observing that the call never happens is the
-    # only proof of the short-circuit.
-    save_calls: list[tuple[tuple, dict]] = []
-    monkeypatch.setattr(
-        'aivm.attachments.session.save_store',
-        lambda *a, **k: save_calls.append((a, k)) or cfg_path,
-    )
-
     out = _record_attachment(
         cfg,
         cfg_path,
@@ -486,34 +553,37 @@ def test_record_attachment_skips_save_when_unchanged(
         tag='',
     )
     assert out == cfg_path
-    assert save_calls == []
-    # And the persisted store still holds exactly the one original entry.
     records = load_store(cfg_path).attachments
     assert len(records) == 1
     assert records[0].mode == 'git'
     assert records[0].guest_dst == guest_dst
 
 
-def test_record_attachment_passes_reason_to_save_store(
+def test_record_attachment_passes_reason_to_update_store(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
-    # A symlinked host_src makes the lexical/resolved paths differ, so the
-    # typed path is also recorded as an alias — exercising that branch.
     real = tmp_path / 'real-repo'
     real.mkdir()
     host_src = tmp_path / 'repo'
     host_src.symlink_to(real)
 
-    # save_store stays faked: it only ever *logs* the reason (never persists
-    # it), and loguru binds its default logger at definition time, so the
-    # reason is observable only by intercepting the call.
-    save_kwargs: list[dict] = []
+    calls: list[dict[str, Any]] = []
+
+    def fake_update_store(
+        mutate: Callable[[Store], None],
+        path: Path,
+        **kwargs: Any,
+    ) -> Store:
+        reg = Store()
+        mutate(reg)
+        calls.append({'path': path, **kwargs})
+        return reg
+
     monkeypatch.setattr(
-        'aivm.attachments.session.save_store',
-        lambda *a, **k: save_kwargs.append(dict(k)) or cfg_path,
+        'aivm.attachments.session.update_store', fake_update_store
     )
 
     out = _record_attachment(
@@ -527,12 +597,14 @@ def test_record_attachment_passes_reason_to_save_store(
     )
 
     assert out == cfg_path
-    assert save_kwargs == [
+    assert calls == [
         {
+            'path': cfg_path,
             'reason': (
                 f'Persist attachment record for {host_src} on VM vm-git '
-                '(mode=git, access=rw, guest_dst=/workspace/repo).'
-            )
+                '(owner=legacy, mode=git, access=rw, '
+                'guest_dst=/workspace/repo).'
+            ),
         }
     ]
 
@@ -550,7 +622,7 @@ def test_vm_connect_clis_pass_lexical_host_src_to_session(
     host_src.mkdir()
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(host_src.resolve()),
         guest_dst=str(host_src),
         tag='hostcode-proj-abc12345',
@@ -576,6 +648,263 @@ def test_vm_connect_clis_pass_lexical_host_src_to_session(
     assert passed == host_src.expanduser().absolute()
 
 
+
+@pytest.mark.parametrize('cli_cls', [VMCodeCLI, VMSSHCLI], ids=['code', 'ssh'])
+def test_code_and_ssh_route_through_shared_foreground_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    cli_cls: Any,
+) -> None:
+    """Both launchers must call the common preparation seam, not duplicate it."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-common-prep-seam'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    inner = _fake_prepare_session(cfg, cfg_path, host_src, attachment, [])
+    calls: list[Any] = []
+
+    def fake_foreground(args: Any) -> Any:
+        calls.append(args)
+        return inner(host_src=host_src)
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session', fake_foreground
+    )
+    assert (
+        cli_cls.main(
+            argv=False,
+            config=str(cfg_path),
+            host_src=str(host_src),
+            yes=True,
+            dry_run=True,
+        )
+        == 0
+    )
+    assert len(calls) == 1
+
+
+def test_code_and_ssh_share_identical_foreground_preparation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Launcher choice happens only after one common startup pipeline."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-shared-foreground-prep'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, captured),
+    )
+
+    common: dict[str, Any] = dict(
+        argv=False,
+        config=str(cfg_path),
+        host_src=str(host_src),
+        yes=True,
+        dry_run=True,
+    )
+    assert VMCodeCLI.main(**common) == 0
+    assert VMSSHCLI.main(**common) == 0
+
+    assert len(captured) == 2
+    first = dict(captured[0])
+    second = dict(captured[1])
+    first_bootstrap = first.pop('bootstrap_missing_vm')
+    second_bootstrap = second.pop('bootstrap_missing_vm')
+    assert first == second
+    assert first_bootstrap.func is second_bootstrap.func
+    assert first_bootstrap.args == second_bootstrap.args
+    assert first_bootstrap.keywords == second_bootstrap.keywords
+
+
+
+def test_vm_ssh_continues_when_repository_agent_setup_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Repository credential failures do not prevent VM access."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ssh-agent-failure'
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, []),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.prepare_agent_forwarding',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AIVMError('forwarded agent is unavailable')
+        ),
+    )
+    ssh_config_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (
+            ssh_config_calls.append(k) or (tmp_path / 'ssh_config', False)
+        ),
+    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+
+    rc = VMSSHCLI.main(
+        argv=False, config=str(cfg_path), host_src=str(host_src), yes=True
+    )
+
+    assert rc == 0
+    assert ssh_config_calls[0]['forward_agent_socket'] == ''
+    ssh_cmd = recorder.only('ssh')
+    assert '-A' not in ssh_cmd
+    assert not any(part.startswith('SSH_AUTH_SOCK=') for part in ssh_cmd)
+    assert warnings == [
+        'Repository ssh-agent setup failed; continuing without credential '
+        'forwarding: forwarded agent is unavailable'
+    ]
+
+
+def test_vm_ssh_continues_when_ssh_config_update_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Managed SSH alias maintenance is optional for a direct shell."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-ssh-config-failure'
+    cfg.paths.ssh_identity_file = str(tmp_path / 'id_ed25519')
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_attached_session',
+        _fake_prepare_session(cfg, cfg_path, host_src, attachment, []),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
+        lambda session: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('ssh config is read-only')
+        ),
+    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+
+    rc = VMSSHCLI.main(
+        argv=False, config=str(cfg_path), host_src=str(host_src), yes=True
+    )
+
+    assert rc == 0
+    assert recorder.only('ssh')
+    assert warnings == [
+        'Could not update the managed SSH config entry for '
+        'vm-ssh-config-failure; continuing without it: ssh config is read-only'
+    ]
+
+
+def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tunnel startup does not depend on the workstation SSH alias."""
+    from tests.helpers import capture_logs
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-code-config-failure'
+    cfg_path = tmp_path / 'config.toml'
+    host_src = tmp_path / 'proj'
+    host_src.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(host_src.resolve()),
+        guest_dst=str(host_src),
+        tag='hostcode-proj',
+    )
+    session = _fake_prepare_session(
+        cfg, cfg_path, host_src, attachment, []
+    )(host_src=host_src)
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session', lambda args: session
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
+        lambda session: None,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._upsert_ssh_config_entry',
+        lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError('ssh config is read-only')
+        ),
+    )
+    tunnel_calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._start_remote_tunnel_session',
+        lambda *a: tunnel_calls.append(a),
+    )
+    warnings = capture_logs(
+        monkeypatch, 'aivm.cli.vm_connect.log', levels=('warning',)
+    )
+
+    rc = VMCodeCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        host_src=str(host_src),
+        yes=True,
+        tunnel=True,
+        no_attach=True,
+    )
+
+    assert rc == 0
+    assert len(tunnel_calls) == 1
+    assert warnings == [
+        'Could not update the managed SSH config entry for '
+        'vm-code-config-failure; continuing without it: ssh config is read-only'
+    ]
+
+
 @pytest.mark.parametrize(
     ('ssh_exit', 'expect_rc', 'expect_error'),
     [
@@ -599,12 +928,7 @@ def test_vm_ssh_reports_only_transport_failures(
     run. Only ssh's own exit code 255 (connection/transport failure) is
     aivm's to report.
     """
-    from tests.helpers import (
-        FakeProc,
-        activate_manager,
-        capture_logs,
-        command_recorder,
-    )
+    from tests.helpers import capture_logs
 
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-ssh-exit'
@@ -614,7 +938,7 @@ def test_vm_ssh_reports_only_transport_failures(
     host_src.mkdir()
     attachment = ResolvedAttachment(
         vm_name=cfg.vm.name,
-        mode=AttachmentMode.SHARED,
+        mode=AttachmentMode.DIRECT_VIRTIOFS,
         source_dir=str(host_src.resolve()),
         guest_dst=str(host_src),
         tag='hostcode-proj',
@@ -628,9 +952,7 @@ def test_vm_ssh_reports_only_transport_failures(
         'aivm.cli.vm_connect._upsert_ssh_config_entry',
         lambda *a, **k: (tmp_path / 'ssh_config', False),
     )
-    monkeypatch.setattr(
-        'aivm.cli.vm_connect.require_ssh_identity', lambda p: p
-    )
+    monkeypatch.setattr('aivm.cli.vm_connect.require_ssh_identity', lambda p: p)
     errors = capture_logs(
         monkeypatch, 'aivm.cli.vm_connect.log', levels=('error',)
     )
@@ -648,3 +970,35 @@ def test_vm_ssh_reports_only_transport_failures(
     else:
         assert errors == []
         assert 'SSH session ended' in out
+
+
+@pytest.mark.parametrize(
+    ('reply', 'expected'),
+    [
+        pytest.param(FakeProc(0, 'running\n', ''), True, id='running'),
+        pytest.param(FakeProc(0, 'shut off\n', ''), False, id='shut-off'),
+        pytest.param(
+            FakeProc(1, '', 'error: authentication failed: access denied'),
+            None,
+            id='inconclusive',
+        ),
+    ],
+)
+def test_nonsudo_running_probe_pins_c_locale(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: object,
+    expected: bool | None,
+) -> None:
+    """Every answer this probe gives is read out of English text.
+
+    Both the running/not-running verdict and the 'inconclusive, needs sudo'
+    verdict string-match the reply, so a localized virsh would report a
+    running VM as stopped and a permission failure as a definite 'no'.
+    """
+    from aivm.attachments.session import _probe_vm_running_nonsudo
+
+    activate_manager(monkeypatch)
+    rec = command_recorder(monkeypatch, {'virsh domstate': reply})
+
+    assert _probe_vm_running_nonsudo('vm-locale') is expected
+    assert rec.calls and all(is_locale_pinned(call) for call in rec.calls)

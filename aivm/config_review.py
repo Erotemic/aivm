@@ -21,7 +21,7 @@ class ConfigReviewItem:
 
 
 def _format_bool(value: bool) -> str:
-    return 'true' if bool(value) else 'false'
+    return 'true' if value else 'false'
 
 
 def _format_secret(value: str) -> str:

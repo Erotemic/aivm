@@ -9,10 +9,12 @@ from pathlib import Path
 
 from ..config import AgentVMConfig, FirewallConfig, NetworkConfig
 from ..errors import AIVMError
+from ..host_identity import HostIdentity
 from .models import (
     AttachmentEntry,
     CredentialEntry,
     NetworkEntry,
+    PrincipalEntry,
     Store,
     VMEntry,
 )
@@ -30,6 +32,85 @@ def find_network(reg: Store, network_name: str) -> NetworkEntry | None:
     for rec in reg.networks:
         if rec.name == network_name:
             return rec
+    return None
+
+
+def find_principal(
+    reg: Store, *, vm_name: str, principal_id: str
+) -> PrincipalEntry | None:
+    for item in reg.principals:
+        if item.vm_name == vm_name and item.id == principal_id:
+            return item
+    return None
+
+
+def find_principals_for_vm(reg: Store, vm_name: str) -> list[PrincipalEntry]:
+    return sorted(
+        (item for item in reg.principals if item.vm_name == vm_name),
+        key=lambda item: (item.host_user, item.id),
+    )
+
+
+def find_principal_for_host(
+    reg: Store, *, vm_name: str, host_user: str
+) -> PrincipalEntry | None:
+    matches = [
+        item
+        for item in reg.principals
+        if item.vm_name == vm_name and item.host_user == host_user
+    ]
+    if len(matches) > 1:
+        ids = ', '.join(sorted(item.id for item in matches))
+        raise AIVMError(
+            f'Multiple principals for host user {host_user!r} on VM '
+            f'{vm_name!r}: {ids}. Repair the machine store before continuing.'
+        )
+    return matches[0] if matches else None
+
+
+def find_principal_for_host_identity(
+    reg: Store, *, vm_name: str, identity: HostIdentity
+) -> PrincipalEntry | None:
+    """Resolve a principal by kernel identity and fail on partial matches."""
+    principals = find_principals_for_vm(reg, vm_name)
+    exact = [
+        item
+        for item in principals
+        if item.host_uid == identity.uid and item.host_user == identity.username
+    ]
+    if len(exact) > 1:
+        ids = ', '.join(sorted(item.id for item in exact))
+        raise AIVMError(
+            f'Multiple access identities match uid {identity.uid} and host user '
+            f'{identity.username!r} on VM {vm_name!r}: {ids}.'
+        )
+    if exact:
+        return exact[0]
+
+    uid_matches = [item for item in principals if item.host_uid == identity.uid]
+    if uid_matches:
+        details = ', '.join(
+            f'{item.host_user!r} ({item.id})' for item in uid_matches
+        )
+        raise AIVMError(
+            f'Invoking uid {identity.uid} now resolves to host user '
+            f'{identity.username!r}, but the VM store records {details}. '
+            'This looks like a host account rename. Repair the stored host '
+            'username explicitly before continuing.'
+        )
+
+    name_matches = [
+        item for item in principals if item.host_user == identity.username
+    ]
+    if name_matches:
+        details = ', '.join(
+            f'uid {item.host_uid} ({item.id})' for item in name_matches
+        )
+        raise AIVMError(
+            f'Host user {identity.username!r} is running as uid {identity.uid}, '
+            f'but the VM store records {details}. This looks like account '
+            'recreation or UID reuse; refusing to select that identity.'
+        )
     return None
 
 
@@ -54,7 +135,8 @@ def _near_misses(name: str, known: Sequence[str]) -> list[str]:
     contained = [
         candidate
         for candidate in known
-        if lowered and (lowered in candidate.lower() or candidate.lower() in lowered)
+        if lowered
+        and (lowered in candidate.lower() or candidate.lower() in lowered)
     ]
     close = difflib.get_close_matches(
         name, known, n=_MAX_SUGGESTIONS, cutoff=0.75
@@ -160,55 +242,164 @@ def materialize_vm_cfg(reg: Store, vm_name: str) -> AgentVMConfig:
     return cfg
 
 
-def find_attachments(
-    reg: Store, host_path: str | Path
+def _attachment_path_matches(
+    candidates: Sequence[AttachmentEntry], host_path: str | Path
 ) -> list[AttachmentEntry]:
+    """Match a stored attachment without requiring the source to exist.
+
+    Lexical stored paths and aliases are authoritative for teardown. Filesystem
+    canonicalization is only an additional strategy when both objects still
+    exist; disappearance of the source must never make detach impossible.
+    """
     norm = _norm_dir(host_path)
-    return [att for att in reg.attachments if att.host_path == norm]
+    exact = [item for item in candidates if item.host_path == norm]
+    aliases = [
+        item
+        for item in candidates
+        if item not in exact and norm in (item.host_lexical_paths or ())
+    ]
+    if exact or aliases:
+        return exact + aliases
+
+    try:
+        target_resolved = str(Path(norm).resolve(strict=True))
+    except OSError:
+        return []
+    resolved: list[AttachmentEntry] = []
+    for item in candidates:
+        try:
+            stored_resolved = str(Path(item.host_path).resolve(strict=True))
+        except OSError:
+            continue
+        if stored_resolved == target_resolved:
+            resolved.append(item)
+    return resolved
 
 
-def find_attachments_for_vm(reg: Store, vm_name: str) -> list[AttachmentEntry]:
+def _attachment_sort_key(item: AttachmentEntry) -> tuple[str, str, str, str]:
+    return (
+        item.owner_principal_id,
+        item.vm_name,
+        item.guest_dst,
+        item.tag,
+    )
+
+
+def find_attachments(
+    reg: Store,
+    host_path: str | Path,
+    *,
+    owner_principal_id: str | None = None,
+) -> list[AttachmentEntry]:
+    """Return all attachment records matching a lexical path or saved alias."""
+    candidates = [
+        item
+        for item in reg.attachments
+        if (
+            owner_principal_id is None
+            or item.owner_principal_id == owner_principal_id
+        )
+    ]
+    return sorted(
+        _attachment_path_matches(candidates, host_path),
+        key=_attachment_sort_key,
+    )
+
+
+def find_attachments_for_vm(
+    reg: Store,
+    vm_name: str,
+    *,
+    owner_principal_id: str | None = None,
+) -> list[AttachmentEntry]:
     vm_name = str(vm_name).strip()
     return sorted(
-        (att for att in reg.attachments if att.vm_name == vm_name),
-        key=lambda att: (att.host_path, att.guest_dst, att.tag),
+        (
+            att
+            for att in reg.attachments
+            if att.vm_name == vm_name
+            and (
+                owner_principal_id is None
+                or att.owner_principal_id == owner_principal_id
+            )
+        ),
+        key=lambda att: (
+            att.owner_principal_id,
+            att.host_path,
+            att.guest_dst,
+            att.tag,
+        ),
     )
 
 
 def find_attachment_for_vm(
-    reg: Store, host_path: str | Path, vm_name: str
+    reg: Store,
+    host_path: str | Path,
+    vm_name: str,
+    *,
+    owner_principal_id: str | None = None,
 ) -> AttachmentEntry | None:
-    """Locate an attachment for ``vm_name`` by host path.
+    """Locate one unambiguous VM attachment without requiring source access."""
+    matches = [
+        item
+        for item in find_attachments(
+            reg, host_path, owner_principal_id=owner_principal_id
+        )
+        if item.vm_name == vm_name
+    ]
+    if len(matches) > 1:
+        details = '; '.join(
+            f'owner={item.owner_principal_id or "legacy"}, '
+            f'guest_dst={item.guest_dst or "(default)"}, tag={item.tag or "(none)"}'
+            for item in matches
+        )
+        raise AIVMError(
+            f'Multiple attachment records match {str(host_path)!r} on VM '
+            f'{vm_name!r}: {details}. Select an owner or guest destination '
+            'explicitly before detaching.'
+        )
+    return matches[0] if matches else None
 
-    Match precedence:
 
-    1. Exact lexical match against ``att.host_path``.
-    2. Match against any of ``att.host_lexical_paths`` aliases.
-    3. Match where ``resolve(input) == resolve(att.host_path)`` — handles the
-       case where the user later attaches via the canonical path that an
-       existing record was registered as a symlinked alias of (or vice
-       versa). Resolving on every comparison would be slow on stores with
-       many attachments; we only resolve when (1) and (2) miss.
-    """
-    norm = _norm_dir(host_path)
-    candidates = [a for a in reg.attachments if a.vm_name == vm_name]
-    for att in candidates:
-        if att.host_path == norm:
-            return att
-    for att in candidates:
-        if norm in (att.host_lexical_paths or []):
-            return att
-    try:
-        target_resolved = str(Path(norm).resolve())
-    except OSError:
-        return None
-    for att in candidates:
-        try:
-            if str(Path(att.host_path).resolve()) == target_resolved:
-                return att
-        except OSError:
-            continue
-    return None
+def find_attachments_for_vm_path(
+    reg: Store, host_path: str | Path, vm_name: str
+) -> list[AttachmentEntry]:
+    """Return every owner record matching one VM-local lexical path."""
+    return [
+        item
+        for item in find_attachments(reg, host_path)
+        if item.vm_name == vm_name
+    ]
+
+
+def find_attachment_by_guest_dst(
+    reg: Store,
+    *,
+    vm_name: str,
+    guest_dst: str,
+    owner_principal_id: str | None = None,
+) -> AttachmentEntry | None:
+    """Locate one attachment by its machine-global guest destination."""
+    target = str(guest_dst or '').strip()
+    matches = [
+        att
+        for att in reg.attachments
+        if att.vm_name == vm_name
+        and att.guest_dst == target
+        and (
+            owner_principal_id is None
+            or att.owner_principal_id == owner_principal_id
+        )
+    ]
+    if len(matches) > 1:
+        owners = ', '.join(
+            sorted(att.owner_principal_id or '(legacy)' for att in matches)
+        )
+        raise AIVMError(
+            f'Multiple attachments for VM {vm_name!r} use guest destination '
+            f'{target!r}: {owners}.'
+        )
+    return matches[0] if matches else None
 
 
 def find_attachment(
@@ -222,18 +413,45 @@ def find_attachment(
 
 
 def find_credentials_for_vm(
-    reg: Store, vm_name: str
+    reg: Store,
+    vm_name: str,
+    *,
+    principal_id: str | None = None,
 ) -> list[CredentialEntry]:
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
     return sorted(
-        (item for item in reg.credentials if item.vm_name == vm_name),
-        key=lambda item: item.id,
+        (
+            item
+            for item in reg.credentials
+            if item.vm_name == vm_name
+            and (principal is None or item.principal_id == principal)
+        ),
+        key=lambda item: (item.principal_id, item.id),
     )
 
 
 def find_credential(
-    reg: Store, *, vm_name: str, credential_id: str
+    reg: Store,
+    *,
+    vm_name: str,
+    credential_id: str,
+    principal_id: str | None = None,
 ) -> CredentialEntry | None:
-    for item in reg.credentials:
-        if item.vm_name == vm_name and item.id == credential_id:
-            return item
-    return None
+    principal = (
+        None if principal_id is None else str(principal_id or '').strip()
+    )
+    matches = [
+        item
+        for item in reg.credentials
+        if item.vm_name == vm_name
+        and item.id == credential_id
+        and (principal is None or item.principal_id == principal)
+    ]
+    if len(matches) > 1:
+        raise AIVMError(
+            f'Multiple credential records for VM {vm_name!r} use id '
+            f'{credential_id!r}; select an owner principal explicitly.'
+        )
+    return matches[0] if matches else None

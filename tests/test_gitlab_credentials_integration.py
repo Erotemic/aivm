@@ -62,7 +62,9 @@ def _patch_generated_host_key(monkeypatch: pytest.MonkeyPatch) -> None:
         public_path.write_text(public, encoding='utf-8')
         return replace(entry, key_fingerprint=public_key_fingerprint(public))
 
-    monkeypatch.setattr('aivm.credentials.keys.generate_host_key', fake_generate)
+    monkeypatch.setattr(
+        'aivm.credentials.keys.generate_host_key', fake_generate
+    )
 
 
 class _FakeGitLabBackend:
@@ -76,7 +78,9 @@ class _FakeGitLabBackend:
     def resolve_project(self, project: str) -> GitLabProject:
         return GitLabProject('42', project, f'https://gitlab.com/{project}')
 
-    def list_deploy_keys(self, project: GitLabProject) -> list[ProviderDeployKey]:
+    def list_deploy_keys(
+        self, project: GitLabProject
+    ) -> list[ProviderDeployKey]:
         del project
         return [] if self.key is None else [self.key]
 
@@ -112,9 +116,7 @@ class _FakeGitLabBackend:
 
 
 def test_parse_nested_gitlab_repository_and_select_provider() -> None:
-    repo = parse_repository_url(
-        'git@gitlab.com:group/subgroup/project.git'
-    )
+    repo = parse_repository_url('git@gitlab.com:group/subgroup/project.git')
     assert repo.host == 'gitlab.com'
     assert repo.owner == 'group/subgroup'
     assert repo.name == 'project'
@@ -166,7 +168,9 @@ def test_auto_provider_uses_setup_hostname() -> None:
         pytest.param('gitlab.example.co.uk', 'gitlab', id='multi_label_domain'),
         pytest.param('github.com', 'github', id='canonical_github'),
         pytest.param('ghe.corp.example', 'github', id='enterprise_github'),
-        pytest.param('notgitlab.example.com', 'github', id='not_a_gitlab_label'),
+        pytest.param(
+            'notgitlab.example.com', 'github', id='not_a_gitlab_label'
+        ),
     ],
 )
 def test_auto_provider_recognizes_self_managed_gitlab(
@@ -289,11 +293,14 @@ def test_setup_auto_selects_gitlab_from_hostname(
         ),
     )
 
-    assert VMCredsSetupCLI.main(
-        argv=False,
-        hostname='gitlab.com',
-        check=True,
-    ) == 0
+    assert (
+        VMCredsSetupCLI.main(
+            argv=False,
+            hostname='gitlab.com',
+            check=True,
+        )
+        == 0
+    )
 
 
 def test_add_explicit_gitlab_shorthand_dry_run(
@@ -401,8 +408,10 @@ def test_grant_service_persists_gitlab_kind(
     monkeypatch.setattr(
         providers,
         'add_deploy_key',
-        lambda *a, **k: events.append('provider-add')
-        or ProviderDeployKey('12', _public_key(), 'title', False),
+        lambda *a, **k: (
+            events.append('provider-add')
+            or ProviderDeployKey('12', _public_key(), 'title', False)
+        ),
     )
     monkeypatch.setattr(
         'aivm.credentials.service._resolve_ip_for_ssh_ops',

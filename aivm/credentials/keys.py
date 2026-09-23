@@ -60,7 +60,9 @@ def _handle_directory_permission_issue(
 def _safe_vm_name(vm_name: str) -> str:
     value = _SAFE_PART.sub('_', vm_name.strip()).strip('._')
     if not value:
-        raise AIVMError(f'Cannot derive credential path from VM name {vm_name!r}.')
+        raise AIVMError(
+            f'Cannot derive credential path from VM name {vm_name!r}.'
+        )
     return value
 
 
@@ -247,7 +249,9 @@ def inspect_host_keypair(
     try:
         public_text = public_path.read_text(encoding='utf-8').strip()
     except (OSError, UnicodeError) as ex:
-        raise AIVMError(f'Could not read host public key {public_path}: {ex}') from ex
+        raise AIVMError(
+            f'Could not read host public key {public_path}: {ex}'
+        ) from ex
     normalized_public = normalized_public_key(public_text)
     # Validate the public-key payload before comparing it with the key
     # derived from the private key. Otherwise an arbitrary two-token string
@@ -334,18 +338,21 @@ def generate_host_key(
             credentials_directory = directory.parent
             if not os.path.lexists(vm_directory):
                 manager.submit(
-                    ['mkdir', '-m', '700', str(vm_directory)], ownership='tool',
+                    ['mkdir', '-m', '700', str(vm_directory)],
+                    ownership='tool',
                     role='modify',
                     summary='Create protected VM data directory',
                 )
             if not os.path.lexists(credentials_directory):
                 manager.submit(
-                    ['mkdir', '-m', '700', str(credentials_directory)], ownership='tool',
+                    ['mkdir', '-m', '700', str(credentials_directory)],
+                    ownership='tool',
                     role='modify',
                     summary='Create protected credential parent directory',
                 )
             manager.submit(
-                ['mkdir', '-m', '700', str(directory)], ownership='tool',
+                ['mkdir', '-m', '700', str(directory)],
+                ownership='tool',
                 role='modify',
                 summary='Create protected host credential directory',
             )

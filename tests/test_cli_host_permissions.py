@@ -16,7 +16,7 @@ from aivm.cli.host_permissions import (
 from aivm.config import AgentVMConfig
 from aivm.config_store import load_store, save_store, upsert_vm
 from aivm.config_store.models import Store, VMEntry
-from tests.helpers import FakeProc, activate_manager
+from tests.helpers import FakeProc, activate_manager, capture_logs, command_recorder
 
 
 def test_host_permissions_command_has_no_compatibility_alias() -> None:
@@ -177,7 +177,9 @@ def test_setup_reports_no_config_gap_when_base_dir_already_resolves(
     save_store(store, cfg_path, reason='pin base_dir')
     before = cfg_path.read_bytes()
 
-    rc = HostPermissionsSetupCLI.main(argv=False, config=str(cfg_path), yes=True)
+    rc = HostPermissionsSetupCLI.main(
+        argv=False, config=str(cfg_path), yes=True
+    )
 
     assert rc == 0
     assert cfg_path.read_bytes() == before
@@ -247,14 +249,22 @@ def _stub_check_probes(
     *,
     writable_dirs: set[str] | None = None,
     blockers: list[Path] | None = None,
+    can_sudo: bool = True,
 ) -> None:
     """Pin the host probes so check verdicts depend only on the store.
 
     ``writable_dirs=None`` means every dir is user-writable; otherwise only
     the listed ones are.  These probes (group membership, live libvirt, path
-    ownership) read real host state, which is exactly what a unit test must
-    not depend on.
+    ownership, and whether this account can escalate at all) read real host
+    state, which is exactly what a unit test must not depend on.
     """
+    activate_manager(monkeypatch)
+    # `sudo -n true`, normalized: whether sudo is usable here is host state.
+    command_recorder(
+        monkeypatch,
+        {'true': FakeProc(0 if can_sudo else 1, '', 'a password is required')},
+        default=FakeProc(0),
+    )
     monkeypatch.setattr(
         'aivm.cli.host_permissions.user_in_libvirt_group', lambda: True
     )
@@ -306,6 +316,35 @@ def test_check_reports_friction_not_failure_under_as_needed(
     assert 'sudo will be used for:' in out
     assert 'the nftables firewall' in out
     assert 'VM storage under /var/lib/libvirt/aivm' in out
+
+
+def test_check_does_not_promise_sudo_to_an_account_without_it(
+    monkeypatch: MonkeyPatch, tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """ "sudo will be used for X" is a false all-clear when sudo is unavailable.
+
+    On a shared workstation the ordinary user is in the libvirt group and
+    has no sudoers entry. Telling them the host is "Ready" and that sudo
+    "will be used" describes a host they do not have; what they need to
+    know is which steps an administrator has to do for them.
+    """
+    cfg_path = tmp_path / 'config.toml'
+    _check_store(
+        cfg_path,
+        privilege_mode='as-needed',
+        base_dir='/var/lib/libvirt/aivm',
+        firewall_enabled=True,
+    )
+    _stub_check_probes(monkeypatch, writable_dirs=set(), can_sudo=False)
+
+    rc = HostPermissionsCheckCLI.main(argv=False, config=str(cfg_path))
+
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert 'sudo will be used for:' not in out
+    assert 'cannot obtain sudo' in out
+    assert 'the nftables firewall' in out
+    assert 'host administrator' in out
 
 
 def test_check_fails_every_mode_on_qemu_traversal_blockers(
@@ -409,7 +448,7 @@ def _adopt_env(
             'virsh domstate': domstate,
             'virsh shutdown': shutdown,
             'virsh start': FakeProc(0),
-            'bash -c': FakeProc(0),
+            'python3 -c': FakeProc(0),
         },
     )
     return cfg_path, tree, rec
@@ -434,17 +473,18 @@ def test_adopt_cycles_running_vm_around_the_group_handoff(
     # The store is untouched: adoption changes ownership, not config.
     assert cfg_path.read_bytes() == before
 
-    script = [c for c in rec.normalized if c[:2] == ['bash', '-c']][0][-1]
-    assert 'os.walk' in script
-    assert '/proc/self/mountinfo' in script
-    assert "followlinks=False" in script
-    assert str(tree) in script
+    command = [c for c in rec.normalized if c[:2] == ['python3', '-c']][0]
+    source = command[2]
+    assert 'os.walk' in source
+    assert '/proc/self/mountinfo' in source
+    assert 'followlinks=False' in source
+    assert command[command.index('--tree') + 1] == str(tree)
     # The handoff runs escalated, between shutdown and restart.
-    raw_bash = [c for c in rec.calls if 'bash' in c[:3]][0]
-    assert raw_bash[0] == 'sudo'
+    raw_python = [c for c in rec.calls if 'python3' in c[:3]][0]
+    assert raw_python[0] == 'sudo'
     order = [c[:2] for c in rec.normalized]
-    assert order.index(['virsh', 'shutdown']) < order.index(['bash', '-c'])
-    assert order.index(['bash', '-c']) < order.index(['virsh', 'start'])
+    assert order.index(['virsh', 'shutdown']) < order.index(['python3', '-c'])
+    assert order.index(['python3', '-c']) < order.index(['virsh', 'start'])
     assert 'Stopping vm-a first' in out
     assert 'will be restarted even if' in out
 
@@ -463,7 +503,7 @@ def test_adopt_leaves_stopped_vm_alone(
     )
 
     assert rc == 0
-    assert any(c[:2] == ['bash', '-c'] for c in rec.normalized)
+    assert any(c[:2] == ['python3', '-c'] for c in rec.normalized)
     assert not any(c[:2] == ['virsh', 'shutdown'] for c in rec.normalized)
     assert not any(c[:2] == ['virsh', 'start'] for c in rec.normalized)
 
@@ -527,3 +567,135 @@ def test_adopt_reports_when_nothing_needs_adopting(
     assert rc == 0
     assert 'Nothing to adopt' in out
     assert rec.normalized == []
+
+
+def test_setup_dry_run_describes_production_machine_store_bootstrap(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """Setup prepares the store root under the group libvirt already grants.
+
+    ``_stub_host_probes`` puts the caller in the libvirt group, which is also
+    the default store group, so no membership work remains. Creating or
+    joining that group is libvirt's to do, never setup's.
+    """
+    activate_manager(monkeypatch, yes=True)
+    _stub_host_probes(monkeypatch)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    cfg_path = tmp_path / 'config.toml'
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
+
+    rc = HostPermissionsSetupCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        base_dir=str(tmp_path / 'vmstore'),
+        dry_run=True,
+        yes=True,
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    rendered = '\n'.join(messages)
+    # The parent is prepared separately and stays root-owned and non-group-
+    # writable: it is the chain the root persistent-replay service reads from.
+    assert 'install -d -o root -g root -m 0755 /var/lib/aivm' in rendered
+    assert (
+        'install -d -o root -g libvirt -m 2770 /var/lib/aivm/machine'
+        in rendered
+    )
+    assert 'groupadd' not in rendered
+    assert 'usermod' not in rendered
+
+
+def test_setup_dry_run_creates_an_overridden_machine_group(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """A site-chosen group is ours to create, unlike the libvirt default."""
+    activate_manager(monkeypatch, yes=True)
+    _stub_host_probes(monkeypatch)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setenv('AIVM_MACHINE_GROUP', 'aivm-admins')
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.machine_group_exists', lambda name: False
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.user_in_machine_group',
+        lambda *args, **kwargs: False,
+    )
+    cfg_path = tmp_path / 'config.toml'
+    _store_with_vm(cfg_path, privilege_mode='as-needed')
+
+    rc = HostPermissionsSetupCLI.main(
+        argv=False,
+        config=str(cfg_path),
+        base_dir=str(tmp_path / 'vmstore'),
+        dry_run=True,
+        yes=True,
+    )
+
+    assert rc == 0
+    capsys.readouterr()
+    rendered = '\n'.join(messages)
+    assert 'groupadd --system aivm-admins' in rendered
+    assert 'usermod -aG aivm-admins' in rendered
+    assert (
+        'install -d -o root -g aivm-admins -m 2770 /var/lib/aivm/machine'
+        in rendered
+    )
+
+
+def test_setup_target_user_ignores_sudo_environment(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from aivm.cli.host_permissions import _resolve_setup_target_user
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setenv('SUDO_USER', 'mallory')
+    monkeypatch.setattr('aivm.cli.host_permissions.os.geteuid', lambda: 1001)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1001, username='alice'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+
+    assert _resolve_setup_target_user('') == 'alice'
+
+
+def test_root_setup_requires_explicit_target_user(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aivm.cli.host_permissions import _resolve_setup_target_user
+    from aivm.errors import AIVMError
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr('aivm.cli.host_permissions.os.geteuid', lambda: 0)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=0, gid=0, username='root'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+
+    with pytest.raises(AIVMError, match='requires an explicit'):
+        _resolve_setup_target_user('')
+    assert _resolve_setup_target_user('alice') == 'alice'

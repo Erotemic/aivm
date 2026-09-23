@@ -70,9 +70,7 @@ def test_e2e_full_cycle(tmp_path: Path) -> None:
     _require_e2e_host_dependencies(cwd=REPO_ROOT, timeout_s=timeout_s, env=env)
 
     cfg_path = tmp_path / 'e2e-full.toml'
-    cfg = make_e2e_config(
-        tmp_path, priv=priv, pub=pub, firewall_enabled=True
-    )
+    cfg = make_e2e_config(tmp_path, priv=priv, pub=pub, firewall_enabled=True)
     cfg.firewall.allow_tcp_ports = [22, 2222]
     apply_shared_image_cache(cfg)
 

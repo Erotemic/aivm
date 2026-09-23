@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pytest import MonkeyPatch
 
 from aivm.config import AgentVMConfig
@@ -10,9 +12,18 @@ from aivm.firewall import (
     _nft_script,
     apply_firewall,
     effective_firewall_table,
+    ensure_firewall_ready,
     firewall_status,
+    read_firewall_live_state,
+    read_firewall_tcp_ports,
 )
-from tests.helpers import FakeProc, activate_manager
+from tests.helpers import (
+    CommandRecorder,
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+)
 
 
 def test_effective_bridge_and_gateway_prefers_live(
@@ -67,9 +78,146 @@ def test_nft_script_allows_configured_ports(
     script = _nft_script(cfg)
     assert 'iifname "virbr-aivm" tcp dport {22, 2222} accept' in script
     assert 'iifname "virbr-aivm" udp dport {53} accept' in script
-    assert ('iifname "virbr-aivm" ip daddr {' in script) and (
-        'tcp dport {22, 2222} accept' in script
+    assert ('iifname "virbr-aivm" ct original ip daddr {' in script) and (
+        'ct original proto-dst {22, 2222} accept' in script
     )
+
+
+def test_nft_script_allows_only_configured_tcp_endpoints(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_endpoints = [
+        '10.50.56.23:14042',
+        ' 10.50.56.23:14042 ',
+    ]
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm-net', '10.77.0.1'),
+    )
+
+    script = _nft_script(cfg)
+
+    host_rule = (
+        'iifname "virbr-aivm-net" ip daddr 10.50.56.23 '
+        'tcp dport 14042 accept'
+    )
+    forward_rule = (
+        'iifname "virbr-aivm-net" ct original ip daddr 10.50.56.23 '
+        'meta l4proto tcp ct original proto-dst 14042 accept'
+    )
+    assert script.count(host_rule) == 1
+    assert script.count(forward_rule) == 1
+    assert 'tcp dport {14042} accept' not in script
+    assert 'ct original proto-dst {14042} accept' not in script
+
+
+def test_nft_script_rejects_invalid_tcp_endpoint(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_endpoints = ['10.50.56.23']
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
+    )
+
+    try:
+        _nft_script(cfg)
+    except RuntimeError as ex:
+        assert 'expected IPv4:port' in str(ex)
+    else:
+        raise AssertionError('Expected RuntimeError for invalid TCP endpoint')
+
+
+def test_nft_script_filters_forward_policy_on_pre_dnat_tuple(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.firewall.allow_tcp_ports = [14042]
+    cfg.firewall.allow_udp_ports = [14043]
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm-net', '10.77.0.1'),
+    )
+
+    script = _nft_script(cfg)
+
+    assert (
+        'ct original ip daddr {' in script
+        and 'meta l4proto tcp ct original proto-dst {14042} accept' in script
+    )
+    assert (
+        'ct original ip daddr {' in script
+        and 'meta l4proto udp ct original proto-dst {14043} accept' in script
+    )
+    assert 'iifname "virbr-aivm-net" ct original ip daddr {' in script
+    assert 'counter comment "aivm-policy-sha256:' in script
+
+
+def test_read_firewall_ports_uses_live_bridge_and_reads_policy_marker(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.network.bridge = 'virbr-stale'
+    cfg.firewall.allow_tcp_ports = [14042]
+    table = effective_firewall_table(cfg)
+    live_bridge = 'virbr-aivm-net'
+    marker = 'abc123'
+    payload = {
+        'nftables': [
+            {
+                'rule': {
+                    'family': 'inet',
+                    'table': table,
+                    'chain': 'input',
+                    'comment': f'aivm-policy-sha256:{marker}',
+                    'expr': [
+                        {
+                            'match': {
+                                'op': '==',
+                                'left': {'meta': {'key': 'iifname'}},
+                                'right': live_bridge,
+                            }
+                        },
+                        {
+                            'match': {
+                                'op': '==',
+                                'left': {
+                                    'payload': {
+                                        'protocol': 'tcp',
+                                        'field': 'dport',
+                                    }
+                                },
+                                'right': 14042,
+                            }
+                        },
+                        {'accept': None},
+                    ],
+                }
+            }
+        ]
+    }
+
+    activate_manager(monkeypatch, euid=0)
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: (live_bridge, '10.77.0.1'),
+    )
+    monkeypatch.setattr(
+        'aivm.commands.subprocess.run',
+        lambda cmd, **kwargs: FakeProc(stdout=json.dumps(payload)),
+    )
+
+    state, error = read_firewall_live_state(cfg, use_sudo=True)
+    assert error == ''
+    assert state is not None
+    assert state.bridge == live_bridge
+    assert state.tcp_ports == (14042,)
+    assert state.policy_fingerprint == marker
+    ports, error = read_firewall_tcp_ports(cfg, use_sudo=True)
+    assert error == ''
+    assert ports == (14042,)
 
 
 def test_nft_script_invalid_port_raises(
@@ -107,8 +255,10 @@ def test_firewall_status_uses_readonly_step(
     activate_manager(monkeypatch, isatty=True)
     monkeypatch.setattr(
         'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs))
-        or FakeProc(stdout='table inet aivm_fw {}'),
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs))
+            or FakeProc(stdout='table inet aivm_fw {}')
+        ),
     )
 
     table = effective_firewall_table(cfg)
@@ -150,69 +300,6 @@ def test_apply_firewall_runs_delete_then_apply(
     assert calls[2][0] == ['nft', '-f', '-']
 
 
-def test_apply_firewall_cleans_up_the_pre_upgrade_table(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """Upgrading from the un-namespaced table must not orphan it.
-
-    Older aivm installed rules under cfg.firewall.table directly; the
-    namespaced table now sits alongside it, and a leftover legacy table
-    keeps dropping traffic (making allowlist edits look ineffective).
-    Apply deletes both the current derived table and the legacy name.
-    """
-    from aivm.firewall import effective_firewall_table
-
-    cfg = AgentVMConfig()
-    cfg.firewall.table = 'aivm_sandbox'
-    calls = []
-
-    activate_manager(monkeypatch, yes_sudo=False, euid=0)
-    monkeypatch.setattr(
-        'aivm.firewall._effective_bridge_and_gateway',
-        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
-    )
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
-    )
-
-    apply_firewall(cfg, dry_run=False)
-
-    deleted = [
-        c[0][4] for c in calls if c[0][:4] == ['nft', 'delete', 'table', 'inet']
-    ]
-    assert deleted == [effective_firewall_table(cfg), 'aivm_sandbox']
-    # The freshly loaded ruleset must target only the namespaced table.
-    load = next(c for c in calls if c[0] == ['nft', '-f', '-'])
-    script = load[1]['input']
-    assert effective_firewall_table(cfg) in script
-    assert 'table inet aivm_sandbox ' not in script
-
-
-def test_remove_firewall_cleans_up_the_pre_upgrade_table(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """fw remove deletes the namespaced table and the legacy name."""
-    from aivm.firewall import effective_firewall_table, remove_firewall
-
-    cfg = AgentVMConfig()
-    cfg.firewall.table = 'aivm_sandbox'
-    calls = []
-
-    activate_manager(monkeypatch, yes_sudo=False, euid=0)
-    monkeypatch.setattr(
-        'aivm.commands.subprocess.run',
-        lambda cmd, **kwargs: calls.append((cmd, kwargs)) or FakeProc(),
-    )
-
-    remove_firewall(cfg, dry_run=False)
-
-    deleted = [
-        c[0][4] for c in calls if c[0][:4] == ['nft', 'delete', 'table', 'inet']
-    ]
-    assert deleted == [effective_firewall_table(cfg), 'aivm_sandbox']
-
-
 def test_firewall_tables_are_isolated_per_network() -> None:
     cfg_a = AgentVMConfig()
     cfg_a.firewall.table = 'aivm_fw'
@@ -229,6 +316,104 @@ def test_firewall_tables_are_isolated_per_network() -> None:
     assert effective_firewall_table(cfg_a) != effective_firewall_table(cfg_b)
     assert effective_firewall_table(cfg_a).startswith('aivm_fw_')
     assert effective_firewall_table(cfg_b).startswith('aivm_fw_')
+
+
+def _fw_scenario(
+    monkeypatch: MonkeyPatch,
+    *,
+    sudo_ok: bool,
+    table_present: bool,
+) -> tuple[AgentVMConfig, CommandRecorder, list[str]]:
+    """One host account facing one live nftables state.
+
+    ``sudo_ok=False`` is the shared-workstation default: a member of the
+    libvirt group with no sudoers entry, for whom every ``sudo`` invocation
+    fails before the wrapped program starts.
+    """
+    cfg = AgentVMConfig()
+    activate_manager(monkeypatch, yes_sudo=True)
+
+    def route(normalized: list[str]) -> FakeProc:
+        if not sudo_ok:
+            # sudo declines before the wrapped program starts, so nothing is
+            # ever observed about the table -- which is the whole point.
+            return FakeProc(1, '', 'sudo: a password is required\n')
+        if normalized[:3] == ['nft', 'list', 'table']:
+            if table_present:
+                return FakeProc(0, 'table inet x { }\n')
+            return FakeProc(1, '', 'Error: No such file or directory\n')
+        return FakeProc(0)
+
+    rec = command_recorder(monkeypatch, default=route)
+    warnings = capture_logs(
+        monkeypatch, 'aivm.firewall.log', levels=('warning',)
+    )
+    return cfg, rec, warnings
+
+
+def test_unverifiable_firewall_is_not_treated_as_a_missing_one(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A caller who cannot read nftables must not trigger a repair.
+
+    This is the shared-workstation case: an administrator installed the
+    table, and an ordinary libvirt-group user cannot see it because ``nft``
+    has no unprivileged read. Inferring "absent" from that silence would
+    schedule an install the caller cannot perform and abort a session that
+    had nothing wrong with it.
+    """
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=False, table_present=True
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert not rec.ran('nft', '-f')
+    assert not rec.ran('nft', 'delete')
+    joined = '\n'.join(warnings)
+    assert 'UNVERIFIED' in joined
+    assert 'sudo aivm firewall apply' in joined
+
+
+def test_unverifiable_firewall_never_blocks_the_caller(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Being unable to check the firewall must not stop the user working."""
+    cfg, _rec, _warnings = _fw_scenario(
+        monkeypatch, sudo_ok=False, table_present=False
+    )
+
+    # Returns rather than raising: the whole point is that a blind spot in
+    # the firewall check is not a reason to refuse a session.
+    ensure_firewall_ready(cfg)
+
+
+def test_missing_firewall_is_installed_when_the_caller_can(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=True, table_present=False
+    )
+    monkeypatch.setattr(
+        'aivm.firewall._effective_bridge_and_gateway',
+        lambda _cfg: ('virbr-aivm', '10.77.0.1'),
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert rec.ran('nft', '-f')
+    assert not warnings
+
+
+def test_present_firewall_is_left_alone(monkeypatch: MonkeyPatch) -> None:
+    cfg, rec, warnings = _fw_scenario(
+        monkeypatch, sudo_ok=True, table_present=True
+    )
+
+    ensure_firewall_ready(cfg)
+
+    assert not rec.ran('nft', '-f')
+    assert not warnings
 
 
 def test_firewall_dry_run_does_not_probe_virsh(

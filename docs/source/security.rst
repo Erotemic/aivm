@@ -84,7 +84,11 @@ Network boundary:
 
 * Guest has WAN egress by design (to support development and API access).
 * When firewall isolation is enabled, guest access to common private/LAN ranges
-  is intended to be blocked unless explicitly allowed.
+  is intended to be blocked unless explicitly allowed. Prefer scoped
+  ``firewall.allow_tcp_endpoints`` entries such as ``10.50.56.23:14042`` for
+  single-service exceptions. The older ``allow_tcp_ports`` /
+  ``allow_udp_ports`` settings are intentionally broad port bypasses applying
+  to the host and all otherwise-blocked destinations.
 
 References:
 

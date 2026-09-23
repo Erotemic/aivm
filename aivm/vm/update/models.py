@@ -9,17 +9,18 @@ from enum import StrEnum
 class RestartKind(StrEnum):
     """How invasive a post-update restart needs to be.
 
-    NONE  - no restart required (e.g. disk grow via qemu-img is live)
-    SOFT  - guest-OS reboot only; qemu process persists
-            (``virsh reboot``). Right for changes the guest reads on its
-            own boot.
-    HARD  - full power cycle; kill qemu and respawn it
-            (``virsh shutdown`` + ``virsh start``). Required when the
-            change is at the qemu/virtiofsd layer rather than inside the
-            guest: CPU and RAM are configured with ``--config`` only and
-            so are picked up on next qemu start, not on guest reboot;
-            virtiofsd's ``<binary path>`` likewise can only change when
-            qemu spawns a fresh virtiofsd.
+    NONE
+        no restart required (e.g. disk grow via qemu-img is live)
+    SOFT
+        guest-OS reboot only; qemu process persists (``virsh reboot``).
+        Right for changes the guest reads on its own boot.
+    HARD
+        full power cycle; kill qemu and respawn it (``virsh shutdown`` +
+        ``virsh start``). Required when the change is at the
+        qemu/virtiofsd layer rather than inside the guest: CPU and RAM are
+        configured with ``--config`` only and so are picked up on next qemu
+        start, not on guest reboot; virtiofsd's ``<binary path>`` likewise
+        can only change when qemu spawns a fresh virtiofsd.
     """
 
     NONE = 'none'
@@ -65,6 +66,16 @@ class FdGuardDrift:
 
 
 @dataclass(frozen=True)
+class FirewallDrift:
+    """Host-side managed firewall state that differs from config."""
+
+    action: str
+    current_tcp_ports: tuple[int, ...] | None
+    desired_tcp_ports: tuple[int, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
 class VMUpdateDrift:
     cpus: tuple[int, int] | None = None
     ram_mb: tuple[int, int] | None = None
@@ -73,6 +84,7 @@ class VMUpdateDrift:
     virtiofs_binary: tuple[VirtiofsBinaryDrift, ...] = ()
     virtiofsd_mode: str = ''
     fd_guard: FdGuardDrift | None = None
+    firewall: FirewallDrift | None = None
     notes: tuple[str, ...] = ()
 
     def has_changes(self) -> bool:
@@ -83,5 +95,6 @@ class VMUpdateDrift:
                 self.disk_bytes,
                 self.virtiofs_binary,
                 self.fd_guard,
+                self.firewall,
             )
         )

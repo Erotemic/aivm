@@ -91,9 +91,9 @@ Safety and Trust Boundaries
 
    Current implementation limitations:
 
-   * direct ``shared`` attaches use one VM virtiofs device mapping per folder
-     and can exhaust device-slot capacity (for example PCI/PCIe slots) when
-     many folders are attached to one VM
+   * ``direct-virtiofs`` attaches use one VM virtiofs device mapping per
+     folder and can exhaust device-slot capacity (for example PCI/PCIe slots)
+     when many folders are attached to one VM; the mode is named for that cost
    * ``shared-root`` and ``persistent`` reduce device-slot pressure by using a
      single export, but long-lived exports can still trigger virtiofsd
      file-descriptor retention/growth and downstream ``Too many open files``

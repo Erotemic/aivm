@@ -314,23 +314,25 @@ def test_config_init_interactive_edit_updates_password_login(
             'sys.stdin.isatty': returns(True),
         },
     )
-    answers = iter([
-        'p',  # prompt-by-prompt values
-        '',  # vm.name
-        '',  # vm.user
-        '',  # vm.cpus
-        '',  # vm.ram_mb
-        '',  # vm.disk_gb
-        'y',  # vm.allow_password_login
-        '',  # network.name
-        '',  # network.subnet_cidr
-        '',  # network.gateway_ip
-        '',  # network.dhcp_start
-        '',  # network.dhcp_end
-        '',  # paths.ssh_identity_file
-        '',  # paths.ssh_pubkey_path
-        'y',  # confirm
-    ])
+    answers = iter(
+        [
+            'p',  # prompt-by-prompt values
+            '',  # vm.name
+            '',  # vm.user
+            '',  # vm.cpus
+            '',  # vm.ram_mb
+            '',  # vm.disk_gb
+            'y',  # vm.allow_password_login
+            '',  # network.name
+            '',  # network.subnet_cidr
+            '',  # network.gateway_ip
+            '',  # network.dhcp_start
+            '',  # network.dhcp_end
+            '',  # paths.ssh_identity_file
+            '',  # paths.ssh_pubkey_path
+            'y',  # confirm
+        ]
+    )
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(
         'aivm.cli.config.init.getpass.getpass', lambda _: 'debug-pass'

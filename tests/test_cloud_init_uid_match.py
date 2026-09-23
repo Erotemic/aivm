@@ -63,9 +63,7 @@ def _render_with_uid(
         'aivm.vm.cloudinit._invoking_host_uid_gid',
         lambda: (host_uid, host_gid),
     )
-    monkeypatch.setattr(
-        'aivm.vm.cloudinit.detect_host_timezone', lambda: ''
-    )
+    monkeypatch.setattr('aivm.vm.cloudinit.detect_host_timezone', lambda: '')
     return _render_user_data_text(cfg, pubkey='ssh-ed25519 AAAA test')
 
 
@@ -74,7 +72,9 @@ def test_render_user_data_emits_primary_uid_and_gid_when_match_enabled(
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.match_host_user_ids = True
-    text = _render_with_uid(monkeypatch, host_uid=692586045, host_gid=692584961, cfg=cfg)
+    text = _render_with_uid(
+        monkeypatch, host_uid=692586045, host_gid=692584961, cfg=cfg
+    )
     assert 'uid: 692586045' in text
     assert 'primary_group: "692584961"' in text
     assert 'target_gid=692584961' in text

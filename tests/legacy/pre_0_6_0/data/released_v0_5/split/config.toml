@@ -1,0 +1,9 @@
+schema_version = 8
+active_vm = "aivm-2404-fixture-host"
+
+[behavior]
+yes_sudo = false
+auto_approve_readonly_sudo = true
+verbose = 2
+privilege_mode = "as-needed"
+credential_directory_permission_policy = "warn"

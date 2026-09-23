@@ -35,3 +35,20 @@ def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
             f'  - virtiofs fd guard (guest): {drift.fd_guard.action} '
             f'({drift.fd_guard.reason})'
         )
+    if drift.firewall is not None:
+        if drift.firewall.action == 'remove':
+            print(
+                '  - firewall: remove managed table '
+                f'({drift.firewall.reason})'
+            )
+        else:
+            current = (
+                '(missing)'
+                if drift.firewall.current_tcp_ports is None
+                else repr(drift.firewall.current_tcp_ports)
+            )
+            print(
+                '  - firewall: reconcile managed policy '
+                f'(tcp ports {current} -> {drift.firewall.desired_tcp_ports}; '
+                f'{drift.firewall.reason})'
+            )
