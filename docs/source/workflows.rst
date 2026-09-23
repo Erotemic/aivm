@@ -30,6 +30,25 @@ usually breaks reconciliation into:
 * sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
+Provision specific guest tools
+------------------------------
+
+A bare ``aivm vm provision`` runs the configured full provisioning pass. When
+one or more positional targets are supplied, AIVM provisions only those
+one-shot requirements instead of rerunning unrelated configured packages and
+tools:
+
+.. code-block:: bash
+
+   aivm vm provision pi
+   aivm vm provision rust
+   aivm vm provision docker rust
+
+This distinction is useful when a guest has unrelated package-manager drift.
+For example, provisioning ``pi`` does not perform the full baseline APT pass;
+its Node.js fallback is installed under the guest user's AIVM data directory so
+an unrelated broken APT source cannot block the Pi-specific operation.
+
 SSH into mapped directory
 -------------------------
 

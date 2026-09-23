@@ -326,18 +326,25 @@ def test_guest_pi_tool_default_off_and_opt_in() -> None:
 def test_guest_pi_script_uses_official_installer() -> None:
     cfg = AgentVMConfig()
     script = _build_pi_install_script(cfg, 'latest', True)
-    assert 'curl -fsSL https://pi.dev/install.sh | sh' in script
+    assert 'aivm_fetch_stdout https://pi.dev/install.sh | sh' in script
+    assert 'wget -qO-' in script
     # The Node prerequisite is checked in pure shell (node --version
-    # against the 22.19.0 floor the installer preflights), and NodeSource
-    # is the bootstrap when it is unmet.
+    # against the 22.19.0 floor the installer preflights). When unmet,
+    # AIVM fetches the official Node archive into user-owned storage rather
+    # than depending on apt/NodeSource.
     assert 'aivm_node_ok' in script
     assert '22.19.0' in script
-    assert 'deb.nodesource.com/setup_22.x' in script
-    assert 'apt-get install -y nodejs' in script
+    assert 'nodejs.org/dist/v${aivm_node_version}' in script
+    assert 'SHASUMS256.txt' in script
+    assert 'sha256sum' in script
+    assert 'AIVM_NODE_ROOT' in script
+    assert 'deb.nodesource.com' not in script
+    assert 'apt-get install -y nodejs' not in script
     assert 'apt-get install -y ca-certificates curl' in script
-    # The NodeSource install must take precedence over a leftover
-    # user-managed node on PATH.
-    assert 'AIVM_SYSTEM_NODE_DIR' in script
+    # The local bootstrap must take precedence over a leftover user-managed
+    # node on PATH and persist that path for later shells.
+    assert 'AIVM_PI_NODE_BIN_DIR' in script
+    assert '# >>> aivm pi node PATH >>>' in script
     # The deprecated @mariozechner/pi-coding-agent package (frozen with an
     # unpatched credential-exposure advisory) is uninstalled before the
     # installer runs, and a foreign `pi` is refused rather than clobbered.
@@ -513,20 +520,17 @@ def test_lifecycle_compatibility_exports_are_bound() -> None:
 # status probe fragment.
 #
 # The substring assertions above prove the generated shell *contains* the
-# right pieces, but they cannot prove the shell *works*: the identity
-# walk, the NodeSource bootstrap, the PATH prepend that defeats a
-# shadowing user node, the deprecated-package migration, and the
-# refusal path all only make sense when executed.  Each test below
-# builds a fake guest tree in a temp dir and runs the generated script
-# with a fully custom environment whose PATH exposes only stub
-# npm/curl/sudo/apt-get, the node/pi fixtures the case installs, and
-# real coreutils symlinked into ``core/``.
+# right pieces, but they cannot prove the shell *works*: the identity walk,
+# user-local Node bootstrap, PATH shadowing, deprecated-package migration,
+# and refusal path only make sense when executed. Each test below builds a
+# fake guest tree whose apt-get stub fails deliberately. A successful clean
+# Pi bootstrap therefore proves it does not depend on unrelated apt sources.
 # ------------------------------------------------------------------
 
 
 _PI_HARNESS_COREUTILS = (
     'bash', 'sh', 'sed', 'head', 'dirname', 'readlink', 'grep', 'env',
-    'cat', 'mkdir', 'ln', 'chmod', 'cp', 'rm',
+    'cat', 'mkdir', 'ln', 'chmod', 'cp', 'rm', 'awk', 'mktemp', 'basename',
 )
 
 # The npm fake models the subcommands the pi script uses (prefix/ls/
@@ -571,25 +575,95 @@ case "$cmd" in
 esac
 """
 
-# curl stands in for the two remote fetches the script makes; anything
-# else is an error, which catches regressions that fetch new URLs.
+# curl stands in for the Pi installer and the two files fetched from the
+# official Node.js distribution. It accepts the option shapes used by the
+# generated script and rejects every other URL.
 _PI_STUB_CURL = r"""\
 #!/bin/sh
 set -eu
-url=$2
+url=''
+out=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o)
+            out=$2
+            shift 2
+            ;;
+        -*) shift ;;
+        *)
+            url=$1
+            shift
+            ;;
+    esac
+done
 case "$url" in
     https://pi.dev/install.sh)
         echo "request $url" >> "$STUB_LOG"
         cat "$INSTALLER_SCRIPT"
         ;;
-    https://deb.nodesource.com/setup_22.x)
+    https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz)
         echo "request $url" >> "$STUB_LOG"
+        printf '%s\n' 'fake-node-archive' > "$out"
+        ;;
+    https://nodejs.org/dist/v22.19.0/SHASUMS256.txt)
+        echo "request $url" >> "$STUB_LOG"
+        printf '%s  %s\n' 'deadbeef' 'node-v22.19.0-linux-x64.tar.gz' > "$out"
         ;;
     *)
         echo "unexpected curl $url" >> "$STUB_LOG"
         exit 1
         ;;
 esac
+"""
+
+_PI_STUB_SHA256SUM = r"""\
+#!/bin/sh
+set -eu
+printf '%s  %s\n' 'deadbeef' "$1"
+"""
+
+_PI_STUB_UNAME = r"""\
+#!/bin/sh
+set -eu
+echo x86_64
+"""
+
+# tar simulates extracting the verified official Node archive into AIVM's
+# user-owned Node root. The generated node/npm are the staging fixtures below.
+_PI_STUB_TAR = r"""\
+#!/bin/sh
+set -eu
+archive=''
+dest=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -xzf)
+            archive=$2
+            shift 2
+            ;;
+        -C)
+            dest=$2
+            shift 2
+            ;;
+        *) shift ;;
+    esac
+done
+name=$(basename "$archive" .tar.gz)
+target="$dest/$name"
+mkdir -p "$target/bin"
+cp "$STAGING/node" "$target/bin/node"
+cp "$STAGING/npm" "$target/bin/npm"
+chmod +x "$target/bin/node" "$target/bin/npm"
+echo "extract $archive -> $target" >> "$STUB_LOG"
+"""
+
+# Any apt invocation is a regression for these Pi tests. The transport
+# fallback still contains apt for a guest that lacks curl, but curl is present
+# in this harness and Node bootstrap itself must remain apt-independent.
+_PI_STUB_APT_GET = r"""\
+#!/bin/sh
+echo "unexpected apt-get $*" >> "$STUB_LOG"
+exit 99
 """
 
 # sudo is a plain pass-through (the stubs run as the current user).
@@ -599,33 +673,11 @@ while [ $# -gt 0 ] && [ "$1" = '-E' ]; do shift; done
 exec "$@"
 """
 
-# apt-get update is a no-op; `apt-get install -y nodejs` simulates the
-# NodeSource package by installing the staging node/npm into the
-# AIVM_SYSTEM_NODE_DIR.
-_PI_STUB_APT_GET = """\
-#!/bin/sh
-set -eu
-if [ "$1" = 'update' ]; then
-    echo "apt-get update" >> "$STUB_LOG"
-    exit 0
-fi
-if [ "$1" = 'install' ]; then
-    echo "apt-get $*" >> "$STUB_LOG"
-    sysdir=$AIVM_SYSTEM_NODE_DIR
-    mkdir -p "$sysdir"
-    cp "$STAGING/node" "$sysdir/node"
-    cp "$STAGING/npm" "$sysdir/npm"
-    chmod +x "$sysdir/node" "$sysdir/npm"
-    exit 0
-fi
-echo "apt-get unhandled: $*" >> "$STUB_LOG"
-exit 1
-"""
-
-# The staging node is the fresh NodeSource toolchain (22.x).
+# The staging node is the user-local Node toolchain extracted from the
+# official archive.
 _PI_STAGING_NODE = """\
 #!/bin/sh
-if [ "$1" = '--version' ]; then echo v22.23.2; exit 0; fi
+if [ "$1" = '--version' ]; then echo v22.19.0; exit 0; fi
 echo "node unhandled: $*" >&2
 exit 1
 """
@@ -649,13 +701,12 @@ ln -sf "$dir/bin/pi.js" "$prefix/bin/pi"
 class _PiShellHarness:
     """Fake guest tree for executing the generated pi shell.
 
-    Layout under ``base``: ``home/`` (the fake $HOME), ``sysbin/``
-    (where the NodeSource nodejs lands, i.e. AIVM_SYSTEM_NODE_DIR),
-    ``stub/`` (fake npm/curl/sudo/apt-get), ``core/`` (real coreutils
-    as symlinks), ``prefix/`` (npm global prefix), ``staging/`` (fresh
-    NodeSource toolchain plus the npm fake), plus ``log`` (STUB_LOG)
-    and ``installer.sh`` (the pi.dev payload).  The child environment
-    is a fully custom dict, so nothing outside this tree is reachable.
+    ``node-root`` stands in for ``~/.local/share/aivm/node``; ``stub`` holds
+    fake network/privilege commands; ``core`` exposes only the ordinary Unix
+    utilities the script expects; ``prefix`` is npm's global prefix; and
+    ``staging`` is the verified Node payload that the tar stub extracts.
+    The child environment is fully custom, so nothing else on the host PATH
+    can accidentally make a test pass.
     """
 
     def __init__(
@@ -672,6 +723,7 @@ class _PiShellHarness:
         self.core = base / 'core'
         self.prefix = base / 'prefix'
         self.staging = base / 'staging'
+        self.node_root = base / 'node-root'
         self.log = base / 'log'
         for d in (
             self.home / '.local' / 'bin',
@@ -681,11 +733,15 @@ class _PiShellHarness:
             self.prefix / 'bin',
             self.prefix / 'lib' / 'node_modules',
             self.staging,
+            self.node_root,
         ):
             d.mkdir(parents=True)
         for name in _PI_HARNESS_COREUTILS:
             (self.core / name).symlink_to('/usr/bin/' + name)
         self._write(self.stub / 'curl', _PI_STUB_CURL)
+        self._write(self.stub / 'sha256sum', _PI_STUB_SHA256SUM)
+        self._write(self.stub / 'uname', _PI_STUB_UNAME)
+        self._write(self.stub / 'tar', _PI_STUB_TAR)
         self._write(self.stub / 'sudo', _PI_STUB_SUDO)
         self._write(self.stub / 'apt-get', _PI_STUB_APT_GET)
         if npm_in_stub:
@@ -704,7 +760,7 @@ class _PiShellHarness:
         path.chmod(0o755)
 
     def seed_sysbin(self, node_version: str) -> None:
-        """Preseed the system dir with a NodeSource-style toolchain."""
+        """Preseed a system-style Node/npm toolchain."""
         node = self.sysbin / 'node'
         node.write_text(
             '#!/bin/sh\n'
@@ -717,8 +773,7 @@ class _PiShellHarness:
         npm.chmod(0o755)
 
     def add_user_node(self, version: str) -> Path:
-        """A user-managed node in ~/.local/bin (typically earlier in
-        PATH than the system dir)."""
+        """A user-managed node in ~/.local/bin (typically earlier in PATH)."""
         path = self.home / '.local' / 'bin' / 'node'
         path.write_text(
             '#!/bin/sh\n'
@@ -729,9 +784,7 @@ class _PiShellHarness:
         return path
 
     def install_pi_package(self, name: str, version: str) -> Path:
-        """Install an npm global package providing ``pi`` with the
-        shape real ``npm install -g`` produces: package.json, a bin
-        script, and a prefix/bin symlink the identity walk resolves."""
+        """Install an npm global package providing ``pi`` with real shape."""
         pkg = self.prefix / 'lib' / 'node_modules' / name
         (pkg / 'bin').mkdir(parents=True)
         (pkg / 'package.json').write_text(
@@ -748,9 +801,7 @@ class _PiShellHarness:
         return pi
 
     def add_unattributable_pi(self, version: str) -> Path:
-        """A plain script named pi with no package.json in any
-        ancestor: it is on PATH but cannot be attributed to an npm
-        package."""
+        """A plain pi script with no package.json in any ancestor."""
         path = self.home / '.local' / 'bin' / 'pi'
         path.write_text(f'#!/bin/sh\necho {version}\n')
         path.chmod(0o755)
@@ -764,8 +815,8 @@ class _PiShellHarness:
         return ':'.join(str(self.base / d) for d in dirs)
 
     def default_path_dirs(self) -> tuple[str, ...]:
-        # The system dir is ahead of the user dir here; the shadowing
-        # test (case 3) passes an explicit ordering instead.
+        # The system dir is ahead of the user dir here; the shadowing test
+        # passes an explicit ordering instead.
         return ('stub', 'sysbin', 'home/.local/bin', 'prefix/bin', 'core')
 
     def run(
@@ -780,7 +831,7 @@ class _PiShellHarness:
             'STUB_LOG': str(self.log),
             'STAGING': str(self.staging),
             'INSTALLER_SCRIPT': str(self.base / 'installer.sh'),
-            'AIVM_SYSTEM_NODE_DIR': str(self.sysbin),
+            'AIVM_NODE_ROOT': str(self.node_root),
             'LC_ALL': 'C',
         }
         bash = shutil.which('bash') or '/usr/bin/bash'
@@ -800,6 +851,7 @@ class _PiShellHarness:
         log = self.log_text()
         assert 'unhandled' not in log, log
         assert 'unexpected curl' not in log, log
+        assert 'unexpected apt-get' not in log, log
         for line in log.splitlines():
             # The npm fake only logs non-modeled invocations.
             assert not line.startswith('npm '), log
@@ -821,8 +873,8 @@ def _run_pi_install_script(
 
 
 def test_pi_install_clean_machine_bootstraps_node(tmp_path: Path) -> None:
-    """Case 1: no node or npm at all -> NodeSource bootstrap ->
-    installer -> healthy end state with the profile PATH block."""
+    """Case 1: no node or npm -> verified user-local Node bootstrap ->
+    installer -> healthy end state with persistent PATH blocks."""
     harness = _PiShellHarness(tmp_path / 'base')
     res = _run_pi_install_script(harness)
     assert res.returncode == 0, res.stderr
@@ -830,10 +882,10 @@ def test_pi_install_clean_machine_bootstraps_node(tmp_path: Path) -> None:
     # version the stub installer records).
     assert res.stdout.strip() == '0.85.1'
     log = harness.log_text()
-    # The NodeSource bootstrap runs exactly once: the post-bootstrap
-    # aivm_node_ok passes, so no second fetch happens.
-    assert log.count('request https://deb.nodesource.com/setup_22.x') == 1
-    assert log.count('apt-get install -y nodejs') == 1
+    # The official archive and checksum are fetched once; apt is never touched.
+    assert log.count('request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz') == 1
+    assert log.count('request https://nodejs.org/dist/v22.19.0/SHASUMS256.txt') == 1
+    assert 'apt-get' not in log
     assert 'request https://pi.dev/install.sh' in log
     assert 'stub installer started' in log
     harness.assert_no_unhandled_stub_calls()
@@ -842,15 +894,17 @@ def test_pi_install_clean_machine_bootstraps_node(tmp_path: Path) -> None:
     profile = (harness.home / '.profile').read_text()
     assert profile.count('# >>> aivm pi PATH >>>') == 1
     assert str(harness.prefix / 'bin') in profile
-    # The fresh NodeSource toolchain landed in the system dir.
-    assert (harness.sysbin / 'node').exists()
-    assert (harness.sysbin / 'npm').exists()
+    # The fresh Node toolchain landed under AIVM's user-owned data root.
+    local_node = harness.node_root / 'node-v22.19.0-linux-x64'
+    assert (local_node / 'bin' / 'node').exists()
+    assert (local_node / 'bin' / 'npm').exists()
+    assert profile.count('# >>> aivm pi node PATH >>>') == 1
+    assert str(local_node / 'bin') in profile
 
 
 def test_pi_install_node_without_npm_bootstraps(tmp_path: Path) -> None:
-    """Case 2: a sufficient user node (v22.19.0) but no npm anywhere ->
-    the NodeSource bootstrap still fires, and the user's node file is
-    left byte-identical."""
+    """Case 2: sufficient user node but no npm -> local bootstrap still
+    supplies a complete toolchain without modifying the user's node."""
     harness = _PiShellHarness(tmp_path / 'base', npm_in_stub=False)
     user_node = harness.add_user_node('22.19.0')
     before = user_node.read_text()
@@ -858,16 +912,15 @@ def test_pi_install_node_without_npm_bootstraps(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stderr
     assert res.stdout.strip() == '0.85.1'
     log = harness.log_text()
-    assert 'request https://deb.nodesource.com/setup_22.x' in log
+    assert 'request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz' in log
     assert 'request https://pi.dev/install.sh' in log
     harness.assert_no_unhandled_stub_calls()
     assert user_node.read_text() == before
 
 
-def test_pi_install_old_user_node_shadowed_by_nodesource(tmp_path: Path) -> None:
-    """Case 3: an old user node (v18) earlier in PATH -> the
-    bootstrap's PATH prepend makes the fresh NodeSource node win, so
-    the install succeeds without touching the user's node."""
+def test_pi_install_old_user_node_shadowed_by_local_bootstrap(tmp_path: Path) -> None:
+    """Case 3: old user node earlier in PATH -> the local bootstrap's
+    PATH prepend makes Node 22.19 win without touching the user's node."""
     harness = _PiShellHarness(tmp_path / 'base')
     user_node = harness.add_user_node('18.0.0')
     before = user_node.read_text()
@@ -878,7 +931,7 @@ def test_pi_install_old_user_node_shadowed_by_nodesource(tmp_path: Path) -> None
     assert res.returncode == 0, res.stderr
     assert res.stdout.strip() == '0.85.1'
     log = harness.log_text()
-    assert log.count('request https://deb.nodesource.com/setup_22.x') == 1
+    assert log.count('request https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.gz') == 1
     assert 'request https://pi.dev/install.sh' in log
     harness.assert_no_unhandled_stub_calls()
     # The user's v18 node is still there and byte-identical.  rc 0 also
@@ -904,8 +957,8 @@ def test_pi_install_migrates_deprecated_mariozechner_package(tmp_path: Path) -> 
     log = harness.log_text()
     assert 'uninstall -g @mariozechner/pi-coding-agent' in log
     assert 'request https://pi.dev/install.sh' in log
-    # The seeded Node was adequate, so no NodeSource bootstrap.
-    assert 'deb.nodesource.com' not in log
+    # The seeded Node was adequate, so no Node archive bootstrap.
+    assert 'nodejs.org/dist/' not in log
     harness.assert_no_unhandled_stub_calls()
     # The deprecated package is gone (an empty scope dir is harmless
     # residue, as with real npm); pi now resolves to earendil.
@@ -971,9 +1024,8 @@ def test_pi_install_updates_below_floor_earendil(tmp_path: Path) -> None:
     assert res.stdout.strip().splitlines()[-1] == '0.85.1'
     log = harness.log_text()
     assert 'request https://pi.dev/install.sh' in log
-    # Updating an existing healthy-shaped install does not re-bootstrap
-    # node.
-    assert 'deb.nodesource.com' not in log
+    # Updating an existing healthy-shaped install does not re-bootstrap Node.
+    assert 'nodejs.org/dist/' not in log
     harness.assert_no_unhandled_stub_calls()
     pkg_json = (
         harness.prefix / 'lib' / 'node_modules'

@@ -981,30 +981,38 @@ status/firewall/update regression suite passes, architecture generated docs are
 current, and the fix directly covers the observed path where
 `10.77.0.1:14042` was DNATed to `172.19.0.3:4000` before AIVM's forward filter.
 
-## 2026-09-23 14:15:00 -0400
+## 2026-09-23 16:05:41 -0400
 
-Implemented destination-scoped TCP firewall exceptions via
-`firewall.allow_tcp_endpoints`, motivated by the need to expose one LAN/host
-service without broadening access to the same port across every blocked CIDR.
-I kept `allow_tcp_ports` unchanged for compatibility but documented its broad
-bypass semantics more explicitly. Endpoint rules cover both host-local
-destinations (input chain) and routed/NATed destinations (forward chain, using
-the pre-DNAT conntrack tuple), because the same configured address can
-terminate on the host rather than traverse the forward hook.
+I investigated `aivm vm provision pi` failing before the Pi installer ran. The
+reported guest had an unrelated expired third-party APT source, and the named
+Pi request still entered the full provisioning path, whose unconditional
+`apt-get update` aborted on that repository. I changed positional `vm provision`
+targets into genuinely narrow one-shot provisioning: a bare command still runs
+the configured full pass, while named targets install only what was explicitly
+requested. This reuses the existing narrow `provision_guest_requirements`
+workflow rather than adding a second provisioning implementation.
 
-I kept the first endpoint syntax deliberately narrow: canonical IPv4 plus TCP
-port (`IPv4:port`), with validation and deduplication. I did not add CIDR or
-IPv6 endpoint syntax; that can be designed separately if needed. The policy
-fingerprint includes normalized endpoint exceptions, so `aivm vm update`
-notices endpoint edits and reapplies the managed table live. The older broad
-port fields remain supported and are now described as broad bypasses rather
-than destination-scoped allows.
+Pi needed one additional change because its previous Node.js fallback used the
+NodeSource APT repository. I replaced that fallback with a verified official
+Node.js 22.19.0 binary archive installed under the guest user's AIVM data
+directory. That keeps the Pi-specific path independent of unrelated APT source
+health once a download transport is available, while preserving the existing
+Pi package identity checks, deprecated-package migration, and official pi.dev
+installer. The local Node bin directory is persisted in `.profile` alongside
+the Pi path.
 
-Focused firewall/config/update tests pass, including canonical store roundtrip
-coverage. The broader non-E2E tree reached 1308 passed and 14 skipped; four
-permission-sensitive tests fail only because this container can write paths
-that those tests intentionally expect an ordinary non-root runner not to be
-able to write. `compileall` and `git diff --check` pass. The main remaining
-runtime limitation is the same as prior firewall work: this container does not
-provide a useful host nftables environment for applying the generated rules,
-so syntax/semantics are covered by generated-script regression tests.
+The main tradeoff is semantic: positional provisioning targets are now narrow
+instead of "full configured provisioning plus these extras". I think that
+matches the command shape and the existing one-shot helper better, and avoids
+surprising side effects when asking for one tool. Bare `aivm vm provision`
+retains the old full behavior. Docker remains package-manager-backed, so a
+broken APT configuration can still block `aivm vm provision docker`; that is an
+intrinsic dependency rather than the accidental coupling fixed here.
+
+I added hermetic shell execution coverage in which `apt-get` deliberately
+fails, yet a clean Pi install bootstraps Node and succeeds. The focused CLI,
+provisioning, and guest-tool suite passes 52 tests, and the architecture suite
+passes 12 tests. The broader non-E2E tree passes 1307 tests with 14 skips; its
+four failures under the root test runner are the existing permission-model
+assertions, and those same four pass when rerun as an unprivileged user. Python
+compilation and `git diff --check` also pass.

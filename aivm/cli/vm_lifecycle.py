@@ -40,6 +40,7 @@ from ..vm import (
 from ..vm.create_ops import create_vm_from_defaults
 from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
 from ..vm.guest_tools import GUEST_TOOL_REGISTRY
+from ..vm.provision import provision_guest_requirements
 from ..vm.rename import rename_managed_vm, validate_vm_name
 from ._common import _BaseCommand
 
@@ -268,12 +269,13 @@ class VMDeleteCLI(_BaseCommand):
 
 
 class VMProvisionCLI(_BaseCommand):
-    """Provision configured components plus one-shot named targets.
+    """Provision configured components or one-shot named targets.
 
-    ``docker`` reuses the existing ``provision.install_docker`` path. Other
-    positional names enable registry-defined guest tools for this invocation.
-    Version or channel pins remain config values; the registry supplies each
-    one-shot tool default.
+    With no positional names, this runs the configured full provisioning pass.
+    With positional names, only those targets are provisioned. ``docker`` maps
+    to its Ubuntu packages; other names use the registry-defined guest-tool
+    installers. Version or channel pins remain config values; the registry
+    supplies each one-shot tool default.
     """
 
     tools: list[str] = kwconf.Value(
@@ -316,11 +318,32 @@ class VMProvisionCLI(_BaseCommand):
                 ', '.join(PROVISION_TARGET_NAMES),
             )
             return 2
-        if 'docker' in requested:
-            cfg.provision.install_docker = True
-        GUEST_TOOL_REGISTRY.apply_enable_overrides(
-            cfg.tools, (name for name in requested if name != 'docker')
-        )
+        if requested:
+            tool_names = tuple(name for name in requested if name != 'docker')
+            package_names = (
+                ('docker.io', 'docker-compose-v2')
+                if 'docker' in requested
+                else ()
+            )
+            ip = '0.0.0.0'
+            if not args.dry_run:
+                ip = _resolve_ip_for_ssh_ops(
+                    cfg,
+                    yes=args.yes,
+                    purpose=(
+                        'Query VM networking state before targeted SSH '
+                        'provisioning.'
+                    ),
+                )
+            provision_guest_requirements(
+                cfg,
+                ip,
+                packages=package_names,
+                tools=tool_names,
+                dry_run=args.dry_run,
+            )
+            return 0
+
         if not args.dry_run:
             _resolve_ip_for_ssh_ops(
                 cfg,

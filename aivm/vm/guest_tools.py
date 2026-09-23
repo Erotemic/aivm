@@ -483,10 +483,8 @@ _PI_IDENTITY_PROBE = textwrap.dedent(r"""
 # Body of the pi install script (after the shared probe header).  Kept as
 # one plain string — not an f-string — so shell ${...} and brace groups
 # stay literal; the two dynamic parts (transport bootstrap, shared probe)
-# are joined in _build_pi_install_script.  The Node prerequisite check is
-# pure shell (node --version) so the script stays testable with a stub
-# node, and AIVM_SYSTEM_NODE_DIR (default /usr/bin) is a test seam naming
-# where NodeSource's nodejs package lands.
+# are joined in _build_pi_install_script. The Node prerequisite check and
+# bootstrap stay in shell so the script remains testable without a real guest.
 _PI_INSTALL_BODY = textwrap.dedent("""
 # pi's official installer preflights for Node.js 22.19.0+ and npm; its
 # own Node bootstrap is interactive-only, so in a no-tty session like
@@ -498,6 +496,80 @@ aivm_node_ok() {
     [ -n "$aivm_node_version" ] || return 1
     aivm_version_at_least "$aivm_node_version" 22.19.0
 }
+aivm_fetch_to() {
+    aivm_fetch_url=$1
+    aivm_fetch_out=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$aivm_fetch_url" -o "$aivm_fetch_out"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$aivm_fetch_out" "$aivm_fetch_url"
+    else
+        echo 'Neither curl nor wget is installed; cannot download Pi prerequisites.' >&2
+        return 1
+    fi
+}
+aivm_fetch_stdout() {
+    aivm_fetch_url=$1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$aivm_fetch_url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$aivm_fetch_url"
+    else
+        echo 'Neither curl nor wget is installed; cannot download the Pi installer.' >&2
+        return 1
+    fi
+}
+# Install the minimum supported Node release under the guest user's home when
+# the existing toolchain is missing or too old. This deliberately avoids apt:
+# a broken unrelated third-party apt source must not prevent provisioning pi.
+aivm_install_node_local() {
+    aivm_node_version=22.19.0
+    case "$(uname -m)" in
+        x86_64|amd64) aivm_node_arch=x64 ;;
+        aarch64|arm64) aivm_node_arch=arm64 ;;
+        armv7l|armv7*) aivm_node_arch=armv7l ;;
+        ppc64le) aivm_node_arch=ppc64le ;;
+        s390x) aivm_node_arch=s390x ;;
+        *)
+            echo "Unsupported architecture for the pi Node.js bootstrap: $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+    aivm_node_root=${AIVM_NODE_ROOT:-"$HOME/.local/share/aivm/node"}
+    aivm_node_name="node-v${aivm_node_version}-linux-${aivm_node_arch}"
+    aivm_node_home="$aivm_node_root/$aivm_node_name"
+    if [ ! -x "$aivm_node_home/bin/node" ] || [ ! -x "$aivm_node_home/bin/npm" ]; then
+        if [ -e "$aivm_node_home" ]; then
+            echo "AIVM's Node.js bootstrap target exists but is incomplete: $aivm_node_home" >&2
+            echo 'Remove that incomplete directory and re-run: aivm vm provision pi' >&2
+            return 1
+        fi
+        for aivm_cmd in tar sha256sum awk mktemp; do
+            if ! command -v "$aivm_cmd" >/dev/null 2>&1; then
+                echo "Missing command required to bootstrap Node.js for pi: $aivm_cmd" >&2
+                return 1
+            fi
+        done
+        aivm_tmp=$(mktemp -d "${TMPDIR:-/tmp}/aivm-node.XXXXXX") || return 1
+        aivm_archive="$aivm_node_name.tar.gz"
+        aivm_dist="https://nodejs.org/dist/v${aivm_node_version}"
+        aivm_fetch_to "$aivm_dist/$aivm_archive" "$aivm_tmp/$aivm_archive"
+        aivm_fetch_to "$aivm_dist/SHASUMS256.txt" "$aivm_tmp/SHASUMS256.txt"
+        aivm_expected=$(awk -v name="$aivm_archive" '$2 == name {print $1; exit}' "$aivm_tmp/SHASUMS256.txt")
+        aivm_actual=$(sha256sum "$aivm_tmp/$aivm_archive" | awk '{print $1}')
+        if [ -z "$aivm_expected" ] || [ "$aivm_expected" != "$aivm_actual" ]; then
+            echo "Node.js archive checksum verification failed for $aivm_archive" >&2
+            rm -rf "$aivm_tmp"
+            return 1
+        fi
+        mkdir -p "$aivm_node_root"
+        tar -xzf "$aivm_tmp/$aivm_archive" -C "$aivm_node_root"
+        rm -rf "$aivm_tmp"
+    fi
+    AIVM_PI_NODE_BIN_DIR="$aivm_node_home/bin"
+    export AIVM_PI_NODE_BIN_DIR
+    export PATH="$AIVM_PI_NODE_BIN_DIR:$PATH"
+}
 # Global npm operations need write access to the npm prefix; use sudo
 # only when the current user cannot write it directly.
 aivm_npm_global() {
@@ -507,18 +579,11 @@ aivm_npm_global() {
         sudo npm "$@"
     fi
 }
-# Distro apt nodejs packages are too old on common Ubuntu and Debian
-# guests, so Node 22 comes from NodeSource's apt repo when needed.
 if ! aivm_node_ok; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-    # Prefer the just-installed node for the rest of this script, so a
-    # leftover user-managed node earlier in PATH cannot shadow it for
-    # the installer.
-    export PATH="${AIVM_SYSTEM_NODE_DIR:-/usr/bin}:$PATH"
+    aivm_install_node_local
 fi
 if ! aivm_node_ok; then
-    echo 'Node.js 22.19.0+ and npm are required to install pi, but no suitable toolchain was found after the NodeSource bootstrap.' >&2
+    echo 'Node.js 22.19.0+ and npm are required to install pi, but no suitable toolchain was found after the user-local bootstrap.' >&2
     exit 1
 fi
 # pi moved from @mariozechner/pi-coding-agent (frozen at 0.73.1, with an
@@ -555,7 +620,7 @@ case $aivm_identity_rc in
                 ;;
             *)
                 echo "refusing to install pi: the pi on PATH is owned by package '$aivm_pi_name', not @earendil-works/pi-coding-agent" >&2
-                echo 'remove or rename that pi, then re-run: aivm provision pi' >&2
+                echo 'remove or rename that pi, then re-run: aivm vm provision pi' >&2
                 exit 1
                 ;;
         esac
@@ -564,12 +629,12 @@ case $aivm_identity_rc in
         ;;
     *)
         echo 'refusing to install pi: the pi on PATH is not an install of @earendil-works/pi-coding-agent (or its deprecated predecessor)' >&2
-        echo 'remove or rename that pi, then re-run: aivm provision pi' >&2
+        echo 'remove or rename that pi, then re-run: aivm vm provision pi' >&2
         exit 1
         ;;
 esac
 if [ "$aivm_need_install" -eq 1 ]; then
-    curl -fsSL https://pi.dev/install.sh | sh
+    aivm_fetch_stdout https://pi.dev/install.sh | sh
 fi
 # Verify the identity of what actually provides `pi` on PATH after the
 # (possibly skipped) install: a `pi` that is not
@@ -606,6 +671,18 @@ if ! command -v pi >/dev/null 2>&1; then
     exit 1
 fi
 PROFILE="$HOME/.profile"
+if [ -n "${AIVM_PI_NODE_BIN_DIR:-}" ] && ! grep -Fq '# >>> aivm pi node PATH >>>' "$PROFILE" 2>/dev/null; then
+    {
+        echo ''
+        echo '# >>> aivm pi node PATH >>>'
+        printf '%s\\n' "case ':\\$PATH:' in"
+        printf '%s\\n' "  *':$AIVM_PI_NODE_BIN_DIR:'*) ;;"
+        printf '%s\\n' "  *) PATH='$AIVM_PI_NODE_BIN_DIR':\\$PATH ;;"
+        printf '%s\\n' 'esac'
+        printf '%s\\n' 'export PATH'
+        echo '# <<< aivm pi node PATH <<<'
+    } >> "$PROFILE"
+fi
 if ! grep -Fq '# >>> aivm pi PATH >>>' "$PROFILE" 2>/dev/null; then
     {
         echo ''
@@ -628,7 +705,7 @@ def _build_pi_install_script(
     """Build a script that installs pi's current package with identity
     gating around the official installer.
 
-    ``curl -fsSL https://pi.dev/install.sh | sh`` remains the package
+    The official ``https://pi.dev/install.sh`` script remains the package
     install mechanism (it wraps ``npm install -g
     @earendil-works/pi-coding-agent``), but aivm gates it on the *identity*
     of whatever ``pi`` is on PATH rather than the bare binary name:
@@ -645,9 +722,12 @@ def _build_pi_install_script(
 
     The installer's Node prerequisite (Node.js 22.19.0+ *and* npm) is
     checked in pure shell (``node --version``) so the whole script stays
-    testable with a stub ``node``; when it is unmet, Node 22 is installed
-    from NodeSource's apt repo.  The 0.78.1 and 22.19.0 floors mirror the
-    package history / installer preflight; verify them against pi.dev's
+    testable with a stub ``node``. When it is unmet, the official Node.js
+    22.19.0 binary archive is checksum-verified and installed under the
+    guest user's AIVM data directory instead of using apt. That isolation is
+    intentional: unrelated broken third-party apt sources must not block a
+    targeted ``aivm vm provision pi``. The 0.78.1 and 22.19.0 floors mirror
+    the package history / installer preflight; verify them against pi.dev's
     docs and https://pi.dev/install.sh when they change.
 
     pi.dev's installer always installs the latest release and offers no
@@ -658,7 +738,7 @@ def _build_pi_install_script(
     transport_bootstrap = ''
     if ensure_transport:
         transport_bootstrap = """
-if ! command -v curl >/dev/null 2>&1; then
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     sudo apt-get update -y
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
 fi
@@ -701,9 +781,9 @@ def _pi_status_check() -> str:
                 exit 0
             fi
             if [ "$aivm_pi_name" = '@mariozechner/pi-coding-agent' ]; then
-                echo "pi $aivm_pi_version on PATH is the deprecated @mariozechner/pi-coding-agent; run 'aivm provision pi' to migrate to @earendil-works/pi-coding-agent" >&2
+                echo "pi $aivm_pi_version on PATH is the deprecated @mariozechner/pi-coding-agent; run 'aivm vm provision pi' to migrate to @earendil-works/pi-coding-agent" >&2
             elif [ "$aivm_pi_name" = '@earendil-works/pi-coding-agent' ]; then
-                echo "pi $aivm_pi_version on PATH is older than 0.78.1; run 'aivm provision pi' to update" >&2
+                echo "pi $aivm_pi_version on PATH is older than 0.78.1; run 'aivm vm provision pi' to update" >&2
             else
                 echo "pi on PATH is owned by '$aivm_pi_name', not @earendil-works/pi-coding-agent" >&2
             fi

@@ -1357,7 +1357,7 @@
         {
           "imported": "aivm.vm.provision",
           "importer": "aivm.cli.vm_lifecycle",
-          "occurrences": 1,
+          "occurrences": 2,
           "path": "aivm/cli/vm_lifecycle.py"
         },
         {

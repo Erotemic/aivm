@@ -83,3 +83,41 @@ def test_targeted_package_and_tool_share_one_install_step(
     script = str(manager.calls[0][-1])
     assert 'apt-get install -y tmux' in script
     assert 'apt-get install -y code' in script
+
+
+def test_targeted_pi_does_not_run_unconditional_apt_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'aivm-2404'
+    transport = SimpleNamespace(
+        ssh_identity_file='/tmp/id_ed25519',
+        ssh_target=lambda ip: f'agent@{ip}',
+    )
+    provision_mod = importlib.import_module('aivm.vm.provision')
+    monkeypatch.setattr(
+        provision_mod, 'guest_transport_from_effective_cfg', lambda cfg: transport
+    )
+    monkeypatch.setattr(
+        provision_mod, 'require_ssh_identity', lambda path: '/tmp/id_ed25519'
+    )
+    manager = FakeCommandManager()
+    monkeypatch.setattr(provision_mod.CommandManager, 'current', lambda: manager)
+
+    provision_guest_requirements(
+        cfg,
+        '10.77.0.103',
+        tools=('pi',),
+    )
+
+    script = str(manager.calls[0][-1])
+    lines = script.splitlines()
+    # The narrow wrapper enters the Pi installer directly. The only apt update
+    # left is Pi's guarded transport fallback when curl is absent.
+    assert lines[:2] == ['set -euo pipefail', 'set -euo pipefail']
+    assert script.count('sudo apt-get update -y') == 1
+    apt_index = lines.index('    sudo apt-get update -y')
+    assert (
+        lines[apt_index - 1]
+        == 'if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then'
+    )

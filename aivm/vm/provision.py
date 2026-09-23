@@ -48,8 +48,9 @@ def provision_guest_requirements(
     context = guest_transport_from_effective_cfg(effective)
     ident = require_ssh_identity(context.ssh_identity_file)
 
-    remote_parts = ['set -euo pipefail', 'sudo apt-get update -y']
+    remote_parts = ['set -euo pipefail']
     if package_names:
+        remote_parts.append('sudo apt-get update -y')
         quoted_packages = ' '.join(shlex.quote(name) for name in package_names)
         remote_parts.append(
             'sudo DEBIAN_FRONTEND=noninteractive '
