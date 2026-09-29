@@ -8,5 +8,9 @@
     "storage": "local",
     "tool_format": "zipapp",
     "tool_path": ".llm_resource_tally/tool"
+  },
+  "publication": {
+    "append_ledger_dir": ".llm_resource_tally/ledger",
+    "lifetime_totals_path": ".llm_resource_tally/lifetime-totals.json"
   }
 }
