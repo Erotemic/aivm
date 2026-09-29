@@ -63,7 +63,7 @@ requires-dist = [
     { name = "aivm", extras = ["optional"], marker = "extra == 'all'" },
     { name = "aivm", extras = ["tests"], marker = "extra == 'all'" },
     { name = "coverage", marker = "extra == 'tests'", specifier = ">=6.1.1" },
-    { name = "kwconf", specifier = ">=0.11.0" },
+    { name = "kwconf", specifier = ">=0.12.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=0.18.0" },
     { name = "pygments", marker = "extra == 'optional'", specifier = ">=2.19.2" },
@@ -367,11 +367,11 @@ wheels = [
 
 [[package]]
 name = "kwconf"
-version = "0.11.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c6/77/20ce9cf65bc20e769db9a506e72e291f7a38ee766393110858a15e93ea1b/kwconf-0.11.0.tar.gz", hash = "sha256:cd8e9192a3c0e54750368980f9bf6b02676f75b76ac3830b656e977cc55f988f", size = 172077, upload-time = "2026-08-07T15:25:34.385Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/a8/b49b210a85a785fa0cf6c849896c23b2286c7c3d01a8c7bd6d43e55751f6/kwconf-0.12.0.tar.gz", hash = "sha256:036437d556358ab5cb04d1d0f91185b9538b7abbc253cd58b662d46dc45fa4dd", size = 189608, upload-time = "2026-09-20T00:50:05.718Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/7a/4b4a1c503cc621eb2256e5d18385ccfb546f536008cdb4db0189426f5e77/kwconf-0.11.0-py3-none-any.whl", hash = "sha256:4691afdf7173ca0d42302a2cf17910917ac3bd02729e0b2f2cb2aa1e3b2ee18b", size = 110488, upload-time = "2026-08-07T15:25:32.964Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/5f/d1f5f2771e807b41dfecc27753d3d96718d564c7abee6dcc30da928a61cd/kwconf-0.12.0-py3-none-any.whl", hash = "sha256:a78f9709618d6affe8f64988ed5b14592d4716883bb3f4cec6dedc0c955c7d2e", size = 121219, upload-time = "2026-09-20T00:50:03.95Z" },
 ]
 
 [[package]]

@@ -201,10 +201,13 @@ class AgentVMModalCLI(kwconf.ModalCLI):
         parser: Any = None,
         special_options: Any = ...,
         fuzzy_hyphens: int | None = None,
+        short_alias_clusters: bool | None = None,
     ) -> Any:
-        # kwconf 0.10.x hardcodes the modal version option as ``--version``.
-        # Build the normal command tree without that one action, then restore
-        # the same destination with the conventional ``-V`` spelling as well.
+        # kwconf hardcodes the modal version option as ``--version`` with
+        # no ``-V`` alias (true in every release through 0.12.0, and no
+        # hook to customize the spelling). Build the normal command tree
+        # without that one action, then restore the same destination with
+        # the conventional ``-V`` spelling as well.
         version = self.version
         self.version = None
         try:
@@ -212,6 +215,7 @@ class AgentVMModalCLI(kwconf.ModalCLI):
                 parser=parser,
                 special_options=special_options,
                 fuzzy_hyphens=fuzzy_hyphens,
+                short_alias_clusters=short_alias_clusters,
             )
         finally:
             self.version = version
