@@ -1,0 +1,310 @@
+"""E2E checks for non-destructive foreground persistent replay.
+
+These tests use real Linux bind mounts because ``findmnt`` presentation and
+mountpoint behavior are precisely what unit fakes can accidentally model wrong.
+They do not create a VM; they exercise the generated guest replay helper against
+the same kernel mount primitives it uses inside a guest.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from aivm.persistent_replay import persistent_replay_python
+from tests.e2e._helpers import require_passwordless_sudo
+from tests.persistent_helpers import _exec_guest_replay_helper
+
+pytestmark = pytest.mark.e2e
+
+
+def _require_e2e() -> None:
+    if os.getenv('AIVM_E2E') != '1':
+        pytest.skip('Set AIVM_E2E=1 to run e2e tests.')
+    require_passwordless_sudo()
+
+
+def _sudo(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ['sudo', '-n', *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _ensure_record_as_guest_root(
+    helper_source: str,
+    *,
+    persistent_root: Path,
+    record: dict[str, object],
+    preserve_live_mounts: bool,
+) -> None:
+    """Run one replay operation with the privilege used by the guest service."""
+    driver = r"""
+import json
+import sys
+
+source = sys.stdin.read()
+namespace = {"__name__": "aivm_e2e_guest_replay"}
+exec(compile(source, "<aivm-persistent-attachment-replay>", "exec"), namespace)
+namespace["PERSISTENT_ROOT_MOUNT"] = sys.argv[1]
+namespace["ensure_record"](
+    json.loads(sys.argv[2]),
+    preserve_live_mounts=(sys.argv[3] == "1"),
+)
+"""
+    proc = subprocess.run(
+        [
+            'sudo',
+            '-n',
+            sys.executable,
+            '-c',
+            driver,
+            str(persistent_root),
+            json.dumps(record, sort_keys=True),
+            '1' if preserve_live_mounts else '0',
+        ],
+        input=helper_source,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or '').strip()
+        raise AssertionError(
+            'Privileged guest replay operation failed: '
+            f'rc={proc.returncode}: {detail}'
+        )
+
+
+def _mount_bind_or_skip(source: Path, target: Path) -> None:
+    proc = subprocess.run(
+        ['sudo', '-n', 'mount', '--bind', str(source), str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return
+    detail = (proc.stderr or proc.stdout or '').strip()
+    if 'permission denied' in detail.lower() or 'operation not permitted' in detail.lower():
+        pytest.skip(f'E2E runner lacks mount capability: {detail}')
+    raise AssertionError(f'Could not create E2E bind mount: {detail}')
+
+
+def test_foreground_replay_keeps_busy_bind_of_same_directory(
+    tmp_path: Path,
+) -> None:
+    """A healthy busy workspace is already converged, regardless of SOURCE text."""
+    _require_e2e()
+    persistent_root = tmp_path / 'persistent-root'
+    source = persistent_root / 'token'
+    target = tmp_path / 'workspace'
+    source.mkdir(parents=True)
+    target.mkdir()
+    (source / 'sentinel.txt').write_text('live', encoding='utf-8')
+
+    _mount_bind_or_skip(source, target)
+    holder = subprocess.Popen(['sleep', '60'], cwd=target)
+    try:
+        ns = _exec_guest_replay_helper(persistent_replay_python())
+        ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+        unmount_calls: list[str] = []
+        real_unmount = ns['unmount_guest_dst']
+
+        def record_unmount(guest_dst: str, *, ignore_busy: bool = False) -> None:
+            unmount_calls.append(guest_dst)
+            real_unmount(guest_dst, ignore_busy=ignore_busy)
+
+        ns['unmount_guest_dst'] = record_unmount
+        ns['ensure_record'](
+            {
+                'guest_dst': str(target),
+                'shared_root_token': 'token',
+                'access': 'rw',
+                'enabled': True,
+            },
+            preserve_live_mounts=True,
+        )
+
+        assert unmount_calls == []
+        assert ns['same_directory_object'](str(source), str(target))
+        assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'live'
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+        _sudo('umount', str(target))
+
+
+def test_foreground_replay_refuses_to_replace_different_busy_bind(
+    tmp_path: Path,
+) -> None:
+    """A genuine conflict is diagnosed while the live mount remains intact."""
+    _require_e2e()
+    persistent_root = tmp_path / 'persistent-root'
+    desired = persistent_root / 'desired-token'
+    live = tmp_path / 'live-source'
+    target = tmp_path / 'workspace'
+    desired.mkdir(parents=True)
+    live.mkdir()
+    target.mkdir()
+    (live / 'sentinel.txt').write_text('do-not-disrupt', encoding='utf-8')
+
+    _mount_bind_or_skip(live, target)
+    holder = subprocess.Popen(['sleep', '60'], cwd=target)
+    try:
+        ns = _exec_guest_replay_helper(persistent_replay_python())
+        ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+        unmount_calls: list[str] = []
+        real_unmount = ns['unmount_guest_dst']
+
+        def record_unmount(guest_dst: str, *, ignore_busy: bool = False) -> None:
+            unmount_calls.append(guest_dst)
+            real_unmount(guest_dst, ignore_busy=ignore_busy)
+
+        ns['unmount_guest_dst'] = record_unmount
+        with pytest.raises(ns['LiveMountConflictError'], match='leaves live mounts untouched'):
+            ns['ensure_record'](
+                {
+                    'guest_dst': str(target),
+                    'shared_root_token': 'desired-token',
+                    'access': 'rw',
+                    'enabled': True,
+                },
+                preserve_live_mounts=True,
+            )
+
+        assert unmount_calls == []
+        assert ns['same_directory_object'](str(live), str(target))
+        assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'do-not-disrupt'
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)
+        _sudo('umount', str(target))
+
+
+def _mount_tmpfs_or_skip(target: Path) -> None:
+    proc = subprocess.run(
+        [
+            'sudo',
+            '-n',
+            'mount',
+            '-t',
+            'tmpfs',
+            '-o',
+            f'uid={os.getuid()},gid={os.getgid()},mode=0755',
+            'aivm-persistent-root',
+            str(target),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return
+    detail = (proc.stderr or proc.stdout or '').strip()
+    if (
+        'permission denied' in detail.lower()
+        or 'operation not permitted' in detail.lower()
+    ):
+        pytest.skip(f'E2E runner lacks mount capability: {detail}')
+    raise AssertionError(f'Could not create E2E tmpfs mount: {detail}')
+
+
+def _make_mount_private(target: Path) -> None:
+    """Keep the one-namespace E2E faithful to the real host/guest boundary."""
+    proc = subprocess.run(
+        ['sudo', '-n', 'mount', '--make-private', str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or '').strip()
+        raise AssertionError(f'Could not make E2E mount private: {detail}')
+
+
+def _umount_if_mounted(target: Path) -> None:
+    probe = subprocess.run(
+        ['mountpoint', '-q', str(target)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode == 0:
+        _sudo('umount', str(target))
+
+
+def test_foreground_replay_repairs_reboot_stale_same_token_bind(
+    tmp_path: Path,
+) -> None:
+    """Reproduce host-replay ordering and repair only the stale AIVM bind."""
+    _require_e2e()
+    persistent_root = tmp_path / 'persistent-root'
+    persistent_root.mkdir()
+    target = tmp_path / 'workspace'
+    target.mkdir()
+    live_source = tmp_path / 'live-source'
+    live_source.mkdir()
+    (live_source / 'sentinel.txt').write_text('current', encoding='utf-8')
+
+    _mount_tmpfs_or_skip(persistent_root)
+    token = persistent_root / 'token'
+    token.mkdir()
+    (token / 'sentinel.txt').write_text('pre-replay', encoding='utf-8')
+    _mount_bind_or_skip(token, target)
+    # The real guest bind lives in a separate mount namespace behind virtiofs.
+    # This E2E models host and guest in one namespace, so make the simulated
+    # guest mount private before changing the host-side token. Otherwise mount
+    # propagation can update ``target`` too and erase the stale-bind condition
+    # the test is intended to reproduce.
+    _make_mount_private(target)
+    try:
+        # Host replay replaces the token with the real source after the guest
+        # has already bound the old token directory into the workspace.
+        _mount_bind_or_skip(live_source, token)
+        try:
+            ns = _exec_guest_replay_helper(persistent_replay_python())
+            ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+
+            # Prove the fixture actually reproduced the reboot race before
+            # asking the replay helper to classify or repair it.
+            assert not ns['same_directory_object'](str(token), str(target))
+            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'pre-replay'
+            assert (token / 'sentinel.txt').read_text(encoding='utf-8') == 'current'
+
+            info = ns['current_mount_info'](str(target))
+            assert info is not None
+            assert ns['mount_is_same_persistent_token'](
+                info,
+                {
+                    'guest_dst': str(target),
+                    'shared_root_token': 'token',
+                },
+            ), info
+
+            _ensure_record_as_guest_root(
+                persistent_replay_python(),
+                persistent_root=persistent_root,
+                record={
+                    'guest_dst': str(target),
+                    'shared_root_token': 'token',
+                    'access': 'rw',
+                    'enabled': True,
+                },
+                preserve_live_mounts=True,
+            )
+
+            assert ns['same_directory_object'](str(token), str(target))
+            assert (target / 'sentinel.txt').read_text(encoding='utf-8') == 'current'
+        finally:
+            _umount_if_mounted(token)
+    finally:
+        _umount_if_mounted(target)
+        _umount_if_mounted(persistent_root)

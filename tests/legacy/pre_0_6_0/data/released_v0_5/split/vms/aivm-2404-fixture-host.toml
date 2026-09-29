@@ -1,0 +1,39 @@
+[[vms]]
+name = "aivm-2404-fixture-host"
+network_name = "aivm-net"
+[vms.vm]
+name = "aivm-2404-fixture-host"
+user = "alice-agent"
+cpus = 6
+ram_mb = 12288
+disk_gb = 80
+allow_password_login = true
+password = "agent"
+timezone = ""
+match_host_user_ids = true
+mirror_shared_home_folders = false
+[vms.image]
+ubuntu_img_url = "https://cloud-images.ubuntu.com/releases/noble/release-20260225/ubuntu-24.04-server-cloudimg-amd64.img"
+cache_name = "noble-base.img"
+redownload = false
+[vms.provision]
+enabled = true
+install_docker = true
+packages = ["git", "jq", "ripgrep", "fd-find", "tmux", "htop", "unzip", "ca-certificates", "curl"]
+[vms.paths]
+base_dir = "/var/lib/libvirt/aivm"
+state_dir = "/home/alice/.local/state/aivm"
+ssh_identity_file = "/home/alice/.ssh/id_aivm_ed25519"
+ssh_pubkey_path = "/home/alice/.ssh/id_aivm_ed25519.pub"
+[vms.virtiofs]
+inode_file_handles = ""
+fd_guard = true
+fd_guard_threshold = 500000
+fd_guard_emergency_threshold = 750000
+fd_guard_interval_sec = 600
+[[vms.attachments]]
+host_path = "/srv/aivm-fixture/alice-project"
+mode = "shared"
+access = "rw"
+guest_dst = "/home/alice-agent/code/project"
+tag = "fixture-project"

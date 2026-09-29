@@ -16,8 +16,8 @@ from ..attachments.persistent import (
     _persistent_root_host_dir,
 )
 from ..attachments.resolve import (
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _resolve_attachment,
 )
@@ -38,19 +38,27 @@ from ..config_review import (
 from ..config_store import (
     find_network,
     find_vm,
-    load_store,
     materialize_vm_cfg,
     save_store,
     upsert_network,
     upsert_vm_with_network,
 )
+from ..domain_authority import stamp_domain_authority
 from ..errors import AIVMError
 from ..firewall import apply_firewall
 from ..net import ensure_network
 from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
+from ..profile_store import UserProfileStore
 from ..resource_checks import (
     vm_resource_impossible_lines,
     vm_resource_warning_lines,
+)
+from ..scoped_store import (
+    StoreScope,
+    load_scope_profile,
+    load_scope_store,
+    persist_creator_vm,
+    resolve_store_scope,
 )
 from ..services import maybe_install_missing_host_deps
 from ..vm import create_or_start_vm
@@ -131,7 +139,7 @@ def _prompt_bool_with_default(prompt: str, default: bool) -> bool:
     while True:
         raw = input(f'{prompt} [{default_label}]: ').strip().lower()
         if not raw:
-            return bool(default)
+            return default
         if raw in {'1', 'true', 't', 'y', 'yes', 'on'}:
             return True
         if raw in {'0', 'false', 'f', 'n', 'no', 'off'}:
@@ -232,12 +240,14 @@ def _confirm_reviewed_vm_create(cfg: AgentVMConfig) -> AgentVMConfig:
 
 def _resolve_create_config(
     cfg_path: Path, vm_override: str | None
-) -> tuple[AgentVMConfig, Store]:
+) -> tuple[AgentVMConfig, Store, StoreScope, UserProfileStore | None]:
     """Resolve the config for VM creation from store defaults or fallback.
 
     Returns the resolved config and the store (for later persistence).
     """
-    reg = load_store(cfg_path)
+    scope = resolve_store_scope(str(cfg_path))
+    reg = load_scope_store(scope)
+    profile = load_scope_profile(scope) if scope.is_machine else None
     if reg.defaults is not None:
         # Work on a copy so per-create overrides (e.g. --vm) never mutate
         # persisted defaults in the registry.
@@ -245,8 +255,11 @@ def _resolve_create_config(
     elif reg.vms:
         # Fallback for stores that predate/omit [defaults]: use an existing
         # managed VM definition as the template source for new VM creation.
+        selected_active = (
+            profile.active_vm if profile is not None else reg.active_vm
+        )
         template_name = (
-            reg.active_vm if find_vm(reg, reg.active_vm) is not None else ''
+            selected_active if find_vm(reg, selected_active) is not None else ''
         )
         if not template_name:
             template_name = sorted(v.name for v in reg.vms)[0]
@@ -265,7 +278,14 @@ def _resolve_create_config(
     if vm_override:
         cfg.vm.name = vm_override.strip()
 
-    return cfg, reg
+    if profile is not None:
+        cfg.vm.user = profile.default_guest_user or cfg.vm.user
+        cfg.paths.ssh_identity_file = profile.ssh_identity_file
+        cfg.paths.ssh_pubkey_path = profile.ssh_pubkey_path
+        cfg.paths.state_dir = profile.state_dir
+        cfg.verbosity = int(profile.behavior.verbose)
+
+    return cfg, reg, scope, profile
 
 
 def _initial_share_mapping_for_create(
@@ -295,7 +315,7 @@ def _initial_share_mapping_for_create(
         mode_opt,
         access_opt,
     )
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag, str(attachment.mode)
     if attachment.mode == ATTACHMENT_MODE_SHARED_ROOT:
         return (
@@ -377,7 +397,7 @@ def create_vm_from_defaults(
         0 on success, 1 on error.
     """
     try:
-        cfg, reg = _resolve_create_config(cfg_path, vm_override)
+        cfg, reg, scope, profile = _resolve_create_config(cfg_path, vm_override)
     except RuntimeError as ex:
         if 'No config defaults found in store' in str(ex):
             return 1
@@ -456,28 +476,42 @@ def create_vm_from_defaults(
         create_or_start_vm(
             cfg,
             dry_run=dry_run,
-            recreate=bool(force and existing is not None),
+            recreate=force and existing is not None,
             config_store_path=cfg_path,
             share_source_dir=initial_share_source_dir,
             share_tag=initial_share_tag,
         )
+        if scope.is_machine and scope.machine_layout is not None:
+            # Claim the domain for this store while its definition is fresh,
+            # so a second store on this host can tell whose it is.
+            stamp_domain_authority(
+                cfg.vm.name, scope.machine_layout, dry_run=dry_run
+            )
 
     # Persist the new VM record
     if not dry_run:
-        prev_active_vm = reg.active_vm
-        upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+        prev_active_vm = (
+            profile.active_vm if profile is not None else reg.active_vm
+        )
         set_active = set_default
         if not set_active and not yes and prev_active_vm != cfg.vm.name:
             set_active = _prompt_set_created_vm_default(cfg.vm.name)
-        if not set_active:
-            reg.active_vm = prev_active_vm
-        save_store(
-            reg,
-            cfg_path,
-            reason=(
-                f'Persist created VM record for {cfg.vm.name} and update '
-                'the active default selection.'
-            ),
+        reason = (
+            f'Persist created VM record for {cfg.vm.name}, adopt the creator '
+            'principal, and update the active default selection.'
         )
+        if scope.is_machine:
+            persist_creator_vm(
+                scope,
+                reg,
+                cfg,
+                set_active=set_active,
+                reason=reason,
+            )
+        else:
+            upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+            if not set_active:
+                reg.active_vm = prev_active_vm
+            save_store(reg, cfg_path, reason=reason)
 
     return 0

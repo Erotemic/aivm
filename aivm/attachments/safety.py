@@ -281,6 +281,26 @@ def confirm_sensitive_attach(
     return ans == 'yes'
 
 
+def warn_shared_home_attachment(host_src: Path, *, shared_vm: bool) -> None:
+    """Make trusted-user exposure explicit for paths under the caller's home."""
+    if not shared_vm:
+        return
+    try:
+        home = _canonical_path(Path.home())
+        source = _canonical_path(host_src)
+    except (OSError, RuntimeError):
+        return
+    if source == home or not _is_same_or_under(source, home):
+        return
+    log.warning(
+        'Attachment {} comes from the caller home directory and is being '
+        'exported into a shared VM. In trusted-user mode, other enrolled guest '
+        'principals may be able to inspect the mounted content even though the '
+        'attachment record remains owned by the current principal.',
+        source,
+    )
+
+
 @dataclass(frozen=True)
 class AttachmentSafetyReport:
     """Aggregated result of the attachment preflight checks."""

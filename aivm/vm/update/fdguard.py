@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import shlex
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
 from ...commands import CommandManager, Elided
 from ...config import AgentVMConfig
 from ...errors import AIVMError
@@ -40,7 +42,8 @@ def _guest_ssh_cmd(
     base64 file payloads and run to several kilobytes on one line, which is
     unreadable in a log, so the caller says what the script does instead.
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     return [
         'ssh',
         *ssh_base_args(
@@ -49,7 +52,7 @@ def _guest_ssh_cmd(
             connect_timeout=10,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         Elided(f'sh -c {shlex.quote(script)}', label),
     ]
 
@@ -62,7 +65,7 @@ def _fdguard_drift(
     Returns ``(drift-or-None, notes)``. Probe failures are notes, not
     errors: the guard must never block an otherwise valid hardware update.
     """
-    desired = bool(cfg.virtiofs.fd_guard)
+    desired = cfg.virtiofs.fd_guard
     if not vm_running:
         return None, (
             'VM is not running; guest virtiofs fd guard state was not '

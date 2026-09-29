@@ -12,7 +12,8 @@ Path A: One-command project entry (recommended)
 
 Behavior:
 
-* Uses global config store at ``~/.config/aivm/config.toml``.
+* Uses the shared machine store under ``/var/lib/aivm/machine`` and the
+  caller's private XDG profile.
 * If VM context is missing, ``aivm`` can bootstrap required config/VM steps.
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what
@@ -31,11 +32,85 @@ Path B: Explicit config-store setup
    aivm config init
    aivm vm create
 
-This path is explicit and reproducible. ``aivm config init`` establishes VM
-defaults and SSH identity configuration; ``aivm vm create`` provisions the VM.
-During interactive init, choose the editor path for direct TOML editing or the
-prompt-by-prompt path for a terminal-only walkthrough.  The detected defaults
-table is shown once; later confirmations summarize only values that changed.
+For the first host user, this path is explicit and reproducible:
+``aivm config init`` establishes machine defaults and the private SSH profile,
+and ``aivm vm create`` provisions the VM. During interactive creator init,
+choose the editor path for direct TOML editing or the prompt-by-prompt path for
+a terminal-only walkthrough.
+
+A later host user runs only:
+
+.. code-block:: bash
+
+   aivm config init
+
+If the hostname-qualified name exactly matches a managed VM, AIVM creates that
+user's profile and enrolls a separate guest account through the restricted
+bootstrap channel. It never rewrites the VM definition during a join and never
+silently adopts an unmanaged same-name libvirt domain. A stopped VM may leave a
+recoverable pending principal; retry with ``aivm vm access reconcile``.
+
+Shared workstation: what the administrator does once
+-----------------------------------------------------
+
+Two host privileges are separate, and on a shared workstation only one of
+them is usually handed out. Membership in the ``libvirt`` and ``aivm`` groups
+lets an ordinary user drive libvirt and the shared machine store directly.
+Sudo is a different grant, and a few operations need root on *every*
+invocation no matter how the host is prepared:
+
+* managed nftables rules --- installing them, and reading them back;
+* establishing a *new* host bind mount, which the ``persistent`` and
+  ``shared-root`` attachment modes use to stage a folder under the VM's
+  export root.
+
+So an administrator prepares the host once:
+
+.. code-block:: bash
+
+   # For each user who will share the VM.
+   sudo aivm host permissions setup --user alice
+
+   # Install the sandbox rules. They live in the live kernel ruleset, so
+   # this is needed again after every host reboot.
+   sudo aivm firewall apply
+
+Users log out and back in (or ``newgrp libvirt``) for the group change, then
+run ``aivm config init`` to join, and work normally from there.
+
+What a user without sudo can and cannot do
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+They can create, start, stop, restart, update and delete VMs, attach folders
+in ``direct-virtiofs`` and ``git`` modes, manage credentials, and open
+sessions. Their already-established ``persistent`` attachments keep working:
+AIVM re-asserts those binds only when they have actually drifted, so an
+ordinary start needs no privileges.
+
+They cannot install or read the nftables rules, and cannot create a *new*
+``persistent`` or ``shared-root`` attachment. Two ways around the second:
+
+.. code-block:: bash
+
+   # No host privileges needed; maps the folder straight into the guest.
+   # Costs one guest PCIe slot per folder, so keep the set small.
+   aivm vm attach ~/proj --mode direct-virtiofs
+
+   # Or an administrator declares it on the user's behalf, so the record is
+   # owned by that user rather than by the admin.
+   sudo aivm vm attach /home/alice/proj \
+       --owner_principal <alice-access-identity> --admin_override
+
+Run ``aivm host permissions check`` to see which of these apply to your
+account; it reports what is unavailable to *you* rather than what a
+privileged account could do.
+
+Because ``nft`` has no unprivileged read, a user without sudo cannot verify
+the firewall. AIVM says so rather than guessing: a session or VM start whose
+firewall cannot be checked continues with a clear "rules UNVERIFIED" warning
+instead of assuming the table is missing and trying to reinstall it. It
+never silently treats an unreadable firewall as an absent one, and never
+blocks a user over a check they are not allowed to perform.
 
 After either path
 -----------------
@@ -93,6 +168,11 @@ Notes
   attachment intent with replay helpers. ``shared-root`` remains available with
   ``aivm attach . --mode shared-root`` for the legacy single-export path, and
   both modes still rely on virtiofs.
+* On shared-machine installs, attachments are globally visible but owned by the
+  principal that declared them. Ordinary code/SSH restoration uses only the
+  caller's records. Mutating another owner's declaration requires both
+  ``--owner_principal`` and ``--admin_override``; guest destinations must be
+  unique across the VM.
 * Settings sync has been removed for now because it was too flaky. Use explicit
   attachments or manual Git operations until a replacement is designed.
 

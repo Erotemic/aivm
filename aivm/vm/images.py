@@ -82,7 +82,8 @@ def _resolve_expected_image_sha256(*, image_url: str) -> tuple[str | None, str]:
         out = (
             CommandManager.current()
             .run(
-                ['sha256sum', str(file_path)], role='read',
+                ['sha256sum', str(file_path)],
+                role='read',
                 check=True,
                 capture=True,
             )
@@ -139,7 +140,8 @@ def _verify_image_sha256(
     actual = out.strip().split()[0].lower() if out.strip() else ''
     if actual != expected_sha256:
         mgr.submit(
-            ['rm', '-f', str(image_path)], ownership='tool',
+            ['rm', '-f', str(image_path)],
+            ownership='tool',
             sudo=path_needs_sudo(image_path),
             role='modify',
             check=False,
@@ -216,23 +218,83 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                 'Cached base image failed checksum verification; redownloading. {}',
                 ex,
             )
+    transfer_cmd = (
+        ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
+        if local_file_src is not None
+        else [
+            'curl',
+            '-L',
+            '--fail',
+            '--progress-bar',
+            '-o',
+            str(tmp_img),
+            url,
+        ]
+    )
+    use_sudo = path_needs_sudo(p['img_dir'])
+    mkdir_request = mgr.request(
+        ['mkdir', '-p', str(p['img_dir'])],
+        ownership='tool',
+        sudo=use_sudo,
+        role='modify',
+        check=True,
+        capture=True,
+        summary='Create VM image directory',
+        detail=f'target={p["img_dir"]}',
+    )
+    cleanup_request = mgr.request(
+        ['rm', '-f', str(tmp_img)],
+        ownership='tool',
+        sudo=use_sudo,
+        role='modify',
+        check=False,
+        capture=True,
+        summary='Remove stale partial image file',
+        detail=f'target={tmp_img}',
+    )
+    transfer_request = mgr.request(
+        transfer_cmd,
+        ownership='tool',
+        sudo=use_sudo,
+        role='modify',
+        check=True,
+        capture=(local_file_src is not None),
+        summary=(
+            'Copy local base image into staging file'
+            if local_file_src is not None
+            else 'Download base image into staging file'
+        ),
+        detail=(
+            f'source={local_file_src} destination={tmp_img}'
+            if local_file_src is not None
+            else f'url={url} destination={tmp_img}'
+        ),
+    )
+    move_request = mgr.request(
+        ['mv', '-f', str(tmp_img), str(base_img)],
+        ownership='tool',
+        sudo=use_sudo,
+        role='modify',
+        check=True,
+        capture=True,
+        summary='Move staged base image into cache',
+        detail=f'source={tmp_img} destination={base_img}',
+    )
+    checksum_request = mgr.request(
+        ['sha256sum', str(base_img)],
+        sudo=use_sudo,
+        role='read',
+        check=True,
+        capture=True,
+        summary='Compute base image checksum',
+        detail=f'path={base_img} source={checksum_source}',
+    )
     if dry_run:
-        if local_file_src is not None:
-            log.info(
-                'DRYRUN: cp {} {}; mv {} {}',
-                local_file_src,
-                tmp_img,
-                tmp_img,
-                base_img,
-            )
-        else:
-            log.info(
-                'DRYRUN: curl -L --fail -o {} {}; mv {} {}',
-                tmp_img,
-                url,
-                tmp_img,
-                base_img,
-            )
+        mkdir_request.preview()
+        cleanup_request.preview()
+        transfer_request.preview()
+        move_request.preview()
+        checksum_request.preview()
         return base_img
     _ensure_qemu_access(cfg, dry_run=False)
     if local_file_src is not None:
@@ -241,7 +303,6 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         )
     else:
         log.info('Downloading base image to {} (showing progress)', base_img)
-    use_sudo = path_needs_sudo(p['img_dir'])
     with mgr.intent(
         'Fetch base image',
         why=(
@@ -260,72 +321,11 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
                 ),
                 approval_scope=f'image-fetch:{cfg.vm.name}',
             ):
-                mkdir_handle = mgr.submit(
-                    ['mkdir', '-p', str(p['img_dir'])], ownership='tool',
-                    sudo=use_sudo,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary='Create VM image directory',
-                    detail=f'target={p["img_dir"]}',
-                )
-                cleanup_tmp_handle = mgr.submit(
-                    ['rm', '-f', str(tmp_img)], ownership='tool',
-                    sudo=use_sudo,
-                    role='modify',
-                    check=False,
-                    capture=True,
-                    summary='Remove stale partial image file',
-                    detail=f'target={tmp_img}',
-                )
-                transfer_cmd = (
-                    ['cp', '--reflink=auto', str(local_file_src), str(tmp_img)]
-                    if local_file_src is not None
-                    else [
-                        'curl',
-                        '-L',
-                        '--fail',
-                        '--progress-bar',
-                        '-o',
-                        str(tmp_img),
-                        url,
-                    ]
-                )
-                transfer_handle = mgr.submit(
-                    transfer_cmd, ownership='tool',
-                    sudo=use_sudo,
-                    role='modify',
-                    check=True,
-                    capture=(local_file_src is not None),
-                    summary=(
-                        'Copy local base image into staging file'
-                        if local_file_src is not None
-                        else 'Download base image into staging file'
-                    ),
-                    detail=(
-                        f'source={local_file_src} destination={tmp_img}'
-                        if local_file_src is not None
-                        else f'url={url} destination={tmp_img}'
-                    ),
-                )
-                move_handle = mgr.submit(
-                    ['mv', '-f', str(tmp_img), str(base_img)], ownership='tool',
-                    sudo=use_sudo,
-                    role='modify',
-                    check=True,
-                    capture=True,
-                    summary='Move staged base image into cache',
-                    detail=f'source={tmp_img} destination={base_img}',
-                )
-                checksum_handle = mgr.submit(
-                    ['sha256sum', str(base_img)],
-                    sudo=use_sudo,
-                    role='read',
-                    check=True,
-                    capture=True,
-                    summary='Compute base image checksum',
-                    detail=f'path={base_img} source={checksum_source}',
-                )
+                mkdir_handle = mkdir_request.submit()
+                cleanup_tmp_handle = cleanup_request.submit()
+                transfer_handle = transfer_request.submit()
+                move_handle = move_request.submit()
+                checksum_handle = checksum_request.submit()
                 mkdir_handle.result()
                 cleanup_tmp_handle.result()
                 transfer_handle.result()
@@ -346,7 +346,8 @@ def fetch_image(cfg: AgentVMConfig, *, dry_run: bool = False) -> Path:
         )
         if expected_sha256 and actual != expected_sha256:
             mgr.submit(
-                ['rm', '-f', str(base_img)], ownership='tool',
+                ['rm', '-f', str(base_img)],
+                ownership='tool',
                 sudo=use_sudo,
                 role='modify',
                 check=False,

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
 
 from loguru import logger
 
@@ -10,12 +14,22 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..privilege import virsh_needs_sudo
-from ..runtime import virsh_cmd
+from ..runtime import pin_locale, virsh_cmd, virsh_domain_missing
 from .connectivity import get_ip_cached
+from .paths import _paths
 
 log = logger
 
+
 def _vm_defined(name: str) -> bool:
+    """Return a definitive domain-presence answer or fail closed.
+
+    ``virsh dominfo`` uses a nonzero exit status for both a genuinely missing
+    domain and inspection failures such as a broken libvirt connection or a
+    permission denial.  Only the recognized no-domain diagnostic is absence;
+    every other failure aborts the caller before destructive work can begin.
+    The stderr is string-matched, so the invocation pins the C locale.
+    """
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
         with mgr.step(
@@ -27,7 +41,7 @@ def _vm_defined(name: str) -> bool:
             approval_scope=f'vm-defined:{name}',
         ):
             res = mgr.submit(
-                virsh_cmd('dominfo', name),
+                pin_locale(virsh_cmd('dominfo', name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -37,70 +51,270 @@ def _vm_defined(name: str) -> bool:
             ).result()
     else:
         res = mgr.run(
-            virsh_cmd('dominfo', name),
+            pin_locale(virsh_cmd('dominfo', name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
             summary=f'Inspect VM definition {name}',
         )
-    return res.code == 0
+    if res.code == 0:
+        return True
+    detail = (res.stderr or res.stdout or '').strip()
+    if virsh_domain_missing(detail):
+        return False
+    raise AIVMError(
+        f'Could not determine whether VM {name!r} is defined: '
+        f'{detail or f"virsh dominfo exited with status {res.code}"}'
+    )
 
-def _destroy_and_undefine_vm(name: str) -> None:
+
+def domain_is_defined(name: str) -> bool:
+    """Return whether the system libvirt connection defines ``name``."""
+    return _vm_defined(name)
+
+
+@dataclass(frozen=True)
+class DomainRemovalReport:
+    """Observed result of one libvirt domain removal."""
+
+    storage_paths: tuple[Path, ...]
+    retained_storage_paths: tuple[Path, ...]
+
+    @property
+    def storage_removed(self) -> bool:
+        return not self.retained_storage_paths
+
+
+def require_managed_storage_path(
+    cfg: AgentVMConfig,
+    path: Path,
+    *,
+    action: str,
+    recovery: str = '',
+) -> None:
+    """Refuse any storage path outside this VM's AIVM-managed tree.
+
+    This is the single containment rule guarding every flow that reaches
+    ``virsh undefine --remove-all-storage`` (deletion and recreate alike).
+    Both the literal and the fully resolved forms must sit under the managed
+    VM base directory so a symlinked component cannot smuggle an external
+    file into storage removal.  ``action`` names the refused operation in
+    the error; ``recovery`` optionally appends caller-specific next steps.
+    """
+    root = Path(os.path.abspath(os.fspath(_paths(cfg)['base_dir'])))
+    candidate = Path(os.path.abspath(os.fspath(path)))
+    resolved_root = root.resolve(strict=False)
+    resolved_candidate = candidate.resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+        resolved_candidate.relative_to(resolved_root)
+    except ValueError as ex:
+        message = (
+            f'VM {cfg.vm.name!r} uses storage outside its AIVM-managed tree: '
+            f'{candidate}. Refusing {action} before changing attachment, '
+            'credential, libvirt, or storage state.'
+        )
+        if recovery:
+            message += f' {recovery}'
+        raise AIVMError(message) from ex
+
+
+def domain_file_storage_paths(name: str) -> tuple[Path, ...]:
+    """Return every file-backed ``<disk>`` source from the live domain XML.
+
+    Every ``<disk>`` element is inventoried regardless of its ``device``
+    attribute: ``virsh undefine --remove-all-storage`` deletes cdrom/floppy
+    media exactly like writable disks, so containment validation and
+    deletion journaling must see them too.  A removable drive without a
+    ``<source>`` (empty tray) has nothing to delete and is skipped; a disk
+    proper without a source, or any non-file source, fails closed.
+    """
+    if not _vm_defined(name):
+        return ()
     mgr = CommandManager.current()
-    mgr.run(
-        virsh_cmd('destroy', name),
+    res = mgr.run(
+        virsh_cmd('dumpxml', name),
         sudo=virsh_needs_sudo(),
-        role='modify',
+        role='read',
         check=False,
         capture=True,
+        summary=f'Capture managed storage coordinates for VM {name}',
     )
-    # Different libvirt states require different undefine flags.
-    attempts = [
-        virsh_cmd(
-            'undefine',
-            name,
-            '--managed-save',
-            '--snapshots-metadata',
-            '--nvram',
-            '--remove-all-storage',
-        ),
-        virsh_cmd(
-            'undefine',
-            name,
-            '--managed-save',
-            '--snapshots-metadata',
-            '--nvram',
-        ),
-        virsh_cmd('undefine', name, '--nvram', '--remove-all-storage'),
-        virsh_cmd('undefine', name, '--nvram'),
-        virsh_cmd('undefine', name, '--remove-all-storage'),
-        virsh_cmd('undefine', name),
-    ]
-    errs: list[str] = []
-    for cmd in attempts:
-        res = mgr.run(
-            cmd,
+    if res.code != 0:
+        detail = (res.stderr or res.stdout or '').strip()
+        raise AIVMError(
+            f'Could not capture storage paths before deleting VM {name!r}: '
+            f'{detail or "virsh dumpxml failed"}'
+        )
+    try:
+        root = ET.fromstring(res.stdout)
+    except ET.ParseError as ex:
+        raise AIVMError(
+            f'Could not parse libvirt XML before deleting VM {name!r}: {ex}'
+        ) from ex
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for disk in root.findall('./devices/disk'):
+        device = str(disk.attrib.get('device', 'disk')).strip() or 'disk'
+        source = disk.find('source')
+        if source is None:
+            if device == 'disk':
+                raise AIVMError(
+                    f'VM {name!r} has a disk without a source; AIVM cannot '
+                    'verify storage deletion.'
+                )
+            # A removable drive (cdrom/floppy) with no inserted media has
+            # nothing for --remove-all-storage to delete.
+            continue
+        raw = str(source.attrib.get('file', '')).strip()
+        if not raw:
+            source_kind = (
+                ', '.join(
+                    f'{key}={value!r}'
+                    for key, value in sorted(source.attrib.items())
+                )
+                or '(no source attributes)'
+            )
+            raise AIVMError(
+                f'VM {name!r} uses non-file or otherwise unverifiable disk '
+                f'storage ({source_kind}). Refusing deletion because AIVM '
+                'cannot prove that every managed disk was removed.'
+            )
+        if raw in seen:
+            continue
+        path = Path(raw)
+        if not path.is_absolute():
+            raise AIVMError(
+                f'VM {name!r} has a non-absolute file-backed disk path: {raw!r}'
+            )
+        seen.add(raw)
+        paths.append(path)
+    return tuple(paths)
+
+
+def _host_path_exists(path: Path) -> bool:
+    """Return a definitive storage-path presence answer or fail closed."""
+    result = CommandManager.current().run(
+        pin_locale(['stat', '--format=%F', '--', str(path)]),
+        sudo=virsh_needs_sudo(),
+        role='read',
+        check=False,
+        capture=True,
+        summary=f'Verify managed VM storage removal: {path}',
+    )
+    if result.code == 0:
+        return True
+    detail = (result.stderr or result.stdout or '').strip()
+    confirmed_absent = (
+        result.code == 1
+        and detail.startswith('stat: cannot stat')
+        and detail.endswith('No such file or directory')
+    )
+    if confirmed_absent:
+        return False
+    raise AIVMError(
+        f'Could not determine whether managed VM storage exists: {path}: '
+        f'{detail or f"stat exited with status {result.code}"}'
+    )
+
+
+def _destroy_and_undefine_vm(
+    name: str,
+    *,
+    storage_paths: tuple[Path, ...] | None = None,
+) -> DomainRemovalReport:
+    """Remove one domain without ever falling back to retained storage."""
+    expected = None if storage_paths is None else tuple(storage_paths)
+    captured = domain_file_storage_paths(name) if expected is None else expected
+
+    def require_expected_inventory() -> None:
+        if expected is None:
+            return
+        current = domain_file_storage_paths(name)
+        expected_names = {os.path.abspath(os.fspath(path)) for path in expected}
+        current_names = {os.path.abspath(os.fspath(path)) for path in current}
+        if current_names != expected_names:
+            added = sorted(current_names - expected_names)
+            removed = sorted(expected_names - current_names)
+            details: list[str] = []
+            if added:
+                details.append(
+                    'new live domain disks:\n'
+                    + '\n'.join(f'  - {item}' for item in added)
+                )
+            if removed:
+                details.append(
+                    'expected disks no longer present:\n'
+                    + '\n'.join(f'  - {item}' for item in removed)
+                )
+            raise AIVMError(
+                f'VM {name!r} storage inventory changed before undefine. '
+                'Refusing --remove-all-storage.\n' + '\n'.join(details)
+            )
+
+    mgr = CommandManager.current()
+    if _vm_defined(name):
+        require_expected_inventory()
+        mgr.run(
+            virsh_cmd('destroy', name),
             sudo=virsh_needs_sudo(),
             role='modify',
             check=False,
             capture=True,
         )
-        if res.code != 0:
-            msg = (res.stderr or res.stdout or '').strip()
-            if msg:
-                errs.append(f'{cmd}: {msg}')
-        if not _vm_defined(name):
-            return
-    detail = '\n'.join(errs[-4:]) if errs else '(no details)'
-    raise RuntimeError(
-        f'Failed to undefine VM {name}; domain is still present after retries.\n{detail}'
+        if _vm_defined(name):
+            # The journal comparison is repeated after shutdown, immediately
+            # before storage-removing undefine attempts. This catches disks
+            # attached during an interrupted or concurrent deletion window.
+            require_expected_inventory()
+        # Different libvirt states require different metadata flags, but every
+        # attempt retains --remove-all-storage. Silently retrying without that
+        # flag destroys the only record that identifies orphaned disks.
+        attempts = [
+            virsh_cmd(
+                'undefine',
+                name,
+                '--managed-save',
+                '--snapshots-metadata',
+                '--nvram',
+                '--remove-all-storage',
+            ),
+            virsh_cmd('undefine', name, '--nvram', '--remove-all-storage'),
+            virsh_cmd('undefine', name, '--remove-all-storage'),
+        ]
+        errs: list[str] = []
+        for cmd in attempts:
+            res = mgr.run(
+                cmd,
+                sudo=virsh_needs_sudo(),
+                role='modify',
+                check=False,
+                capture=True,
+            )
+            if res.code != 0:
+                msg = (res.stderr or res.stdout or '').strip()
+                if msg:
+                    errs.append(f'{cmd}: {msg}')
+            if not _vm_defined(name):
+                break
+        if _vm_defined(name):
+            detail = '\n'.join(errs[-3:]) if errs else '(no details)'
+            raise AIVMError(
+                f'Failed to undefine VM {name}; domain is still present after '
+                f'storage-removing retries.\n{detail}'
+            )
+    retained = tuple(path for path in captured if _host_path_exists(path))
+    return DomainRemovalReport(
+        storage_paths=captured, retained_storage_paths=retained
     )
+
 
 def vm_exists(cfg: AgentVMConfig, *, dry_run: bool = False) -> bool:
     if dry_run:
         return False
     return _vm_defined(cfg.vm.name)
+
 
 def _is_vm_active(state: str) -> bool:
     """Return True if the libvirt state indicates an active domain.
@@ -122,6 +336,7 @@ def _is_vm_active(state: str) -> bool:
     ]
     return any(s in state for s in active_states)
 
+
 def _get_vm_state(name: str) -> tuple[int, str, str]:
     """Get the current state of a VM.
 
@@ -129,10 +344,13 @@ def _get_vm_state(name: str) -> tuple[int, str, str]:
     The state and error strings are lowercased and stripped.
     On success, state contains the VM state and error is empty.
     On failure, state is empty and error contains the error message.
+
+    Callers match the state against English names such as ``running`` and
+    ``shut off``, so the invocation pins the C locale.
     """
     mgr = CommandManager.current()
     res = mgr.run(
-        virsh_cmd('domstate', name),
+        pin_locale(virsh_cmd('domstate', name)),
         sudo=virsh_needs_sudo(),
         role='read',
         check=False,
@@ -142,6 +360,7 @@ def _get_vm_state(name: str) -> tuple[int, str, str]:
     state = (res.stdout or '').strip().lower()
     error = (res.stderr or '').strip().lower()
     return (res.code, state, error)
+
 
 def _wait_for_vm_state(
     name: str,
@@ -178,6 +397,7 @@ def _wait_for_vm_state(
         f'Timeout waiting for VM {name} to reach state {target_state!r} '
         f'(current state: {last_state!r}) after {timeout_s}s.'
     )
+
 
 def _wait_for_vm_not_state(
     name: str,
@@ -216,18 +436,27 @@ def _wait_for_vm_not_state(
         f'(still in state: {last_state!r}) after {timeout_s}s.'
     )
 
+
 def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Gracefully shut down the VM using ACPI shutdown signal.
 
     This sends a graceful shutdown signal to the guest OS. If the guest
-    does not shut down within a reasonable time, callers may need to use
-    ``destroy_vm`` for a forced shutdown.
+    does not shut down within a reasonable time, callers may need a
+    forced power-off (``virsh destroy``).
     """
     name = cfg.vm.name
-    if dry_run:
-        log.info('DRYRUN: virsh shutdown {}', name)
-        return
     mgr = CommandManager.current()
+    shutdown_request = mgr.request(
+        virsh_cmd('shutdown', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Send ACPI shutdown signal to VM {name}',
+    )
+    if dry_run:
+        shutdown_request.preview()
+        return
     with mgr.intent(
         f'Shut down VM {name}',
         why='Gracefully stop the VM by sending an ACPI shutdown signal to the guest OS.',
@@ -283,14 +512,7 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             log.info('VM {} resumed (state={})', name, state)
 
         # Send ACPI shutdown signal
-        res = mgr.run(
-            virsh_cmd('shutdown', name),
-            sudo=virsh_needs_sudo(),
-            role='modify',
-            check=False,
-            capture=True,
-            summary=f'Send ACPI shutdown signal to VM {name}',
-        )
+        res = shutdown_request.run()
         if res.code != 0:
             msg = (res.stderr or res.stdout or '').strip()
             raise RuntimeError(
@@ -298,20 +520,39 @@ def shutdown_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             )
         log.info('Shutdown signal sent to VM {}', name)
 
+
 def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
     """Gracefully restart the VM (shutdown then start).
 
     This sends a graceful shutdown signal to the guest OS, waits for it to
     stop, and then starts the VM again. If the guest does not shut down
     within a reasonable time, this may need to be followed by a forced
-    restart using ``destroy_vm`` and ``create_or_start_vm``.
+    restart using ``virsh destroy`` and ``create_or_start_vm``.
 
     This operation requires the VM to already exist; it will not create
     a new VM.
     """
     name = cfg.vm.name
+    mgr = CommandManager.current()
+    shutdown_request = mgr.request(
+        virsh_cmd('shutdown', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=False,
+        capture=True,
+        summary=f'Shut down VM {name}',
+    )
+    start_request = mgr.request(
+        virsh_cmd('start', name),
+        sudo=virsh_needs_sudo(),
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Start VM {name}',
+    )
     if dry_run:
-        log.info('DRYRUN: restart VM {}', name)
+        shutdown_request.preview()
+        start_request.preview()
         return
 
     # Verify the VM exists before attempting restart
@@ -321,7 +562,6 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
             f'use `aivm vm up` to create and start it.'
         )
 
-    mgr = CommandManager.current()
     with mgr.intent(
         f'Restart VM {name}',
         why='Gracefully stop and then start the VM to apply changes or recover from transient issues.',
@@ -368,21 +608,14 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
                         name,
                         state,
                     )
-                    _start_vm(name)
+                    start_request.run()
                     log.info('VM {} restarted', name)
                     return
                 log.info('VM {} resumed (state={})', name, state)
 
             log.info('Sending shutdown signal to VM {} (state={})', name, state)
             # Send ACPI shutdown signal
-            res = mgr.run(
-                virsh_cmd('shutdown', name),
-                sudo=virsh_needs_sudo(),
-                role='modify',
-                check=False,
-                capture=True,
-                summary='Send ACPI shutdown signal to VM',
-            )
+            res = shutdown_request.run()
             if res.code != 0:
                 msg = (res.stderr or res.stdout or '').strip()
                 raise RuntimeError(
@@ -401,8 +634,9 @@ def restart_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
 
         # Start the VM (use start_vm helper, not create_or_start_vm)
         log.info('Starting VM {}', name)
-        _start_vm(name)
+        start_request.run()
         log.info('VM {} restarted', name)
+
 
 def _start_vm(name: str) -> None:
     """Start a defined VM by name.
@@ -419,19 +653,6 @@ def _start_vm(name: str) -> None:
         summary=f'Start VM {name}',
     )
 
-def destroy_vm(cfg: AgentVMConfig, *, dry_run: bool = False) -> None:
-    name = cfg.vm.name
-    if dry_run:
-        log.info('DRYRUN: virsh destroy/undefine {}', name)
-        return
-    mgr = CommandManager.current()
-    with mgr.intent(
-        f'Destroy VM {name}',
-        why='Remove the libvirt domain and its related managed definition state.',
-        role='modify',
-    ):
-        _destroy_and_undefine_vm(name)
-    log.info('VM removed: {}', name)
 
 def vm_status(cfg: AgentVMConfig) -> str:
     name = cfg.vm.name

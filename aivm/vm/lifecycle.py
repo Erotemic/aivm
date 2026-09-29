@@ -53,7 +53,6 @@ from .domain import (
     _vm_defined,
     _wait_for_vm_not_state,
     _wait_for_vm_state,
-    destroy_vm,
     restart_vm,
     shutdown_vm,
     vm_exists,
@@ -89,6 +88,7 @@ from .provision import provision
 
 log = logger
 
+
 def detect_host_timezone() -> str:
     """Return the host timezone via the cloud-init module compatibility path.
 
@@ -108,7 +108,6 @@ __all__ = [
     'DEFAULT_UBUNTU_NOBLE_IMG_URL',
     'SUPPORTED_IMAGE_SHA256',
     'create_or_start_vm',
-    'destroy_vm',
     'detect_host_timezone',
     'fetch_image',
     'get_ip_cached',

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_cli_vm_attach.py -x -q)",
+      "Bash(python -m pytest tests/test_attachment_shared_root.py::test_shared_root_host_bind_does_not_unmount_when_target_not_mountpoint tests/test_attachment_shared_root.py::test_shared_root_host_bind_prompts_once_per_privileged_step tests/test_attachment_shared_root.py::test_shared_root_host_bind_autoapproves_readonly_findmnt_when_auth_cached tests/test_vm_helpers.py::test_qemu_access_does_not_recurse_vm_root_after_shared_root_bind -v)",
+      "Bash(pytest:*)"
+    ]
+  }
+}

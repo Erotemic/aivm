@@ -23,7 +23,13 @@ from aivm.vm import (
     vm_has_virtiofs_shared_memory,
     vm_share_mappings,
 )
-from tests.helpers import FakeProc, activate_manager, command_recorder
+from aivm.vm.share import detach_vm_share
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    command_recorder,
+    is_locale_pinned,
+)
 
 
 def test_vm_share_helpers(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
@@ -384,3 +390,67 @@ def test_ensure_share_mounted_read_only_uses_ro_option(
     assert run_kwargs[0]['timeout'] == 20
     assert 'sudo -n mount -t virtiofs -o ro' in remote_script
     assert 'mount -t virtiofs -o ro' in remote_script
+
+
+@pytest.mark.parametrize(
+    ('state', 'expect_live'),
+    [
+        pytest.param('running\n', True, id='running-attaches-live'),
+        pytest.param('shut off\n', False, id='stopped-attaches-config-only'),
+    ],
+)
+def test_attach_pins_c_locale_for_the_live_decision(
+    monkeypatch: MonkeyPatch, tmp_path: Path, state: str, expect_live: bool
+) -> None:
+    """Live-vs-config attachment turns on the English word 'running'.
+
+    Regression: unpinned, a localized host reported every VM as not running,
+    so a live VM received only the config-only attachment and the share
+    stayed missing until its next boot -- drift with no error to explain it.
+    """
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-locale-attach'
+    source = tmp_path / 'src'
+    source.mkdir()
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'true': FakeProc(0, '', ''),
+            'virsh domstate': FakeProc(0, state, ''),
+            'virsh attach-device': FakeProc(0, '', ''),
+        },
+    )
+
+    attach_vm_share(cfg, str(source.resolve()), 'hostcode-src', dry_run=False)
+
+    domstate = [call for call in rec.calls if 'domstate' in call]
+    assert domstate and all(is_locale_pinned(call) for call in domstate)
+    attach = next(call for call in rec.normalized if 'attach-device' in call)
+    assert ('--live' in attach) is expect_live
+
+
+def test_detach_pins_c_locale_for_the_live_decision(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Detach makes the same live-vs-config decision from the same word."""
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-locale-detach'
+    source = tmp_path / 'src'
+    source.mkdir()
+    activate_manager(monkeypatch)
+    rec = command_recorder(
+        monkeypatch,
+        {
+            'true': FakeProc(0, '', ''),
+            'virsh domstate': FakeProc(0, 'running\n', ''),
+            'virsh detach-device': FakeProc(0, '', ''),
+        },
+    )
+
+    assert detach_vm_share(cfg, str(source.resolve()), 'hostcode-src')
+
+    domstate = [call for call in rec.calls if 'domstate' in call]
+    assert domstate and all(is_locale_pinned(call) for call in domstate)
+    detach = next(call for call in rec.normalized if 'detach-device' in call)
+    assert '--live' in detach

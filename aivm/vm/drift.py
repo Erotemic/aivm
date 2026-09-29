@@ -2,6 +2,7 @@
 
 This module provides a clean separation between drift detection and drift handling.
 Its job is to:
+
   * compute desired VM/share shape from config + attachment intent
   * compute actual VM/share shape from libvirt
   * diff them
@@ -25,7 +26,7 @@ from ..config import AgentVMConfig
 from ..config_store import Store, find_attachments_for_vm
 from ..firewall import read_firewall_tcp_ports
 from ..privilege import virsh_needs_sudo
-from ..runtime import virsh_cmd
+from ..runtime import pin_locale, virsh_cmd
 from .paths import persistent_root_host_dir, shared_root_host_dir
 from .share import (
     SHARED_ROOT_VIRTIOFS_TAG,
@@ -205,9 +206,15 @@ def read_actual_vm_hardware(
         error_type is one of: 'not_found', 'permission', 'other', or '' on success.
         error_detail contains the raw error message.
     """
-    cmd = virsh_cmd('dominfo', cfg.vm.name)
+    # Parsed by English field name, and its failures are classified by
+    # English stderr text, so the invocation pins the C locale.
+    cmd = pin_locale(virsh_cmd('dominfo', cfg.vm.name))
     res = CommandManager.current().run(
-        cmd, role='read', sudo=use_sudo and virsh_needs_sudo(), check=False, capture=True
+        cmd,
+        role='read',
+        sudo=use_sudo and virsh_needs_sudo(),
+        check=False,
+        capture=True,
     )
     if res.code != 0:
         # Check both stderr and stdout for error messages
@@ -235,7 +242,7 @@ def expected_mapping_for_attachment(
     Returns:
         A tuple of (host_source, tag) or None if attachment mode doesn't use virtiofs.
     """
-    if attachment.mode == AttachmentMode.SHARED:
+    if attachment.mode == AttachmentMode.DIRECT_VIRTIOFS:
         return attachment.source_dir, attachment.tag
     if attachment.mode == AttachmentMode.SHARED_ROOT:
         return str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG
@@ -626,14 +633,14 @@ def desired_saved_vm_mappings(
     desired: set[tuple[str, str]] = set()
     for att in find_attachments_for_vm(reg, cfg.vm.name):
         mode = att.mode
-        if mode in ('shared', 'shared-root'):
-            if mode == 'shared':
-                # For shared mode, use host_path (the store field) and tag from attachment
+        if mode in (AttachmentMode.DIRECT_VIRTIOFS, AttachmentMode.SHARED_ROOT):
+            if mode == AttachmentMode.DIRECT_VIRTIOFS:
+                # Its own device, so the mapping is the folder itself.
                 src = att.host_path
                 tag = att.tag
                 if src:  # Only add non-empty sources
                     desired.add((src, tag))
-            elif mode == 'shared-root':
+            elif mode == AttachmentMode.SHARED_ROOT:
                 # For shared-root mode, use canonical path and tag
                 desired.add(
                     (str(_shared_root_host_dir(cfg)), SHARED_ROOT_VIRTIOFS_TAG)

@@ -1,0 +1,339 @@
+version: 1
+
+subsystems:
+  - id: cli
+    label: CLI and command adapters
+    exact:
+      - aivm.__main__
+    prefixes:
+      - aivm.cli
+
+  - id: orchestration
+    label: Runtime resolution and services
+    exact:
+      - aivm.services
+      - aivm.runtime
+      - aivm.scoped_store
+      - aivm.operational_scope
+      - aivm.status
+      - aivm.config_review
+    prefixes: []
+
+  - id: config-model
+    label: Configuration models
+    exact:
+      - aivm.attachment_schema
+      - aivm.config
+      - aivm.config_scopes
+      - aivm.credential_backends
+    prefixes: []
+
+  - id: persistence
+    label: Machine store, profile, and locking
+    exact:
+      - aivm.machine_store
+      - aivm.profile_store
+      - aivm.user_paths
+    prefixes:
+      - aivm.config_store
+
+  - id: access
+    label: Access identities and enrollment
+    exact:
+      - aivm.access_control
+      - aivm.enrollment
+      - aivm.guestctl
+      - aivm.ssh_keys
+      - aivm.host_identity
+    prefixes: []
+
+  - id: attachments
+    label: Attachments and persistent replay
+    exact:
+      - aivm.persistent_replay
+    prefixes:
+      - aivm.attachments
+
+  - id: credentials
+    label: Repository credentials
+    exact: []
+    prefixes:
+      - aivm.credentials
+
+  - id: lifecycle
+    label: VM, network, firewall, and host lifecycle
+    exact:
+      - aivm.domain_authority
+      - aivm.net
+      - aivm.firewall
+      - aivm.host
+      - aivm.detect
+      - aivm.resource_checks
+      - aivm.fs_identity
+    prefixes:
+      - aivm.vm
+
+  - id: execution
+    label: Commands, privilege, and process control
+    exact:
+      - aivm.commands
+      - aivm.privilege
+      - aivm.fdguard
+      - aivm.terminal
+      - aivm.modes
+    prefixes: []
+
+  - id: runtime-resources
+    label: Standalone runtime resources
+    exact: []
+    prefixes:
+      - aivm.rc
+
+  - id: compatibility
+    label: Pre-0.6 compatibility boundary
+    exact:
+      - aivm.migration
+      - aivm.migration_apply
+    prefixes:
+      - aivm.legacy
+
+  - id: support
+    label: Shared support utilities
+    exact:
+      - aivm
+      - aivm.errors
+      - aivm.tunnel_helper
+      - aivm.util
+      - aivm.xmlutil
+    prefixes: []
+
+excluded_modules: []
+
+# Every current cross-subsystem import edge is listed. New edges fail the check
+# until a reviewer intentionally adds them here.
+allowed_edges:
+  access:
+    - config-model
+    - execution
+    - lifecycle
+    - orchestration
+    - persistence
+    - support
+  attachments:
+    - compatibility
+    - config-model
+    - execution
+    - lifecycle
+    - orchestration
+    - persistence
+    - support
+  cli:
+    - access
+    - attachments
+    - compatibility
+    - config-model
+    - credentials
+    - execution
+    - lifecycle
+    - orchestration
+    - persistence
+    - support
+  compatibility:
+    - access
+    - cli
+    - config-model
+    - credentials
+    - execution
+    - lifecycle
+    - orchestration
+    - persistence
+    - support
+  config-model:
+    - lifecycle
+    - persistence
+    - support
+  credentials:
+    - attachments
+    - compatibility
+    - config-model
+    - execution
+    - lifecycle
+    - orchestration
+    - persistence
+    - support
+  execution:
+    - access
+    - orchestration
+    - support
+  lifecycle:
+    - access
+    - attachments
+    - compatibility
+    - config-model
+    - credentials
+    - execution
+    - orchestration
+    - persistence
+    - support
+  orchestration:
+    - access
+    - attachments
+    - compatibility
+    - config-model
+    - execution
+    - lifecycle
+    - persistence
+    - support
+  persistence:
+    - access
+    - compatibility
+    - config-model
+    - credentials
+    - support
+  support:
+    - cli
+    - execution
+
+# The default classification for an allowed edge is accepted. These entries
+# make transitional and questionable edges explicit rather than silently
+# grandfathering them.
+edge_annotations:
+  - from: attachments
+    to: compatibility
+    classification: transitional
+    note: Legacy owner/path handling remains behind explicit compatibility imports.
+  - from: cli
+    to: compatibility
+    classification: transitional
+    note: Migration and released-store inspection commands enter the versioned boundary.
+  - from: compatibility
+    to: cli
+    classification: known-debt
+    note: The versioned migration CLI still reuses canonical CLI setup helpers.
+  - from: credentials
+    to: compatibility
+    classification: transitional
+    note: Ownership normalization accepts released owner-less records.
+  - from: lifecycle
+    to: compatibility
+    classification: transitional
+    note: Firewall and virtiofs update shims preserve released behavior.
+  - from: orchestration
+    to: compatibility
+    classification: transitional
+    note: Store selection and legacy context construction remain explicit adapters.
+  - from: persistence
+    to: compatibility
+    classification: transitional
+    note: The parser and renderer preserve released schemas through marked adapters.
+  - from: config-model
+    to: lifecycle
+    classification: known-debt
+    note: ToolsConfig currently derives its dynamic tool fields from the guest-tool registry.
+  - from: execution
+    to: access
+    classification: known-debt
+    note: Privilege approval resolves the kernel host identity directly.
+  - from: execution
+    to: orchestration
+    classification: known-debt
+    note: Privilege command construction reads the current libvirt runtime URI.
+  - from: support
+    to: execution
+    classification: known-debt
+    note: Utility compatibility helpers still re-export command wrappers.
+  - from: credentials
+    to: attachments
+    classification: known-debt
+    note: Credential installation uses prepared attachment sessions for guest access.
+
+# The source graph is complete in component-edges.json. This reviewed subset
+# keeps the contributor-facing diagram legible while still being validated
+# against real imports.
+diagram_edges:
+  - {from: cli, to: orchestration}
+  - {from: cli, to: access}
+  - {from: cli, to: attachments}
+  - {from: cli, to: credentials}
+  - {from: cli, to: lifecycle}
+  - {from: orchestration, to: persistence}
+  - {from: orchestration, to: config-model}
+  - {from: orchestration, to: access}
+  - {from: orchestration, to: lifecycle}
+  - {from: access, to: persistence}
+  - {from: access, to: lifecycle}
+  - {from: attachments, to: persistence}
+  - {from: attachments, to: lifecycle}
+  - {from: credentials, to: persistence}
+  - {from: credentials, to: lifecycle}
+  - {from: lifecycle, to: persistence}
+  - {from: lifecycle, to: execution}
+  - {from: lifecycle, to: config-model}
+  - {from: persistence, to: config-model}
+  - {from: attachments, to: compatibility}
+  - {from: credentials, to: compatibility}
+  - {from: lifecycle, to: compatibility}
+  - {from: orchestration, to: compatibility}
+  - {from: persistence, to: compatibility}
+  - {from: compatibility, to: persistence}
+  - {from: compatibility, to: orchestration}
+  - {from: compatibility, to: lifecycle}
+
+legacy:
+  package: aivm.legacy.pre_0_6_0
+  test_root: tests/legacy/pre_0_6_0
+  canonical_import_allowlist:
+    - importer: aivm.attachments.ownership
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Normalize released owner-less attachment records.
+    - importer: aivm.attachments.persistent.manifest
+      imported_prefix: aivm.legacy.pre_0_6_0.paths
+      reason: Read the released persistent-state location during transition.
+    - importer: aivm.cli.config.lint
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Lint explicitly reports released-store compatibility state.
+    - importer: aivm.cli.config.migrate
+      imported_prefix: aivm.legacy.pre_0_6_0.cli
+      reason: Public command facade for explicit released-store migration.
+    - importer: aivm.cli.config.paths
+      imported_prefix: aivm.legacy.pre_0_6_0.paths
+      reason: Show released and canonical paths to operators.
+    - importer: aivm.config_store.io
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Compatibility markers and released split-path discovery.
+    - importer: aivm.config_store.io
+      imported_prefix: aivm.legacy.pre_0_6_0.paths
+      reason: Compatibility markers and released split-path discovery.
+    - importer: aivm.config_store.models
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Store remains a marked compatibility surface during schema transition.
+    - importer: aivm.config_store.mutate
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Released mutation helpers remain marked compatibility surfaces.
+    - importer: aivm.config_store.parse
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Parse released schema versions through an explicit adapter.
+    - importer: aivm.config_store.parse
+      imported_prefix: aivm.legacy.pre_0_6_0.schema
+      reason: Parse released schema versions through an explicit adapter.
+    - importer: aivm.config_store.render
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Render released documents only through marked compatibility paths.
+    - importer: aivm.credentials.ownership
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Normalize released owner-less credential records.
+    - importer: aivm.firewall
+      imported_prefix: aivm.legacy.pre_0_6_0.firewall
+      reason: Preserve released firewall naming semantics.
+    - importer: aivm.scoped_store
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Explicitly select released stores without silently migrating them.
+    - importer: aivm.scoped_store
+      imported_prefix: aivm.legacy.pre_0_6_0.selection
+      reason: Explicitly select released stores without silently migrating them.
+    - importer: aivm.services
+      imported_prefix: aivm.legacy.pre_0_6_0.context
+      reason: Build a compatibility runtime context for released stores.
+    - importer: aivm.vm.update.virtiofs
+      imported_prefix: aivm.legacy.pre_0_6_0
+      reason: Preserve released virtiofs update behavior.

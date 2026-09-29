@@ -855,7 +855,6 @@ def main(argv: bool = True, **kwargs) -> int:
 
 def show_human_report() -> None:
 
-
     # The row you called out:
     loose_readonly_cold = behavior_df.query(
         "op_kind == 'command' and queue == 'loose' and sudo == True "
@@ -911,7 +910,6 @@ def show_human_report() -> None:
     pd.set_option('display.width', 200)
     pd.set_option('display.max_colwidth', 80)
 
-
     def show_df(
         title, df, *, sort_by=None, columns=None, max_rows=None, style='cyan'
     ):
@@ -924,7 +922,6 @@ def show_human_report() -> None:
         console.rule(title, style='bold yellow')
         console.print(df.to_string(index=False), style=style, markup=False)
         console.print()
-
 
     # Core columns that are usually worth looking at
     main_cols = BEHAVIOR_PREDICATE_COLS + BEHAVIOR_OUTCOME_COLS
@@ -1010,6 +1007,7 @@ def show_human_report() -> None:
         grouped,
         style='bright_blue',
     )
+
 
 if __name__ == '__main__':
     raise SystemExit(main())

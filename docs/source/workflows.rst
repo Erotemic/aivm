@@ -30,6 +30,25 @@ usually breaks reconciliation into:
 * sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
+Provision specific guest tools
+------------------------------
+
+A bare ``aivm vm provision`` runs the configured full provisioning pass. When
+one or more positional targets are supplied, AIVM provisions only those
+one-shot requirements instead of rerunning unrelated configured packages and
+tools:
+
+.. code-block:: bash
+
+   aivm vm provision pi
+   aivm vm provision rust
+   aivm vm provision docker rust
+
+This distinction is useful when a guest has unrelated package-manager drift.
+For example, provisioning ``pi`` does not perform the full baseline APT pass;
+its Node.js fallback is installed under the guest user's AIVM data directory so
+an unrelated broken APT source cannot block the Pi-specific operation.
+
 SSH into mapped directory
 -------------------------
 
@@ -37,6 +56,38 @@ SSH into mapped directory
 
    aivm vm ssh .
    aivm vm ssh_config
+
+Rename a VM
+-----------
+
+.. code-block:: bash
+
+   aivm vm down --vm old-name          # renaming needs a shut-off VM
+   aivm vm rename new-name --vm old-name
+   aivm vm rename new-name --dry_run   # preview every move first
+
+The VM name is an identity, not a label: it names the libvirt domain, the
+disk file, the AIVM-owned storage tree, the machine-state and bootstrap
+directories, and the ``vm_name`` on every attachment, credential, and
+principal record. ``aivm vm rename`` moves all of them together, then
+rewrites the store last, so a failure part-way is rolled back and leaves the
+VM under its original name.
+
+This is why renaming is not a ``aivm vm update`` drift dimension: ``update``
+locates its subject *by* name, so a changed name leaves it nothing to compare
+against.
+
+The rename refuses rather than guessing when it cannot do the job safely --
+a running VM, a name already taken by another VM or libvirt domain, live bind
+mounts under the storage tree, or installed root-owned persistent host-bind
+replay artifacts (whose manifest filename and systemd unit both embed the VM
+name). Detach persistent attachments first, rename, then reattach.
+
+The guest's *own* hostname is not changed. AIVM only sets it through
+cloud-init's ``local-hostname`` on first boot and does not manage it
+afterwards, so update it inside the guest if you want it to match::
+
+   aivm vm ssh --vm new-name -- sudo hostnamectl set-hostname new-name
 
 Attach folders
 --------------
@@ -61,15 +112,18 @@ Attachment modes:
   and per-folder host/guest bind mounts. Existing saved ``shared-root``
   attachments continue to use it; new attachments can request it explicitly
   with ``--mode shared-root``.
-* ``shared``: direct per-folder virtiofs mapping.
+* ``direct-virtiofs``: its own virtiofs device per folder. Named for its
+  cost: each one occupies a guest PCIe slot (see below). The only mode
+  needing no host bind mount, so the only one a caller without sudo can
+  create.
 * ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing.
   It does not automatically synchronize worktree contents.
 
 The ``persistent`` and ``shared-root`` backends stage host bind mounts, so
 establishing a *new* one runs ``mount --bind`` and needs root. Reconciling an
 already-established attachment issues no privileged command at all, and is
-therefore unaffected by ``privilege_mode``. Only ``shared`` never needs a
-bind mount.
+therefore unaffected by ``privilege_mode``. Only ``direct-virtiofs`` never
+needs a bind mount.
 
 ``--mode git`` switches the attachment to a normal guest-local repo. That
 avoids a writable host share and adds a host-side Git remote pointing at the
@@ -79,10 +133,11 @@ branch state into the checked-out guest repo and fetch guest commits later.
 Git-mode default guest paths match the exact host path unless ``--guest_dst``
 overrides them.
 
-Major limitation: shared folder count
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Major limitation: direct-virtiofs folder count
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Each ``shared`` folder consumes a dedicated virtiofs device mapping. Large
+Each ``direct-virtiofs`` folder consumes a dedicated virtiofs device mapping,
+and each mapping occupies one of the guest's limited PCIe slots. Large
 attachment sets can exhaust VM device-slot capacity (for example PCI/PCIe
 slots), causing attach/restore failures such as
 ``No more available PCI slots``.
@@ -90,8 +145,9 @@ slots), causing attach/restore failures such as
 ``shared-root`` and ``persistent`` reduce this pressure by using a single
 persistent virtiofs mapping per VM.
 
-If this happens, prefer ``--mode git`` for some folders, detach unused shared
-folders, or split the workload across multiple VMs.
+If this happens, move folders to ``persistent`` or ``shared-root``, which
+multiplex any number of them through one device, prefer ``--mode git`` for
+some, detach unused ones, or split the workload across multiple VMs.
 
 Major limitation: long-lived virtiofs FD growth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -192,7 +248,10 @@ Reconcile VM drift
 .. code-block:: bash
 
    aivm vm edit     # change the saved VM config fragment in $EDITOR
-   aivm vm update   # reconcile the live libvirt domain against saved config
+   aivm vm update   # reconcile live host/libvirt state against saved config
+
+``vm update`` includes the managed nftables firewall. Changes to firewall
+ports or policy are applied live and do not require restarting the VM.
 
 Run without sudo
 ----------------

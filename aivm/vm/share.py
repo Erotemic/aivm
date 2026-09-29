@@ -7,7 +7,6 @@ folders are shared into VMs.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import shlex
 import tempfile
@@ -20,12 +19,16 @@ from xml.sax.saxutils import quoteattr
 
 from loguru import logger
 
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from ..attachment_schema import MIRROR_HOME_AUTO
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..modes import PrivilegeMode
 from ..privilege import virsh_needs_sudo
 from ..runtime import (
+    pin_locale,
     require_ssh_identity,
     ssh_base_args,
     virsh_cmd,
@@ -41,13 +44,23 @@ class AttachmentMode(StrEnum):
     """Attachment mode for VM shared folders.
 
     These modes determine how host directories are shared with the VM:
-    - SHARED: Direct virtiofs mount of the host directory
+    - DIRECT_VIRTIOFS: its own virtiofs device per folder, mapped straight
+      into the guest
     - SHARED_ROOT: VM-specific bind mount via shared-root directory
     - PERSISTENT: Persistent staged attachments replayed in-guest
     - GIT: Git clone of the host repo into the guest
+
+    ``DIRECT_VIRTIOFS`` is named for its cost rather than its behavior,
+    because that cost is what should decide against it. Every folder
+    attached this way adds a *separate* virtiofs device to the domain, and
+    each device occupies one of the guest's finite PCIe slots; the other
+    virtiofs-backed modes multiplex any number of folders through a single
+    device. It is the only mode needing no host bind mount, so it remains
+    the right answer for a caller without root -- but reach for it for that
+    reason, not by default.
     """
 
-    SHARED = 'shared'
+    DIRECT_VIRTIOFS = 'direct-virtiofs'
     SHARED_ROOT = 'shared-root'
     PERSISTENT = 'persistent'
     GIT = 'git'
@@ -77,11 +90,15 @@ class ResolvedAttachment:
     """
 
     vm_name: str
-    mode: AttachmentMode = AttachmentMode.SHARED
+    mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS
     access: AttachmentAccess = AttachmentAccess.RW
     source_dir: str = ''
     guest_dst: str = ''
     tag: str = ''
+    owner_principal_id: str = ''
+    # Guest presentation policy carried with the resolved attachment.  Kept as
+    # a string here so the VM/share layer does not own policy resolution.
+    mirror_home: str = MIRROR_HOME_AUTO
 
 
 def _auto_share_tag_for_path(host_src: Path, existing_tags: set[str]) -> str:
@@ -202,17 +219,18 @@ def _dumpxml_text(
     if entry is not None and entry[0] == mgr.mutation_generation:
         return entry[1]
     # Closed stdin keeps an unprivileged probe from blocking on a polkit
-    # password prompt outside the manager's approval flow, and LC_ALL=C
-    # keeps the domain-missing stderr heuristic locale-independent.
-    probe_env = {**os.environ, 'LC_ALL': 'C'}
+    # password prompt outside the manager's approval flow, and the locale pin
+    # keeps the domain-missing stderr heuristic locale-independent. The pin
+    # rides in the argv rather than in env= so the sudo retry below cannot
+    # lose it to the host's sudoers environment policy.
+    dumpxml_cmd = pin_locale(virsh_cmd('dumpxml', cfg.vm.name))
     res = mgr.submit(
-        virsh_cmd('dumpxml', cfg.vm.name),
+        dumpxml_cmd,
         sudo=False,
         role='read',
         check=False,
         capture=True,
         input_text='',
-        env=probe_env,
         summary=summary,
         detail=detail,
     ).result()
@@ -226,12 +244,11 @@ def _dumpxml_text(
         and not virsh_domain_missing(res.stderr)
     ):
         res = mgr.submit(
-            virsh_cmd('dumpxml', cfg.vm.name),
+            dumpxml_cmd,
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
             capture=True,
-            env=probe_env,
             summary=summary,
             detail=detail,
         ).result()
@@ -321,9 +338,7 @@ def vm_share_mappings_detailed(
         src_dir = src.attrib.get('dir', '') if src is not None else ''
         tgt_dir = tgt.attrib.get('dir', '') if tgt is not None else ''
         if src_dir or tgt_dir:
-            mappings.append(
-                (src_dir, tgt_dir, fs.find('readonly') is not None)
-            )
+            mappings.append((src_dir, tgt_dir, fs.find('readonly') is not None))
     return mappings
 
 
@@ -333,9 +348,7 @@ def vm_share_mappings(
     """Return virtiofs filesystem mappings as (source_dir, target_tag)."""
     return [
         (src, tag)
-        for src, tag, _ro in vm_share_mappings_detailed(
-            cfg, use_sudo=use_sudo
-        )
+        for src, tag, _ro in vm_share_mappings_detailed(cfg, use_sudo=use_sudo)
     ]
 
 
@@ -400,9 +413,13 @@ def attach_vm_share(
         tmp = f.name
     mgr = CommandManager.current()
     if vm_running is None:
+        # Whether the device is attached live or config-only turns on the
+        # English word 'running', so the probe must not be localized: a
+        # running VM would otherwise get the config-only attach and the share
+        # would stay unavailable until its next boot.
         state = (
             mgr.submit(
-                virsh_cmd('domstate', cfg.vm.name),
+                pin_locale(virsh_cmd('domstate', cfg.vm.name)),
                 sudo=virsh_needs_sudo(),
                 role='read',
                 check=False,
@@ -506,9 +523,10 @@ def detach_vm_share(
         f.write(xml)
         tmp = f.name
     mgr = CommandManager.current()
+    # As in attach: the live-vs-config decision matches an English state name.
     state = (
         mgr.run(
-            virsh_cmd('domstate', cfg.vm.name),
+            pin_locale(virsh_cmd('domstate', cfg.vm.name)),
             sudo=virsh_needs_sudo(),
             role='read',
             check=False,
@@ -548,7 +566,8 @@ def ensure_share_mounted(
     dry_run: bool = False,
 ) -> None:
     cfg = cfg.expanded_paths()
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     if not guest_dst:
         raise RuntimeError('Share guest_dst is empty.')
     if not tag:
@@ -581,17 +600,24 @@ def ensure_share_mounted(
             connect_timeout=5,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         remote,
     ]
+    request = CommandManager.current().request(
+        cmd,
+        role='modify',
+        check=False,
+        capture=True,
+        timeout=20,
+        summary=f'Reconcile guest virtiofs share {tag}',
+    )
     if dry_run:
-        log.info('DRYRUN: {}', ' '.join(cmd))
+        request.preview()
         return
-    mgr = CommandManager.current()
     max_attempts = 12
     retry_sleep_s = 2.0
     for attempt in range(1, max_attempts + 1):
-        res = mgr.run(cmd, sudo=False, check=False, capture=True, timeout=20)
+        res = request.run()
         if res.code == 0:
             if attempt > 1:
                 log.info(

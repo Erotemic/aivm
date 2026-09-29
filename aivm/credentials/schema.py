@@ -78,15 +78,16 @@ def normalize_credential_access(value: object) -> CredentialAccess:
             f'Unsupported credential access {str(value)!r}; '
             f'--access must be one of: {allowed}'
         )
-    return CREDENTIAL_ACCESS_WRITE if resolved == 'write' else (
-        CREDENTIAL_ACCESS_READ
+    return (
+        CREDENTIAL_ACCESS_WRITE
+        if resolved == 'write'
+        else (CREDENTIAL_ACCESS_READ)
     )
 
 
 class _HasCredentialState(Protocol):
     @property
-    def state(self) -> str:
-        ...
+    def state(self) -> str: ...
 
 
 def credential_is_guest_usable(entry: _HasCredentialState) -> bool:

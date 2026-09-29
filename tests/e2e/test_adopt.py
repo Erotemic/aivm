@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from aivm.cli.host_permissions import _adopt_script
+from aivm.cli.host_permissions import _storage_adopt_command
 from tests.e2e._helpers import require_passwordless_sudo
 
 pytestmark = pytest.mark.e2e
@@ -31,7 +31,9 @@ def _require_host_identities() -> None:
         grp.getgrnam('libvirt')
         pwd.getpwnam('libvirt-qemu')
     except KeyError:
-        pytest.skip('Adoption e2e needs the libvirt group and libvirt-qemu user.')
+        pytest.skip(
+            'Adoption e2e needs the libvirt group and libvirt-qemu user.'
+        )
     import shutil
 
     if shutil.which('setfacl') is None or shutil.which('getfacl') is None:
@@ -69,7 +71,7 @@ def test_adopt_script_prunes_live_bind_mounts(tmp_path: Path) -> None:
         _sudo('ln', '-s', str(outside), str(tree / 'vm1' / 'link-out'))
 
         proc = subprocess.run(
-            ['sudo', '-n', 'bash', '-c', _adopt_script(tree)],
+            ['sudo', '-n', *(str(x) for x in _storage_adopt_command(tree))],
             capture_output=True,
             text=True,
         )
@@ -126,7 +128,7 @@ def test_adopt_script_resolves_symlinked_tree_before_pruning(
         _sudo('chown', '-R', f'{os.getuid()}:{os.getgid()}', str(source))
 
         proc = subprocess.run(
-            ['sudo', '-n', 'bash', '-c', _adopt_script(alias)],
+            ['sudo', '-n', *(str(x) for x in _storage_adopt_command(alias))],
             capture_output=True,
             text=True,
         )

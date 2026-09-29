@@ -14,10 +14,11 @@ from ...config import (
     NetworkConfig,
     PathsConfig,
     ProvisionConfig,
+    ToolsConfig,
     VirtiofsConfig,
     VMConfig,
 )
-from ...config_store import load_config_document
+from ...config_store import load_config_document, split_source_paths
 from ...credentials.schema import (
     VALID_CREDENTIAL_ACCESS,
     VALID_CREDENTIAL_KINDS,
@@ -30,7 +31,9 @@ from ...credentials.validation import (
     validate_metadata_text,
     validate_provider_key_id,
 )
+from ...legacy.pre_0_6_0 import compatibility_surface
 from ...services import cfg_path
+from ...vm.guest_tools import GUEST_TOOL_REGISTRY, GuestToolConfigError
 from .._common import _BaseCommand
 
 
@@ -41,12 +44,31 @@ class ConfigLintCLI(_BaseCommand):
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         path = cfg_path(args.config)
-        loaded = load_config_document(path)
-        if not loaded.sources:
+        try:
+            loaded = load_config_document(path)
+        except GuestToolConfigError:
+            # A broken [tools] value stops the store parser before lint gets
+            # a chance to run. Reporting exactly this kind of problem is
+            # lint's job, so fall back to the raw source text; the finding
+            # itself comes from _lint_store_text's tools checks below.
+            sources = split_source_paths(path)
+            layout = (
+                'split'
+                if any(src.role != 'root' for src in sources)
+                else 'monolith'
+            )
+            source_text = '\n'.join(
+                src.path.read_text(encoding='utf-8') for src in sources
+            )
+        else:
+            sources = loaded.sources
+            layout = loaded.layout
+            source_text = loaded.source_text or path.read_text(encoding='utf-8')
+        if not sources:
             print(f'Config store not found: {path}', file=sys.stderr)
             return 2
-        problems = _lint_store_text(loaded.source_text or path.read_text(encoding='utf-8'))
-        label = path if loaded.layout != 'split' else f'{path.parent} (split layout)'
+        problems = _lint_store_text(source_text)
+        label = path if layout != 'split' else f'{path.parent} (split layout)'
         if not problems:
             print(f'✅ Config lint passed: {label}')
             return 0
@@ -61,11 +83,32 @@ def _field_names(cls: type[Any]) -> set[str]:
     return {f.name for f in fields(cast(Any, cls))}
 
 
+def _tools_value_problems(prefix: str, sec: dict[str, object]) -> list[str]:
+    """Validate known ``[tools]`` values with the registry's own spec rules.
+
+    Unknown keys are reported by the generic allow-list check; this catches
+    values the parser or resolver would reject, such as a non-string spec or
+    a pinned version a tool's installer cannot honor.
+    """
+    problems: list[str] = []
+    for definition in GUEST_TOOL_REGISTRY:
+        if definition.name not in sec:
+            continue
+        scratch = ToolsConfig()
+        try:
+            scratch.update({definition.name: sec[definition.name]})
+            GUEST_TOOL_REGISTRY.resolve(scratch, definition.name)
+        except GuestToolConfigError as ex:
+            problems.append(f'{prefix}: {ex}')
+    return problems
+
+
 def _lint_store_file(path: Path) -> list[str]:
     """Return schema/shape problems for the config store file."""
     return _lint_store_text(path.read_text(encoding='utf-8'))
 
 
+@compatibility_surface
 def _lint_store_text(text: str) -> list[str]:
     """Return schema/shape problems for a canonical config document.
 
@@ -77,6 +120,7 @@ def _lint_store_text(text: str) -> list[str]:
 
     allowed_top = {
         'schema_version',
+        'store_kind',
         'active_vm',
         'behavior',
         'defaults',
@@ -95,10 +139,12 @@ def _lint_store_text(text: str) -> list[str]:
         'vm',
         'image',
         'provision',
+        'tools',
         'paths',
         'virtiofs',
         'attachments',
         'credentials',
+        'principals',
     }
     section_allowed: dict[str, set[str]] = {
         'vm': _field_names(VMConfig),
@@ -106,6 +152,7 @@ def _lint_store_text(text: str) -> list[str]:
         'firewall': _field_names(FirewallConfig),
         'image': _field_names(ImageConfig),
         'provision': _field_names(ProvisionConfig),
+        'tools': {*GUEST_TOOL_REGISTRY.names(), 'bin_dir'},
         'paths': _field_names(PathsConfig),
         'virtiofs': _field_names(VirtiofsConfig),
     }
@@ -141,6 +188,7 @@ def _lint_store_text(text: str) -> list[str]:
                 'firewall',
                 'image',
                 'provision',
+                'tools',
                 'paths',
                 'virtiofs',
             }
@@ -162,6 +210,50 @@ def _lint_store_text(text: str) -> list[str]:
                         problems.append(
                             f'defaults.{sec_name} unknown key: {key!r}'
                         )
+                if sec_name == 'tools':
+                    problems.extend(
+                        _tools_value_problems(f'defaults.{sec_name}', sec)
+                    )
+
+    valid_principal_states = {
+        'pending',
+        'active',
+        'disabled',
+        'error',
+        'legacy',
+    }
+    for vm_idx, item in enumerate(raw.get('vms', []) or []):
+        if not isinstance(item, dict):
+            continue
+        principals = item.get('principals', [])
+        if not isinstance(principals, list):
+            problems.append(
+                f'vms[{vm_idx}].principals should be an array of tables'
+            )
+            continue
+        allowed_principal = {
+            'id',
+            'host_user',
+            'host_uid',
+            'host_gid',
+            'guest_user',
+            'ssh_public_key',
+            'state',
+        }
+        for principal_idx, principal in enumerate(principals):
+            prefix = f'vms[{vm_idx}].principals[{principal_idx}]'
+            if not isinstance(principal, dict):
+                problems.append(f'{prefix} is not a table/object')
+                continue
+            for key in sorted(str(key) for key in principal.keys()):
+                if key not in allowed_principal:
+                    problems.append(f'{prefix} unknown key: {key!r}')
+            for required in ('id', 'host_user', 'guest_user'):
+                if not str(principal.get(required, '')).strip():
+                    problems.append(f'{prefix} missing {required!r}')
+            state = str(principal.get('state', 'pending'))
+            if state not in valid_principal_states:
+                problems.append(f'{prefix} invalid state: {state!r}')
 
     networks = raw.get('networks', [])
     if isinstance(networks, list):
@@ -208,6 +300,7 @@ def _lint_store_text(text: str) -> list[str]:
     allowed_attachment = {
         'host_path',
         'vm_name',
+        'owner_principal_id',
         'mode',
         'access',
         'guest_dst',
@@ -220,6 +313,7 @@ def _lint_store_text(text: str) -> list[str]:
     }
     allowed_credential = {
         'id',
+        'principal_id',
         'kind',
         'provider_host',
         'owner',
@@ -255,6 +349,13 @@ def _lint_store_text(text: str) -> list[str]:
                         problems.append(
                             f'vms[{idx}].{sec_name} unknown key: {key!r}'
                         )
+                if sec_name == 'tools':
+                    problems.extend(
+                        _tools_value_problems(
+                            f'vms[{idx}].{sec_name}',
+                            cast(dict[str, object], sec),
+                        )
+                    )
             nested_atts = item.get('attachments', [])
             if isinstance(nested_atts, list):
                 for att_idx, att in enumerate(nested_atts):
@@ -276,7 +377,7 @@ def _lint_store_text(text: str) -> list[str]:
             nested_creds = item.get('credentials', [])
             if isinstance(nested_creds, list):
                 seen_cred_ids: set[str] = set()
-                seen_cred_scopes: set[tuple[str, str, str]] = set()
+                seen_cred_scopes: set[tuple[str, str, str, str]] = set()
                 required_credential = {
                     'id',
                     'kind',
@@ -288,6 +389,8 @@ def _lint_store_text(text: str) -> list[str]:
                     'key_fingerprint',
                     'state',
                 }
+                if str(raw.get('store_kind', 'legacy')).strip() == 'machine':
+                    required_credential.add('principal_id')
                 for cred_idx, cred in enumerate(nested_creds):
                     label = f'vms[{idx}].credentials[{cred_idx}]'
                     if not isinstance(cred, dict):
@@ -324,15 +427,18 @@ def _lint_store_text(text: str) -> list[str]:
                             )
                         seen_cred_ids.add(cred_id)
                     scope = (
+                        str(cred.get('principal_id', '')).strip(),
                         str(cred.get('provider_host', '')).strip().lower(),
                         str(cred.get('owner', '')).strip().lower(),
                         str(cred.get('repository', '')).strip().lower(),
                     )
-                    if all(scope):
+                    if all(scope[1:]):
                         if scope in seen_cred_scopes:
                             problems.append(
                                 f'{label} duplicate credential scope: '
-                                + '/'.join(scope)
+                                + ':'.join(
+                                    (scope[0] or 'legacy', '/'.join(scope[1:]))
+                                )
                             )
                         seen_cred_scopes.add(scope)
                     if not missing:
@@ -345,6 +451,7 @@ def _lint_store_text(text: str) -> list[str]:
                                 ),
                                 owner=str(cred.get('owner', '')),
                                 repository=str(cred.get('repository', '')),
+                                principal_id=str(cred.get('principal_id', '')),
                             )
                             validate_provider_key_id(
                                 str(cred.get('provider_key_id', ''))

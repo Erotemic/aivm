@@ -23,6 +23,25 @@ def virsh_cmd(*args: str) -> list[str]:
     return ['virsh', '-c', SYSTEM_LIBVIRT_URI, *args]
 
 
+def pin_locale(cmd: list[str]) -> list[str]:
+    """Prefix ``env LC_ALL=C`` so the command's output can be string-matched.
+
+    virsh (and ``stat``, and most of coreutils) localizes its diagnostics,
+    state names, and field labels, so matchers such as
+    :func:`virsh_domain_missing` only see the English text they expect when
+    the invocation pins the C locale.  The pin rides inside the argv rather
+    than in an ``env=`` override so it also survives sudo's environment
+    reset when the command escalates.  Apply it to every invocation whose
+    stdout/stderr is string-matched; output that is merely displayed or
+    exit-code-checked stays in the user's locale.
+
+    Being the one spelling of this rule is the point: a locale-sensitive
+    probe that skips it is findable by grep, and one that hand-rolls the
+    ``env LC_ALL=C`` prefix is not.
+    """
+    return ['env', 'LC_ALL=C', *cmd]
+
+
 def current_libvirt_uri() -> str:
     """Return the libvirt URI every client command must target."""
     return SYSTEM_LIBVIRT_URI
@@ -33,6 +52,10 @@ def virsh_domain_missing(stderr: str) -> bool:
 
     Distinguishes "domain not found" from permission/connection failures so
     callers know that retrying with sudo cannot change the answer.
+
+    Only the C-locale diagnostics match: run the virsh command under
+    :func:`pin_locale` (or an ``LC_ALL=C`` env override) or translated
+    stderr will defeat the check.
     """
     detail = (stderr or '').lower()
     return 'failed to get domain' in detail or 'domain not found' in detail

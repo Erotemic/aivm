@@ -51,27 +51,32 @@ import subprocess
 import sys
 from pathlib import Path
 
-VM = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("AIVM_VM", "aivm-2404")
-PERSISTENT_ROOT = Path(f"/var/lib/libvirt/aivm/{VM}/persistent-root")
+VM = (
+    sys.argv[1] if len(sys.argv) > 1 else os.environ.get('AIVM_VM', 'aivm-2404')
+)
+PERSISTENT_ROOT = Path(f'/var/lib/libvirt/aivm/{VM}/persistent-root')
 
 AT_FDCWD = -100
 MAX_HANDLE_SZ = 128
 CAP_DAC_READ_SEARCH = 2  # bit index, see capabilities(7)
 
-libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+libc = ctypes.CDLL(ctypes.util.find_library('c') or 'libc.so.6', use_errno=True)
 
 
 class FileHandle(ctypes.Structure):
     _fields_ = [
-        ("handle_bytes", ctypes.c_uint32),
-        ("handle_type", ctypes.c_int32),
-        ("f_handle", ctypes.c_ubyte * MAX_HANDLE_SZ),
+        ('handle_bytes', ctypes.c_uint32),
+        ('handle_type', ctypes.c_int32),
+        ('f_handle', ctypes.c_ubyte * MAX_HANDLE_SZ),
     ]
 
 
 libc.name_to_handle_at.argtypes = [
-    ctypes.c_int, ctypes.c_char_p, ctypes.POINTER(FileHandle),
-    ctypes.POINTER(ctypes.c_int), ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_char_p,
+    ctypes.POINTER(FileHandle),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int,
 ]
 libc.name_to_handle_at.restype = ctypes.c_int
 
@@ -81,44 +86,53 @@ def test_name_to_handle_at(path: Path):
     h.handle_bytes = MAX_HANDLE_SZ
     mnt_id = ctypes.c_int(0)
     rc = libc.name_to_handle_at(
-        AT_FDCWD, str(path).encode(), ctypes.byref(h),
-        ctypes.byref(mnt_id), 0,
+        AT_FDCWD,
+        str(path).encode(),
+        ctypes.byref(h),
+        ctypes.byref(mnt_id),
+        0,
     )
     if rc == 0:
-        return True, f"OK (handle_bytes={h.handle_bytes} handle_type={h.handle_type})"
+        return (
+            True,
+            f'OK (handle_bytes={h.handle_bytes} handle_type={h.handle_type})',
+        )
     err = ctypes.get_errno()
     name = {
-        95: "EOPNOTSUPP",
-        38: "ENOSYS",
-        13: "EACCES",
-        2: "ENOENT",
+        95: 'EOPNOTSUPP',
+        38: 'ENOSYS',
+        13: 'EACCES',
+        2: 'ENOENT',
     }.get(err, str(err))
     # EOVERFLOW means the fs *does* support handles but our buffer was too small.
     # That counts as "supports" for our purposes; we'd never see this with 128B.
     if err == 75:  # EOVERFLOW
-        return True, "OK (EOVERFLOW: supported but handle larger than test buffer)"
-    return False, f"FAIL errno={err} ({name}: {os.strerror(err)})"
+        return (
+            True,
+            'OK (EOVERFLOW: supported but handle larger than test buffer)',
+        )
+    return False, f'FAIL errno={err} ({name}: {os.strerror(err)})'
 
 
 def find_virtiofsd_pids() -> list[int]:
     pids = []
-    for entry in os.listdir("/proc"):
+    for entry in os.listdir('/proc'):
         if not entry.isdigit():
             continue
         try:
-            exe = os.readlink(f"/proc/{entry}/exe")
+            exe = os.readlink(f'/proc/{entry}/exe')
         except (FileNotFoundError, PermissionError, OSError):
             continue
-        if os.path.basename(exe) == "virtiofsd":
+        if os.path.basename(exe) == 'virtiofsd':
             pids.append(int(entry))
     return sorted(pids)
 
 
 def parse_cap_eff(pid: int) -> int | None:
     try:
-        with open(f"/proc/{pid}/status") as f:
+        with open(f'/proc/{pid}/status') as f:
             for line in f:
-                if line.startswith("CapEff:"):
+                if line.startswith('CapEff:'):
                     return int(line.split()[1], 16)
     except (FileNotFoundError, PermissionError):
         return None
@@ -129,22 +143,22 @@ def parse_mountinfo() -> dict[tuple[int, int], tuple[str, str, str]]:
     """Return {(major, minor): (fstype, source, mountpoint)}."""
     out: dict[tuple[int, int], tuple[str, str, str]] = {}
     try:
-        with open("/proc/self/mountinfo") as f:
+        with open('/proc/self/mountinfo') as f:
             lines = f.read().splitlines()
     except FileNotFoundError:
         return out
     for line in lines:
         parts = line.split()
         try:
-            sep = parts.index("-")
+            sep = parts.index('-')
         except ValueError:
             continue
         major_minor = parts[2]
         mountpoint = parts[4]
         fstype = parts[sep + 1]
-        source = parts[sep + 2] if len(parts) > sep + 2 else "?"
+        source = parts[sep + 2] if len(parts) > sep + 2 else '?'
         try:
-            maj, mnr = (int(x) for x in major_minor.split(":"))
+            maj, mnr = (int(x) for x in major_minor.split(':'))
         except ValueError:
             continue
         out.setdefault((maj, mnr), (fstype, source, mountpoint))
@@ -153,70 +167,84 @@ def parse_mountinfo() -> dict[tuple[int, int], tuple[str, str, str]]:
 
 def banner(s: str) -> None:
     print()
-    print("=" * 60)
+    print('=' * 60)
     print(s)
-    print("=" * 60)
+    print('=' * 60)
 
 
 def sub(s: str) -> None:
-    print(f"\n--- {s}")
+    print(f'\n--- {s}')
 
 
 def main() -> int:
-    banner(f"--inode-file-handles=prefer feasibility check for VM={VM}")
-    print(f"persistent-root: {PERSISTENT_ROOT}")
+    banner(f'--inode-file-handles=prefer feasibility check for VM={VM}')
+    print(f'persistent-root: {PERSISTENT_ROOT}')
 
     pass_1 = pass_2 = pass_3 = True
 
     # 1. virtiofsd flag support
-    sub("1. virtiofsd version + --inode-file-handles flag")
+    sub('1. virtiofsd version + --inode-file-handles flag')
     binary = None
-    for cand in ("/usr/libexec/virtiofsd", "/usr/bin/virtiofsd"):
+    for cand in ('/usr/libexec/virtiofsd', '/usr/bin/virtiofsd'):
         if os.path.exists(cand):
             binary = cand
             break
     if not binary:
-        print("    virtiofsd binary not found on common paths")
+        print('    virtiofsd binary not found on common paths')
         pass_1 = False
     else:
-        v = subprocess.run([binary, "--version"], capture_output=True, text=True)
-        print(f"    binary:  {binary}")
-        print(f"    version: {(v.stdout or v.stderr).strip()}")
-        h = subprocess.run([binary, "--help"], capture_output=True, text=True)
+        v = subprocess.run(
+            [binary, '--version'], capture_output=True, text=True
+        )
+        print(f'    binary:  {binary}')
+        print(f'    version: {(v.stdout or v.stderr).strip()}')
+        h = subprocess.run([binary, '--help'], capture_output=True, text=True)
         helptext = h.stdout + h.stderr
-        if "inode-file-handles" in helptext:
-            print("    --inode-file-handles flag: SUPPORTED")
+        if 'inode-file-handles' in helptext:
+            print('    --inode-file-handles flag: SUPPORTED')
         else:
-            print("    --inode-file-handles flag: NOT FOUND in --help")
+            print('    --inode-file-handles flag: NOT FOUND in --help')
             pass_1 = False
 
     # 2. CAP_DAC_READ_SEARCH availability path
-    sub("2. CAP_DAC_READ_SEARCH availability for virtiofsd")
+    sub('2. CAP_DAC_READ_SEARCH availability for virtiofsd')
     bit = 1 << CAP_DAC_READ_SEARCH
 
     # 2a. running virtiofsd: shows current state, not inevitable state
-    print("    [2a] live virtiofsd effective caps (current state, not the question we care about)")
+    print(
+        '    [2a] live virtiofsd effective caps (current state, not the question we care about)'
+    )
     pids = find_virtiofsd_pids()
     if not pids:
-        print("        (no virtiofsd processes running)")
+        print('        (no virtiofsd processes running)')
     else:
         for pid in pids:
             cap_eff = parse_cap_eff(pid)
             if cap_eff is None:
-                print(f"        pid={pid}: cannot read /proc/{pid}/status (need sudo)")
+                print(
+                    f'        pid={pid}: cannot read /proc/{pid}/status (need sudo)'
+                )
                 continue
-            has = "YES" if cap_eff & bit else "NO "
-            print(f"        pid={pid:<7} CapEff={cap_eff:#018x}  dac_read_search={has}")
-    print("        (virtiofsd drops this cap when not using file handles; missing")
-    print("         here is expected and does NOT prove anything about feasibility.)")
+            has = 'YES' if cap_eff & bit else 'NO '
+            print(
+                f'        pid={pid:<7} CapEff={cap_eff:#018x}  dac_read_search={has}'
+            )
+    print(
+        '        (virtiofsd drops this cap when not using file handles; missing'
+    )
+    print(
+        '         here is expected and does NOT prove anything about feasibility.)'
+    )
 
     # 2b. actual parent(s) of virtiofsd: do they hold dac_read_search?
     print()
-    print("    [2b] virtiofsd's actual parent process(es): can they pass dac_read_search down?")
+    print(
+        "    [2b] virtiofsd's actual parent process(es): can they pass dac_read_search down?"
+    )
 
     def _read_status_field(pid: int, field: str) -> str | None:
         try:
-            with open(f"/proc/{pid}/status") as f:
+            with open(f'/proc/{pid}/status') as f:
                 for line in f:
                     if line.startswith(field):
                         return line.split(maxsplit=1)[1].strip()
@@ -226,14 +254,14 @@ def main() -> int:
 
     def _comm(pid: int) -> str:
         try:
-            with open(f"/proc/{pid}/comm") as f:
+            with open(f'/proc/{pid}/comm') as f:
                 return f.read().strip()
         except (FileNotFoundError, PermissionError):
-            return "?"
+            return '?'
 
     parent_pids: set[int] = set()
     for vd_pid in pids:
-        ppid_str = _read_status_field(vd_pid, "PPid:")
+        ppid_str = _read_status_field(vd_pid, 'PPid:')
         if ppid_str and ppid_str.isdigit():
             ppid = int(ppid_str)
             if ppid > 0:
@@ -241,32 +269,38 @@ def main() -> int:
 
     parent_has_cap = False
     if not parent_pids:
-        print("        (no virtiofsd processes; cannot inspect parent)")
+        print('        (no virtiofsd processes; cannot inspect parent)')
     else:
         for ppid in sorted(parent_pids):
             cap_eff = parse_cap_eff(ppid)
-            cap_bnd_s = _read_status_field(ppid, "CapBnd:")
+            cap_bnd_s = _read_status_field(ppid, 'CapBnd:')
             cap_bnd = int(cap_bnd_s, 16) if cap_bnd_s else None
-            eff = "?" if cap_eff is None else ("YES" if cap_eff & bit else "NO ")
-            bnd = "?" if cap_bnd is None else ("YES" if cap_bnd & bit else "NO ")
-            print(f"        parent pid={ppid} comm={_comm(ppid)}  "
-                  f"effective={eff}  bounding={bnd}")
+            eff = (
+                '?' if cap_eff is None else ('YES' if cap_eff & bit else 'NO ')
+            )
+            bnd = (
+                '?' if cap_bnd is None else ('YES' if cap_bnd & bit else 'NO ')
+            )
+            print(
+                f'        parent pid={ppid} comm={_comm(ppid)}  '
+                f'effective={eff}  bounding={bnd}'
+            )
             if (cap_eff and cap_eff & bit) or (cap_bnd and cap_bnd & bit):
                 parent_has_cap = True
 
     # 2c. AppArmor: does the profile allow it?
     print()
-    print("    [2c] AppArmor: profile allows capability dac_read_search?")
-    aa_enabled = os.path.exists("/sys/kernel/security/apparmor")
+    print('    [2c] AppArmor: profile allows capability dac_read_search?')
+    aa_enabled = os.path.exists('/sys/kernel/security/apparmor')
     profile_finding = None
     if not aa_enabled:
-        print("        AppArmor not enabled on this host; not a blocker.")
+        print('        AppArmor not enabled on this host; not a blocker.')
         profile_finding = True
     else:
         candidates = [
-            "/etc/apparmor.d/usr.libexec.virtiofsd",
-            "/etc/apparmor.d/abstractions/libvirt-qemu",
-            "/etc/apparmor.d/libvirt/TEMPLATE.qemu",
+            '/etc/apparmor.d/usr.libexec.virtiofsd',
+            '/etc/apparmor.d/abstractions/libvirt-qemu',
+            '/etc/apparmor.d/libvirt/TEMPLATE.qemu',
         ]
         found_any = False
         for p in candidates:
@@ -277,38 +311,46 @@ def main() -> int:
                 with open(p) as f:
                     content = f.read()
             except PermissionError:
-                print(f"        {p}: permission denied (try sudo)")
+                print(f'        {p}: permission denied (try sudo)')
                 continue
-            allows = "dac_read_search" in content
-            denies = "deny capability dac_read_search" in content
-            marker = "ALLOWS" if (allows and not denies) else \
-                     "DENIES" if denies else \
-                     "no explicit rule (may inherit from abstractions)"
-            print(f"        {p}: {marker}")
+            allows = 'dac_read_search' in content
+            denies = 'deny capability dac_read_search' in content
+            marker = (
+                'ALLOWS'
+                if (allows and not denies)
+                else 'DENIES'
+                if denies
+                else 'no explicit rule (may inherit from abstractions)'
+            )
+            print(f'        {p}: {marker}')
             if profile_finding is None and allows and not denies:
                 profile_finding = True
             if denies:
                 profile_finding = False
         if not found_any:
-            print("        (no virtiofsd/libvirt profiles found in /etc/apparmor.d/)")
+            print(
+                '        (no virtiofsd/libvirt profiles found in /etc/apparmor.d/)'
+            )
             profile_finding = None
 
     # Combined judgement for check 2
     if parent_has_cap and profile_finding is not False:
         print()
-        print("    -> parent has the cap and AppArmor is not a known blocker:")
-        print("       virtiofsd should retain dac_read_search when started with")
-        print("       --inode-file-handles=prefer or =mandatory.")
+        print('    -> parent has the cap and AppArmor is not a known blocker:')
+        print(
+            '       virtiofsd should retain dac_read_search when started with'
+        )
+        print('       --inode-file-handles=prefer or =mandatory.')
         pass_2 = True
     else:
         pass_2 = False
         print()
-        print("    -> at least one prerequisite is missing or unclear.")
+        print('    -> at least one prerequisite is missing or unclear.')
 
     # 3. Per-filesystem name_to_handle_at support under persistent-root
-    sub("3. name_to_handle_at support per filesystem under persistent-root")
+    sub('3. name_to_handle_at support per filesystem under persistent-root')
     if not PERSISTENT_ROOT.is_dir():
-        print(f"    {PERSISTENT_ROOT} not a directory; skipping")
+        print(f'    {PERSISTENT_ROOT} not a directory; skipping')
         pass_3 = False
     else:
         mountinfo = parse_mountinfo()
@@ -328,7 +370,9 @@ def main() -> int:
                     p = Path(root) / fname
                     try:
                         st2 = p.lstat()
-                        if (st2.st_mode & 0o170000) == 0o100000 and st2.st_dev == st.st_dev:
+                        if (
+                            st2.st_mode & 0o170000
+                        ) == 0o100000 and st2.st_dev == st.st_dev:
                             sample = p
                             break
                     except OSError:
@@ -338,44 +382,58 @@ def main() -> int:
             seen[st.st_dev] = (token_dir.name, sample)
 
         if not seen:
-            print("    (no token directories found)")
+            print('    (no token directories found)')
             pass_3 = False
         else:
-            print(f"    {'token (first hit per fs)':50s}  {'fstype':8s}  result")
+            print(
+                f'    {"token (first hit per fs)":50s}  {"fstype":8s}  result'
+            )
             for dev, (token, sample) in seen.items():
                 maj, mnr = os.major(dev), os.minor(dev)
                 fs_info = mountinfo.get((maj, mnr))
-                fstype = fs_info[0] if fs_info else "?"
+                fstype = fs_info[0] if fs_info else '?'
                 if sample is None:
-                    print(f"    {token:50s}  {fstype:8s}  (no regular file found to test)")
+                    print(
+                        f'    {token:50s}  {fstype:8s}  (no regular file found to test)'
+                    )
                     continue
                 ok, msg = test_name_to_handle_at(sample)
                 if not ok:
                     pass_3 = False
-                print(f"    {token:50s}  {fstype:8s}  {msg}")
+                print(f'    {token:50s}  {fstype:8s}  {msg}')
 
     # Verdict
-    sub("verdict")
+    sub('verdict')
     results = [
-        ("flag supported by virtiofsd", pass_1),
-        ("running virtiofsd has CAP_DAC_READ_SEARCH", pass_2),
-        ("filesystems support name_to_handle_at", pass_3),
+        ('flag supported by virtiofsd', pass_1),
+        ('running virtiofsd has CAP_DAC_READ_SEARCH', pass_2),
+        ('filesystems support name_to_handle_at', pass_3),
     ]
     for label, ok in results:
-        print(f"    [{'PASS' if ok else 'FAIL'}] {label}")
+        print(f'    [{"PASS" if ok else "FAIL"}] {label}')
     overall = all(ok for _, ok in results)
     print()
     if overall:
-        print("    All checks passed. --inode-file-handles=prefer should work.")
-        print("    With 'prefer', any filesystem that does NOT support handles will")
-        print("    silently fall back to per-FD inode caching; only 'mandatory'")
-        print("    would refuse to start.")
+        print('    All checks passed. --inode-file-handles=prefer should work.')
+        print(
+            "    With 'prefer', any filesystem that does NOT support handles will"
+        )
+        print(
+            "    silently fall back to per-FD inode caching; only 'mandatory'"
+        )
+        print('    would refuse to start.')
     else:
-        print("    Some checks failed; review above. Note that 'prefer' is still")
-        print("    safe to try if (1) passes, since unsupported filesystems just")
-        print("    fall back to per-FD caching; the win simply becomes partial.")
+        print(
+            "    Some checks failed; review above. Note that 'prefer' is still"
+        )
+        print(
+            '    safe to try if (1) passes, since unsupported filesystems just'
+        )
+        print(
+            '    fall back to per-FD caching; the win simply becomes partial.'
+        )
 
-    sub("how to apply (suggested)")
+    sub('how to apply (suggested)')
     print("""\
     The cleanest non-invasive way is a tiny wrapper script:
 
@@ -403,5 +461,5 @@ def main() -> int:
     return 0 if overall else 1
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

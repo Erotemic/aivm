@@ -9,7 +9,10 @@ from pathlib import Path, PurePosixPath
 
 from loguru import logger
 
-from ..commands import CommandManager
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from ..attachment_schema import MIRROR_HOME_NO
+from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -20,8 +23,8 @@ from ..vm.share import ResolvedAttachment
 from .persistent import _prepare_persistent_attachment_host_and_vm
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
+    ATTACHMENT_MODE_DIRECT_VIRTIOFS,
     ATTACHMENT_MODE_PERSISTENT,
-    ATTACHMENT_MODE_SHARED,
     ATTACHMENT_MODE_SHARED_ROOT,
     _compute_mirror_home_symlink,
     _default_primary_guest_dst,
@@ -53,7 +56,8 @@ def _ensure_guest_symlink(
     - regular file: warn and skip
     - symlink to wrong target: warn and skip
     """
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     link_q = shlex.quote(symlink_path)
     tgt_q = shlex.quote(target_path)
     parent_q = shlex.quote(str(PurePosixPath(symlink_path).parent))
@@ -88,12 +92,26 @@ def _ensure_guest_symlink(
             ident,
             strict_host_key_checking='accept-new',
         ),
-        f'{cfg.vm.user}@{ip}',
-        script,
+        context.ssh_target(ip),
+        Elided(
+            script,
+            f'guest symlink reconcile: {symlink_path} -> {target_path}',
+        ),
     ]
-    res = CommandManager.current().run(
-        cmd, sudo=False, check=False, capture=True
-    )
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Reconcile guest attachment symlink',
+        why=f'Ensure {symlink_path} points to the attached path {target_path}.',
+        approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+    ):
+        res = mgr.run(
+            cmd,
+            sudo=False,
+            role='modify',
+            check=False,
+            capture=True,
+            summary=f'Reconcile guest symlink {symlink_path}',
+        )
     if res.code not in (0, 3, 4, 5):
         log.warning(
             'Guest symlink setup failed for {} -> {}: {}',
@@ -105,6 +123,103 @@ def _ensure_guest_symlink(
     stderr = (res.stderr or '').strip()
     if stderr and 'aivm-symlink-warn' in stderr:
         log.warning('{}', stderr.replace('aivm-symlink-warn: ', ''))
+
+
+def _remove_guest_symlink_if_target(
+    cfg: AgentVMConfig,
+    ip: str,
+    *,
+    symlink_path: str,
+    target_path: str,
+) -> None:
+    """Remove one AIVM-derived guest symlink only when it still matches.
+
+    A read-only probe keeps the common already-absent case free of mutation
+    approval.  The removal script rechecks the target immediately before
+    unlinking so a changed/user-owned path is preserved.
+    """
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
+    link_q = shlex.quote(symlink_path)
+    target_q = shlex.quote(target_path)
+    mgr = CommandManager.current()
+    base = [
+        'ssh',
+        *ssh_base_args(
+            ident,
+            strict_host_key_checking='accept-new',
+        ),
+        context.ssh_target(ip),
+    ]
+    probe_script = f'if [ -L {link_q} ]; then readlink -- {link_q}; fi'
+    with mgr.intent(
+        f'Inspect mirror-home symlink {symlink_path}',
+        why='Remove only an AIVM-derived mirror that still points at this attachment.',
+        role='read',
+    ):
+        probe = mgr.run(
+            [*base, probe_script],
+            sudo=False,
+            check=False,
+            capture=True,
+        )
+    if probe.code != 0 or (probe.stdout or '').strip() != target_path:
+        return
+
+    remove_script = (
+        f'if [ -L {link_q} ] && [ "$(readlink -- {link_q})" = {target_q} ]; '
+        f'then sudo -n rm -- {link_q}; fi'
+    )
+    with mgr.intent(
+        f'Remove disabled mirror-home symlink {symlink_path}',
+        why='Converge an explicit per-attachment mirror_home=no policy without touching unrelated guest paths.',
+        role='modify',
+    ):
+        result = mgr.run(
+            [*base, remove_script],
+            sudo=False,
+            check=False,
+            capture=True,
+        )
+    if result.code != 0:
+        log.warning(
+            'Guest mirror-home symlink cleanup failed for {} -> {}: {}',
+            symlink_path,
+            target_path,
+            (result.stderr or result.stdout or '').strip(),
+        )
+
+
+def _mirror_home_symlink_paths(
+    cfg: AgentVMConfig,
+    host_src: Path,
+    attachment: ResolvedAttachment,
+) -> list[str]:
+    """Return the unique mirror-home paths derived for one attachment."""
+    guest_dst = attachment.guest_dst
+    is_default_dst = guest_dst == _default_primary_guest_dst(host_src)
+    if not is_default_dst:
+        return []
+
+    paths: list[str] = []
+    lexical_mirror = _compute_mirror_home_symlink(
+        cfg, host_src, guest_dst, is_default_dst=True
+    )
+    if lexical_mirror is not None:
+        paths.append(lexical_mirror)
+
+    current_lexical = _host_symlink_lexical_path(host_src)
+    if current_lexical is not None:
+        try:
+            resolved_src = host_src.resolve()
+        except OSError:
+            return paths
+        resolved_mirror = _compute_mirror_home_symlink(
+            cfg, resolved_src, guest_dst, is_default_dst=True
+        )
+        if resolved_mirror is not None and resolved_mirror not in paths:
+            paths.append(resolved_mirror)
+    return paths
 
 
 def _apply_guest_derived_symlinks(
@@ -119,6 +234,7 @@ def _apply_guest_derived_symlinks(
     """Create companion and mirror-home symlinks in the guest after attachment.
 
     Three cases are handled:
+
     1. Companion symlinks: for ``host_src`` itself (when its lexical form
        differs from the resolved guest_dst) and for every additional alias
        supplied via ``extra_lexical_paths`` (typically the persisted
@@ -186,15 +302,23 @@ def _apply_guest_derived_symlinks(
             target_path=guest_dst,
         )
 
+    mirror_paths = _mirror_home_symlink_paths(cfg, host_src, attachment)
     if not mirror_home:
+        # Explicit per-attachment opt-out owns cleanup of the derived links it
+        # may have created while previously enabled. Inherited ``auto`` false
+        # remains a no-op so the default path does not add SSH round trips.
+        if attachment.mirror_home == MIRROR_HOME_NO:
+            for mirror_path in mirror_paths:
+                _remove_guest_symlink_if_target(
+                    cfg,
+                    ip,
+                    symlink_path=mirror_path,
+                    target_path=guest_dst,
+                )
         return
 
-    # 2. Mirror-home for the lexical host path.
-    is_default_dst = guest_dst == _default_primary_guest_dst(host_src)
-    mirror_path = _compute_mirror_home_symlink(
-        cfg, host_src, guest_dst, is_default_dst=is_default_dst
-    )
-    if mirror_path is not None:
+    # 2/3. Mirror-home for the lexical and, when distinct, resolved host path.
+    for mirror_path in mirror_paths:
         _ensure_guest_symlink(
             cfg,
             ip,
@@ -202,27 +326,13 @@ def _apply_guest_derived_symlinks(
             target_path=guest_dst,
         )
 
-    # 3. Mirror-home for the resolved host path (only when host_src is a symlink
-    #    and the attachment did not use an explicit custom guest_dst).
-    if current_lexical is not None and is_default_dst:
-        try:
-            resolved_src = host_src.resolve()
-        except OSError:
-            return
-        resolved_mirror = _compute_mirror_home_symlink(
-            cfg, resolved_src, guest_dst, is_default_dst=True
-        )
-        if resolved_mirror is not None and resolved_mirror != mirror_path:
-            _ensure_guest_symlink(
-                cfg,
-                ip,
-                symlink_path=resolved_mirror,
-                target_path=guest_dst,
-            )
-
 
 def _upsert_ssh_config_entry(
-    cfg: AgentVMConfig, *, dry_run: bool = False, yes: bool = False
+    cfg: AgentVMConfig,
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    forward_agent_socket: str = '',
 ) -> tuple[Path, bool]:
     cfg = cfg.expanded_paths()
     ssh_dir = Path.home() / '.ssh'
@@ -230,7 +340,7 @@ def _upsert_ssh_config_entry(
     block_name = cfg.vm.name
     new_block = (
         f'# >>> aivm:{block_name} >>>\n'
-        f'{mk_ssh_config(cfg).rstrip()}\n'
+        f'{mk_ssh_config(cfg, forward_agent_socket=forward_agent_socket).rstrip()}\n'
         f'# <<< aivm:{block_name} <<<\n'
     )
     if dry_run:
@@ -299,7 +409,7 @@ def _ensure_attachment_available_in_guest(
     symlink under the guest home mirroring the host-home-relative path is created.
     """
     mgr = CommandManager.current()
-    if attachment.mode == ATTACHMENT_MODE_SHARED:
+    if attachment.mode == ATTACHMENT_MODE_DIRECT_VIRTIOFS:
         ensure_share_mounted(
             cfg,
             ip,
@@ -373,7 +483,8 @@ def _ensure_attachment_available_in_guest(
 
 def _git_repo_context(host_src: Path) -> tuple[Path, Path]:
     probe = CommandManager.current().run(
-        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'], role='read',
+        ['git', '-C', str(host_src), 'rev-parse', '--show-toplevel'],
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -425,7 +536,8 @@ def _upsert_host_git_remote(
             'rev-parse',
             '--path-format=absolute',
             '--git-common-dir',
-        ], role='read',
+        ],
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -439,7 +551,8 @@ def _upsert_host_git_remote(
         )
     git_cfg = Path((git_dir_probe.stdout or '').strip()) / 'config'
     probe = mgr.run(
-        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name], role='read',
+        ['git', '-C', str(repo_root), 'remote', 'get-url', remote_name],
+        role='read',
         sudo=False,
         check=False,
         capture=True,
@@ -494,9 +607,10 @@ def _ensure_guest_git_repo(
     cfg: AgentVMConfig,
     guest_repo_root: str,
 ) -> None:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     root_q = shlex.quote(guest_repo_root)
-    user_q = shlex.quote(cfg.vm.user)
+    user_q = shlex.quote(context.guest_user)
     # Use sudo to create the full repo root path in case the parent dirs are
     # outside the guest home and not user-writable (e.g. /home/joncrall/code/repo).
     # Only chown the repo root leaf itself — never recursively chown parent trees.

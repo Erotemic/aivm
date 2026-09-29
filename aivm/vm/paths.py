@@ -22,6 +22,7 @@ def _paths(cfg: AgentVMConfig, *, dry_run: bool = False) -> dict[str, Path]:
         'known_hosts': state_dir / 'known_hosts',
     }
 
+
 def shared_root_host_dir(cfg: AgentVMConfig) -> Path:
     """Host-side export directory backing shared-root attachments for this VM.
 
@@ -30,6 +31,7 @@ def shared_root_host_dir(cfg: AgentVMConfig) -> Path:
     detection, attachment reconciliation, and VM creation.
     """
     return Path(cfg.paths.base_dir) / cfg.vm.name / 'shared-root'
+
 
 def persistent_root_host_dir(cfg: AgentVMConfig) -> Path:
     """Host-side export directory backing persistent attachments for this VM.

@@ -178,13 +178,17 @@ def _project_selector(project: GitLabProject | str | int) -> str:
 
 def _json_object(raw: object, *, label: str) -> dict[str, object]:
     if not isinstance(raw, dict):
-        raise GitLabError(f'GitLab returned an unexpected response while {label}.')
+        raise GitLabError(
+            f'GitLab returned an unexpected response while {label}.'
+        )
     return cast(dict[str, object], raw)
 
 
 def _json_list(raw: object, *, label: str) -> list[object]:
     if not isinstance(raw, list):
-        raise GitLabError(f'GitLab returned an unexpected response while {label}.')
+        raise GitLabError(
+            f'GitLab returned an unexpected response while {label}.'
+        )
     return cast(list[object], raw)
 
 
@@ -348,12 +352,16 @@ class GitLabDeployKeyBackend:
                 )
         except HTTPError as ex:
             body = ex.read()
-            reason = _error_message(body, fallback=str(ex.reason or 'request failed'))
+            reason = _error_message(
+                body, fallback=str(ex.reason or 'request failed')
+            )
             message = f'GitLab request failed: {reason} (HTTP {ex.code})'
             if ex.code == 401:
                 raise GitLabAuthenticationError(message) from ex
             if 400 <= ex.code < 500:
-                raise GitLabProviderRejectedError(message, status=ex.code) from ex
+                raise GitLabProviderRejectedError(
+                    message, status=ex.code
+                ) from ex
             raise GitLabTransportError(message) from ex
         except (URLError, TimeoutError, socket.timeout, OSError) as ex:
             raise GitLabTransportError(
@@ -433,7 +441,9 @@ class GitLabDeployKeyBackend:
             try:
                 page = json.loads(result.body.decode('utf-8'))
             except (UnicodeDecodeError, json.JSONDecodeError) as ex:
-                raise GitLabError('GitLab returned invalid deploy-key JSON.') from ex
+                raise GitLabError(
+                    'GitLab returned invalid deploy-key JSON.'
+                ) from ex
             items.extend(_json_list(page, label='listing deploy keys'))
             url = self._next_page_url(result.headers, current_url=url)
         return [_parse_deploy_key(item) for item in items]
@@ -492,7 +502,7 @@ class GitLabDeployKeyBackend:
         payload: dict[str, object] = {
             'title': str(title),
             'key': public_key,
-            'can_push': bool(write),
+            'can_push': write,
         }
         if expires_at:
             payload['expires_at'] = expires_at
@@ -516,7 +526,7 @@ class GitLabDeployKeyBackend:
         if title is not None:
             payload['title'] = title
         if write is not None:
-            payload['can_push'] = bool(write)
+            payload['can_push'] = write
         if not payload:
             raise GitLabError('Deploy-key update has no requested changes.')
         selector = _project_selector(project)

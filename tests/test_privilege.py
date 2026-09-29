@@ -67,9 +67,7 @@ def test_virsh_needs_sudo_per_mode(monkeypatch: MonkeyPatch) -> None:
     # as-needed consults the capability probe (pinned False by conftest)
     _activate('as-needed')
     assert virsh_needs_sudo() is True
-    monkeypatch.setattr(
-        'aivm.privilege.libvirt_without_sudo_ok', lambda: True
-    )
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', lambda: True)
     assert virsh_needs_sudo() is False
 
 
@@ -201,7 +199,9 @@ def test_attachment_resolution_is_privilege_mode_independent(
         att = _resolve_attachment(cfg, cfg_path, host_src, '', '', '')
         assert str(att.mode) == 'persistent'
         for requested in ('persistent', 'shared-root'):
-            att = _resolve_attachment(cfg, cfg_path, host_src, '', requested, '')
+            att = _resolve_attachment(
+                cfg, cfg_path, host_src, '', requested, ''
+            )
             assert str(att.mode) == requested
 
 
@@ -387,6 +387,7 @@ def test_fetch_image_refuses_to_redownload_over_unknown_state(
     monkeypatch.setattr(
         'aivm.vm.images._ensure_qemu_access', lambda *a, **k: None
     )
+
     # Belt and braces: an unknown cached image must not reach `curl`, so a
     # regression here fails the assertion rather than downloading 600MB.
     def fail_on_exec(cmd: list[str], **kwargs: Any) -> FakeProc:

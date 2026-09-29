@@ -1,0 +1,6 @@
+[submodule "submodules/kwconf"]
+	path = submodules/kwconf
+	url = https://github.com/Erotemic/kwconf.git
+[submodule "submodules/xdoctest"]
+	path = submodules/xdoctest
+	url = https://github.com/Erotemic/xdoctest.git

@@ -93,5 +93,5 @@ def test_attach_failure_guidance_mentions_vm_update_for_wrapper_drift() -> None:
     src = (repo_root / 'aivm' / 'attachments' / 'session.py').read_text(
         encoding='utf-8'
     )
-    assert "virtiofsd-wrapper-" in src
+    assert 'virtiofsd-wrapper-' in src
     assert 'aivm vm update' in src

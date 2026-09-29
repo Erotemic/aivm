@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from typing import Any
 
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandError, CommandManager, Elided
+from aivm.commands import CommandError, CommandManager, CommandResult, Elided
 from aivm.errors import (
     AIVMError,
     ApprovalUnavailableError,
@@ -304,7 +305,9 @@ def test_failed_command_is_not_re_run_by_a_later_flush(
     except CommandError:
         pass
 
-    result = mgr.run(['unrelated', 'thing'], role='read', check=True, capture=True)
+    result = mgr.run(
+        ['unrelated', 'thing'], role='read', check=True, capture=True
+    )
 
     assert result.code == 0
     assert attempts == [['failing', 'thing'], ['unrelated', 'thing']], (
@@ -363,7 +366,9 @@ def test_attempt_reports_success(monkeypatch: MonkeyPatch) -> None:
     mgr = CommandManager(yes=True)
 
     with mgr.attempt('Register the thing') as attempt:
-        result = mgr.run(['fine', 'thing'], role='read', check=True, capture=True)
+        result = mgr.run(
+            ['fine', 'thing'], role='read', check=True, capture=True
+        )
 
     assert attempt.ok
     assert attempt.reason == ''
@@ -391,7 +396,11 @@ def test_attempt_leaves_no_command_for_a_later_flush_to_re_run(
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
         del kwargs
         attempts.append(list(cmd))
-        return FakeProc(1, '', 'nope') if cmd[0] == 'failing' else FakeProc(0, 'ok', '')
+        return (
+            FakeProc(1, '', 'nope')
+            if cmd[0] == 'failing'
+            else FakeProc(0, 'ok', '')
+        )
 
     patch_command_runtime(monkeypatch, fake_run)
     mgr = CommandManager(yes=True)
@@ -434,11 +443,15 @@ def test_rereading_a_failed_loose_handle_runs_nothing_and_reraises(
     executed = _recording_runner(monkeypatch)
     mgr = CommandManager(yes=True)
 
-    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    handle = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError) as first:
         handle.result()
 
-    mgr.submit(['unrelated', 'MUTATION'], role='modify', check=True, capture=True)
+    mgr.submit(
+        ['unrelated', 'MUTATION'], role='modify', check=True, capture=True
+    )
 
     with pytest.raises(CommandError) as second:
         handle.result()
@@ -483,7 +496,9 @@ def test_rereading_a_failed_handle_with_an_empty_queue_reraises(
     _recording_runner(monkeypatch)
     mgr = CommandManager(yes=True)
 
-    handle = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    handle = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError) as first:
         handle.result()
     with pytest.raises(CommandError) as second:
@@ -516,9 +531,79 @@ def test_aborted_plan_leaves_every_handle_terminal(
     assert executed == []
     for handle in pending:
         assert handle.done(), 'an unexecuted handle stayed pending'
-        with pytest.raises(CommandNotExecutedError, match='aborted'):
+        with pytest.raises(CommandNotExecutedError, match='abandoned'):
             handle.result()
     assert executed == [], 'reading an abandoned handle executed something'
+
+
+def test_declined_plan_leaves_every_handle_terminal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Declining a plan's approval resolves every queued handle.
+
+    Regression: abort_plan only covers exceptions raised by the step body;
+    when the decline came out of finish_plan itself the plan left the stack
+    with every handle still pending, so done() lied and result() raised a
+    manager-invariant error instead of CommandNotExecutedError.
+    """
+    executed: list[list[str]] = []
+    prompts = patch_command_runtime(
+        monkeypatch,
+        lambda cmd, **kw: executed.append(list(cmd)) or FakeProc(0, '', ''),
+        answer='n',
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    pending: list[Any] = []
+    with pytest.raises(UserDeclinedError):
+        with mgr.step('Declined step'):
+            pending.append(
+                mgr.submit(['virsh', 'one'], sudo=True, role='modify')
+            )
+            pending.append(
+                mgr.submit(['virsh', 'two'], sudo=True, role='modify')
+            )
+
+    assert prompts, 'the plan approval prompt never fired'
+    assert executed == []
+    for handle in pending:
+        assert handle.done(), 'a declined-plan handle stayed pending'
+        with pytest.raises(CommandNotExecutedError, match='abandoned'):
+            handle.result()
+    assert executed == [], 'reading a declined handle executed something'
+
+
+def test_mid_plan_failure_resolves_the_remaining_handles(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A command that raises mid-plan must not leave later handles pending."""
+
+    def runner(cmd: list[str], **kw: Any) -> FakeProc:
+        if 'boom' in cmd:
+            return FakeProc(1, '', 'exploded')
+        return FakeProc(0, 'ok', '')
+
+    patch_command_runtime(monkeypatch, runner)
+    mgr = CommandManager(yes=True)
+
+    pending: list[Any] = []
+    with pytest.raises(CommandError):
+        with mgr.step('Partially failing step'):
+            pending.append(
+                mgr.submit(['boom'], role='modify', check=True, capture=True)
+            )
+            pending.append(
+                mgr.submit(['after'], role='modify', check=True, capture=True)
+            )
+
+    failed, never_ran = pending
+    assert failed.done()
+    with pytest.raises(CommandError):
+        failed.result()
+    assert never_ran.done(), 'a post-failure handle stayed pending'
+    with pytest.raises(CommandNotExecutedError, match='abandoned'):
+        never_ran.result()
 
 
 def test_every_terminal_handle_replays_instead_of_executing(
@@ -530,7 +615,9 @@ def test_every_terminal_handle_replays_instead_of_executing(
 
     good = mgr.submit(['fine', 'thing'], role='read', check=True, capture=True)
     assert good.result().stdout == 'ok'
-    bad = mgr.submit(['failing', 'thing'], role='read', check=True, capture=True)
+    bad = mgr.submit(
+        ['failing', 'thing'], role='read', check=True, capture=True
+    )
     with pytest.raises(CommandError):
         bad.result()
 
@@ -640,7 +727,7 @@ def test_marked_payload_logs_its_label_and_still_executes_in_full(
 
     run_lines = [m for m in messages if m.startswith('RUN')]
     assert run_lines == [
-        'RUN: ssh agent@10.0.0.2 <<OMITTED guest bootstrap script>>'
+        'RUN:\nssh agent@10.0.0.2 <<OMITTED guest bootstrap script>>'
     ]
     assert executed == [['ssh', 'agent@10.0.0.2', script]]
     # the shortening is announced rather than left for the reader to notice
@@ -669,7 +756,7 @@ def test_unmarked_long_payload_admits_it_is_unmarked(
     mgr.run(['ssh', 'agent@10.0.0.2', script], sudo=False, role='read')
 
     run_line = next(m for m in messages if m.startswith('RUN'))
-    assert run_line == 'RUN: ssh agent@10.0.0.2 <<OMITTED unmarked argument>>'
+    assert run_line == 'RUN:\nssh agent@10.0.0.2 <<OMITTED unmarked argument>>'
     assert 'payloadpayload' not in run_line
     # never asserts what the payload is, the way the old shape rules did
     assert 'remote command' not in run_line
@@ -707,7 +794,7 @@ def test_ordinary_command_is_logged_verbatim(
     ]
     mgr.run(cmd, sudo=False, role='read')
 
-    assert 'RUN: ' + ' '.join(cmd) in messages
+    assert 'RUN:\n' + ' '.join(cmd) in messages
 
 
 def test_only_an_unprivileged_read_is_held_back(
@@ -731,8 +818,8 @@ def test_only_an_unprivileged_read_is_held_back(
 
     shown = [m for m in info if m.startswith('RUN')]
     assert shown == [
-        'RUN: sudo qemu-img info /disk.qcow2',
-        'RUN: virsh setvcpus vm 8',
+        'RUN:\nsudo qemu-img info /disk.qcow2',
+        'RUN:\nvirsh setvcpus vm 8',
     ]
 
 
@@ -747,7 +834,7 @@ def test_reads_are_recoverable_at_debug(monkeypatch: MonkeyPatch) -> None:
 
     mgr.run(['virsh', 'dominfo', 'vm'], sudo=False, role='read')
 
-    assert 'RUN: virsh dominfo vm' in verbose
+    assert 'RUN:\nvirsh dominfo vm' in verbose
 
 
 def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
@@ -763,7 +850,7 @@ def test_an_unclassified_command_stays_loud(monkeypatch: MonkeyPatch) -> None:
 
     mgr.run(['some-tool', '--do-a-thing'], sudo=False)
 
-    assert 'RUN: some-tool --do-a-thing' in info
+    assert 'RUN:\nsome-tool --do-a-thing' in info
 
 
 def test_a_read_that_escalates_nothing_stays_quiet_as_root(
@@ -787,11 +874,9 @@ def test_a_read_that_escalates_nothing_stays_quiet_as_root(
     mgr.run(probe, sudo=True, role='read')
     assert [m for m in info if m.startswith('RUN')] == []
 
-    verbose = capture_logs(
-        monkeypatch, 'aivm.commands.log', levels=('debug',)
-    )
+    verbose = capture_logs(monkeypatch, 'aivm.commands.log', levels=('debug',))
     mgr.run(probe, sudo=True, role='read')
-    assert 'RUN: qemu-img info /disk.qcow2' in verbose
+    assert 'RUN:\nqemu-img info /disk.qcow2' in verbose
 
 
 def test_handing_the_terminal_to_the_user_is_not_a_write(
@@ -829,7 +914,7 @@ def test_handing_the_terminal_to_the_user_is_not_a_write(
 def test_an_omission_notice_never_outlives_its_command(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """"OMITTED FROM THE COMMAND ABOVE" is a lie if the command is not above.
+    """ "OMITTED FROM THE COMMAND ABOVE" is a lie if the command is not above.
 
     An unprivileged read is held for --verbose 2, so its omission notice has
     to be held too, or the default log complains about a line it never shows.
@@ -920,3 +1005,211 @@ def test_secrets_are_kept_off_the_command_line_not_out_of_the_log(
 
     assert seen == [secret]
     assert not any(secret in m for m in messages)
+
+
+def test_request_is_single_source_for_preview_and_run(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    seen: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(
+        self: CommandManager, cmd: list[str], **kwargs: Any
+    ) -> CommandResult:
+        del self
+        seen.append((list(cmd), dict(kwargs)))
+        return CommandResult(0, 'ok', '')
+
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(yes=True)
+    request = mgr.request(
+        ['demo-tool', '--flag'],
+        role='read',
+        check=False,
+        capture=True,
+        env={'DEMO': '1'},
+        summary='Inspect demo state',
+    )
+
+    request.preview()
+    assert seen == []
+    assert 'DRYRUN: Inspect demo state' in messages
+    assert 'command (read-only):\ndemo-tool --flag' in messages
+
+    monkeypatch.setattr(CommandManager, 'run', fake_run)
+    result = request.run()
+    assert result.stdout == 'ok'
+    assert seen == [
+        (
+            ['demo-tool', '--flag'],
+            {
+                'sudo': False,
+                'role': 'read',
+                'ownership': 'user',
+                'user_driven': False,
+                'check': False,
+                'capture': True,
+                'text': True,
+                'input_text': None,
+                'env': {'DEMO': '1'},
+                'timeout': None,
+                'summary': 'Inspect demo state',
+                'detail': '',
+            },
+        )
+    ]
+
+
+def test_command_request_is_frozen() -> None:
+    mgr = CommandManager()
+    request = mgr.request(['true'], role='read')
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(request, 'role', 'modify')
+
+
+def test_preview_uses_command_renderer_without_execution(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, '', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    mgr.preview(
+        ['virsh', 'start', 'demo-vm'],
+        role='modify',
+        summary='Start demo VM',
+    )
+
+    assert executed == []
+    assert 'DRYRUN: Start demo VM' in messages
+    assert 'command:\nvirsh start demo-vm' in messages
+
+
+def test_replace_process_is_owned_by_command_manager(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class ExecCalled(RuntimeError):
+        pass
+
+    seen: list[tuple[str, list[str]]] = []
+
+    def fake_execvp(program: str, argv: list[str]) -> None:
+        seen.append((program, list(argv)))
+        raise ExecCalled
+
+    monkeypatch.setattr('aivm.commands.os.execvp', fake_execvp)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+
+    with pytest.raises(ExecCalled):
+        mgr.replace_process(
+            ['ssh', '-t', 'agent@vm', 'tmux attach -t aivm-tunnel'],
+            role='read',
+            summary='Attach tunnel',
+        )
+
+    assert seen == [
+        ('ssh', ['ssh', '-t', 'agent@vm', 'tmux attach -t aivm-tunnel'])
+    ]
+    assert (
+        'RUN (exec, replaces this process):\n'
+        "ssh -t agent@vm 'tmux attach -t aivm-tunnel'"
+    ) in messages
+
+
+
+def test_manager_dry_run_renders_plan_without_execution_or_approval(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, 'should-not-run', '')
+
+    prompts = patch_command_runtime(monkeypatch, fake_run)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    with mgr.step('Change demo state'):
+        handle = mgr.submit(
+            ['virsh', 'start', 'demo-vm'],
+            sudo=True,
+            role='modify',
+            summary='Start demo VM',
+        )
+
+    assert executed == []
+    assert prompts == []
+    assert handle.done()
+    with pytest.raises(CommandNotExecutedError, match='dry run'):
+        handle.result()
+    assert 'DRYRUN: Step: Change demo state' in messages
+    assert any('command:\nsudo virsh start demo-vm' in m for m in messages)
+
+
+def test_manager_dry_run_stops_when_command_result_is_required(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    executed: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        del kwargs
+        executed.append(list(cmd))
+        return FakeProc(0, 'answer', '')
+
+    patch_command_runtime(monkeypatch, fake_run)
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    handle = mgr.submit(
+        ['virsh', 'domstate', 'demo-vm'],
+        role='read',
+        summary='Inspect demo VM state',
+    )
+    with pytest.raises(CommandNotExecutedError, match='dry run'):
+        _ = handle.stdout
+    assert executed == []
+
+
+def test_replace_process_dry_run_does_not_exec(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def fail_exec(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr('aivm.commands.os.execvp', fail_exec)
+    monkeypatch.setattr('aivm.commands.os.execvpe', fail_exec)
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    mgr.replace_process(
+        ['ssh', '-t', 'agent@vm'],
+        role='read',
+        summary='Attach tunnel',
+    )
+
+    assert 'DRYRUN: Attach tunnel' in messages
+    assert 'DRYRUN (exec skipped):\nssh -t agent@vm' in messages

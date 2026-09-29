@@ -12,19 +12,60 @@ SITES = Path(
 OUT = Path('/home/joncrall/code/aivm/docs/planning/command-approval-audit.md')
 
 READ_VERBS = (
-    'dominfo', 'domstate', 'dumpxml', 'domblkinfo', 'domiflist', 'domifaddr',
-    'net-info', 'net-dumpxml', 'net-dhcp-leases', "'list'", 'list --name',
-    'qemu-img info', 'findmnt', 'stat', 'command -v', 'sha256sum', 'mountpoint',
-    'getent', 'id -u', 'systemctl is-', 'nft list', 'test -', 'true',
-    'lsblk', 'df ', 'readlink', 'which', 'ip -j', 'ip addr', 'ss -',
+    'dominfo',
+    'domstate',
+    'dumpxml',
+    'domblkinfo',
+    'domiflist',
+    'domifaddr',
+    'net-info',
+    'net-dumpxml',
+    'net-dhcp-leases',
+    "'list'",
+    'list --name',
+    'qemu-img info',
+    'findmnt',
+    'stat',
+    'command -v',
+    'sha256sum',
+    'mountpoint',
+    'getent',
+    'id -u',
+    'systemctl is-',
+    'nft list',
+    'test -',
+    'true',
+    'lsblk',
+    'df ',
+    'readlink',
+    'which',
+    'ip -j',
+    'ip addr',
+    'ss -',
     # git read-only subcommands
-    'rev-parse', 'get-url', 'show-toplevel', 'ls-remote', '--get',
-    'symbolic-ref', 'is-enabled', 'is-active', 'systemctl show',
-    'systemd-detect-virt', "'ls'", 'ls -', 'cat ',
+    'rev-parse',
+    'get-url',
+    'show-toplevel',
+    'ls-remote',
+    '--get',
+    'symbolic-ref',
+    'is-enabled',
+    'is-active',
+    'systemctl show',
+    'systemd-detect-virt',
+    "'ls'",
+    'ls -',
+    'cat ',
 )
 TOOL_HINTS = (
-    'base_dir', 'state_dir', 'export root', 'cloud-init', 'cloudinit',
-    'noble-base', 'images', 'cache',
+    'base_dir',
+    'state_dir',
+    'export root',
+    'cloud-init',
+    'cloudinit',
+    'noble-base',
+    'images',
+    'cache',
 )
 
 
@@ -32,33 +73,84 @@ TOOL_HINTS = (
 # (file, line). Basis is reported as "reviewed".
 OVERRIDES = {
     # mkdir: a write, except into a directory aivm owns
-    ('aivm/attachments/persistent/host_bind.py', 154): ('tool', 'persistent-root export dir under base_dir'),
-    ('aivm/attachments/persistent/host_bind.py', 218): ('tool', 'bind staging parent under base_dir'),
-    ('aivm/attachments/persistent/host_bind.py', 226): ('tool', 'bind staging target under base_dir'),
-    ('aivm/attachments/shared_root.py', 91): ('tool', 'shared-root export parent under base_dir'),
-    ('aivm/attachments/shared_root.py', 399): ('tool', 'shared-root bind parent under base_dir'),
-    ('aivm/attachments/shared_root.py', 407): ('tool', 'shared-root bind target under base_dir'),
+    ('aivm/attachments/persistent/host_bind.py', 154): (
+        'tool',
+        'persistent-root export dir under base_dir',
+    ),
+    ('aivm/attachments/persistent/host_bind.py', 218): (
+        'tool',
+        'bind staging parent under base_dir',
+    ),
+    ('aivm/attachments/persistent/host_bind.py', 226): (
+        'tool',
+        'bind staging target under base_dir',
+    ),
+    ('aivm/attachments/shared_root.py', 91): (
+        'tool',
+        'shared-root export parent under base_dir',
+    ),
+    ('aivm/attachments/shared_root.py', 399): (
+        'tool',
+        'shared-root bind parent under base_dir',
+    ),
+    ('aivm/attachments/shared_root.py', 407): (
+        'tool',
+        'shared-root bind target under base_dir',
+    ),
     ('aivm/cli/host_permissions.py', 786): ('tool', 'creates base_dir itself'),
     ('aivm/vm/host_access.py', 129): ('tool', 'qemu-access dir under base_dir'),
     ('aivm/vm/host_access.py', 191): ('tool', 'qemu-access dir under base_dir'),
     ('aivm/vm/images.py', 263): ('tool', 'image cache dir under base_dir'),
-    ('aivm/credentials/keys.py', 336): ('tool', 'aivm credential dir; the mkdir only'),
-    ('aivm/credentials/keys.py', 342): ('tool', 'aivm credential dir; the mkdir only'),
-    ('aivm/credentials/keys.py', 347): ('tool', 'aivm credential dir; the mkdir only'),
+    ('aivm/credentials/keys.py', 336): (
+        'tool',
+        'aivm credential dir; the mkdir only',
+    ),
+    ('aivm/credentials/keys.py', 342): (
+        'tool',
+        'aivm credential dir; the mkdir only',
+    ),
+    ('aivm/credentials/keys.py', 347): (
+        'tool',
+        'aivm credential dir; the mkdir only',
+    ),
     # mkdir into directories the user owns
-    ('aivm/services.py', 156): ('user', "creates the user's ~/.ssh; not aivm-owned"),
-    ('aivm/attachments/persistent/transport.py', 106): ('user', 'installs under host system config, not aivm-owned'),
-    ('aivm/attachments/persistent/transport.py', 98): ('user', 'removes an installed host system file'),
+    ('aivm/services.py', 156): (
+        'user',
+        "creates the user's ~/.ssh; not aivm-owned",
+    ),
+    ('aivm/attachments/persistent/transport.py', 106): (
+        'user',
+        'installs under host system config, not aivm-owned',
+    ),
+    ('aivm/attachments/persistent/transport.py', 98): (
+        'user',
+        'removes an installed host system file',
+    ),
     # image fetch cleanup: regenerable by redownload
-    ('aivm/vm/images.py', 141): ('tool', 'removes a checksum-failed cached image; refetchable'),
+    ('aivm/vm/images.py', 141): (
+        'tool',
+        'removes a checksum-failed cached image; refetchable',
+    ),
     ('aivm/vm/images.py', 272): ('tool', 'removes the download temp file'),
-    ('aivm/vm/images.py', 348): ('tool', 'removes a stale cached base image; refetchable'),
+    ('aivm/vm/images.py', 348): (
+        'tool',
+        'removes a stale cached base image; refetchable',
+    ),
     # disk lifecycle is not bookkeeping
-    ('aivm/vm/disk.py', 50): ('user', 'qemu-img create makes the VM disk; not a read, not regenerable'),
-    ('aivm/vm/disk.py', 35): ('user', 'removes the VM disk; destroys guest data'),
+    ('aivm/vm/disk.py', 50): (
+        'user',
+        'qemu-img create makes the VM disk; not a read, not regenerable',
+    ),
+    ('aivm/vm/disk.py', 35): (
+        'user',
+        'removes the VM disk; destroys guest data',
+    ),
     ('aivm/vm/update/detect.py', 57): ('read', 'qemu-img info inspects only'),
     # confirmed reads
-    ('aivm/attachments/guest.py', 375): ('read', 'git rev-parse --show-toplevel'),
+    ('aivm/attachments/guest.py', 375): (
+        'read',
+        'git rev-parse --show-toplevel',
+    ),
     ('aivm/attachments/guest.py', 421): ('read', 'git rev-parse --path-format'),
     ('aivm/attachments/guest.py', 442): ('read', 'git remote get-url'),
     ('aivm/cli/config/discover.py', 41): ('read', 'virsh list --all --name'),
@@ -68,15 +160,39 @@ OVERRIDES = {
     ('aivm/vm/drift.py', 209): ('read', 'reads actual VM hardware'),
     ('aivm/vm/host_access.py', 271): ('read', 'getent group lookup'),
     # image fetch, same flow as the refetchable rm calls
-    ('aivm/vm/images.py', 294): ('tool', 'downloads the base image into the cache'),
-    ('aivm/vm/images.py', 311): ('tool', 'moves the verified download into the cache'),
+    ('aivm/vm/images.py', 294): (
+        'tool',
+        'downloads the base image into the cache',
+    ),
+    ('aivm/vm/images.py', 311): (
+        'tool',
+        'moves the verified download into the cache',
+    ),
     # cloud-init: written into an aivm dir, but installed into the VM later
-    ('aivm/vm/cloudinit.py', 362): ('tool', 'ci_dir under base_dir; regenerated from config'),
-    ('aivm/vm/cloudinit.py', 370): ('tool', 'user-data rendered entirely from cfg'),
-    ('aivm/vm/cloudinit.py', 385): ('tool', 'meta-data rendered entirely from cfg'),
-    ('aivm/vm/cloudinit.py', 393): ('tool', 'network-config rendered entirely from cfg'),
-    ('aivm/vm/cloudinit.py', 410): ('tool', 'removes the seed ISO before rebuilding it'),
-    ('aivm/vm/cloudinit.py', 418): ('tool', 'rebuilds the seed ISO from the files above'),
+    ('aivm/vm/cloudinit.py', 362): (
+        'tool',
+        'ci_dir under base_dir; regenerated from config',
+    ),
+    ('aivm/vm/cloudinit.py', 370): (
+        'tool',
+        'user-data rendered entirely from cfg',
+    ),
+    ('aivm/vm/cloudinit.py', 385): (
+        'tool',
+        'meta-data rendered entirely from cfg',
+    ),
+    ('aivm/vm/cloudinit.py', 393): (
+        'tool',
+        'network-config rendered entirely from cfg',
+    ),
+    ('aivm/vm/cloudinit.py', 410): (
+        'tool',
+        'removes the seed ISO before rebuilding it',
+    ),
+    ('aivm/vm/cloudinit.py', 418): (
+        'tool',
+        'rebuilds the seed ISO from the files above',
+    ),
 }
 
 
@@ -96,8 +212,20 @@ def classify(row):
 
     probe_fn = any(
         tok in fn.lower()
-        for tok in ('probe', 'detect', 'inspect', 'status', '_get_', 'check',
-                    'read', 'parse', 'find', 'resolve', 'capacity', 'exists')
+        for tok in (
+            'probe',
+            'detect',
+            'inspect',
+            'status',
+            '_get_',
+            'check',
+            'read',
+            'parse',
+            'find',
+            'resolve',
+            'capacity',
+            'exists',
+        )
     )
     looks_read = any(v in cmd for v in READ_VERBS)
 
@@ -114,7 +242,11 @@ def classify(row):
     if 'mkdir' in cmd and any(h in low for h in TOOL_HINTS):
         return 'tool', 'creates an aivm-owned directory', 'rule'
     if 'mkdir' in cmd:
-        return 'tool', 'directory creation; confirm the target is aivm-owned', 'unsure'
+        return (
+            'tool',
+            'directory creation; confirm the target is aivm-owned',
+            'unsure',
+        )
     if fil.endswith('images.py'):
         return 'tool', 'base-image cache; regenerable by redownload', 'unsure'
     if 'cloudinit' in fil:
@@ -125,9 +257,12 @@ def classify(row):
 
 rows = json.load(SITES.open())
 affected = [
-    r for r in rows
-    if not (r['role'] == 'read'
-            or (r['role'] is None and r['enclosing_role'] == 'read'))
+    r
+    for r in rows
+    if not (
+        r['role'] == 'read'
+        or (r['role'] is None and r['enclosing_role'] == 'read')
+    )
 ]
 
 by_file = defaultdict(list)
@@ -140,7 +275,9 @@ uncertain = 0
 lines = []
 for fil in sorted(by_file):
     lines.append(f'\n### `{fil}`\n')
-    lines.append('| Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |')
+    lines.append(
+        '| Line | Function | Command | Declared | sudo | In step | Proposed | Basis | Rationale |'
+    )
     lines.append('|---|---|---|---|---|---|---|---|---|')
     for r in sorted(by_file[fil], key=lambda x: x['line']):
         disp, why, basis = classify(r)
@@ -148,21 +285,22 @@ for fil in sorted(by_file):
         bases[basis] += 1
         if basis != 'rule':
             uncertain += 1
-        mark = {'rule': '', 'unsure': ' **?**', 'default': '',
-                'reviewed': ''}[basis]
+        mark = {'rule': '', 'unsure': ' **?**', 'default': '', 'reviewed': ''}[
+            basis
+        ]
         cmd = r['cmd'].replace('|', '\\|')
         if len(cmd) > 62:
             cmd = cmd[:59] + '...'
         declared = r['role'] or (
-            f"({r['enclosing_role']})" if r['enclosing_role'] else '—'
+            f'({r["enclosing_role"]})' if r['enclosing_role'] else '—'
         )
         lines.append(
-            f"| {r['line']} | `{r['func']}` | `{cmd}` | {declared} | "
-            f"{r['sudo'] if r['sudo'] is not None else '—'} | "
-            f"{'yes' if r['grouped'] else 'no'} | **{disp}**{mark} | {basis} | {why} |"
+            f'| {r["line"]} | `{r["func"]}` | `{cmd}` | {declared} | '
+            f'{r["sudo"] if r["sudo"] is not None else "—"} | '
+            f'{"yes" if r["grouped"] else "no"} | **{disp}**{mark} | {basis} | {why} |'
         )
 
-header = f'''# Command approval audit
+header = f"""# Command approval audit
 
 Generated inventory of every command submission affected by the
 "a write is the guard" policy in `docs/source/design.rst`. Purpose is wholesale
@@ -313,7 +451,7 @@ the command text and enclosing function name. Regenerate after editing code
 rather than hand-maintaining this file.
 
 ## Sites
-'''
+"""
 
 OUT.write_text(header + '\n'.join(lines) + '\n')
 print(f'wrote {OUT}')

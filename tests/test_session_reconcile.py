@@ -40,6 +40,10 @@ from aivm.attachments.session import (
     ReconcilePolicy,
     _reconcile_attached_vm,
 )
+from aivm.attachments.persistent import (
+    PERSISTENT_ROOT_VIRTIOFS_TAG,
+    _persistent_root_host_dir,
+)
 from aivm.attachments.shared_root import (
     _shared_root_host_dir,
     _shared_root_host_target,
@@ -81,10 +85,10 @@ def _domain_xml(
     ``vm_has_virtiofs_shared_memory`` requires.
     """
     mem = (
-        "  <memoryBacking>\n"
+        '  <memoryBacking>\n'
         "    <source type='memfd'/>\n"
         "    <access mode='shared'/>\n"
-        "  </memoryBacking>\n"
+        '  </memoryBacking>\n'
         if shared_memory
         else ''
     )
@@ -93,16 +97,16 @@ def _domain_xml(
         "      <driver type='virtiofs'/>\n"
         f"      <source dir='{src}'/>\n"
         f"      <target dir='{tag}'/>\n"
-        "    </filesystem>\n"
+        '    </filesystem>\n'
         for src, tag in filesystems
     )
     return (
         "<domain type='kvm'>\n"
-        f"{mem}"
-        "  <devices>\n"
-        f"{devices}"
-        "  </devices>\n"
-        "</domain>\n"
+        f'{mem}'
+        '  <devices>\n'
+        f'{devices}'
+        '  </devices>\n'
+        '</domain>\n'
     )
 
 
@@ -130,7 +134,7 @@ def _sequence(*procs: FakeProc) -> Callable[[list[str]], FakeProc]:
 def _make_env(
     tmp_path: Path,
     *,
-    mode: AttachmentMode = AttachmentMode.SHARED,
+    mode: AttachmentMode = AttachmentMode.DIRECT_VIRTIOFS,
     tag: str = PROJ_TAG,
     guest_dst: str = PROJ_DST,
 ) -> tuple[Any, Path, ResolvedAttachment]:
@@ -196,14 +200,13 @@ def test_running_vm_with_present_share_makes_no_changes(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert result.attachment.tag == PROJ_TAG
     assert result.cached_ip is None
     assert result.cached_ssh_ok is False
     assert result.shared_root_host_side_ready is False
+    assert result.vm_was_running is True
     assert not rec.ran('virsh', 'start')
     assert not rec.ran('virsh', 'attach-device')
     assert not rec.ran('virsh', 'dominfo')
@@ -223,6 +226,12 @@ def test_stopped_vm_is_started_before_confirming_share(
     """
     cfg, host_src, attachment = _make_env(tmp_path)
     activate_manager(monkeypatch)
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: pytest.fail(
+            'starting a defined VM must not require creation dependencies'
+        ),
+    )
     xml = _domain_xml(
         filesystems=((str(host_src.resolve()), PROJ_TAG),),
         shared_memory=True,
@@ -240,13 +249,98 @@ def test_stopped_vm_is_started_before_confirming_share(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert rec.only('virsh', 'start', VM_NAME) == ['virsh', 'start', VM_NAME]
     assert not rec.ran('virsh', 'attach-device')
     assert result.attachment.tag == PROJ_TAG
+    assert result.vm_was_running is False
+
+
+def test_persistent_exports_are_staged_before_starting_stopped_vm(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Saved persistent exports must exist before guest boot replay can run."""
+    from aivm.fs_identity import directory_identity
+
+    cfg, host_src, attachment = _make_env(
+        tmp_path, mode=AttachmentMode.PERSISTENT
+    )
+    activate_manager(monkeypatch)
+    events: list[str] = []
+    states = iter([False, True])
+    identity = directory_identity(host_src.resolve())
+    record = type(
+        'Record',
+        (),
+        {
+            'enabled': True,
+            'shared_root_token': attachment.tag,
+            'guest_dst': attachment.guest_dst,
+            'source_dir': attachment.source_dir,
+            'access': attachment.access,
+            'source_dev': identity.dev,
+            'source_ino': identity.ino,
+        },
+    )()
+    export_result = type(
+        'ExportResult',
+        (),
+        {
+            'records': (record,),
+            'unavailable_tokens': frozenset(),
+        },
+    )()
+
+    monkeypatch.setattr(
+        'aivm.attachments.session.get_ip_cached', lambda _cfg: None
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._probe_vm_running_nonsudo',
+        lambda _name: next(states),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.probe_network',
+        lambda *a, **k: type('Probe', (), {'ok': True})(),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.vm_exists', lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent._ensure_persistent_root_parent_dir',
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_persistent_host_exports',
+        lambda *a, **k: events.append('exports') or export_result,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.create_or_start_vm',
+        lambda *a, **k: events.append('start'),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session.vm_share_mappings',
+        lambda *a, **k: [
+            (
+                str(_persistent_root_host_dir(cfg)),
+                PERSISTENT_ROOT_VIRTIOFS_TAG,
+            )
+        ],
+    )
+
+    result = _reconcile_attached_vm(
+        cfg,
+        host_src,
+        attachment,
+        policy=_policy(),
+        config_store_path=tmp_path / 'config.toml',
+    )
+
+    assert events == ['exports', 'start']
+    assert result.persistent_host_export_identity == (
+        identity.dev,
+        identity.ino,
+    )
 
 
 def test_running_vm_attaches_missing_share_live(
@@ -271,9 +365,7 @@ def test_running_vm_attaches_missing_share_live(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     attach = rec.only('virsh', 'attach-device', VM_NAME)
     assert '--live' in attach
@@ -362,6 +454,11 @@ def test_running_vm_missing_share_recreates_when_allowed(
         },
     )
     calls: list[dict[str, Any]] = []
+    dependency_checks: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+    )
     monkeypatch.setattr(
         'aivm.attachments.session.create_or_start_vm',
         lambda _cfg, **k: calls.append(k) or None,
@@ -375,6 +472,7 @@ def test_running_vm_missing_share_recreates_when_allowed(
     assert calls[0]['recreate'] is True
     assert calls[0]['share_source_dir'] == str(host_src.resolve())
     assert calls[0]['share_tag'] == PROJ_TAG
+    assert dependency_checks == [{'yes': True, 'dry_run': False}]
     # The recreate decision replaces the live attach.
     assert not rec.ran('virsh', 'attach-device')
 
@@ -402,16 +500,22 @@ def test_stale_virtiofs_source_recreates_vm(
             LIBVIRT_PROBE: FakeProc(0),
             'virsh domstate': _states('shut off', 'running'),
             'virsh net-info': _active_net(),
+            'virsh dominfo': FakeProc(0, f'Name:           {VM_NAME}\n'),
             'virsh dumpxml': FakeProc(0, xml),
         },
     )
     calls: list[dict[str, Any]] = []
+    dependency_checks: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        'aivm.attachments.session.maybe_install_missing_host_deps',
+        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+    )
 
     def fake_create(_cfg: Any, **k: Any) -> None:
         calls.append(k)
         if len(calls) == 1:
             raise RuntimeError(
-                "internal error: virtiofs export directory "
+                'internal error: virtiofs export directory '
                 "'/stale/export' does not exist"
             )
 
@@ -420,13 +524,12 @@ def test_stale_virtiofs_source_recreates_vm(
     )
     warnings = capture_logs(monkeypatch, 'aivm.attachments.session.log')
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert len(calls) == 2
     assert calls[0]['recreate'] is False
     assert calls[1]['recreate'] is True
+    assert dependency_checks == [{'yes': True, 'dry_run': False}]
     assert any('stale virtiofs source' in m for m in warnings)
     assert result.attachment.tag == PROJ_TAG
 
@@ -510,7 +613,9 @@ def test_firewall_probe_explains_its_unavoidable_sudo_prompt(
             'true': FakeProc(1, '', 'a password is required'),
         },
     )
-    messages = capture_logs(monkeypatch, 'aivm.attachments.session.log')
+    # The reconcile delegates the whole firewall decision to
+    # aivm.firewall.ensure_firewall_ready, so that is where it narrates.
+    messages = capture_logs(monkeypatch, 'aivm.firewall.log')
 
     _reconcile_attached_vm(
         cfg, host_src, attachment, policy=_policy(ensure_firewall=True)
@@ -545,7 +650,7 @@ def test_firewall_skipped_and_warned_when_privilege_never(
         },
     )
     warnings = capture_logs(
-        monkeypatch, 'aivm.attachments.session.log', levels=('warning',)
+        monkeypatch, 'aivm.firewall.log', levels=('warning',)
     )
 
     _reconcile_attached_vm(
@@ -589,9 +694,7 @@ def test_inactive_network_is_defined_and_started(
         },
     )
 
-    _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert rec.ran('virsh', 'net-define')
     assert rec.only('virsh', 'net-start', cfg.network.name) == [
@@ -635,9 +738,7 @@ def test_permission_denied_probe_falls_back_to_ssh_readiness(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     assert result.cached_ip == '10.0.0.9'
     assert result.cached_ssh_ok is True
@@ -677,9 +778,7 @@ def test_shared_root_missing_mapping_binds_host_and_attaches(
         },
     )
 
-    result = _reconcile_attached_vm(
-        cfg, host_src, attachment, policy=_policy()
-    )
+    result = _reconcile_attached_vm(cfg, host_src, attachment, policy=_policy())
 
     target = str(_shared_root_host_target(cfg, 'token-proj'))
     assert rec.only('mount', '--bind') == [

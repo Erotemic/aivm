@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import shlex
 
-from ..commands import CommandHandle, CommandManager, CommandResult
+from aivm.config_scopes import guest_transport_from_effective_cfg
+
+from ..commands import CommandExecution, CommandManager, CommandResult
 from ..config import AgentVMConfig
 from ..config_store import CredentialEntry
 from ..runtime import require_ssh_identity, ssh_base_args
@@ -49,6 +51,7 @@ def _validated_entry_repository(cred: CredentialEntry) -> GitRepository:
             provider_host=cred.provider_host,
             owner=cred.owner,
             repository=cred.repository,
+            principal_id=cred.principal_id,
         )
     except CredentialValidationError as ex:
         from ..errors import AIVMError
@@ -57,7 +60,8 @@ def _validated_entry_repository(cred: CredentialEntry) -> GitRepository:
 
 
 def _ssh_command(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
-    ident = require_ssh_identity(cfg.paths.ssh_identity_file)
+    context = guest_transport_from_effective_cfg(cfg)
+    ident = require_ssh_identity(context.ssh_identity_file)
     return [
         'ssh',
         *ssh_base_args(
@@ -66,7 +70,7 @@ def _ssh_command(cfg: AgentVMConfig, ip: str, script: str) -> list[str]:
             connect_timeout=15,
             batch_mode=True,
         ),
-        f'{cfg.vm.user}@{ip}',
+        context.ssh_target(ip),
         script,
     ]
 
@@ -81,7 +85,7 @@ def _submit_guest(
     summary: str,
     input_text: str | None = None,
     check: bool = True,
-) -> CommandHandle:
+) -> CommandExecution:
     return manager.submit(
         _ssh_command(cfg, ip, script),
         sudo=False,
@@ -304,9 +308,7 @@ def verify_guest_repository(
 ) -> CommandResult:
     safe_id = _safe_credential_id(credential_id)
     source_url = repo.verification_url
-    expected_url = (
-        f'git@aivm-cred-{safe_id}:{repo.owner}/{repo.name}.git'
-    )
+    expected_url = f'git@aivm-cred-{safe_id}:{repo.owner}/{repo.name}.git'
     source_q = shlex.quote(source_url)
     expected_q = shlex.quote(expected_url)
     command = (

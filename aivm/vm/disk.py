@@ -14,6 +14,7 @@ from .paths import _paths
 
 log = logger
 
+
 def _ensure_disk(
     cfg: AgentVMConfig,
     base_img: Path,
@@ -29,25 +30,23 @@ def _ensure_disk(
     if disk_exists is None:
         raise _undetermined_existence_error(vm_disk, 'VM disk')
     if disk_exists and recreate:
+        remove_request = mgr.request(
+            ['rm', '-f', str(vm_disk)],
+            sudo=use_sudo,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Remove VM disk {vm_disk}',
+        )
         if dry_run:
-            log.info('DRYRUN: rm -f {}', vm_disk)
+            remove_request.preview()
         else:
-            mgr.run(
-                ['rm', '-f', str(vm_disk)], sudo=use_sudo, check=True, capture=True
-            )
-            disk_exists = False
+            remove_request.run()
+        disk_exists = False
     if disk_exists:
         log.info('VM disk exists: {}', vm_disk)
         return vm_disk
-    if dry_run:
-        log.info(
-            'DRYRUN: qemu-img create -f qcow2 -F qcow2 -b {} {} {}G',
-            base_img,
-            vm_disk,
-            cfg.vm.disk_gb,
-        )
-        return vm_disk
-    mgr.run(
+    create_request = mgr.request(
         [
             'qemu-img',
             'create',
@@ -61,7 +60,13 @@ def _ensure_disk(
             f'{cfg.vm.disk_gb}G',
         ],
         sudo=use_sudo,
+        role='modify',
         check=True,
         capture=True,
+        summary=f'Create VM disk {vm_disk}',
     )
+    if dry_run:
+        create_request.preview()
+        return vm_disk
+    create_request.run()
     return vm_disk
