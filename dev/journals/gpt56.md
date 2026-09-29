@@ -1057,3 +1057,39 @@ The broader non-E2E `tests/` suite reports 1308 passed, 14 skipped, and four
 permission-model failures under the root-like runner; those same four tests pass
 when rerun as an unprivileged user. `compileall` and `git diff --check` pass, and
 the resource tally reports no unpublished accounting rows.
+
+## 2026-09-29 18:25:42 -0400
+
+I did a release-doc cleanup pass for 0.6.0 without changing the changelog. The
+main issue was not prose polish but documentation drift across several eras of
+the repository: README still described one config store, quickstart still named
+an obsolete `aivm` machine-store group and top-level firewall command, the
+security page still referred to the removed `never` privilege mode, the
+virtiofs page pointed users at the pre-0.6 config path, and workflows still used
+the rejected `shared` attachment spelling. I updated those surfaces to match the
+current machine-store plus private-profile model, `as-needed`/`always` privilege
+modes, `aivm host fw`, and the current attachment names.
+
+I also removed a source of recurring drift rather than trying to maintain it a
+second time. The `agent-memory` architecture/discovery files were old snapshots
+that named deleted modules and the pre-0.6 single-store schema. They now point
+to the mechanically checked architecture docs under `docs/architecture/`
+instead of pretending to be current module inventories. The released-store
+migration planning page now describes the implemented apply/status/resume/
+verify/rollback lifecycle and explicitly calls out the known lack of binding
+between an earlier reviewed report and a later apply invocation.
+
+The release-process note now reflects the project's actual convention: the
+0.6.0 release branch keeps its `Unreleased` changelog heading through
+publication, and a later development branch records the release date. I did not
+modify `CHANGELOG.md` itself. I also did not touch the kwconf submodule because
+that bump is being handled separately.
+
+Risk is low because this pass is documentation-only, but wording around the
+personal versus shared machine-store root is easy to oversimplify. I grounded
+those changes in `machine_store.py`, `scoped_store.py`, and the host-permissions
+implementation, and kept the distinction that both roots use the same 0.6
+machine-store model. I am most confident in the concrete corrections: removed
+`never`, removed the stale `shared` mode name, corrected `aivm host fw apply`,
+removed the obsolete `aivm`-group claim, and repaired the broken migration-doc
+reference.

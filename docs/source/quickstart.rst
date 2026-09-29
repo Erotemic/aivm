@@ -12,8 +12,9 @@ Path A: One-command project entry (recommended)
 
 Behavior:
 
-* Uses the shared machine store under ``/var/lib/aivm/machine`` and the
-  caller's private XDG profile.
+* Uses the 0.6 machine-store model plus the caller's private XDG profile. A
+  shared host uses ``/var/lib/aivm/machine``; an unshared host uses a
+  user-owned machine store under the caller's XDG data directory.
 * If VM context is missing, ``aivm`` can bootstrap required config/VM steps.
 * Attaches current folder and opens VS Code.
 * Major setup/reconcile logs are grouped into step previews so you can see what
@@ -53,11 +54,12 @@ recoverable pending principal; retry with ``aivm vm access reconcile``.
 Shared workstation: what the administrator does once
 -----------------------------------------------------
 
-Two host privileges are separate, and on a shared workstation only one of
-them is usually handed out. Membership in the ``libvirt`` and ``aivm`` groups
-lets an ordinary user drive libvirt and the shared machine store directly.
-Sudo is a different grant, and a few operations need root on *every*
-invocation no matter how the host is prepared:
+Two host privileges are separate. By default, the shared machine store reuses
+the ``libvirt`` group, so one membership grants both direct system-libvirt
+access and updates to the shared desired-state store. Sites that override
+``AIVM_MACHINE_GROUP`` may use a separate trusted store group. Sudo is a
+different grant, and a few operations need root on *every* invocation no
+matter how the host is prepared:
 
 * managed nftables rules --- installing them, and reading them back;
 * establishing a *new* host bind mount, which the ``persistent`` and
@@ -73,7 +75,7 @@ So an administrator prepares the host once:
 
    # Install the sandbox rules. They live in the live kernel ruleset, so
    # this is needed again after every host reboot.
-   sudo aivm firewall apply
+   sudo aivm host fw apply
 
 Users log out and back in (or ``newgrp libvirt``) for the group change, then
 run ``aivm config init`` to join, and work normally from there.
@@ -121,14 +123,14 @@ After either path
    aivm status --sudo
    aivm vm update
 
-Optional: routine operation without sudo
-----------------------------------------
+Optional: reduce routine sudo use
+---------------------------------
 
-The default posture assumes an administrator: system libvirt plus sudo
-prompts, with no setup ceremony. :doc:`privilege-modes` compares the
-postures side by side.
+The default posture uses system libvirt and the ``as-needed`` privilege mode.
+:doc:`privilege-modes` compares the supported modes and explains which host
+operations still require root.
 
-If you prefer ``aivm`` to never invoke ``sudo``:
+To minimize routine ``sudo`` use:
 
 .. code-block:: bash
 

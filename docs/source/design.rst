@@ -31,11 +31,14 @@ Primary user outcomes:
 System Model
 ------------
 
-Single source of truth
+State sources of truth
 ~~~~~~~~~~~~~~~~~~~~~~
 
-* Use the config store as the canonical declared state for managed VMs,
-  networks, and attachments.
+* Use the machine store as the canonical declared state for machine-owned
+  configuration: defaults, managed VMs and networks, firewall policy, access
+  identities, attachment declarations, and credential metadata.
+* Use the private XDG user profile as the canonical caller-owned state for
+  active-VM selection, SSH identity paths, and behavior preferences.
 * Treat runtime state (libvirt, network, firewall, guest reachability) as
   observed state that may drift from declared state.
 

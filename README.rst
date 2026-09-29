@@ -69,7 +69,8 @@ What it provides
 * Ubuntu cloud-image VM provisioning via cloud-init
 * SSH + VS Code Remote-SSH workflows
 * Optional virtiofs folder sharing (explicit trust extension)
-* A single config store for defaults, VMs, networks, and attachments
+* Machine-scoped desired state for defaults, VMs, networks, access identities,
+  attachments, and credential metadata, plus a private per-user XDG profile
 
 Auditability by imitation
 -------------------------
@@ -140,9 +141,11 @@ offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
    aivm status
    aivm status --sudo   # optional deeper privileged checks
 
-``aivm code .`` auto-selects/bootstraps VM context from the shared machine
-store (normally ``/var/lib/aivm/machine``) plus the caller's private XDG profile,
-attaches the current folder if needed, and opens VS Code.
+``aivm code .`` auto-selects/bootstraps VM context from the 0.6 machine store
+plus the caller's private XDG profile, attaches the current folder if needed, and
+opens VS Code. A host prepared for multi-user sharing uses
+``/var/lib/aivm/machine``; otherwise AIVM uses a user-owned machine store under
+the caller's XDG data directory.
 
 During setup and reconcile flows, subprocess logging is organized around
 user-meaningful steps without sacrificing the command-level visibility described
@@ -272,7 +275,7 @@ receive the new host-qualified default.
    [behavior]
    yes_sudo = false
    auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
-   privilege_mode = "as-needed"       # "never" | "as-needed" | "always"
+   privilege_mode = "as-needed"       # "as-needed" | "always"
    credential_directory_permission_policy = "warn"  # "warn" | "error" | "ignore"
 
 Common Workflows
@@ -582,8 +585,8 @@ remain retained. Interrupted work is explicit and resumable::
    aivm config migrate rollback migration-0123456789abcdef
 
 Migration does not recreate the VM or replace the legacy guest account. See
-``docs/planning/released-store-migration-apply.md`` for root requirements,
-transaction phases, verification, and rollback semantics.
+``docs/planning/released-store-migration-plan.md`` for planning, apply,
+verification, recovery, and rollback semantics.
 
 Alternatives and related projects
 ---------------------------------

@@ -196,8 +196,9 @@ Attachment mode rules:
 
 * New folder: attaches in ``git`` mode, with default guest path matching the
   exact host path.
-* Previously attached non-``git`` folder, including ``shared``, ``shared-root``,
-  or ``persistent``: errors until you detach and reattach in ``git`` mode.
+* Previously attached non-``git`` folder, including ``direct-virtiofs``,
+  ``shared-root``, or ``persistent``: errors until you detach and reattach in
+  ``git`` mode.
 * No explicit mode (``aivm code .``): use saved mode when present, else create a
   new ``persistent`` attachment.
 
@@ -209,8 +210,10 @@ Attachment mode rules:
 Attachment access modes:
 
 * ``rw`` (default): read-write access to the shared folder.
-* ``ro``: read-only access; supported for ``shared``, ``shared-root``, and
-  ``persistent`` modes.
+* ``ro``: read-only access; supported for ``direct-virtiofs``,
+  ``shared-root``, and ``persistent`` modes. The old mode name ``shared`` is
+  intentionally rejected; use ``direct-virtiofs`` when you want one virtiofs
+  device per folder.
 
 Specify access with ``--access``:
 

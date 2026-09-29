@@ -78,11 +78,28 @@ the same `virsh_needs_sudo()` decision as every other libvirt client command,
 so `behavior.privilege_mode` alone governs it. When the probes cannot reach
 libvirt, the plan reports a `runtime-inventory-unavailable` warning.
 
-## Next phase
+## Apply and recovery
 
-The apply phase will consume a fresh plan rather than trusting an old report. It
-must back up every source, verify source fingerprints, write a resumable phase
-journal, install the bootstrap helper through the creator's working SSH path,
-move persistent state and credential directories, verify the migrated machine,
-and retain an explicit rollback path. None of those mutations are implemented
-by `migrate plan`.
+The apply phase is implemented as `aivm config migrate apply`. It rebuilds a
+fresh plan from the same source descriptors rather than treating an earlier
+text/JSON report as an executable artifact. If that fresh plan is blocked,
+apply prints the report and stops before mutation. Otherwise it creates
+verified backups and a durable phase journal, writes the machine/profile state,
+copies credential and persistent data, installs the restricted guest enrollment
+helper, and verifies the migrated installation. Released inputs are retained so
+rollback remains possible.
+
+Migration recovery is explicit:
+
+```bash
+aivm config migrate status
+aivm config migrate resume MIGRATION_ID
+aivm config migrate verify MIGRATION_ID
+aivm config migrate rollback MIGRATION_ID
+```
+
+`migrate plan` itself remains read-only. One known 0.6 limitation is that the
+reviewed report is not cryptographically bound to the later `apply` invocation;
+`apply` rebuilds and validates a fresh plan instead. The release-review triage
+record in `docs/planning/0.6.0-release-review-findings.md` documents that and
+other intentionally deferred pre-0.6 migration corner cases.
