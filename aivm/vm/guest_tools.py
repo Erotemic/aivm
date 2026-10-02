@@ -749,6 +749,9 @@ if ! grep -Fq '# >>> aivm pi PATH >>>' "$PROFILE" 2>/dev/null; then
         echo '# <<< aivm pi PATH <<<'
     } >> "$PROFILE"
 fi
+# TODO: ensure `pi install -l npm:pi-provider-litellm` also runs to setup
+# the litellm endpoint (and make sure you have the .llm_resource_tally
+# hook enabled).
 pi --version
 """).strip()
 
