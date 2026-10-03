@@ -209,3 +209,18 @@ dedented body with `pi --version` still the final line, and all 44 tests in
 `tests/test_vm_guest_tools.py` pass (fresh uv env; kwconf 0.12.0).
 Confident this is comment-only; no shell logic, PATH blocks, or
 verification steps changed.
+
+## 2026-10-02 20:14:46 -0400
+Follow-up on the `allow_tcp_ports` discussion: the user asked where the
+authority for that config key lives and whether it could be aliased.
+Answered from the code: the `FirewallConfig` dataclass in
+`aivm/config.py` is the definition; both parse paths (`load()` and
+`config_store/parse.py`) enforce exact field names via `hasattr` and
+silently drop unknown keys; both renderers emit canonical names from
+`asdict()`, so an alias would be read-only by construction. Per request I
+added a TODO above the field in `FirewallConfig`: rename to
+`allow_any_url_tcp_ports` (or better, make it clear these override the
+block CIDRs). Comment-only; no rename or alias implemented yet — that
+would be a deliberate schema/terminology change. Verified: `py_compile`
+clean and the 75 tests across test_firewall/test_config/test_store/
+test_machine_store pass.
