@@ -42,8 +42,10 @@ When escalation is not available at all
 ----------------------------------------
 
 Host permissions and sudo are separate grants: on a shared workstation an
-administrator commonly gives users the ``libvirt`` and ``aivm`` groups and no
-sudoers entry. ``aivm host permissions check`` reports what that means for
+administrator commonly grants ``libvirt`` membership and no sudoers entry. By
+default that same group owns the shared machine store; sites that set
+``AIVM_MACHINE_GROUP`` separately must grant that configured store group as
+well. ``aivm host permissions check`` reports what that means for
 *your* account rather than for a privileged one, and the operations that still
 need root fail with a message naming what wanted it and what to ask an
 administrator for --- not a bare ``sudo -v`` error. Once an escalation attempt

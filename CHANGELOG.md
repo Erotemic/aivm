@@ -2,7 +2,10 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.6.0 - Unreleased
+## Version 0.6.1 - Unreleased
+
+
+## Version 0.6.0 - Released 2026-09-29
 
 ### Fixed
 * Persistent attachments now recover safely from the host-reboot ordering case
