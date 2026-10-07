@@ -1229,6 +1229,12 @@
           "path": "aivm/cli/config/init.py"
         },
         {
+          "imported": "aivm.host",
+          "importer": "aivm.cli.config.init",
+          "occurrences": 1,
+          "path": "aivm/cli/config/init.py"
+        },
+        {
           "imported": "aivm.resource_checks",
           "importer": "aivm.cli.config.init",
           "occurrences": 1,
@@ -1281,6 +1287,12 @@
           "importer": "aivm.cli.host",
           "occurrences": 1,
           "path": "aivm/cli/host.py"
+        },
+        {
+          "imported": "aivm.host",
+          "importer": "aivm.cli.host_permissions",
+          "occurrences": 1,
+          "path": "aivm/cli/host_permissions.py"
         },
         {
           "imported": "aivm.vm.domain",
@@ -1684,6 +1696,12 @@
         },
         {
           "imported": "aivm.config_store",
+          "importer": "aivm.cli.config.init",
+          "occurrences": 1,
+          "path": "aivm/cli/config/init.py"
+        },
+        {
+          "imported": "aivm.machine_store",
           "importer": "aivm.cli.config.init",
           "occurrences": 1,
           "path": "aivm/cli/config/init.py"
@@ -3557,6 +3575,12 @@
           "importer": "aivm.domain_authority",
           "occurrences": 1,
           "path": "aivm/domain_authority.py"
+        },
+        {
+          "imported": "aivm.machine_store",
+          "importer": "aivm.host",
+          "occurrences": 1,
+          "path": "aivm/host.py"
         },
         {
           "imported": "aivm.config_store",

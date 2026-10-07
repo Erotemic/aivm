@@ -42,9 +42,10 @@ class _BaseCommand(kwconf.Config):
         short_alias=['c'],
         help=(
             'Explicit config-store path. Without this option, AIVM uses an '
-            'existing legacy user store, the shared machine store under '
-            '/var/lib/aivm/machine when this host has one, or your own '
-            'machine store under ~/.local/share/aivm/machine.'
+            'existing legacy or machine store. On a fresh implicit install, '
+            '`aivm config init` asks whether the machine store should be '
+            'shared under /var/lib/aivm/machine or personal under the user '
+            'data directory.'
         ),
     )
     verbose: int = kwconf.Value(

@@ -9,8 +9,14 @@ Guidance for contributors (human or AI agents) working in this repository.
 - Config model:
   - Existing released per-user stores remain readable and are not silently
     migrated.
-  - Fresh implicit 0.6 installations use the machine-global store under
-    `/var/lib/aivm` plus a private XDG user profile.
+  - Fresh implicit 0.6 installations must explicitly resolve machine-store
+    placement before writing defaults: shared host authority under
+    `/var/lib/aivm/machine`, or a personal machine authority under the user
+    data directory. Interactive bootstrap exposes that choice; unattended
+    default/bootstrap flows choose shared. Once either authority exists, never
+    silently switch to the other -- changing placement is a migration. Shared
+    selection must use the centralized host-permissions preparation path rather
+    than recreating group/directory setup in config or launcher code.
   - Managed VMs persist host-to-guest principals. `aivm config init` joins a
     later user only when the hostname-qualified name exactly matches a managed
     record, then enrolls through the forced `aivm-guestctl` bootstrap channel.

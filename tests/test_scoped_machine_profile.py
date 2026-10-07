@@ -324,3 +324,64 @@ def test_machine_store_lints_with_principals(
     save_scope_store(scope, reg, reason='lint fixture')
     loaded = load_config_document(scope.store_path)
     assert _lint_store_text(loaded.source_text) == []
+
+
+def _fresh_store_choice_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Path:
+    """Expose the real shared/personal choice instead of the test override."""
+    shared = tmp_path / 'shared-machine'
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared
+    )
+    return shared
+
+
+def test_fresh_implicit_install_requires_machine_store_choice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.scoped_store import fresh_implicit_machine_store_choice_required
+
+    _fresh_store_choice_env(monkeypatch, tmp_path)
+
+    assert fresh_implicit_machine_store_choice_required()
+
+
+def test_empty_personal_directory_does_not_hide_first_run_choice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.machine_store import personal_machine_store_root
+    from aivm.scoped_store import fresh_implicit_machine_store_choice_required
+
+    _fresh_store_choice_env(monkeypatch, tmp_path)
+    personal_machine_store_root().mkdir(parents=True)
+
+    assert fresh_implicit_machine_store_choice_required()
+
+
+def test_existing_shared_root_is_already_an_explicit_scope_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.scoped_store import fresh_implicit_machine_store_choice_required
+
+    shared = _fresh_store_choice_env(monkeypatch, tmp_path)
+    shared.mkdir(parents=True)
+
+    assert not fresh_implicit_machine_store_choice_required()
+
+
+def test_existing_personal_store_is_not_silently_replaced_by_shared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.machine_store import personal_machine_store_root
+    from aivm.scoped_store import fresh_implicit_machine_store_choice_required
+
+    _fresh_store_choice_env(monkeypatch, tmp_path)
+    personal = personal_machine_store_root()
+    personal.mkdir(parents=True)
+    (personal / 'config.toml').write_text(
+        'schema_version = 9\nstore_kind = "machine"\n', encoding='utf-8'
+    )
+
+    assert not fresh_implicit_machine_store_choice_required()

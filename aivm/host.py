@@ -8,8 +8,10 @@ continue to execute exclusively through :class:`aivm.commands.CommandManager`.
 
 from __future__ import annotations
 
+import os
 import shlex
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -17,7 +19,18 @@ from loguru import logger
 
 from .commands import CommandError, CommandManager
 from .errors import AIVMError
-from .privilege import require_sudo_allowed
+from .machine_store import (
+    DEFAULT_MACHINE_STORE_ROOT,
+    MACHINE_STORE_ROOT_ENV,
+    MachineStoreLayout,
+    current_machine_group_name,
+    ensure_machine_store_layout,
+    machine_group_exists,
+    machine_store_layout,
+    resolve_machine_group_gid,
+    user_in_machine_group,
+)
+from .privilege import LIBVIRT_GROUP, require_sudo_allowed
 from .util import which
 
 log = logger
@@ -28,6 +41,14 @@ class HostCapability(str, Enum):
 
     LIBVIRT_CLIENT = 'libvirt-client'
     VM_LIFECYCLE = 'vm-lifecycle'
+
+
+@dataclass(frozen=True)
+class MachineStoreAccessPreparation:
+    """Result of establishing the host-side machine-store authority."""
+
+    layout: MachineStoreLayout
+    membership_added: bool
 
 
 _VM_LIFECYCLE_CMDS = (
@@ -133,6 +154,145 @@ def ensure_host_capability(
 
     install_deps_debian(assume_yes=True)
     require_host_capability(capability)
+
+
+def prepare_machine_store_access(
+    *,
+    user: str,
+    dry_run: bool,
+) -> MachineStoreAccessPreparation:
+    """Establish the one machine-store root selected for shared operation.
+
+    This is the host-side authority used by both ``host permissions setup``
+    and fresh-install shared-store bootstrap.  It owns group creation/membership
+    and the root-owned/setgid directory creation; callers own only the UX around
+    why preparation is happening and whether a newly-added group requires a
+    login refresh before they can continue.
+    """
+    mgr = CommandManager.current()
+    configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
+    layout = machine_store_layout(
+        None if configured_root else DEFAULT_MACHINE_STORE_ROOT
+    )
+    if configured_root:
+        if dry_run:
+            print(
+                f'DRYRUN: prepare caller-owned AIVM machine store at '
+                f'{layout.root}'
+            )
+        else:
+            ensure_machine_store_layout(layout, group_gid=os.getgid())
+        return MachineStoreAccessPreparation(
+            layout=layout, membership_added=False
+        )
+
+    group_name = current_machine_group_name()
+    group_exists = machine_group_exists(group_name)
+    owns_group = group_name != LIBVIRT_GROUP
+    listed = group_exists and user_in_machine_group(
+        user, group_name=group_name
+    )
+    group_request = (
+        mgr.request(
+            ['groupadd', '--system', group_name],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Create the {group_name} group',
+        )
+        if not group_exists and owns_group
+        else None
+    )
+    member_request = (
+        mgr.request(
+            ['usermod', '-aG', group_name, user],
+            sudo=True,
+            role='modify',
+            check=True,
+            capture=True,
+            summary=f'Add {user} to the {group_name} group',
+        )
+        if not listed and (group_exists or owns_group)
+        else None
+    )
+    parent_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
+            str(layout.root.parent),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare root-owned {layout.root.parent}',
+    )
+    root_request = mgr.request(
+        [
+            'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
+            str(layout.root),
+        ],
+        sudo=True,
+        role='modify',
+        check=True,
+        capture=True,
+        summary=f'Prepare shared AIVM state at {layout.root}',
+    )
+
+    if dry_run:
+        if group_request is not None:
+            group_request.preview()
+        if member_request is not None:
+            member_request.preview()
+        parent_request.preview()
+        root_request.preview()
+        return MachineStoreAccessPreparation(
+            layout=layout, membership_added=member_request is not None
+        )
+
+    if not group_exists and not owns_group:
+        # The default group belongs to libvirt.  Never fabricate a group with
+        # the right name but no qemu:///system authority.
+        resolve_machine_group_gid(group_name)
+
+    with mgr.intent(
+        'Prepare the shared AIVM machine store',
+        why=(
+            'Machine definitions, principals, and attachments need one '
+            'group-writable host-wide authority.'
+        ),
+        role='modify',
+    ):
+        if group_request is not None:
+            with mgr.step(
+                'Create the trusted AIVM host group',
+                why='The machine store is shared by trusted local AIVM users.',
+                approval_scope='host-permissions-setup-aivm-group',
+            ):
+                group_request.submit()
+        if member_request is not None:
+            with mgr.step(
+                'Add the invoking user to the AIVM host group',
+                why='Group membership permits shared machine-store updates.',
+                approval_scope='host-permissions-setup-aivm-member',
+            ):
+                member_request.submit()
+        with mgr.step(
+            'Create the shared AIVM machine-store root',
+            why=(
+                'The setgid root preserves trusted-group ownership on '
+                'atomic replacements and split config fragments.'
+            ),
+            approval_scope='host-permissions-setup-aivm-root',
+        ):
+            # Keep the parent root-owned/non-group-writable because the root
+            # persistent-replay service trusts that directory chain.
+            parent_request.submit()
+            root_request.submit()
+
+    return MachineStoreAccessPreparation(
+        layout=layout, membership_added=member_request is not None
+    )
 
 
 def check_commands_with_sudo() -> tuple[list[str], str | None]:

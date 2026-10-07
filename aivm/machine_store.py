@@ -20,6 +20,7 @@ import os
 import re
 from contextlib import ExitStack
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import Iterable
@@ -75,6 +76,13 @@ BOOTSTRAP_DIRECTORY_MODE = 0o2750
 PERSONAL_DIRECTORY_MODE = 0o700
 PERSONAL_FILE_MODE = 0o600
 PERSONAL_BOOTSTRAP_DIRECTORY_MODE = 0o700
+
+
+class MachineStorePlacement(str, Enum):
+    """Where a machine-scoped AIVM authority is persisted."""
+
+    SHARED = 'shared'
+    PERSONAL = 'personal'
 
 
 class MachineStoreGroupError(AIVMError):
@@ -223,6 +231,27 @@ def machine_store_layout(root: Path | None = None) -> MachineStoreLayout:
     if root is None:
         root = resolve_machine_store_root()
     return MachineStoreLayout.from_root(root)
+
+
+def machine_store_layout_for_placement(
+    placement: MachineStorePlacement,
+) -> MachineStoreLayout:
+    """Return the canonical layout for an explicit fresh-install choice.
+
+    The environment override is already an explicit store-root decision and
+    therefore never reaches the shared/personal prompt.  Keeping this helper
+    about the two canonical placements makes it impossible for the UI layer to
+    reimplement their paths or ownership classification.
+    """
+    if placement is MachineStorePlacement.SHARED:
+        return MachineStoreLayout.from_root(
+            DEFAULT_MACHINE_STORE_ROOT, shared=True
+        )
+    if placement is MachineStorePlacement.PERSONAL:
+        return MachineStoreLayout.from_root(
+            personal_machine_store_root(), shared=False
+        )
+    raise ValueError(f'Unsupported machine-store placement: {placement!r}')
 
 
 def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:

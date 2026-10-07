@@ -335,7 +335,9 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     assert harness.calls == ['host_requirements']
     assert init_kwargs == [
         {
-            'config_opt': str(harness.cfg_path.resolve()),
+            # Preserve the implicit selection through config init so a fresh
+            # host can choose shared vs personal before the path is fixed.
+            'config_opt': None,
             'yes': False,
             'defaults': False,
             'force': False,

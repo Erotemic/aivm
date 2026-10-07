@@ -97,7 +97,11 @@ def _bootstrap_vm_for_folder(
         from .config.init import initialize_config_defaults
 
         init_rc = initialize_config_defaults(
-            config_opt=str(missing_store_path),
+            # Preserve the caller's original selection.  Passing the currently
+            # resolved missing path would freeze a fresh implicit install onto
+            # the personal fallback before config init can ask shared vs
+            # personal.
+            config_opt=config_opt,
             yes=yes,
             defaults=yes,
             force=False,
@@ -107,6 +111,10 @@ def _bootstrap_vm_for_folder(
             raise AIVMError(
                 'Could not initialize config defaults for VM creation.'
             ) from ex
+        # The first init may have established the shared root, changing the
+        # implicit store resolution.  Creation must consume the authority init
+        # actually selected, not the pre-init fallback path from the error.
+        missing_store_path = cfg_path(config_opt)
     create_ops.create_vm_from_defaults(
         missing_store_path,
         vm_override=vm_opt if vm_opt else None,

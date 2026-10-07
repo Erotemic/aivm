@@ -30,7 +30,6 @@ def test_config_init_noninteractive_requires_yes_or_defaults(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(False),
         },
@@ -49,7 +48,6 @@ def test_config_init_noninteractive_defaults_flag_bypasses_prompt(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(False),
         },
@@ -75,7 +73,6 @@ def test_config_init_interactive_shows_summary_and_accepts(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
         },
@@ -136,7 +133,6 @@ def test_config_init_interactive_can_create_dedicated_aivm_key(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': fake_defaults_missing_keys,
             'sys.stdin.isatty': returns(True),
         },
@@ -180,7 +176,6 @@ def test_config_init_defaults_warns_when_ssh_keys_missing(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(False),
             'log.warning': records(log_calls),
@@ -204,7 +199,6 @@ def test_config_init_prompt_mentions_editor_and_prompt_shortcuts(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
         },
@@ -231,7 +225,6 @@ def test_config_init_interactive_edit_updates_hardware(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
         },
@@ -275,7 +268,6 @@ def test_config_init_logs_resource_warnings_from_shared_checker(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'vm_resource_warning_lines': returns(['resource warning test']),
             'log.warning': records(logged),
@@ -309,7 +301,6 @@ def test_config_init_interactive_edit_updates_password_login(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
         },
@@ -362,7 +353,6 @@ def test_config_init_editor_path_shows_full_table_once(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
             'select_editor_command': returns(['fake-editor']),
@@ -396,7 +386,6 @@ def test_config_init_editor_unavailable_falls_back_to_prompts(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
             'select_editor_command': returns(None),
@@ -435,7 +424,6 @@ def test_config_init_invalid_editor_document_can_be_reopened(
         monkeypatch,
         INIT_NS,
         {
-            'cfg_path': returns(cfg_path),
             'auto_defaults': returns(_fake_defaults_cfg(tmp_path)),
             'sys.stdin.isatty': returns(True),
             'select_editor_command': returns(['fake-editor']),
