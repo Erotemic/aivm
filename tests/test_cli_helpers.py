@@ -70,6 +70,8 @@ def test_upsert_ssh_config_names_dedicated_forwarded_agent(
 
     assert changed is True
     text = path.read_text(encoding='utf-8')
+    assert f'  IdentityAgent {socket_path}\n' in text
+    assert '  AddKeysToAgent no\n' in text
     assert f'  ForwardAgent {socket_path}\n' in text
     assert 'SSH_AUTH_SOCK' not in text
 

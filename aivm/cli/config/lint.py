@@ -18,7 +18,14 @@ from ...config import (
     VirtiofsConfig,
     VMConfig,
 )
-from ...config_store import load_config_document, split_source_paths
+from ...config_store import (
+    AgentCredentialEntry,
+    AttachmentEntry,
+    CredentialEntry,
+    PrincipalEntry,
+    load_config_document,
+    split_source_paths,
+)
 from ...credentials.schema import (
     VALID_CREDENTIAL_ACCESS,
     VALID_CREDENTIAL_KINDS,
@@ -132,6 +139,9 @@ def _lint_store_text(text: str) -> list[str]:
         if key not in allowed_top:
             problems.append(f'unknown top-level key: {key!r}')
 
+    # Structural VM sections are explicit, while fields within persisted
+    # records derive from the same dataclasses used by the parser/renderer.
+    # This prevents lint from drifting behind fields that AIVM itself writes.
     allowed_vm_record = {
         'name',
         'network_name',
@@ -144,6 +154,7 @@ def _lint_store_text(text: str) -> list[str]:
         'virtiofs',
         'attachments',
         'credentials',
+        'agent_credentials',
         'principals',
     }
     section_allowed: dict[str, set[str]] = {
@@ -231,15 +242,7 @@ def _lint_store_text(text: str) -> list[str]:
                 f'vms[{vm_idx}].principals should be an array of tables'
             )
             continue
-        allowed_principal = {
-            'id',
-            'host_user',
-            'host_uid',
-            'host_gid',
-            'guest_user',
-            'ssh_public_key',
-            'state',
-        }
+        allowed_principal = _field_names(PrincipalEntry) - {'vm_name'}
         for principal_idx, principal in enumerate(principals):
             prefix = f'vms[{vm_idx}].principals[{principal_idx}]'
             if not isinstance(principal, dict):
@@ -297,34 +300,14 @@ def _lint_store_text(text: str) -> list[str]:
     elif networks is not None:
         problems.append('top-level key "networks" should be an array of tables')
 
-    allowed_attachment = {
-        'host_path',
-        'vm_name',
-        'owner_principal_id',
-        'mode',
-        'access',
-        'guest_dst',
-        'tag',
-        'host_lexical_paths',
+    allowed_attachment = _field_names(AttachmentEntry) | {
         # Legacy schema-6 singular form. Still accepted by the parser with a
         # deprecation warning; allow it here so lint doesn't reject existing
         # configs that haven't been rewritten yet.
         'host_lexical_path',
     }
-    allowed_credential = {
-        'id',
-        'principal_id',
-        'kind',
-        'provider_host',
-        'owner',
-        'repository',
-        'access',
-        'provider_key_id',
-        'provider_key_title',
-        'key_fingerprint',
-        'state',
-        'provider_managed',
-    }
+    allowed_credential = _field_names(CredentialEntry) - {'vm_name'}
+    allowed_agent_credential = _field_names(AgentCredentialEntry) - {'vm_name'}
     vms = raw.get('vms', [])
     if isinstance(vms, list):
         for idx, item in enumerate(vms):
@@ -468,6 +451,21 @@ def _lint_store_text(text: str) -> list[str]:
             elif nested_creds is not None:
                 problems.append(
                     f'vms[{idx}].credentials should be an array of tables'
+                )
+            nested_agent_creds = item.get('agent_credentials', [])
+            if isinstance(nested_agent_creds, list):
+                for cred_idx, cred in enumerate(nested_agent_creds):
+                    label = f'vms[{idx}].agent_credentials[{cred_idx}]'
+                    if not isinstance(cred, dict):
+                        problems.append(f'{label} is not a table/object')
+                        continue
+                    cred = cast(dict[str, object], cred)
+                    for key in sorted(str(key) for key in cred.keys()):
+                        if key not in allowed_agent_credential:
+                            problems.append(f'{label} unknown key: {key!r}')
+            elif nested_agent_creds is not None:
+                problems.append(
+                    f'vms[{idx}].agent_credentials should be an array of tables'
                 )
     elif vms is not None:
         problems.append('top-level key "vms" should be an array of tables')

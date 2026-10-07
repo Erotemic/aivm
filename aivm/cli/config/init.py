@@ -9,7 +9,7 @@ import tomllib
 from copy import deepcopy
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import kwconf
 from loguru import logger
@@ -34,20 +34,28 @@ from ...config_store import (
 from ...detect import auto_defaults
 from ...enrollment import normalized_guest_username, reconcile_current_principal
 from ...errors import AIVMError, CommandControlError
+from ...host import (
+    HostCapability,
+    ensure_host_capability,
+    prepare_machine_store_authority,
+    require_machine_store_session_access,
+)
 from ...host_identity import current_host_identity
+from ...machine_store import MachineStorePlacement
 from ...profile_store import save_user_profile
 from ...resource_checks import vm_resource_warning_lines
 from ...scoped_store import (
     StoreScope,
     ensure_machine_scope_ready,
+    fresh_implicit_machine_store_choice_required,
     load_scope_profile,
     load_scope_store,
     profile_from_effective_cfg,
     resolve_store_scope,
     save_scope_store,
+    store_scope_for_machine_placement,
 )
 from ...services import (
-    cfg_path,
     hydrate_ssh_identity_defaults,
     maybe_offer_create_ssh_identity,
 )
@@ -89,6 +97,15 @@ class InitCLI(_BaseCommand):
             'join without interactive review.'
         ),
     )
+    machine_store: Literal['', 'shared', 'personal'] = kwconf.Value(
+        '',
+        help=(
+            'Fresh implicit installs only: choose the host-wide shared '
+            'machine store or a store owned only by this host account. '
+            'Interactive first-run setup asks when omitted; --yes/--defaults '
+            'use shared.'
+        ),
+    )
     vm: str = kwconf.Value(
         '',
         help=(
@@ -108,7 +125,93 @@ class InitCLI(_BaseCommand):
             force=args.force,
             standalone_guidance=True,
             vm_opt=str(args.vm or ''),
+            machine_store_opt=str(args.machine_store or ''),
         )
+
+
+def _parse_machine_store_placement(
+    raw: str,
+) -> MachineStorePlacement | None:
+    value = str(raw or '').strip().lower()
+    if not value:
+        return None
+    try:
+        return MachineStorePlacement(value)
+    except ValueError as ex:
+        raise AIVMError(
+            f'Unknown machine-store placement {raw!r}; choose shared or '
+            'personal.'
+        ) from ex
+
+
+def _choose_fresh_machine_store_placement(
+    *,
+    config_opt: str | None,
+    requested: str,
+    yes: bool,
+    defaults: bool,
+) -> MachineStorePlacement | None:
+    """Resolve the one-time shared/personal decision for a fresh host."""
+    placement = _parse_machine_store_placement(requested)
+    if config_opt and placement is not None:
+        raise AIVMError(
+            '`--machine_store` cannot be combined with an explicit --config '
+            'path; the explicit path already chooses where configuration '
+            'lives.'
+        )
+
+    needs_choice = fresh_implicit_machine_store_choice_required()
+    if not needs_choice:
+        if placement is None:
+            return None
+        active = resolve_store_scope(config_opt)
+        desired = store_scope_for_machine_placement(placement)
+        if active.store_path.resolve() != desired.store_path.resolve():
+            raise AIVMError(
+                f'This host already has an AIVM config authority at '
+                f'{active.store_path}. `--machine_store={placement.value}` '
+                'is only for a fresh implicit install; switching an existing '
+                'authority requires an explicit migration.'
+            )
+        return None
+
+    if placement is not None:
+        return placement
+    if yes or defaults:
+        return MachineStorePlacement.SHARED
+    if not sys.stdin.isatty():
+        raise AIVMError(
+            'A fresh implicit install must choose its machine-store scope. '
+            'Re-run interactively, pass `--machine_store=shared` or '
+            '`--machine_store=personal`, or use --yes/--defaults to select '
+            'the shared default.'
+        )
+
+    shared = store_scope_for_machine_placement(MachineStorePlacement.SHARED)
+    personal = store_scope_for_machine_placement(
+        MachineStorePlacement.PERSONAL
+    )
+    print('No AIVM machine store exists on this host.')
+    print('How should AIVM manage this host?')
+    print()
+    print('  [1] Shared machine')
+    print('      One host-wide VM authority for trusted local users.')
+    print(f'      Store: {shared.store_path.parent}')
+    print('      Requires host-group setup for shared access.')
+    print()
+    print('  [2] Personal machine')
+    print('      VM authority belongs only to this host account.')
+    print(f'      Store: {personal.store_path.parent}')
+    print()
+    while True:
+        answer = input('Select [1/2] (default: 1): ').strip().lower()
+        if answer in {'', '1', 's', 'shared'}:
+            return MachineStorePlacement.SHARED
+        if answer in {'2', 'p', 'personal'}:
+            return MachineStorePlacement.PERSONAL
+        if answer in {'n', 'no', 'q', 'quit'}:
+            raise AIVMError('Aborted by user.')
+        print("Please choose '1' (shared) or '2' (personal).")
 
 
 def initialize_config_defaults(
@@ -119,10 +222,20 @@ def initialize_config_defaults(
     force: bool,
     standalone_guidance: bool,
     vm_opt: str = '',
+    machine_store_opt: str = '',
 ) -> int:
     """Initialize creator defaults or join the caller to a managed machine."""
-    path = cfg_path(config_opt)
-    scope = resolve_store_scope(str(path), for_init=True)
+    placement = _choose_fresh_machine_store_placement(
+        config_opt=config_opt,
+        requested=machine_store_opt,
+        yes=yes,
+        defaults=defaults,
+    )
+    scope = resolve_store_scope(
+        config_opt,
+        for_init=True,
+        machine_placement=placement,
+    )
     path = scope.store_path
     requested_vm = str(vm_opt or '').strip()
     if requested_vm and not scope.is_machine:
@@ -131,6 +244,17 @@ def initialize_config_defaults(
             f'store, but this invocation uses the per-user store at {path}.'
         )
     if scope.is_machine:
+        if placement is MachineStorePlacement.SHARED:
+            ensure_host_capability(
+                HostCapability.LIBVIRT_CLIENT,
+                yes=yes,
+                dry_run=False,
+            )
+            preparation = prepare_machine_store_authority(
+                user=current_host_identity().username,
+                dry_run=False,
+            )
+            require_machine_store_session_access(preparation)
         ensure_machine_scope_ready(scope)
     reg = load_scope_store(scope)
 
@@ -216,7 +340,7 @@ def initialize_config_defaults(
         save_scope_store(
             scope,
             reg,
-            reason='Initialize shared machine defaults.',
+            reason='Initialize machine defaults.',
         )
         profile = profile_from_effective_cfg(
             cfg,

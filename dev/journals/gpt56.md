@@ -1057,3 +1057,133 @@ The broader non-E2E `tests/` suite reports 1308 passed, 14 skipped, and four
 permission-model failures under the root-like runner; those same four tests pass
 when rerun as an unprivileged user. `compileall` and `git diff --check` pass, and
 the resource tally reports no unpublished accounting rows.
+
+## 2026-09-29 18:25:42 -0400
+
+I did a release-doc cleanup pass for 0.6.0 without changing the changelog. The
+main issue was not prose polish but documentation drift across several eras of
+the repository: README still described one config store, quickstart still named
+an obsolete `aivm` machine-store group and top-level firewall command, the
+security page still referred to the removed `never` privilege mode, the
+virtiofs page pointed users at the pre-0.6 config path, and workflows still used
+the rejected `shared` attachment spelling. I updated those surfaces to match the
+current machine-store plus private-profile model, `as-needed`/`always` privilege
+modes, `aivm host fw`, and the current attachment names.
+
+I also removed a source of recurring drift rather than trying to maintain it a
+second time. The `agent-memory` architecture/discovery files were old snapshots
+that named deleted modules and the pre-0.6 single-store schema. They now point
+to the mechanically checked architecture docs under `docs/architecture/`
+instead of pretending to be current module inventories. The released-store
+migration planning page now describes the implemented apply/status/resume/
+verify/rollback lifecycle and explicitly calls out the known lack of binding
+between an earlier reviewed report and a later apply invocation.
+
+The release-process note now reflects the project's actual convention: the
+0.6.0 release branch keeps its `Unreleased` changelog heading through
+publication, and a later development branch records the release date. I did not
+modify `CHANGELOG.md` itself. I also did not touch the kwconf submodule because
+that bump is being handled separately.
+
+Risk is low because this pass is documentation-only, but wording around the
+personal versus shared machine-store root is easy to oversimplify. I grounded
+those changes in `machine_store.py`, `scoped_store.py`, and the host-permissions
+implementation, and kept the distinction that both roots use the same 0.6
+machine-store model. I am most confident in the concrete corrections: removed
+`never`, removed the stale `shared` mode name, corrected `aivm host fw apply`,
+removed the obsolete `aivm`-group claim, and repaired the broken migration-doc
+reference.
+
+## 2026-10-07 10:37:45 -0400
+
+I revisited the fresh-machine `aivm ssh` bootstrap failure as an architecture
+problem rather than keeping the earlier ordering-only patch. The failure was
+caused by `config init` performing its unmanaged-domain collision check before
+the composite first-VM workflow had established that the host could actually
+run libvirt tooling. The old dependency policy also lived in `services.py`,
+while detection and installation already lived in `host.py`, which made the
+precondition harder to see and encouraged callers to know executable details.
+
+I moved the contract into `aivm.host` as named host capabilities. A
+`LIBVIRT_CLIENT` capability currently means `virsh`; `VM_LIFECYCLE` is the full
+set needed by create/start/reconcile. `require_host_capability` is a
+side-effect-free defensive gate and `ensure_host_capability` is the explicit
+workflow remediation gate. The latter fixes the old `--yes` inversion: `--yes`
+now skips the question and proceeds with dependency installation instead of
+skipping installation. Neither helper executes an external command to detect
+capability; executable lookup is local, and package/service commands remain in
+`install_deps_debian`, which uses `CommandManager`.
+
+The first-VM `ssh`/`code` bootstrap now ensures `VM_LIFECYCLE` immediately
+after the user's bootstrap consent and before `config init`. Independently
+callable create/recreate/up workflows keep their own idempotent lifecycle
+precondition. `_vm_defined` requires only `LIBVIRT_CLIENT` before it asks
+`virsh_needs_sudo` or submits `virsh dominfo`, so a standalone config-init
+collision check reports the named missing capability rather than leaking an
+`env: virsh: No such file or directory` result. I deliberately did not make
+`CommandManager` auto-install packages on command-not-found: that would mix
+execution with provisioning policy and risk recursive or surprising side
+effects.
+
+The main tradeoff is one cheap repeated PATH check at nested workflow
+boundaries. I prefer that to relying on caller ordering: `vm create` must stay
+safe when invoked directly even though the composite bootstrap has already
+ensured the same capability. Unit tests that fake virsh at the CommandManager
+boundary now explicitly suppress the real-host PATH precondition in those test
+modules; dedicated host/domain tests cover the capability behavior itself.
+The generated architecture edge inventory was refreshed because dependency
+ownership moved from `services.py` into the host capability layer.
+
+Validation: the focused bootstrap/config/domain/reconcile/create/rename suites
+pass 185/185, an adjacent credentials/restore/status/host-permissions slice
+passes 151 with 7 skips, and the full `tests/` run reaches 1315 passed / 25
+skipped.
+Its four failures are the same root-permission-sensitive failures reproduced
+unchanged on the pristine source snapshot (`test_cli_vm_update` disk
+writability, the unreadable machine-store test, and two privilege writability
+tests). Architecture generation/check and Python compilation are clean. Ruff
+and flake8 are not installed in this restricted environment, so their lint
+checks could not be run here.
+
+## 2026-10-07 12:53:31 -0400
+Worked through the fresh-install machine-store UX after the host-capability bootstrap fix. The key concern was avoiding another launcher-specific workaround: the shared/personal choice now lives at config initialization, while physical placement is modeled in `machine_store`, fresh-authority detection in `scoped_store`, and host-side shared-store preparation in the centralized `host` service used by `host permissions setup` as well. The foreground ssh/code bootstrap preserves its original implicit config intent through init and re-resolves the resulting authority before VM creation, so the prompt actually controls where state is written.
+
+I am confident in the authority invariant: an existing shared root, personal machine store, released user store, or explicit `AIVM_MACHINE_STORE_ROOT` prevents a new placement decision; an empty personal directory left by an interrupted first run does not. Selecting shared may add the user to the trusted host group; when that happens initialization stops before writing machine config and requires a login refresh rather than using sudo to bypass the new group boundary. The main compatibility risk is first-run automation: `--yes` and `--defaults` intentionally choose shared, while an unattended personal install should initialize explicitly with `aivm config init --machine_store=personal`. Focused tests cover the prompt, retry state, no-silent-switch rule, centralized host preparation, and ssh/code preservation of implicit scope. Generated architecture docs were refreshed after the dependency move.
+
+## 2026-10-07 13:58:00 -0400
+
+The first real shared-store bootstrap run exposed a lifecycle bug in the scope
+work. `prepare_machine_store_access` used one predicate for two different facts:
+whether the account is persistently listed in the trusted group and whether the
+already-running process actually carries that gid. On a host where `libvirt`
+membership was already configured but the shell predated that change, setup
+skipped `usermod`, created `/var/lib/aivm/machine`, and then config initialization
+continued into `locks/`, where the kernel correctly returned EACCES. The resulting
+diagnostic was duplicated because a low-level filesystem failure was reporting a
+higher-level activation problem.
+
+I split those states explicitly. `machine_group_membership_state` reports durable
+account configuration separately from live process credentials. Host setup is now
+named `prepare_machine_store_authority` to make its responsibility clear: it owns
+persistent group/root preparation, but does not claim that the current session has
+been refreshed. The returned `MachineStoreAuthorityPreparation` records both
+phases, and `require_machine_store_session_access` is the single transition guard
+used by fresh shared `config init` before any store contents are created or
+written. The shared root is intentionally retained when activation is pending:
+that root is the durable record of the user's shared-machine scope choice, so a
+retry after login resumes the same authority rather than prompting again or
+falling back to a personal store.
+
+The resolver now recognizes the prepared-but-stale-session state as well. If the
+shared root exists, the account is configured in the trusted group, but the
+process lacks the gid, it emits the session-refresh diagnosis instead of generic
+`usermod` instructions. `host permissions check` likewise grades live
+machine-store membership from kernel credentials rather than durable account
+membership. The contributor invariant now records this persistent-authority vs
+session-activation split so future changes cannot collapse them again.
+
+Focused machine-store/host/config/permissions/session tests pass 83/83, including
+the exact regression where membership was already configured and therefore no
+`usermod` occurs. A full `tests/` run reaches 1328 passed / 25 skipped before
+architecture regeneration, with only the generated edge inventory plus three
+known root-writability artifacts failing.

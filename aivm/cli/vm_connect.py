@@ -27,7 +27,12 @@ from ..credentials.agent_transport import (
     prepare_agent_forwarding,
 )
 from ..errors import AIVMError
-from ..runtime import require_ssh_identity, ssh_base_args
+from ..host import HostCapability, ensure_host_capability
+from ..runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    ssh_forward_agent_socket_args,
+)
 from ..services import PreparedSession, cfg_path, load_cfg
 from ..tunnel_helper import (
     DEFAULT_TMUX_SESSION,
@@ -83,11 +88,24 @@ def _bootstrap_vm_for_folder(
         ans = input(prompt).strip().lower()
         if ans not in {'', 'y', 'yes'}:
             raise AIVMError('Aborted by user.') from ex
+    # The first-VM bootstrap is one composite transaction.  Prepare its host
+    # capability before config init performs the unmanaged-domain collision
+    # check, which itself requires the libvirt client.  ``vm create`` repeats
+    # this idempotent precondition so it remains safe when called directly.
+    ensure_host_capability(
+        HostCapability.VM_LIFECYCLE,
+        yes=yes,
+        dry_run=dry_run,
+    )
     if need_init:
         from .config.init import initialize_config_defaults
 
         init_rc = initialize_config_defaults(
-            config_opt=str(missing_store_path),
+            # Preserve the caller's original selection.  Passing the currently
+            # resolved missing path would freeze a fresh implicit install onto
+            # the personal fallback before config init can ask shared vs
+            # personal.
+            config_opt=config_opt,
             yes=yes,
             defaults=yes,
             force=False,
@@ -97,6 +115,10 @@ def _bootstrap_vm_for_folder(
             raise AIVMError(
                 'Could not initialize config defaults for VM creation.'
             ) from ex
+        # The first init may have established the shared root, changing the
+        # implicit store resolution.  Creation must consume the authority init
+        # actually selected, not the pre-init fallback path from the error.
+        missing_store_path = cfg_path(config_opt)
     create_ops.create_vm_from_defaults(
         missing_store_path,
         vm_override=vm_opt if vm_opt else None,
@@ -770,17 +792,11 @@ class VMSSHCLI(_BaseCommand):
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        ssh_cmd: list[str] = []
+        ssh_cmd: list[str] = ['ssh']
         if agent_forwarding is not None:
             ssh_cmd.extend(
-                [
-                    'env',
-                    f'SSH_AUTH_SOCK={agent_forwarding.socket_path}',
-                ]
+                ssh_forward_agent_socket_args(str(agent_forwarding.socket_path))
             )
-        ssh_cmd.append('ssh')
-        if agent_forwarding is not None:
-            ssh_cmd.append('-A')
         ssh_cmd.extend(
             [
                 '-t',

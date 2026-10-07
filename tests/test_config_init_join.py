@@ -555,3 +555,230 @@ def test_config_init_vm_refuses_an_unmanaged_name(
 
     assert 'aivm-2404-second' in str(ex.value)
     assert 'aivm vm create' in str(ex.value)
+
+
+def test_fresh_init_prompts_for_shared_or_personal_store(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from aivm.cli.config.init import _choose_fresh_machine_store_placement
+    from aivm.machine_store import MachineStorePlacement
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda prompt='': '2')
+
+    placement = _choose_fresh_machine_store_placement(
+        config_opt=None,
+        requested='',
+        yes=False,
+        defaults=False,
+    )
+
+    assert placement is MachineStorePlacement.PERSONAL
+    out = capsys.readouterr().out
+    assert 'No AIVM machine store exists on this host.' in out
+    assert '[1] Shared machine' in out
+    assert '[2] Personal machine' in out
+    assert str(tmp_path / 'var-lib-aivm-machine') in out
+    from aivm.machine_store import personal_machine_store_root
+
+    assert str(personal_machine_store_root()) in out
+
+
+def test_fresh_init_default_choice_is_shared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.cli.config.init import _choose_fresh_machine_store_placement
+    from aivm.machine_store import MachineStorePlacement
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    monkeypatch.setattr('aivm.cli.config.init.sys.stdin.isatty', lambda: True)
+    monkeypatch.setattr('builtins.input', lambda prompt='': '')
+
+    placement = _choose_fresh_machine_store_placement(
+        config_opt=None,
+        requested='',
+        yes=False,
+        defaults=False,
+    )
+
+    assert placement is MachineStorePlacement.SHARED
+
+
+def test_fresh_init_yes_selects_shared_without_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.cli.config.init import _choose_fresh_machine_store_placement
+    from aivm.machine_store import MachineStorePlacement
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    monkeypatch.setattr(
+        'builtins.input',
+        lambda prompt='': (_ for _ in ()).throw(
+            AssertionError('--yes must not prompt for machine-store scope')
+        ),
+    )
+
+    placement = _choose_fresh_machine_store_placement(
+        config_opt=None,
+        requested='',
+        yes=True,
+        defaults=False,
+    )
+
+    assert placement is MachineStorePlacement.SHARED
+
+
+def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.cli.config.init import initialize_config_defaults
+    from aivm.errors import AIVMError
+    from aivm.host import HostCapability, MachineStoreAuthorityPreparation
+    from aivm.machine_store import (
+        MachineStorePlacement,
+        machine_store_layout_for_placement,
+    )
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    seen: list[object] = []
+
+    def fake_capability(capability: HostCapability, **kwargs: object) -> None:
+        seen.append(('capability', capability, kwargs))
+
+    def fake_prepare(**kwargs: object) -> MachineStoreAuthorityPreparation:
+        seen.append(('prepare', kwargs))
+        return MachineStoreAuthorityPreparation(
+            layout=machine_store_layout_for_placement(
+                MachineStorePlacement.SHARED
+            ),
+            membership_added=True,
+            membership_configured=True,
+            session_membership_active=False,
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.config.init.ensure_host_capability', fake_capability
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.prepare_machine_store_authority', fake_prepare
+    )
+
+    with pytest.raises(AIVMError, match='Log out and back in'):
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=True,
+            force=False,
+            standalone_guidance=False,
+            machine_store_opt='shared',
+        )
+
+    assert seen[0][0:2] == ('capability', HostCapability.LIBVIRT_CLIENT)
+    assert seen[1][0] == 'prepare'
+    assert not (tmp_path / 'var-lib-aivm-machine' / 'config.toml').exists()
+
+
+def test_shared_choice_stops_when_membership_is_configured_but_session_is_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Persistent /etc/group membership is not live process authority."""
+    from aivm.cli.config.init import initialize_config_defaults
+    from aivm.host import HostCapability, MachineStoreAuthorityPreparation
+    from aivm.machine_store import (
+        MachineStorePlacement,
+        MachineStoreSessionRefreshRequired,
+        machine_store_layout_for_placement,
+    )
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.ensure_host_capability',
+        lambda capability, **kwargs: (
+            None
+            if capability is HostCapability.LIBVIRT_CLIENT
+            else (_ for _ in ()).throw(AssertionError(capability))
+        ),
+    )
+
+    def fake_prepare(**kwargs: object) -> MachineStoreAuthorityPreparation:
+        del kwargs
+        layout = machine_store_layout_for_placement(
+            MachineStorePlacement.SHARED
+        )
+        layout.root.mkdir(parents=True)
+        return MachineStoreAuthorityPreparation(
+            layout=layout,
+            membership_added=False,
+            membership_configured=True,
+            session_membership_active=False,
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.config.init.prepare_machine_store_authority', fake_prepare
+    )
+
+    with pytest.raises(
+        MachineStoreSessionRefreshRequired, match='kernel credentials'
+    ):
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=True,
+            force=False,
+            standalone_guidance=False,
+            machine_store_opt='shared',
+        )
+
+    root = tmp_path / 'var-lib-aivm-machine'
+    assert root.is_dir(), 'prepared root durably records the shared choice'
+    assert not (root / 'config.toml').exists()
+
+
+def test_existing_personal_authority_rejects_shared_switch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.cli.config.init import _choose_fresh_machine_store_placement
+    from aivm.errors import AIVMError
+    from aivm.machine_store import personal_machine_store_root
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    personal = personal_machine_store_root()
+    personal.mkdir(parents=True)
+    (personal / 'config.toml').write_text(
+        'schema_version = 9\nstore_kind = "machine"\n', encoding='utf-8'
+    )
+
+    with pytest.raises(AIVMError, match='explicit migration'):
+        _choose_fresh_machine_store_placement(
+            config_opt=None,
+            requested='shared',
+            yes=True,
+            defaults=True,
+        )

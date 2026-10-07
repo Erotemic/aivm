@@ -417,9 +417,13 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
         monkeypatch,
         {
             (
-                'env',
-                f'SSH_AUTH_SOCK={forwarding.socket_path}',
                 'ssh',
+                '-o',
+                f'IdentityAgent={forwarding.socket_path}',
+                '-o',
+                'AddKeysToAgent=no',
+                '-o',
+                f'ForwardAgent={forwarding.socket_path}',
             ): FakeProc(0, '', '')
         },
     )
@@ -439,11 +443,15 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
             'forward_agent_socket': str(forwarding.socket_path),
         }
     ]
-    ssh_cmd = next(cmd for cmd in recorder.normalized if cmd[0] == 'env')
-    assert ssh_cmd[:4] == [
-        'env',
-        f'SSH_AUTH_SOCK={forwarding.socket_path}',
+    ssh_cmd = next(cmd for cmd in recorder.normalized if cmd[0] == 'ssh')
+    assert ssh_cmd[:7] == [
         'ssh',
-        '-A',
+        '-o',
+        f'IdentityAgent={forwarding.socket_path}',
+        '-o',
+        'AddKeysToAgent=no',
+        '-o',
+        f'ForwardAgent={forwarding.socket_path}',
     ]
-    assert not any(part.startswith('ForwardAgent=') for part in ssh_cmd)
+    assert '-A' not in ssh_cmd
+    assert not any(part.startswith('SSH_AUTH_SOCK=') for part in ssh_cmd)

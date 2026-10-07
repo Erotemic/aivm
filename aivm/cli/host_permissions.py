@@ -30,19 +30,16 @@ from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
+from ..host import prepare_machine_store_authority
 from ..host_identity import current_host_identity
 from ..machine_store import (
-    DEFAULT_MACHINE_STORE_ROOT,
-    MACHINE_STORE_ROOT_ENV,
     MachineStoreAccessError,
     MachineStoreLayout,
     current_machine_group_name,
-    ensure_machine_store_layout,
     machine_group_exists,
     machine_store_layout,
     machine_store_root_ready,
-    resolve_machine_group_gid,
-    user_in_machine_group,
+    machine_group_membership_state,
 )
 from ..modes import PrivilegeMode
 from ..privilege import (
@@ -471,9 +468,13 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 )
             )
         elif active_layout is not None:
-            machine_group_ok = machine_group_exists(
-                machine_group
-            ) and user_in_machine_group(group_name=machine_group)
+            membership = machine_group_membership_state(
+                group_name=machine_group
+            )
+            machine_group_ok = (
+                machine_group_exists(machine_group)
+                and membership.active is True
+            )
             # The store group is normally the libvirt group, which gets its
             # own line below. Reporting the same membership twice under two
             # names reads as two separate things to fix.
@@ -484,8 +485,13 @@ class HostPermissionsCheckCLI(_BaseCommand):
                         f'{machine_group} machine-store membership',
                         'permits shared desired-state updates'
                         if machine_group_ok
-                        else 'run `aivm host permissions setup`, then log '
-                        'out/in',
+                        else (
+                            'membership is configured but not active in this '
+                            'session; log out/in'
+                            if membership.configured
+                            else 'run `aivm host permissions setup`, then log '
+                            'out/in'
+                        ),
                         'shared machine-store access',
                     )
                 )
@@ -672,149 +678,6 @@ class HostPermissionsCheckCLI(_BaseCommand):
         return 0
 
 
-def _prepare_machine_store_access(
-    args: Any,
-    mgr: CommandManager,
-    *,
-    user: str,
-) -> bool:
-    """Prepare the shared config root; return whether membership was added."""
-    # Setup is how a host *becomes* shared, so it always targets the host-wide
-    # root. Resolving the active layout instead would make it a no-op on the
-    # very hosts it exists to promote: an unshared host resolves to the
-    # caller's own personal root, which needs no privileged preparation.
-    configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
-    layout = machine_store_layout(
-        None if configured_root else DEFAULT_MACHINE_STORE_ROOT
-    )
-    if configured_root:
-        if args.dry_run:
-            print(
-                f'DRYRUN: prepare caller-owned AIVM machine store at '
-                f'{layout.root}'
-            )
-        else:
-            ensure_machine_store_layout(layout, group_gid=os.getgid())
-        return False
-
-    group_name = current_machine_group_name()
-    group_exists = machine_group_exists(group_name)
-    listed = group_exists and user_in_machine_group(user, group_name=group_name)
-    # The store group is the libvirt group unless a site overrode it. Both the
-    # group itself and membership in it are then libvirt's to manage: the
-    # group ships with the package, and the caller below adds membership for
-    # qemu:///system access. Creating or joining it here would either forge a
-    # libvirt group that grants no libvirt access, or issue a second identical
-    # usermod.
-    owns_group = group_name != LIBVIRT_GROUP
-    group_request = (
-        mgr.request(
-            ['groupadd', '--system', group_name],
-            sudo=True,
-            role='modify',
-            check=True,
-            capture=True,
-            summary=f'Create the {group_name} group',
-        )
-        if not group_exists and owns_group
-        else None
-    )
-    member_request = (
-        mgr.request(
-            ['usermod', '-aG', group_name, user],
-            sudo=True,
-            role='modify',
-            check=True,
-            capture=True,
-            summary=f'Add {user} to the {group_name} group',
-        )
-        if not listed and owns_group
-        else None
-    )
-    parent_request = mgr.request(
-        [
-            'install', '-d', '-o', 'root', '-g', 'root', '-m', '0755',
-            str(layout.root.parent),
-        ],
-        sudo=True,
-        role='modify',
-        check=True,
-        capture=True,
-        summary=f'Prepare root-owned {layout.root.parent}',
-    )
-    root_request = mgr.request(
-        [
-            'install', '-d', '-o', 'root', '-g', group_name, '-m', '2770',
-            str(layout.root),
-        ],
-        sudo=True,
-        role='modify',
-        check=True,
-        capture=True,
-        summary=f'Prepare shared AIVM state at {layout.root}',
-    )
-    if args.dry_run:
-        if group_request is not None:
-            group_request.preview()
-        if member_request is not None:
-            member_request.preview()
-        parent_request.preview()
-        root_request.preview()
-        return not listed and owns_group
-    if not group_exists and not owns_group:
-        # Fail before the install below writes a root owned by a group that
-        # cannot exist; resolve_machine_group_gid explains how to get libvirt.
-        resolve_machine_group_gid(group_name)
-
-    membership_added = False
-    with mgr.intent(
-        'Prepare the shared AIVM machine store',
-        why=(
-            'Machine definitions, principals, and attachments need one '
-            'group-writable host-wide authority.'
-        ),
-        role='modify',
-    ):
-        if not group_exists and owns_group:
-            with mgr.step(
-                'Create the trusted AIVM host group',
-                why='The machine store is shared by trusted local AIVM users.',
-                approval_scope='host-permissions-setup-aivm-group',
-            ):
-                assert group_request is not None
-                group_request.submit()
-        if not listed and owns_group:
-            with mgr.step(
-                'Add the invoking user to the AIVM host group',
-                why='Group membership permits shared machine-store updates.',
-                approval_scope='host-permissions-setup-aivm-member',
-            ):
-                assert member_request is not None
-                member_request.submit()
-            membership_added = True
-        with mgr.step(
-            'Create the shared AIVM machine-store root',
-            why=(
-                'The setgid root preserves trusted-group ownership on '
-                'atomic replacements and split config fragments.'
-            ),
-            approval_scope='host-permissions-setup-aivm-root',
-        ):
-            # The parent is created first and separately: `install -d` applies
-            # its mode to every directory it creates, so folding these into
-            # one call would hand the group write access to the parent too --
-            # which is the chain the root persistent-replay service requires
-            # nobody but root can write.
-            parent_request.submit()
-            root_request.submit()
-    if membership_added:
-        print(
-            f'👉 Added {user} to {group_name}. Log out and back in before '
-            'running `aivm config init` against the shared machine store.'
-        )
-    return membership_added
-
-
 def _resolve_setup_target_user(requested: str) -> str:
     """Resolve host setup ownership without trusting sudo environment text."""
     explicit = str(requested or '').strip()
@@ -895,10 +758,22 @@ class HostPermissionsSetupCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
         user = _resolve_setup_target_user(str(args.user or ''))
-        _prepare_machine_store_access(args, mgr, user=user)
+        store_preparation = prepare_machine_store_authority(
+            user=user, dry_run=args.dry_run
+        )
+        if store_preparation.membership_added:
+            print(
+                f'👉 Added {user} to {current_machine_group_name()}. Log out '
+                'and back in before using the shared machine store.'
+            )
 
-        group_added = False
-        if not user_in_libvirt_group():
+        machine_group_is_libvirt = (
+            current_machine_group_name() == LIBVIRT_GROUP
+        )
+        group_added = (
+            store_preparation.membership_added and machine_group_is_libvirt
+        )
+        if not user_in_libvirt_group() and not group_added:
             # Under `sudo aivm ...`, the account that needs libvirt access
             # is the invoking user, not root.
             libvirt_group_request = mgr.request(

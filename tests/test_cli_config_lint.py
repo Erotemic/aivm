@@ -7,6 +7,15 @@ from pathlib import Path
 import pytest
 
 from aivm.cli.config import ConfigLintCLI, _lint_store_file
+from aivm.config import AgentVMConfig
+from aivm.config_store import (
+    AgentCredentialEntry,
+    AttachmentEntry,
+    Store,
+    VMEntry,
+    render_store_toml,
+)
+from aivm.credentials.agent_schema import agent_credential_id
 
 
 def test_lint_store_file_detects_unknown_sections(tmp_path: Path) -> None:
@@ -153,3 +162,100 @@ def test_config_lint_reports_pinned_claude_spec(
     assert rc == 2
     out = capsys.readouterr().out
     assert "vms[0].tools: Invalid config value [tools] claude = '1.2.3'" in out
+
+
+def test_lint_accepts_current_renderer_record_fields(tmp_path: Path) -> None:
+    """Every field emitted by the canonical renderer must be lint-clean.
+
+    This guards the schema boundary between the config-store model/renderer and
+    the independent typo detector.  In particular, persistent attachment
+    identity and ssh-agent credentials previously became valid persisted state
+    without being added to lint's duplicated allow-lists.
+    """
+    vm_name = 'aivm-2404'
+    principal_id = 'principal-test'
+    provider_host = 'github.com'
+    owner = 'example'
+    repository = 'repo'
+    cred_id = agent_credential_id(
+        vm_name, f'{provider_host}/{owner}/{repository}', principal_id
+    )
+    store = Store(
+        schema_version=14,
+        store_kind='machine',
+        vms=[
+            VMEntry(
+                name=vm_name,
+                network_name='aivm-net',
+                cfg=AgentVMConfig(),
+            )
+        ],
+        attachments=[
+            AttachmentEntry(
+                host_path='/data/shared',
+                vm_name=vm_name,
+                owner_principal_id=principal_id,
+                guest_dst='/data/shared',
+                tag='hostcode-shared',
+                mirror_home='no',
+                source_dev=2304,
+                source_ino=123456,
+            )
+        ],
+        agent_credentials=[
+            AgentCredentialEntry(
+                id=cred_id,
+                vm_name=vm_name,
+                principal_id=principal_id,
+                provider_host=provider_host,
+                owner=owner,
+                repository=repository,
+                provider_key_title='aivm:test',
+                state='pending',
+            )
+        ],
+    )
+
+    rendered = render_store_toml(store, attachment_style='nested')
+    assert 'mirror_home = "no"' in rendered
+    assert 'source_dev = 2304' in rendered
+    assert 'source_ino = 123456' in rendered
+    assert '[[vms.agent_credentials]]' in rendered
+
+    fpath = tmp_path / 'rendered.toml'
+    fpath.write_text(rendered, encoding='utf-8')
+    assert _lint_store_file(fpath) == []
+
+
+def test_lint_rejects_unknown_agent_credential_key(tmp_path: Path) -> None:
+    fpath = tmp_path / 'config.toml'
+    fpath.write_text(
+        '\n'.join(
+            [
+                'schema_version = 14',
+                'store_kind = "machine"',
+                '',
+                '[[vms]]',
+                'name = "aivm-2404"',
+                'network_name = "aivm-net"',
+                '',
+                '[[vms.agent_credentials]]',
+                'id = "agent-git-000000000000"',
+                'principal_id = "principal-test"',
+                'kind = "github-deploy-key"',
+                'provider_host = "github.com"',
+                'owner = "example"',
+                'repository = "repo"',
+                'access = "read"',
+                'provider_key_id = ""',
+                'provider_key_title = "aivm:test"',
+                'key_fingerprint = ""',
+                'state = "pending"',
+                'typo = "bad"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    probs = _lint_store_file(fpath)
+    assert "vms[0].agent_credentials[0] unknown key: 'typo'" in probs

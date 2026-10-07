@@ -98,6 +98,8 @@ class FirewallConfig:
         ]
     )
     extra_block_cidrs: list[str] = field(default_factory=list)
+    # TODO: rename to allow_any_url_tcp_ports (or better to make it clear
+    # these override the block cidrs).
     # Broad escape hatch: these ports are allowed to the host and every
     # otherwise-blocked destination. Prefer allow_tcp_endpoints for narrow
     # destination-specific exceptions.

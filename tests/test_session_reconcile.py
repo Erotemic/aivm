@@ -49,6 +49,7 @@ from aivm.attachments.shared_root import (
     _shared_root_host_target,
 )
 from aivm.errors import AIVMError
+from aivm.host import HostCapability
 from aivm.vm.paths import _paths
 from aivm.vm.share import (
     AttachmentMode,
@@ -71,6 +72,14 @@ PROJ_DST = '/workspace/proj'
 # to learn whether the libvirt group grants unprivileged access.  Answering
 # it success keeps commands unprivileged (the recorder strips sudo anyway).
 LIBVIRT_PROBE = 'virsh list --name'
+
+
+@pytest.fixture(autouse=True)
+def _assume_domain_host_capability(monkeypatch: MonkeyPatch) -> None:
+    """The recorder supplies virsh; do not depend on the test host PATH."""
+    monkeypatch.setattr(
+        'aivm.vm.domain.require_host_capability', lambda capability: None
+    )
 
 
 def _domain_xml(
@@ -227,8 +236,8 @@ def test_stopped_vm_is_started_before_confirming_share(
     cfg, host_src, attachment = _make_env(tmp_path)
     activate_manager(monkeypatch)
     monkeypatch.setattr(
-        'aivm.attachments.session.maybe_install_missing_host_deps',
-        lambda **kwargs: pytest.fail(
+        'aivm.attachments.session.ensure_host_capability',
+        lambda *args, **kwargs: pytest.fail(
             'starting a defined VM must not require creation dependencies'
         ),
     )
@@ -454,10 +463,12 @@ def test_running_vm_missing_share_recreates_when_allowed(
         },
     )
     calls: list[dict[str, Any]] = []
-    dependency_checks: list[dict[str, Any]] = []
+    dependency_checks: list[tuple[HostCapability, dict[str, Any]]] = []
     monkeypatch.setattr(
-        'aivm.attachments.session.maybe_install_missing_host_deps',
-        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+        'aivm.attachments.session.ensure_host_capability',
+        lambda capability, **kwargs: dependency_checks.append(
+            (capability, dict(kwargs))
+        ),
     )
     monkeypatch.setattr(
         'aivm.attachments.session.create_or_start_vm',
@@ -472,7 +483,9 @@ def test_running_vm_missing_share_recreates_when_allowed(
     assert calls[0]['recreate'] is True
     assert calls[0]['share_source_dir'] == str(host_src.resolve())
     assert calls[0]['share_tag'] == PROJ_TAG
-    assert dependency_checks == [{'yes': True, 'dry_run': False}]
+    assert dependency_checks == [
+        (HostCapability.VM_LIFECYCLE, {'yes': True, 'dry_run': False})
+    ]
     # The recreate decision replaces the live attach.
     assert not rec.ran('virsh', 'attach-device')
 
@@ -505,10 +518,12 @@ def test_stale_virtiofs_source_recreates_vm(
         },
     )
     calls: list[dict[str, Any]] = []
-    dependency_checks: list[dict[str, Any]] = []
+    dependency_checks: list[tuple[HostCapability, dict[str, Any]]] = []
     monkeypatch.setattr(
-        'aivm.attachments.session.maybe_install_missing_host_deps',
-        lambda **kwargs: dependency_checks.append(dict(kwargs)),
+        'aivm.attachments.session.ensure_host_capability',
+        lambda capability, **kwargs: dependency_checks.append(
+            (capability, dict(kwargs))
+        ),
     )
 
     def fake_create(_cfg: Any, **k: Any) -> None:
@@ -529,7 +544,9 @@ def test_stale_virtiofs_source_recreates_vm(
     assert len(calls) == 2
     assert calls[0]['recreate'] is False
     assert calls[1]['recreate'] is True
-    assert dependency_checks == [{'yes': True, 'dry_run': False}]
+    assert dependency_checks == [
+        (HostCapability.VM_LIFECYCLE, {'yes': True, 'dry_run': False})
+    ]
     assert any('stale virtiofs source' in m for m in warnings)
     assert result.attachment.tag == PROJ_TAG
 

@@ -153,7 +153,9 @@ else:
   and guard config, but intentionally leaves the safe updatedb ``PRUNEFS``
   entries in place.
 
-Config knobs (``[virtiofs]`` in ``~/.config/aivm/config.toml``)::
+Config knobs live in the selected VM's ``[virtiofs]`` section. In the 0.6
+machine-store layout, use ``aivm vm edit`` to edit that VM fragment and
+``aivm config paths vm`` to see its physical path::
 
    [virtiofs]
    fd_guard = true                         # install the guard in guests

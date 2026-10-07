@@ -8,6 +8,7 @@ import os
 import stat
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,12 +32,15 @@ from aivm.machine_store import (
     MACHINE_FILE_MODE,
     PERSONAL_DIRECTORY_MODE,
     PERSONAL_FILE_MODE,
+    MachineGroupMembershipState,
     MachineStoreAccessError,
+    MachineStoreSessionRefreshRequired,
     MachineStoreGroupError,
     MachineStoreLayout,
     current_machine_group_gid,
     ensure_machine_store_layout,
     machine_resource_locks,
+    machine_group_membership_state,
     machine_root_is_shared,
     machine_store_layout,
     machine_store_policy,
@@ -167,6 +171,68 @@ def test_machine_store_rejects_symlinked_root(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match='symlinked store path'):
         ensure_machine_store_layout(layout, group_gid=os.getgid())
+
+
+def test_machine_group_membership_separates_configured_from_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr(
+        'aivm.machine_store.grp.getgrnam',
+        lambda name: SimpleNamespace(gr_gid=4242, gr_mem=['alice']),
+    )
+    monkeypatch.setattr(
+        'aivm.machine_store.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_gid=1001),
+    )
+    monkeypatch.setattr(
+        'aivm.machine_store.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1001, username='alice'),
+    )
+    monkeypatch.setattr('aivm.machine_store.os.getgid', lambda: 1001)
+    monkeypatch.setattr('aivm.machine_store.os.getegid', lambda: 1001)
+    monkeypatch.setattr('aivm.machine_store.os.getgroups', lambda: [1001])
+
+    state = machine_group_membership_state(
+        'alice', group_name='libvirt'
+    )
+
+    assert state == MachineGroupMembershipState(
+        group_name='libvirt',
+        group_gid=4242,
+        user='alice',
+        configured=True,
+        active=False,
+    )
+    assert state.requires_session_refresh
+
+
+def test_existing_shared_authority_reports_pending_session_activation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
+    monkeypatch.setattr(
+        'aivm.machine_store._directory_is_usable', lambda path: False
+    )
+    monkeypatch.setattr(
+        'aivm.machine_store.machine_group_membership_state',
+        lambda *args, **kwargs: MachineGroupMembershipState(
+            group_name='libvirt',
+            group_gid=4242,
+            user='alice',
+            configured=True,
+            active=False,
+        ),
+    )
+
+    with pytest.raises(
+        MachineStoreSessionRefreshRequired, match='kernel credentials'
+    ):
+        machine_store_layout()
 
 
 def test_missing_machine_group_has_actionable_error(
@@ -487,6 +553,11 @@ def test_unreachable_shared_store_refuses_instead_of_forking(
     shared.mkdir(mode=0o000)
     monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
     monkeypatch.setattr('aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT', shared)
+    # chmod(000) is still writable to root in some CI/container environments;
+    # the contract under test is the resolver's inaccessible-root behavior.
+    monkeypatch.setattr(
+        'aivm.machine_store._directory_is_usable', lambda path: False
+    )
 
     try:
         with pytest.raises(MachineStoreAccessError) as caught:

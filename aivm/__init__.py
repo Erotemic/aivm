@@ -5,7 +5,7 @@
 # stamp the modal CLI's ``--version``. It also stays a plain literal
 # assignment here: docs/source/conf.py and .github/workflows/release.yml
 # parse this file's AST rather than importing it.
-__version__ = '0.6.0'
+__version__ = '0.6.1'
 
 from .cli import main  # noqa: E402
 

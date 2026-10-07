@@ -63,7 +63,7 @@ def stub_create_ops(monkeypatch: MonkeyPatch, tmp_path: Path) -> CreateOpsStub:
             'ensure_network': noop,
             'apply_firewall': noop,
             'create_or_start_vm': noop,
-            'maybe_install_missing_host_deps': noop,
+            'ensure_host_capability': noop,
             'vm_resource_warning_lines': returns([]),
             'vm_resource_impossible_lines': returns([]),
         },
@@ -139,8 +139,8 @@ def test_vm_create_reviewed_config_uses_concise_confirmation(
         'aivm.vm.create_ops.create_or_start_vm', lambda *a, **k: None
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
+        'aivm.vm.create_ops.ensure_host_capability',
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.vm_resource_warning_lines', lambda cfg: []

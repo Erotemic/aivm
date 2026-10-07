@@ -24,10 +24,10 @@ from ..config_store import (
 from ..errors import AIVMError, CommandControlError
 from ..firewall import ensure_firewall_ready
 from ..fs_identity import directory_identity
+from ..host import HostCapability, ensure_host_capability
 from ..net import ensure_network
 from ..services import (
     PreparedSession,
-    maybe_install_missing_host_deps,
     maybe_offer_create_ssh_identity,
     record_vm,
     resolve_context_for_code,
@@ -677,8 +677,10 @@ def _reconcile_attached_vm(
                 False if policy.dry_run else vm_exists(cfg, dry_run=False)
             )
             if not vm_is_defined:
-                maybe_install_missing_host_deps(
-                    yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+                ensure_host_capability(
+                    HostCapability.VM_LIFECYCLE,
+                    yes=bool(policy.yes),
+                    dry_run=bool(policy.dry_run),
                 )
             if attachment.mode in {
                 ATTACHMENT_MODE_SHARED_ROOT,
@@ -734,8 +736,10 @@ def _reconcile_attached_vm(
                         cfg.vm.name,
                         missing_virtiofs_dir,
                     )
-                    maybe_install_missing_host_deps(
-                        yes=bool(policy.yes), dry_run=False
+                    ensure_host_capability(
+                        HostCapability.VM_LIFECYCLE,
+                        yes=bool(policy.yes),
+                        dry_run=False,
                     )
                     create_or_start_vm(
                         cfg,
@@ -897,8 +901,10 @@ def _reconcile_attached_vm(
                     )
 
         if recreate:
-            maybe_install_missing_host_deps(
-                yes=bool(policy.yes), dry_run=bool(policy.dry_run)
+            ensure_host_capability(
+                HostCapability.VM_LIFECYCLE,
+                yes=bool(policy.yes),
+                dry_run=bool(policy.dry_run),
             )
             create_or_start_vm(
                 cfg,

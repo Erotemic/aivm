@@ -81,7 +81,7 @@ def test_vm_up_stages_persistent_exports_before_start_without_second_replay(
         lambda *a, **k: None,
     )
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.maybe_install_missing_host_deps',
+        'aivm.cli.vm_lifecycle.ensure_host_capability',
         lambda *a, **k: None,
     )
     monkeypatch.setattr(

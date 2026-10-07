@@ -2,7 +2,41 @@
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Version 0.6.0 - Unreleased
+## Version 0.6.1 - Unreleased
+
+### Changed
+* Fresh 0.6 bootstrap now makes machine authority placement explicit: users can
+  choose a shared machine store at ``/var/lib/aivm/machine`` or a personal
+  machine store under their XDG data directory. Unattended/default bootstrap
+  chooses shared authority, while an already-established authority is never
+  silently replaced by the other scope.
+* Host prerequisites are now modeled as named capabilities. VM bootstrap and
+  lifecycle paths establish their required host capabilities before config or
+  libvirt work begins, and ``--yes`` approves dependency remediation instead of
+  skipping it. Low-level domain operations fail with an AIVM capability error
+  when required libvirt tooling is absent instead of leaking a raw command-not-
+  found failure.
+* Shared-machine preparation now separates durable ``libvirt`` group membership
+  from membership active in the current process credentials. Preparing a shared
+  root remains a durable authority decision, but AIVM refuses machine-store
+  writes until the current login session actually carries the required group.
+
+### Fixed
+* Dedicated repository ``ssh-agent`` forwarding now keeps VM login credentials
+  out of the repository agent. AIVM selects and forwards the dedicated socket
+  explicitly, forces ``AddKeysToAgent=no``, retains the explicit VM
+  ``IdentityFile`` with ``IdentitiesOnly=yes``, and verifies the exact forwarded
+  fingerprint set before enabling credential forwarding.
+* Config lint now derives persisted record keys from the same store models used
+  by parsing and rendering, including ``agent_credentials`` and attachment
+  metadata such as ``source_dev``, ``source_ino``, and ``mirror_home``. Config
+  emitted by AIVM no longer fails its own lint because of schema-list drift.
+* Generator-based ``@contextmanager`` helpers now use ``Generator`` return
+  annotations, removing the deprecated ``Iterator`` overload diagnostics from
+  newer ``ty`` / Python 3.14 checks.
+
+
+## Version 0.6.0 - Released 2026-09-29
 
 ### Fixed
 * Persistent attachments now recover safely from the host-reboot ordering case

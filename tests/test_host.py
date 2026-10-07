@@ -7,11 +7,19 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
+from aivm.errors import AIVMError
 from aivm.host import (
+    HostCapability,
+    MachineStoreAuthorityPreparation,
     check_commands,
     check_commands_with_sudo,
+    ensure_host_capability,
     host_is_debian_like,
     install_deps_debian,
+    prepare_machine_store_authority,
+    require_machine_store_session_access,
+    required_commands,
+    require_host_capability,
 )
 from aivm.util import CmdResult
 from tests.helpers import FakeProc, activate_manager
@@ -29,6 +37,86 @@ def test_check_commands(
     assert 'virt-install' in missing
     assert 'cloud-localds' in missing
     assert 'nft' not in missing_opt
+
+
+def test_named_host_capabilities_keep_libvirt_probe_minimal() -> None:
+    assert required_commands(HostCapability.LIBVIRT_CLIENT) == ['virsh']
+    assert 'virsh' in required_commands(HostCapability.VM_LIFECYCLE)
+    assert 'virt-install' in required_commands(HostCapability.VM_LIFECYCLE)
+
+
+def test_require_host_capability_reports_actionable_missing_command(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('aivm.host.which', lambda cmd: None)
+    with pytest.raises(AIVMError, match='libvirt-client.*virsh'):
+        require_host_capability(HostCapability.LIBVIRT_CLIENT)
+
+
+def test_ensure_host_capability_yes_installs_without_prompt(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    installed = False
+    prompted = False
+
+    def fake_which(cmd: str) -> str | None:
+        if installed:
+            return f'/usr/bin/{cmd}'
+        return None
+
+    def fake_install(*, assume_yes: bool = True) -> None:
+        nonlocal installed
+        assert assume_yes is True
+        installed = True
+
+    def fail_prompt(prompt: str = '') -> str:
+        nonlocal prompted
+        prompted = True
+        raise AssertionError(f'--yes must not prompt: {prompt}')
+
+    monkeypatch.setattr('aivm.host.which', fake_which)
+    monkeypatch.setattr('aivm.host.host_is_debian_like', lambda: True)
+    monkeypatch.setattr('aivm.host.install_deps_debian', fake_install)
+    monkeypatch.setattr('builtins.input', fail_prompt)
+
+    ensure_host_capability(
+        HostCapability.VM_LIFECYCLE, yes=True, dry_run=False
+    )
+
+    assert installed is True
+    assert prompted is False
+
+
+def test_machine_store_authority_distinguishes_configured_from_active_session(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from aivm.host_identity import current_host_identity
+    from aivm.machine_store import MachineStoreSessionRefreshRequired
+
+    activate_manager(monkeypatch, yes=True)
+    user = current_host_identity().username
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr('aivm.host.machine_group_exists', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.host.user_has_machine_group_membership',
+        lambda selected, group_name=None: True,
+    )
+    monkeypatch.setattr(
+        'aivm.host.current_process_has_machine_group',
+        lambda group_name=None: False,
+    )
+
+    preparation = prepare_machine_store_authority(user=user, dry_run=True)
+
+    assert isinstance(preparation, MachineStoreAuthorityPreparation)
+    assert preparation.membership_added is False
+    assert preparation.membership_configured is True
+    assert preparation.session_membership_active is False
+    assert preparation.requires_session_refresh
+    with pytest.raises(
+        MachineStoreSessionRefreshRequired, match='kernel credentials'
+    ):
+        require_machine_store_session_access(preparation)
 
 
 def test_check_commands_with_sudo(

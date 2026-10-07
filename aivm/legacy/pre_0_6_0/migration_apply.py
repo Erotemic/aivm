@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterator, Literal, cast
+from typing import Callable, Generator, Literal, cast
 
 from ...commands import CommandManager
 from ...config import AgentVMConfig
@@ -2575,7 +2575,7 @@ def _assert_safe_restore_path(path: Path, managed_root: Path) -> None:
 @contextmanager
 def _open_authorized_parent(
     path: Path, managed_root: Path
-) -> Iterator[tuple[int, Path]]:
+) -> Generator[tuple[int, Path], None, None]:
     """Open a target parent one component at a time without following links."""
     selected = _lexical_absolute(path)
     root = _lexical_absolute(managed_root)
@@ -2722,7 +2722,7 @@ def _atomic_restore_backup(
 @contextmanager
 def _migration_rollback_locks(
     layout: MachineStoreLayout,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     policy = current_machine_store_policy(layout)
     migration_lock = layout.locks_dir / 'migration.lock'
     with exclusive_file_lock(migration_lock, policy):

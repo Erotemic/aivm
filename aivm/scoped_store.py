@@ -13,6 +13,7 @@ choose the machine store for a brand-new installation.
 from __future__ import annotations
 
 import hashlib
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,13 +40,16 @@ from .host_identity import HostIdentity, current_host_identity
 from .legacy.pre_0_6_0 import compatibility_surface
 from .legacy.pre_0_6_0.selection import selected_store_path
 from .machine_store import (
+    MACHINE_STORE_ROOT_ENV,
     MachineStoreAccessError,
     MachineStoreLayout,
+    MachineStorePlacement,
     current_machine_group_gid,
     current_machine_group_name,
     current_machine_store_policy,
     ensure_machine_store_layout,
     machine_store_layout,
+    machine_store_layout_for_placement,
 )
 from .profile_store import (
     UserProfileStore,
@@ -69,14 +73,65 @@ class StoreScope:
         return self.mode == 'machine'
 
 
+def fresh_implicit_machine_store_choice_required() -> bool:
+    """Return whether a fresh implicit install has no store authority yet.
+
+    An existing shared root is itself an explicit host-wide opt-in even before
+    defaults are written.  An existing personal or released store likewise
+    owns the decision already.  Empty directories left by an interrupted
+    personal bootstrap do not count as an authority, so a retry still gets the
+    shared/personal choice.
+    """
+    if os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip():
+        return False
+
+    shared = machine_store_layout_for_placement(MachineStorePlacement.SHARED)
+    if shared.root.is_dir() and not shared.root.is_symlink():
+        return False
+
+    personal = machine_store_layout_for_placement(
+        MachineStorePlacement.PERSONAL
+    )
+    if split_source_paths(personal.config_path):
+        return False
+
+    legacy_path = selected_store_path(
+        None, machine_store_path=personal.config_path
+    )
+    return legacy_path is None
+
+
+def store_scope_for_machine_placement(
+    placement: MachineStorePlacement,
+) -> StoreScope:
+    """Build the machine/profile scope for one explicit placement."""
+    layout = machine_store_layout_for_placement(placement)
+    return StoreScope(
+        mode='machine',
+        store_path=layout.config_path,
+        profile_path=profile_store_path(),
+        machine_layout=layout,
+    )
+
+
 @compatibility_surface
 def resolve_store_scope(
     config_opt: str | None,
     *,
     for_init: bool = False,
+    machine_placement: MachineStorePlacement | None = None,
 ) -> StoreScope:
     """Choose legacy or machine persistence without silently migrating data."""
-    layout = machine_store_layout()
+    if machine_placement is not None:
+        if config_opt:
+            raise AIVMError(
+                'An explicit --config path already chooses the config store; '
+                'it cannot be combined with a shared/personal machine-store '
+                'placement.'
+            )
+        layout = machine_store_layout_for_placement(machine_placement)
+    else:
+        layout = machine_store_layout()
     legacy_path = selected_store_path(
         config_opt,
         machine_store_path=layout.config_path,

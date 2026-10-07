@@ -15,6 +15,7 @@ import pytest
 from pytest import MonkeyPatch
 
 from aivm.errors import AIVMError
+from aivm.host import require_host_capability as real_require_host_capability
 from aivm.vm import restart_vm, shutdown_vm
 from aivm.vm.domain import (
     _destroy_and_undefine_vm,
@@ -28,6 +29,14 @@ from tests.helpers import (
     command_recorder,
     make_cfg,
 )
+
+
+@pytest.fixture(autouse=True)
+def _assume_domain_host_capability(monkeypatch: MonkeyPatch) -> None:
+    """Keep domain unit tests independent of the runner's installed tools."""
+    monkeypatch.setattr(
+        'aivm.vm.domain.require_host_capability', lambda capability: None
+    )
 
 
 def _domstate_route(states: list[str]) -> Callable[[list[str]], FakeProc]:
@@ -403,6 +412,23 @@ def test_domain_undefine_refuses_changed_explicit_storage_inventory(
 
     assert not any(cmd[:2] == ['virsh', 'destroy'] for cmd in rec.normalized)
     assert not any(cmd[:2] == ['virsh', 'undefine'] for cmd in rec.normalized)
+
+
+def test_vm_defined_requires_libvirt_client_before_privilege_probe(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A missing virsh is a host-capability error, not a command failure."""
+    monkeypatch.setattr(
+        'aivm.vm.domain.require_host_capability', real_require_host_capability
+    )
+    monkeypatch.setattr('aivm.host.which', lambda cmd: None)
+    monkeypatch.setattr(
+        'aivm.vm.domain.virsh_needs_sudo',
+        lambda: pytest.fail('privilege probing must not run without virsh'),
+    )
+
+    with pytest.raises(AIVMError, match='libvirt-client.*virsh'):
+        _vm_defined('inspect-me')
 
 
 @pytest.mark.parametrize(

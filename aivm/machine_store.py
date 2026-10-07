@@ -17,9 +17,11 @@ from __future__ import annotations
 import grp
 import hashlib
 import os
+import pwd
 import re
 from contextlib import ExitStack
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import TracebackType
 from typing import Iterable
@@ -77,6 +79,13 @@ PERSONAL_FILE_MODE = 0o600
 PERSONAL_BOOTSTRAP_DIRECTORY_MODE = 0o700
 
 
+class MachineStorePlacement(str, Enum):
+    """Where a machine-scoped AIVM authority is persisted."""
+
+    SHARED = 'shared'
+    PERSONAL = 'personal'
+
+
 class MachineStoreGroupError(AIVMError):
     """Raised when the configured trusted host group does not exist.
 
@@ -95,6 +104,31 @@ class MachineStoreAccessError(AIVMError):
     domains is what invariant 1 of the shared-machine architecture forbids.
     Refusing is recoverable (join the group); silently forking is not.
     """
+
+
+class MachineStoreSessionRefreshRequired(MachineStoreAccessError):
+    """Raised when durable group membership is not active in this process."""
+
+
+@dataclass(frozen=True)
+class MachineGroupMembershipState:
+    """Separate durable group configuration from live process credentials.
+
+    ``configured`` answers whether the target user's account will receive the
+    group on a new login. ``active`` answers whether the *current process* has
+    that gid in its kernel credentials.  For a different target user, live
+    process membership is unknowable here and ``active`` is ``None``.
+    """
+
+    group_name: str
+    group_gid: int | None
+    user: str
+    configured: bool
+    active: bool | None
+
+    @property
+    def requires_session_refresh(self) -> bool:
+        return self.configured and self.active is False
 
 
 def personal_machine_store_root() -> Path:
@@ -204,6 +238,17 @@ def resolve_machine_store_root() -> Path:
     if shared.is_dir() and not shared.is_symlink():
         if not _directory_is_usable(shared):
             group = current_machine_group_name()
+            membership = machine_group_membership_state(group_name=group)
+            if membership.requires_session_refresh:
+                raise MachineStoreSessionRefreshRequired(
+                    f'This host already has a shared AIVM authority at '
+                    f'{shared}, and {membership.user!r} is configured in the '
+                    f'{group!r} group, but this process does not carry that '
+                    'group in its kernel credentials yet. Log out and back in '
+                    '(or start a new login session), then rerun the command. '
+                    'AIVM will not fall back to a personal store while the '
+                    'shared authority is pending activation.'
+                )
             raise MachineStoreAccessError(
                 f'This host has a shared AIVM machine store at {shared}, but '
                 f'{current_host_identity().username!r} cannot write it. It is '
@@ -223,6 +268,27 @@ def machine_store_layout(root: Path | None = None) -> MachineStoreLayout:
     if root is None:
         root = resolve_machine_store_root()
     return MachineStoreLayout.from_root(root)
+
+
+def machine_store_layout_for_placement(
+    placement: MachineStorePlacement,
+) -> MachineStoreLayout:
+    """Return the canonical layout for an explicit fresh-install choice.
+
+    The environment override is already an explicit store-root decision and
+    therefore never reaches the shared/personal prompt.  Keeping this helper
+    about the two canonical placements makes it impossible for the UI layer to
+    reimplement their paths or ownership classification.
+    """
+    if placement is MachineStorePlacement.SHARED:
+        return MachineStoreLayout.from_root(
+            DEFAULT_MACHINE_STORE_ROOT, shared=True
+        )
+    if placement is MachineStorePlacement.PERSONAL:
+        return MachineStoreLayout.from_root(
+            personal_machine_store_root(), shared=False
+        )
+    raise ValueError(f'Unsupported machine-store placement: {placement!r}')
 
 
 def resolve_machine_group_gid(group_name: str = DEFAULT_MACHINE_GROUP) -> int:
@@ -270,22 +336,64 @@ def machine_group_exists(group_name: str | None = None) -> bool:
     return True
 
 
-def user_in_machine_group(
+def machine_group_membership_state(
     user: str | None = None, *, group_name: str | None = None
-) -> bool:
-    """Return whether the current login has active trusted-group access."""
+) -> MachineGroupMembershipState:
+    """Inspect durable membership and live credentials as separate facts."""
     name = group_name or current_machine_group_name()
+    selected = user or current_host_identity().username
     try:
         record = grp.getgrnam(name)
     except KeyError:
-        return False
-    selected = user or current_host_identity().username
-    if selected in record.gr_mem:
-        return True
+        return MachineGroupMembershipState(
+            group_name=name,
+            group_gid=None,
+            user=selected,
+            configured=False,
+            active=None,
+        )
+
+    gid = int(record.gr_gid)
+    configured = selected in (record.gr_mem or [])
     try:
-        return int(record.gr_gid) in {int(gid) for gid in os.getgroups()}
-    except OSError:
-        return False
+        configured = configured or int(pwd.getpwnam(selected).pw_gid) == gid
+    except KeyError:
+        pass
+
+    current = current_host_identity()
+    active: bool | None = None
+    if selected == current.username:
+        try:
+            process_gids = {int(os.getgid()), int(os.getegid())}
+            process_gids.update(int(item) for item in os.getgroups())
+            active = gid in process_gids
+        except OSError:
+            active = False
+
+    return MachineGroupMembershipState(
+        group_name=name,
+        group_gid=gid,
+        user=selected,
+        configured=configured,
+        active=active,
+    )
+
+
+def user_has_machine_group_membership(
+    user: str | None = None, *, group_name: str | None = None
+) -> bool:
+    """Return whether account configuration grants the group on next login."""
+    return machine_group_membership_state(
+        user, group_name=group_name
+    ).configured
+
+
+def current_process_has_machine_group(
+    *, group_name: str | None = None
+) -> bool:
+    """Return whether the invoking process currently carries the group gid."""
+    state = machine_group_membership_state(group_name=group_name)
+    return state.active is True
 
 
 def machine_store_root_ready(

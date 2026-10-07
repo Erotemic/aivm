@@ -65,10 +65,11 @@ Host boundary (trusted):
 * Host user account and local filesystem.
 * Host ``sudo`` privileges when explicitly approved by the operator.
 * ``libvirt`` group membership, when the operator prepares direct
-  system-libvirt access. This is effectively root-equivalent: controlling the system
-  libvirt daemon lets a principal run arbitrary configuration as root.
-  The ``never`` policy is therefore a *no-sudo-invocation* guarantee (``aivm``
-  never executes ``sudo``), not a reduced-privilege guarantee.
+  system-libvirt access. This is effectively root-equivalent: controlling the
+  system libvirt daemon lets a principal run arbitrary configuration as root.
+  The default ``as-needed`` policy can avoid invoking ``sudo`` for operations
+  that already work through that membership, but this reduces prompts rather
+  than the account's underlying host authority.
 
 Guest boundary (untrusted):
 
@@ -112,10 +113,12 @@ VM a usable sandbox. A credential that grants what its holder already possesses
 protects nothing, so treating it as a secret would add ceremony without moving
 the boundary.
 
-Keeping the password declarative in the config store is also the point of the
-config store: one file states what the VM is, and the VM is reconciled toward
-it. Removing the password from that file to protect it would trade a real
-usability property for no security gain.
+Keeping the password declarative in the machine-owned VM configuration is also
+part of the reconciliation model: the persisted desired state says what the VM
+is, and the VM is reconciled toward it. The 0.6 store may be split across
+machine-store fragments, with caller-owned settings kept separately in the
+private user profile. Removing the guest password from desired state merely to
+hide it would trade a real usability property for no security gain.
 
 The consequence to be aware of is narrow: a ``--verbose 2`` log, or the
 cloud-init directory under ``base_dir``, discloses the guest password to anyone

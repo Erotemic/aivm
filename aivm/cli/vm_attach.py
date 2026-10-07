@@ -10,7 +10,7 @@ separate Request/Result layer.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -390,7 +390,7 @@ _ROOT_REQUIRING_ATTACH_MODES = frozenset(
 @contextmanager
 def _attach_privilege_guidance(
     mode: str, owner_principal_id: str
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Name both ways out when a mode's host setup needs unavailable root.
 
     A host account without sudo -- the normal state of every ordinary user

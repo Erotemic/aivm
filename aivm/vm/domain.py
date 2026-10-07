@@ -13,6 +13,7 @@ from loguru import logger
 from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..host import HostCapability, require_host_capability
 from ..privilege import virsh_needs_sudo
 from ..runtime import pin_locale, virsh_cmd, virsh_domain_missing
 from .connectivity import get_ip_cached
@@ -30,6 +31,7 @@ def _vm_defined(name: str) -> bool:
     every other failure aborts the caller before destructive work can begin.
     The stderr is string-matched, so the invocation pins the C locale.
     """
+    require_host_capability(HostCapability.LIBVIRT_CLIENT)
     mgr = CommandManager.current()
     if mgr.current_plan() is None:
         with mgr.step(

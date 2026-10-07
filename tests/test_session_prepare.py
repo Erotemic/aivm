@@ -42,6 +42,7 @@ from aivm.config_store import (
     upsert_vm,
 )
 from aivm.errors import AIVMError
+from aivm.host import HostCapability
 from aivm.services import (
     resolve_context_for_code as real_resolve_context_for_code,
 )
@@ -173,6 +174,15 @@ def attached_session_harness(
     monkeypatch.setattr(
         'aivm.vm.create_ops.create_vm_from_defaults', fake_vm_create
     )
+
+    def fake_host_capability(capability: HostCapability, **kwargs: Any) -> None:
+        del kwargs
+        assert capability is HostCapability.VM_LIFECYCLE
+        harness.calls.append('host_requirements')
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect.ensure_host_capability', fake_host_capability
+    )
     return harness
 
 
@@ -245,7 +255,7 @@ def test_prepare_attached_session_bootstraps_missing_vm(
         bootstrap_missing_vm=bootstrap,
     )
     assert session.cfg.vm.name == 'bootstrap-vm'
-    assert harness.calls == ['config_init', 'vm_create']
+    assert harness.calls == ['host_requirements', 'config_init', 'vm_create']
 
     store = load_store(harness.cfg_path)
     atts = [a for a in store.attachments if a.vm_name == 'bootstrap-vm']
@@ -322,9 +332,12 @@ def test_prepare_attached_session_interactive_bootstrap_preserves_yes_false(
     )
 
     assert session.cfg.vm.name == 'bootstrap-vm'
+    assert harness.calls == ['host_requirements']
     assert init_kwargs == [
         {
-            'config_opt': str(harness.cfg_path.resolve()),
+            # Preserve the implicit selection through config init so a fresh
+            # host can choose shared vs personal before the path is fixed.
+            'config_opt': None,
             'yes': False,
             'defaults': False,
             'force': False,
@@ -388,7 +401,7 @@ def test_prepare_attached_session_bootstraps_create_only_when_defaults_exist(
         bootstrap_missing_vm=bootstrap,
     )
     assert session.cfg.vm.name == 'bootstrap-vm'
-    assert harness.calls == ['vm_create']
+    assert harness.calls == ['host_requirements', 'vm_create']
 
     persisted = load_store(harness.cfg_path)
     assert any(a.vm_name == 'bootstrap-vm' for a in persisted.attachments)
