@@ -19,16 +19,21 @@ from loguru import logger
 
 from .commands import CommandError, CommandManager
 from .errors import AIVMError
+from .host_identity import current_host_identity
 from .machine_store import (
     DEFAULT_MACHINE_STORE_ROOT,
     MACHINE_STORE_ROOT_ENV,
+    MachineStoreAccessError,
     MachineStoreLayout,
+    MachineStoreSessionRefreshRequired,
     current_machine_group_name,
+    current_process_has_machine_group,
     ensure_machine_store_layout,
     machine_group_exists,
     machine_store_layout,
+    machine_store_root_ready,
     resolve_machine_group_gid,
-    user_in_machine_group,
+    user_has_machine_group_membership,
 )
 from .privilege import LIBVIRT_GROUP, require_sudo_allowed
 from .util import which
@@ -44,11 +49,27 @@ class HostCapability(str, Enum):
 
 
 @dataclass(frozen=True)
-class MachineStoreAccessPreparation:
-    """Result of establishing the host-side machine-store authority."""
+class MachineStoreAuthorityPreparation:
+    """Result of establishing durable host-side machine-store authority.
+
+    Preparation changes persistent host state only.  It does not and cannot
+    refresh the supplementary groups carried by the already-running process.
+    Callers that intend to use a newly prepared shared authority immediately
+    must check ``session_membership_active`` before touching store contents.
+    """
 
     layout: MachineStoreLayout
     membership_added: bool
+    membership_configured: bool
+    session_membership_active: bool | None
+
+    @property
+    def requires_session_refresh(self) -> bool:
+        return (
+            self.layout.shared
+            and self.membership_configured
+            and self.session_membership_active is False
+        )
 
 
 _VM_LIFECYCLE_CMDS = (
@@ -156,18 +177,19 @@ def ensure_host_capability(
     require_host_capability(capability)
 
 
-def prepare_machine_store_access(
+def prepare_machine_store_authority(
     *,
     user: str,
     dry_run: bool,
-) -> MachineStoreAccessPreparation:
-    """Establish the one machine-store root selected for shared operation.
+) -> MachineStoreAuthorityPreparation:
+    """Prepare durable machine-store authority without claiming session access.
 
-    This is the host-side authority used by both ``host permissions setup``
-    and fresh-install shared-store bootstrap.  It owns group creation/membership
-    and the root-owned/setgid directory creation; callers own only the UX around
-    why preparation is happening and whether a newly-added group requires a
-    login refresh before they can continue.
+    This is the one host-side transition used by both ``host permissions
+    setup`` and fresh shared bootstrap. It may create durable group membership
+    and the root-owned/setgid authority root. A running process keeps the group
+    credentials it had at login, so preparation deliberately reports live
+    activation separately instead of treating a successful ``usermod`` (or an
+    already-listed account) as immediate access.
     """
     mgr = CommandManager.current()
     configured_root = os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip()
@@ -182,14 +204,17 @@ def prepare_machine_store_access(
             )
         else:
             ensure_machine_store_layout(layout, group_gid=os.getgid())
-        return MachineStoreAccessPreparation(
-            layout=layout, membership_added=False
+        return MachineStoreAuthorityPreparation(
+            layout=layout,
+            membership_added=False,
+            membership_configured=True,
+            session_membership_active=True,
         )
 
     group_name = current_machine_group_name()
     group_exists = machine_group_exists(group_name)
     owns_group = group_name != LIBVIRT_GROUP
-    listed = group_exists and user_in_machine_group(
+    configured = group_exists and user_has_machine_group_membership(
         user, group_name=group_name
     )
     group_request = (
@@ -213,7 +238,7 @@ def prepare_machine_store_access(
             capture=True,
             summary=f'Add {user} to the {group_name} group',
         )
-        if not listed and (group_exists or owns_group)
+        if not configured and (group_exists or owns_group)
         else None
     )
     parent_request = mgr.request(
@@ -246,8 +271,15 @@ def prepare_machine_store_access(
             member_request.preview()
         parent_request.preview()
         root_request.preview()
-        return MachineStoreAccessPreparation(
-            layout=layout, membership_added=member_request is not None
+        return MachineStoreAuthorityPreparation(
+            layout=layout,
+            membership_added=member_request is not None,
+            membership_configured=configured or member_request is not None,
+            session_membership_active=(
+                current_process_has_machine_group(group_name=group_name)
+                if user == current_host_identity().username
+                else None
+            ),
         )
 
     if not group_exists and not owns_group:
@@ -290,9 +322,55 @@ def prepare_machine_store_access(
             parent_request.submit()
             root_request.submit()
 
-    return MachineStoreAccessPreparation(
-        layout=layout, membership_added=member_request is not None
+    return MachineStoreAuthorityPreparation(
+        layout=layout,
+        membership_added=member_request is not None,
+        membership_configured=True,
+        session_membership_active=(
+            current_process_has_machine_group(group_name=group_name)
+            if user == current_host_identity().username
+            else None
+        ),
     )
+
+
+def require_machine_store_session_access(
+    preparation: MachineStoreAuthorityPreparation,
+) -> None:
+    """Require a prepared shared authority to be usable by this process.
+
+    Authority preparation and process activation are intentionally separate
+    lifecycle phases. Creating the shared root durably records the user's
+    shared-machine choice; a process started before the corresponding group
+    membership was active must stop here and resume from a new login session.
+    """
+    if not preparation.layout.shared:
+        return
+    if preparation.requires_session_refresh:
+        group = current_machine_group_name()
+        raise MachineStoreSessionRefreshRequired(
+            f'Prepared the shared AIVM authority at '
+            f'{preparation.layout.root}. '
+            f'{current_host_identity().username!r} is configured in the '
+            f'{group!r} group, but this process does not carry that group in '
+            'its kernel credentials yet. Log out and back in (or start a new '
+            'login session), then rerun the command. No AIVM config was '
+            'written; the prepared shared root records the scope choice so '
+            'AIVM will continue with the same authority after login.'
+        )
+    if preparation.session_membership_active is None:
+        raise MachineStoreAccessError(
+            'AIVM cannot verify live shared-store access for a different host '
+            'user from this process. Start the command as that user after host '
+            'permissions setup has completed.'
+        )
+    if not machine_store_root_ready(preparation.layout):
+        raise MachineStoreAccessError(
+            f'The shared AIVM authority at {preparation.layout.root} was '
+            'prepared, but this process still cannot read, write, and traverse '
+            'it. Run `aivm host permissions check` to inspect the active group '
+            'credentials and directory ownership before continuing.'
+        )
 
 
 def check_commands_with_sudo() -> tuple[list[str], str | None]:

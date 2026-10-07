@@ -2801,6 +2801,12 @@
           "path": "aivm/domain_authority.py"
         },
         {
+          "imported": "aivm.host_identity",
+          "importer": "aivm.host",
+          "occurrences": 1,
+          "path": "aivm/host.py"
+        },
+        {
           "imported": "aivm.guestctl",
           "importer": "aivm.vm.cloudinit",
           "occurrences": 1,

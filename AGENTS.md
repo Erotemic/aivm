@@ -17,6 +17,14 @@ Guidance for contributors (human or AI agents) working in this repository.
     silently switch to the other -- changing placement is a migration. Shared
     selection must use the centralized host-permissions preparation path rather
     than recreating group/directory setup in config or launcher code.
+  - Shared-machine setup has two distinct lifecycle phases. Persistent authority
+    preparation configures trusted-group membership and creates the shared root;
+    current-process activation comes only from the kernel credentials inherited
+    by a login/session. Never treat `/etc/group` membership (including a
+    successful `usermod`) as proof that the running process can use the store.
+    A prepared shared root is a durable scope decision even if activation is
+    pending, but no config/store write may proceed until current-session access
+    is proven.
   - Managed VMs persist host-to-guest principals. `aivm config init` joins a
     later user only when the hostname-qualified name exactly matches a managed
     record, then enrolls through the forced `aivm-guestctl` bootstrap channel.

@@ -1149,3 +1149,41 @@ checks could not be run here.
 Worked through the fresh-install machine-store UX after the host-capability bootstrap fix. The key concern was avoiding another launcher-specific workaround: the shared/personal choice now lives at config initialization, while physical placement is modeled in `machine_store`, fresh-authority detection in `scoped_store`, and host-side shared-store preparation in the centralized `host` service used by `host permissions setup` as well. The foreground ssh/code bootstrap preserves its original implicit config intent through init and re-resolves the resulting authority before VM creation, so the prompt actually controls where state is written.
 
 I am confident in the authority invariant: an existing shared root, personal machine store, released user store, or explicit `AIVM_MACHINE_STORE_ROOT` prevents a new placement decision; an empty personal directory left by an interrupted first run does not. Selecting shared may add the user to the trusted host group; when that happens initialization stops before writing machine config and requires a login refresh rather than using sudo to bypass the new group boundary. The main compatibility risk is first-run automation: `--yes` and `--defaults` intentionally choose shared, while an unattended personal install should initialize explicitly with `aivm config init --machine_store=personal`. Focused tests cover the prompt, retry state, no-silent-switch rule, centralized host preparation, and ssh/code preservation of implicit scope. Generated architecture docs were refreshed after the dependency move.
+
+## 2026-10-07 13:58:00 -0400
+
+The first real shared-store bootstrap run exposed a lifecycle bug in the scope
+work. `prepare_machine_store_access` used one predicate for two different facts:
+whether the account is persistently listed in the trusted group and whether the
+already-running process actually carries that gid. On a host where `libvirt`
+membership was already configured but the shell predated that change, setup
+skipped `usermod`, created `/var/lib/aivm/machine`, and then config initialization
+continued into `locks/`, where the kernel correctly returned EACCES. The resulting
+diagnostic was duplicated because a low-level filesystem failure was reporting a
+higher-level activation problem.
+
+I split those states explicitly. `machine_group_membership_state` reports durable
+account configuration separately from live process credentials. Host setup is now
+named `prepare_machine_store_authority` to make its responsibility clear: it owns
+persistent group/root preparation, but does not claim that the current session has
+been refreshed. The returned `MachineStoreAuthorityPreparation` records both
+phases, and `require_machine_store_session_access` is the single transition guard
+used by fresh shared `config init` before any store contents are created or
+written. The shared root is intentionally retained when activation is pending:
+that root is the durable record of the user's shared-machine scope choice, so a
+retry after login resumes the same authority rather than prompting again or
+falling back to a personal store.
+
+The resolver now recognizes the prepared-but-stale-session state as well. If the
+shared root exists, the account is configured in the trusted group, but the
+process lacks the gid, it emits the session-refresh diagnosis instead of generic
+`usermod` instructions. `host permissions check` likewise grades live
+machine-store membership from kernel credentials rather than durable account
+membership. The contributor invariant now records this persistent-authority vs
+session-activation split so future changes cannot collapse them again.
+
+Focused machine-store/host/config/permissions/session tests pass 83/83, including
+the exact regression where membership was already configured and therefore no
+`usermod` occurs. A full `tests/` run reaches 1328 passed / 25 skipped before
+architecture regeneration, with only the generated edge inventory plus three
+known root-writability artifacts failing.

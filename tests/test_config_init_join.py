@@ -648,7 +648,7 @@ def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
 ) -> None:
     from aivm.cli.config.init import initialize_config_defaults
     from aivm.errors import AIVMError
-    from aivm.host import HostCapability, MachineStoreAccessPreparation
+    from aivm.host import HostCapability, MachineStoreAuthorityPreparation
     from aivm.machine_store import (
         MachineStorePlacement,
         machine_store_layout_for_placement,
@@ -664,20 +664,22 @@ def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
     def fake_capability(capability: HostCapability, **kwargs: object) -> None:
         seen.append(('capability', capability, kwargs))
 
-    def fake_prepare(**kwargs: object) -> MachineStoreAccessPreparation:
+    def fake_prepare(**kwargs: object) -> MachineStoreAuthorityPreparation:
         seen.append(('prepare', kwargs))
-        return MachineStoreAccessPreparation(
+        return MachineStoreAuthorityPreparation(
             layout=machine_store_layout_for_placement(
                 MachineStorePlacement.SHARED
             ),
             membership_added=True,
+            membership_configured=True,
+            session_membership_active=False,
         )
 
     monkeypatch.setattr(
         'aivm.cli.config.init.ensure_host_capability', fake_capability
     )
     monkeypatch.setattr(
-        'aivm.cli.config.init.prepare_machine_store_access', fake_prepare
+        'aivm.cli.config.init.prepare_machine_store_authority', fake_prepare
     )
 
     with pytest.raises(AIVMError, match='Log out and back in'):
@@ -693,6 +695,66 @@ def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
     assert seen[0][0:2] == ('capability', HostCapability.LIBVIRT_CLIENT)
     assert seen[1][0] == 'prepare'
     assert not (tmp_path / 'var-lib-aivm-machine' / 'config.toml').exists()
+
+
+def test_shared_choice_stops_when_membership_is_configured_but_session_is_stale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Persistent /etc/group membership is not live process authority."""
+    from aivm.cli.config.init import initialize_config_defaults
+    from aivm.host import HostCapability, MachineStoreAuthorityPreparation
+    from aivm.machine_store import (
+        MachineStorePlacement,
+        MachineStoreSessionRefreshRequired,
+        machine_store_layout_for_placement,
+    )
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
+        tmp_path / 'var-lib-aivm-machine',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.config.init.ensure_host_capability',
+        lambda capability, **kwargs: (
+            None
+            if capability is HostCapability.LIBVIRT_CLIENT
+            else (_ for _ in ()).throw(AssertionError(capability))
+        ),
+    )
+
+    def fake_prepare(**kwargs: object) -> MachineStoreAuthorityPreparation:
+        del kwargs
+        layout = machine_store_layout_for_placement(
+            MachineStorePlacement.SHARED
+        )
+        layout.root.mkdir(parents=True)
+        return MachineStoreAuthorityPreparation(
+            layout=layout,
+            membership_added=False,
+            membership_configured=True,
+            session_membership_active=False,
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.config.init.prepare_machine_store_authority', fake_prepare
+    )
+
+    with pytest.raises(
+        MachineStoreSessionRefreshRequired, match='kernel credentials'
+    ):
+        initialize_config_defaults(
+            config_opt=None,
+            yes=True,
+            defaults=True,
+            force=False,
+            standalone_guidance=False,
+            machine_store_opt='shared',
+        )
+
+    root = tmp_path / 'var-lib-aivm-machine'
+    assert root.is_dir(), 'prepared root durably records the shared choice'
+    assert not (root / 'config.toml').exists()
 
 
 def test_existing_personal_authority_rejects_shared_switch(

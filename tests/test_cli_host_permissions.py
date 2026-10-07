@@ -627,9 +627,17 @@ def test_setup_dry_run_creates_an_overridden_machine_group(
     monkeypatch.setattr(
         'aivm.cli.host_permissions.machine_group_exists', lambda name: False
     )
+    from aivm.machine_store import MachineGroupMembershipState
+
     monkeypatch.setattr(
-        'aivm.cli.host_permissions.user_in_machine_group',
-        lambda *args, **kwargs: False,
+        'aivm.cli.host_permissions.machine_group_membership_state',
+        lambda *args, **kwargs: MachineGroupMembershipState(
+            group_name='aivm-admins',
+            group_gid=None,
+            user='alice',
+            configured=False,
+            active=False,
+        ),
     )
     cfg_path = tmp_path / 'config.toml'
     _store_with_vm(cfg_path, privilege_mode='as-needed')

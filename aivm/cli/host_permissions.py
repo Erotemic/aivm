@@ -30,7 +30,7 @@ from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig, BehaviorConfig, PathsConfig
 from ..config_store import load_store, materialize_vm_cfg, save_store
 from ..errors import AIVMError
-from ..host import prepare_machine_store_access
+from ..host import prepare_machine_store_authority
 from ..host_identity import current_host_identity
 from ..machine_store import (
     MachineStoreAccessError,
@@ -39,7 +39,7 @@ from ..machine_store import (
     machine_group_exists,
     machine_store_layout,
     machine_store_root_ready,
-    user_in_machine_group,
+    machine_group_membership_state,
 )
 from ..modes import PrivilegeMode
 from ..privilege import (
@@ -468,9 +468,13 @@ class HostPermissionsCheckCLI(_BaseCommand):
                 )
             )
         elif active_layout is not None:
-            machine_group_ok = machine_group_exists(
-                machine_group
-            ) and user_in_machine_group(group_name=machine_group)
+            membership = machine_group_membership_state(
+                group_name=machine_group
+            )
+            machine_group_ok = (
+                machine_group_exists(machine_group)
+                and membership.active is True
+            )
             # The store group is normally the libvirt group, which gets its
             # own line below. Reporting the same membership twice under two
             # names reads as two separate things to fix.
@@ -481,8 +485,13 @@ class HostPermissionsCheckCLI(_BaseCommand):
                         f'{machine_group} machine-store membership',
                         'permits shared desired-state updates'
                         if machine_group_ok
-                        else 'run `aivm host permissions setup`, then log '
-                        'out/in',
+                        else (
+                            'membership is configured but not active in this '
+                            'session; log out/in'
+                            if membership.configured
+                            else 'run `aivm host permissions setup`, then log '
+                            'out/in'
+                        ),
                         'shared machine-store access',
                     )
                 )
@@ -749,7 +758,7 @@ class HostPermissionsSetupCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         mgr = CommandManager.current()
         user = _resolve_setup_target_user(str(args.user or ''))
-        store_preparation = prepare_machine_store_access(
+        store_preparation = prepare_machine_store_authority(
             user=user, dry_run=args.dry_run
         )
         if store_preparation.membership_added:

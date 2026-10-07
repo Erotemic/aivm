@@ -37,7 +37,8 @@ from ...errors import AIVMError, CommandControlError
 from ...host import (
     HostCapability,
     ensure_host_capability,
-    prepare_machine_store_access,
+    prepare_machine_store_authority,
+    require_machine_store_session_access,
 )
 from ...host_identity import current_host_identity
 from ...machine_store import MachineStorePlacement
@@ -249,19 +250,11 @@ def initialize_config_defaults(
                 yes=yes,
                 dry_run=False,
             )
-            preparation = prepare_machine_store_access(
+            preparation = prepare_machine_store_authority(
                 user=current_host_identity().username,
                 dry_run=False,
             )
-            if preparation.membership_added:
-                raise AIVMError(
-                    f'Prepared the shared AIVM machine store at '
-                    f'{preparation.layout.root} and added '
-                    f'{current_host_identity().username!r} to its trusted '
-                    'host group. Log out and back in so the new group '
-                    'membership is active, then rerun this command. AIVM '
-                    'will detect the shared store and continue there.'
-                )
+            require_machine_store_session_access(preparation)
         ensure_machine_scope_ready(scope)
     reg = load_scope_store(scope)
 

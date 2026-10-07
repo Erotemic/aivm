@@ -10,11 +10,14 @@ from pytest import MonkeyPatch
 from aivm.errors import AIVMError
 from aivm.host import (
     HostCapability,
+    MachineStoreAuthorityPreparation,
     check_commands,
     check_commands_with_sudo,
     ensure_host_capability,
     host_is_debian_like,
     install_deps_debian,
+    prepare_machine_store_authority,
+    require_machine_store_session_access,
     required_commands,
     require_host_capability,
 )
@@ -82,6 +85,38 @@ def test_ensure_host_capability_yes_installs_without_prompt(
 
     assert installed is True
     assert prompted is False
+
+
+def test_machine_store_authority_distinguishes_configured_from_active_session(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    from aivm.host_identity import current_host_identity
+    from aivm.machine_store import MachineStoreSessionRefreshRequired
+
+    activate_manager(monkeypatch, yes=True)
+    user = current_host_identity().username
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr('aivm.host.machine_group_exists', lambda name: True)
+    monkeypatch.setattr(
+        'aivm.host.user_has_machine_group_membership',
+        lambda selected, group_name=None: True,
+    )
+    monkeypatch.setattr(
+        'aivm.host.current_process_has_machine_group',
+        lambda group_name=None: False,
+    )
+
+    preparation = prepare_machine_store_authority(user=user, dry_run=True)
+
+    assert isinstance(preparation, MachineStoreAuthorityPreparation)
+    assert preparation.membership_added is False
+    assert preparation.membership_configured is True
+    assert preparation.session_membership_active is False
+    assert preparation.requires_session_refresh
+    with pytest.raises(
+        MachineStoreSessionRefreshRequired, match='kernel credentials'
+    ):
+        require_machine_store_session_access(preparation)
 
 
 def test_check_commands_with_sudo(
