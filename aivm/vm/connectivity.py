@@ -258,10 +258,18 @@ def ssh_config(
         '  StrictHostKeyChecking accept-new',
     ]
     if forward_agent_socket:
-        # Name the dedicated AIVM socket explicitly.  This forwards only the
-        # VM/principal-scoped credential agent rather than inheriting the
-        # caller's ordinary SSH_AUTH_SOCK.
-        lines.append(f'  ForwardAgent {forward_agent_socket}')
+        # OpenSSH checks its authentication-agent selection before it requests
+        # forwarding, even when ForwardAgent itself names a socket path.  Keep
+        # the dedicated socket selected for that check while preventing host
+        # AddKeysToAgent policy from mutating it.  IdentitiesOnly + IdentityFile
+        # above still determine VM login authentication.
+        lines.extend(
+            [
+                f'  IdentityAgent {forward_agent_socket}',
+                '  AddKeysToAgent no',
+                f'  ForwardAgent {forward_agent_socket}',
+            ]
+        )
     return '\n'.join(lines) + '\n'
 
 

@@ -419,6 +419,10 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
             (
                 'ssh',
                 '-o',
+                f'IdentityAgent={forwarding.socket_path}',
+                '-o',
+                'AddKeysToAgent=no',
+                '-o',
                 f'ForwardAgent={forwarding.socket_path}',
             ): FakeProc(0, '', '')
         },
@@ -440,8 +444,12 @@ def test_vm_ssh_forwards_prepared_dedicated_agent(
         }
     ]
     ssh_cmd = next(cmd for cmd in recorder.normalized if cmd[0] == 'ssh')
-    assert ssh_cmd[:3] == [
+    assert ssh_cmd[:7] == [
         'ssh',
+        '-o',
+        f'IdentityAgent={forwarding.socket_path}',
+        '-o',
+        'AddKeysToAgent=no',
         '-o',
         f'ForwardAgent={forwarding.socket_path}',
     ]

@@ -33,10 +33,12 @@ def guest_ssh_command(
 ) -> list[str]:
     """Build an SSH command to the guest, optionally forwarding one agent.
 
-    The VM login key and the repository agent are separate capabilities.  Name
-    the forwarded repository-agent socket explicitly instead of making it the
-    SSH client's ``SSH_AUTH_SOCK``; otherwise inherited ``AddKeysToAgent``
-    policy can contaminate the dedicated agent with the VM login identity.
+    The VM login key and repository agent remain separate capabilities even
+    though OpenSSH requires the forwarded socket to be selected as its local
+    ``IdentityAgent`` before it will request forwarding.  The centralized
+    forwarding args force ``AddKeysToAgent=no`` and callers use an explicit VM
+    ``IdentityFile`` with ``IdentitiesOnly=yes``, so the dedicated agent is
+    transported without absorbing or offering the VM login identity.
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)

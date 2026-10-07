@@ -75,8 +75,12 @@ def test_guest_ssh_command_forwards_only_named_agent_socket(tmp_path: Path) -> N
         forward_agent_socket=socket_path,
     )
 
-    assert cmd[:3] == [
+    assert cmd[:7] == [
         'ssh',
+        '-o',
+        f'IdentityAgent={socket_path}',
+        '-o',
+        'AddKeysToAgent=no',
         '-o',
         f'ForwardAgent={socket_path}',
     ]

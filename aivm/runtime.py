@@ -71,22 +71,35 @@ def require_ssh_identity(identity: str) -> str:
 
 
 def ssh_forward_agent_socket_args(socket_path: str) -> list[str]:
-    """Bind agent forwarding to one explicit Unix-domain socket.
+    """Forward exactly one dedicated agent without letting SSH mutate it.
 
-    Do not implement dedicated-agent forwarding by replacing ``SSH_AUTH_SOCK``
-    and then using ``ssh -A``.  That also makes the dedicated repository agent
-    the client's *authentication* agent, so inherited OpenSSH policy such as
-    ``AddKeysToAgent yes`` can load the VM login key into the repository agent.
+    OpenSSH has a non-obvious coupling here: even when ``ForwardAgent`` names
+    an explicit socket path, the client still runs its ordinary authentication
+    agent presence check before requesting forwarding.  If ``IdentityAgent`` /
+    ``SSH_AUTH_SOCK`` is absent, forwarding is silently disabled and the guest
+    receives no ``SSH_AUTH_SOCK``.
 
-    ``ForwardAgent=<path>`` names the socket that is transported without making
-    it the authentication agent.  Because the socket is selected explicitly on
-    the command line, forwarding does not depend on ambient ``SSH_AUTH_SOCK`` or
-    ``IdentityAgent`` selection.
+    Point ``IdentityAgent`` at the same dedicated socket so that presence check
+    succeeds, but force ``AddKeysToAgent=no`` so the VM login key can never be
+    inserted into the repository agent by ambient host policy.  Callers also
+    use ``IdentitiesOnly=yes`` with an explicit VM ``IdentityFile``; therefore
+    the dedicated agent is available for transport but its repository keys are
+    not candidates for VM login authentication.
+
+    Keep these three options together.  Splitting them across call sites makes
+    the forwarding/isolation invariant depend on ambient OpenSSH configuration.
     """
     selected = str(socket_path or '').strip()
     if not selected:
         return []
-    return ['-o', f'ForwardAgent={selected}']
+    return [
+        '-o',
+        f'IdentityAgent={selected}',
+        '-o',
+        'AddKeysToAgent=no',
+        '-o',
+        f'ForwardAgent={selected}',
+    ]
 
 
 def ssh_base_args(
