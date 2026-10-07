@@ -28,7 +28,11 @@ from ..credentials.agent_transport import (
 )
 from ..errors import AIVMError
 from ..host import HostCapability, ensure_host_capability
-from ..runtime import require_ssh_identity, ssh_base_args
+from ..runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    ssh_forward_agent_socket_args,
+)
 from ..services import PreparedSession, cfg_path, load_cfg
 from ..tunnel_helper import (
     DEFAULT_TMUX_SESSION,
@@ -788,17 +792,11 @@ class VMSSHCLI(_BaseCommand):
         remote_cmd = (
             f'cd {shlex.quote(session.share_guest_dst)} && exec $SHELL -l'
         )
-        ssh_cmd: list[str] = []
+        ssh_cmd: list[str] = ['ssh']
         if agent_forwarding is not None:
             ssh_cmd.extend(
-                [
-                    'env',
-                    f'SSH_AUTH_SOCK={agent_forwarding.socket_path}',
-                ]
+                ssh_forward_agent_socket_args(str(agent_forwarding.socket_path))
             )
-        ssh_cmd.append('ssh')
-        if agent_forwarding is not None:
-            ssh_cmd.append('-A')
         ssh_cmd.extend(
             [
                 '-t',

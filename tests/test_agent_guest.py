@@ -75,13 +75,13 @@ def test_guest_ssh_command_forwards_only_named_agent_socket(tmp_path: Path) -> N
         forward_agent_socket=socket_path,
     )
 
-    assert cmd[:4] == [
-        'env',
-        f'SSH_AUTH_SOCK={socket_path}',
+    assert cmd[:3] == [
         'ssh',
-        '-A',
+        '-o',
+        f'ForwardAgent={socket_path}',
     ]
-    assert not any(part.startswith('ForwardAgent=') for part in cmd)
+    assert '-A' not in cmd
+    assert not any(part.startswith('SSH_AUTH_SOCK=') for part in cmd)
     assert cmd[-2:] == ['agent@10.77.0.195', 'ssh-add -l -E sha256']
 
 def test_guest_selector_is_private_mode_for_openssh(monkeypatch) -> None:

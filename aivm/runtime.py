@@ -70,6 +70,25 @@ def require_ssh_identity(identity: str) -> str:
     return ident
 
 
+def ssh_forward_agent_socket_args(socket_path: str) -> list[str]:
+    """Bind agent forwarding to one explicit Unix-domain socket.
+
+    Do not implement dedicated-agent forwarding by replacing ``SSH_AUTH_SOCK``
+    and then using ``ssh -A``.  That also makes the dedicated repository agent
+    the client's *authentication* agent, so inherited OpenSSH policy such as
+    ``AddKeysToAgent yes`` can load the VM login key into the repository agent.
+
+    ``ForwardAgent=<path>`` names the socket that is transported without making
+    it the authentication agent.  Because the socket is selected explicitly on
+    the command line, forwarding does not depend on ambient ``SSH_AUTH_SOCK`` or
+    ``IdentityAgent`` selection.
+    """
+    selected = str(socket_path or '').strip()
+    if not selected:
+        return []
+    return ['-o', f'ForwardAgent={selected}']
+
+
 def ssh_base_args(
     ident: str,
     *,

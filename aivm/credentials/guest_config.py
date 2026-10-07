@@ -15,7 +15,11 @@ from aivm.config_scopes import guest_transport_from_effective_cfg
 
 from ..commands import CommandExecution, CommandManager, CommandResult
 from ..config import AgentVMConfig
-from ..runtime import require_ssh_identity, ssh_base_args
+from ..runtime import (
+    require_ssh_identity,
+    ssh_base_args,
+    ssh_forward_agent_socket_args,
+)
 
 _SSH_INCLUDE = 'Include ~/.ssh/aivm.d/*.conf'
 
@@ -29,26 +33,16 @@ def guest_ssh_command(
 ) -> list[str]:
     """Build an SSH command to the guest, optionally forwarding one agent.
 
-    For AIVM-owned SSH processes, bind the dedicated agent through a
-    process-local ``SSH_AUTH_SOCK`` and ordinary ``ssh -A``.  This keeps the
-    user's ambient agent out of the connection while using the oldest and
-    most widely exercised OpenSSH forwarding path.  External clients such as
-    VS Code still use ``ForwardAgent=<path>`` in the generated SSH config,
-    where AIVM cannot inject a process environment.
+    The VM login key and the repository agent are separate capabilities.  Name
+    the forwarded repository-agent socket explicitly instead of making it the
+    SSH client's ``SSH_AUTH_SOCK``; otherwise inherited ``AddKeysToAgent``
+    policy can contaminate the dedicated agent with the VM login identity.
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
-    args: list[str] = []
+    args: list[str] = ['ssh']
     if forward_agent_socket is not None:
-        args.extend(
-            [
-                'env',
-                f'SSH_AUTH_SOCK={forward_agent_socket}',
-            ]
-        )
-    args.append('ssh')
-    if forward_agent_socket is not None:
-        args.append('-A')
+        args.extend(ssh_forward_agent_socket_args(str(forward_agent_socket)))
     args.extend(
         ssh_base_args(
             ident,
