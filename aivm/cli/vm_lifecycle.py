@@ -20,13 +20,13 @@ from ..attachments.session import (
 )
 from ..commands import CommandManager
 from ..firewall import ensure_firewall_ready
+from ..host import HostCapability, ensure_host_capability
 from ..operational_scope import announce_vm_machine_impact
 from ..scoped_store import resolve_store_scope
 from ..services import (
     cfg_path,
     load_cfg,
     load_cfg_with_path,
-    maybe_install_missing_host_deps,
     record_vm,
     resolve_cfg_for_code,
 )
@@ -69,7 +69,11 @@ class VMUpCLI(_BaseCommand):
         announce_vm_machine_impact(
             cfg_path, cfg.vm.name, action='start or reconcile'
         )
-        maybe_install_missing_host_deps(yes=args.yes, dry_run=args.dry_run)
+        ensure_host_capability(
+            HostCapability.VM_LIFECYCLE,
+            yes=args.yes,
+            dry_run=args.dry_run,
+        )
         host_exports = None
         if not args.dry_run and not args.recreate:
             # Stage saved host exports before a stopped VM can boot its guest

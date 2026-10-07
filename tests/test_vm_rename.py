@@ -19,6 +19,14 @@ from aivm.vm.rename import (
 from tests.helpers import FakeProc, activate_manager, command_recorder
 
 
+@pytest.fixture(autouse=True)
+def _assume_domain_host_capability(monkeypatch: MonkeyPatch) -> None:
+    """The command recorder supplies virsh independently of host PATH."""
+    monkeypatch.setattr(
+        'aivm.vm.domain.require_host_capability', lambda capability: None
+    )
+
+
 def _scope_and_cfg(cfg_path: Path) -> tuple[StoreScope, AgentVMConfig]:
     return resolve_store_scope(str(cfg_path)), load_cfg(str(cfg_path))
 

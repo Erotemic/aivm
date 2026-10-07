@@ -1801,8 +1801,8 @@ def test_vm_up_recreate_refuses_active_credentials(
     upsert_credential(store, entry)
     save_store(store, path)
     monkeypatch.setattr(
-        'aivm.cli.vm_lifecycle.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
+        'aivm.cli.vm_lifecycle.ensure_host_capability',
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         'aivm.vm.create.vm_exists',
@@ -1842,8 +1842,8 @@ def test_vm_create_force_refuses_active_credentials(
         'aivm.vm.create_ops.vm_resource_impossible_lines', lambda cfg: []
     )
     monkeypatch.setattr(
-        'aivm.vm.create_ops.maybe_install_missing_host_deps',
-        lambda **kwargs: None,
+        'aivm.vm.create_ops.ensure_host_capability',
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         'aivm.vm.create_ops.ensure_network', lambda *args, **kwargs: None

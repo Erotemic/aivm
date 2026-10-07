@@ -7,11 +7,16 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
+from aivm.errors import AIVMError
 from aivm.host import (
+    HostCapability,
     check_commands,
     check_commands_with_sudo,
+    ensure_host_capability,
     host_is_debian_like,
     install_deps_debian,
+    required_commands,
+    require_host_capability,
 )
 from aivm.util import CmdResult
 from tests.helpers import FakeProc, activate_manager
@@ -29,6 +34,54 @@ def test_check_commands(
     assert 'virt-install' in missing
     assert 'cloud-localds' in missing
     assert 'nft' not in missing_opt
+
+
+def test_named_host_capabilities_keep_libvirt_probe_minimal() -> None:
+    assert required_commands(HostCapability.LIBVIRT_CLIENT) == ['virsh']
+    assert 'virsh' in required_commands(HostCapability.VM_LIFECYCLE)
+    assert 'virt-install' in required_commands(HostCapability.VM_LIFECYCLE)
+
+
+def test_require_host_capability_reports_actionable_missing_command(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('aivm.host.which', lambda cmd: None)
+    with pytest.raises(AIVMError, match='libvirt-client.*virsh'):
+        require_host_capability(HostCapability.LIBVIRT_CLIENT)
+
+
+def test_ensure_host_capability_yes_installs_without_prompt(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    installed = False
+    prompted = False
+
+    def fake_which(cmd: str) -> str | None:
+        if installed:
+            return f'/usr/bin/{cmd}'
+        return None
+
+    def fake_install(*, assume_yes: bool = True) -> None:
+        nonlocal installed
+        assert assume_yes is True
+        installed = True
+
+    def fail_prompt(prompt: str = '') -> str:
+        nonlocal prompted
+        prompted = True
+        raise AssertionError(f'--yes must not prompt: {prompt}')
+
+    monkeypatch.setattr('aivm.host.which', fake_which)
+    monkeypatch.setattr('aivm.host.host_is_debian_like', lambda: True)
+    monkeypatch.setattr('aivm.host.install_deps_debian', fake_install)
+    monkeypatch.setattr('builtins.input', fail_prompt)
+
+    ensure_host_capability(
+        HostCapability.VM_LIFECYCLE, yes=True, dry_run=False
+    )
+
+    assert installed is True
+    assert prompted is False
 
 
 def test_check_commands_with_sudo(

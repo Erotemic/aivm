@@ -46,6 +46,7 @@ from ..config_store import (
 from ..domain_authority import stamp_domain_authority
 from ..errors import AIVMError
 from ..firewall import apply_firewall
+from ..host import HostCapability, ensure_host_capability
 from ..net import ensure_network
 from ..persistent_replay import PERSISTENT_ROOT_VIRTIOFS_TAG
 from ..profile_store import UserProfileStore
@@ -60,7 +61,6 @@ from ..scoped_store import (
     persist_creator_vm,
     resolve_store_scope,
 )
-from ..services import maybe_install_missing_host_deps
 from ..vm import create_or_start_vm
 
 if TYPE_CHECKING:
@@ -455,8 +455,10 @@ def create_vm_from_defaults(
         access_opt=initial_attachment_access,
     )
 
-    # Install host dependencies
-    maybe_install_missing_host_deps(yes=yes, dry_run=dry_run)
+    # Declare the independently callable create workflow's host precondition.
+    ensure_host_capability(
+        HostCapability.VM_LIFECYCLE, yes=yes, dry_run=dry_run
+    )
 
     # Create VM with CommandManager narration
     mgr = CommandManager.current()

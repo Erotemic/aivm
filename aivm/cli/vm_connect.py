@@ -27,6 +27,7 @@ from ..credentials.agent_transport import (
     prepare_agent_forwarding,
 )
 from ..errors import AIVMError
+from ..host import HostCapability, ensure_host_capability
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..services import PreparedSession, cfg_path, load_cfg
 from ..tunnel_helper import (
@@ -83,6 +84,15 @@ def _bootstrap_vm_for_folder(
         ans = input(prompt).strip().lower()
         if ans not in {'', 'y', 'yes'}:
             raise AIVMError('Aborted by user.') from ex
+    # The first-VM bootstrap is one composite transaction.  Prepare its host
+    # capability before config init performs the unmanaged-domain collision
+    # check, which itself requires the libvirt client.  ``vm create`` repeats
+    # this idempotent precondition so it remains safe when called directly.
+    ensure_host_capability(
+        HostCapability.VM_LIFECYCLE,
+        yes=yes,
+        dry_run=dry_run,
+    )
     if need_init:
         from .config.init import initialize_config_defaults
 

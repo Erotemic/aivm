@@ -1093,3 +1093,54 @@ machine-store model. I am most confident in the concrete corrections: removed
 `never`, removed the stale `shared` mode name, corrected `aivm host fw apply`,
 removed the obsolete `aivm`-group claim, and repaired the broken migration-doc
 reference.
+
+## 2026-10-07 10:37:45 -0400
+
+I revisited the fresh-machine `aivm ssh` bootstrap failure as an architecture
+problem rather than keeping the earlier ordering-only patch. The failure was
+caused by `config init` performing its unmanaged-domain collision check before
+the composite first-VM workflow had established that the host could actually
+run libvirt tooling. The old dependency policy also lived in `services.py`,
+while detection and installation already lived in `host.py`, which made the
+precondition harder to see and encouraged callers to know executable details.
+
+I moved the contract into `aivm.host` as named host capabilities. A
+`LIBVIRT_CLIENT` capability currently means `virsh`; `VM_LIFECYCLE` is the full
+set needed by create/start/reconcile. `require_host_capability` is a
+side-effect-free defensive gate and `ensure_host_capability` is the explicit
+workflow remediation gate. The latter fixes the old `--yes` inversion: `--yes`
+now skips the question and proceeds with dependency installation instead of
+skipping installation. Neither helper executes an external command to detect
+capability; executable lookup is local, and package/service commands remain in
+`install_deps_debian`, which uses `CommandManager`.
+
+The first-VM `ssh`/`code` bootstrap now ensures `VM_LIFECYCLE` immediately
+after the user's bootstrap consent and before `config init`. Independently
+callable create/recreate/up workflows keep their own idempotent lifecycle
+precondition. `_vm_defined` requires only `LIBVIRT_CLIENT` before it asks
+`virsh_needs_sudo` or submits `virsh dominfo`, so a standalone config-init
+collision check reports the named missing capability rather than leaking an
+`env: virsh: No such file or directory` result. I deliberately did not make
+`CommandManager` auto-install packages on command-not-found: that would mix
+execution with provisioning policy and risk recursive or surprising side
+effects.
+
+The main tradeoff is one cheap repeated PATH check at nested workflow
+boundaries. I prefer that to relying on caller ordering: `vm create` must stay
+safe when invoked directly even though the composite bootstrap has already
+ensured the same capability. Unit tests that fake virsh at the CommandManager
+boundary now explicitly suppress the real-host PATH precondition in those test
+modules; dedicated host/domain tests cover the capability behavior itself.
+The generated architecture edge inventory was refreshed because dependency
+ownership moved from `services.py` into the host capability layer.
+
+Validation: the focused bootstrap/config/domain/reconcile/create/rename suites
+pass 185/185, an adjacent credentials/restore/status/host-permissions slice
+passes 151 with 7 skips, and the full `tests/` run reaches 1315 passed / 25
+skipped.
+Its four failures are the same root-permission-sensitive failures reproduced
+unchanged on the pristine source snapshot (`test_cli_vm_update` disk
+writability, the unreadable machine-store test, and two privilege writability
+tests). Architecture generation/check and Python compilation are clean. Ruff
+and flake8 are not installed in this restricted environment, so their lint
+checks could not be run here.

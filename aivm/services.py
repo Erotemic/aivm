@@ -3,8 +3,8 @@
 This module is the home for config/session preparation that is not CLI
 argument parsing: resolving which VM a command targets, loading and
 persisting its config, binding the process to the configured runtime,
-offering to create SSH identities, and gating on missing host
-dependencies.  It sits above ``config_store``/``commands`` and below
+and offering to create SSH identities.  It sits above
+``config_store``/``commands`` and below
 ``cli``/``vm``/``attachments`` so all three can depend on it without any
 package importing upward from the CLI layer.
 """
@@ -35,7 +35,6 @@ from .config_store import (
 from .detect import detect_ssh_identity
 from .domain_authority import require_domain_authority
 from .errors import AIVMError, NoVMContextError
-from .host import check_commands, host_is_debian_like, install_deps_debian
 from .host_identity import current_host_identity
 from .legacy.pre_0_6_0.context import (
     resolve_pre_0_6_0_vm_context,
@@ -532,57 +531,3 @@ class PreparedSession:
     def cfg(self) -> AgentVMConfig:
         """Legacy machine config view for call sites not yet context-native."""
         return self.context.effective_cfg
-
-
-def maybe_install_missing_host_deps(*, yes: bool, dry_run: bool) -> None:
-    """Best-effort host dependency gate before VM lifecycle operations.
-
-    We keep this prompt local to workflows that actively create/start/reconcile
-    VMs so users see missing prerequisites at the point of need.
-    """
-    missing, _ = check_commands()
-    if not missing:
-        return
-    missing_txt = ', '.join(missing)
-    print(f'Missing required host dependencies: {missing_txt}')
-    print('Suggested command: aivm host install_deps')
-    if yes:
-        print(
-            '--yes was provided; skipping interactive dependency install prompt.'
-        )
-        return
-    if dry_run:
-        print(
-            'DRYRUN: would prompt to install missing dependencies before VM setup.'
-        )
-        return
-    if not host_is_debian_like():
-        raise AIVMError(
-            'Host is not detected as Debian/Ubuntu. Install dependencies manually, then retry.'
-        )
-    if not sys.stdin.isatty():
-        raise AIVMError(
-            'Missing required host dependencies in non-interactive mode. '
-            'Run `aivm host install_deps` first.'
-        )
-    ans = (
-        input('Install missing dependencies now with apt? [Y/n]: ')
-        .strip()
-        .lower()
-    )
-    do_install = ans in {'', 'y', 'yes'}
-    if not do_install:
-        raise AIVMError('Aborted by user.')
-    mgr = CommandManager.current()
-    with mgr.intent(
-        'Prepare host dependencies',
-        why='Install the host packages required before VM lifecycle work can proceed.',
-        role='modify',
-    ):
-        install_deps_debian(assume_yes=True)
-    missing_after, _ = check_commands()
-    if missing_after:
-        raise AIVMError(
-            'Required dependencies are still missing after install attempt: '
-            + ', '.join(missing_after)
-        )

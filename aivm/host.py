@@ -1,12 +1,16 @@
-"""Host prerequisite checks and installation helpers.
+"""Host capability checks and dependency installation helpers.
 
-This module is intentionally narrow: detect required binaries and install common
-Debian/Ubuntu dependencies used by VM/network/firewall workflows.
+Host-facing workflows declare the capability they need here instead of learning
+which executables happen to implement it.  Detection is side-effect free; only
+explicit workflow policy may offer to install packages.  External processes
+continue to execute exclusively through :class:`aivm.commands.CommandManager`.
 """
 
 from __future__ import annotations
 
 import shlex
+import sys
+from enum import Enum
 from pathlib import Path
 
 from loguru import logger
@@ -18,7 +22,15 @@ from .util import which
 
 log = logger
 
-REQUIRED_CMDS = [
+
+class HostCapability(str, Enum):
+    """Named host prerequisites consumed by higher-level workflows."""
+
+    LIBVIRT_CLIENT = 'libvirt-client'
+    VM_LIFECYCLE = 'vm-lifecycle'
+
+
+_VM_LIFECYCLE_CMDS = (
     'virsh',
     'virt-install',
     'qemu-img',
@@ -27,19 +39,100 @@ REQUIRED_CMDS = [
     'curl',
     'ip',
     'ssh',
-]
+)
+_CAPABILITY_COMMANDS: dict[HostCapability, tuple[str, ...]] = {
+    HostCapability.LIBVIRT_CLIENT: ('virsh',),
+    HostCapability.VM_LIFECYCLE: _VM_LIFECYCLE_CMDS,
+}
 OPTIONAL_CMDS = ['nft', 'ssh-keyscan', 'setfacl']
 
 
-def required_commands() -> list[str]:
-    """Return the required host commands."""
-    return list(REQUIRED_CMDS)
+def required_commands(
+    capability: HostCapability = HostCapability.VM_LIFECYCLE,
+) -> list[str]:
+    """Return executable prerequisites for one named host capability."""
+    return list(_CAPABILITY_COMMANDS[capability])
+
+
+def missing_commands(capability: HostCapability) -> list[str]:
+    """Return missing executables without running an external command."""
+    return [c for c in required_commands(capability) if which(c) is None]
 
 
 def check_commands() -> tuple[list[str], list[str]]:
-    missing = [c for c in required_commands() if which(c) is None]
+    """Return the full VM-lifecycle preflight used by ``host doctor``."""
+    missing = missing_commands(HostCapability.VM_LIFECYCLE)
     missing_opt = [c for c in OPTIONAL_CMDS if which(c) is None]
     return missing, missing_opt
+
+
+def require_host_capability(capability: HostCapability) -> None:
+    """Fail clearly when a host capability is unavailable.
+
+    This is the defensive boundary for low-level operations.  It never
+    installs packages: callers that own user-facing remediation policy should
+    use :func:`ensure_host_capability` before entering those operations.
+    """
+    missing = missing_commands(capability)
+    if not missing:
+        return
+    noun = 'command' if len(missing) == 1 else 'commands'
+    rendered = ', '.join(missing)
+    raise AIVMError(
+        f'Host capability {capability.value!r} is unavailable; missing required '
+        f'{noun}: {rendered}. Run `aivm host install_deps` and retry.'
+    )
+
+
+def ensure_host_capability(
+    capability: HostCapability,
+    *,
+    yes: bool,
+    dry_run: bool,
+) -> None:
+    """Satisfy one host capability at a workflow boundary when possible.
+
+    Detection and remediation policy live together so callers only declare
+    what they need.  Package installation is still an explicit application
+    action; a low-level command failure never triggers package management.
+    """
+    missing = missing_commands(capability)
+    if not missing:
+        return
+
+    missing_txt = ', '.join(missing)
+    print(
+        f'Missing required host dependencies for {capability.value}: '
+        f'{missing_txt}'
+    )
+    print('Suggested command: aivm host install_deps')
+    if dry_run:
+        print(
+            'DRYRUN: would satisfy the missing host capability before '
+            'continuing.'
+        )
+        return
+    if not host_is_debian_like():
+        raise AIVMError(
+            'Host is not detected as Debian/Ubuntu. Install dependencies '
+            'manually, then retry.'
+        )
+    if not yes:
+        if not sys.stdin.isatty():
+            raise AIVMError(
+                'Missing required host dependencies in non-interactive mode. '
+                'Run `aivm host install_deps` first, or re-run with --yes.'
+            )
+        ans = (
+            input('Install missing dependencies now with apt? [Y/n]: ')
+            .strip()
+            .lower()
+        )
+        if ans not in {'', 'y', 'yes'}:
+            raise AIVMError('Aborted by user.')
+
+    install_deps_debian(assume_yes=True)
+    require_host_capability(capability)
 
 
 def check_commands_with_sudo() -> tuple[list[str], str | None]:
@@ -59,7 +152,7 @@ def check_commands_with_sudo() -> tuple[list[str], str | None]:
             'without --sudo.'
         )
     missing = []
-    for cmd in REQUIRED_CMDS:
+    for cmd in required_commands(HostCapability.VM_LIFECYCLE):
         # Match sudo's effective PATH and shell command lookup behavior.
         probe = mgr.run(
             ['sudo', '-n', 'sh', '-c', f'command -v {shlex.quote(cmd)}'],

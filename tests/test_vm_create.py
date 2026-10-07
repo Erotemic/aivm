@@ -32,6 +32,14 @@ from tests.helpers import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _assume_domain_host_capability(monkeypatch: MonkeyPatch) -> None:
+    """The command recorder supplies virsh independently of host PATH."""
+    monkeypatch.setattr(
+        'aivm.vm.domain.require_host_capability', lambda capability: None
+    )
+
+
 def _stub_create_inputs(monkeypatch: MonkeyPatch) -> None:
     """Stub the image/seed/disk preparation that precedes ``virt-install``."""
     monkeypatch.setattr('aivm.vm.create.vm_exists', lambda *a, **k: False)
