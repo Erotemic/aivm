@@ -5,8 +5,9 @@ is Python with executable contracts and adversarial tests. There are no Lean
 proof artifacts, extracted Rust functions or verified-binary claims in this
 release. This document is the acceptance contract for that next stage.
 
-See [the architecture](aivm-secrets-design.md) for source references, the threat
-model, deployment assumptions and milestones. This document's mathematical
+See [the architecture](aivm-secrets-design.md) and the
+[provider-neutral plan](aivm-secrets-agnostic-integrations.md) for source
+references, the threat model, deployment assumptions and milestones. This document's mathematical
 notation is a specification sketch, not executable Lean.
 
 ## 1. What should be proved
@@ -29,9 +30,9 @@ Event = Receive(authenticatedChannel, boundedBytes, timeSample)
       | Approve(exactRequestDigest, expiry)
       | Tick(timeSample)
 
-Effect = FetchPRFacts(requestId, canonicalRepository, prNumber)
-       | GitHubRead(requestId, allowedReadKind, canonicalResource)
-       | GitHubWrite(requestId, allowedWriteKind, exactBody)
+Effect = FetchServiceFacts(requestId, serviceId, canonicalResource)
+       | ServiceRead(requestId, serviceId, typedEffect)
+       | ServiceWrite(requestId, serviceId, typedEffect)
        | AppendAudit(redactedEvent)
        | Reply(publicProjection)
 ```
@@ -75,8 +76,8 @@ For a normalized policy `p`, channel `b`, grant `g`, request `r` and state `s`:
 ```text
 admit(p, g, b, r, s) = Accepted(s', ticket)
   -> b = g.binding
-  /\ r.repository = p.repository
-  /\ r.pr in p.prNumbers
+  /\ r.resource in p.allowedResources
+  /\ serviceOf(r) = p.serviceId
   /\ r.operation in p.operations
   /\ payloadWithinBounds(p, r)
   /\ (isWrite(r) -> hostAllowsWrites)
@@ -95,7 +96,8 @@ Conflating these classes would make a false theorem about the implementation.
 
 Routes must be constructed from canonical resource identifiers, not response
 URLs, user-controlled headers or an unconstrained string. Prove the method,
-provider host, resource and body projection as part of effect construction.
+provider host, resource and body projection as part of effect construction,
+quantifying over all installed/approved adapters and their typed manifests.
 HTTP serialization remains in the trusted boundary until separately refined.
 
 ### TIME-01 and REVOKE-01: linearization, not magic cancellation
@@ -247,7 +249,7 @@ and a refinement argument or a visible trusted assumption.
 
 Add positive witnesses to catch vacuity: at least one authorized read, one
 explicitly authorized write, one legal narrowing and one budget-exhaustion
-trace. Mutation tests remove a repository check, drop a channel comparison,
+trace. Mutation tests remove a resource constraint or service-specific host check, drop a channel comparison,
 refund a failed reservation, allow a redirect or accept a duplicate JSON key.
 The associated test/proof gate must fail. Mutation success is supporting
 evidence, not a completeness proof of the specification.
@@ -272,3 +274,38 @@ failure for a release advertised as verified.
 These are evidence levels, not dates. Do not call level 1 formally verified.
 Do not use level 2 to imply level 4. A useful public claim names the theorem,
 the implementation revision, the trust assumptions and the excluded effects.
+
+
+## 7. Service-neutral proof and plugin-conformance additions (2026-10-09)
+
+The GitHub-specific statements above are historical examples of the first
+prototype; the intended theorem domain is **every registered service adapter**.
+A plugin cannot inherit a security claim solely because it implements the
+right Python method names. It must satisfy a typed effect contract included
+in the compiled/extracted Rust and Lean models.
+
+The new Python `kernel.reserve` is the first isolated common transition. It
+checks authenticated channel/policy binding, time and monotonically bounded
+lifetime, budget, exact named operation membership, host write enablement,
+and bounded payload size. The service adapter separately parses and checks its
+resource arguments. Today the broker trusts installed Python adapter code;
+there is no machine-checked refinement connecting the adapter's route to a
+verified authorization decision. Thus the experimental tests cannot establish
+end-to-end complete mediation against a compromised adapter.
+
+Add proof obligations PLUGIN-01, RESOLVER-01, ROUTE-01, COMP-01, EXT-01, and
+REFINE-01 as specified in
+[aivm-secrets-agnostic-integrations.md](aivm-secrets-agnostic-integrations.md).
+Future kernel extraction should use a **closed declarative ServiceSpec** and
+proof-producing checked effect interpreter, avoiding dynamic function pointers
+inside the Aeneas-translated proof surface. An untrusted third-party plugin
+may propose a bounded `Intent`, but cannot hold the underlying credential or
+mint `AuthorizedEffect`.
+
+Proof boundaries must explicitly account for any adapter that performs
+service-specific metadata preflights, API semantically meaningful GETs, token
+refresh, signature requests, or delegated operations. A generic HTTP GET is
+not necessarily observationally pure. A destination-pinning theorem must be
+paired with a TLS/egress assumption and a statement about host DNS and proxy
+behavior. Every claim must distinguish the proved extracted Rust function
+from the unproved Python orchestration and network runtime.

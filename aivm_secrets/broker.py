@@ -1,8 +1,8 @@
-"""Serialized orchestration around the pure authorization core.
+"""Service-neutral, serialized capability broker.
 
-A denial before dispatch emits no provider request. Each accepted operation
-reserves budget before I/O. Revocation waits for the current request: it is not
-cancellation or rollback of an already-dispatched GitHub operation.
+Only the host-trusted adapter can produce routes. All outbound effects are
+mediated by session binding, policy, request budgets and pre-dispatch audit.
+Neither a guest CLI name nor a credential resolver conveys authorization.
 """
 
 from __future__ import annotations
@@ -14,12 +14,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
+from .adapters import build_adapter
 from .audit import AuditLog
-from .core import (Binding, Claims, Policy, PRFacts, Request, State, authorize,
-                   effect_route, exact_keys, integer, metadata_route)
 from .envelope import EnvelopeCodec
 from .errors import SecretsError
-from .provider import GitHubProvider
+from .kernel import Binding, Claims, State, exact_keys, integer, reserve
 from .wire import MAX_REPLY, dumps, loads
 
 
@@ -30,15 +29,15 @@ def failure(code: str) -> dict[str, Any]:
 
 
 class Broker:
-    def __init__(self, policy: Policy, binding: Binding, credential: str,
+    def __init__(self, policy: Any, binding: Binding, credential: str,
                  audit_path: Path, *, allow_writes: bool = False,
                  provider: Any = None, wall_clock: Callable[[], float] = time.time,
                  monotonic_clock: Callable[[], float] = time.monotonic):
-        # Validate host API inputs too; a future Rust boundary will do the same.
         if type(allow_writes) is not bool:
             raise SecretsError('invalid_policy')
-        self.policy = Policy.parse(policy.to_dict())
+        self.policy = type(policy).parse(policy.to_dict())
         self.binding = Binding.parse(asdict(binding))
+        self._adapter, self._provider = build_adapter(self.policy, provider)
         self._wall_clock = wall_clock
         self._monotonic_clock = monotonic_clock
         self._deadline = monotonic_clock() + policy.lifetime_seconds
@@ -49,7 +48,6 @@ class Broker:
         self.capability = self._codec.seal(claims, credential)
         self._claims = claims
         self._allow_writes = allow_writes
-        self._provider = provider if provider is not None else GitHubProvider()
         self._state = State()
         self._lock = threading.RLock()
         self._attempts = 0
@@ -65,15 +63,22 @@ class Broker:
     def _live(self) -> bool:
         return self._monotonic_clock() < self._deadline
 
-    def _check(self, request: Request, claims: Claims, *, reserve: bool) -> None:
-        # A second check after metadata uses the pre-reservation budget count,
-        # but current revocation/time. It does not authorize a second operation.
-        state = self._state if reserve else State(self._state.active, self._state.used - 1)
-        next_state = authorize(self.policy, claims, self.binding, request, state,
-                               now=int(self._wall_clock()), monotonic_live=self._live(),
-                               allow_writes=self._allow_writes)
-        if reserve:
-            self._state = next_state
+    def _check(self, request: Any, claims: Claims, *, reserve_budget: bool) -> None:
+        # No effect may skip scope validation, including the second step of a
+        # multi-effect plan. The second check uses the pre-reservation count.
+        self._adapter.check_scope(request)
+        state = (self._state if reserve_budget else
+                 State(self._state.active, self._state.used - 1))
+        new = reserve(self.policy.digest, self.policy.max_requests,
+                      self.policy.max_body_bytes, claims, self.binding, state,
+                      now=int(self._wall_clock()), monotonic_live=self._live(),
+                      operation=request.operation,
+                      allowed_operations=frozenset(self.policy.operations),
+                      is_write=self._adapter.is_write(request),
+                      allow_writes=self._allow_writes,
+                      body_bytes=self._adapter.body_bytes(request))
+        if reserve_budget:
+            self._state = new
 
     def handle(self, raw: bytes) -> dict[str, Any]:
         with self._lock:
@@ -82,7 +87,6 @@ class Broker:
             self._attempts += 1
             if self._attempts > self._max_attempts:
                 self._state = State(False, self._state.used)
-                # Bound audit growth even for unauthenticated garbage.
                 return failure('exhausted')
             request_id = secrets.token_hex(16)
             request = None
@@ -90,42 +94,43 @@ class Broker:
             try:
                 wire = exact_keys(loads(raw), {'version', 'capability', 'request'})
                 integer(wire['version'], 1, 1)
-                request = Request.parse(wire['request'])
+                request = self._adapter.parse(wire['request'])
                 opened = self._codec.open(wire['capability'])
                 if opened.claims.grant_id != self._claims.grant_id:
                     raise SecretsError('wrong_binding')
-                self._check(request, opened.claims, reserve=True)
+                self._check(request, opened.claims, reserve_budget=True)
                 self._audit.record('authorized', request_id, timestamp=int(self._wall_clock()),
                                    request=request)
-                self._check(request, opened.claims, reserve=False)
-                metadata = self._provider.execute(metadata_route(request), opened.credential)
-                facts = PRFacts.parse(metadata)
-                route = effect_route(self.policy, request, facts)
-                self._check(request, opened.claims, reserve=False)
-                if route is None:
-                    result = metadata
+                self._check(request, opened.claims, reserve_budget=False)
+                preflight_route = self._adapter.preflight(request)
+                if preflight_route is not None:
+                    if preflight_route.method != 'GET':
+                        raise SecretsError('denied')
+                    facts = self._provider.execute(preflight_route, opened.credential)
+                    route = self._adapter.effect(request, facts)
+                    self._check(request, opened.claims, reserve_budget=False)
                 else:
+                    facts = None
+                    route = self._adapter.effect(request, None)
+                if route is None:
+                    result = facts
+                else:
+                    # All final effects, including direct reads, have an
+                    # auditable dispatch boundary and a fresh live check.
                     self._audit.record('dispatch', request_id, timestamp=int(self._wall_clock()),
                                        request=request)
-                    self._check(request, opened.claims, reserve=False)
-                    dispatched_write = route.method != 'GET'
+                    self._check(request, opened.claims, reserve_budget=False)
+                    effect_is_write = route.method != 'GET'
+                    if effect_is_write != self._adapter.is_write(request):
+                        raise SecretsError('denied')
+                    dispatched_write = effect_is_write
                     result = self._provider.execute(route, opened.credential)
                 reply = {'version': 1, 'ok': True, 'result': result}
-                if request.operation in {'pr.comments', 'pr.reviews', 'pr.review-comments'}:
-                    if type(result) is not list or len(result) > 100:
-                        raise SecretsError('upstream_response')
-                    reply['pagination'] = {'page': request.page, 'per_page': 100,
-                                           'possibly_more': len(result) == 100}
-                if request.operation == 'pr.checks':
-                    if (type(result) is not dict or type(result.get('check_runs')) is not list
-                            or len(result['check_runs']) > 100):
-                        raise SecretsError('upstream_response')
-                    reply['pagination'] = {'page': request.page, 'per_page': 100,
-                                           'possibly_more': len(result['check_runs']) == 100}
+                pagination = self._adapter.pagination(request, result)
+                if pagination is not None:
+                    reply['pagination'] = pagination
                 encoded = dumps(reply)
                 # Reflection tripwire, not a general information-flow proof.
-                # Check escaped JSON form too, since opaque tokens may contain
-                # characters escaped by the serializer.
                 secret_json = dumps(opened.credential)[1:-1]
                 if len(encoded) > MAX_REPLY - 1 or secret_json in encoded:
                     raise SecretsError('upstream_response')

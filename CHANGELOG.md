@@ -5,6 +5,11 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.2 - Unreleased
 
 ### Added
+* Provider-neutral secret-use integrations (policy schema 2): host-only
+  executable-argv or private-file credential resolvers, declarative HTTPS
+  service operations, fixed-origin typed routing, and a generic guest
+  ``aivm-secrets invoke`` client. Schema 1 GitHub operations remain optional
+  and backward-compatible. See the provider-neutral planning document.
 * Experimental `aivm-secrets` package and CLI, shipped beside AIVM with an
   optional `secrets` extra. Host-held GitHub credentials are carried in sealed,
   session-bound capabilities for explicitly selected PR operations, with

@@ -7,6 +7,7 @@ store, existing deploy-key backends, or persistent SSH config.
 from __future__ import annotations
 
 import os
+import shutil
 import secrets
 import shlex
 import tempfile
@@ -35,11 +36,12 @@ def run_secrets_ssh(session: PreparedSession, ssh_cmd: list[str], *,
     from aivm_secrets import guest
     from aivm_secrets.broker import Broker
     from aivm_secrets.cli import load_policy
-    from aivm_secrets.core import Binding
+    from aivm_secrets.kernel import Binding
+    from aivm_secrets.http_service import HTTPPolicy
     from aivm_secrets.errors import SecretsError
     from aivm_secrets.files import private_directory
     from aivm_secrets.server import LocalServer
-    from aivm_secrets.sources import credential_from_file, credential_from_gh
+    from aivm_secrets.sources import credential_from_file, credential_from_gh, resolve_source
 
     context = session.context
     if (context.principal.host_uid != os.getuid()
@@ -53,15 +55,38 @@ def run_secrets_ssh(session: PreparedSession, ssh_cmd: list[str], *,
     if session.ip is None:
         raise SecretsError('guest_setup')
     ident = require_ssh_identity(context.profile.ssh_identity_file)
-    log.info('Secret session: repo={} PRs={} operations={} writes={} TTL={}s',
-             policy.repository, list(policy.pr_numbers), list(policy.operations),
-             allow_writes, policy.lifetime_seconds)
-    if token_file is None:
-        log.info('Read host GitHub credential with: gh auth token --hostname github.com (output withheld)')
-        credential = credential_from_gh()
-    else:
-        log.info('Read host-only GitHub credential file: {} (contents withheld)', token_file)
+    service = policy.service if isinstance(policy, HTTPPolicy) else policy.repository
+    log.info('Secret session: service={} operations={} writes={} TTL={}s',
+             service, list(policy.operations), allow_writes, policy.lifetime_seconds)
+    if token_file is not None:
+        log.info('Use operator-supplied host-only credential file (contents withheld)')
         credential = credential_from_file(token_file.expanduser())
+    elif isinstance(policy, HTTPPolicy):
+        source = policy.credential_source
+        if source['kind'] == 'file':
+            _outside_workspace(Path(source['path']), session)
+        else:
+            # Defend against accidentally invoking a command installed in a
+            # guest-writable checkout (including via a PATH symlink). The host
+            # policy and its resolver executable must still be trusted.
+            executable = shutil.which(source['argv'][0])
+            if executable is None:
+                raise SecretsError('credential_source')
+            resolved_executable = Path(executable).resolve()
+            _outside_workspace(resolved_executable, session)
+            # Avoid searching PATH a second time after the trust check. This
+            # still needs fd-based exec pinning in the hardened implementation.
+            source = dict(source, argv=[str(resolved_executable), *source['argv'][1:]])
+            for arg in source['argv'][1:]:
+                if arg.startswith(('/', './', '../')):
+                    candidate = Path(arg) if Path(arg).is_absolute() else Path.home() / arg
+                    _outside_workspace(candidate, session)
+        log.info('Resolve service credential using host-only {} source',
+                 policy.credential_source['kind'])
+        credential = resolve_source(source)
+    else:
+        log.info('Resolve credential using optional legacy GitHub integration')
+        credential = credential_from_gh()
     channel = secrets.token_hex(16)
     binding = Binding(os.getuid(), context.principal.id,
                       context.machine.vm.name, channel)
@@ -79,7 +104,7 @@ def run_secrets_ssh(session: PreparedSession, ssh_cmd: list[str], *,
                                 connect_timeout=10), context.ssh_target(session.ip)]
     guest_dir = f'/tmp/aivm-secrets-{channel}'
     guest_socket = guest_dir + '/broker.sock'
-    client_path = guest_dir + '/gh'
+    client_path = guest_dir + ('/aivm-secrets' if isinstance(policy, HTTPPolicy) else '/gh')
     capability_path = guest_dir + '/capability'
     created = False
 
@@ -116,7 +141,7 @@ def run_secrets_ssh(session: PreparedSession, ssh_cmd: list[str], *,
                              '-o', 'StrictHostKeyChecking=yes',
                              '-R', f'{guest_socket}:{socket_path}',
                              *ssh_cmd[1:-1], environment + ssh_cmd[-1]]
-                log.info('Restricted gh client: {}; unsupported commands do not fall back to stock gh.', client_path)
+                log.info('Restricted service client: {}; unsupported commands have no fallback.', client_path)
                 log.info('Login shell profiles may reset PATH; $AIVM_SECRETS_CLIENT is the explicit client path.')
                 return manager.run(forwarded, sudo=False, user_driven=True,
                                    check=False, capture=False)

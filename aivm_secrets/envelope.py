@@ -11,12 +11,12 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 
-from .core import Claims, exact_keys
+from .kernel import Claims, exact_keys
 from .errors import SecretsError
 from .wire import dumps, loads
 
 PREFIX = 'aivs1.'
-AAD = b'aivm-secrets/local-session/github/v1'
+AAD = b'aivm-secrets/local-session/service-neutral/v1'
 MAX_CAPABILITY = 32768
 
 

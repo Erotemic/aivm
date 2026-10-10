@@ -1,15 +1,74 @@
 Experimental secret-use sessions
 ===============================
 
-``aivm-secrets`` keeps a GitHub credential on the host and gives a guest a
-short-lived encrypted capability for selected pull-request operations. It is an
+``aivm-secrets`` keeps a provider credential on the host and gives a guest a
+short-lived encrypted capability for bounded, named service operations. It is an
 experimental Python implementation, not formally verified software. The
 architecture and proof roadmap live in ``docs/planning/aivm-secrets-design.md``
-and ``docs/planning/aivm-secrets-formal-assurance.md``.
+and ``docs/planning/aivm-secrets-formal-assurance.md``. The
+provider-neutral integration contract and migration roadmap are in
+``docs/planning/aivm-secrets-agnostic-integrations.md``.
 
 This is separate from repository SSH deploy keys. Existing guest-key and
 dedicated ssh-agent workflows are unchanged. Git push is not added by this
 feature. Only foreground ``aivm ssh`` is integrated; VS Code is not yet wired.
+
+Provider-neutral HTTPS integrations (schema 2)
+----------------------------------------------
+
+To add a new service **without editing AIVM**, create a host-owned JSON policy
+that pins a service host, a credential source, and a finite set of named HTTP
+operations. For example, an optional non-GitHub GitLab example is shipped at
+``docs/examples/aivm-secrets-gitlab-readonly.json``. It resolves a GitLab access
+token via the *host* 1Password CLI ``op read``; that CLI and its secret reference
+must actually exist in your host account for a live session to work.
+
+Install and validate a sample configuration with private host-only permissions::
+
+    install -d -m 700 "$HOME/.config/aivm/secrets"
+    install -m 600 docs/examples/aivm-secrets-gitlab-readonly.json \
+        "$HOME/.config/aivm/secrets/gitlab.json"
+    aivm-secrets policy-check "$HOME/.config/aivm/secrets/gitlab.json"
+
+To connect with this policy::
+
+    aivm ssh "$HOME/code/TauCeti" \
+        --secrets_policy "$HOME/.config/aivm/secrets/gitlab.json"
+
+Inside the guest, AIVM exposes a generic ``aivm-secrets`` client (not a fake
+``gh``); its explicit path is available via ``$AIVM_SECRETS_CLIENT``::
+
+    "$AIVM_SECRETS_CLIENT" invoke account.read
+
+For operations with finite path arguments::
+
+    "$AIVM_SECRETS_CLIENT" invoke issue.view --arguments '{"issue":23}'
+
+Other CLI tools can translate their accepted syntax into these named requests,
+but must not be allowed to choose arbitrary provider URLs, authentication
+headers, host executables or service accounts. Neither the generic CLI nor a
+shim is a security boundary. All authority is checked on the host. A service
+using an authentication protocol other than Bearer/X-API-Key HTTPS needs a
+reviewed adapter; there is no generic arbitrary ``host.exec`` endpoint.
+
+A schema-2 policy has these primary fields: ``schema: 2``, ``adapter: https``,
+``service``, ``host``, ``authentication``, ``credential_source``, ``operations``.
+Each operation defines a name, method (GET/POST/PATCH), static path template,
+optional ``parameters`` with finite exact values, optional bounded JSON
+``body_fields``, and a JSON/text result mode. Read the full schema and examples
+in ``docs/planning/aivm-secrets-agnostic-integrations.md``.
+
+The manifest selects exactly one fixed public DNS host, direct verified TLS,
+and does not support arbitrary URL queries, GraphQL, redirects, retries, port
+overrides or non-HTTP authentication schemes. The host credential tool is
+*not* installed in the VM. Schema 2 uses host-only ``command``/``file``
+resolvers; schema 1 retains the GitHub-specific fallback described below.
+
+Legacy GitHub integration (schema 1)
+------------------------------------
+
+The remainder of this guide describes the original compatibility integration,
+not requirements imposed by the provider-neutral broker.
 
 Host setup
 ----------
@@ -159,7 +218,7 @@ an explicit host decision before starting a new grant. ``outcome_unknown``
 means a dispatched write may already have succeeded: inspect the selected PR
 before retrying. A client timeout on a write has the same reconciliation need.
 
-The provider uses a direct TLS connection to ``api.github.com``. It ignores
+The legacy GitHub adapter uses a direct TLS connection to ``api.github.com``. It ignores
 HTTP proxy environment variables, follows no redirects and retries no requests.
 Networks requiring an enterprise egress proxy are not supported by this first
 adapter. Host system TLS roots remain trusted. There is no generic TCP listener.
@@ -176,10 +235,15 @@ runtime directory; existing paths are deliberately refused::
         --runtime-dir "$SECRETS_RUNTIME" \
         --credential-source gh
 
-The command stays in the foreground until its policy lifetime ends or Ctrl-C.
-A second terminal may use ``aivm-secrets gh --socket`` and
-``--capability-file`` with the printed runtime path, followed by a supported
-``pr`` command. This listener is local to the host UID; do not publish or mount
+For schema 2, the source is already in the policy, so omit
+``--credential-source gh``. The command stays in the foreground until its
+policy lifetime ends or Ctrl-C.
+A second terminal may set ``AIVM_SECRETS_SOCKET`` and
+``AIVM_SECRETS_CAPABILITY_FILE`` to the printed runtime paths, then use
+``aivm-secrets invoke account.read`` for a schema-2 service, or
+``aivm-secrets gh --socket ... --capability-file ... pr view ...`` for the
+legacy GitHub client. Explicit ``python -m aivm_secrets.guest`` also accepts
+``--socket`` and ``--capability-file`` before ``invoke``. This listener is local to the host UID; do not publish or mount
 it into another environment as a substitute for an authenticated channel.
 Standalone mode leaves its private audit/ciphertext files behind for inspection;
 the key is not persisted. Remove that directory after the session ends when

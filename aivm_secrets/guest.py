@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Restricted gh-shaped client. Stdlib only; NOT the stock GitHub CLI.
+"""Standalone guest client for named broker operations (stdlib only).
 
-No fallback to gh, gh api, shell execution, or raw URLs is implemented.
+Also retains the legacy, opt-in gh-shaped PR client. Neither mode falls
+back to host tool invocation, unrestricted APIs, shell execution, or raw URLs.
 """
 
 from __future__ import annotations
@@ -23,6 +24,13 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument('--socket', default=os.environ.get('AIVM_SECRETS_SOCKET', ''))
     p.add_argument('--capability-file', default=os.environ.get('AIVM_SECRETS_CAPABILITY_FILE', ''))
     groups = p.add_subparsers(dest='group', required=True)
+    invoke = groups.add_parser('invoke', allow_abbrev=False,
+                                help='Invoke a named, policy-allowed service operation')
+    invoke.add_argument('operation')
+    args_group = invoke.add_mutually_exclusive_group()
+    args_group.add_argument('--arguments', default=None, help='JSON object of typed arguments')
+    args_group.add_argument('--arguments-file', default=None,
+                            help='Read a JSON argument object from a file or stdin (-)')
     pr = groups.add_parser('pr', allow_abbrev=False)
     operations = pr.add_subparsers(dest='operation', required=True)
     for name in ('view', 'diff', 'comments', 'reviews', 'review-comments', 'checks', 'comment', 'edit'):
@@ -41,6 +49,21 @@ def parser() -> argparse.ArgumentParser:
 
 
 def request_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.group == 'invoke':
+        data = args.arguments
+        if args.arguments_file is not None:
+            if args.arguments_file == '-':
+                raw = sys.stdin.buffer.read(16385)
+            else:
+                with open(args.arguments_file, 'rb') as stream:
+                    raw = stream.read(16385)
+            if len(raw) > 16384:
+                raise ValueError('arguments too large')
+            data = raw.decode('utf-8')
+        arguments = json.loads(data) if data is not None else {}
+        if type(arguments) is not dict:
+            raise ValueError('arguments must be a JSON object')
+        return {'operation': args.operation, 'arguments': arguments}
     request = {'operation': 'pr.' + args.operation, 'repository': args.repo, 'pr': args.number}
     if hasattr(args, 'page'):
         request['page'] = args.page
@@ -101,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 code = 'request_failed'
             print('aivm-secrets: ' + code[:64], file=sys.stderr)
             return 3
-        if args.operation == 'diff':
+        if args.group == 'pr' and args.operation == 'diff':
             sys.stdout.write(result['result'])
         else:
             print(json.dumps(result, indent=2, ensure_ascii=True))

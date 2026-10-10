@@ -2,7 +2,9 @@
 
 Status: proposed architecture plus an experimental Python vertical slice.
 Research date: 2026-10-09. No part of this implementation is formally verified.
-The companion [assurance plan](aivm-secrets-formal-assurance.md) defines proof
+The companion [provider-neutral integration plan](aivm-secrets-agnostic-integrations.md)
+defines schema 2 and supersedes GitHub-specific assumptions below. The
+[assurance plan](aivm-secrets-formal-assurance.md) defines proof
 obligations and the evidence needed before making stronger claims. See
 [the operator guide](../source/secrets.rst) for commands that work in this slice.
 
@@ -21,7 +23,9 @@ of the HTTP framework, VM manager, identity provider, persistence engine, and
 agent harness. Evaluate h5i-app as a compatible framework and development tool,
 not as a prerequisite for running a local broker.
 
-The first provider is GitHub. The first workload is inspecting selected TauCeti
+The first compatibility integration is GitHub (schema 1); new installations
+should prefer the provider-neutral HTTPS manifest (schema 2). The initial
+workload was inspecting selected TauCeti
 PRs, reviews and checks, with optional narrowly scoped comments and title/body
 edits. Git push remains a separate capability using AIVM's existing repository
 SSH credential backends. No existing credential is migrated, replaced or
@@ -117,7 +121,10 @@ The delivered Python package is split deliberately:
 
 | Module | Responsibility | Eventual destination |
 | --- | --- | --- |
-| `core.py` | Canonical policy/request types, authorization, attenuation relation, provider-fact checks, route construction | Extractable safe-Rust kernel |
+| `kernel.py` | Provider-independent binding, claims, budget, time and write authorization | Extractable safe-Rust kernel |
+| `core.py` | Legacy GitHub-specific policy, PR facts and route mapping | Optional service adapter; keep outside common kernel |
+| `adapters.py` | Explicit host-selected service registry and legacy GitHub adapter | Closed, verified service spec compilation |
+| `http_service.py` | Declarative fixed-host HTTPS operation adapter, schema 2 | Verified route interpreter plus trusted TLS egress |
 | `wire.py` | Bounded, duplicate-rejecting protocol parser and serialization | Bounded codec with refinement contract |
 | `envelope.py` | Library-backed authenticated encryption and strict capability decoding | Credential service; audited crypto dependency |
 | `broker.py` | Serialized grant state, checks, budget reservation, effect sequencing | Verified transition system plus small trusted interpreter |
@@ -145,8 +152,10 @@ extracted into its own repository/distribution without carrying libvirt code.
 
 ### Delivered local profile: `aivs1`
 
-The prototype obtains a token from the owning host's `gh auth token --hostname
-github.com`, an explicitly supplied private file, or stdin in standalone mode.
+Schema 1 defaults to the owning host's `gh auth token --hostname github.com`
+or an explicitly supplied private file / standalone stdin. Schema 2 instead
+uses an operator-approved host-only command-argv resolver or private file,
+independent of the remote service or guest CLI.
 No login is performed inside the guest. Do not call guest-controlled programs
 to acquire credentials. The host executable and its configuration are trusted.
 
@@ -407,10 +416,12 @@ The detailed theorem inventory, refinement obligations and release gates are in
 
 ## 11. Delivery milestones and acceptance gates
 
-### P0 - Python vertical slice (this overlay)
+### P0 - Python vertical slice (original overlay and service-neutral follow-up)
 
 Deliver the independent package, local encrypted capability, strict bounded
-policy, broker-native GitHub operations, audit, foreground SSH adapter and tests.
+policy, broker-native GitHub operations, schema 2 declarative HTTPS integrations,
+provider-neutral admission kernel, generic guest invocation, audit, foreground
+SSH adapter and tests.
 Keep all writes opt-in. Record the tests actually run and the lack of live
 libvirt/provider integration and formal proofs. Existing deploy-key and agent
 workflows must remain available. This is a reviewable prototype, not a hardened
@@ -482,6 +493,9 @@ Do not expose a broad token to get an early demo working. Do not add arbitrary
 `gh api` as a workaround for missing operations. Do not label tests as proofs.
 Every expansion should identify the new effects, authorization rule, failure
 behavior, adversarial test and affected theorem before it ships.
+
+The provider-neutral protocol, credential source and CLI-extension design is
+documented in [the companion plan](aivm-secrets-agnostic-integrations.md).
 
 ## References
 

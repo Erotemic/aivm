@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .core import Request
 from .errors import SecretsError
 from .files import private_directory
 from .wire import dumps
@@ -22,11 +21,17 @@ class AuditLog:
             raise SecretsError('audit_failed') from None
 
     def record(self, event: str, request_id: str, *, timestamp: int,
-               request: Request | None = None, code: str = '') -> None:
+               request: object | None = None, code: str = '') -> None:
         row = {'schema': 1, 'channel': self.channel, 'event': event,
                'request_id': request_id, 'timestamp': timestamp, 'code': code}
         if request is not None:
-            row.update(operation=request.operation, repository=request.repository, pr=request.pr)
+            row['operation'] = getattr(request, 'operation')
+            # Optional, trusted/canonical resource identifiers only. Never
+            # reflect generic request parameters or credential values.
+            if hasattr(request, 'repository'):
+                row['repository'] = request.repository
+            if hasattr(request, 'pr'):
+                row['pr'] = request.pr
         try:
             data = dumps(row) + b'\n'
             written = self._stream.write(data)

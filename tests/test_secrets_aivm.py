@@ -128,3 +128,84 @@ def test_failed_guest_setup_revokes_without_exposing_guest_echo(tmp_path, monkey
     assert exc.value.code == 'guest_setup' and TOKEN not in str(exc.value)
     assert brokers[0].capability == ''
     assert brokers[0].handle(b'{}')['error']['code'] == 'revoked'
+
+
+def test_generic_service_ssh_adapter_does_not_install_gh_shim(tmp_path, monkeypatch):
+    """Schema 2 can obtain a host credential from a non-GitHub resolver."""
+    from aivm.secrets_transport import run_secrets_ssh
+    from aivm_secrets.broker import Broker
+    from aivm_secrets.guest import exchange
+    from aivm_secrets.wire import dumps
+
+    session = session_fixture(tmp_path)
+    policy = {
+        'schema': 2, 'adapter': 'https', 'service': 'service-test',
+        'host': 'api.example.org', 'authentication': 'bearer',
+        'credential_source': {'kind': 'command', 'argv': ['mytool', 'auth', 'token']},
+        'operations': [{'name': 'account.read', 'method': 'GET', 'path': '/v1/me'}],
+    }
+    path = tmp_path / 'generic-policy.json'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(dumps(policy))
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+        def execute(self, route, token):
+            self.calls.append((route, token))
+            return {'account': 'example'}
+
+    provider = Provider()
+    brokers = []
+    def create(*args, **kwargs):
+        instance = Broker(*args, **kwargs, provider=provider)
+        brokers.append(instance)
+        return instance
+    monkeypatch.setattr('aivm_secrets.broker.Broker', create)
+    monkeypatch.setattr('aivm_secrets.sources.resolve_source', lambda source: TOKEN)
+    monkeypatch.setattr('aivm.secrets_transport.shutil.which', lambda binary: '/usr/bin/mytool')
+
+    class Manager:
+        def run(self, cmd, **kwargs):
+            assert TOKEN not in ' '.join(cmd) and TOKEN not in str(kwargs.get('input_text', ''))
+            if '-R' in cmd:
+                host_socket = cmd[cmd.index('-R') + 1].split(':', 1)[1]
+                assert exchange(host_socket, brokers[0].capability,
+                                {'operation': 'account.read', 'arguments': {}})['ok']
+                assert 'AIVM_SECRETS_CLIENT=' in cmd[-1]
+                assert '/aivm-secrets' in cmd[-1]
+                assert '/gh;' not in cmd[-1]
+            return CommandResult(0, '', '')
+
+    monkeypatch.setattr('aivm.secrets_transport.CommandManager.current', lambda: Manager())
+    result = run_secrets_ssh(session, ['ssh', 'agent@10.0.0.2', 'exec $SHELL -l'],
+                             policy_path=path)
+    assert result.code == 0
+    assert len(provider.calls) == 1 and provider.calls[0][1] == TOKEN
+    assert brokers[0].capability == ''
+
+
+def test_generic_source_executable_must_not_reside_in_shared_tree(tmp_path, monkeypatch):
+    from aivm.secrets_transport import run_secrets_ssh
+    from aivm_secrets.wire import dumps
+    session = session_fixture(tmp_path)
+    resolver = session.host_src / 'resolver'
+    resolver.write_text('#!/bin/sh\n')
+    resolver.chmod(0o700)
+    path = tmp_path / 'policy.json'
+    policy = {
+        'schema': 2, 'adapter': 'https', 'service': 'source-check',
+        'host': 'api.example.org', 'authentication': 'bearer',
+        'credential_source': {'kind': 'command', 'argv': [str(resolver)]},
+        'operations': [{'name': 'read', 'method': 'GET', 'path': '/v1/ok'}],
+    }
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(dumps(policy))
+    monkeypatch.setattr('aivm_secrets.sources.resolve_source',
+                        lambda source: pytest.fail('host resolver executed'))
+    with pytest.raises(SecretsError) as ex:
+        run_secrets_ssh(session, ['ssh', 'agent@10.0.0.2', 'exec $SHELL -l'],
+                        policy_path=path)
+    assert ex.value.code == 'shared_source'

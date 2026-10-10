@@ -755,10 +755,10 @@ class VMSSHCLI(_BaseCommand):
     )
 
     secrets_policy: str = kwconf.Value(
-        '', help='Opt in to a foreground GitHub broker using a host-only JSON policy.',
+        '', help='Opt in to a foreground secret-use broker using a host-only JSON policy.',
     )
     secrets_token_file: str = kwconf.Value(
-        '', help='Host-only token file; otherwise read the owning host gh login.',
+        '', help='Optional host-only token file (overrides the policy credential source); schema 1 otherwise uses gh.',
     )
     secrets_allow_writes: bool = kwconf.Flag(
         False, help='Also enable policy-authorized writes for this session only.',

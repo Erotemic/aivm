@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .errors import SecretsError
+from .kernel import Binding, Claims, State, exact_keys, integer, text
 from .wire import dumps
 
 READ_OPERATIONS = frozenset({
@@ -21,33 +22,6 @@ READ_OPERATIONS = frozenset({
 WRITE_OPERATIONS = frozenset({'pr.comment', 'pr.edit'})
 OPERATIONS = READ_OPERATIONS | WRITE_OPERATIONS
 SCHEMA_VERSION = 1
-
-
-def exact_keys(value: Any, required: set[str], optional: set[str] | None = None,
-               *, code: str = 'invalid_request') -> dict[str, Any]:
-    if type(value) is not dict or not required <= value.keys() or (
-        value.keys() - required - (optional or set())
-    ):
-        raise SecretsError(code)
-    return value
-
-
-def integer(value: Any, low: int, high: int, *, code: str = 'invalid_request') -> int:
-    if type(value) is not int or not low <= value <= high:
-        raise SecretsError(code)
-    return value
-
-
-def text(value: Any, limit: int, *, code: str = 'invalid_request') -> str:
-    if type(value) is not str:
-        raise SecretsError(code)
-    try:
-        size = len(value.encode('utf-8'))
-    except UnicodeError:
-        raise SecretsError(code) from None
-    if not 1 <= size <= limit or '\x00' in value:
-        raise SecretsError(code)
-    return value
 
 
 def repository(value: Any, *, code: str = 'invalid_request') -> str:
@@ -64,23 +38,6 @@ def login(value: Any, *, code: str = 'invalid_request') -> str:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}', value):
         raise SecretsError(code)
     return value.lower()
-
-
-@dataclass(frozen=True)
-class Binding:
-    """Host-established identity; never populated from client request fields."""
-
-    owner_uid: int
-    access_identity: str
-    vm: str
-    channel: str
-
-    @classmethod
-    def parse(cls, value: Any) -> Binding:
-        value = exact_keys(value, {'owner_uid', 'access_identity', 'vm', 'channel'})
-        return cls(integer(value['owner_uid'], 0, 2**32 - 1),
-                   text(value['access_identity'], 128), text(value['vm'], 128),
-                   text(value['channel'], 128))
 
 
 @dataclass(frozen=True)
@@ -178,33 +135,6 @@ class Request:
             raise SecretsError('invalid_request')
         return cls(op, repository(value['repository']),
                    integer(value['pr'], 1, 2**31 - 1), page, body, title)
-
-
-@dataclass(frozen=True)
-class Claims:
-    binding: Binding
-    policy_digest: str
-    grant_id: str
-    issued_at: int
-    expires_at: int
-
-    @classmethod
-    def parse(cls, value: Any) -> Claims:
-        value = exact_keys(value, {'binding', 'policy_digest', 'grant_id',
-                                  'issued_at', 'expires_at'})
-        issued = integer(value['issued_at'], 0, 2**63 - 3601)
-        expires = integer(value['expires_at'], issued + 1, issued + 3600)
-        digest = text(value['policy_digest'], 64)
-        grant_id = text(value['grant_id'], 64)
-        if not re.fullmatch(r'[a-f0-9]{64}', digest) or not re.fullmatch(r'[a-f0-9]{32}', grant_id):
-            raise SecretsError('invalid_request')
-        return cls(Binding.parse(value['binding']), digest, grant_id, issued, expires)
-
-
-@dataclass(frozen=True)
-class State:
-    active: bool = True
-    used: int = 0
 
 
 @dataclass(frozen=True)
