@@ -1,0 +1,151 @@
+{
+ "about": "Positive witnesses: authorized reads and the exact effects they produce.",
+ "theorems": [
+  "AUTH-01",
+  "EFFECT-01",
+  "ROUTE-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "demo-service",
+  "host": "api.example.org",
+  "authentication": "x-api-key",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "profile.read",
+    "method": "GET",
+    "path": "/v1/account"
+   },
+   {
+    "name": "issue.view",
+    "method": "GET",
+    "path": "/v1/issues/{issue}",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    }
+   },
+   {
+    "name": "issue.list",
+    "method": "GET",
+    "path": "/v1/issues",
+    "query": {
+     "state": "open",
+     "page": "{page}"
+    },
+    "parameters": {
+     "page": {
+      "min": 1,
+      "max": 50
+     }
+    }
+   },
+   {
+    "name": "issue.comment",
+    "method": "POST",
+    "path": "/v1/issues/{issue}/comments",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    },
+    "body_fields": {
+     "body": 100
+    }
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 5,
+  "max_body_bytes": 100
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": null,
+    "effect": {
+     "method": "GET",
+     "target": "/v1/account",
+     "accept": "application/json",
+     "response": "json"
+    }
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "effect": {
+     "method": "GET",
+     "target": "/v1/issues/23",
+     "accept": "application/json",
+     "response": "json"
+    }
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.list",
+    "arguments": {
+     "page": 50
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "effect": {
+     "method": "GET",
+     "target": "/v1/issues?page=50&state=open",
+     "accept": "application/json",
+     "response": "json"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,2292 @@
+{
+ "about": "Policy acceptance. \"valid\" is specified by hand. For valid policies, \"canonical\" and \"scope\" are the reference parse and \"sha256\" pins the policy digest: SHA-256 of the canonical encoding of \"canonical\".",
+ "cases": [
+  {
+   "name": "declarative https service",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      },
+      "query": {
+       "page": "{page}",
+       "state": "open"
+      }
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account",
+      "response": "json",
+      "accept": "application/json"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "59a3d06a941196266d401f10bf9faa2000922a32c9e3b3ac1c5ab36fd154a2b6",
+   "scope": [
+    {
+     "name": "issue.comment",
+     "write": true,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 100,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "issue.list",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 50
+      }
+     },
+     "fields": {}
+    },
+    {
+     "name": "issue.view",
+     "write": false,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "profile.read",
+     "write": false,
+     "parameters": {},
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "declarative https, pinned private deployment",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "git.corp.example",
+    "authentication": "bearer",
+    "credential_source": {
+     "kind": "file",
+     "path": "/home/op/.config/corp/token"
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "egress": {
+     "port": 8443,
+     "address": "10.20.30.40",
+     "ca_file": "/etc/ssl/corp-root.pem"
+    },
+    "headers": {
+     "X-Api-Version": "2026-03-10"
+    }
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "git.corp.example",
+    "authentication": "bearer",
+    "egress": {
+     "port": 8443,
+     "address": "10.20.30.40",
+     "ca_file": "/etc/ssl/corp-root.pem"
+    },
+    "headers": {
+     "X-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "file",
+     "path": "/home/op/.config/corp/token"
+    },
+    "operations": [
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      },
+      "query": {
+       "page": "{page}",
+       "state": "open"
+      }
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account",
+      "response": "json",
+      "accept": "application/json"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "e031555aa7fecf7b1ec65e44e99b879b9388c54a0e9087c4f003f285dc12e66f",
+   "scope": [
+    {
+     "name": "issue.comment",
+     "write": true,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 100,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "issue.list",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 50
+      }
+     },
+     "fields": {}
+    },
+    {
+     "name": "issue.view",
+     "write": false,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "profile.read",
+     "write": false,
+     "parameters": {},
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "github pull requests",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 1,
+    "repository": "taucetiproject/tauceti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.checks",
+     "pr.comment",
+     "pr.comments",
+     "pr.diff",
+     "pr.edit",
+     "pr.review-comments",
+     "pr.reviews",
+     "pr.view"
+    ],
+    "author": "erotemic",
+    "head_repository": "erotemic/tauceti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "sha256": "7bc6ce1d119b594c027570f26e4d0571ebeaf0cd848c7934752f47530e2ee9cf",
+   "scope": [
+    {
+     "name": "pr.checks",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.comment",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "pr.comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.diff",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.edit",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": false
+      },
+      "title": {
+       "max_bytes": 256,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "pr.review-comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.reviews",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.view",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "github: spelling is normalized",
+   "policy": {
+    "schema": 1,
+    "repository": "TAUCETIPROJECT/tauceti",
+    "pr_numbers": [
+     13862,
+     13861
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "EROTEMIC",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 1,
+    "repository": "taucetiproject/tauceti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.checks",
+     "pr.comment",
+     "pr.comments",
+     "pr.diff",
+     "pr.edit",
+     "pr.review-comments",
+     "pr.reviews",
+     "pr.view"
+    ],
+    "author": "erotemic",
+    "head_repository": "erotemic/tauceti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "sha256": "7bc6ce1d119b594c027570f26e4d0571ebeaf0cd848c7934752f47530e2ee9cf",
+   "scope": [
+    {
+     "name": "pr.checks",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.comment",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "pr.comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.diff",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.edit",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": false
+      },
+      "title": {
+       "max_bytes": 256,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "pr.review-comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.reviews",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.view",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: unknown schema",
+   "policy": {
+    "schema": 3,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: boolean schema",
+   "policy": {
+    "schema": true,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: non-https adapter",
+   "policy": {
+    "schema": 2,
+    "adapter": "exec",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: ip literal host",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "127.0.0.1",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: host with port",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org:443",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: localhost",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "localhost",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unknown authentication",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "basic",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: address is not an ip",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "egress": {
+     "address": "evil.invalid"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: reserved header",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "headers": {
+     "Authorization": "Bearer x"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: header injection",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "headers": {
+     "X-A": "b\r\nHost: evil.invalid"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: shell credential source",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "shell",
+     "script": "gh auth token"
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: code-loading environment",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "x"
+     ],
+     "inherit_env": [
+      "LD_PRELOAD"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: no operations",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: lifetime over one hour",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 3601,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unknown top-level field",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "allow_writes": true
+   },
+   "valid": false
+  },
+  {
+   "name": "https: DELETE method",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "DELETE",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: dot-dot path",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/../admin"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: query in path",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/x?admin=1"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: placeholder without allowlist",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/{id}"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unused parameter",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/x",
+      "parameters": {
+       "id": [
+        1
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unsafe parameter value",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/{id}",
+      "parameters": {
+       "id": [
+        "../x"
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: wildcard parameter",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/{id}",
+      "parameters": {
+       "id": "*"
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: GET with body",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/v1/x",
+      "body_fields": {
+       "b": 10
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: POST without body",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "POST",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: duplicate operation",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/a"
+     },
+     {
+      "name": "x",
+      "method": "GET",
+      "path": "/b"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "github: wildcard pr",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": "*",
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: duplicate pr",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     1,
+     1
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: unknown operation",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.merge"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: author with slash",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "a/b",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: url as repository",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "https://evil.invalid/r",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  }
+ ]
+}

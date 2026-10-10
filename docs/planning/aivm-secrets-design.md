@@ -1,12 +1,18 @@
 # AIVM Secrets: credential-use capabilities with a verifiable core
 
-Status: proposed architecture plus an experimental Python vertical slice.
-Research date: 2026-10-09. No part of this implementation is formally verified.
+Status: architecture, implemented in Python through the local-host scope of
+milestones P0-P3 below (updated 2026-10-10; research date 2026-10-09). **No part
+of this implementation is formally verified.** The Rust kernel, the Lean
+proofs and the remote-identity work of P4 do not exist yet.
 The companion [provider-neutral integration plan](aivm-secrets-agnostic-integrations.md)
 defines schema 2 and supersedes GitHub-specific assumptions below. The
+[kernel specification](aivm-secrets-kernel-spec.md) states the implemented
+state machine for the Rust port. The
 [assurance plan](aivm-secrets-formal-assurance.md) defines proof
-obligations and the evidence needed before making stronger claims. See
-[the operator guide](../source/secrets.rst) for commands that work in this slice.
+obligations and the evidence needed before making stronger claims; the
+[assumption ledger](aivm-secrets-assumptions.json) lists what is trusted. See
+[the operator guide](../source/secrets.rst) for the commands, and
+[the validation record](aivm-secrets-validation.md) for what was run.
 
 ## 1. Decision and scope
 
@@ -107,37 +113,50 @@ A narrowly authorized proxy cannot repair an independently exposed host secret.
 | Authorization | Every emitted effect belongs to a bounded grant and current epoch | A permitted comment may trigger an external bot or leak other guest data |
 | Revocation | Requests after the revocation linearization point cannot begin new effects | An already dispatched effect cannot be rolled back |
 | Budget | Admission consumes bounded authority before I/O | Budget exhaustion and service denial are possible |
-| Audit | Required audit writes precede dispatch; failures stop authority | Local JSONL is neither immutable nor a distributed transaction with GitHub |
+| Audit | Required audit writes precede dispatch; failures stop authority; interior edits break a hash chain | Local JSONL is neither immutable nor a distributed transaction with the provider; tail truncation needs an externally kept head digest |
 
 Read-only is the default. A write grant is explicitly a grant to send its allowed
-content to the selected PR; it is not proof that the content is appropriate.
+content to the selected resource; it is not proof that the content is appropriate.
 For example, denying the merge API does **not** prove that posting a comment
-cannot trigger a repository's merge bot. One-shot, exact-content approvals are
-a later capability, not something the first implementation silently claims.
+cannot trigger a repository's merge bot. The `approve` write mode adds one-shot,
+exact-content host approvals; it bounds *what* is sent, not what a provider
+then does with it.
 
 ## 4. Package and trust-boundary layout
 
-The delivered Python package is split deliberately:
+The delivered Python package is split into a pure kernel and an impure host
+shell. The split is enforced by `tests/test_secrets_purity.py`, not by
+convention:
 
 | Module | Responsibility | Eventual destination |
 | --- | --- | --- |
-| `kernel.py` | Provider-independent binding, claims, budget, time and write authorization | Extractable safe-Rust kernel |
-| `core.py` | Legacy GitHub-specific policy, PR facts and route mapping | Optional service adapter; keep outside common kernel |
-| `adapters.py` | Explicit host-selected service registry and legacy GitHub adapter | Closed, verified service spec compilation |
-| `http_service.py` | Declarative fixed-host HTTPS operation adapter, schema 2 | Verified route interpreter plus trusted TLS egress |
-| `wire.py` | Bounded, duplicate-rejecting protocol parser and serialization | Bounded codec with refinement contract |
-| `envelope.py` | Library-backed authenticated encryption and strict capability decoding | Credential service; audited crypto dependency |
-| `broker.py` | Serialized grant state, checks, budget reservation, effect sequencing | Verified transition system plus small trusted interpreter |
-| `provider.py` | Fixed-origin TLS egress; bounded responses; no redirects/retries | Small Rust I/O boundary |
-| `audit.py`, `files.py`, `sources.py` | Private host files, audit durability, host credential acquisition | Host adapters with explicit assumptions |
-| `server.py` | Session-local Unix socket, kernel peer UID check, framing | Transport adapter |
-| `guest.py` | Replaceable, dependency-light client | Untrusted convenience layer |
-| `cli.py` | Explicit host administration and standalone lifecycle | Operator interface |
-| `aivm/secrets_transport.py` | Existing resolved context -> foreground SSH capability | AIVM integration only |
+| `kernel/grammar.py`, `codec.py` | Regex-free alphabets; strict JSON; canonical encoding and digests | `secrets-protocol`, with a refinement contract |
+| `kernel/model.py`, `scope.py` | Bindings, claims, requests, effects, destinations; authorization as data, membership and attenuation | Extractable safe-Rust kernel |
+| `kernel/machine.py` | The state machine: admit, emit, delegate, approve, revoke. Sole constructor of `AuthorizedEffect` | Verified transition system |
+| `kernel/https.py` | Declarative fixed-destination HTTPS service specs, schema 2 | Verified route interpreter |
+| `kernel/github.py` | Fact-conditioned GitHub PR service, schema 1 | Optional service variant |
+| `kernel/service.py`, `source.py` | The closed sum of service specs; the grammar of a credential source | Closed, verified spec compilation |
+| `kernel/wire.py`, `trace.py` | Protocol version 1 frames; I/O-free trace replay for conformance | Bounded codec; shared conformance harness |
+| `host/envelope.py` | Library-backed authenticated encryption and strict capability decoding | Credential service; audited crypto dependency |
+| `host/broker.py` | The interpreter that drives kernel transitions, audit and the executor | Small trusted interpreter with a refinement argument |
+| `host/egress.py` | The one TLS destination: pinned host, optional address/CA pins, hard total deadline, no redirects/retries/proxies | Small Rust I/O boundary |
+| `host/audit.py`, `files.py`, `sources.py` | Hash-chained audit durability; whole-path file safety; host credential acquisition | Host adapters with explicit assumptions |
+| `host/server.py`, `session.py` | Guest and control Unix sockets with kernel peer-UID checks; per-user registry of live sessions | Transport adapter |
+| `host/hardening.py` | No core dumps; non-dumpable process | Service privilege reduction |
+| `guest.py` | Replaceable, dependency-free client | Untrusted convenience layer |
+| `cli.py` | Host operator interface and the `serve` process AIVM starts | Operator interface |
+| `aivm/secrets_transport.py` | Resolved context -> broker child process -> foreground SSH | AIVM integration only |
+
+The broker runs as its **own process** even under AIVM: `aivm ssh` starts
+`aivm-secrets serve` as a child bound to its lifetime, so the credential is
+resolved in, and never leaves, that process. AIVM reaches it only through its
+command line, one line of JSON and the lifetime of a pipe -- which is the
+contract a Rust broker will be dropped in behind.
 
 Longer term, use separate Rust crates for `secrets-kernel`, `secrets-protocol`
-and `secrets-host`, with a Lean proof package and an independent conformance
-corpus. Those are planned boundaries, not empty crates included in this slice.
+and `secrets-host`, with a Lean proof package. The independent conformance
+corpus they must reproduce already exists (`tests/secrets_vectors/`); the
+crates themselves are planned boundaries, not code included here.
 The trusted service should eventually own credential material and egress in
 its own process. Merely returning `True` from a verified Rust policy function
 to arbitrary Python that still owns the token does not establish complete
@@ -208,8 +227,11 @@ integrity merely from possession of an instance identity.
 
 ### Refresh, revocation, and persistence
 
-The prototype does not refresh credentials or grants. Re-entering a session is
-an explicit new host action. Future OAuth acquisition must validate redirect
+The implementation does not refresh credentials or grants. Re-entering a session is
+an explicit new host action. Revocation is implemented for the local case: a
+session ends when its foreground process ends, when its access identity is
+disabled, on `aivm-secrets revoke`, or on an audit failure; one grant can be
+revoked without its ancestors. All of that state is in broker memory. Future OAuth acquisition must validate redirect
 state and use an appropriate provider flow, keep refresh tokens host-side,
 serialize rotation, redact errors and never widen the existing grant on refresh.
 A shorter upstream lifetime always limits effective authority.
@@ -231,10 +253,13 @@ principal whose recorded host UID equals the kernel UID; environment variables
 such as `USER` do not establish ownership. Administrator access is not permission
 to borrow another principal's provider identity.
 
-The adapter loads a host-owned policy outside the currently shared source,
-obtains the credential, creates a private host socket and audit file, and copies
-only the inspectable guest client and sealed capability through SSH stdin.
-It opens a dedicated reverse Unix-socket forward on the foreground SSH process.
+The adapter starts the broker as a child process, naming a host-owned policy
+and the shared workspace as an *untrusted root*. The broker refuses to start
+if the policy, the credential, the resolver program or its own code lies
+inside that root; it resolves the credential itself and creates its private
+sockets and audit file. AIVM then copies only the inspectable guest client and
+the sealed capability through SSH stdin, and opens a dedicated reverse
+Unix-socket forward on the foreground SSH process.
 Secret sessions disable SSH multiplexing and ambient SSH config; require the
 already-established host key; and require forwarding setup to succeed. Existing
 explicit VM identity and dedicated repository-agent options are retained.
@@ -246,25 +271,30 @@ assignment of that listener to the selected SSH session is therefore essential.
 A client-supplied VM name or username has no authority. The proof plan must not
 mistake the peer-UID check for attestation of a guest process.
 
-Closing the foreground session shuts down the listener and revokes the broker
-before best-effort guest cleanup. Keys are not persisted. Expired sessions deny
-operations even if their interactive shell remains open. Host cleanup and SSH
-transport are currently tested with fakes plus real local sockets, not a live
-libvirt VM; an operator must perform the documented VM smoke test before relying
-on the integration. Some guest sshd configurations may forbid streamlocal
-forwarding; setup then fails rather than broadening sshd permissions.
+Closing the foreground session ends the broker before best-effort guest
+cleanup. The broker holds its stdin as a lifetime lease, so it also ends if the
+AIVM process is killed without running any cleanup. Keys are not persisted.
+Expired sessions deny operations even if their interactive shell remains open.
+The whole path -- real KVM guest, real OpenSSH streamlocal forward, real broker
+process, verified TLS to a local provider -- is exercised by
+`tests/e2e/test_secrets.py`. Some guest sshd configurations may forbid
+streamlocal forwarding; setup then fails rather than broadening sshd
+permissions.
 
-Access-identity state is checked at session creation, not continuously watched.
-Disabling that identity in another AIVM command does not yet signal an existing
-broker. Terminate its foreground host session to revoke it immediately; its TTL
-still bounds subsequent admissions. Connecting disable/delete events to active
-secret sessions is a P3 lifecycle obligation, not an implemented guarantee.
+Access-identity state is checked at session creation and then re-read from the
+authoritative store every few seconds while the session is open. Disabling or
+removing the identity -- from any terminal, by its owner or an administrator
+-- ends the session's authority without waiting for its TTL. The check is a
+poll, so "immediately" means within the poll interval, and it applies to
+machine-store identities; a single-user explicit `--config` store has no
+identity records to revoke.
 
-Only `aivm ssh` is integrated initially. VS Code, long-lived services, detached
+Only `aivm ssh` is integrated. VS Code, long-lived services, detached
 agents and remote hosts need explicit lifecycle designs rather than silently
 inheriting authority through an old socket. No persistent machine-store schema
 is added. Audit files live in the owning profile state; private runtime sockets
-live in fresh host temporary directories.
+live in a per-session directory under the owner's `$XDG_RUNTIME_DIR`, which is
+also how `aivm-secrets sessions` finds live sessions.
 
 ## 7. Authorization as data, not executable policy
 
@@ -283,9 +313,11 @@ keys, nonfinite numbers, excessive nesting, booleans masquerading as integers,
 and oversized frames are rejected.
 
 Admission checks binding and policy, active state, half-open wall-clock validity
-and monotonic deadline, budget, repository/PR membership, operation and payload
-bounds. Writes require **both** policy membership and an independent host
-`allow_writes` opt-in. The request budget is reserved before any provider I/O;
+and monotonic deadline, budget, operation and argument membership and payload
+bounds, in a fixed order. Writes require **both** policy membership and an
+independent host write mode (`deny`, `approve` or `allow`); in `approve` mode
+each exact write additionally needs a one-shot approval issued through the
+host control socket. The request budget is reserved before any provider I/O;
 a failed provider preflight consumes the admission. Invalid traffic also has a
 separate attempt cap, bounding per-session audit growth.
 
@@ -293,9 +325,10 @@ Every admitted request first fetches the selected PR metadata from a constructed
 REST path. Require the expected PR number, base repository, author and head
 repository. Treat returned URLs as data, never destinations. A commit SHA used
 for checks is validated before path construction. Recheck expiry/revocation
-before any second dispatch, including after audit I/O. The lock serializes
-budget reservation and dispatch, rather than allowing concurrent requests to
-observe the same remaining budget.
+before any second dispatch, including after audit I/O. Requests are served one
+at a time, so concurrent requests never observe the same remaining budget; a
+separate, briefly held lock guards kernel state, so revocation and approval
+are not delayed by a provider that is slow to answer.
 
 This preflight is not an atomic GitHub transaction. Repository transfer,
 metadata change, or remote actions can occur after it. Future grants should pin
@@ -304,12 +337,14 @@ update only where its actual semantics meet the requirement. Do not invent an
 `If-Match` guarantee for an endpoint. For now the stated condition is that
 freshly fetched metadata matched at the check, not throughout an external write.
 
-Attenuation is defined as semantic subset: same provider/resource ownership
-constraints, subset of PRs and operations, no longer lifetime, no larger budget
-or body limit. The pure function is included for conformance tests, but no
-endpoint mints child grants yet. In a future hierarchy, absolute expiration,
-ancestor revocation, epoch matching and a shared budget ledger are also required;
-independent copies of a parent's budget would amplify total authority.
+Attenuation is defined as semantic subset: the child names only operations,
+parameter values and field sizes its parent has, with no longer lifetime and
+no larger budget or body limit. A guest may mint such a child grant
+(`delegate`). The hierarchy enforces absolute expiration no later than the
+parent's, revocation of every descendant with an ancestor, and a **shared**
+budget: a child has no budget of its own, and each admission debits every
+ancestor, so no number of children can spend more than the root allows. The
+tree is bounded (64 grants, depth 4) and lives in broker memory.
 
 ## 8. GitHub operations and client compatibility
 
@@ -345,16 +380,21 @@ broker-native API remains available even if that compatibility layer is added.
 
 The initial provider creates a direct TLS connection to `api.github.com`, does
 not read HTTP proxy environment variables, sends fixed authorization and API
-headers, refuses redirects and does not retry. Transport, timeout, response
-parsing or audit failure after a write dispatch produces an unknown-outcome
-response. The operator must inspect GitHub before retrying. Pagination includes
+headers, refuses redirects and does not retry. Two failures of a write are
+definite and reported as such: no connection was established (`unreachable`),
+or the service answered 4xx (`upstream_rejected`). Any other transport,
+timeout, response-parsing or audit failure after a write dispatch produces an
+unknown-outcome response, and the operator must inspect the service before
+retrying. Pagination includes
 an explicit `possibly_more` flag; the client never implies a single page is all
 feedback.
 
 ## 9. Audit, resource bounds and residual risks
 
 Use private append-only-in-process JSONL with event IDs, channel, timestamp,
-operation, repository, PR and fixed outcome codes. Never log tokens, ciphertext,
+operation, kernel-validated resource identifiers and fixed outcome codes. Each
+record carries its sequence number and the hash of the previous record, and
+`aivm-secrets audit-verify` checks the chain. Never log tokens, ciphertext,
 request bodies, titles, arbitrary upstream errors or debug HTTP headers. Required
 audit records are flushed/fsynced before dispatch; an audit failure revokes the
 session. Completion failure after an external write is still an unknown outcome.
@@ -365,16 +405,18 @@ truncate history.
 Wire frames are limited to 64 KiB; provider responses to 2 MiB; list pages to 100;
 policies to 512 PRs, 1,000 admissions and one hour. Defaults are smaller. Socket
 framing has a deadline, malformed attempts have a cap, and the service serializes
-requests. Provider socket timeouts are not a hard total wall-clock bound against
-a peer that trickles data. There is no current service-availability theorem.
-Host resource limits, bounded total transport time, peer flood controls and
-workload performance measurements belong in hardening.
+requests. One provider exchange has a hard total deadline, enforced from a
+second thread on a duplicate descriptor, so a peer that trickles data cannot
+hold a request open. Simultaneous connections are bounded and excess ones
+queue. There is no service-availability theorem: a guest can still exhaust its
+own budget or delay its own requests.
 
 Private file readers reject unsafe ownership/modes, symlinks at the final path,
-hard links and nonregular files. Ancestor directories and the trusted user's
-other processes are assumptions. A production hardening pass should use held
-no-symlink directory descriptors throughout and reject unsafe ancestor ownership,
-in line with AIVM's existing privileged-path principles. No custom keychain,
+hard links and nonregular files, and check the whole path: each ancestor is
+opened through a held directory descriptor without following links and must be
+owned by root or the caller and not writable by others. Resolver programs are
+checked the same way, hop by hop through any symlinks. The trusted user's
+other processes remain an assumption. No custom keychain,
 password vault, generic filesystem secret fetch, or encrypted storage service is
 introduced in this slice.
 
@@ -415,6 +457,14 @@ The detailed theorem inventory, refinement obligations and release gates are in
 [the assurance plan](aivm-secrets-formal-assurance.md).
 
 ## 11. Delivery milestones and acceptance gates
+
+Status as of 2026-10-10: P0 is delivered. The Python-expressible parts of P1
+(frozen vectors, effect grammar, abstract state machine), P2 (kernel
+transitions with trace-level, generated and mutation tests) and P3 (separate
+credential-owning process, real VM lifecycle tests, total deadlines, fault
+injection, whole-path safety) are delivered **as tested Python, not as
+verified Rust**. From P4, in-memory revocation and one-shot approvals are
+delivered; everything involving remote identity or durable state is not.
 
 ### P0 - Python vertical slice (original overlay and service-neutral follow-up)
 

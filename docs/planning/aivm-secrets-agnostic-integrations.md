@@ -1,9 +1,11 @@
 # AIVM Secrets: provider-neutral integrations and CLI compatibility
 
 Status: **implemented experimental Python schema 2 with planned verified Rust
-kernel**. This refines [the main architecture](aivm-secrets-design.md) and
-[the assurance plan](aivm-secrets-formal-assurance.md). The original GitHub PR
-schema 1 remains a compatibility integration, **not the core architecture**.
+kernel** (updated 2026-10-10). This refines [the main architecture](aivm-secrets-design.md) and
+[the assurance plan](aivm-secrets-formal-assurance.md); the implemented state
+machine is specified in [the kernel specification](aivm-secrets-kernel-spec.md).
+The original GitHub PR schema 1 remains a compatibility integration, **not the
+core architecture**.
 
 ## 1. Architectural decision
 
@@ -141,12 +143,20 @@ The declarative adapter uses **policy schema 2**, with keys:
 
 * `service`: stable descriptive identifier, chosen by the operator;
 * `adapter`: currently `https`;
-* `host`: one canonical public DNS hostname, TLS port 443, no origin override;
+* `host`: one canonical public DNS hostname; always the name TLS authenticates;
 * `authentication`: `bearer` or `x-api-key` (no custom/header injection);
 * `credential_source`: host-only typed source object;
 * `operations`: finite, distinct names, each with `GET`/`POST`/`PATCH`, a
-  validated relative path template, finite permitted path parameter values,
-  optional bounded JSON string body fields, and `json`/`text` response;
+  validated relative path template, optional `query` entries that are fixed
+  values or `{placeholder}` references, `parameters` giving every placeholder
+  its permitted values (a finite list of integers or strings, or an integer
+  range `{"min", "max"}`), optional bounded JSON string body fields, a
+  `json`/`text` response and an optional `accept` media type;
+* `egress` (optional): operator pins for a private deployment -- `port`, an
+  `address` to connect to, and a `ca_file` that replaces the system roots for
+  this service. TLS still authenticates `host`;
+* `headers` (optional): static headers such as an API version. Names the
+  executor owns (authentication, `Host`, cookie, content, proxy) are refused;
 * `lifetime_seconds`, `max_requests`, `max_body_bytes`: bounded session limits.
 
 A request is only:
@@ -156,16 +166,25 @@ A request is only:
 ```
 
 It cannot supply an HTTP method, URL, token, `Host` header, proxy, body schema,
-or executable path. Every path placeholder must have a nonempty finite
-allowlist of permitted integer or segment-string values. No arbitrary query
+or executable path. Every placeholder, in the path or the query, must have an
+explicit allowlist: finite integer or segment-string values, or a bounded
+integer range. Permitted values contain only RFC 3986 unreserved characters,
+so the request target is constructed without escaping. No arbitrary query
 strings, arbitrary HTTP bodies, binary streaming, redirects, retries or GraphQL
 are available in schema 2. A body write requires both a policy-listed method
-and a host-level `allow_writes` switch. The trusted HTTP executor rechecks the
+and a host write mode of `allow`, or `approve` plus a one-shot approval of the
+exact request. The trusted HTTP executor rechecks the
 constructed route and only connects to the policy's fixed TLS host. Reflection
 checks are a backstop, **not** a general noninterference guarantee.
 
-See [the GitLab example](../examples/aivm-secrets-gitlab-readonly.json) for a
-complete non-GitHub service configured without a Python plugin. The example
+Reference manifests ship in `docs/examples/`: GitLab merge-request review
+(`aivm-secrets-gitlab-merge-request.json`), GitHub issues through schema 2
+(`aivm-secrets-github-issues.json`), a non-Git service
+(`aivm-secrets-huggingface-readonly.json`) and a private-CA deployment
+(`aivm-secrets-selfhosted-pinned.json`). They are examples to copy and edit:
+none has been run against the live service by this project.
+See [the GitLab example](../examples/aivm-secrets-gitlab-readonly.json) for
+the smallest complete non-GitHub service configured without a Python plugin. The example
 uses `gitlab.com` and its documented Bearer authorization for access tokens,
 resolving one operator-owned token using 1Password's `op read`. Check the
 underlying credential scopes before actual use.
@@ -178,7 +197,15 @@ The **generic**, stdlib-only client supports:
 "$AIVM_SECRETS_CLIENT" invoke account.read
 "$AIVM_SECRETS_CLIENT" invoke issue.view --arguments '{"issue":23}'
 "$AIVM_SECRETS_CLIENT" invoke issue.comment --arguments-file comment.json
+"$AIVM_SECRETS_CLIENT" operations
+"$AIVM_SECRETS_CLIENT" delegate --scope '{"operations":{"issue.view":{"issue":[23]}}}' --output helper.cap
+"$AIVM_SECRETS_CLIENT" renounce
 ```
+
+`operations` reports what the presented capability permits. `delegate` mints a
+strictly smaller capability (ATTEN-01); `renounce` gives one up. These are the
+whole guest protocol: there is no verb for approval, revocation of another
+grant, or anything on the host control plane.
 
 To add a human-friendly CLI, write an **untrusted argument translator** that
 constructs this limited request shape; keep policy enforcement entirely on the
@@ -186,10 +213,11 @@ host. That CLI can be a `glab`-shaped adapter, a `gh`-shaped adapter, or a
 custom agent tool. A translator is not privileged, even if malicious: the
 broker validates arguments against the selected service operation.
 
-The existing schema 1 integration installs a limited `gh`-shaped client for
-backward compatibility. It is not stock `gh`, and it cannot run arbitrary
-`gh api` or shell commands. Schema 2 installs a generic `aivm-secrets` guest
-client and does **not** shadow the name of another installed CLI. Don't rely
+Every session installs the generic `aivm-secrets` guest client. For schema 1
+the same client is additionally linked under the name `gh` for backward
+compatibility. It is not stock `gh`, and it cannot run arbitrary `gh api` or
+shell commands. Schema 2 does **not** shadow the name of another installed
+CLI. Don't rely
 on PATH shadowing for security: the guest can execute any executable anyway.
 
 **Supporting unmodified stock tools** is a separate P3 workstream:
@@ -209,17 +237,21 @@ on PATH shadowing for security: the guest can execute any executable anyway.
 
 ## 3. Pure service-neutral kernel and effects
 
-The Python prototype now keeps common `Binding`, `Claims`, `State`, strict
-scalar parsers, and `reserve` in `aivm_secrets/kernel.py`. Authorization takes
-an explicit operation ID, finite allowed set, write flag, budget/size limits,
-time sample, monotonic live bit, and authenticated binding. It has **no GitHub
-operation names, PR identifiers, credentials, sockets or subprocesses**.
+The Python implementation keeps the common model, scope algebra and state
+machine in the pure package `aivm_secrets/kernel/`. Authorization
+(`machine.admit`) takes the authenticated claims and binding, a canonical
+request, and an explicit clock sample; it knows operations only as entries of
+a `Scope` -- names, typed parameter allowlists and field size caps. It has **no
+GitHub operation names, PR identifiers, credentials, sockets or
+subprocesses**.
 
-Host dispatch is through `aivm_secrets/adapters.py`:
+Services are a closed sum in `aivm_secrets/kernel/service.py`:
 
-* `GitHubAdapter`: compatibility schema 1, requiring author/head/base PR facts;
-* `HTTPAdapter`: schema 2, validated declarative REST operations;
-* executor selected by host-controlled policy type, never by a guest field.
+* `GitHubSpec`: compatibility schema 1, requiring author/head/base PR facts;
+* `HTTPSpec`: schema 2, validated declarative REST operations;
+* the variant is selected by the policy's explicit schema number, never by a
+  guest field, and both compile to the same `Scope` and the same `Effect`.
+  One executor (`host/egress.py`) serves both.
 
 The broker uniformly parses a request, authenticates/decrypts a capability,
 reserves a budget slot, writes an audit admission, optionally performs a
@@ -229,8 +261,12 @@ write outcomes are not automatically retried. The trusted executor is pinned
 by the service policy, and cannot be chosen from a URI returned by the remote
 service.
 
-For a Rust refactor, the service adapter should **not have arbitrary egress
-capability**. Introduce an effect DSL and checked `EffectTicket` types:
+The Python implementation already has this shape: `admit` leaves an open
+`Ticket` in kernel state, `emit_preflight`/`emit_final` compute the effect
+from the spec and the admitted request and are the only constructors of
+`AuthorizedEffect`, and the executor accepts nothing else. For the Rust
+refactor, keep it: the service spec must **not have arbitrary egress
+capability**, and the pipeline stays
 
 ```text
 ParsedGrant  -> authorize/reserve -> ReservedTicket
@@ -293,18 +329,23 @@ in a small trusted interpreter with an explicit refinement argument.
    cannot emit a network request to an origin outside `s`, even with hostile
    upstream responses, redirects, proxy variables or malformed arguments.
 
-The current Python tests and design do **not** establish these proofs.
+The current Python tests and design do **not** establish these proofs. They
+do provide the executable counterpart of steps 1-4 and 6: a closed
+`ServiceSpec`, policy acceptance vectors, admission and effect traces, and a
+conformance corpus (`tests/secrets_vectors/`) the Rust and Lean
+implementations must reproduce.
 
 ## 5. Deployment roadmap
 
-* **P0 (this overlay):** schema 2 host-only command/file resolution, strict
+* **P0 (delivered):** schema 2 host-only command/file resolution, strict
   HTTPS service manifests, service-neutral session kernel and broker,
   `invoke` guest client, cross-service tests, and schema 1 compatibility.
-  Validate with test suites under multiple umasks. No live credential smoke
-  test or Lean proof is claimed.
-* **P1:** reference plugins for GitLab, GitHub and one non-Git service; freeze
-  manifest schema and typed effect IR, add optional CLI wrappers outside TCB.
-  Define explicit identity semantics and auth scope introspection per service.
+  No live credential smoke test or Lean proof is claimed.
+* **P1 (partly delivered):** reference manifests for GitLab, GitHub and one
+  non-Git service ship as examples; the typed effect IR (`Effect`) and its
+  grammar are implemented and pinned by vectors. Still open: declaring the
+  manifest schema frozen, optional CLI wrappers outside the TCB, and explicit
+  identity semantics and auth-scope introspection per service.
 * **P2:** safe-Rust implementation of common policy, typed manifest compiler,
   reservation and effect-ticket construction, with Aeneas/Lean proof artifacts.
   Keep Python/libvirt orchestration outside the verified crate.
@@ -334,22 +375,26 @@ The current Python tests and design do **not** establish these proofs.
 * `allow_writes` governs direct protocol methods only. A permitted GET can have
   side effects at the remote service, and a permitted POST can trigger bots;
   manifest correctness requires service-specific review.
-* The current HTTPS policy uses a single fixed hostname and does not support
-  redirects, URL queries, GraphQL, streaming, content negotiation, arbitrary
-  headers, custom ports, custom CA configuration, OAuth refresh or SigV4.
+* The HTTPS policy uses a single fixed hostname. It supports allowlisted query
+  parameters, operator-pinned static headers, and operator-pinned port,
+  address and trust anchor. It does not support redirects, arbitrary queries,
+  GraphQL, streaming, request bodies beyond flat string fields, client
+  certificates, OAuth refresh or SigV4.
 * `aivm-secrets` is an independent Python module in the existing `aivm` wheel.
   It can be split into its own distribution later with the same policy/wire
   contracts, after protocol stability and a compatibility period.
 
 ### Executable provenance caveat
 
-When AIVM SSH integration resolves a command source, it rejects an executable
-whose resolved path is inside the current shared workspace, and rejects
-literal absolute/relative-path arguments resolving inside that workspace.
-This reduces accidental execution of guest-writable scripts but is **not a
-proof of dependency provenance**. A host CLI may import modules or load
+The broker rejects a resolver executable that lies inside a declared untrusted
+root (for AIVM, the shared workspace), following symlinks hop by hop, and
+rejects literal path arguments resolving inside one. It also requires every
+directory on the way to the executable to be controlled only by root or the
+caller. This prevents executing a guest-writable script and closes the window
+between checking a path and running it, but is **not a proof of dependency
+provenance**. A host CLI may import modules or load
 plugins/configuration from other mutable paths, and command arguments may use
 other indirections. The operator must pin and audit trusted resolver programs
 and all their executable dependencies, then move resolution into a dedicated
-least-privilege service for production. `aivm-secrets serve` standalone lacks
-AIVM workspace context, so its operator is responsible for this check.
+least-privilege service for production. `aivm-secrets serve` standalone has no
+workspace of its own to distrust; pass `--untrusted-root DIR` to give it one.

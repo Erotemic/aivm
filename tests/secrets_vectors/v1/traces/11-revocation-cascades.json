@@ -1,0 +1,232 @@
+{
+ "about": "Revoking a grant revokes its descendants and leaves its ancestors and siblings alone.",
+ "theorems": [
+  "REVOKE-01",
+  "ATTEN-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "demo-service",
+  "host": "api.example.org",
+  "authentication": "x-api-key",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "profile.read",
+    "method": "GET",
+    "path": "/v1/account"
+   },
+   {
+    "name": "issue.view",
+    "method": "GET",
+    "path": "/v1/issues/{issue}",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    }
+   },
+   {
+    "name": "issue.list",
+    "method": "GET",
+    "path": "/v1/issues",
+    "query": {
+     "state": "open",
+     "page": "{page}"
+    },
+    "parameters": {
+     "page": {
+      "min": 1,
+      "max": 50
+     }
+    }
+   },
+   {
+    "name": "issue.comment",
+    "method": "POST",
+    "path": "/v1/issues/{issue}/comments",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    },
+    "body_fields": {
+     "body": 100
+    }
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 5,
+  "max_body_bytes": 100
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "delegate",
+   "grant": "root",
+   "as": "child",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "narrowing": {
+    "operations": {
+     "issue.view": {}
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "delegate",
+   "grant": "child",
+   "as": "grandchild",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "narrowing": {
+    "operations": {
+     "issue.view": {
+      "issue": [
+       23
+      ]
+     }
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "delegate",
+   "grant": "root",
+   "as": "sibling",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "narrowing": {
+    "operations": {
+     "profile.read": {}
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "revoke",
+   "grant": "child",
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "child",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "revoked"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "grandchild",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "revoked"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "sibling",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "renounce",
+   "grant": "sibling",
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "sibling",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "revoked"
+   }
+  }
+ ]
+}

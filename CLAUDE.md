@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run doctests: `./run_doctests.sh`
 - Build docs: `./run_docs.sh` (warnings are errors; catches dangling `:doc:`/toctree targets)
 - Run E2E tests: `./run_e2e_tests.sh` (Note: requires `AIVM_E2E=1` or `AIVM_E2E_BOOTSTRAP=1` and a host with libvirt/KVM and sudo privileges)
+- Run the secrets suites: `python -m pytest -o addopts='' -q tests/test_secrets_*.py` (offline; real TLS on loopback) and `AIVM_E2E=1 python -m pytest -o addopts='' -s tests/e2e/test_secrets.py` (creates a real KVM guest)
 
 ### Test conventions
 
@@ -61,6 +62,14 @@ There is **no intent log**: `CommandManager` pops every `IntentFrame` and
 `CommandPlan` and drains `_loose_commands` before returning, so nothing records
 what it intended after the fact. Don't design an assertion around one.
 
+For `aivm_secrets`, the equivalents are in `tests/secrets_helpers.py`:
+`FakeExecutor` (the provider, in-process, for orchestration tests),
+`TLSService` (a real HTTPS server on loopback with a throwaway CA -- point a
+policy at it with `egress` pins instead of mocking `http.client`), and
+`ServeProcess` (a real broker child). Socket paths must be short, so those
+tests take their runtime directory from `tempfile` under `/tmp`, not from
+`tmp_path`.
+
 Keep a stub only for a genuine boundary (a live guest, the developer's real
 `~/.ssh/config`, `time.sleep`, an interactive prompt) or when the stubbed thing
 is the subject of a different test file. Say which in a comment.
@@ -87,6 +96,7 @@ is the subject of a different test file. Say which in a comment.
 - `aivm/host.py`, `aivm/net.py`, `aivm/firewall.py`: Provide abstractions for interacting with the host system's networking, libvirt, and nftables firewall.
 - `aivm/config_store/` & `aivm/config.py`: Manage the global configuration store located at `~/.config/aivm/config.toml`.
 - `aivm/machine_store.py`: Owns where the 0.6 machine store lives (shared vs personal root), its permissions, and the globally ordered resource locks.
+- `aivm_secrets/`: The independent secret-use broker (`aivm-secrets`), shipped in the same distribution. It never imports `aivm`. `kernel/` is the pure state machine and service specs; `host/` is the impure shell (TLS egress, AEAD envelope, audit, files, sockets); `guest.py` is the single-file client copied into the guest. `aivm/secrets_transport.py` is the only AIVM code that knows it exists, and reaches it as a child process.
 
 ### Key Design Patterns
 - **Command Manager**: Subprocess execution is centralized through a command manager that organizes logs into semantic steps and handles sudo approvals.
@@ -111,4 +121,6 @@ is the subject of a different test file. Say which in a comment.
   because a caller passes `sudo=True` speculatively under
   `privilege_mode='as-needed'` and no `sudo` reaches the command line when
   already root. This is a deliberate policy, not an oversight to optimize away.
+- **The secrets kernel stays pure, and only it can authorize an effect**: `aivm_secrets/kernel/` is written to be ported to verified Rust (Charon/Aeneas/Lean), so it may import only `dataclasses`, `typing`, `json`, `hashlib` and `ipaddress`, and may not use a clock, file, socket, environment, RNG, regular expression, closure, lambda or mutable dataclass. Every transition returns a new `State` or raises a fixed-code `SecretsError` *without changing state*; time and fresh identifiers arrive as arguments. `AuthorizedEffect`, `Ticket` and `Grant` are constructed only in `kernel/machine.py`, and the executor is called only from `host/broker.py` with a value a kernel emission returned. `tests/test_secrets_purity.py` enforces all of this structurally -- extend the kernel within those rules rather than relaxing the test. When a check is added, add its mutant to `tests/test_secrets_mutation.py`; when behavior a client can observe changes, that is a protocol change against `tests/secrets_vectors/`, not a refactor.
+- **AIVM talks to the secrets broker as a process, never as a library**: `aivm ssh --secrets_policy` starts `aivm-secrets serve` as a child, reads one JSON line, and holds the child's stdin open as a lifetime lease (close it, or die, and the session is revoked). AIVM may import `aivm_secrets.errors` and nothing else. The credential is resolved inside the child, so it never exists in the AIVM process, a command line or an AIVM log; do not "simplify" this into an in-process `Broker`, which would also break the drop-in replacement by a Rust binary.
 - **A refusal is not a failure**: `CommandControlError` (user declined, approval unavailable, sudo forbidden, never executed) says the user did not authorize the work; `CommandError` says the work did not succeed. Best-effort machinery — `mgr.attempt(...)`, `except AIVMError`, `except Exception` — routinely recovers from the second and must never recover from the first, because continuing past it contradicts the user's own decision. `attempt()` re-raises every `CommandControlError` regardless of `catch`, and broad handlers wrapping manager calls re-raise it explicitly. When adding one, ask what it does to a declined prompt.

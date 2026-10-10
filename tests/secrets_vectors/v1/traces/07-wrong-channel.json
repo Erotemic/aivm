@@ -1,0 +1,168 @@
+{
+ "about": "A capability presented on any other channel, identity, VM or owner is refused.",
+ "theorems": [
+  "BIND-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "demo-service",
+  "host": "api.example.org",
+  "authentication": "x-api-key",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "profile.read",
+    "method": "GET",
+    "path": "/v1/account"
+   },
+   {
+    "name": "issue.view",
+    "method": "GET",
+    "path": "/v1/issues/{issue}",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    }
+   },
+   {
+    "name": "issue.list",
+    "method": "GET",
+    "path": "/v1/issues",
+    "query": {
+     "state": "open",
+     "page": "{page}"
+    },
+    "parameters": {
+     "page": {
+      "min": 1,
+      "max": 50
+     }
+    }
+   },
+   {
+    "name": "issue.comment",
+    "method": "POST",
+    "path": "/v1/issues/{issue}/comments",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    },
+    "body_fields": {
+     "body": 100
+    }
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 5,
+  "max_body_bytes": 100
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "binding": {
+    "channel": "dddddddddddddddddddddddddddddddd"
+   },
+   "expect": {
+    "code": "wrong_binding"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "binding": {
+    "access_identity": "someone-else"
+   },
+   "expect": {
+    "code": "wrong_binding"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "binding": {
+    "vm": "another-vm"
+   },
+   "expect": {
+    "code": "wrong_binding"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "binding": {
+    "owner_uid": 0
+   },
+   "expect": {
+    "code": "wrong_binding"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "ok"
+   }
+  }
+ ]
+}

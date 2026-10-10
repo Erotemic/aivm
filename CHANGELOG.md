@@ -5,23 +5,41 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## Version 0.6.2 - Unreleased
 
 ### Added
-* Provider-neutral secret-use integrations (policy schema 2): host-only
-  executable-argv or private-file credential resolvers, declarative HTTPS
-  service operations, fixed-origin typed routing, and a generic guest
-  ``aivm-secrets invoke`` client. Schema 1 GitHub operations remain optional
-  and backward-compatible. See the provider-neutral planning document.
-* Experimental `aivm-secrets` package and CLI, shipped beside AIVM with an
-  optional `secrets` extra. Host-held GitHub credentials are carried in sealed,
-  session-bound capabilities for explicitly selected PR operations, with
-  bounded requests, fixed-origin egress and redacted audit records.
-* Opt-in foreground `aivm ssh --secrets_policy` sessions with a restricted
-  gh-shaped guest client. Writes require both policy authorization and
-  `--secrets_allow_writes=true`; existing repository credential backends and
-  ordinary SSH behavior remain independent.
-* Secret-management architecture and formal-assurance plans covering Garrett's
-  identity-bound credential proxy design and a safe-Rust/Aeneas/Lean migration.
-  The delivered Python prototype is not formally verified and does not yet
-  implement mTLS, non-exportable instance keys, or stock-gh compatibility.
+* Experimental secret-use sessions: `aivm ssh --secrets_policy POLICY` lets a
+  guest *use* a host-held service credential for a fixed list of named
+  operations without ever holding it. Shipped as the independent
+  `aivm_secrets` package and `aivm-secrets` CLI behind the optional `secrets`
+  extra. Tested Python, **not formally verified**; see `docs/source/secrets.rst`
+  and `docs/planning/aivm-secrets-*.md`.
+* Declarative HTTPS services (policy schema 2): a manifest pins one TLS
+  destination, a host-only credential source, and named operations with typed
+  path and query parameters (finite lists or integer ranges) and bounded
+  string body fields. Optional operator pins for port, address, trust anchor
+  and static headers support private deployments. Reference manifests for
+  GitLab, GitHub and a non-Git service are in `docs/examples/`.
+* The GitHub pull-request service (policy schema 1): every operation is
+  conditioned on freshly fetched PR metadata matching the policy.
+* Host write modes, `--secrets_writes deny|approve|allow`. In `approve` mode
+  each exact write waits for a one-shot `aivm-secrets approve` on the host.
+* Guest-side delegation: `aivm-secrets delegate` mints a strictly smaller
+  capability that spends its parent's budget; `operations` describes a
+  capability and `renounce` gives one up.
+* Host operator commands: `aivm-secrets sessions`, `pending`, `approve`,
+  `deny`, `revoke` and `audit-verify`.
+* Hash-chained audit files written before each dispatch, a hard total deadline
+  on provider requests, and whole-path ownership checks for policies,
+  credentials, trust anchors and resolver programs.
+* A secret session ends when its foreground `aivm ssh` exits or is killed, on
+  expiry, on `aivm-secrets revoke`, and when its AIVM access identity is
+  disabled or removed from any terminal.
+* The broker runs as a separate process bound to the foreground session, so
+  the credential never enters the AIVM process. Its kernel
+  (`aivm_secrets/kernel/`) is a pure state machine shaped for a later
+  verified-Rust port, specified in
+  `docs/planning/aivm-secrets-kernel-spec.md` and pinned by the conformance
+  vectors in `tests/secrets_vectors/`.
+* A real-VM end-to-end suite for secret sessions,
+  `tests/e2e/test_secrets.py`, included in `run_e2e_tests.sh`.
 
 
 ## Version 0.6.1 - Released 2026-10-07

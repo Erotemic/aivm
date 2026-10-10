@@ -1,0 +1,233 @@
+{
+ "about": "Every GitHub operation first fetches the selected PR; a metadata mismatch stops all later effects and still spends the reservation.",
+ "theorems": [
+  "AUTH-01",
+  "EFFECT-01",
+  "BUDGET-01"
+ ],
+ "policy": {
+  "schema": 1,
+  "repository": "TauCetiProject/TauCeti",
+  "pr_numbers": [
+   13861,
+   13862
+  ],
+  "operations": [
+   "pr.view",
+   "pr.diff",
+   "pr.comments",
+   "pr.reviews",
+   "pr.review-comments",
+   "pr.checks",
+   "pr.comment",
+   "pr.edit"
+  ],
+  "author": "Erotemic",
+  "head_repository": "Erotemic/TauCeti",
+  "lifetime_seconds": 1800,
+  "max_requests": 4,
+  "max_body_bytes": 8192
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "pr.view",
+    "repository": "TauCetiProject/TauCeti",
+    "pr": 13861
+   },
+   "facts": {
+    "number": 13861,
+    "title": "Proof repair",
+    "body": "Example",
+    "base": {
+     "repo": {
+      "full_name": "TauCetiProject/TauCeti"
+     }
+    },
+    "head": {
+     "repo": {
+      "full_name": "Erotemic/TauCeti"
+     },
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": {
+     "login": "Erotemic"
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/repos/taucetiproject/tauceti/pulls/13861",
+     "accept": "application/vnd.github+json",
+     "response": "json"
+    },
+    "effect": null
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "pr.reviews",
+    "repository": "TauCetiProject/TauCeti",
+    "pr": 13861,
+    "page": 2
+   },
+   "facts": {
+    "number": 13861,
+    "title": "Proof repair",
+    "body": "Example",
+    "base": {
+     "repo": {
+      "full_name": "TauCetiProject/TauCeti"
+     }
+    },
+    "head": {
+     "repo": {
+      "full_name": "Erotemic/TauCeti"
+     },
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": {
+     "login": "Erotemic"
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/repos/taucetiproject/tauceti/pulls/13861",
+     "accept": "application/vnd.github+json",
+     "response": "json"
+    },
+    "effect": {
+     "method": "GET",
+     "target": "/repos/taucetiproject/tauceti/pulls/13861/reviews?per_page=100&page=2",
+     "accept": "application/vnd.github+json",
+     "response": "json"
+    }
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "pr.diff",
+    "repository": "TauCetiProject/TauCeti",
+    "pr": 13861
+   },
+   "facts": {
+    "number": 13861,
+    "title": "Proof repair",
+    "body": "Example",
+    "base": {
+     "repo": {
+      "full_name": "TauCetiProject/TauCeti"
+     }
+    },
+    "head": {
+     "repo": {
+      "full_name": "Erotemic/TauCeti"
+     },
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": {
+     "login": "someone-else"
+    }
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "pr.checks",
+    "repository": "TauCetiProject/TauCeti",
+    "pr": 13861
+   },
+   "facts": {
+    "number": 13861,
+    "title": "Proof repair",
+    "body": "Example",
+    "base": {
+     "repo": {
+      "full_name": "Elsewhere/TauCeti"
+     }
+    },
+    "head": {
+     "repo": {
+      "full_name": "Erotemic/TauCeti"
+     },
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": {
+     "login": "Erotemic"
+    }
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "pr.view",
+    "repository": "TauCetiProject/TauCeti",
+    "pr": 13861
+   },
+   "facts": {
+    "number": 13861,
+    "title": "Proof repair",
+    "body": "Example",
+    "base": {
+     "repo": {
+      "full_name": "TauCetiProject/TauCeti"
+     }
+    },
+    "head": {
+     "repo": {
+      "full_name": "Erotemic/TauCeti"
+     },
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": {
+     "login": "Erotemic"
+    }
+   },
+   "expect": {
+    "code": "exhausted"
+   }
+  }
+ ]
+}

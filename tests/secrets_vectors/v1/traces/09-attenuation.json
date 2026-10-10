@@ -1,0 +1,243 @@
+{
+ "about": "A legal narrowing; the child permits nothing outside its parent and spends its parent's budget.",
+ "theorems": [
+  "ATTEN-01",
+  "BUDGET-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "demo-service",
+  "host": "api.example.org",
+  "authentication": "x-api-key",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "profile.read",
+    "method": "GET",
+    "path": "/v1/account"
+   },
+   {
+    "name": "issue.view",
+    "method": "GET",
+    "path": "/v1/issues/{issue}",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    }
+   },
+   {
+    "name": "issue.list",
+    "method": "GET",
+    "path": "/v1/issues",
+    "query": {
+     "state": "open",
+     "page": "{page}"
+    },
+    "parameters": {
+     "page": {
+      "min": 1,
+      "max": 50
+     }
+    }
+   },
+   {
+    "name": "issue.comment",
+    "method": "POST",
+    "path": "/v1/issues/{issue}/comments",
+    "parameters": {
+     "issue": [
+      23,
+      24
+     ]
+    },
+    "body_fields": {
+     "body": 100
+    }
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 3,
+  "max_body_bytes": 100
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "delegate",
+   "grant": "root",
+   "as": "helper",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "narrowing": {
+    "operations": {
+     "issue.view": {
+      "issue": [
+       23
+      ]
+     }
+    },
+    "max_requests": 2,
+    "lifetime_seconds": 30
+   },
+   "expect": {
+    "code": "ok",
+    "grant": {
+     "remaining_requests": 2,
+     "expires_at": 1030,
+     "writes": "deny",
+     "operations": [
+      {
+       "name": "issue.view",
+       "write": false,
+       "parameters": {
+        "issue": [
+         23
+        ]
+       },
+       "fields": {}
+      }
+     ]
+    }
+   }
+  },
+  {
+   "do": "request",
+   "grant": "helper",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "effect": {
+     "method": "GET",
+     "target": "/v1/issues/23",
+     "accept": "application/json",
+     "response": "json"
+    }
+   }
+  },
+  {
+   "do": "request",
+   "grant": "helper",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 24
+    }
+   },
+   "expect": {
+    "code": "denied"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "helper",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "denied"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 24
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "helper",
+   "clock": {
+    "wall": 1030,
+    "mono": 130
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "expired"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "helper",
+   "clock": {
+    "wall": 1029,
+    "mono": 129
+   },
+   "request": {
+    "operation": "issue.view",
+    "arguments": {
+     "issue": 23
+    }
+   },
+   "expect": {
+    "code": "ok"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1029,
+    "mono": 129
+   },
+   "request": {
+    "operation": "profile.read",
+    "arguments": {}
+   },
+   "expect": {
+    "code": "exhausted"
+   }
+  }
+ ]
+}

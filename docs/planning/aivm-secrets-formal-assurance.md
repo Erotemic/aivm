@@ -1,9 +1,13 @@
 # AIVM Secrets: formal assurance and refinement plan
 
-Status: obligations to implement, not completed proofs. The delivered system
-is Python with executable contracts and adversarial tests. There are no Lean
-proof artifacts, extracted Rust functions or verified-binary claims in this
-release. This document is the acceptance contract for that next stage.
+Status: obligations to implement, not completed proofs (updated 2026-10-10).
+The delivered system is Python with executable contracts and adversarial
+tests. There are no Lean proof artifacts, extracted Rust functions or
+verified-binary claims in this release. This document is the acceptance
+contract for that next stage. What exists today toward it: a pure,
+extraction-shaped kernel, [its specification](aivm-secrets-kernel-spec.md), a
+frozen conformance corpus, a mutation gate, and
+[a machine-readable assumption ledger](aivm-secrets-assumptions.json).
 
 See [the architecture](aivm-secrets-design.md) and the
 [provider-neutral plan](aivm-secrets-agnostic-integrations.md) for source
@@ -37,10 +41,13 @@ Effect = FetchServiceFacts(requestId, serviceId, canonicalResource)
        | Reply(publicProjection)
 ```
 
-`Approve` and durable epochs are future features. Distinguish events modeled
-for the target from events implemented in the current single-session runtime.
-The current budget is attached to one session; a future delegated grant tree
-requires additional global budget accounting.
+Of these events, the Python kernel implements `Receive` (as `admit` and the
+two emissions), `Revoke`, `Approve` and explicit time samples, as separate
+total functions rather than one `step`. Durable epochs remain a future
+feature: revocation and approvals live in the memory of one session's broker.
+The budget is attached to one session and is shared across its delegated
+grant tree, each admission debiting every ancestor; accounting across
+*sessions* does not exist.
 
 The kernel never receives raw provider secrets. It can reference an opaque
 credential identity only after the trusted envelope verifier authenticates it.
@@ -56,18 +63,23 @@ parser and authentication refinement proved or explicitly assumed separately.
 
 | ID | Property to prove | Current evidence / gap |
 | --- | --- | --- |
-| AUTH-01 | Every admitted request is within normalized resource, operation and payload bounds; writes also require host write authority | Python unit tests and an independent finite oracle; no proof |
-| EFFECT-01 | Every credentialed effect has a matching admission/reservation and is exactly the effect authorized for that request | Constructed routes and orchestration tests; interpreter refinement unproved |
-| BIND-01 | A grant bound to one channel/identity/epoch cannot authorize an effect on a distinct channel/identity/epoch | Equality checks and cross-session tests; local channel assignment trusted |
-| TIME-01 | Admission/dispatch validation requires `issued <= now < expires` and a live monotonic deadline | Boundary and injected-clock tests; trusted clock sampling and scheduling |
-| REVOKE-01 | No new effect is authorized after revocation linearizes for that grant/ancestor | Serialized prototype; no cancellation theorem or persistent epochs |
-| BUDGET-01 | The number of reservations is bounded; no admission reuses a reservation; failed preflight does not refund authority | Reservation and concurrent-socket tests; no distributed quota |
-| ATTEN-01 | A child policy permits no operation outside its parent's semantic permission set | Pure `is_attenuation` predicate; no child-grant issuance |
-| APPROVAL-01 | A one-shot approval authorizes at most one effect with exactly the approved canonical bytes | Planned; not implemented |
-| CODEC-01 | Accepted bytes have one canonical meaning, and encoded effect bytes preserve that meaning | Strict Python parser tests; no byte-to-Rust-to-Lean refinement |
-| CONF-01 | Public errors/audit/protocol outputs contain no raw credential under the specified declassification model | Safe errors and reflection tests; no noninterference proof |
-| AUDIT-01 | Required intent durability acknowledgment precedes each dispatch; audit failure prevents later admissions | Fault-injection tests; filesystem and external atomicity trusted |
-| RESTART-01 | A stale capability cannot regain authority after an epoch change or ordinary restart | Fresh per-process key in prototype; snapshot rollback not covered |
+| AUTH-01 | Every admitted request is within normalized resource, operation and payload bounds; writes also require host write authority | 2^9-case independent oracle, generated traces against a reference model, vectors; no proof |
+| EFFECT-01 | Every credentialed effect has a matching admission/reservation and is exactly the effect authorized for that request | Effects are computed inside the kernel under a ticket bound to the request digest; sole-constructor and sole-caller checks; interpreter refinement unproved |
+| BIND-01 | A grant bound to one channel/identity/epoch cannot authorize an effect on a distinct channel/identity/epoch | Per-component equality tests, cross-session and post-crash replay on a real VM; local channel assignment trusted |
+| TIME-01 | Admission/dispatch validation requires `issued <= now < expires` and a live monotonic deadline | Boundary and rollback tests at every emission, expiry on a real VM; trusted clock sampling and scheduling |
+| REVOKE-01 | No new effect is authorized after revocation linearizes for that grant/ancestor | Revocation observed between preflight and write, cascade over the grant tree, host revoke and identity disable on live sessions; in-memory epochs only |
+| BUDGET-01 | The number of reservations is bounded; no admission reuses a reservation; failed preflight does not refund authority | Invariant checked after every generated step; concurrent clients in-process, over sockets and from a real guest; no cross-session quota |
+| ATTEN-01 | A child policy permits no operation outside its parent's semantic permission set | Exhaustive `spec_subset` against set inclusion, brute-force scope oracle, delegated grants with shared budget, expiry clamp and bounded depth; no proof |
+| APPROVAL-01 | A one-shot approval authorizes at most one effect with exactly the approved canonical bytes | Implemented: digest binds policy, grant and request; consumed with admission; unreachable from the guest socket. In-memory only |
+| CODEC-01 | Accepted bytes have one canonical meaning, and encoded effect bytes preserve that meaning | Regex-free validators checked against regex oracles, strictness negatives, canonical-encoding vectors; no byte-to-Rust-to-Lean refinement |
+| CONF-01 | Public errors/audit/protocol outputs contain no raw credential under the specified declassification model | Fixed error table, reflection tripwire, a search of a live guest's disk and process environments; no noninterference proof |
+| AUDIT-01 | Required intent durability acknowledgment precedes each dispatch; audit failure prevents later admissions | Ordering test, fault injection at each record, hash-chain verification; filesystem and external atomicity trusted |
+| RESTART-01 | A stale capability cannot regain authority after an epoch change or ordinary restart | Fresh per-process key; a killed session's capability refused by the next session on a real VM; snapshot rollback not covered |
+
+Each row is also attacked by at least one mutant in
+`tests/test_secrets_mutation.py`: a single deleted check that the named tests
+must detect. All 48 current mutants are detected. That is evidence the tests
+are not vacuous; it says nothing about checks nobody thought to write.
 
 ### AUTH-01 and EFFECT-01: meaningful authorization
 
@@ -123,7 +135,8 @@ rollback; never infer anti-rollback from use of a monotonic API alone.
 ### BUDGET-01 and ATTEN-01: no amplification
 
 For one local session, start with `used = 0`, allow reservation only if
-`used < limit`, and increment exactly once before provider I/O. Inductively
+`used < limit` for the grant and each ancestor, and increment each exactly
+once before provider I/O. Inductively
 prove `0 <= used <= limit` and an injection from accepted operations into
 reservations. A second provider request within one operation must reuse its
 own reservation, not create an extra admission or bypass final checks.
@@ -133,8 +146,9 @@ child's absolute expiration not to exceed the parent's expiration, all ancestor
 epochs to remain active, and all children to debit an authoritative common
 budget or a proven disjoint allocation. Minting many children each with the
 parent's full budget violates non-amplification even if every policy predicate
-individually says "subset". The delivered predicate compares relative policy
-limits; it is not a complete grant-delegation implementation.
+individually says "subset". The delivered kernel takes the first route: a
+child holds no budget of its own, and the state invariant
+`sum(children.used) <= parent.used` is checked after every generated step.
 
 ### CONF-01: specify information release honestly
 
@@ -158,9 +172,9 @@ claim; this architecture necessarily trusts the intended credential recipient.
 
 ### APPROVAL-01 and AUDIT-01: binding human decisions to effects
 
-A future approval hashes the canonical provider, repository identity, PR
-identity, operation, exact body bytes, grant/epoch and validity interval. Changes
-invalidate it. Consumption must be atomic with effect admission; losing an
+An approval is identified by a digest of the policy, the grant and the
+canonical request -- operation, resource arguments and exact body bytes -- and
+carries its own expiry. Any change yields a different digest. Consumption must be atomic with effect admission; losing an
 external response does not restore an approval. The public guest endpoint must
 not expose approval issuance.
 
@@ -172,9 +186,11 @@ into a distributed atomic commit with GitHub.
 
 ## 3. Trusted computing base and assumption ledger
 
-Publish a machine-readable assumption manifest alongside future proof results.
-Each entry needs an owner, a scope, a version/hash where applicable, a failure
-consequence, and a test or justification. At minimum include:
+A machine-readable assumption manifest is published as
+[aivm-secrets-assumptions.json](aivm-secrets-assumptions.json): each entry has
+an owner, the consequence of the assumption failing, and the tests that
+exercise the boundary. Version pins and hashes are to be added with the first
+proof results. It covers at least:
 
 | Boundary | Explicit assumption / additional work |
 | --- | --- |
@@ -252,12 +268,18 @@ explicitly authorized write, one legal narrowing and one budget-exhaustion
 trace. Mutation tests remove a resource constraint or service-specific host check, drop a channel comparison,
 refund a failed reservation, allow a redirect or accept a duplicate JSON key.
 The associated test/proof gate must fail. Mutation success is supporting
-evidence, not a completeness proof of the specification.
+evidence, not a completeness proof of the specification. For the Python
+implementation both gates exist today: the vector corpus is checked for the
+required witnesses, and `tests/test_secrets_mutation.py` applies each of those
+deletions.
 
 Run the same independent vectors through Python, compiled Rust and extracted
-Lean definitions. Tests already separate policy, envelope, broker, actual Unix
-socket transport and AIVM orchestration. Extend that coverage with fuzzing,
-crash injection and real VM smoke tests. Do not let optional formatting failures
+Lean definitions; the corpus is `tests/secrets_vectors/` and the replay
+harness is `aivm_secrets/kernel/trace.py`. Tests separate grammar, policy,
+kernel, envelope, executor, broker, Unix socket transport, operator CLI and
+AIVM orchestration, and include generated traces, crash injection and a
+real-VM suite. Extend that with coverage-guided fuzzing of the codec and the
+frame parser. Do not let optional formatting failures
 prevent collecting security or benchmark evidence, but do not waive a proof
 failure for a release advertised as verified.
 
@@ -284,14 +306,19 @@ A plugin cannot inherit a security claim solely because it implements the
 right Python method names. It must satisfy a typed effect contract included
 in the compiled/extracted Rust and Lean models.
 
-The new Python `kernel.reserve` is the first isolated common transition. It
-checks authenticated channel/policy binding, time and monotonically bounded
-lifetime, budget, exact named operation membership, host write enablement,
-and bounded payload size. The service adapter separately parses and checks its
-resource arguments. Today the broker trusts installed Python adapter code;
-there is no machine-checked refinement connecting the adapter's route to a
-verified authorization decision. Thus the experimental tests cannot establish
-end-to-end complete mediation against a compromised adapter.
+The Python `kernel.machine` holds the common transitions. `admit` checks
+authenticated channel/policy binding, time and monotonically bounded lifetime,
+budget, operation membership, typed resource arguments, host write mode and
+bounded payload size, for the grant and each ancestor. Resource arguments are
+checked against a `Scope` the service spec compiles to, so the check is the
+same code for every service. The kernel also computes and grammar-checks each
+effect, and refuses one whose class differs from the admitted operation, so a
+defective service compiler cannot turn a read into a write or leave the
+effect grammar. It does **not** verify that a compiler's route is the route
+the operator meant: there is no machine-checked refinement connecting a
+spec's route to its manifest, and the interpreter around the kernel is
+trusted Python. The tests therefore cannot establish end-to-end complete
+mediation against a compromised service spec or interpreter.
 
 Add proof obligations PLUGIN-01, RESOLVER-01, ROUTE-01, COMP-01, EXT-01, and
 REFINE-01 as specified in

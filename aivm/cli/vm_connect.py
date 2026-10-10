@@ -21,7 +21,7 @@ from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
 from ..config_scopes import ResolvedVMContext
-from ..config_store import load_store
+from ..config_store import find_principal, load_store
 from ..credentials.agent_transport import (
     AgentForwarding,
     prepare_agent_forwarding,
@@ -33,6 +33,7 @@ from ..runtime import (
     ssh_base_args,
     ssh_forward_agent_socket_args,
 )
+from ..scoped_store import load_scope_store, resolve_store_scope
 from ..services import PreparedSession, cfg_path, load_cfg
 from ..tunnel_helper import (
     DEFAULT_TMUX_SESSION,
@@ -40,7 +41,8 @@ from ..tunnel_helper import (
     tunnel_helper_source,
 )
 from ..util import which
-from ..vm import create_ops, ssh_config as mk_ssh_config, wait_for_ip
+from ..vm import create_ops, wait_for_ip
+from ..vm import ssh_config as mk_ssh_config
 from ..vm.provision import provision_guest_requirements
 from ._common import _BaseCommand
 
@@ -712,6 +714,34 @@ class VMCodeCLI(_BaseCommand):
         return 0
 
 
+def _access_identity_still_usable(
+    config_opt: str | None, session: PreparedSession
+) -> bool:
+    """Re-read the authoritative record of the identity a session runs as.
+
+    A secret session's authority belongs to an access identity. It is
+    checked once at session start; this is the question asked again while
+    the session is open, so that disabling or removing the identity -- from
+    any terminal, by its owner or an administrator -- ends the session's
+    authority instead of merely preventing the next login.
+    """
+    principal = session.context.principal
+    scope = resolve_store_scope(config_opt)
+    if not scope.is_machine:
+        # A single-user explicit store has no identity records to revoke.
+        return True
+    current = find_principal(
+        load_scope_store(scope),
+        vm_name=session.context.machine.vm.name,
+        principal_id=principal.id,
+    )
+    return (
+        current is not None
+        and current.state == 'active'
+        and current.host_uid == principal.host_uid
+    )
+
+
 class VMSSHCLI(_BaseCommand):
     """SSH into the VM and start a shell in the mapped guest directory."""
 
@@ -755,19 +785,35 @@ class VMSSHCLI(_BaseCommand):
     )
 
     secrets_policy: str = kwconf.Value(
-        '', help='Opt in to a foreground secret-use broker using a host-only JSON policy.',
+        '',
+        help=(
+            'Opt in to a foreground secret-use session using a host-only JSON '
+            'policy. The service credential stays on the host; the guest gets '
+            'a short-lived capability for the named operations only.'
+        ),
     )
     secrets_token_file: str = kwconf.Value(
-        '', help='Optional host-only token file (overrides the policy credential source); schema 1 otherwise uses gh.',
+        '',
+        help=(
+            'Optional private host token file, used instead of the credential '
+            'source the policy names.'
+        ),
     )
-    secrets_allow_writes: bool = kwconf.Flag(
-        False, help='Also enable policy-authorized writes for this session only.',
+    secrets_writes: Literal['deny', 'approve', 'allow'] = kwconf.Value(
+        'deny',
+        help=(
+            'How this session treats policy-listed writes. deny: reads only. '
+            'approve: each exact write waits for `aivm-secrets approve` on '
+            'the host. allow: policy-listed writes proceed.'
+        ),
     )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
-        if not args.secrets_policy and (args.secrets_token_file or args.secrets_allow_writes):
+        if not args.secrets_policy and (
+            args.secrets_token_file or args.secrets_writes != 'deny'
+        ):
             log.error('Secret credential/write options require --secrets_policy.')
             return 1
         log.trace(
@@ -823,17 +869,26 @@ class VMSSHCLI(_BaseCommand):
         )
         if args.secrets_policy:
             from aivm_secrets.errors import SecretsError
+
             from ..secrets_transport import run_secrets_ssh
 
             try:
                 ssh_result = run_secrets_ssh(
-                    session, ssh_cmd,
+                    session,
+                    ssh_cmd,
                     policy_path=Path(args.secrets_policy),
-                    token_file=Path(args.secrets_token_file) if args.secrets_token_file else None,
-                    allow_writes=args.secrets_allow_writes,
+                    token_file=(
+                        Path(args.secrets_token_file)
+                        if args.secrets_token_file
+                        else None
+                    ),
+                    writes=args.secrets_writes,
+                    still_authorized=partial(
+                        _access_identity_still_usable, args.config, session
+                    ),
                 )
             except SecretsError as ex:
-                log.error('Secret session failed: {}', ex)
+                log.error('Secret session failed: {}', ex.for_operator())
                 return 1
             except OSError:
                 log.error('Secret session host or transport setup failed.')
