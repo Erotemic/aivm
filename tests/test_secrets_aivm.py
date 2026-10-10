@@ -1,4 +1,3 @@
-import json
 import os
 
 import pytest
@@ -8,7 +7,7 @@ from aivm.config import AgentVMConfig
 from aivm.services import PreparedSession
 from aivm_secrets.errors import SecretsError
 from tests.helpers import resolved_test_context
-from tests.secrets_helpers import FakeProvider, TOKEN, policy_data
+from tests.secrets_helpers import FakeProvider, TOKEN, write_policy_file
 
 
 def session_fixture(tmp_path):
@@ -34,8 +33,7 @@ def test_foreground_adapter_carries_only_ciphertext_and_revokes(tmp_path, monkey
     from aivm_secrets.guest import exchange
 
     session = session_fixture(tmp_path)
-    policy_path = tmp_path / 'policy.json'
-    policy_path.write_text(json.dumps(policy_data()))
+    policy_path = write_policy_file(tmp_path / 'policy.json')
     provider = FakeProvider()
     brokers = []
     def create(*args, **kwargs):
@@ -76,8 +74,7 @@ def test_foreground_adapter_carries_only_ciphertext_and_revokes(tmp_path, monkey
 def test_adapter_rejects_shared_policy_before_credential_access(tmp_path, monkeypatch):
     from aivm.secrets_transport import run_secrets_ssh
     session = session_fixture(tmp_path)
-    path = session.host_src / 'policy.json'
-    path.write_text(json.dumps(policy_data()))
+    path = write_policy_file(session.host_src / 'policy.json')
     monkeypatch.setattr('aivm_secrets.sources.credential_from_gh', lambda: pytest.fail('credential read'))
     with pytest.raises(SecretsError) as exc:
         run_secrets_ssh(session, [], policy_path=path)
@@ -109,8 +106,7 @@ def test_failed_guest_setup_revokes_without_exposing_guest_echo(tmp_path, monkey
     from aivm.secrets_transport import run_secrets_ssh
     from aivm_secrets.broker import Broker
     session = session_fixture(tmp_path)
-    path = tmp_path / 'policy.json'
-    path.write_text(json.dumps(policy_data()))
+    path = write_policy_file(tmp_path / 'policy.json')
     brokers = []
     def create(*args, **kwargs):
         instance = Broker(*args, **kwargs, provider=FakeProvider())

@@ -17,7 +17,7 @@ from aivm_secrets.provider import GitHubProvider, HOST, MAX_RESPONSE
 from aivm_secrets.server import LocalServer
 from aivm_secrets.sources import credential_from_file, credential_from_gh
 from aivm_secrets.wire import read_frame
-from tests.secrets_helpers import Harness, TOKEN, policy_data
+from tests.secrets_helpers import Harness, TOKEN, write_policy_file
 
 
 def test_real_unix_socket_and_standalone_guest_client(tmp_path, capsys):
@@ -114,8 +114,8 @@ def test_wire_denies_pipelining_and_incomplete_frames(data):
 
 
 def test_policy_check_does_not_acquire_credential(tmp_path, monkeypatch, capsys):
-    path = tmp_path / 'policy.json'
-    path.write_text(json.dumps(policy_data()))
+    path = write_policy_file(tmp_path / 'policy.json')
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
     monkeypatch.setattr('aivm_secrets.cli.credential_from_gh', lambda: pytest.fail('credential read'))
     assert main(['policy-check', str(path)]) == 0
     assert json.loads(capsys.readouterr().out)['policy']['repository'] == 'taucetiproject/tauceti'

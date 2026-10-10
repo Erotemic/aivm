@@ -22,6 +22,20 @@ def policy_data(**changes):
     return data
 
 
+def write_policy_file(path: Path, **changes) -> Path:
+    """Create a policy fixture safely, irrespective of the caller's umask.
+
+    A group-writable default umask (0002) must not turn positive policy
+    tests into `unsafe_file` failures. Use a private mode from creation,
+    including on a host with permissive default file creation settings.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(dumps(policy_data(**changes)))
+    return path
+
+
 def metadata():
     return {'number': 13861, 'title': 'Proof repair', 'body': 'Example',
             'base': {'repo': {'full_name': 'TauCetiProject/TauCeti'}},
