@@ -20,7 +20,7 @@ import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from sys import version_info
-from typing import Literal, Sequence
+from typing import IO, Literal, Sequence
 
 if version_info >= (3, 11):
     from types import TracebackType
@@ -167,6 +167,48 @@ class CommandResult:
     code: int
     stdout: str
     stderr: str
+
+
+class SupervisedProcess:
+    """A child started by :meth:`CommandManager.spawn`; the caller owns it.
+
+    The child holds its stdin open as a *lease*: it is expected to stop when
+    that pipe closes, which happens when :meth:`release` is called and also
+    when this process dies for any reason. That makes "the child cannot
+    outlive its supervisor" a property of the kernel's pipe semantics rather
+    than of cleanup code that a crash would skip.
+    """
+
+    def __init__(self, process: 'subprocess.Popen[bytes]'):
+        self._process = process
+
+    @property
+    def stdout(self) -> IO[bytes]:
+        assert self._process.stdout is not None
+        return self._process.stdout
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def release(self) -> None:
+        """End the lease by closing the child's stdin. Idempotent."""
+        stdin = self._process.stdin
+        if stdin is not None and not stdin.closed:
+            try:
+                stdin.close()
+            except OSError:
+                pass
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        """Wait for exit; ``None`` if the child is still running."""
+        try:
+            return self._process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def kill(self) -> None:
+        self._process.kill()
+        self._process.wait()
 
 
 CommandState = Literal['pending', 'succeeded', 'failed', 'not-executed']
@@ -1298,6 +1340,94 @@ class CommandManager:
                 argv,
                 CommandResult(126, '', f'command is not executable: {denied}'),
             ) from ex
+
+    def spawn(
+        self,
+        cmd: Sequence[str],
+        *,
+        role: CommandRole | None = None,
+        ownership: CommandOwnership = 'user',
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        summary: str = '',
+        detail: str = '',
+    ) -> SupervisedProcess | None:
+        """Start an unprivileged child that runs beside this process.
+
+        ``run`` waits for a command to finish. A supervised child is one the
+        caller must keep alive for a while -- the secret-use broker holds a
+        credential for exactly as long as a foreground session lasts. It is
+        still a command the user is entitled to see and to refuse, so it is
+        announced like any other and passes the same privilege gate and the
+        same consent rule as a loose ``run``.
+
+        It never escalates: privilege needs the approval machinery of a plan,
+        and a long-lived root child is not something to start in passing.
+        The child's stdin and stdout are pipes the caller owns and its stderr
+        is discarded; see :class:`SupervisedProcess` for the lease they form.
+
+        Returns ``None`` during dry-run, after rendering the command.
+        """
+        if self.current_plan() is not None:
+            raise CommandManagerInvariantError(
+                'A supervised process cannot be started inside an open '
+                'command step.'
+            )
+        spec = self.request(
+            cmd,
+            sudo=False,
+            role=role,
+            ownership=ownership,
+            capture=True,
+            env=env,
+            summary=summary,
+            detail=detail,
+        )
+        self._reject_sudo_if_forbidden(spec.cmd, needs_sudo=False)
+        local_log = log.opt(depth=1)
+        run_line, omissions = self._render_preview(spec)
+        if spec.summary:
+            local_log.info(
+                '{}{}', 'DRYRUN: ' if self.dry_run else '', spec.summary
+            )
+        label = (
+            'DRYRUN (start skipped):'
+            if self.dry_run
+            else 'RUN (supervised, runs beside this process):'
+        )
+        local_log.info('{}\n{}', label, run_line)
+        self._announce_omissions(omissions, _stacklevel=1)
+        raw_line = self._raw_command(spec)
+        if raw_line != run_line:
+            local_log.debug('raw command:\n{}', raw_line)
+        if self.dry_run:
+            return None
+        if self._is_confirmable_write(spec):
+            self._confirm_loose_command(spec, _stacklevel=2)
+        if self._effective_role(spec) == 'modify':
+            self.mutation_generation += 1
+        argv = [str(part) for part in spec.cmd]
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                cwd=cwd,
+            )
+        except FileNotFoundError as ex:
+            missing = ex.filename or (argv[0] if argv else '<empty command>')
+            raise CommandError(
+                argv, CommandResult(127, '', f'command not found: {missing}')
+            ) from ex
+        except PermissionError as ex:
+            denied = ex.filename or (argv[0] if argv else '<empty command>')
+            raise CommandError(
+                argv,
+                CommandResult(126, '', f'command is not executable: {denied}'),
+            ) from ex
+        return SupervisedProcess(process)
         raise CommandManagerInvariantError('os.exec returned without replacing the process')
 
     def _resolve_dry_run_commands(
