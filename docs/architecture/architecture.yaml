@@ -12,6 +12,7 @@ subsystems:
     label: Runtime resolution and services
     exact:
       - aivm.services
+      - aivm.secrets_transport
       - aivm.runtime
       - aivm.scoped_store
       - aivm.operational_scope

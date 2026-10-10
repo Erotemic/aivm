@@ -1603,6 +1603,12 @@
           "path": "aivm/cli/vm_connect.py"
         },
         {
+          "imported": "aivm.secrets_transport",
+          "importer": "aivm.cli.vm_connect",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_connect.py"
+        },
+        {
           "imported": "aivm.services",
           "importer": "aivm.cli.vm_connect",
           "occurrences": 1,
@@ -3996,6 +4002,12 @@
       "classification": "accepted",
       "from": "orchestration",
       "imports": [
+        {
+          "imported": "aivm.commands",
+          "importer": "aivm.secrets_transport",
+          "occurrences": 1,
+          "path": "aivm/secrets_transport.py"
+        },
         {
           "imported": "aivm.commands",
           "importer": "aivm.services",

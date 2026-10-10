@@ -754,9 +754,22 @@ class VMSSHCLI(_BaseCommand):
         False, short_alias=['n'], help='Print actions without running.'
     )
 
+    secrets_policy: str = kwconf.Value(
+        '', help='Opt in to a foreground GitHub broker using a host-only JSON policy.',
+    )
+    secrets_token_file: str = kwconf.Value(
+        '', help='Host-only token file; otherwise read the owning host gh login.',
+    )
+    secrets_allow_writes: bool = kwconf.Flag(
+        False, help='Also enable policy-authorized writes for this session only.',
+    )
+
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        if not args.secrets_policy and (args.secrets_token_file or args.secrets_allow_writes):
+            log.error('Secret credential/write options require --secrets_policy.')
+            return 1
         log.trace(
             'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
             args.host_src,
@@ -808,13 +821,31 @@ class VMSSHCLI(_BaseCommand):
                 remote_cmd,
             ]
         )
-        ssh_result = CommandManager.current().run(
-            ssh_cmd,
-            sudo=False,
-            user_driven=True,
-            check=False,
-            capture=False,
-        )
+        if args.secrets_policy:
+            from aivm_secrets.errors import SecretsError
+            from ..secrets_transport import run_secrets_ssh
+
+            try:
+                ssh_result = run_secrets_ssh(
+                    session, ssh_cmd,
+                    policy_path=Path(args.secrets_policy),
+                    token_file=Path(args.secrets_token_file) if args.secrets_token_file else None,
+                    allow_writes=args.secrets_allow_writes,
+                )
+            except SecretsError as ex:
+                log.error('Secret session failed: {}', ex)
+                return 1
+            except OSError:
+                log.error('Secret session host or transport setup failed.')
+                return 1
+        else:
+            ssh_result = CommandManager.current().run(
+                ssh_cmd,
+                sudo=False,
+                user_driven=True,
+                check=False,
+                capture=False,
+            )
         if ssh_result.code == 255:
             # 255 is ssh's own exit status: the connection or transport
             # failed. Anything else is simply what the user's login shell

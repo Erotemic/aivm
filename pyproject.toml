@@ -50,7 +50,11 @@ dependencies = [
   "kwconf>=0.12.0",
   "PyYAML>=6.0.2",
 ]
+optional-dependencies.secrets = [
+  "cryptography>=46.0.0",
+]
 optional-dependencies.all = [
+  "aivm[secrets]",
   "aivm[docs]",
   "aivm[optional]",
   "aivm[tests]",
@@ -69,6 +73,7 @@ optional-dependencies.optional = [
   "pygments>=2.19.2",
 ]
 optional-dependencies.tests = [
+  "aivm[secrets]",
   "coverage>=6.1.1",
   "pytest>=6.2.5",
   "pytest-cov>=3.0.0",
@@ -78,6 +83,7 @@ optional-dependencies.tests = [
 ]
 urls.Homepage = "https://github.com/Erotemic/aivm"
 scripts.aivm = "aivm.cli:main"
+scripts.aivm-secrets = "aivm_secrets.cli:main"
 
 [tool.setuptools]
 include-package-data = true

@@ -4,6 +4,20 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
 
+### Added
+* Experimental `aivm-secrets` package and CLI, shipped beside AIVM with an
+  optional `secrets` extra. Host-held GitHub credentials are carried in sealed,
+  session-bound capabilities for explicitly selected PR operations, with
+  bounded requests, fixed-origin egress and redacted audit records.
+* Opt-in foreground `aivm ssh --secrets_policy` sessions with a restricted
+  gh-shaped guest client. Writes require both policy authorization and
+  `--secrets_allow_writes=true`; existing repository credential backends and
+  ordinary SSH behavior remain independent.
+* Secret-management architecture and formal-assurance plans covering Garrett's
+  identity-bound credential proxy design and a safe-Rust/Aeneas/Lean migration.
+  The delivered Python prototype is not formally verified and does not yet
+  implement mTLS, non-exportable instance keys, or stock-gh compatibility.
+
 
 ## Version 0.6.1 - Released 2026-10-07
 
