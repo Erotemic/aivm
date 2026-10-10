@@ -23,7 +23,16 @@ import pytest
 
 from aivm_secrets import guest
 from aivm_secrets.host.server import LocalServer
-from tests.secrets_helpers import REPO, Harness, https_policy
+from aivm_secrets.kernel.service import parse_policy
+from tests.secrets_helpers import (
+    PROJECT,
+    REPO,
+    Harness,
+    github_policy,
+    https_policy,
+    tracker_facts,
+    tracker_policy,
+)
 
 
 @pytest.fixture
@@ -80,14 +89,6 @@ def test_the_client_is_one_stdlib_only_file_that_old_pythons_can_parse():
         (['renounce'], 'renounce', True),
         (['delegate', '--scope', '{"operations":{"issue.view":{}}}', '--output', 'x'],
          'delegate', {'operations': {'issue.view': {}}}),
-        (['pr', 'view', '7', '--repo', REPO], 'request',
-         {'operation': 'pr.view', 'repository': REPO, 'pr': 7}),
-        (['pr', 'reviews', '7', '-R', REPO, '--page', '3'], 'request',
-         {'operation': 'pr.reviews', 'repository': REPO, 'pr': 7, 'page': 3}),
-        (['pr', 'comment', '7', '--repo', REPO, '--body', 'hi; rm -rf /'], 'request',
-         {'operation': 'pr.comment', 'repository': REPO, 'pr': 7, 'body': 'hi; rm -rf /'}),
-        (['pr', 'edit', '7', '--repo', REPO, '--title', 'T'], 'request',
-         {'operation': 'pr.edit', 'repository': REPO, 'pr': 7, 'title': 'T'}),
     ],
 )  # fmt: skip
 def test_command_lines_translate_to_exactly_one_frame(argv, verb, payload):
@@ -131,6 +132,7 @@ def test_request_arguments_input_is_not_shell_parsed(tmp_path):
         ['pr', 'view', '--repo', 'x/y'],
         ['auth', 'token'],
         ['repo', 'clone', 'x/y'],
+        ['as'],
         ['invoke'],
         ['invoke', 'x', '--arguments', '{}', '--arguments-file', 'f'],
         ['invoke', 'x', '--url', 'https://evil.invalid'],
@@ -400,3 +402,334 @@ def test_the_client_runs_as_a_copied_standalone_script(session, tmp_path):
     )  # fmt: skip
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['result']['path'] == '/v1/issues/24'
+
+
+# -- answering to another tool's name ---------------------------------------
+#
+# Nothing below is specific to any tool: ``tk`` is an invented command line
+# for an invented service, and ``gh`` works only because the built-in GitHub
+# manifest carries a table for it.
+
+
+def table(policy, alias):
+    """The table and operations a ``describe`` reply would carry."""
+    spec = parse_policy(policy)
+    operations = [operation.to_wire() for operation in spec.scope()]
+    return spec.cli_tables()[alias], operations
+
+
+def translate(words, policy=None, alias='tk'):
+    rows, operations = table(policy or tracker_policy(), alias)
+    return guest.request_from_alias(rows, operations, list(words))
+
+
+@pytest.mark.parametrize(
+    'words,operation,arguments',
+    [
+        (['view', '7', '--project', PROJECT], 'ticket.view',
+         {'ticket': 7, 'project': PROJECT}),
+        (['view', '-p', PROJECT, '7'], 'ticket.view',
+         {'ticket': 7, 'project': PROJECT}),
+        (['view', f'--project={PROJECT}', '8'], 'ticket.view',
+         {'ticket': 8, 'project': PROJECT}),
+        (['builds', 'list', '7', '--project', PROJECT, '--page', '3'],
+         'ticket.builds', {'ticket': 7, 'project': PROJECT, 'page': 3}),
+        (['note', PROJECT, '7', '--text', 'hi; rm -rf / $(id)'], 'ticket.note',
+         {'ticket': 7, 'project': PROJECT, 'text': 'hi; rm -rf / $(id)'}),
+        (['note', PROJECT, '7', '--text=a=b', '--title', ''], 'ticket.note',
+         {'ticket': 7, 'project': PROJECT, 'text': 'a=b', 'title': ''}),
+        # After ``--`` nothing is an option, so a value may start with one.
+        (['note', '--text', 'x', '--', PROJECT, '7'], 'ticket.note',
+         {'ticket': 7, 'project': PROJECT, 'text': 'x'}),
+        (['log', '7'], 'ticket.log', {'ticket': 7}),
+    ],
+)  # fmt: skip
+def test_a_command_table_translates_words_into_one_typed_request(
+    words, operation, arguments
+):
+    request, output = translate(words)
+    assert request == {'operation': operation, 'arguments': arguments}
+    assert output == ('result' if operation == 'ticket.log' else 'reply')
+    # Numbers are numbers because the operation says so, not by guessing.
+    assert type(request['arguments']['ticket']) is int
+    assert type(request['arguments'].get('project', '')) is str
+
+
+@pytest.mark.parametrize(
+    'words,problem',
+    [
+        ([], 'available here'),
+        (['delete', '7'], 'available here'),
+        (['builds'], 'available here'),  # only ``builds list`` exists
+        (['api', '/user'], 'available here'),
+        (['view'], 'wrong number'),
+        (['view', '7', '8'], 'wrong number'),
+        (['view', '7', '--web'], 'unsupported option'),
+        (['view', '7', '--json', 'title'], 'unsupported option'),
+        (['view', '7', '--text', 'x'], 'unsupported option'),
+        (['view', '7', '--project'], 'missing its value'),
+        (['view', '7', '-p', 'a', '--project', 'b'], 'given twice'),
+        (['note', PROJECT, '7', '--text', 'a', '--text-file', '-'], 'twice'),
+        (['view', 'seven', '-p', PROJECT], 'must be a number'),
+        (['view', '7.0', '-p', PROJECT], 'must be a number'),
+        (['builds', 'list', '7', '--page', 'two'], 'must be a number'),
+        (
+            ['note', PROJECT, '7', '--text-file', '/nonexistent/x'],
+            'cannot read',
+        ),
+        (['view', '-1', '-p', PROJECT], 'unsupported option'),
+    ],
+)
+def test_anything_the_table_does_not_describe_is_a_usage_error(words, problem):
+    with pytest.raises(guest.Usage) as caught:
+        translate(words)
+    assert problem in str(caught.value)
+
+
+def test_the_available_commands_are_listed_from_the_table():
+    with pytest.raises(guest.Usage) as caught:
+        translate(['help'])
+    assert str(caught.value) == ('available here: builds list; log; note; view')
+
+
+def test_a_file_option_reads_bounded_text(tmp_path, monkeypatch):
+    path = tmp_path / 'note.md'
+    path.write_text('from a file\n')
+    request, _ = translate(['note', PROJECT, '7', '--text-file', str(path)])
+    assert request['arguments']['text'] == 'from a file\n'
+    monkeypatch.setattr(
+        sys,
+        'stdin',
+        type('In', (), {'buffer': __import__('io').BytesIO(b'piped')})(),
+    )
+    request, _ = translate(['note', PROJECT, '7', '--text-file', '-'])
+    assert request['arguments']['text'] == 'piped'
+    path.write_text('x' * (guest.MAX_INPUT + 1))
+    with pytest.raises(guest.Usage):
+        translate(['note', PROJECT, '7', '--text-file', str(path)])
+
+
+@pytest.mark.parametrize(
+    'rows',
+    [
+        None, 'view', 7, {}, [None], [[]], ['view'], [{}], [{'command': 'view'}],
+        [{'command': []}], [{'command': [7]}], [{'command': ['view']}],
+        [{'command': ['view'], 'operation': 'x', 'options': 'no'}],
+        [{'command': ['view'], 'operation': 'x', 'positional': None}],
+        [{'command': ['\x1b[31mview'], 'operation': 'x'}],
+    ],
+)  # fmt: skip
+def test_a_hostile_table_can_only_produce_a_usage_error_or_a_request(rows):
+    """The table comes from a peer; the client never trusts its shape."""
+    for words in (['view', '7', '--project', 'x'], ['other']):
+        try:
+            request, output = guest.request_from_alias(rows, None, words)
+        except guest.Usage as problem:
+            assert '\x1b' not in str(problem)
+        except (TypeError, AttributeError, KeyError, ValueError):
+            pass  # reported by ``main`` as a transport failure, exit 2
+        else:
+            assert set(request) == {'operation', 'arguments'}
+
+
+class Live:
+    """A broker on a real socket, addressed the way a guest session is."""
+
+    def __init__(self, tmp_path, monkeypatch, policy, writes='allow'):
+        self.h = Harness(tmp_path, policy=policy, writes=writes)
+        self._directory = tempfile.TemporaryDirectory(prefix='as-', dir='/tmp')
+        self.directory = Path(self._directory.name)
+        capability = self.directory / 'capability'
+        capability.write_text(self.h.capability + '\n')
+        self._server = LocalServer(self.h.broker, self.directory / 's')
+        server = self._server.__enter__()
+        self.env = {
+            'AIVM_SECRETS_SOCKET': str(server.socket_path),
+            'AIVM_SECRETS_CAPABILITY_FILE': str(capability),
+        }
+        for key, value in self.env.items():
+            monkeypatch.setenv(key, value)
+
+    def close(self):
+        self._server.__exit__(None, None, None)
+        self._directory.cleanup()
+        self.h.broker.close()
+
+
+@pytest.fixture
+def live(tmp_path, monkeypatch):
+    made = []
+
+    def build(policy, **kwargs):
+        made.append(Live(tmp_path, monkeypatch, policy, **kwargs))
+        return made[-1]
+
+    yield build
+    for item in made:
+        item.close()
+
+
+def test_an_invented_tool_name_works_end_to_end(live, capsys):
+    session = live(tracker_policy())
+    session.h.executor.metadata = tracker_facts()
+    assert (
+        guest.main(['view', '7', '--project', 'ACME/Widgets'], alias='tk') == 0
+    )
+    assert json.loads(capsys.readouterr().out)['result'] == tracker_facts()
+    assert (
+        guest.main(['note', PROJECT, '7', '--text', 'hello'], alias='tk') == 0
+    )
+    assert json.loads(capsys.readouterr().out)['result']['body'] == {
+        'text': 'hello'
+    }
+    session.h.executor.execute = lambda authorized, credential: 'raw log\n'
+    assert guest.main(['log', '8'], alias='tk') == 0
+    assert capsys.readouterr().out == 'raw log\n'  # ``output: result``
+    # The explicit spelling is the same thing.
+    base = [
+        '--socket', session.env['AIVM_SECRETS_SOCKET'],
+        '--capability-file', session.env['AIVM_SECRETS_CAPABILITY_FILE'],
+    ]  # fmt: skip
+    assert guest.main([*base, 'as', 'tk', 'log', '8']) == 0
+    assert capsys.readouterr().out == 'raw log\n'
+
+
+def test_gh_is_the_same_mechanism_with_the_built_in_table(live, capsys):
+    session = live(github_policy())
+    h = session.h
+    assert guest.main(['pr', 'view', '13861', '--repo', REPO], alias='gh') == 0
+    assert json.loads(capsys.readouterr().out)['result']['number'] == 13861
+    assert guest.main(['pr', 'diff', '13861', '-R', REPO], alias='gh') == 0
+    assert capsys.readouterr().out.startswith('diff --git')
+    h.executor.result = [{'id': 1}]
+    argv = ['pr', 'reviews', '13861', '--repo', REPO, '--page', '2']
+    assert guest.main(argv, alias='gh') == 0
+    reply = json.loads(capsys.readouterr().out)
+    assert reply['pagination']['page'] == 2 and reply['result'] == [{'id': 1}]
+    body = 'Looks right; $(id) `id` | tee'
+    argv = ['pr', 'comment', '13861', '--repo', REPO, '--body', body]
+    assert guest.main(argv, alias='gh') == 0
+    capsys.readouterr()
+    effect, credential = h.executor.calls[-1]
+    assert effect.method == 'POST' and effect.body == (('body', body),)
+    assert (
+        guest.main(
+            ['pr', 'edit', '13861', '--repo', REPO, '--title', 'T'], alias='gh'
+        )
+        == 0
+    )
+    assert h.executor.calls[-1][0].body == (('title', 'T'),)
+    output = capsys.readouterr()
+    assert credential not in output.out + output.err
+
+
+@pytest.mark.parametrize(
+    'words',
+    [
+        ['api', '/user'],
+        ['auth', 'token'],
+        ['auth', 'status', '--show-token'],
+        ['repo', 'clone', 'x/y'],
+        ['pr', 'merge', '13861', '--repo', REPO],
+        ['pr', 'view', '13861', '--repo', REPO, '--web'],
+        ['pr', 'view', '13861', '--repo', REPO, '--json', 'title'],
+        ['pr', 'comment', '13861', '--repo', REPO, '--edit-last'],
+        ['pr', 'view', '--repo', REPO],
+        ['pr', 'checkout', '13861'],
+        ['secret', 'list'],
+        ['--version'],
+        [],
+    ],
+)
+def test_gh_has_no_stock_fallback(live, capsys, words):
+    """An unlisted command is an error. It is never passed to anything else."""
+    session = live(github_policy())
+    assert guest.main(words, alias='gh') == 2
+    captured = capsys.readouterr()
+    assert 'not the real gh' in captured.err and captured.out == ''
+    assert not session.h.executor.calls
+    assert session.h.token not in captured.err
+
+
+def test_a_request_the_table_allows_is_still_decided_by_the_broker(
+    live, capsys
+):
+    session = live(github_policy(), writes='deny')
+    assert guest.main(['pr', 'view', '9', '--repo', REPO], alias='gh') == 3
+    assert capsys.readouterr().err.strip() == 'aivm-secrets: denied'
+    argv = ['pr', 'comment', '13861', '--repo', REPO, '--body', 'x']
+    assert guest.main(argv, alias='gh') == 3
+    assert (
+        guest.main(['pr', 'view', '13861', '-R', 'other/repo'], alias='gh') == 3
+    )
+    assert not session.h.executor.calls
+
+
+def test_an_alias_the_session_does_not_define_does_nothing(
+    live, capsys, monkeypatch
+):
+    session = live(https_policy())
+    assert guest.main(['pr', 'view', '1', '--repo', 'x/y'], alias='gh') == 2
+    assert 'no gh commands' in capsys.readouterr().err
+    assert guest.main(['x'], alias='\x1b[31mevil') == 2
+    assert '\x1b' not in capsys.readouterr().err
+    assert not session.h.executor.calls
+    monkeypatch.delenv('AIVM_SECRETS_SOCKET')
+    assert guest.main(['pr', 'view', '1'], alias='gh') == 2
+    assert 'no AIVM secret session' in capsys.readouterr().err
+
+
+def test_a_hostile_describe_reply_cannot_inject_terminal_text(
+    capsys, monkeypatch
+):
+    table_ = {'cli': {'gh': [{'command': ['\u001b[31mrm'], 'operation': 'x'}]}}
+    answer = json.dumps(dict(table_, ok=True, grant='not a grant')).encode()
+    with tempfile.TemporaryDirectory(prefix='as-', dir='/tmp') as directory:
+        capability = Path(directory) / 'capability'
+        capability.write_text('aivs1.x')
+        fake = Impostor(Path(directory), answer + b'\n')
+        monkeypatch.setenv('AIVM_SECRETS_SOCKET', str(fake.path))
+        monkeypatch.setenv('AIVM_SECRETS_CAPABILITY_FILE', str(capability))
+        try:
+            assert guest.main(['pr', 'view'], alias='gh') == 2
+        finally:
+            fake.close()
+    err = capsys.readouterr().err
+    assert '\x1b' not in err and 'available here: ?' in err
+
+
+def test_installed_under_another_name_the_client_answers_to_it(live, tmp_path):
+    """Exactly how it runs in a guest: one copied file and a symlink to it."""
+    import subprocess
+
+    session = live(github_policy())
+    bindir = tmp_path / 'bin'
+    bindir.mkdir()
+    copied = bindir / 'aivm-secrets'
+    copied.write_bytes(Path(guest.__file__).read_bytes())
+    copied.chmod(0o700)
+    (bindir / 'gh').symlink_to('aivm-secrets')
+    env = dict(session.env, PATH=f'{bindir}:{os.environ["PATH"]}')
+
+    def run(*argv, input=None):
+        return subprocess.run(
+            list(argv), env=env, input=input, capture_output=True, text=True,
+            cwd=str(tmp_path), timeout=30,
+        )  # fmt: skip
+
+    view = run('gh', 'pr', 'view', '13861', '--repo', REPO)
+    assert view.returncode == 0, view.stderr
+    assert json.loads(view.stdout)['result']['user']['login'] == 'Erotemic'
+    comment = run(
+        'gh', 'pr', 'comment', '13861', '--repo', REPO, '--body-file', '-',
+        input='from stdin\n',
+    )  # fmt: skip
+    assert comment.returncode == 0, comment.stderr
+    assert session.h.executor.calls[-1][0].body == (('body', 'from stdin\n'),)
+    refused = run('gh', 'api', '/user')
+    assert refused.returncode == 2 and 'not the real gh' in refused.stderr
+    # Under its own name the same file is the ordinary client.
+    own = run('aivm-secrets', 'operations')
+    assert own.returncode == 0 and 'gh' in json.loads(own.stdout)['cli']
+    spelled = run('aivm-secrets', 'as', 'gh', 'pr', 'diff', '13861', '-R', REPO)
+    assert spelled.stdout.startswith('diff --git')

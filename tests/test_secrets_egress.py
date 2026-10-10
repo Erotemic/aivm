@@ -18,11 +18,12 @@ import pytest
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.host import egress as egress_module
 from aivm_secrets.host.egress import HTTPSExecutor
-from aivm_secrets.kernel.github import GitHubSpec
 from aivm_secrets.kernel.machine import AuthorizedEffect
 from aivm_secrets.kernel.model import Effect, Egress
+from aivm_secrets.kernel.service import parse_policy
 from aivm_secrets.kernel.wire import MAX_RESPONSE
 from tests.secrets_helpers import (
+    REPO,
     SERVICE_TOKEN,
     TLS_HOST,
     TLSService,
@@ -36,8 +37,16 @@ READ = Effect('GET', '/v1/issues/23', (('page', '2'),))
 WRITE = Effect('POST', '/v1/issues/23/comments', body=(('body', 'héllo "x"'),))
 
 
-def authorized(effect: Effect, *, final: bool = True) -> AuthorizedEffect:
-    return AuthorizedEffect(0, 'a' * 32, 'd' * 64, final, effect)
+# A provider whose GET changes state; the manifest declared it a write.
+TOGGLE = Effect('GET', '/v1/issues/23/close')
+
+
+def authorized(
+    effect: Effect, *, final: bool = True, write: bool | None = None
+) -> AuthorizedEffect:
+    """What the kernel would mint. ``write`` is the *declared* effect."""
+    declared = effect.is_write if write is None else write
+    return AuthorizedEffect(0, 'a' * 32, 'd' * 64, final, declared, effect)
 
 
 @pytest.fixture
@@ -119,15 +128,18 @@ def test_text_responses_and_custom_accept(service):
     ).code == ('upstream_response')
 
 
-def test_the_github_service_reaches_only_its_constructed_routes(service):
-    """Schema 1 effects through the same executor, on a stand-in destination."""
-    spec = GitHubSpec.parse(github_policy())
+def test_the_github_preset_reaches_only_its_constructed_routes(service):
+    """The built-in manifest through the same executor, on a stand-in host."""
+    spec = parse_policy(github_policy())
     request = spec.parse_request(
-        {'operation': 'pr.checks', 'repository': spec.repository, 'pr': 13861}
+        {
+            'operation': 'pr.checks',
+            'arguments': {'repository': REPO, 'pr': 13861},
+        }
     )
     base = '/repos/taucetiproject/tauceti'
     service.routes[('GET', f'{base}/pulls/13861')] = metadata()
-    checks = f'{base}/commits/{"a" * 40}/check-runs?per_page=100&page=1'
+    checks = f'{base}/commits/{"a" * 40}/check-runs?page=1&per_page=100'
     service.routes[('GET', checks)] = {'check_runs': []}
     runner = executor(service, headers=spec.egress.headers)
     facts = runner.execute(
@@ -158,24 +170,63 @@ def test_https_provider_never_redirects_or_retries(service, status):
     )  # one request; the Location was not chased
 
 
-@pytest.mark.parametrize('status', [400, 401, 403, 404, 409, 422, 429])
-def test_a_refusal_is_definite_for_reads_and_writes(service, status):
-    """4xx: the service answered and did not apply the request."""
+STATUSES_4XX = [400, 401, 403, 404, 409, 422, 429]
+
+
+@pytest.mark.parametrize('status', STATUSES_4XX)
+def test_a_refused_read_is_definite(service, status):
+    """4xx to a read: the service answered, and there was nothing to apply."""
     provider_text = b'{"message":"token ghp_PROVIDERTEXT is invalid"}'
     service.routes[('GET', '/v1/issues/23?page=2')] = respond(
         status, provider_text
     )
-    service.routes[('POST', '/v1/issues/23/comments')] = respond(
-        status, provider_text
-    )
-    for effect in (READ, WRITE):
-        error = failed(
-            executor(service).execute, authorized(effect), SERVICE_TOKEN
-        )
-        assert (error.code, error.status) == ('upstream_rejected', status)
-        # No provider text is carried by the error, only the bounded status.
-        assert 'PROVIDERTEXT' not in str(error) + error.detail
-    assert len(service.requests) == 2  # never retried, 429 included
+    error = failed(executor(service).execute, authorized(READ), SERVICE_TOKEN)
+    assert (error.code, error.status) == ('upstream_rejected', status)
+    # No provider text is carried by the error, only the bounded status.
+    assert 'PROVIDERTEXT' not in str(error) + error.detail
+    assert len(service.requests) == 1  # never retried, 429 included
+
+
+@pytest.mark.parametrize('status', STATUSES_4XX)
+def test_a_write_answered_4xx_may_still_have_been_applied(service, status):
+    """No HTTP status proves a sent write did nothing.
+
+    This provider *applies* the comment and then answers 4xx -- a conflict
+    detected after the fact, a validation error from a later stage. Calling
+    that "rejected" would invite the very retry that duplicates it.
+    """
+    applied = []
+
+    def apply_then_refuse(seen):
+        applied.append(seen['body'])
+        return status, {}, b'{"message":"ghp_PROVIDERTEXT conflict"}'
+
+    service.routes[('POST', '/v1/issues/23/comments')] = apply_then_refuse
+    error = failed(executor(service).execute, authorized(WRITE), SERVICE_TOKEN)
+    assert (error.code, error.status) == ('outcome_unknown', status)
+    assert 'PROVIDERTEXT' not in str(error) + error.detail
+    assert len(applied) == 1 and len(service.requests) == 1
+
+
+@pytest.mark.parametrize('status', [404, 409, 500, 302])
+def test_a_declared_write_is_a_write_whatever_its_method(service, status):
+    """The verdict follows the manifest's ``effect``, not ``GET`` vs ``POST``."""
+    service.routes[('GET', '/v1/issues/23/close')] = respond(status)
+    declared = authorized(TOGGLE, write=True)
+    error = failed(executor(service).execute, declared, SERVICE_TOKEN)
+    assert (error.code, error.status) == ('outcome_unknown', status)
+    # The very same request, declared a read, is an ordinary read failure.
+    plain = failed(executor(service).execute, authorized(TOGGLE), SERVICE_TOKEN)
+    assert plain.code in ('upstream_rejected', 'upstream_error')
+    assert len(service.requests) == 2
+
+
+def test_a_declared_write_that_succeeds_is_just_a_result(service):
+    service.routes[('GET', '/v1/issues/23/close')] = {'closed': True}
+    declared = authorized(TOGGLE, write=True)
+    assert executor(service).execute(declared, SERVICE_TOKEN) == {
+        'closed': True
+    }
 
 
 @pytest.mark.parametrize('status', [500, 502, 503, 504])
@@ -315,7 +366,11 @@ def test_a_dropped_connection_after_sending_leaves_a_write_unknown(tmp_path):
     with RawTLSPeer(tmp_path, lambda peer: None) as runner:
         read = failed(runner.execute, authorized(READ), SERVICE_TOKEN)
         write = failed(runner.execute, authorized(WRITE), SERVICE_TOKEN)
+        toggle = failed(
+            runner.execute, authorized(TOGGLE, write=True), SERVICE_TOKEN
+        )
     assert (read.code, write.code) == ('upstream_error', 'outcome_unknown')
+    assert toggle.code == 'outcome_unknown'
 
 
 def test_a_trickling_peer_cannot_outlive_the_total_deadline(
@@ -367,11 +422,16 @@ def test_only_a_kernel_authorization_is_executable(service):
     runner = executor(service)
     for forged in [READ, ('GET', '/v1/x'), {'effect': READ}, None]:
         assert failed(runner.execute, forged, SERVICE_TOKEN).code == 'denied'
-    # A preflight is by definition read-only.
-    preflight_write = authorized(WRITE, final=False)
-    assert (
-        failed(runner.execute, preflight_write, SERVICE_TOKEN).code == 'denied'
-    )
+    for inconsistent in (
+        # A preflight is by definition read-only ...
+        authorized(WRITE, final=False),
+        authorized(TOGGLE, final=False, write=True),
+        # ... and a request with a body is never a declared read.
+        authorized(WRITE, write=False),
+    ):
+        assert (
+            failed(runner.execute, inconsistent, SERVICE_TOKEN).code == 'denied'
+        )
     assert service.requests == []
 
 

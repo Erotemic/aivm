@@ -98,6 +98,15 @@ and GitHub's endpoint semantics. Trust the operator to select the right host
 account, policy and workspace. Root and unrestricted hypervisor administrators
 remain outside this boundary, as they already do for AIVM.
 
+Other local users are *not* trusted. Every host file the session depends on
+must be owned by root or the caller and writable by nobody else. A
+group-writable path is accepted only when the group is provably the
+caller's alone: its primary group, with no other listed member, no other
+account using it as a primary group, and an account database that is local
+and therefore enumerable. A group's member list alone cannot establish this,
+because accounts whose primary group it is do not appear there; on a host
+with a directory service, group-writable paths are refused.
+
 In particular, do not install the host broker from an editable source tree that
 the guest can modify. Do not share the host home, credential store, runtime
 socket directory, or audit directory with an untrusted guest. Checking the
@@ -133,9 +142,9 @@ convention:
 | `kernel/grammar.py`, `codec.py` | Regex-free alphabets; strict JSON; canonical encoding and digests | `secrets-protocol`, with a refinement contract |
 | `kernel/model.py`, `scope.py` | Bindings, claims, requests, effects, destinations; authorization as data, membership and attenuation | Extractable safe-Rust kernel |
 | `kernel/machine.py` | The state machine: admit, emit, delegate, approve, revoke. Sole constructor of `AuthorizedEffect` | Verified transition system |
-| `kernel/https.py` | Declarative fixed-destination HTTPS service specs, schema 2 | Verified route interpreter |
-| `kernel/github.py` | Fact-conditioned GitHub PR service, schema 1 | Optional service variant |
-| `kernel/service.py`, `source.py` | The closed sum of service specs; the grammar of a credential source | Closed, verified spec compilation |
+| `kernel/https.py` | The one service mechanism: declarative fixed-destination manifests with declared effects, fact checks and inert command tables | Verified route interpreter |
+| `kernel/presets.py` | Built-in manifests as data: policy schema 1 expands to the GitHub pull-request manifest | Data shipped with the kernel; no proof surface of its own |
+| `kernel/service.py`, `source.py` | Policy schema to service spec, by one route; the grammar of a credential source | Closed, verified spec compilation |
 | `kernel/wire.py`, `trace.py` | Protocol version 1 frames; I/O-free trace replay for conformance | Bounded codec; shared conformance harness |
 | `host/envelope.py` | Library-backed authenticated encryption and strict capability decoding | Credential service; audited crypto dependency |
 | `host/broker.py` | The interpreter that drives kernel transitions, audit and the executor | Small trusted interpreter with a refinement argument |
@@ -255,9 +264,30 @@ to borrow another principal's provider identity.
 
 The adapter starts the broker as a child process, naming a host-owned policy
 and the shared workspace as an *untrusted root*. The broker refuses to start
-if the policy, the credential, the resolver program or its own code lies
-inside that root; it resolves the credential itself and creates its private
-sockets and audit file. AIVM then copies only the inspectable guest client and
+if the policy, the credential, a trust anchor, the resolver program or its
+own code is reachable through that root; it resolves the credential itself
+and creates its private sockets and audit file.
+
+"Reachable through" is deliberately stronger than "located in". A path is
+resolved one component at a time from `/`, through held directory
+descriptors, and is refused if any location *visited* lies under the root:
+the path as written, each symbolic link followed, and the final destination.
+Checking only the destination would accept `workspace/link/token` with
+`link -> /host/private`, which resolves outside the workspace while the
+guest still decides, at any moment, what it resolves to. A credential
+resolver is executed at the fully resolved location that was checked, with
+its original name only as `argv[0]`, so a link re-pointed after the check
+changes nothing.
+
+The broker's own code is protected at launch, not only by inspection. AIVM
+starts it with `python -I` (no `PYTHON*` variables, no user site, no current
+directory) and an environment from which loader and trust-store variables
+have been removed; a `PYTHONPATH` that reaches into the workspace therefore
+cannot substitute the package or plant a `sitecustomize.py`. As a second,
+independent half the broker checks where its interpreter, every module
+search path entry and every loaded module came from, and refuses to serve if
+any lies under the untrusted root. That half detects rather than prevents --
+the code has already run -- which is why both exist. AIVM then copies only the inspectable guest client and
 the sealed capability through SSH stdin, and opens a dedicated reverse
 Unix-socket forward on the foreground SSH process.
 Secret sessions disable SSH multiplexing and ambient SSH config; require the
@@ -363,9 +393,18 @@ Routes follow GitHub's PR, issue-comment and check-run REST APIs. The adapter
 pins the documented API version `2026-03-10`; an API upgrade needs contract and
 fixture review rather than automatic acceptance. [GH1, GH2, GH3]
 
+None of this is GitHub-specific code. The table above is the built-in
+manifest (`kernel/presets.py`, shown in full by `aivm-secrets policy-check`
+and shipped as `docs/examples/aivm-secrets-github-pr.json`): its operations,
+its `pull` fact check, the bound head commit, and a `cli` table mapping `gh`
+command lines onto operations. The guest client reads that table from the
+broker and contains no command of its own.
+
 The guest executable is deliberately gh-shaped, not a transparent replacement
-for stock `gh`. It supports only the table above, requires `--repo` and an
-explicit PR number, and has no fallback. Existing `campaign_ops.py` code using
+for stock `gh`. It supports only what the table lists, requires `--repo` and
+an explicit PR number, and has no fallback: an unlisted command is a usage
+error in the client, and a request made around the client is still decided by
+the broker. Existing `campaign_ops.py` code using
 `gh api`, GraphQL, arbitrary `--json` selection or workflow logs will need a
 separate adapter. Do not advertise drop-in campaign compatibility.
 
@@ -380,12 +419,15 @@ broker-native API remains available even if that compatibility layer is added.
 
 The initial provider creates a direct TLS connection to `api.github.com`, does
 not read HTTP proxy environment variables, sends fixed authorization and API
-headers, refuses redirects and does not retry. Two failures of a write are
-definite and reported as such: no connection was established (`unreachable`),
-or the service answered 4xx (`upstream_rejected`). Any other transport,
-timeout, response-parsing or audit failure after a write dispatch produces an
-unknown-outcome response, and the operator must inspect the service before
-retrying. Pagination includes
+headers, refuses redirects and does not retry. One failure of a write is
+definite and reported as such: no connection was established
+(`unreachable`). Every other failure after a write dispatch -- transport,
+timeout, response parsing, audit, or any HTTP status, 4xx included --
+produces an unknown-outcome response, because a service can apply a request
+and then answer 409 or 422; the operator must inspect the service before
+retrying. (`upstream_rejected` is reported for reads only.) Which operations
+are writes is declared per operation in the manifest and is never inferred
+from the method. Pagination includes
 an explicit `possibly_more` flag; the client never implies a single page is all
 feedback.
 

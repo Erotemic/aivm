@@ -91,8 +91,9 @@ class BrokerProcess:
             # bookkeeping for a session the user asked for on this command
             # line; nothing the user authored is changed.
             ownership='tool',
-            # Never the shared workspace: ``-P`` already keeps the current
-            # directory off ``sys.path``; this keeps it out of the child too.
+            env=broker_environment(),
+            # Never the shared workspace, whatever directory `aivm ssh` was
+            # run from.
             cwd=str(Path.home()),
             summary='Start the secret-use broker for this session',
         )
@@ -170,6 +171,62 @@ class BrokerProcess:
         return self._process.poll() is None
 
 
+# Variables that choose what code a process loads or whom it trusts. None
+# of them may be inherited by the broker from the session that starts it.
+_LOADER_PREFIXES = ('PYTHON', 'LD_', 'DYLD_')
+_LOADER_NAMES = frozenset(
+    {
+        'BASH_ENV',
+        'ENV',
+        'GCONV_PATH',
+        'OPENSSL_CONF',
+        'OPENSSL_MODULES',
+        'SSL_CERT_DIR',
+        'SSL_CERT_FILE',
+    }
+)
+
+
+def interpreter_flags() -> list[str]:
+    """Flags that keep the caller's environment out of the broker's imports.
+
+    ``-I`` (isolated) ignores every ``PYTHON*`` variable, the user site
+    directory and the current directory, so a ``PYTHONPATH`` that points
+    into the shared workspace cannot substitute the broker's code or plant a
+    ``sitecustomize.py`` in it. ``-P`` alone does not: it only withholds the
+    current directory.
+
+    A broker installed with ``pip install --user`` lives in the user site,
+    which ``-I`` would hide. That one case keeps the user site (``-E -P``):
+    it is under the host user's home, which is not shared with a guest.
+    """
+    import site
+
+    import aivm_secrets.errors
+
+    package = Path(aivm_secrets.errors.__file__).resolve()
+    user_site = Path(site.getusersitepackages()).resolve()
+    if user_site in package.parents:
+        return ['-E', '-P']
+    return ['-I']
+
+
+def broker_environment() -> dict[str, str]:
+    """The caller's environment without anything that redirects loading.
+
+    The interpreter flags already neutralize ``PYTHON*``; removing those
+    variables as well keeps them from reaching anything the broker starts,
+    and the loader and trust-store variables have no interpreter flag at
+    all. What a credential resolver may see is narrowed again, by name,
+    inside the broker.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(_LOADER_PREFIXES) and name not in _LOADER_NAMES
+    }
+
+
 def broker_command(
     *,
     policy_path: Path,
@@ -183,7 +240,7 @@ def broker_command(
     """The exact child command line. It never contains a credential."""
     argv = [
         sys.executable,
-        '-P',
+        *interpreter_flags(),
         '-m',
         'aivm_secrets',
         'serve',
@@ -339,7 +396,8 @@ def run_secrets_ssh(
             'cat > aivm-secrets && chmod 700 aivm-secrets'
         )
         for alias in info.client_aliases:
-            # e.g. the GitHub PR service also answers to a gh-shaped name.
+            # A policy's command tables name the tools the client also
+            # answers to; the built-in GitHub manifest lists `gh`.
             install += f' && ln -s aivm-secrets {shlex.quote(alias)}'
         guest_dir, aliases = directory, info.client_aliases
         payload = (

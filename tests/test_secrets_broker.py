@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -19,12 +20,17 @@ from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.audit import verify
 from aivm_secrets.kernel import codec
 from aivm_secrets.kernel.model import Claims
+from aivm_secrets.kernel.service import reparse
 from tests.secrets_helpers import (
+    PROJECT,
     REPO,
+    REVISION,
     SERVICE_TOKEN,
     TOKEN,
     Harness,
     https_policy,
+    tracker_facts,
+    tracker_policy,
 )
 
 
@@ -117,7 +123,7 @@ def test_audit_intent_is_written_before_each_provider_call(make):
     [
         ({'repository': 'other/repo'}, 'denied'),
         ({'pr': 9}, 'denied'),
-        ({'operation': 'pr.merge'}, 'invalid_request'),
+        ({'operation': 'pr.merge'}, 'denied'),
         ({'url': 'https://evil.invalid'}, 'invalid_request'),
         ({'owner_uid': 0}, 'invalid_request'),
         ({'pr': True}, 'invalid_request'),
@@ -381,8 +387,12 @@ def test_even_authenticated_claims_must_match_channel_and_policy(h):
         forged = h.broker._codec.seal(claims, TOKEN)
         reply = h.broker.handle(h.frame('describe', True, forged))
         assert code(reply) == 'wrong_binding'
-        assert code(h.broker.handle(h.frame('request', {
-            'operation': 'pr.view', 'repository': REPO, 'pr': 13861}, forged))) == 'wrong_binding'  # fmt: skip
+        view = {
+            'operation': 'pr.view',
+            'arguments': {'repository': REPO, 'pr': 13861},
+        }
+        reply = h.broker.handle(h.frame('request', view, forged))
+        assert code(reply) == 'wrong_binding'
     assert not h.executor.calls
 
 
@@ -466,13 +476,18 @@ def test_post_write_audit_failure_reports_unknown_outcome(make):
     'raised,reported',
     [
         (SecretsError('upstream_error'), 'outcome_unknown'),
+        (SecretsError('upstream_error', status=503), 'outcome_unknown'),
         (SecretsError('upstream_response'), 'outcome_unknown'),
         (SecretsError('outcome_unknown'), 'outcome_unknown'),
         (SecretsError('internal_error'), 'outcome_unknown'),
         (RuntimeError('boom'), 'outcome_unknown'),
-        # The only definite answers about a dispatched write:
+        # A 4xx is not proof either: a service may apply a write and then
+        # answer 409 or 422. Only its own contract could say otherwise.
+        (SecretsError('upstream_rejected', status=409), 'outcome_unknown'),
+        (SecretsError('upstream_rejected', status=422), 'outcome_unknown'),
+        (SecretsError('outcome_unknown', status=404), 'outcome_unknown'),
+        # The one definite answer about a dispatched write: nothing was sent.
         (SecretsError('unreachable'), 'unreachable'),
-        (SecretsError('upstream_rejected', status=422), 'upstream_rejected'),
     ],
 )
 def test_any_failure_after_write_dispatch_requires_reconciliation(
@@ -482,17 +497,33 @@ def test_any_failure_after_write_dispatch_requires_reconciliation(
     original = h.executor.execute
 
     def execute(authorized, credential):
-        if authorized.effect.is_write:
+        if authorized.write:
             raise raised
         return original(authorized, credential)
 
     h.executor.execute = execute
     reply = h.call('pr.comment', body='Update')
     assert code(reply) == reported
-    if reported == 'upstream_rejected':
-        assert reply['error']['status'] == 422
-        assert h.rows()[-1]['status'] == 422
+    status = getattr(raised, 'status', 0)
+    # The status the service gave is kept as a datum beside the verdict.
+    assert reply['error'].get('status') == (status or None)
+    assert h.rows()[-1].get('status') == (status or None)
     assert h.rows()[-1]['code'] == reported
+
+
+def test_a_failed_fact_fetch_before_a_write_is_not_an_unknown_outcome(make):
+    """Nothing was dispatched yet: the read's own failure is the answer."""
+    h = make(writes='allow')
+
+    def execute(authorized, credential):
+        assert not authorized.final and not authorized.write
+        raise SecretsError('upstream_rejected', status=404)
+
+    h.executor.execute = execute
+    reply = h.call('pr.comment', body='Update')
+    assert reply['error']['code'] == 'upstream_rejected'
+    assert reply['error']['status'] == 404
+    assert 'dispatch' not in h.events()
 
 
 def test_read_failures_keep_their_own_code_and_status(g):
@@ -503,9 +534,160 @@ def test_read_failures_keep_their_own_code_and_status(g):
     reply = g.invoke('issue.view', issue=23)
     assert reply['error'] == {
         'code': 'upstream_rejected',
-        'message': 'Service refused the request; it was not applied.',
+        'message': 'Service refused the read request.',
         'status': 404,
     }
+
+
+# -- a generic manifest: declared effects, fact checks, command tables ------
+
+
+@pytest.fixture
+def tracker(make):
+    def build(writes='deny', **changes):
+        instance = make(
+            f'tracker-{writes}',
+            policy=tracker_policy(**changes),
+            token=SERVICE_TOKEN,
+            writes=writes,
+        )
+        instance.executor.metadata = tracker_facts()
+        return instance
+
+    return build
+
+
+TICKET = {'project': PROJECT, 'ticket': 7}
+
+
+def test_a_declared_write_get_is_refused_until_the_host_allows_writes(tracker):
+    """``ticket.close`` is a GET. It is gated by ``effect``, not by method."""
+    denied = tracker('deny')
+    assert code(denied.invoke('ticket.close', **TICKET)) == 'denied'
+    assert not denied.executor.calls
+    # An ordinary read on the same session still works.
+    assert denied.invoke('ticket.log', ticket=7)['ok']
+
+    waiting = tracker('approve')
+    reply = waiting.invoke('ticket.close', **TICKET)
+    assert code(reply) == 'approval_required' and not waiting.executor.calls
+    digest = reply['approval']['digest']
+    (pending,) = waiting.broker.control({'command': 'pending'})['pending']
+    assert pending['operation'] == 'ticket.close'
+    assert waiting.broker.control({'command': 'approve', 'digest': digest})[
+        'ok'
+    ]
+    assert waiting.invoke('ticket.close', **TICKET)['ok']
+    assert code(waiting.invoke('ticket.close', **TICKET)) == 'approval_required'
+
+    allowed = tracker('allow')
+    assert allowed.invoke('ticket.close', **TICKET)['ok']
+    ((effect, _),) = allowed.executor.calls
+    assert (effect.method, effect.body) == ('GET', None)
+    assert effect.target == '/v1/projects/acme/widgets/tickets/7/close'
+    events = allowed.events()
+    assert events.index('dispatch') < events.index('completed')
+
+
+@pytest.mark.parametrize('status', [404, 409, 500])
+def test_a_failed_declared_write_get_is_an_unknown_outcome(tracker, status):
+    h = tracker('allow')
+    seen = []
+
+    def execute(authorized, credential):
+        seen.append(authorized)
+        code_ = 'upstream_rejected' if status < 500 else 'upstream_error'
+        raise SecretsError(code_, status=status)
+
+    h.executor.execute = execute
+    reply = h.invoke('ticket.close', **TICKET)
+    assert reply['error']['code'] == 'outcome_unknown'
+    assert reply['error']['status'] == status
+    (authorized,) = seen
+    assert authorized.write and authorized.effect.method == 'GET'
+    assert h.rows()[-1]['code'] == 'outcome_unknown'
+
+
+def test_a_fact_check_gates_and_can_answer_a_generic_operation(tracker):
+    h = tracker('allow')
+    view = h.invoke('ticket.view', project='ACME/Widgets', ticket=7)
+    assert view['ok'] and view['result'] == tracker_facts()
+    assert [e.target for e, _ in h.executor.calls] == [
+        '/v1/projects/acme/widgets/tickets/7'
+    ]
+    builds = h.invoke('ticket.builds', **TICKET)
+    assert builds['ok']
+    assert h.executor.calls[-1][0].target == (
+        f'/v1/projects/acme/widgets/revisions/{REVISION}/builds/31/main'
+        '?page=1&per_page=50'
+    )
+    note = h.invoke('ticket.note', text='NOTE-TEXT', **TICKET)
+    assert note['ok'] and note['result']['body'] == {'text': 'NOTE-TEXT'}
+    assert h.executor.methods == ['GET', 'GET', 'GET', 'GET', 'POST']
+    # The recorded resource is the normalized request, never a body.
+    row = [r for r in h.rows() if r['event'] == 'completed'][-1]
+    assert row['resource'] == {'project': PROJECT, 'ticket': 7}
+    assert 'NOTE-TEXT' not in json.dumps(h.rows())
+
+
+@pytest.mark.parametrize(
+    'path,value',
+    [
+        (('id',), 8),
+        (('owner', 'name'), 'mallory'),
+        (('state',), 'closed'),
+        (('project', 'slug'), 'acme/gadgets'),
+        (('head', 'rev'), '../../admin'),
+        (('branch',), 'a/b'),
+    ],
+)
+def test_a_failed_fact_check_prevents_every_later_effect(tracker, path, value):
+    h = tracker('allow')
+    target = h.executor.metadata
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    for operation, extra in (
+        ('ticket.note', {'text': 'hi'}),
+        ('ticket.builds', {}),
+    ):
+        reply = h.invoke(operation, **TICKET, **extra)
+        assert code(reply) == 'resource_mismatch'
+    # One fact fetch each, and never a second request.
+    assert h.executor.methods == ['GET', 'GET']
+    assert 'dispatch' not in h.events()
+    assert h.broker.status()['used'] == 2  # the budget is spent regardless
+
+
+def test_generic_pagination_reaches_the_reply(tracker):
+    h = tracker()
+    h.executor.result = [{}] * 50
+    reply = h.invoke('ticket.builds', page=3, **TICKET)
+    assert reply['pagination'] == {
+        'page': 3,
+        'per_page': 50,
+        'possibly_more': True,
+    }
+    h.executor.result = [{}] * 51
+    assert code(h.invoke('ticket.builds', **TICKET)) == 'upstream_response'
+
+
+def test_describe_carries_the_command_tables_as_plain_data(h, g, tracker):
+    """The guest client learns how to phrase requests; it is granted nothing."""
+    assert g.send('describe')['cli'] == {}
+    gh = h.send('describe')['cli']
+    assert list(gh) == ['gh']
+    assert {' '.join(row['command']) for row in gh['gh']} == {
+        'pr view', 'pr diff', 'pr comments', 'pr reviews',
+        'pr review-comments', 'pr checks', 'pr comment', 'pr edit',
+    }  # fmt: skip
+    t = tracker()
+    described = t.send('describe')
+    assert described['cli'] == t.spec.cli_tables()
+    assert not (h.executor.calls or g.executor.calls or t.executor.calls)
+    text = json.dumps(described)
+    for hidden in ('api.example.org', 'mytool', SERVICE_TOKEN, 'owner'):
+        assert hidden not in text
 
 
 def test_pagination_reaches_the_reply(h):
@@ -514,7 +696,7 @@ def test_pagination_reaches_the_reply(h):
     assert reply['ok'] and reply['pagination'] == {
         'page': 2, 'per_page': 100, 'possibly_more': True,
     }  # fmt: skip
-    assert h.executor.calls[-1][0].target.endswith('?per_page=100&page=2')
+    assert h.executor.calls[-1][0].target.endswith('?page=2&per_page=100')
     h.executor.result = [{'id': i} for i in range(101)]
     assert code(h.call('pr.comments')) == 'upstream_response'
 
@@ -802,16 +984,32 @@ def test_a_broker_reparses_its_spec_and_binding(h, tmp_path):
     """A spec edited in memory cannot define a session the parser would refuse."""
     from aivm_secrets.host.broker import Broker
 
-    for tampered in [
+    comment = next(op for op in h.spec.operations if op.name == 'pr.comment')
+    others = tuple(op for op in h.spec.operations if op is not comment)
+    edits: list[Any] = [
         replace(h.spec, max_requests=10**6),
         replace(h.spec, lifetime_seconds=10**6),
-        replace(h.spec, operations=('pr.merge',)),
-        replace(h.spec, repository='../../orgs/x'),
+        replace(h.spec, operations=()),
+        replace(h.spec, service='../../orgs/x'),
+        # A write quietly reclassified as a read ...
+        replace(h.spec, operations=others + (replace(comment, write=False),)),
+        replace(
+            h.spec,
+            operations=others
+            + (replace(comment, template=('repos', '..', 'admin')),),
+        ),
         object(),
-    ]:
+    ]
+    for tampered in edits:
         with pytest.raises(SecretsError) as caught:
             Broker(tampered, h.binding, TOKEN, tmp_path / 'never.jsonl')
         assert caught.value.code == 'invalid_policy'
+    # An edit that happens to be a valid policy is honestly a different one:
+    # the session it would define carries a different digest.
+    released = replace(
+        h.spec, operations=others + (replace(comment, requires=''),)
+    )
+    assert reparse(released).digest != h.spec.digest
     with pytest.raises(SecretsError):
         Broker(
             h.spec,

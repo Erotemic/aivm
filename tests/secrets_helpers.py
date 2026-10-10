@@ -82,15 +82,22 @@ def https_policy(**changes: Any) -> dict[str, Any]:
             'inherit_env': ['XDG_CONFIG_HOME'],
         },
         'operations': [
-            {'name': 'profile.read', 'method': 'GET', 'path': '/v1/account'},
+            {
+                'name': 'profile.read',
+                'effect': 'read',
+                'method': 'GET',
+                'path': '/v1/account',
+            },
             {
                 'name': 'issue.view',
+                'effect': 'read',
                 'method': 'GET',
                 'path': '/v1/issues/{issue}',
                 'parameters': {'issue': [23, 24]},
             },
             {
                 'name': 'issue.list',
+                'effect': 'read',
                 'method': 'GET',
                 'path': '/v1/issues',
                 'query': {'state': 'open', 'page': '{page}'},
@@ -98,6 +105,7 @@ def https_policy(**changes: Any) -> dict[str, Any]:
             },
             {
                 'name': 'issue.comment',
+                'effect': 'write',
                 'method': 'POST',
                 'path': '/v1/issues/{issue}/comments',
                 'parameters': {'issue': [23, 24]},
@@ -110,6 +118,149 @@ def https_policy(**changes: Any) -> dict[str, Any]:
     }
     data.update(changes)
     return data
+
+
+PROJECT = 'acme/widgets'
+REVISION = 'c0ffee' + '0' * 34
+
+
+def tracker_policy(**changes: Any) -> dict[str, Any]:
+    """A manifest using every general feature, for an invented provider.
+
+    It has a fact check with literal, parameter and case-folded
+    requirements and three bound facts; an operation whose answer is the
+    check itself; a paged read built from bound facts; a write with an
+    optional field; a state-changing ``GET`` declared as a write; and a
+    command table. Nothing in it is specific to any real service.
+    """
+    target = {'project': [PROJECT], 'ticket': [7, 8]}
+    data = https_policy(
+        service='tracker',
+        authentication='bearer',
+        checks={
+            'ticket': {
+                'path': '/v1/projects/{project}/tickets/{ticket}',
+                'require': [
+                    {'at': ['id'], 'equals_parameter': 'ticket'},
+                    {
+                        'at': ['project', 'slug'],
+                        'equals_parameter': 'project',
+                        'fold': True,
+                    },
+                    {'at': ['state'], 'equals': 'open'},
+                    {'at': ['owner', 'name'], 'equals': 'alice', 'fold': True},
+                    {'at': ['version'], 'equals': 2},
+                ],
+                'bind': {
+                    'revision': {'at': ['head', 'rev'], 'format': 'hex'},
+                    'serial': {'at': ['serial'], 'format': 'integer'},
+                    'branch': {'at': ['branch'], 'format': 'segment'},
+                },
+            }
+        },
+        operations=[
+            {
+                'name': 'ticket.view',
+                'effect': 'read',
+                'requires': 'ticket',
+                'returns': 'check',
+                'parameters': target,
+                'fold': ['project'],
+            },
+            {
+                'name': 'ticket.builds',
+                'effect': 'read',
+                'requires': 'ticket',
+                'method': 'GET',
+                'path': '/v1/projects/{project}/revisions/{revision}'
+                '/builds/{serial}/{branch}',
+                'query': {'page': '{page}', 'per_page': '50'},
+                'parameters': dict(target, page={'min': 1, 'max': 9}),
+                'defaults': {'page': 1},
+                'fold': ['project'],
+                'page': {'size': 50, 'at': ['builds'], 'parameter': 'page'},
+            },
+            {
+                'name': 'ticket.note',
+                'effect': 'write',
+                'requires': 'ticket',
+                'method': 'POST',
+                'path': '/v1/projects/{project}/tickets/{ticket}/notes',
+                'parameters': target,
+                'fold': ['project'],
+                'body_fields': {
+                    'text': 100,
+                    'title': {'max_bytes': 20, 'optional': True},
+                },
+            },
+            {
+                # A provider with a state-changing GET: the manifest says so.
+                'name': 'ticket.close',
+                'effect': 'write',
+                'method': 'GET',
+                'path': '/v1/projects/{project}/tickets/{ticket}/close',
+                'parameters': target,
+                'fold': ['project'],
+            },
+            {
+                'name': 'ticket.log',
+                'effect': 'read',
+                'method': 'GET',
+                'path': '/v1/tickets/{ticket}/log',
+                'parameters': {'ticket': [7, 8]},
+                'response': 'text',
+            },
+        ],
+        cli={
+            'tk': [
+                {
+                    'command': ['view'],
+                    'operation': 'ticket.view',
+                    'positional': ['ticket'],
+                    'options': {'--project': 'project', '-p': 'project'},
+                },
+                {
+                    'command': ['builds', 'list'],
+                    'operation': 'ticket.builds',
+                    'positional': ['ticket'],
+                    'options': {'--project': 'project', '--page': 'page'},
+                },
+                {
+                    'command': ['note'],
+                    'operation': 'ticket.note',
+                    'positional': ['project', 'ticket'],
+                    'options': {
+                        '--text': 'text',
+                        '--text-file': '@text',
+                        '--title': 'title',
+                    },
+                },
+                {
+                    'command': ['log'],
+                    'operation': 'ticket.log',
+                    'positional': ['ticket'],
+                    'output': 'result',
+                },
+            ]
+        },
+        max_requests=20,
+    )
+    data.update(changes)
+    return data
+
+
+def tracker_facts() -> dict[str, Any]:
+    """A provider answer that satisfies ``tracker_policy``'s check."""
+    return {
+        'id': 7,
+        'project': {'slug': 'Acme/Widgets'},
+        'state': 'open',
+        'owner': {'name': 'Alice'},
+        'version': 2,
+        'head': {'rev': REVISION.upper()},
+        'serial': 31,
+        'branch': 'main',
+    }
 
 
 def write_private(path: Path, data: bytes, mode: int = 0o600) -> Path:
@@ -165,6 +316,8 @@ class FakeExecutor:
                 'total_count': 1,
                 'check_runs': [{'name': 'lean', 'status': 'completed'}],
             }
+        if '/builds/' in effect.path:
+            return {'builds': copy.deepcopy(self.result)}
         if effect.path.startswith('/v1/'):
             body = dict(effect.body) if effect.body is not None else None
             return {'ok': True, 'path': effect.target, 'body': body}
@@ -226,10 +379,11 @@ class Harness:
         )
 
     def raw(self, operation: str = 'pr.view', **changes: Any) -> bytes:
-        """A flat schema-1 request frame for PR 13861."""
-        request = {'operation': operation, 'repository': REPO, 'pr': 13861}
-        request.update(changes)
-        return self.frame('request', request)
+        """A request frame for PR 13861 of the GitHub preset."""
+        arguments = {'repository': REPO, 'pr': 13861}
+        arguments.update(changes)
+        payload = {'operation': operation, 'arguments': arguments}
+        return self.frame('request', payload)
 
     def call(
         self, operation: str = 'pr.view', **changes: Any
@@ -468,6 +622,44 @@ class TLSService:
 # ---------------------------------------------------------------------------
 
 
+def poison(directory: Path) -> Path:
+    """Fill ``directory`` with everything a hostile ``PYTHONPATH`` can hold.
+
+    A shadow ``aivm_secrets`` package, a ``sitecustomize.py`` and a
+    ``usercustomize.py``. Each appends the command line of the process that
+    imported it to the returned marker file, so a test can tell *which*
+    process ran guest-supplied code.
+    """
+    marker = directory / 'ran-guest-code'
+    record = (
+        'import os\n'
+        f'with open({str(marker)!r}, "ab") as stream:\n'
+        '    stream.write(open("/proc/self/cmdline", "rb").read() + b"\\n")\n'
+    )
+    shadow = directory / 'aivm_secrets'
+    shadow.mkdir()
+    (shadow / '__init__.py').write_text(record)
+    (shadow / '__main__.py').write_text(
+        'import json\n'
+        'print(json.dumps({"channel": "SHADOW", "socket": "/tmp/shadow"}))\n'
+    )
+    (shadow / 'errors.py').write_text('class SecretsError(Exception): pass\n')
+    (directory / 'sitecustomize.py').write_text(record)
+    (directory / 'usercustomize.py').write_text(record)
+    return marker
+
+
+def ran_as_broker(marker: Path) -> list[bytes]:
+    """The broker processes, if any, that imported something from ``poison``."""
+    if not marker.exists():
+        return []
+    return [
+        line
+        for line in marker.read_bytes().split(b'\n')
+        if b'\x00aivm_secrets\x00serve' in line
+    ]
+
+
 def cli_env(root: Path, **extra: str) -> dict[str, str]:
     """An environment whose runtime and state directories live under ``root``.
 
@@ -492,7 +684,7 @@ def run_cli_process(
     import sys
 
     return subprocess.run(
-        [sys.executable, '-P', '-m', 'aivm_secrets', *argv],
+        [sys.executable, '-I', '-m', 'aivm_secrets', *argv],
         env=env,
         input=input,
         capture_output=True,
@@ -505,7 +697,13 @@ def run_cli_process(
 class ServeProcess:
     """``aivm-secrets serve`` as a child, bound to this object's lifetime."""
 
-    def __init__(self, argv: list[str], *, env: dict[str, str]) -> None:
+    def __init__(
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str],
+        flags: tuple[str, ...] = ('-I',),
+    ) -> None:
         import subprocess
         import sys
 
@@ -513,7 +711,7 @@ class ServeProcess:
         self.process = subprocess.Popen(
             [
                 sys.executable,
-                '-P',
+                *flags,
                 '-m',
                 'aivm_secrets',
                 'serve',

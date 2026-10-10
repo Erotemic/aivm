@@ -10,7 +10,14 @@ lines into protocol version 1 frames.
   operations                            show what this capability permits
   delegate --scope JSON --output FILE   mint a smaller capability for a helper
   renounce                              give up this capability
-  pr ...                                gh-shaped sugar for the GitHub PR service
+  as NAME WORDS...                      speak another tool's command line
+
+A session's policy may give this client other names. Installed under one of
+them (a ``gh`` symlink, say) -- or run as ``aivm-secrets as gh ...`` -- it
+translates that tool's command line into an ordinary request, using a
+command table the broker sends. The table is data from the operator's
+policy; nothing about any particular tool is built into this file, and a
+command the table does not list is an error, never a fallback.
 
 Exit status: 0 success, 2 client or transport failure, 3 refused by the
 broker, 4 a host operator must approve this exact write first.
@@ -31,17 +38,7 @@ from typing import Any
 MAX_FRAME = 65536
 MAX_REPLY = 2 * 1024 * 1024 + 65536
 MAX_INPUT = 16384
-PR_COMMANDS = (
-    'view',
-    'diff',
-    'comments',
-    'reviews',
-    'review-comments',
-    'checks',
-    'comment',
-    'edit',
-)
-PAGED = ('comments', 'reviews', 'review-comments', 'checks')
+WORD = 'abcdefghijklmnopqrstuvwxyz0123456789-'
 
 
 def parser() -> argparse.ArgumentParser:
@@ -104,20 +101,13 @@ def parser() -> argparse.ArgumentParser:
         'renounce', allow_abbrev=False, help='Give up this capability for good'
     )
 
-    pr = groups.add_parser('pr', allow_abbrev=False)
-    operations = pr.add_subparsers(dest='operation', required=True)
-    for name in PR_COMMANDS:
-        op = operations.add_parser(name, allow_abbrev=False)
-        op.add_argument('number', type=int)
-        op.add_argument('--repo', '-R', required=True)
-        if name in PAGED:
-            op.add_argument('--page', type=int, default=1)
-        if name in ('comment', 'edit'):
-            body = op.add_mutually_exclusive_group(required=name == 'comment')
-            body.add_argument('--body')
-            body.add_argument('--body-file', help='UTF-8 file, or - for stdin.')
-        if name == 'edit':
-            op.add_argument('--title')
+    alias = groups.add_parser(
+        'as',
+        allow_abbrev=False,
+        help="Run a command line of another tool this session's policy maps",
+    )
+    alias.add_argument('alias')
+    alias.add_argument('words', nargs=argparse.REMAINDER)
     return p
 
 
@@ -151,20 +141,7 @@ def frame_from_args(args: argparse.Namespace) -> tuple[str, Any]:
         return 'renounce', True
     if args.group == 'delegate':
         return 'delegate', json_object(args.scope, args.scope_file)
-    request: dict[str, Any] = {
-        'operation': 'pr.' + args.operation,
-        'repository': args.repo,
-        'pr': args.number,
-    }
-    if hasattr(args, 'page'):
-        request['page'] = args.page
-    if getattr(args, 'body', None) is not None:
-        request['body'] = args.body
-    if getattr(args, 'body_file', None) is not None:
-        request['body'] = read_bounded(args.body_file)
-    if getattr(args, 'title', None) is not None:
-        request['title'] = args.title
-    return 'request', request
+    raise ValueError('not a frame-producing command')
 
 
 def request_from_args(args: argparse.Namespace) -> Any:
@@ -230,7 +207,196 @@ def report_failure(reply: dict[str, Any]) -> int:
     return 3
 
 
-def main(argv: list[str] | None = None) -> int:
+class Usage(Exception):
+    """The command line does not fit the session's command table."""
+
+
+def _word(value: Any) -> str:
+    """A table word that is safe to print: this is data from a peer."""
+    if isinstance(value, str) and value and all(c in WORD for c in value):
+        return value[:32]
+    return '?'
+
+
+def _matching(rows: Any, words: list[str]) -> tuple[dict[str, Any], list[str]]:
+    """The table row whose command words are the longest prefix of ``words``."""
+    best: dict[str, Any] | None = None
+    for row in rows if isinstance(rows, list) else []:
+        command = row.get('command') if isinstance(row, dict) else None
+        if not isinstance(command, list) or not command:
+            continue
+        if words[: len(command)] == command and (
+            best is None or len(command) > len(best['command'])
+        ):
+            best = row
+    if best is None:
+        known = sorted(
+            ' '.join(_word(w) for w in row['command'])
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get('command'), list)
+        )
+        raise Usage('available here: ' + ('; '.join(known) or '(nothing)'))
+    return best, words[len(best['command']) :]
+
+
+def _typed(operation: dict[str, Any], name: str, text: str) -> Any:
+    """Give a command-line string the type the operation declares for it."""
+    spec = operation.get('parameters', {}).get(name)
+    numeric = isinstance(spec, dict) or (
+        isinstance(spec, list) and spec and type(spec[0]) is int
+    )
+    if not numeric:
+        return text
+    try:
+        return int(text, 10)
+    except ValueError:
+        raise Usage(f'{_word(name)} must be a number') from None
+
+
+def request_from_alias(
+    rows: Any, operations: Any, words: list[str]
+) -> tuple[dict[str, Any], str]:
+    """Translate ``words`` into a request, using only the supplied table.
+
+    Returns the request and the row's output mode. Raises :class:`Usage` for
+    anything the table does not describe.
+    """
+    row, rest = _matching(rows, words)
+    options = row.get('options', {})
+    positional = list(row.get('positional', []))
+    operation = {}
+    for item in operations if isinstance(operations, list) else []:
+        if isinstance(item, dict) and item.get('name') == row.get('operation'):
+            operation = item
+    arguments: dict[str, Any] = {}
+    values: list[str] = []
+    index = 0
+    literal = False
+    while index < len(rest):
+        token = rest[index]
+        index += 1
+        if literal or not token.startswith('-') or token == '-':
+            values.append(token)
+            continue
+        if token == '--':
+            literal = True
+            continue
+        flag, joined, attached = token.partition('=')
+        if not isinstance(options, dict) or flag not in options:
+            raise Usage('unsupported option here')
+        if joined:
+            text = attached
+        elif index < len(rest):
+            text = rest[index]
+            index += 1
+        else:
+            raise Usage('an option is missing its value')
+        destination = str(options[flag])
+        from_file = destination.startswith('@')
+        destination = destination.lstrip('@')
+        if destination in arguments:
+            raise Usage('an argument was given twice')
+        if from_file:
+            try:
+                text = read_bounded(text)
+            except (OSError, ValueError):
+                raise Usage('cannot read the file given to an option') from None
+        arguments[destination] = _typed(operation, destination, text)
+    if len(values) != len(positional):
+        raise Usage('wrong number of arguments')
+    for name, text in zip(positional, values):
+        if name in arguments:
+            raise Usage('an argument was given twice')
+        arguments[name] = _typed(operation, str(name), text)
+    request = {'operation': row.get('operation'), 'arguments': arguments}
+    return request, str(row.get('output', 'reply'))
+
+
+def print_result(reply: dict[str, Any], *, raw: bool) -> None:
+    result = reply.get('result')
+    if raw and isinstance(result, str):
+        sys.stdout.write(result)
+    elif raw:
+        print(json.dumps(result, indent=2, ensure_ascii=True))
+    else:
+        print(json.dumps(reply, indent=2, ensure_ascii=True))
+
+
+def run_alias(
+    alias: str, words: list[str], socket_path: str, capability: str
+) -> int:
+    """Answer to another tool's name, for the commands the policy maps."""
+    described = exchange(socket_path, capability, True, 'describe')
+    if described.get('ok') is not True:
+        return report_failure(described)
+    tables = described.get('cli')
+    rows = tables.get(alias) if isinstance(tables, dict) else None
+    shown = _word(alias)
+    if rows is None:
+        print(
+            f'aivm-secrets: this session has no {shown} commands; '
+            'see `aivm-secrets operations`.',
+            file=sys.stderr,
+        )
+        return 2
+    grant = described.get('grant')
+    operations = grant.get('operations') if isinstance(grant, dict) else []
+    try:
+        request, output = request_from_alias(rows, operations, words)
+    except Usage as problem:
+        print(
+            f'{shown}: this is the aivm-secrets client, not the real {shown}; '
+            f'only commands the session policy lists work. {problem}',
+            file=sys.stderr,
+        )
+        return 2
+    reply = exchange(socket_path, capability, request)
+    if reply.get('ok') is not True:
+        return report_failure(reply)
+    print_result(reply, raw=output == 'result')
+    return 0
+
+
+def read_capability(path: str) -> str:
+    with open(path, 'r', encoding='ascii') as stream:
+        capability = stream.read(32769).strip()
+    if len(capability) > 32768:
+        raise ValueError('capability too large')
+    return capability
+
+
+def invoked_alias() -> str:
+    """The other name this file was run under, if any (a symlink to it)."""
+    name = os.path.basename(sys.argv[0])
+    real = os.path.basename(os.path.realpath(sys.argv[0]))
+    return name if name != real else ''
+
+
+TRANSPORT_FAILURE = (
+    'aivm-secrets: client or transport failure; do not automatically '
+    'retry writes.'
+)
+
+
+def main(argv: list[str] | None = None, alias: str = '') -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+        alias = alias or invoked_alias()
+    if alias:
+        # The whole command line belongs to the other tool; the session is
+        # found through the environment only.
+        socket_path = os.environ.get('AIVM_SECRETS_SOCKET', '')
+        capability_file = os.environ.get('AIVM_SECRETS_CAPABILITY_FILE', '')
+        if not socket_path or not capability_file:
+            print(f'{_word(alias)}: no AIVM secret session.', file=sys.stderr)
+            return 2
+        try:
+            return run_alias(
+                alias, list(argv), socket_path, read_capability(capability_file)
+            )
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            print(TRANSPORT_FAILURE, file=sys.stderr)
+            return 2
     args = parser().parse_args(argv)
     if not args.socket or not args.capability_file:
         print(
@@ -240,10 +406,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        with open(args.capability_file, 'r', encoding='ascii') as stream:
-            capability = stream.read(32769).strip()
-        if len(capability) > 32768:
-            raise ValueError('capability too large')
+        capability = read_capability(args.capability_file)
+        if args.group == 'as':
+            return run_alias(args.alias, args.words, args.socket, capability)
         verb, payload = frame_from_args(args)
         if args.group == 'delegate':
             # Fail before spending anything if the output cannot be created.
@@ -258,23 +423,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.group == 'delegate':
             with os.fdopen(output, 'w', encoding='ascii') as stream:
                 stream.write(reply.pop('capability'))
-        result = reply.get('result')
-        raw = (args.group == 'pr' and args.operation == 'diff') or getattr(
-            args, 'result_only', False
-        )
-        if raw and isinstance(result, str):
-            sys.stdout.write(result)
-        elif raw:
-            print(json.dumps(result, indent=2, ensure_ascii=True))
-        else:
-            print(json.dumps(reply, indent=2, ensure_ascii=True))
+        print_result(reply, raw=getattr(args, 'result_only', False))
         return 0
-    except (OSError, ValueError, TypeError, KeyError):
-        print(
-            'aivm-secrets: client or transport failure; do not automatically '
-            'retry writes.',
-            file=sys.stderr,
-        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        print(TRANSPORT_FAILURE, file=sys.stderr)
         return 2
 
 

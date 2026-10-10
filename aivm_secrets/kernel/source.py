@@ -30,20 +30,6 @@ FORBIDDEN_ENV = frozenset(
     }
 )
 
-# The original integration: the owning operator's existing ``gh`` login. The
-# inherited variables are the ones ``gh`` needs to find its configuration and
-# the desktop keyring; no debugging or proxy variable is among them.
-GH_SOURCE: dict[str, Any] = {
-    'kind': 'command',
-    'argv': ['gh', 'auth', 'token', '--hostname', 'github.com'],
-    'inherit_env': [
-        'DBUS_SESSION_BUS_ADDRESS',
-        'GH_CONFIG_DIR',
-        'XDG_CONFIG_HOME',
-        'XDG_RUNTIME_DIR',
-    ],
-}
-
 
 def _env_name(value: Any, *, code: str) -> str:
     upper_or_underscore = grammar.UPPER + '_'

@@ -37,6 +37,7 @@ from ..kernel.service import ServiceSpec, reparse
 from .audit import AuditLog
 from .egress import HTTPSExecutor
 from .envelope import EnvelopeCodec, OpenedCapability
+from .files import Roots
 
 MAX_PENDING = 16
 DEFAULT_APPROVAL_TTL = 300
@@ -63,6 +64,7 @@ class Broker:
         *,
         writes: str = 'deny',
         executor: Any = None,
+        untrusted: Roots = (),
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
     ):
@@ -83,7 +85,7 @@ class Broker:
         self._executor = (
             executor
             if executor is not None
-            else HTTPSExecutor(self.spec.egress)
+            else HTTPSExecutor(self.spec.egress, untrusted)
         )
         self._requests = threading.Lock()
         self._mutex = threading.Lock()
@@ -191,7 +193,9 @@ class Broker:
                 grant = machine.describe(
                     self._state, claims, self.binding, self._clock()
                 )
-            return wire.success(grant=grant)
+            # The command tables are operator data for the guest client;
+            # they describe how to phrase requests and grant nothing.
+            return wire.success(grant=grant, cli=self.spec.cli_tables())
         if frame.verb == 'delegate':
             narrowing = Narrowing.parse(frame.payload)
             child = self._emit(
@@ -254,7 +258,7 @@ class Broker:
         if final is None:
             result = facts
         else:
-            trace.wrote = final.effect.is_write
+            trace.wrote = final.write
             result = self._executor.execute(final, opened.credential)
         reply = wire.success(
             result=result, **(self.spec.reply_meta(request, result) or {})
@@ -272,13 +276,11 @@ class Broker:
     ) -> dict[str, Any]:
         if error.code == 'audit_failed':
             self._kill()
-        # Once a write has been handed to the executor, only two answers are
-        # definite: nothing was sent, or the service refused it. Every other
-        # failure -- transport, parsing, or audit -- leaves the outcome open.
-        if trace.wrote and error.code not in (
-            'unreachable',
-            'upstream_rejected',
-        ):
+        # Once a write has been handed to the executor, exactly one answer
+        # is definite: no connection was made, so nothing was sent. Every
+        # other failure -- any HTTP status, transport, parsing, or audit --
+        # leaves the outcome open.
+        if trace.wrote and error.code != 'unreachable':
             error = SecretsError('outcome_unknown', status=error.status)
         extra: dict[str, Any] = {}
         event = 'rejected_or_failed'

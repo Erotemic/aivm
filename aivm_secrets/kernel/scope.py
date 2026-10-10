@@ -173,7 +173,9 @@ def check_arguments(operation: OperationScope, request: Request) -> int:
                 raise SecretsError('invalid_request')
         elif item.required:
             raise SecretsError('invalid_request')
-    if operation.write and present == 0:
+    # An operation that has a body must be given some of it: one made only
+    # of optional fields still needs at least one of them.
+    if operation.fields and present == 0:
         raise SecretsError('invalid_request')
     for name, spec in operation.parameters:
         if not contains(spec, given[name]):

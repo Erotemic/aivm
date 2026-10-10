@@ -14,9 +14,9 @@ This package is the Python reference for the planned ``secrets-kernel`` and
 ``model``       bindings, claims, requests, effects, egress destinations
 ``scope``       authorization as data: membership and attenuation
 ``source``      the grammar of a host-only credential source
-``https``       declarative HTTPS service specs (policy schema 2)
-``github``      the fact-conditioned GitHub PR service (policy schema 1)
-``service``     the closed sum of service specs
+``https``       the one service mechanism: declarative HTTPS manifests
+``presets``     built-in manifests as data (GitHub pull requests)
+``service``     policy schema -> service spec, by one route
 ``machine``     the state machine: admit, emit, delegate, approve, revoke
 ``wire``        protocol version 1 frames and replies
 ==============  ==============================================================

@@ -24,11 +24,13 @@
   "operations": [
    {
     "name": "profile.read",
+    "effect": "read",
     "method": "GET",
     "path": "/v1/account"
    },
    {
     "name": "issue.view",
+    "effect": "read",
     "method": "GET",
     "path": "/v1/issues/{issue}",
     "parameters": {
@@ -40,6 +42,7 @@
    },
    {
     "name": "issue.list",
+    "effect": "read",
     "method": "GET",
     "path": "/v1/issues",
     "query": {
@@ -55,6 +58,7 @@
    },
    {
     "name": "issue.comment",
+    "effect": "write",
     "method": "POST",
     "path": "/v1/issues/{issue}/comments",
     "parameters": {

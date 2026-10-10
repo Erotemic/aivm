@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from typing import Any
 
 import pytest
 
@@ -58,12 +59,13 @@ def test_wrong_key_and_noncanonical_encoding():
     cap = envelope.seal(claims(), TOKEN)
     with pytest.raises(SecretsError):
         EnvelopeCodec().open(cap)
-    for bad in [
+    hostile: list[Any] = [
         cap + '=', cap + '\n', ' ' + cap, cap + 'A', 'aivs2.' + cap[6:],
         'AIVS1.' + cap[6:], cap[6:], 'eyJWT', '', None, [], 7, b'bytes',
         'x' * 40000, PREFIX, PREFIX + '!!!!',
         cap.replace('-', '+').replace('_', '/'),
-    ]:  # fmt: skip
+    ]  # fmt: skip
+    for bad in hostile:
         with pytest.raises(SecretsError) as caught:
             envelope.open(bad)
         assert caught.value.code == 'invalid_capability'

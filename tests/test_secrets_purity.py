@@ -110,7 +110,7 @@ def test_kernel_state_is_immutable():
 
     state = machine.State.__new__(machine.State)
     with pytest.raises(FrozenInstanceError):
-        state.active = False
+        setattr(state, 'active', False)
 
 
 def constructions(name: str) -> dict[str, list[int]]:
@@ -157,6 +157,39 @@ def test_the_executor_is_reached_only_through_the_broker():
     assert broker.count('self._executor.execute(') == 2
     assert 'self._executor.execute(preflight, ' in broker
     assert 'self._executor.execute(final, ' in broker
+
+
+def test_provider_knowledge_is_data_in_one_module():
+    """There is one service mechanism, and no provider is compiled into it.
+
+    The built-in GitHub support is a manifest in ``kernel/presets.py``,
+    selected by schema number in ``kernel/service.py``. Nothing else in the
+    package -- not the kernel's interpreter, the broker, the executor or the
+    guest client -- may know that any particular provider or tool exists.
+    """
+    mentions = {
+        str(path.relative_to(PACKAGE))
+        for path in ALL
+        if 'github' in path.read_text(encoding='utf-8').lower()
+    }
+    assert mentions == {
+        'kernel/__init__.py',  # the module table in its docstring
+        'kernel/presets.py',
+        'kernel/service.py',
+    }
+    for path in ALL:
+        if path.name == 'presets.py':
+            continue
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        literals = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+        assert not literals & {'gh', 'pr', 'glab'}, path.name
+    # The preset itself is pure data construction: it imports no mechanism.
+    preset = {name for _, name in imports(PACKAGE / 'kernel' / 'presets.py')}
+    assert preset == {'__future__', 'typing', 'errors', '', 'model'}
 
 
 def test_only_one_module_opens_a_network_connection():

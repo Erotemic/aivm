@@ -24,7 +24,10 @@ from aivm_secrets.host.server import LocalServer, read_frame
 from aivm_secrets.kernel import codec
 from tests.secrets_helpers import REPO, Harness, https_policy
 
-VIEW = {'operation': 'pr.view', 'repository': REPO, 'pr': 13861}
+VIEW = {
+    'operation': 'pr.view',
+    'arguments': {'repository': REPO, 'pr': 13861},
+}
 
 
 @pytest.fixture
@@ -299,7 +302,7 @@ def test_the_control_plane_answers_while_a_request_is_in_flight(
         assert release.wait(10)
         return {'ok': True}
 
-    h.executor.execute = slow
+    setattr(h.executor, 'execute', slow)
     try:
         with LocalServer(h.broker, short_dir / 's') as server:
             request = {'operation': 'profile.read', 'arguments': {}}

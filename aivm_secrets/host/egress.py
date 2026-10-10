@@ -10,8 +10,10 @@ Failures are reported as fixed codes that tell the caller what is known
 about a write:
 
 ``unreachable``        no connection was established; nothing was sent
-``upstream_rejected``  the service answered 4xx; it did not apply the request
-``outcome_unknown``    bytes were sent and no definite answer came back
+``outcome_unknown``    a write was sent and did not come back 2xx. Any other
+                       status, 4xx included, leaves the outcome open: only
+                       the provider's own contract could say otherwise
+``upstream_rejected``  a *read* was answered 4xx
 ``upstream_error`` / ``upstream_response``  a read failed or was unusable
 """
 
@@ -30,7 +32,7 @@ from ..kernel import codec
 from ..kernel.machine import AuthorizedEffect
 from ..kernel.model import Egress, check_effect
 from ..kernel.wire import MAX_RESPONSE
-from .files import read_owned
+from .files import Roots, read_owned
 
 USER_AGENT = 'aivm-secrets/1'
 CONNECT_TIMEOUT = 10.0
@@ -41,12 +43,16 @@ TOTAL_DEADLINE = 45.0
 MAX_CA_BYTES = 1024 * 1024
 
 
-def tls_context(egress: Egress) -> ssl.SSLContext:
+def tls_context(egress: Egress, untrusted: Roots = ()) -> ssl.SSLContext:
     """Verified TLS 1.2+ to system roots, or to one operator-pinned anchor."""
     if egress.ca_file:
         try:
             anchors = read_owned(
-                Path(egress.ca_file), private=False, limit=MAX_CA_BYTES
+                Path(egress.ca_file),
+                private=False,
+                limit=MAX_CA_BYTES,
+                untrusted=untrusted,
+                what='trust anchor',
             ).decode('ascii')
             context = ssl.create_default_context(cadata=anchors)
         except (UnicodeError, ssl.SSLError, ValueError):
@@ -110,11 +116,11 @@ class _Connection(http.client.HTTPSConnection):
 
 
 class HTTPSExecutor:
-    def __init__(self, egress: Egress):
+    def __init__(self, egress: Egress, untrusted: Roots = ()):
         self.egress = egress
         # Built once, so a trust anchor that is unsafe or unreadable stops
         # the session at start rather than at the first request.
-        self._context = tls_context(egress)
+        self._context = tls_context(egress, untrusted)
 
     def _headers(self, authorized: AuthorizedEffect, credential: str) -> dict:
         effect = authorized.effect
@@ -136,7 +142,10 @@ class HTTPSExecutor:
         if type(authorized) is not AuthorizedEffect:
             raise SecretsError('denied')
         effect = check_effect(authorized.effect)
-        if effect.is_write and not authorized.final:
+        # What a failure means depends on what the operation was *declared*
+        # to be, not on its method: a GET may be a declared write.
+        write = authorized.write
+        if (effect.is_write and not write) or (write and not authorized.final):
             raise SecretsError('denied')
         body = None
         if effect.body is not None:
@@ -183,15 +192,16 @@ class HTTPSExecutor:
                 data, limit=MAX_RESPONSE, code='upstream_response'
             )
         except SecretsError as ex:
-            if ex.code in ('unreachable', 'upstream_rejected'):
-                raise
-            if effect.is_write and sent:
+            # Once a write has been sent, no HTTP status proves it was not
+            # applied: a service may act and then answer 409 or 422. The
+            # status is kept as a datum; the verdict is "unknown".
+            if write and sent:
                 raise SecretsError(
                     'outcome_unknown', status=ex.status
                 ) from None
             raise
         except Exception:
-            code = 'outcome_unknown' if effect.is_write else 'upstream_error'
+            code = 'outcome_unknown' if write else 'upstream_error'
             raise SecretsError(code) from None
         finally:
             watchdog.cancel()

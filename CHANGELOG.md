@@ -17,8 +17,22 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   string body fields. Optional operator pins for port, address, trust anchor
   and static headers support private deployments. Reference manifests for
   GitLab, GitHub and a non-Git service are in `docs/examples/`.
-* The GitHub pull-request service (policy schema 1): every operation is
-  conditioned on freshly fetched PR metadata matching the policy.
+* Every manifest operation declares its `effect`, `read` or `write`. It is
+  never inferred from the HTTP method: a `GET` that changes state can be
+  declared a write and is then gated, approved and reported as one.
+* Manifest `checks`: an operation can require facts fetched from the service
+  to hold (equal to a literal or to a request parameter) before anything else
+  is sent, and can bind a validated fact, such as a commit hash, into a later
+  path. Also per-operation `defaults`, case `fold`ing and explicit `page`
+  metadata.
+* Built-in GitHub pull-request support (policy schema 1) with no
+  GitHub-specific code: the short form expands to an ordinary schema-2
+  manifest, printed in full by `aivm-secrets policy-check` and shipped as
+  `docs/examples/aivm-secrets-github-pr.json`.
+* Manifest `cli` tables let the guest client answer to another tool's name.
+  The built-in GitHub manifest carries one for `gh`, so `gh pr view 7 --repo
+  OWNER/NAME` works in a guest; commands the table does not list are usage
+  errors, never a fallback. `aivm-secrets as NAME ...` is the explicit form.
 * Host write modes, `--secrets_writes deny|approve|allow`. In `approve` mode
   each exact write waits for a one-shot `aivm-secrets approve` on the host.
 * Guest-side delegation: `aivm-secrets delegate` mints a strictly smaller
@@ -29,6 +43,19 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * Hash-chained audit files written before each dispatch, a hard total deadline
   on provider requests, and whole-path ownership checks for policies,
   credentials, trust anchors and resolver programs.
+* A failed write is reported as `outcome_unknown` whatever the HTTP status,
+  4xx included, because a service may apply a request and then refuse it.
+  Only "no connection was made" is treated as definite.
+* Host paths are refused if resolving them *visits* the shared workspace at
+  any step, including through a symbolic link that leads back out of it, and
+  a credential resolver is executed at its verified, link-free location.
+* Group-writable policy, credential and resolver paths are accepted only
+  when the group is provably the caller's alone (its primary group, no other
+  member, no other account using it as a primary group, local account
+  database); otherwise they are refused.
+* The broker is started with `python -I` and an environment stripped of
+  loader variables, and independently refuses to serve if its interpreter,
+  module search path or any loaded module comes from the shared workspace.
 * A secret session ends when its foreground `aivm ssh` exits or is killed, on
   expiry, on `aivm-secrets revoke`, and when its AIVM access identity is
   disabled or removed from any terminal.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from itertools import product
+from typing import Any
 
 import pytest
 
@@ -18,11 +19,15 @@ from aivm_secrets.kernel.model import Binding, Clock, Effect, Request
 from aivm_secrets.kernel.scope import Narrowing, is_subset
 from aivm_secrets.kernel.service import parse_policy
 from tests.secrets_helpers import (
+    PROJECT,
     REPO,
+    REVISION,
     github_policy,
     https_policy,
     metadata,
     must,
+    tracker_facts,
+    tracker_policy,
 )
 
 BINDING = Binding(1000, 'principal-a', 'vm-a', 'c' * 32)
@@ -279,7 +284,10 @@ def test_budget_is_bounded_and_never_refunded():
     """BUDGET-01: admissions <= limit, whatever happens after admission."""
     spec, state, claims = session(github_policy(), max_requests=3)
     view = spec.parse_request(
-        {'operation': 'pr.view', 'repository': REPO, 'pr': 13861}
+        {
+            'operation': 'pr.view',
+            'arguments': {'repository': REPO, 'pr': 13861},
+        }
     )
     wrong = metadata()
     wrong['user']['login'] = 'someone-else'
@@ -317,10 +325,10 @@ def test_final_effect_is_computed_by_the_kernel_from_the_admitted_request():
     spec, state, claims = session()
     state = machine.admit(state, claims, BINDING, VIEW, NOW)
     state, preflight = machine.emit_preflight(state, spec, VIEW, NOW)
-    assert preflight is None  # schema 2 has no fact fetch
+    assert preflight is None  # this operation requires no fact check
     state, final = machine.emit_final(state, spec, VIEW, None, NOW)
     assert final == machine.AuthorizedEffect(
-        0, ROOT, VIEW.digest, True, Effect('GET', '/v1/issues/23')
+        0, ROOT, VIEW.digest, True, False, Effect('GET', '/v1/issues/23')
     )
     assert must(state.ticket).phase == 'final'
 
@@ -383,9 +391,7 @@ def test_fact_conditioned_requests_cannot_skip_or_repeat_the_preflight():
     comment = spec.parse_request(
         {
             'operation': 'pr.comment',
-            'repository': REPO,
-            'pr': 13861,
-            'body': 'Update',
+            'arguments': {'repository': REPO, 'pr': 13861, 'body': 'Update'},
         }
     )
     state = machine.admit(state, claims, BINDING, comment, NOW)
@@ -397,13 +403,14 @@ def test_fact_conditioned_requests_cannot_skip_or_repeat_the_preflight():
     state, preflight = machine.emit_preflight(state, spec, comment, NOW)
     preflight = must(preflight)
     assert not preflight.final and preflight.effect.method == 'GET'
+    assert preflight.write is False  # a fact fetch never is one
     assert (
         code_of(machine.emit_preflight, state, spec, comment, NOW)
         == 'internal_error'
     )
     state, final = machine.emit_final(state, spec, comment, metadata(), NOW)
     final = must(final)
-    assert final.final and final.effect.method == 'POST'
+    assert final.final and final.write and final.effect.method == 'POST'
     assert final.effect.body == (('body', 'Update'),)
     assert final.serial == preflight.serial == 0  # one reservation, two effects
     assert machine.settle(state).grants[0].used == 1
@@ -415,9 +422,7 @@ def test_liveness_is_resampled_at_every_emission():
     comment = spec.parse_request(
         {
             'operation': 'pr.comment',
-            'repository': REPO,
-            'pr': 13861,
-            'body': 'Update',
+            'arguments': {'repository': REPO, 'pr': 13861, 'body': 'Update'},
         }
     )
     admitted = machine.admit(state, claims, BINDING, comment, NOW)
@@ -496,15 +501,122 @@ def test_kernel_refuses_effects_a_defective_compiler_would_emit(
         )
 
 
-def test_a_write_ticket_must_end_in_a_write():
+def test_a_write_ticket_must_end_in_an_effect():
+    """A request admitted as a write cannot be answered from facts alone."""
     real, state, claims = session(write_mode='allow')
     state = machine.admit(state, claims, BINDING, COMMENT, NOW)
-    for final in (None, Effect('GET', '/v1/issues/23')):
-        hostile = _Hostile(real, final=final)
-        assert (
-            code_of(machine.emit_final, state, hostile, COMMENT, None, NOW)
-            == 'denied'
+    hostile: Any = _Hostile(real, final=None)
+    assert (
+        code_of(machine.emit_final, state, hostile, COMMENT, None, NOW)
+        == 'denied'
+    )
+    # Its effect may be a GET -- some services change state through one --
+    # and the authorization then still says "write" to the executor.
+    lenient: Any = _Hostile(real, final=Effect('GET', '/v1/issues/23'))
+    _, final = machine.emit_final(state, lenient, COMMENT, None, NOW)
+    assert must(final).write is True and must(final).effect.method == 'GET'
+
+
+# -- declared effects and fact checks, for a generic manifest ---------------
+
+
+def ticket(spec, operation, **arguments):
+    given = {'project': PROJECT, 'ticket': 7}
+    given.update(arguments)
+    return spec.parse_request({'operation': operation, 'arguments': given})
+
+
+@pytest.mark.parametrize(
+    'mode,expected',
+    [('deny', 'denied'), ('approve', 'approval_required'), ('allow', None)],
+)
+def test_a_declared_write_is_gated_like_one_whatever_its_method(mode, expected):
+    """``ticket.close`` is a GET the manifest declares state-changing."""
+    spec, state, claims = session(tracker_policy(), write_mode=mode)
+    close = ticket(spec, 'ticket.close')
+    if expected:
+        assert code_of(machine.admit, state, claims, BINDING, close, NOW) == (
+            expected
         )
+        # Reads on the same grant are unaffected by the write mode.
+        log = spec.parse_request(
+            {'operation': 'ticket.log', 'arguments': {'ticket': 7}}
+        )
+        assert machine.admit(state, claims, BINDING, log, NOW)
+        return
+    state = machine.admit(state, claims, BINDING, close, NOW)
+    assert must(state.ticket).write is True
+    state, preflight = machine.emit_preflight(state, spec, close, NOW)
+    assert preflight is None
+    state, final = machine.emit_final(state, spec, close, None, NOW)
+    final = must(final)
+    assert (final.final, final.write) == (True, True)
+    assert (final.effect.method, final.effect.body) == ('GET', None)
+    assert final.effect.target == '/v1/projects/acme/widgets/tickets/7/close'
+
+
+def test_an_approved_declared_write_is_one_shot_like_any_other():
+    spec, state, claims = session(tracker_policy(), write_mode='approve')
+    close = ticket(spec, 'ticket.close')
+    digest = machine.approval_digest(state.policy_digest, ROOT, close)
+    state = machine.approve(state, digest, NOW, 60)
+    state, final = run(state, spec, claims, close)
+    assert must(final).write and state.approvals == ()
+    assert code_of(machine.admit, state, claims, BINDING, close, NOW) == (
+        'approval_required'
+    )
+
+
+def test_a_checked_operation_runs_fetch_verify_then_effect():
+    spec, state, claims = session(tracker_policy(), write_mode='allow')
+    note = ticket(spec, 'ticket.note', text='hi')
+    state = machine.admit(state, claims, BINDING, note, NOW)
+    assert code_of(
+        machine.emit_final, state, spec, note, tracker_facts(), NOW
+    ) == ('internal_error')  # facts cannot be supplied without the fetch
+    state, preflight = machine.emit_preflight(state, spec, note, NOW)
+    preflight = must(preflight)
+    assert (preflight.final, preflight.write) == (False, False)
+    assert preflight.effect.target == '/v1/projects/acme/widgets/tickets/7'
+    wrong = tracker_facts()
+    wrong['owner']['name'] = 'mallory'
+    assert code_of(machine.emit_final, state, spec, note, wrong, NOW) == (
+        'resource_mismatch'
+    )
+    # A failed check does not consume the ticket's phase or mint anything.
+    assert must(state.ticket).phase == 'preflight'
+    state, final = machine.emit_final(state, spec, note, tracker_facts(), NOW)
+    final = must(final)
+    assert final.write and final.effect.method == 'POST'
+    assert final.effect.body == (('text', 'hi'),)
+
+
+def test_facts_can_be_the_answer_only_for_a_read():
+    spec, state, claims = session(tracker_policy())
+    view = ticket(spec, 'ticket.view')
+    state = machine.admit(state, claims, BINDING, view, NOW)
+    state, preflight = machine.emit_preflight(state, spec, view, NOW)
+    assert must(preflight).write is False
+    state, final = machine.emit_final(state, spec, view, tracker_facts(), NOW)
+    assert final is None and must(state.ticket).phase == 'final'
+    assert machine.settle(state).grants[0].used == 1
+
+
+def test_a_bound_fact_reaches_the_route_through_the_kernel():
+    spec, state, claims = session(tracker_policy())
+    builds = ticket(spec, 'ticket.builds', page=2)
+    state = machine.admit(state, claims, BINDING, builds, NOW)
+    state, _ = machine.emit_preflight(state, spec, builds, NOW)
+    # Without the facts the bound route cannot be built at all.
+    assert code_of(machine.emit_final, state, spec, builds, None, NOW) == (
+        'resource_mismatch'
+    )
+    state, final = machine.emit_final(state, spec, builds, tracker_facts(), NOW)
+    assert must(final).effect.target == (
+        f'/v1/projects/acme/widgets/revisions/{REVISION}/builds/31/main'
+        '?page=2&per_page=50'
+    )
+    assert must(final).write is False
 
 
 # -- writes and APPROVAL-01 --------------------------------------------------

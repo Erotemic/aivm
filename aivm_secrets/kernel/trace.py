@@ -17,7 +17,9 @@ Steps (``clock`` is ``{"wall": int, "mono": int}``):
 ``{"do": "request", "grant": NAME, "request": WIRE, "clock": C}``
     optional ``"facts"`` (the preflight answer), ``"final_clock"`` (a later
     sample for the final emission) and ``"binding"`` (overrides of the
-    transport-established binding, to model a wrong channel).
+    transport-established binding, to model a wrong channel). Its outcome
+    carries ``preflight`` and ``effect`` (each an effect or ``null``) and,
+    when there is an effect, ``write``: whether it was authorized as one.
 ``{"do": "delegate", "grant": NAME, "as": NEW, "narrowing": WIRE, "clock": C}``
 ``{"do": "describe", "grant": NAME, "clock": C}``
 ``{"do": "renounce", "grant": NAME}``
@@ -149,6 +151,9 @@ class Trace:
         )
         if final is not None:
             outcome['effect'] = effect_view(final.effect)
+            # The declared class of the effect, which decides what a failed
+            # dispatch means. It is not derivable from the method.
+            outcome['write'] = final.write
         return outcome
 
 

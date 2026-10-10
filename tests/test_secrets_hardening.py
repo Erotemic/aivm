@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import types
+
+import pytest
+
+from aivm_secrets.errors import SecretsError
+from aivm_secrets.host import hardening
 
 
 def test_hardening_disables_core_dumps_and_ptrace_visibility():
@@ -30,11 +36,63 @@ def test_hardening_disables_core_dumps_and_ptrace_visibility():
 
 
 def test_hardening_never_raises(monkeypatch):
-    from aivm_secrets.host import hardening
-
     def refuse(*args, **kwargs):
         raise OSError('not permitted')
 
     monkeypatch.setattr(hardening.resource, 'setrlimit', refuse)
     monkeypatch.setattr(hardening.ctypes, 'CDLL', refuse)
     assert hardening.harden_process() is False
+
+
+# -- where the running code came from ----------------------------------------
+
+
+def refused(untrusted) -> str:
+    with pytest.raises(SecretsError) as caught:
+        hardening.verify_runtime(untrusted)
+    assert caught.value.code == 'shared_source'
+    return caught.value.detail
+
+
+def test_an_ordinary_runtime_is_accepted(tmp_path):
+    hardening.verify_runtime(())
+    hardening.verify_runtime((tmp_path / 'workspace',))
+
+
+def test_a_search_path_entry_in_the_workspace_is_refused(tmp_path, monkeypatch):
+    workspace = tmp_path / 'workspace'
+    (workspace / 'lib').mkdir(parents=True)
+    monkeypatch.setattr(sys, 'path', [*sys.path, str(workspace / 'lib')])
+    assert 'module search path entry' in refused((workspace,))
+    # An entry that merely *links* into the workspace is the same thing.
+    link = tmp_path / 'innocent'
+    link.symlink_to(workspace / 'lib')
+    monkeypatch.setattr(sys, 'path', [*sys.path[:-1], str(link)])
+    assert 'module search path entry' in refused((workspace,))
+    # ... and so is the empty entry, which means the current directory.
+    monkeypatch.setattr(sys, 'path', [*sys.path[:-1], ''])
+    hardening.verify_runtime((workspace,))
+    monkeypatch.chdir(workspace)
+    assert 'module search path entry' in refused((workspace,))
+
+
+def test_a_module_already_loaded_from_the_workspace_is_refused(
+    tmp_path, monkeypatch
+):
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    planted = types.ModuleType('sitecustomize')
+    planted.__file__ = str(workspace / 'sitecustomize.py')
+    monkeypatch.setitem(sys.modules, 'sitecustomize', planted)
+    assert 'loaded module sitecustomize' in refused((workspace,))
+    # Namespace packages and builtins have no file; they are not a reason.
+    monkeypatch.setitem(sys.modules, 'sitecustomize', types.ModuleType('x'))
+    hardening.verify_runtime((workspace,))
+
+
+def test_the_interpreter_and_the_broker_itself_are_checked(tmp_path):
+    from pathlib import Path
+
+    package = Path(hardening.__file__).resolve().parents[2]
+    assert 'broker code' in refused((package,))
+    assert 'broker python environment' in refused((Path(sys.prefix),))

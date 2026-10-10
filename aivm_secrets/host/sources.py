@@ -22,11 +22,10 @@ from typing import IO, Any
 from ..errors import SecretsError
 from ..kernel import grammar
 from ..kernel.source import parse_source
-from .files import outside, read_owned, verify_program
+from .files import Roots, outside, read_owned, verify_program
 
 MAX_OUTPUT = 4097
 RESOLVER_TIMEOUT = 15.0
-Roots = tuple[Path, ...]
 
 
 def _credential(data: bytes) -> str:
@@ -37,8 +36,15 @@ def _credential(data: bytes) -> str:
 
 
 def credential_from_file(path: Path, *, untrusted: Roots = ()) -> str:
-    outside(path, untrusted, what='credential file')
-    return _credential(read_owned(Path(path), private=True, limit=MAX_OUTPUT))
+    return _credential(
+        read_owned(
+            Path(path),
+            private=True,
+            limit=MAX_OUTPUT,
+            untrusted=untrusted,
+            what='credential file',
+        )
+    )
 
 
 def credential_from_stream(stream: IO[bytes]) -> str:
@@ -46,13 +52,14 @@ def credential_from_stream(stream: IO[bytes]) -> str:
     return _credential(stream.read(MAX_OUTPUT + 1))
 
 
-def _program(name: str, untrusted: Roots) -> Path:
+def _program(name: str, untrusted: Roots) -> tuple[str, Path]:
+    """The name a resolver was found under, and where it really is."""
     found = shutil.which(name)
     if found is None:
         raise SecretsError(
             'credential_source', detail=f'resolver {name!r} not found'
         )
-    return verify_program(Path(found), untrusted)
+    return os.path.abspath(found), verify_program(Path(found), untrusted)
 
 
 def credential_from_command(
@@ -64,10 +71,15 @@ def credential_from_command(
     """Run a trusted host resolver: no shell, bounded output, total deadline.
 
     The child sees ``HOME`` and ``PATH`` plus the named variables only, a
-    closed stdin and a discarded stderr. Its executable is located once,
-    verified along its whole path, and then executed by that absolute name.
+    closed stdin and a discarded stderr.
+
+    Its executable is located once and verified along its whole path. What
+    is then executed is that verified location, which contains no symbolic
+    link, so nothing can be redirected between the check and the ``exec``.
+    The name it was found under is passed only as ``argv[0]``, for programs
+    that dispatch on it.
     """
-    program = _program(argv[0], untrusted)
+    name, program = _program(argv[0], untrusted)
     for argument in argv[1:]:
         if argument.startswith(('/', './', '../', '~/')):
             base = Path.home() if not argument.startswith('/') else Path('/')
@@ -84,7 +96,8 @@ def credential_from_command(
     process = None
     try:
         process = subprocess.Popen(
-            [str(program), *argv[1:]],
+            [name, *argv[1:]],
+            executable=str(program),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,

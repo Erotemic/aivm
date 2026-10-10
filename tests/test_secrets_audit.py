@@ -133,7 +133,7 @@ def test_durability_failures_are_reported_not_swallowed(
         def close(self):
             pass
 
-    log._stream = Stream()
+    setattr(log, '_stream', Stream())
     if failure == 'fsync':
         monkeypatch.setattr(
             audit.os, 'fsync', lambda fd: (_ for _ in ()).throw(OSError())

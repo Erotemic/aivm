@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -41,6 +42,8 @@ from tests.secrets_helpers import (
     TOKEN,
     TLSService,
     github_policy,
+    poison,
+    ran_as_broker,
     write_policy_file,
     write_private,
 )
@@ -269,13 +272,82 @@ def test_the_broker_child_never_receives_a_secret_on_its_command_line(world):
         audit_dir=world.state / 'secrets-audit',
         untrusted=[world.workspace],
     )
-    assert argv[1:5] == ['-P', '-m', 'aivm_secrets', 'serve']
+    assert argv[1:5] == ['-I', '-m', 'aivm_secrets', 'serve']
     assert argv[argv.index('--untrusted-root') + 1] == str(world.workspace)
     assert (
         '--exit-on-stdin-eof' in argv
         and argv[argv.index('--writes') + 1] == 'approve'
     )
     assert SERVICE_TOKEN not in ' '.join(argv)
+
+
+# -- the broker's own code cannot be chosen by its environment --------------
+
+
+def test_a_poisoned_python_environment_cannot_substitute_the_broker(
+    world, monkeypatch
+):
+    """The review's attack: ``PYTHONPATH`` pointing into the workspace.
+
+    The workspace holds a shadow ``aivm_secrets`` package and a
+    ``sitecustomize.py``. AIVM is run with that on ``PYTHONPATH`` and from
+    inside the workspace. The broker that starts must be the installed one,
+    and nothing from the workspace may run in it.
+    """
+    marker = poison(world.workspace)
+    monkeypatch.setenv('PYTHONPATH', str(world.workspace))
+    monkeypatch.setenv(
+        'PYTHONSTARTUP', str(world.workspace / 'sitecustomize.py')
+    )
+    monkeypatch.chdir(world.workspace)
+    # The attack is real: without isolation the shadow package is what runs.
+    control = world.guest._real_run(
+        [sys.executable, '-P', '-m', 'aivm_secrets', 'serve'],
+        capture_output=True, text=True, timeout=30,
+    )  # fmt: skip
+    assert json.loads(control.stdout)['channel'] == 'SHADOW'
+    assert len(ran_as_broker(marker)) >= 2  # sitecustomize and the shadow
+    marker.unlink()
+
+    result = run(world, 'aivm-secrets invoke profile.read; echo CODE=$?')
+    assert result.code == 0 and 'CODE=0' in world.guest.session_output
+    (seen,) = world.service.requests
+    assert seen['headers']['authorization'] == 'Bearer ' + SERVICE_TOKEN
+    assert ran_as_broker(marker) == []
+    assert 'SHADOW' not in world.guest.session_output
+
+
+def test_isolation_flags_follow_where_the_broker_is_installed(monkeypatch):
+    import site
+
+    assert secrets_transport.interpreter_flags() == ['-I']
+    # Installed with ``pip install --user``: -I would hide the broker itself.
+    monkeypatch.setattr(site, 'getusersitepackages', lambda: str(INSTALL_ROOT))
+    assert secrets_transport.interpreter_flags() == ['-E', '-P']
+    monkeypatch.setattr(site, 'getusersitepackages', lambda: '/nonexistent/x')
+    assert secrets_transport.interpreter_flags() == ['-I']
+
+
+def test_the_broker_environment_drops_everything_that_redirects_loading(
+    monkeypatch,
+):
+    hostile = {
+        'PYTHONPATH': '/ws', 'PYTHONSTARTUP': '/ws/x.py', 'PYTHONHOME': '/ws',
+        'PYTHONUSERBASE': '/ws', 'PYTHONINSPECT': '1', 'PYTHONBREAKPOINT': 'os.system',
+        'LD_PRELOAD': '/ws/evil.so', 'LD_LIBRARY_PATH': '/ws', 'LD_AUDIT': '/ws/a.so',
+        'DYLD_INSERT_LIBRARIES': '/ws/evil.dylib', 'BASH_ENV': '/ws/rc', 'ENV': '/ws/rc',
+        'GCONV_PATH': '/ws', 'OPENSSL_CONF': '/ws/openssl.cnf',
+        'OPENSSL_MODULES': '/ws', 'SSL_CERT_FILE': '/ws/ca.pem',
+        'SSL_CERT_DIR': '/ws/certs',
+    }  # fmt: skip
+    kept = {'HOME': '/home/op', 'XDG_RUNTIME_DIR': '/run/user/1', 'LANG': 'C'}
+    for name, value in {**hostile, **kept}.items():
+        monkeypatch.setenv(name, value)
+    environment = secrets_transport.broker_environment()
+    assert not set(hostile) & set(environment)
+    for name, value in kept.items():
+        assert environment[name] == value
+    assert environment['PATH'] == os.environ['PATH']
 
 
 def test_guest_env_and_cleanup_survive_a_failing_shell(world):

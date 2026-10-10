@@ -23,7 +23,7 @@ MESSAGES = {
     'unreachable': (
         'Service connection could not be established; nothing was sent.'
     ),
-    'upstream_rejected': 'Service refused the request; it was not applied.',
+    'upstream_rejected': 'Service refused the read request.',
     'upstream_error': 'Service request failed; no automatic retry was made.',
     'upstream_response': 'Service returned an invalid or oversized response.',
     'unsafe_file': 'Host file ownership, permissions, or type is unsafe.',

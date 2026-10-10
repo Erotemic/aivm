@@ -43,8 +43,10 @@
    },
    "request": {
     "operation": "pr.view",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861
+    }
    },
    "facts": {
     "number": 13861,
@@ -85,9 +87,11 @@
    },
    "request": {
     "operation": "pr.reviews",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861,
-    "page": 2
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861,
+     "page": 2
+    }
    },
    "facts": {
     "number": 13861,
@@ -118,7 +122,7 @@
     },
     "effect": {
      "method": "GET",
-     "target": "/repos/taucetiproject/tauceti/pulls/13861/reviews?per_page=100&page=2",
+     "target": "/repos/taucetiproject/tauceti/pulls/13861/reviews?page=2&per_page=100",
      "accept": "application/vnd.github+json",
      "response": "json"
     }
@@ -133,8 +137,10 @@
    },
    "request": {
     "operation": "pr.diff",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861
+    }
    },
    "facts": {
     "number": 13861,
@@ -168,8 +174,10 @@
    },
    "request": {
     "operation": "pr.checks",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861
+    }
    },
    "facts": {
     "number": 13861,
@@ -203,8 +211,10 @@
    },
    "request": {
     "operation": "pr.view",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861
+    }
    },
    "facts": {
     "number": 13861,

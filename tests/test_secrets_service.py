@@ -1,23 +1,29 @@
-"""The closed sum of service specs (PLUGIN-01, EXT-01)."""
+"""Policies become service specs by one route (PLUGIN-01, EXT-01)."""
 
 from __future__ import annotations
 
 import inspect
+from typing import Any
 
 import pytest
 
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.kernel import service
-from aivm_secrets.kernel.github import GitHubSpec
 from aivm_secrets.kernel.https import HTTPSpec
 from aivm_secrets.kernel.service import parse_policy, reparse
 from tests.secrets_helpers import github_policy, https_policy
 
 
-def test_the_variant_is_selected_by_schema_number_only():
-    assert isinstance(parse_policy(github_policy()), GitHubSpec)
-    assert isinstance(parse_policy(https_policy()), HTTPSpec)
-    # A schema-2 shape cannot be smuggled in under schema 1, or vice versa.
+def test_both_schemas_end_as_the_one_spec_type():
+    """Schema 1 is shorthand for a manifest; there is no second mechanism."""
+    shorthand, manifest = (
+        parse_policy(github_policy()),
+        parse_policy(https_policy()),
+    )
+    assert type(shorthand) is HTTPSpec and type(manifest) is HTTPSpec
+    assert service.ServiceSpec is HTTPSpec
+    # The form is chosen by the schema number alone: a schema-2 shape cannot
+    # be smuggled in under schema 1, or the other way round.
     for mixed in (
         dict(https_policy(), schema=1),
         dict(github_policy(), schema=2),
@@ -45,17 +51,23 @@ def test_reparse_is_idempotent_and_closed():
             reparse(spec) == spec
             and reparse(reparse(spec)).digest == spec.digest
         )
-    for impostor in (
+    subclass = type('Spec', (HTTPSpec,), {})
+    spec = parse_policy(https_policy())
+    impostors: tuple[Any, ...] = (
         object(),
         {'schema': 2},
         None,
         type('Spec', (), {'to_dict': dict})(),
-    ):
+        # Not even a subclass: it could override the functions the kernel
+        # is written against.
+        subclass(spec.service, spec.egress, spec.credential_source),
+    )
+    for impostor in impostors:
         with pytest.raises(SecretsError):
             reparse(impostor)
 
 
-def test_every_variant_offers_the_same_total_interface():
+def test_every_policy_offers_the_same_total_interface():
     """EXT-01: the kernel is written against exactly this surface."""
     surface = (
         'scope',

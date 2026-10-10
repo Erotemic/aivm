@@ -35,6 +35,11 @@ MACHINE = (
     'test_secrets_vectors.py',
 )
 BROKER = ('test_secrets_broker.py',)
+CHECKS = (
+    'test_secrets_https.py',
+    'test_secrets_presets.py',
+    'test_secrets_vectors.py',
+)
 
 
 @dataclass(frozen=True)
@@ -121,16 +126,38 @@ MUTANTS = [
     Mutant('AUTH-01', 'a body field may exceed its byte cap',
            'kernel/scope.py', 'if size > item.max_bytes:', 'if False:',
            ('test_secrets_scope.py', 'test_secrets_trace.py', 'test_secrets_vectors.py')),
-    Mutant('AUTH-01', 'the PR author is not checked against fresh metadata',
-           'kernel/github.py', 'or known.author != self.author', 'or False',
-           ('test_secrets_github.py', 'test_secrets_vectors.py') + BROKER),
-    Mutant('AUTH-01', 'the head repository is not checked against fresh metadata',
-           'kernel/github.py',
-           'or known.head_repository != self.head_repository', 'or False',
-           ('test_secrets_github.py',) + BROKER),
-    Mutant('AUTH-01', 'the base repository is not checked against fresh metadata',
-           'kernel/github.py', 'or known.repository != self.repository', 'or False',
-           ('test_secrets_github.py', 'test_secrets_vectors.py') + BROKER),
+    Mutant('AUTH-01', 'a stated fact is not required to hold',
+           'kernel/https.py',
+           "            if not item.holds(facts, request):\n                raise SecretsError('resource_mismatch')",
+           '            if False:\n                pass', CHECKS + BROKER),
+    Mutant('AUTH-01', 'a fact of another type can satisfy a requirement',
+           'kernel/https.py',
+           '        if type(found) is not type(expected):\n            return False\n',
+           '', CHECKS),
+    Mutant('AUTH-01', 'facts are compared case-insensitively without being told to',
+           'kernel/https.py',
+           'if self.fold and type(found) is str:', 'if type(found) is str:', CHECKS),
+    Mutant('AUTH-01', 'the built-in GitHub manifest does not check the PR author',
+           'kernel/presets.py',
+           "                    {\n                        'at': ['user', 'login'],\n"
+           "                        'equals': login(value['author']),\n"
+           "                        'fold': True,\n                    },\n",
+           '', ('test_secrets_presets.py', 'test_secrets_vectors.py') + BROKER),
+    Mutant('AUTH-01', 'the built-in GitHub manifest does not check the head repository',
+           'kernel/presets.py',
+           "                    {\n                        'at': ['head', 'repo', 'full_name'],\n"
+           "                        'equals': repository(value['head_repository']),\n"
+           "                        'fold': True,\n                    },\n",
+           '', ('test_secrets_presets.py', 'test_secrets_vectors.py') + BROKER),
+    Mutant('AUTH-01', 'a write is classified by its method, not its declaration',
+           'kernel/https.py',
+           'self.name, self.write, self.parameters, self.body_fields',
+           "self.name, self.method != 'GET', self.parameters, self.body_fields",
+           CHECKS + MACHINE + BROKER),
+    Mutant('AUTH-01', 'a method that sends a body may be declared read-only',
+           'kernel/https.py',
+           "            if method != 'GET' and not write:\n", '            if False:\n',
+           CHECKS),
     # -- EFFECT-01 / ROUTE-01 / COMP-01 --------------------------------------
     Mutant('EFFECT-01', 'a ticket can be spent on a different request',
            'kernel/machine.py',
@@ -140,7 +167,24 @@ MUTANTS = [
            "    if effect.is_write:\n        raise SecretsError('denied')",
            '    if effect.is_write:\n        pass', MACHINE),
     Mutant('EFFECT-01', 'a read ticket may emit a write',
-           'kernel/machine.py', 'if effect.is_write != ticket.write:', 'if False:', MACHINE),
+           'kernel/machine.py', 'if effect.is_write and not ticket.write:', 'if False:',
+           MACHINE),
+    Mutant('EFFECT-01', 'a write ticket may end without any effect',
+           'kernel/machine.py',
+           "        if ticket.write:\n            raise SecretsError('denied')",
+           '        if ticket.write:\n            pass', MACHINE),
+    Mutant('EFFECT-01', 'a declared write is authorized as if it were a read',
+           'kernel/machine.py',
+           '        True,\n        ticket.write,\n        effect,',
+           '        True,\n        False,\n        effect,', MACHINE),
+    Mutant('COMP-01', 'a bound commit hash is not validated before entering a path',
+           'kernel/https.py',
+           'return grammar.hex_string(folded, len(folded), code=code)', 'return folded',
+           CHECKS),
+    Mutant('COMP-01', 'a bound segment is not validated before entering a path',
+           'kernel/https.py',
+           '        return grammar.segment(found, code=code)', '        return found',
+           CHECKS),
     Mutant('ROUTE-01', 'dot segments are allowed in a path',
            'kernel/grammar.py', "    if value in ('.', '..'):", '    if False:',
            ('test_secrets_grammar.py', 'test_secrets_model.py', 'test_secrets_https.py')),
@@ -150,8 +194,13 @@ MUTANTS = [
            ('test_secrets_model.py',)),
     Mutant('ROUTE-01', 'a path placeholder needs no allowlist',
            'kernel/https.py',
-           'if used != declared or declared &', 'if declared &',
-           ('test_secrets_https.py', 'test_secrets_vectors.py')),
+           '        if not placed <= declared | captured:', '        if False:', CHECKS),
+    Mutant('ROUTE-01', 'an allowlist nothing uses is accepted',
+           'kernel/https.py', '        if used != declared:', '        if False:', CHECKS),
+    Mutant('ROUTE-01', 'a multi-segment string may be placed in a query',
+           'kernel/https.py',
+           '_parameter(spec, in_query=key in in_query)', '_parameter(spec, in_query=False)',
+           CHECKS),
     Mutant('ROUTE-01', 'a redirect status is treated as success',
            'host/egress.py',
            'if not 200 <= status < 300:', 'if not 200 <= status < 400:',
@@ -217,8 +266,18 @@ MUTANTS = [
            BROKER),
     Mutant('AUDIT-01', 'a failed write is reported as a definite error',
            'host/broker.py',
-           'if trace.wrote and error.code not in (', 'if False and error.code not in (',
-           BROKER),
+           "if trace.wrote and error.code != 'unreachable':",
+           "if False and error.code != 'unreachable':", BROKER),
+    Mutant('AUDIT-01', 'the broker classifies a dispatched write by its method',
+           'host/broker.py',
+           'trace.wrote = final.write', 'trace.wrote = final.effect.is_write', BROKER),
+    Mutant('AUDIT-01', 'a write answered 4xx is reported as definitely not applied',
+           'host/egress.py', '            if write and sent:', '            if False:',
+           ('test_secrets_egress.py',)),
+    Mutant('AUDIT-01', 'the executor judges a failure by method, not declaration',
+           'host/egress.py',
+           '        write = authorized.write\n', '        write = effect.is_write\n',
+           ('test_secrets_egress.py',)),
     Mutant('AUDIT-01', 'the audit chain is not checked',
            'host/audit.py', "or row['prev'] != head", 'or False',
            ('test_secrets_audit.py',)),
@@ -230,6 +289,37 @@ MUTANTS = [
     Mutant('FILES', 'a group-readable credential file is accepted',
            'host/files.py', '        if info.st_mode & 0o077:', '        if False:',
            ('test_secrets_files.py',)),
+    Mutant('FILES', 'a path through a guest-owned link is judged by where it leads',
+           'host/files.py',
+           '            _refuse_under(candidate, forms, what)\n            info = os.stat(',
+           '            info = os.stat(', ('test_secrets_files.py',)),
+    Mutant('FILES', 'a directory is created through a guest-owned link before refusal',
+           'host/files.py',
+           "    outside(path, untrusted, what='directory')\n", '    pass\n',
+           ('test_secrets_files.py',)),
+    Mutant('FILES', 'an account sharing the primary group goes unnoticed',
+           'host/files.py',
+           'entry.pw_gid == gid and entry.pw_uid != me.pw_uid', 'False',
+           ('test_secrets_files.py',)),
+    Mutant('FILES', 'a group is called private without seeing every account',
+           'host/files.py',
+           'if gid != me.pw_gid or not _accounts_enumerable():', 'if gid != me.pw_gid:',
+           ('test_secrets_files.py',)),
+    Mutant('FILES', 'a group-writable trusted file is accepted for any group',
+           'host/files.py',
+           '        if info.st_mode & stat.S_IWGRP and not _private_group(info.st_gid):\n            raise _unsafe(',
+           '        if False:\n            raise _unsafe(', ('test_secrets_files.py',)),
+    Mutant('FILES', 'a verified resolver is looked up by name again when run',
+           'host/sources.py', 'executable=str(program),', 'executable=name,',
+           ('test_secrets_sources.py',)),
+    # -- the broker's own code ----------------------------------------------
+    Mutant('LAUNCH', 'a module search path inside the workspace is accepted',
+           'host/hardening.py', '    for entry in sys.path:', '    for entry in ():',
+           ('test_secrets_hardening.py',)),
+    Mutant('LAUNCH', 'a module already loaded from the workspace is accepted',
+           'host/hardening.py',
+           '    for name, module in list(sys.modules.items()):',
+           '    for name, module in ():', ('test_secrets_hardening.py',)),
 ]  # fmt: skip
 
 SUPPORT = ('__init__.py', 'secrets_helpers.py')
@@ -250,6 +340,8 @@ def build(directory: Path, mutant: Mutant | None) -> None:
     shutil.copytree(
         ROOT / 'tests' / 'secrets_vectors', tests / 'secrets_vectors'
     )
+    # The shipped manifests are test inputs too.
+    shutil.copytree(ROOT / 'docs' / 'examples', directory / 'docs' / 'examples')
     if mutant is None:
         return
     target = directory / 'aivm_secrets' / mutant.path
@@ -342,5 +434,6 @@ def test_every_named_theorem_has_a_mutant():
     assert {
         'AUTH-01', 'EFFECT-01', 'BIND-01', 'TIME-01', 'REVOKE-01', 'BUDGET-01',
         'ATTEN-01', 'APPROVAL-01', 'CODEC-01', 'CONF-01', 'AUDIT-01', 'ROUTE-01',
+        'COMP-01', 'FILES', 'LAUNCH',
     } <= theorems  # fmt: skip
     assert len({(m.path, m.old, m.new) for m in MUTANTS}) == len(MUTANTS)

@@ -110,13 +110,16 @@ class AuthorizedEffect:
     """An effect the kernel has decided may be sent, and proof of which.
 
     Constructed only by this module. ``final`` distinguishes the one final
-    effect of a request from its read-only preflight.
+    effect of a request from its read-only preflight. ``write`` is the
+    operation's *declared* classification, which the executor uses to decide
+    what a failure means; it is never inferred from the HTTP method.
     """
 
     serial: int
     grant_id: str
     request_digest: str
     final: bool
+    write: bool
     effect: Effect
 
 
@@ -376,7 +379,12 @@ def emit_preflight(
     return (
         replace(state, ticket=replace(ticket, phase='preflight')),
         AuthorizedEffect(
-            ticket.serial, ticket.grant_id, ticket.request_digest, False, effect
+            ticket.serial,
+            ticket.grant_id,
+            ticket.request_digest,
+            False,
+            False,
+            effect,
         ),
     )
 
@@ -407,14 +415,22 @@ def emit_final(
             raise SecretsError('denied')
     else:
         check_effect(effect)
-        if effect.is_write != ticket.write:
+        # A request admitted as a read can never send a body-carrying
+        # method. The converse is allowed: an operation may be declared a
+        # write although its method is GET, and is then treated as one.
+        if effect.is_write and not ticket.write:
             raise SecretsError('denied')
     _require_live(state, chain, clock)
     state = replace(state, ticket=replace(ticket, phase='final'))
     if effect is None:
         return state, None
     return state, AuthorizedEffect(
-        ticket.serial, ticket.grant_id, ticket.request_digest, True, effect
+        ticket.serial,
+        ticket.grant_id,
+        ticket.request_digest,
+        True,
+        ticket.write,
+        effect,
     )
 
 

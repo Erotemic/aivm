@@ -94,6 +94,35 @@ def test_policy_vectors(case):
     assert parse_policy(case['canonical']) == spec
 
 
+def test_the_shorthand_and_the_manifest_it_stands_for_are_one_policy():
+    """Schema 1 has no behaviour of its own: its digest is its expansion's."""
+    cases = {case['name']: case for case in load('policy.json')['cases']}
+    shorthand = cases['github pull requests']
+    written_out = cases['github: the manifest the shorthand stands for']
+    assert shorthand['policy']['schema'] == 1
+    assert written_out['policy']['schema'] == 2
+    assert shorthand['sha256'] == written_out['sha256']
+    assert shorthand['canonical'] == written_out['canonical']
+
+
+def test_policy_corpus_has_the_required_witnesses():
+    cases = load('policy.json')['cases']
+    valid = [case for case in cases if case['valid']]
+    operations = [
+        op for case in valid for op in case['canonical']['operations']
+    ]
+    # Vacuity guards: a parser that refused every new construct would pass
+    # the negative cases alone.
+    assert any(
+        op['effect'] == 'write' and op.get('method') == 'GET'
+        for op in operations
+    )
+    assert any(op.get('returns') == 'check' for op in operations)
+    assert any(case['canonical']['checks'] for case in valid)
+    assert any(case['canonical']['cli'] for case in valid)
+    assert sum(not case['valid'] for case in cases) >= 40
+
+
 @pytest.mark.parametrize('path', TRACES, ids=lambda path: path.stem)
 def test_trace_vectors(path):
     document = json.loads(path.read_text(encoding='utf-8'))
@@ -126,6 +155,13 @@ def test_trace_corpus_has_the_required_witnesses():
     assert any(effect(step) in ('POST', 'PATCH') for step in steps), (
         'authorized write'
     )
+    # The class of an effect is declared, so both of these must be witnessed
+    # with the same method.
+    for declared in (True, False):
+        assert any(
+            effect(step) == 'GET' and step['expect'].get('write') is declared
+            for step in steps
+        ), f'GET authorized with write={declared}'
     assert any(
         step['do'] == 'delegate' and step['expect']['code'] == 'ok'
         for step in steps

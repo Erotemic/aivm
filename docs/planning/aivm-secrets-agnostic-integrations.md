@@ -146,12 +146,24 @@ The declarative adapter uses **policy schema 2**, with keys:
 * `host`: one canonical public DNS hostname; always the name TLS authenticates;
 * `authentication`: `bearer` or `x-api-key` (no custom/header injection);
 * `credential_source`: host-only typed source object;
-* `operations`: finite, distinct names, each with `GET`/`POST`/`PATCH`, a
-  validated relative path template, optional `query` entries that are fixed
-  values or `{placeholder}` references, `parameters` giving every placeholder
-  its permitted values (a finite list of integers or strings, or an integer
-  range `{"min", "max"}`), optional bounded JSON string body fields, a
-  `json`/`text` response and an optional `accept` media type;
+* `operations`: finite, distinct names, each with a required `effect`
+  (`read` or `write`), `GET`/`POST`/`PATCH`, a validated relative path
+  template, optional `query` entries that are fixed values or
+  `{placeholder}` references, `parameters` giving every placeholder its
+  permitted values (a finite list of integers or strings, or an integer
+  range `{"min", "max"}`), optional bounded JSON string body fields (each
+  optionally `optional`), a `json`/`text` response and an optional `accept`
+  media type. Optional `defaults`, `fold` and `page` normalize requests and
+  annotate list answers;
+* `checks` (optional): named fact checks. An operation that `requires` one
+  first performs the check's `GET`; every `require` entry -- a value reached
+  by object keys must equal a literal or a request parameter, by exact type,
+  optionally ASCII-case-folded -- must hold before anything else is
+  constructed. `bind` names a fact for use in a later path after validating
+  its `format` (`hex`, `integer`, `segment`). `"returns": "check"` makes the
+  verified answer the result;
+* `cli` (optional): command tables for the guest client, per tool name; see
+  section 2.3;
 * `egress` (optional): operator pins for a private deployment -- `port`, an
   `address` to connect to, and a `ca_file` that replaces the system roots for
   this service. TLS still authenticates `host`;
@@ -171,17 +183,27 @@ explicit allowlist: finite integer or segment-string values, or a bounded
 integer range. Permitted values contain only RFC 3986 unreserved characters,
 so the request target is constructed without escaping. No arbitrary query
 strings, arbitrary HTTP bodies, binary streaming, redirects, retries or GraphQL
-are available in schema 2. A body write requires both a policy-listed method
-and a host write mode of `allow`, or `approve` plus a one-shot approval of the
-exact request. The trusted HTTP executor rechecks the
+are available in schema 2.
+
+**What counts as a write is declared, not inferred.** `effect` is required on
+every operation. A body-carrying method must be `write`; a `GET` may be
+either, and one that changes provider state must be declared `write`. The
+declaration decides everything downstream: a write requires a host write
+mode of `allow`, or `approve` plus a one-shot approval of the exact request;
+its authorization is marked as a write for the executor; and its failure is
+`outcome_unknown` whatever the status, because a service may apply a request
+and then answer 4xx. That an operation declared `read` really is read-only
+is the operator's statement about the provider (assumption SPEC-02). The trusted HTTP executor rechecks the
 constructed route and only connects to the policy's fixed TLS host. Reflection
 checks are a backstop, **not** a general noninterference guarantee.
 
 Reference manifests ship in `docs/examples/`: GitLab merge-request review
 (`aivm-secrets-gitlab-merge-request.json`), GitHub issues through schema 2
 (`aivm-secrets-github-issues.json`), a non-Git service
-(`aivm-secrets-huggingface-readonly.json`) and a private-CA deployment
-(`aivm-secrets-selfhosted-pinned.json`). They are examples to copy and edit:
+(`aivm-secrets-huggingface-readonly.json`), a private-CA deployment
+(`aivm-secrets-selfhosted-pinned.json`) and the built-in GitHub pull-request
+manifest written out in full (`aivm-secrets-github-pr.json`), which uses
+`checks`, bound facts and a `cli` table. They are examples to copy and edit:
 none has been run against the live service by this project.
 See [the GitLab example](../examples/aivm-secrets-gitlab-readonly.json) for
 the smallest complete non-GitHub service configured without a Python plugin. The example
@@ -207,17 +229,33 @@ strictly smaller capability (ATTEN-01); `renounce` gives one up. These are the
 whole guest protocol: there is no verb for approval, revocation of another
 grant, or anything on the host control plane.
 
-To add a human-friendly CLI, write an **untrusted argument translator** that
-constructs this limited request shape; keep policy enforcement entirely on the
-host. That CLI can be a `glab`-shaped adapter, a `gh`-shaped adapter, or a
-custom agent tool. A translator is not privileged, even if malicious: the
-broker validates arguments against the selected service operation.
+A human-friendly command line is an **untrusted argument translator**: it
+constructs this limited request shape and nothing more. It is not privileged,
+even if malicious, because the broker validates the result against the
+selected operation. The translator is data, not code. A manifest's `cli`
+section maps a tool name to rows of
 
-Every session installs the generic `aivm-secrets` guest client. For schema 1
-the same client is additionally linked under the name `gh` for backward
-compatibility. It is not stock `gh`, and it cannot run arbitrary `gh api` or
-shell commands. Schema 2 does **not** shadow the name of another installed
-CLI. Don't rely
+```json
+{"command": ["pr", "view"], "operation": "pr.view",
+ "positional": ["pr"],
+ "options": {"--repo": "repository", "-R": "repository"},
+ "output": "reply"}
+```
+
+and the one guest client interprets them: the longest matching `command`
+selects a row, positionals and options become typed arguments (`@name` reads
+a body field from a file or stdin), and the request is sent as usual. The
+client is linked under each tool name in the session's directory, and
+`aivm-secrets as NAME ...` is the explicit spelling. The tables are served by
+`describe` and carry no authority; the kernel only checks that a row names an
+operation and arguments that exist.
+
+`gh` support is exactly this: the built-in GitHub manifest carries a `gh`
+table. There is no `gh`-specific branch in the client or the broker, and a
+`glab`-shaped or in-house command line is added the same way. It is not the
+stock tool -- a command, flag or form the table does not list is a usage
+error, never a fallback -- and a table may not take the client's own verbs or
+the names the client is started through (`env`, `python3`, `sh`). Don't rely
 on PATH shadowing for security: the guest can execute any executable anyway.
 
 **Supporting unmodified stock tools** is a separate P3 workstream:
@@ -245,13 +283,23 @@ a `Scope` -- names, typed parameter allowlists and field size caps. It has **no
 GitHub operation names, PR identifiers, credentials, sockets or
 subprocesses**.
 
-Services are a closed sum in `aivm_secrets/kernel/service.py`:
+There is one service mechanism, `HTTPSpec` (`aivm_secrets/kernel/https.py`),
+and `kernel/service.py` maps a policy onto it:
 
-* `GitHubSpec`: compatibility schema 1, requiring author/head/base PR facts;
-* `HTTPSpec`: schema 2, validated declarative REST operations;
-* the variant is selected by the policy's explicit schema number, never by a
-  guest field, and both compile to the same `Scope` and the same `Effect`.
-  One executor (`host/egress.py`) serves both.
+* schema 2 is a manifest: validated declarative REST operations, optional
+  fact `checks`, a declared `effect` per operation, and optional `cli`
+  command tables for the guest client;
+* schema 1 is *shorthand*. `kernel/presets.py` expands it into the schema-2
+  manifest for GitHub pull requests -- author/head/base facts as a `check`,
+  the head commit as a bound fact, a `gh` command table -- and that manifest
+  is parsed by the same code. The two have one digest;
+* the form is selected by the policy's explicit schema number, never by a
+  guest field. One executor (`host/egress.py`) serves every manifest.
+
+Built-in support for a provider or a tool is therefore a reviewed *data*
+change. `gh pr view 7` works in a guest because a table in the manifest maps
+those words to the operation `pr.view`; the guest client contains no command
+of any tool, and a command the table does not list is a usage error.
 
 The broker uniformly parses a request, authenticates/decrypts a capability,
 reserves a budget slot, writes an audit admission, optionally performs a

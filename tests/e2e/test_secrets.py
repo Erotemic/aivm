@@ -76,37 +76,49 @@ run() {{
 
 
 def operations() -> list[dict[str, Any]]:
+    def read(name: str, path: str, **more: Any) -> dict[str, Any]:
+        return dict(name=name, effect='read', method='GET', path=path, **more)
+
     return [
-        {'name': 'profile.read', 'method': 'GET', 'path': '/v1/account'},
-        {
-            'name': 'issue.view',
-            'method': 'GET',
-            'path': '/v1/issues/{issue}',
-            'parameters': {'issue': [23, 24]},
-        },
-        {
-            'name': 'issue.list',
-            'method': 'GET',
-            'path': '/v1/issues',
-            'query': {'state': 'open', 'page': '{page}'},
-            'parameters': {'page': {'min': 1, 'max': 5}},
-        },
+        read('profile.read', '/v1/account'),
+        read(
+            'issue.view', '/v1/issues/{issue}', parameters={'issue': [23, 24]}
+        ),
+        read(
+            'issue.list',
+            '/v1/issues',
+            query={'state': 'open', 'page': '{page}'},
+            parameters={'page': {'min': 1, 'max': 5}},
+        ),
         {
             'name': 'issue.comment',
+            'effect': 'write',
             'method': 'POST',
             'path': '/v1/issues/{issue}/comments',
             'parameters': {'issue': [23]},
             'body_fields': {'body': 200},
         },
-        {'name': 'debug.echo', 'method': 'GET', 'path': '/v1/secret-echo'},
-        {'name': 'debug.redirect', 'method': 'GET', 'path': '/v1/moved'},
-        {'name': 'debug.forbidden', 'method': 'GET', 'path': '/v1/forbidden'},
         {
-            'name': 'debug.text',
-            'method': 'GET',
-            'path': '/v1/raw',
-            'response': 'text',
+            # The provider applies this one and *then* answers 409.
+            'name': 'issue.label',
+            'effect': 'write',
+            'method': 'POST',
+            'path': '/v1/issues/{issue}/labels',
+            'parameters': {'issue': [23]},
+            'body_fields': {'label': 40},
         },
+        {
+            # A state-changing GET, declared as the write it is.
+            'name': 'issue.close',
+            'effect': 'write',
+            'method': 'GET',
+            'path': '/v1/issues/{issue}/close',
+            'parameters': {'issue': [23]},
+        },
+        read('debug.echo', '/v1/secret-echo'),
+        read('debug.redirect', '/v1/moved'),
+        read('debug.forbidden', '/v1/forbidden'),
+        read('debug.text', '/v1/raw', response='text'),
     ]
 
 
@@ -149,7 +161,7 @@ class Lab:
     def secrets(self, *argv: str) -> Any:
         """The operator's ``aivm-secrets`` in another host terminal."""
         return subprocess.run(
-            [sys.executable, '-P', '-m', 'aivm_secrets', *argv],
+            [sys.executable, '-I', '-m', 'aivm_secrets', *argv],
             env=self.env, capture_output=True, text=True, cwd='/', timeout=60,
         )  # fmt: skip
 
@@ -231,6 +243,9 @@ def open_session(
     during: Callable[[Terminal, Path], None] | None = None,
     expect_session: bool = True,
     extra: tuple[str, ...] = (),
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    python_flags: tuple[str, ...] = (),
 ) -> Result:
     """Open one real ``aivm ssh`` secret session and run ``script`` in it."""
     from aivm_secrets.kernel import codec
@@ -249,6 +264,7 @@ def open_session(
     terminal = Terminal(
         [
             sys.executable,
+            *python_flags,
             '-m',
             'aivm',
             'ssh',
@@ -262,8 +278,8 @@ def open_session(
             writes,
             *extra,
         ],  # fmt: skip
-        env=lab.env,
-        cwd=REPO_ROOT,
+        env=env or lab.env,
+        cwd=cwd or REPO_ROOT,
     )
     if not expect_session:
         code = terminal.wait(timeout=SESSION_TIMEOUT)
@@ -405,6 +421,11 @@ def lab(tmp_path_factory: pytest.TempPathFactory) -> Any:
                     ('GET', '/v1/issues?page=2&state=open'): [{'id': 31}, {'id': 32}],
                     ('POST', '/v1/issues/23/comments'): lambda seen: (
                         201, {}, b'{"created":true}'
+                    ),
+                    ('GET', '/v1/issues/23/close'): {'state': 'closed'},
+                    # Applied, then refused: see ``conflicts``.
+                    ('POST', '/v1/issues/23/labels'): lambda seen: (
+                        409, {}, b'{"message":"label already present"}'
                     ),
                     # A provider that reflects the credential it was sent.
                     ('GET', '/v1/secret-echo'): lambda seen: (
@@ -688,6 +709,103 @@ run read aivm-secrets invoke issue.view --arguments '{{"issue":23}}'
     events = result.events()
     assert events.count('approved') == 1 and events.count('dispatch') == 2
     assert 'Please merge' not in json.dumps(result.audit)
+
+
+def test_a_write_the_provider_answers_4xx_is_reported_as_unknown(
+    lab: Lab,
+) -> None:
+    """No HTTP status proves a sent write did nothing.
+
+    This provider receives the label and then answers 409. The guest must
+    be told the outcome is unknown -- not "rejected", which would invite the
+    very retry that applies it twice -- and nothing may be retried for it.
+    """
+    script = """
+run label aivm-secrets invoke issue.label --arguments '{"issue":23,"label":"needs-review"}'
+run read aivm-secrets invoke debug.forbidden
+run after aivm-secrets invoke profile.read
+"""
+    result = open_session(lab, 'conflict', script, writes='allow')
+    assert result.rc('label') == 3
+    assert result.err('label') == 'aivm-secrets: outcome_unknown (HTTP 409)'
+    assert result.text('label') == ''
+    # The same class of status on a read is an ordinary, definite refusal.
+    assert result.err('read') == 'aivm-secrets: upstream_rejected (HTTP 403)'
+    assert result.rc('after') == 0
+    posts = [item for item in result.requests if item['method'] == 'POST']
+    assert [(post['target'], json.loads(post['body'])) for post in posts] == [
+        ('/v1/issues/23/labels', {'label': 'needs-review'})
+    ]
+    failed = [
+        (row['operation'], row['code'], row.get('status'))
+        for row in result.audit
+        if row['event'] == 'rejected_or_failed'
+    ]
+    assert failed == [
+        ('issue.label', 'outcome_unknown', 409),
+        ('debug.forbidden', 'upstream_rejected', 403),
+    ]
+    for produced in result.out.iterdir():
+        assert 'already present' not in produced.read_text(errors='replace')
+
+
+def test_a_state_changing_get_is_gated_as_the_write_it_is_declared_to_be(
+    lab: Lab,
+) -> None:
+    """``issue.close`` is a GET. Only its declared effect makes it a write."""
+    target = '/v1/issues/23/close'
+    close = 'aivm-secrets invoke issue.close --arguments \'{"issue":23}\''
+    view = 'aivm-secrets invoke issue.view --arguments \'{"issue":23}\''
+
+    def closes() -> int:
+        return [item['target'] for item in lab.service.seen('GET')].count(
+            target
+        )
+
+    # Host writes denied: refused before egress, while a read still works.
+    denied = open_session(
+        lab, 'close-deny', f'run close {close}\nrun view {view}'
+    )
+    assert denied.err('close') == 'aivm-secrets: denied'
+    assert denied.rc('view') == 0
+    assert denied.targets() == ['/v1/issues/23'] and closes() == 0
+
+    seen: dict[str, Any] = {}
+
+    def operator(terminal: Terminal, out: Path) -> None:
+        wait_for(out / 'first.rc')
+        (item,) = json.loads(lab.secrets('pending', '--json').stdout)
+        seen['pending'] = (item['operation'], item['arguments'])
+        seen['sent_before_approval'] = closes()
+        approved = lab.secrets('approve', item['digest'][:16], '--yes')
+        assert approved.returncode == 0, approved.stderr
+
+    script = f"""
+run first {close}
+i=0
+while [ $i -lt 150 ]; do
+    {close} > "$OUT/retry.out" 2> "$OUT/retry.err" && break
+    sleep 0.2; i=$((i+1))
+done
+echo $? > "$OUT/retry.rc"
+run again {close}
+"""
+    result = open_session(
+        lab, 'close-approve', script, writes='approve', during=operator
+    )
+    assert result.rc('first') == 4
+    assert 'approval_required' in result.err('first')
+    assert seen == {
+        'pending': ('issue.close', {'issue': 23}),
+        'sent_before_approval': 0,
+    }
+    assert result.rc('retry') == 0
+    assert json.loads(result.text('retry'))['result'] == {'state': 'closed'}
+    assert result.rc('again') == 4  # one approval buys one request
+    (sent,) = result.requests
+    assert (sent['method'], sent['target'], sent['body']) == ('GET', target, '')
+    events = result.events()
+    assert events.count('approved') == 1 and events.count('dispatch') == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1128,14 +1246,248 @@ def test_an_untrusted_provider_certificate_sends_no_credential(
 
 
 # ---------------------------------------------------------------------------
-# The GitHub PR service (schema 1)
+# Code and paths the guest controls
 # ---------------------------------------------------------------------------
 
 
-def test_the_github_service_installs_its_alias_and_refuses_out_of_grant_requests(
+def test_a_guest_made_link_out_of_the_workspace_cannot_carry_a_policy(
     lab: Lab,
 ) -> None:
-    """Schema 1 through a real session, without ever contacting GitHub.
+    """The review's symlink case, with a real guest making the link.
+
+    Inside the shared folder the guest creates ``switch``, a link to the
+    host directory that holds the operator's genuine policy and credential.
+    Every path through it resolves to a perfectly good host file -- and is
+    still chosen by the guest, which can re-point the link at any moment.
+    """
+    planted = open_session(
+        lab,
+        'plant-link',
+        f'ln -s {shlex.quote(str(lab.private))} ../switch\n'
+        'run listed ls -l ../switch',
+    )
+    assert planted.rc('listed') == 0
+    link = lab.workspace / 'switch'
+    assert link.is_symlink() and os.path.realpath(link) == str(lab.private)
+    genuine = lab.private / 'plant-link.json'
+    assert genuine.is_file()
+    before = len(lab.service.requests)
+    try:
+        through_policy = open_session(
+            lab, 'link-policy', 'true',
+            policy_path=link / 'plant-link.json', expect_session=False,
+        )  # fmt: skip
+        through_token = open_session(
+            lab, 'link-token', 'true', policy_path=genuine,
+            extra=('--secrets_token_file', str(link / 'token')),
+            expect_session=False,
+        )  # fmt: skip
+    finally:
+        link.unlink()
+    for result in (through_policy, through_token):
+        assert result.code == 1
+        assert 'outside the shared workspace' in result.transcript
+        assert 'Guest client:' not in result.transcript
+    assert len(lab.service.requests) == before
+    assert list((lab.runtime / 'aivm-secrets').iterdir()) == []
+    # Named directly, the very same files open a session.
+    direct = open_session(
+        lab, 'link-direct', 'run read aivm-secrets invoke profile.read',
+        policy_path=genuine,
+    )  # fmt: skip
+    assert direct.rc('read') == 0
+
+
+def test_guest_written_python_cannot_become_the_broker(lab: Lab) -> None:
+    """The review's ``PYTHONPATH`` case, with a real guest writing the code.
+
+    From inside the VM the guest drops a shadow ``aivm_secrets`` package and
+    a ``sitecustomize.py`` into the shared folder. The operator then opens a
+    secret session with ``PYTHONPATH`` pointing there and from that
+    directory. The broker that holds the credential must be the installed
+    one, and none of the guest's files may have run in it.
+    """
+    record = (
+        'import os\n'
+        'here = os.path.dirname(os.path.abspath(__file__))\n'
+        'root = here if os.path.basename(here) != "aivm_secrets" else os.path.dirname(here)\n'
+        'with open(os.path.join(root, "ran-guest-code"), "ab") as stream:\n'
+        '    stream.write(open("/proc/self/cmdline", "rb").read() + b"\\n")\n'
+    )
+    script = f"""
+mkdir ../aivm_secrets
+cat > ../sitecustomize.py <<'PY'
+{record}PY
+cp ../sitecustomize.py ../aivm_secrets/__init__.py
+cat > ../aivm_secrets/__main__.py <<'PY'
+import json
+print(json.dumps({{"channel": "SHADOW", "socket": "/tmp/shadow"}}))
+PY
+run made ls ../aivm_secrets ../sitecustomize.py
+"""
+    assert open_session(lab, 'plant-code', script).rc('made') == 0
+    marker = lab.workspace / 'ran-guest-code'
+    poisoned = dict(lab.env, PYTHONPATH=str(lab.workspace))
+    try:
+        # The attack is real: started the old way, with ``-P`` and this
+        # environment, what runs is the guest's package.
+        control = subprocess.run(
+            [sys.executable, '-P', '-m', 'aivm_secrets', 'serve'],
+            env=poisoned, cwd=lab.workspace, capture_output=True, text=True,
+            timeout=60,
+        )  # fmt: skip
+        assert json.loads(control.stdout)['channel'] == 'SHADOW'
+        assert marker.exists()
+        marker.unlink()
+
+        result = open_session(
+            lab,
+            'poisoned',
+            'run read aivm-secrets invoke profile.read',
+            env=poisoned,
+            cwd=lab.workspace,
+            # The operator's own AIVM is assumed sane; what is under test is
+            # the broker it starts while this variable is in the environment.
+            python_flags=('-I',),
+        )
+        ran = marker.read_bytes() if marker.exists() else b''
+    finally:
+        shutil.rmtree(lab.workspace / 'aivm_secrets', ignore_errors=True)
+        for name in ('sitecustomize.py', 'ran-guest-code'):
+            (lab.workspace / name).unlink(missing_ok=True)
+    assert result.rc('read') == 0
+    assert result.json('read')['result'] == {'login': 'e2e-operator'}
+    (seen,) = result.requests
+    assert seen['headers']['authorization'] == 'Bearer ' + TOKEN
+    assert b'aivm_secrets\x00serve' not in ran, ran
+    assert 'SHADOW' not in result.transcript
+
+
+# ---------------------------------------------------------------------------
+# The built-in GitHub manifest and its ``gh`` command table
+# ---------------------------------------------------------------------------
+
+PULL = '/repos/taucetiproject/tauceti'
+
+
+def test_gh_commands_run_through_the_general_mechanism_on_a_real_vm(
+    lab: Lab,
+) -> None:
+    """``gh pr ...`` in the guest, end to end, with no GitHub-specific code.
+
+    The policy is the built-in manifest exactly as ``policy-check`` prints
+    it, with only its destination and credential source replaced so that it
+    reaches this suite's provider instead of GitHub. Everything else -- the
+    fact check on the PR, the bound commit hash, pagination, the ``gh``
+    command table the guest client reads -- is that manifest's own data.
+    """
+    from aivm_secrets.kernel import presets
+    from tests.secrets_helpers import github_policy, metadata
+
+    manifest = presets.github_pr(github_policy(max_requests=30))
+    manifest.update(
+        host=lab.service.host,
+        egress=lab.service.egress(),
+        credential_source={'kind': 'file', 'path': str(lab.token_file)},
+    )
+    stranger = metadata()
+    stranger.update(number=13862)
+    stranger['user']['login'] = 'someone-else'
+    checks = f'{PULL}/commits/{"a" * 40}/check-runs?page=1&per_page=100'
+    lab.service.routes.update(
+        {
+            ('GET', f'{PULL}/pulls/13861'): lambda seen: (
+                (200, {}, b'diff --git a/x b/x\n+proof\n')
+                if 'diff' in seen['headers']['accept']
+                else (200, {}, json.dumps(metadata()).encode())
+            ),
+            ('GET', f'{PULL}/pulls/13862'): stranger,
+            ('GET', f'{PULL}/issues/13861/comments?page=1&per_page=100'): [
+                {'id': 1, 'body': 'first'}
+            ],
+            ('GET', f'{PULL}/pulls/13861/reviews?page=2&per_page=100'): [],
+            ('GET', checks): {'total_count': 1, 'check_runs': [{'name': 'lean'}]},
+            ('POST', f'{PULL}/issues/13861/comments'): lambda seen: (
+                201, {}, b'{"id": 99}'
+            ),
+            ('PATCH', f'{PULL}/pulls/13861'): {'title': 'New title'},
+        }
+    )  # fmt: skip
+    repo = '--repo TauCetiProject/TauCeti'
+    script = f"""
+command -v gh > "$OUT/which"
+readlink "$(command -v gh)" > "$OUT/link"
+run view gh pr view 13861 {repo}
+run diff gh pr diff 13861 -R TAUCETIPROJECT/tauceti
+run comments gh pr comments 13861 {repo}
+run reviews gh pr reviews 13861 {repo} --page 2
+run checks gh pr checks 13861 {repo}
+printf 'Reviewed in the guest.\\n' > body.md
+run comment gh pr comment 13861 {repo} --body-file body.md
+run edit gh pr edit 13861 {repo} --title 'New title'
+run spelled aivm-secrets as gh pr view 13861 {repo}
+run wrong_author gh pr view 13862 {repo}
+run wrong_author_write gh pr comment 13862 {repo} --body nope
+run other_pr gh pr view 9 {repo}
+run other_repo gh pr view 13861 --repo attacker/TauCeti
+run api gh api /user
+run token gh auth token
+run merge gh pr merge 13861 {repo}
+run web gh pr view 13861 {repo} --web
+run bypass aivm-secrets invoke pr.view --arguments '{{"repository":"attacker/x","pr":13861}}'
+"""
+    result = open_session(lab, 'gh', script, policy=manifest, writes='allow')
+    assert (result.out / 'which').read_text().strip().endswith('/gh')
+    assert (result.out / 'link').read_text().strip() == 'aivm-secrets'
+    assert result.json('view')['result']['user']['login'] == 'Erotemic'
+    assert result.text('diff') == 'diff --git a/x b/x\n+proof\n'  # raw text
+    assert result.json('comments')['result'] == [{'id': 1, 'body': 'first'}]
+    assert result.json('comments')['pagination'] == {
+        'page': 1, 'per_page': 100, 'possibly_more': False,
+    }  # fmt: skip
+    assert result.json('reviews')['pagination']['page'] == 2
+    assert result.json('checks')['result']['check_runs'] == [{'name': 'lean'}]
+    assert result.json('comment')['result'] == {'id': 99}
+    assert result.json('edit')['result'] == {'title': 'New title'}
+    assert result.json('spelled') == result.json('view')
+    # Fresh metadata gates everything: PR 13862 is in the grant by number
+    # but has another author, so nothing follows the one fact fetch.
+    for step in ('wrong_author', 'wrong_author_write'):
+        assert result.err(step) == 'aivm-secrets: resource_mismatch', step
+    for step in ('other_pr', 'other_repo', 'bypass'):
+        assert result.err(step) == 'aivm-secrets: denied', step
+    # Not the real gh: anything the table does not list stops in the guest.
+    for step in ('api', 'token', 'merge', 'web'):
+        assert result.rc(step) == 2 and result.text(step) == '', step
+        assert 'not the real gh' in result.err(step), step
+    fetch = f'{PULL}/pulls/13861'
+    assert [(item['method'], item['target']) for item in result.requests] == [
+        ('GET', fetch),  # view: the checked facts are the answer
+        ('GET', fetch), ('GET', fetch),  # diff
+        ('GET', fetch), ('GET', f'{PULL}/issues/13861/comments?page=1&per_page=100'),
+        ('GET', fetch), ('GET', f'{PULL}/pulls/13861/reviews?page=2&per_page=100'),
+        ('GET', fetch), ('GET', checks),
+        ('GET', fetch), ('POST', f'{PULL}/issues/13861/comments'),
+        ('GET', fetch), ('PATCH', fetch),
+        ('GET', fetch),  # spelled
+        ('GET', f'{PULL}/pulls/13862'), ('GET', f'{PULL}/pulls/13862'),
+    ]  # fmt: skip
+    post = next(item for item in result.requests if item['method'] == 'POST')
+    assert json.loads(post['body']) == {'body': 'Reviewed in the guest.\n'}
+    patch = next(item for item in result.requests if item['method'] == 'PATCH')
+    assert json.loads(patch['body']) == {'title': 'New title'}
+    for item in result.requests:
+        assert item['headers']['authorization'] == 'Bearer ' + TOKEN
+        assert item['headers']['x-github-api-version'] == '2026-03-10'
+    assert TOKEN not in result.transcript + json.dumps(result.audit)
+    for produced in result.out.iterdir():
+        assert TOKEN not in produced.read_text(errors='replace'), produced.name
+
+
+def test_the_github_shorthand_uses_the_operators_gh_login_and_installs_gh(
+    lab: Lab,
+) -> None:
+    """Policy ``schema: 1`` as shipped, without ever contacting GitHub.
 
     The host credential comes from a stand-in ``gh`` on the operator's PATH.
     Every request below is refused before egress, so nothing leaves the
@@ -1162,6 +1514,7 @@ run other_pr gh pr view 9 --repo TauCetiProject/TauCeti
 run other_repo gh pr view 13861 --repo attacker/TauCeti
 run not_granted gh pr checks 13861 --repo TauCetiProject/TauCeti
 run write gh pr comment 13861 --repo TauCetiProject/TauCeti --body hi
+run bypass aivm-secrets invoke pr.comment --arguments '{"repository":"TauCetiProject/TauCeti","pr":13861,"body":"hi"}'
 run api gh api /user
 run json gh pr view 13861 --repo TauCetiProject/TauCeti --json title
 """
@@ -1175,13 +1528,22 @@ run json gh pr view 13861 --repo TauCetiProject/TauCeti --json title
         'github.com',
     ]
     assert (result.out / 'which').read_text().strip().endswith('/gh')
-    names = [op['name'] for op in result.json('ops')['grant']['operations']]
+    described = result.json('ops')
+    names = [op['name'] for op in described['grant']['operations']]
     assert names == ['pr.comments', 'pr.diff', 'pr.view']
-    for step in ('other_pr', 'other_repo', 'not_granted', 'write'):
+    # The command table offers exactly the granted operations ...
+    assert sorted(' '.join(row['command']) for row in described['cli']['gh']) == [
+        'pr comments', 'pr diff', 'pr view',
+    ]  # fmt: skip
+    for step in ('other_pr', 'other_repo'):
         assert result.err(step) == 'aivm-secrets: denied', step
-    assert result.rc('api') == 2 and result.rc('json') == 2  # not stock gh
+    # ... so an ungranted command stops in the client, and going around the
+    # client changes nothing: the broker refuses the operation itself.
+    for step in ('not_granted', 'write', 'api', 'json'):
+        assert result.rc(step) == 2 and 'not the real gh' in result.err(step)
+    assert result.err('bypass') == 'aivm-secrets: denied'
     assert result.requests == []
-    assert result.events().count('rejected_or_failed') == 4
+    assert result.events().count('rejected_or_failed') == 3
     assert TOKEN not in result.transcript
 
 

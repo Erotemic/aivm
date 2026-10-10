@@ -29,6 +29,8 @@ from tests.secrets_helpers import (
     cli_env,
     github_policy,
     https_policy,
+    poison,
+    ran_as_broker,
     run_cli_process,
     write_policy_file,
     write_private,
@@ -66,9 +68,11 @@ def world(root):
         )  # fmt: skip
 
 
-def serve(world, *argv, policy=None):
+def serve(world, *argv, policy=None, env=None, flags=('-I',)):
     return ServeProcess(
-        ['--policy', str(policy or world.policy), *argv], env=world.env
+        ['--policy', str(policy or world.policy), *argv],
+        env=env or world.env,
+        flags=flags,
     )
 
 
@@ -91,9 +95,21 @@ def test_policy_check_does_not_acquire_credential(root, capsys):
     assert len(report['digest']) == 64
     legacy = write_policy_file(root / 'legacy.json', github_policy())
     assert cli.main(['policy-check', str(legacy)]) == 0
-    assert json.loads(capsys.readouterr().out)['policy']['repository'] == (
-        'taucetiproject/tauceti'
-    )
+    # The shorthand is shown as what it stands for: the whole manifest,
+    # fact checks and command table included, ready to be copied and edited.
+    expanded = json.loads(capsys.readouterr().out)['policy']
+    assert (expanded['schema'], expanded['service']) == (2, 'github-pr')
+    assert expanded['host'] == 'api.github.com'
+    assert [item['at'] for item in expanded['checks']['pull']['require']] == [
+        ['number'],
+        ['base', 'repo', 'full_name'],
+        ['user', 'login'],
+        ['head', 'repo', 'full_name'],
+    ]
+    assert len(expanded['cli']['gh']) == 8
+    copied = write_policy_file(root / 'copied.json', expanded)
+    assert cli.main(['policy-check', str(copied)]) == 0
+    assert json.loads(capsys.readouterr().out)['policy'] == expanded
 
 
 def test_policy_check_explains_refusals_to_the_operator(root, capsys):
@@ -298,8 +314,8 @@ def test_token_file_and_stdin_override_the_policy_source(world):
         process.stderr.close()
 
 
-def refused(world, *argv, policy=None):
-    with serve(world, *argv, policy=policy) as broker:
+def refused(world, *argv, policy=None, **kwargs):
+    with serve(world, *argv, policy=policy, **kwargs) as broker:
         assert not broker.ready, broker.announce
         assert broker.process.wait(timeout=20) == 1
         broker.stderr = broker.process.stderr.read().decode()
@@ -310,6 +326,39 @@ def refused(world, *argv, policy=None):
         else True
     )
     return broker.announce['error'], broker.stderr
+
+
+def test_serve_started_without_isolation_notices_guest_supplied_code(
+    world, tmp_path
+):
+    """The second half of the launch defence: detection inside the broker.
+
+    Someone starts ``aivm-secrets serve`` by hand, with a ``PYTHONPATH``
+    that reaches into the workspace. The planted ``sitecustomize.py`` has
+    already run by the time the broker can look -- so it refuses to serve,
+    before the credential is resolved or anything is sent.
+    """
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    marker = poison(workspace)
+    (workspace / 'aivm_secrets').rename(workspace / 'not-the-package')
+    env = dict(world.env, PYTHONPATH=str(workspace))
+    error, _ = refused(
+        world, '--untrusted-root', str(workspace), env=env, flags=('-P',)
+    )
+    assert error['code'] == 'shared_source'
+    assert (
+        'module search path' in error['detail']
+        or 'loaded module' in (error['detail'])
+    )
+    assert ran_as_broker(marker)  # it did run: this half only detects
+    assert world.service.requests == []
+    # Started isolated, the same environment is simply ignored.
+    marker.unlink()
+    with serve(world, '--untrusted-root', str(workspace), env=env) as broker:
+        assert broker.ready, broker.announce
+        assert broker.invoke('profile.read')['ok']
+    assert ran_as_broker(marker) == []
 
 
 def test_serve_refuses_anything_inside_a_guest_writable_root(world):

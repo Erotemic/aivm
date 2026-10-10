@@ -87,25 +87,58 @@ Approval  { digest: hex64, expires_at }
 State     { binding, policy_digest, write_mode: deny|approve|allow,
             max_attempts, grants (≤64, root first), approvals (≤16),
             ticket: Option<Ticket>, serial, attempts, active }
-AuthorizedEffect { serial, grant_id, request_digest, final: bool, effect }
+AuthorizedEffect { serial, grant_id, request_digest, final: bool,
+                   write: bool, effect }
 ```
 
 A `Claims` value carries **no scope**. It names a grant held in `State`, so
 presenting different bytes can never widen authority; it can only fail to
 match.
 
-`ServiceSpec` is a closed sum, selected by an explicit schema number:
+There is **one** service mechanism, `HTTPSpec`: a declarative manifest
+interpreted by the kernel. A policy reaches it by one of two routes, chosen
+by its explicit schema number and ending in the same type:
 
-| Variant | Schema | Conditioned on provider facts |
-| --- | --- | --- |
-| `GitHubSpec` | 1 | yes: every operation first fetches the selected PR |
-| `HTTPSpec` | 2 | no: one request, one effect |
+| Schema | Meaning |
+| --- | --- |
+| 2 | a manifest, parsed directly |
+| 1 | shorthand for the built-in GitHub pull-request manifest: `presets.github_pr` *expands it into a schema-2 manifest*, which is then parsed like any other |
 
-Each variant provides the same total functions: `scope()`,
-`parse_request(wire)`, `preflight(request)`, `final(request, facts)` and
-`reply_meta(request, result)`. There is no registry lookup by name, no
-dynamic import and no trait object; adding a variant is a reviewed change to
-`kernel/service.py`.
+`presets.py` is data construction only. It imports no mechanism, and the
+schema-1 policy and its expansion have the same digest (pinned in
+`tests/secrets_vectors/v1/policy.json`). Nothing else in the package names a
+provider (`tests/test_secrets_purity.py`).
+
+A manifest is a fixed TLS destination plus:
+
+```text
+Check      { name, path template, accept,
+             require: [Requirement], bind: [Capture] }
+Requirement{ at: [key], literal | parameter, fold: bool }
+Capture    { name, at: [key], format: hex|integer|segment }
+Operation  { name, write: bool,            -- declared, never inferred
+             requires: Option<check>, returns_check: bool,
+             method, path template, parameters, query, body fields,
+             response, accept, defaults, fold, page }
+CLICommand { words, operation, positional, options, output }   -- inert data
+```
+
+`HTTPSpec` provides the total functions the kernel is written against:
+`scope()`, `parse_request(wire)` (which folds and defaults, once, before any
+check), `preflight(request)`, `final(request, facts)` and
+`reply_meta(request, result)`. `final` first verifies the check -- every
+`Requirement` must hold, by exact type -- and extracts each `Capture` in its
+declared format; only then does it build the effect, from the template, the
+allowlisted arguments and the validated captures. There is no registry
+lookup by name, no dynamic import and no trait object.
+
+**Effect class.** `Operation.write` comes from the manifest's required
+`effect` field. The parser refuses a body-carrying method declared `read`;
+it accepts a `GET` declared `write`. The class is what admission checks
+against the host write mode, what an approval is required for, and what
+`AuthorizedEffect.write` carries to the executor. `Effect.is_write` (the
+method carries a body) is used for exactly one thing: a request admitted as
+a read may never emit one.
 
 ## 3. Encodings and identities
 
@@ -285,8 +318,10 @@ It must sample a fresh `Clock` for each emission, hold the state lock only
 across a transition (never across I/O, so `revoke`/`approve` are not delayed
 by a slow provider), treat any audit failure as `revoke("")`, and report a
 failure after a write was handed to the executor as `outcome_unknown` unless
-the executor proved one of two things: nothing was sent (`unreachable`) or the
-service refused it (`upstream_rejected`).
+the executor proved that nothing was sent (`unreachable`). No HTTP status is
+proof that a sent write was not applied -- a service may act and then answer
+409 or 422 -- so `upstream_rejected` is reported for reads only. "Write" here
+is `AuthorizedEffect.write`, the declared class, not the method.
 
 These obligations are tested (`tests/test_secrets_broker.py`) but are **not**
 part of the pure kernel. They are the refinement gap the assurance plan calls
@@ -301,9 +336,10 @@ single deleted checks that the named tests must detect
 
 | Theorem | Kernel functions | Tests | Vectors | Mutants |
 | --- | --- | --- | --- | --- |
-| AUTH-01 | `admit`, `scope.check_arguments`, `GitHubSpec.final` | 2⁹-case oracle, generated traces | 01–04, 13 | 7 |
-| EFFECT-01 | `emit_preflight`, `emit_final`, `Ticket` | ticket/phase tests, hostile-compiler tests | 01, 04, 13, 14 | 3 |
-| ROUTE-01 | `model.check_effect`, `HTTPOperation.effect`, `Effect.target` | grammar negatives, exhaustive manifest routing, real-TLS executor | 01, 10, 13 | 5 |
+| AUTH-01 | `admit`, `scope.check_arguments`, `Check.verify`, `Requirement.holds` | 2⁹-case oracle, generated traces, fact-mismatch tables for two manifests | 01–04, 13, 15–17 | 11 |
+| EFFECT-01 | `emit_preflight`, `emit_final`, `Ticket` | ticket/phase tests, hostile-compiler tests, declared-write `GET` | 01, 04, 13–17 | 5 |
+| COMP-01 | `Capture.extract`, `check_effect` | hostile bound facts, hostile-compiler tests | 17 | 2 |
+| ROUTE-01 | `model.check_effect`, `HTTPOperation.effect`, `Effect.target` | grammar negatives, exhaustive manifest routing, real-TLS executor | 01, 10, 13, 17 | 7 |
 | BIND-01 | `authenticate` | per-component binding tests, peer-UID socket test | 07 | 4 |
 | TIME-01 | `require_live` | boundary tests, rollback tests | 06, 14 | 4 |
 | REVOKE-01 | `revoke`, `require_live` | cascade tests, mid-flight revoke | 08, 11 | 4 |
@@ -312,7 +348,7 @@ single deleted checks that the named tests must detect
 | APPROVAL-01 | `approve`, `admit` | one-shot, exact-bytes, expiry, grant-bound | 12 | 3 |
 | CODEC-01 | `codec.loads`, `codec.dumps`, `grammar.*` | regex oracles, strictness negatives | `codec`, `grammar` | 2 |
 | CONF-01 | (interpreter) | reflection tripwire, guest disk/env search in the e2e suite | — | 2 |
-| AUDIT-01 | (interpreter) | ordering test, fault injection, chain verification | — | 4 |
+| AUDIT-01 | (interpreter, executor) | ordering test, fault injection, chain verification, apply-then-4xx provider | — | 7 |
 | RESTART-01 | (envelope) | cross-session and post-crash replay, unit and e2e | `envelope` | — |
 
 The generated-trace test (`tests/test_secrets_trace.py`) replays about 38,000
@@ -346,8 +382,16 @@ of section 5 after each one.
 * The interpreter sequence of section 6 is specified in prose and tested, not
   modelled as a transition system with effects. A trace semantics that
   includes `AppendAudit` and `Execute` events is the next specification step.
-* `GitHubSpec` is code, not data. Quantifying a theorem "over all registered
-  adapters" means, today, over two variants.
+* A manifest's declared `effect` is taken on trust (assumption SPEC-02). The
+  kernel can refuse a body-carrying method declared `read`; it cannot know
+  that a `GET` declared `read` changes nothing at the provider.
+* Remote outcomes are conservative, not resolved: every failed write is
+  `outcome_unknown`. Idempotency keys and provider-specific reconciliation,
+  which could turn some of those into definite answers, are not implemented.
+* Requirements are equalities on values reached through object keys. There
+  is no array indexing, no ordering comparison and no disjunction; a fact
+  that needs one cannot be stated, which is preferable to a predicate
+  language with its own semantics to verify.
 * Epochs are in-memory. A grant does not survive its broker, which is what
   makes restart safe, but it means there is no durable revocation record and no
   claim about host snapshot rollback.

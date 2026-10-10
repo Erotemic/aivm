@@ -78,7 +78,7 @@ parser and authentication refinement proved or explicitly assumed separately.
 
 Each row is also attacked by at least one mutant in
 `tests/test_secrets_mutation.py`: a single deleted check that the named tests
-must detect. All 48 current mutants are detected. That is evidence the tests
+must detect. All 69 current mutants are detected. That is evidence the tests
 are not vacuous; it says nothing about checks nobody thought to write.
 
 ### AUTH-01 and EFFECT-01: meaningful authorization
@@ -94,6 +94,13 @@ admit(p, g, b, r, s) = Accepted(s', ticket)
   /\ payloadWithinBounds(p, r)
   /\ (isWrite(r) -> hostAllowsWrites)
 ```
+
+`isWrite(r)` is the **declared** class of `r`'s operation: a required field of
+the manifest, never a function of the HTTP method. The parser refuses a
+body-carrying method declared read-only; a `GET` declared a write is a write
+in `admit`, in approval, in the minted authorization and in the meaning of a
+failed dispatch. That a `GET` declared `read` changes nothing at the provider
+is an assumption about the provider (SPEC-02), not a theorem.
 
 That is necessary but not sufficient. For every trace prefix `t` ending in an
 emitted provider request, prove the existence of a matching unconsumed ticket
@@ -121,11 +128,25 @@ packet before expiry despite arbitrary process scheduling or network delay.
 Recheck after potentially blocking audit/preflight operations; do not reuse a
 stale sample from the start of a multi-step request.
 
-The current lock means revoke waits for an active request to finish. The target
-may allow a revoke event between preflight and mutation, provided the final epoch
-check is serialized with dispatch admission. In either design, no theorem claims
-to undo a write already accepted by GitHub. Remote outcomes remain uncertain
-when a response is lost. Retrying requires reconciliation, not a proof label.
+The implementation uses two locks. A *request* lock serializes guest requests,
+so at most one ticket is open. A *state* lock is held only across a single
+kernel transition and never across audit or network I/O. `revoke` and
+`approve` take only the state lock: a revocation is therefore not delayed by
+a provider call in flight, and can land between a preflight and the write it
+was fetched for. `emit_final` re-samples liveness under the state lock, and
+that emission is the linearization point of dispatch: a revocation that
+linearizes before it prevents the effect; one that linearizes after it does
+not recall an effect already handed to the executor. No theorem claims to
+undo a write a provider has accepted.
+
+Remote outcomes are reported conservatively. Once a write has been handed to
+the executor, exactly one answer is definite: no connection was established.
+Every other failure -- a transport error, a timeout, an unusable response, or
+*any* HTTP status including 4xx -- is `outcome_unknown`, because a service
+may apply a request and then report a conflict. A status could only be
+upgraded to "not applied" by a provider contract the manifest states; no
+such declaration exists yet, and neither do idempotency keys. Retrying
+requires reconciliation, not a proof label.
 
 Wall-clock rollback is not a grant extension: the local monotonic deadline also
 must hold. A VM/host snapshot may roll back both state and clocks. Address that
@@ -200,9 +221,9 @@ proof results. It covers at least:
 | Binary build | Rust compiler, dependencies, target ABI and link process match the proved sources |
 | Cryptography | AEAD/signature security, entropy, nonce/key separation, correct library use; primitive internals unproved here |
 | Channel identity | SSH or mTLS binds the real peer to the assigned listener/certificate; no spoofable header substitute |
-| Host isolation | Untrusted guest cannot modify broker binaries, keys, runtime paths or owning host process |
+| Host isolation | Untrusted guest cannot modify broker binaries, keys, runtime paths or owning host process. Three parts are checked rather than assumed: no trusted path may *visit* a guest-writable root while being resolved (the path as written, every link followed, and the destination); a resolver runs at its verified, link-free location; and the broker is launched with `python -I` and a scrubbed environment, then re-checks where its own interpreter, search path and loaded modules came from. A group-writable path is accepted only for a group that is provably the caller's alone (GROUP-01) |
 | Time and persistence | Clock samples and epoch store meet documented semantics; rollback assumptions explicit |
-| Provider | TLS peer identity and endpoint semantics; metadata checks are not atomic with later mutations |
+| Provider | TLS peer identity and endpoint semantics; metadata checks are not atomic with later mutations; an operation declared `read` is read-only; no status code is assumed to mean a write was not applied |
 | Executor | Only kernel-issued effects reach credentialed egress; no alternate debug/admin/generic HTTP bypass |
 | Files and audit | Ownership, no-symlink rules and acknowledged writes enforce the modeled access/durability contract |
 
@@ -301,7 +322,11 @@ the implementation revision, the trust assumptions and the excluded effects.
 ## 7. Service-neutral proof and plugin-conformance additions (2026-10-09)
 
 The GitHub-specific statements above are historical examples of the first
-prototype; the intended theorem domain is **every registered service adapter**.
+prototype. As of 2026-10-10 there is no GitHub-specific code to make
+statements about: the service is a manifest (`kernel/presets.py`) interpreted
+by the one mechanism, so the theorem domain is **every output of
+`HTTPSpec.parse`**, and "fact-conditioned" is a property of a manifest's
+`checks` rather than of a variant.
 A plugin cannot inherit a security claim solely because it implements the
 right Python method names. It must satisfy a typed effect contract included
 in the compiled/extracted Rust and Lean models.
@@ -312,8 +337,8 @@ budget, operation membership, typed resource arguments, host write mode and
 bounded payload size, for the grant and each ancestor. Resource arguments are
 checked against a `Scope` the service spec compiles to, so the check is the
 same code for every service. The kernel also computes and grammar-checks each
-effect, and refuses one whose class differs from the admitted operation, so a
-defective service compiler cannot turn a read into a write or leave the
+effect, and refuses a body-carrying effect for a request admitted as a read,
+so a defective service compiler cannot turn a read into a write or leave the
 effect grammar. It does **not** verify that a compiler's route is the route
 the operator meant: there is no machine-checked refinement connecting a
 spec's route to its manifest, and the interpreter around the kernel is

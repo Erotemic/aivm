@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.kernel.source import FORBIDDEN_ENV, GH_SOURCE, parse_source
+from aivm_secrets.kernel.presets import GH_SOURCE
+from aivm_secrets.kernel.source import FORBIDDEN_ENV, parse_source
 
 
 def test_sources_have_one_canonical_form():

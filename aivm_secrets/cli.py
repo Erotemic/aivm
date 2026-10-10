@@ -9,7 +9,7 @@
   revoke [SESSION]          end a session's authority now
   audit-verify FILE...      check an audit file's hash chain
 
-``invoke``, ``operations``, ``delegate``, ``renounce`` and ``pr`` are the
+``invoke``, ``operations``, ``delegate``, ``renounce`` and ``as`` are the
 guest client's verbs and are passed straight through to it.
 
 AIVM's ``aivm ssh --secrets_policy`` runs ``serve`` as a child process, so
@@ -32,19 +32,22 @@ from typing import Any
 from . import guest
 from .errors import SecretsError
 
-GUEST_VERBS = ('invoke', 'operations', 'delegate', 'renounce', 'pr')
+GUEST_VERBS = ('invoke', 'operations', 'delegate', 'renounce', 'as')
 ANNOUNCE_VERSION = 1
 
 
 def load_policy(path: Path, untrusted: tuple[Path, ...] = ()) -> Any:
     """Read and parse a host-owned policy file into a service spec."""
-    from .host.files import outside, read_owned
+    from .host.files import read_owned
     from .kernel import codec
     from .kernel.service import parse_policy
 
-    path = Path(path).expanduser()
-    outside(path, untrusted, what='policy')
-    data = read_owned(path, private=False)
+    data = read_owned(
+        Path(os.path.abspath(Path(path).expanduser())),
+        private=False,
+        untrusted=untrusted,
+        what='policy',
+    )
     return parse_policy(codec.loads(data, code='invalid_policy'))
 
 
@@ -177,8 +180,8 @@ def _announce(mode: str, payload: dict[str, Any]) -> None:
 
 def _serve(args: argparse.Namespace) -> int:
     from .host.broker import Broker
-    from .host.files import outside, private_directory, write_new
-    from .host.hardening import harden_process
+    from .host.files import private_directory, write_new
+    from .host.hardening import harden_process, verify_runtime
     from .host.server import LocalServer
     from .host.session import (
         CAPABILITY_FILE,
@@ -199,11 +202,7 @@ def _serve(args: argparse.Namespace) -> int:
         )
     harden_process()
     untrusted = tuple(args.untrusted_root)
-    # A broker loaded from a tree the guest can write is not a boundary, and
-    # neither is one whose interpreter and libraries live there (a project
-    # virtualenv inside the shared folder, say).
-    outside(Path(__file__).resolve().parent, untrusted, what='broker code')
-    outside(Path(sys.prefix), untrusted, what='broker python environment')
+    verify_runtime(untrusted)
     spec = load_policy(args.policy, untrusted)
     if args.token_file is not None:
         credential = credential_from_file(
@@ -221,7 +220,7 @@ def _serve(args: argparse.Namespace) -> int:
         channel,
     )
     audit_dir = private_directory(
-        (args.audit_dir or default_audit_directory()).expanduser()
+        (args.audit_dir or default_audit_directory()).expanduser(), untrusted
     )
     directory = session_directory(channel)
     broker = None
@@ -234,6 +233,7 @@ def _serve(args: argparse.Namespace) -> int:
             credential,
             audit_dir / f'{channel}.jsonl',
             writes=args.writes,
+            untrusted=untrusted,
         )
         del credential
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -486,8 +486,6 @@ def _is_guest_invocation(argv: list[str]) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv and argv[0] == 'gh':
-        return guest.main(argv[1:])
     if _is_guest_invocation(argv):
         return guest.main(argv)
     args = _parser().parse_args(argv)

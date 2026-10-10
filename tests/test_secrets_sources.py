@@ -18,7 +18,7 @@ from aivm_secrets.host.sources import (
     credential_from_stream,
     resolve_source,
 )
-from aivm_secrets.kernel.source import GH_SOURCE
+from aivm_secrets.kernel.presets import GH_SOURCE
 from tests.secrets_helpers import write_private
 
 TOKEN = 'NOT_REAL_generic_host_command_token_1234'
@@ -173,6 +173,50 @@ def test_resolver_arguments_cannot_point_into_the_workspace(tmp_path):
         )
         == TOKEN
     )
+
+
+def test_a_resolver_link_swapped_after_the_check_runs_the_checked_program(
+    tmp_path, monkeypatch
+):
+    """The race the review described, made deterministic.
+
+    ``resolver`` is a link to a good program. The instant it has been
+    verified, the link is re-pointed at a different one. What runs must be
+    what was verified: the executable is a resolved location, not a name
+    looked up a second time.
+    """
+    marker = tmp_path / 'evil-ran'
+    good = script(tmp_path, 'good', f'echo {TOKEN}')
+    evil = script(tmp_path, 'evil', f'touch {marker}; echo {"E" * 40}')
+    name = tmp_path / 'resolver'
+    name.symlink_to(good)
+    verify = sources.verify_program
+
+    def verify_then_swap(path, untrusted=()):
+        verified = verify(path, untrusted)
+        name.unlink()
+        name.symlink_to(evil)
+        return verified
+
+    monkeypatch.setattr(sources, 'verify_program', verify_then_swap)
+    assert credential_from_command([str(name)]) == TOKEN
+    assert os.path.realpath(name) == str(evil) and not marker.exists()
+
+
+def test_a_resolver_reached_by_link_still_sees_its_own_name(tmp_path):
+    """A program that dispatches on ``argv[0]`` is run under the name used."""
+    link = tmp_path / 'my-python'
+    link.symlink_to(os.path.realpath(PYTHON))
+    body = f'import sys; print({TOKEN!r} if sys.argv[0] == "-c" else "bad")'
+    assert credential_from_command([str(link), '-c', body]) == TOKEN
+    seen = tmp_path / 'argv0'
+    probe = (
+        'import pathlib, sys; '
+        f'pathlib.Path({str(seen)!r}).write_text(sys.executable); '
+        f'print({TOKEN!r})'
+    )
+    assert credential_from_command([str(link), '-I', '-c', probe]) == TOKEN
+    assert seen.read_text() == str(link)
 
 
 def test_a_world_writable_resolver_is_refused(tmp_path):

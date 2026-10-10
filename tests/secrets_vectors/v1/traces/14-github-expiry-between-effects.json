@@ -42,9 +42,11 @@
    },
    "request": {
     "operation": "pr.comment",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861,
-    "body": "Update"
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861,
+     "body": "Update"
+    }
    },
    "facts": {
     "number": 13861,
@@ -82,9 +84,11 @@
    },
    "request": {
     "operation": "pr.comment",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861,
-    "body": "Update"
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861,
+     "body": "Update"
+    }
    },
    "facts": {
     "number": 13861,
@@ -137,9 +141,11 @@
    },
    "request": {
     "operation": "pr.edit",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 13861,
-    "title": "New title"
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 13861,
+     "title": "New title"
+    }
    },
    "facts": {
     "number": 13861,
@@ -182,8 +188,10 @@
    },
    "request": {
     "operation": "pr.view",
-    "repository": "TauCetiProject/TauCeti",
-    "pr": 9
+    "arguments": {
+     "repository": "TauCetiProject/TauCeti",
+     "pr": 9
+    }
    },
    "facts": {
     "number": 13861,
@@ -217,8 +225,10 @@
    },
    "request": {
     "operation": "pr.view",
-    "repository": "../etc",
-    "pr": 13861
+    "arguments": {
+     "repository": "../etc",
+     "pr": 13861
+    }
    },
    "facts": {
     "number": 13861,
@@ -240,7 +250,7 @@
     }
    },
    "expect": {
-    "code": "invalid_request"
+    "code": "denied"
    }
   }
  ]

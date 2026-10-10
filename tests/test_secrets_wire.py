@@ -72,7 +72,7 @@ def test_replies_carry_fixed_text_and_only_a_bounded_status():
         'ok': False,
         'error': {
             'code': 'upstream_rejected',
-            'message': 'Service refused the request; it was not applied.',
+            'message': 'Service refused the read request.',
             'status': 403,
         },
         'approval': {'digest': 'd'},

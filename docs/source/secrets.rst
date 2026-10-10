@@ -72,9 +72,10 @@ Writing a policy
 ----------------
 
 A policy is a host-owned JSON file. It must not be writable by other users and
-must not live inside the workspace you share with the guest (the session
-refuses to start if it does). Unknown fields, duplicate keys, wildcards and
-URLs are rejected.
+must not be reachable through the workspace you share with the guest: the
+session refuses to start if the path, any symbolic link on the way, or the
+place it finally leads lies inside that folder. Unknown fields, duplicate
+keys, wildcards and URLs are rejected.
 
 ::
 
@@ -92,6 +93,7 @@ URLs are rejected.
       "operations": [
         {
           "name": "mr.notes",
+          "effect": "read",
           "method": "GET",
           "path": "/api/v4/projects/{project}/merge_requests/{mr}/notes",
           "query": {"per_page": "100", "page": "{page}"},
@@ -103,6 +105,7 @@ URLs are rejected.
         },
         {
           "name": "mr.note",
+          "effect": "write",
           "method": "POST",
           "path": "/api/v4/projects/{project}/merge_requests/{mr}/notes",
           "parameters": {"project": [278964], "mr": [101]},
@@ -128,18 +131,29 @@ URLs are rejected.
     stderr, and an environment of ``HOME`` and ``PATH`` plus the variables
     named in ``inherit_env``. The program is trusted host code: it must be
     owned by you or root, on a path no other user can modify, and outside the
-    shared workspace.
+    shared workspace. It is located and checked once, and the checked file
+    itself is what runs -- a link re-pointed afterwards changes nothing.
 
 ``operations``
-    Up to 64 named operations. Each has a ``method`` (``GET``, ``POST`` or
-    ``PATCH``) and a ``path`` template. Every ``{placeholder}`` in the path or
-    in ``query`` must be declared in ``parameters`` with the exact values a
-    request may use: a list of integers, a list of strings, or an integer
-    range ``{"min": a, "max": b}``. ``query`` maps a name to a fixed value or
-    to a ``{placeholder}``. ``POST`` and ``PATCH`` operations declare
+    Up to 64 named operations. Each states its ``effect`` -- ``read`` or
+    ``write`` -- a ``method`` (``GET``, ``POST`` or ``PATCH``) and a ``path``
+    template. Every ``{placeholder}`` in the path or in ``query`` must be
+    declared in ``parameters`` with the exact values a request may use: a
+    list of integers, a list of strings, or an integer range ``{"min": a,
+    "max": b}``. ``query`` maps a name to a fixed value or to a
+    ``{placeholder}``. ``POST`` and ``PATCH`` operations declare
     ``body_fields``: the names of string fields and the most bytes each may
-    carry. ``response`` is ``json`` (default) or ``text``; ``accept`` overrides
-    the ``Accept`` header.
+    carry (``{"max_bytes": n, "optional": true}`` for a field that may be
+    left out). ``response`` is ``json`` (default) or ``text``; ``accept``
+    overrides the ``Accept`` header.
+
+    ``effect`` is required and is never guessed from the method. ``POST`` and
+    ``PATCH`` must be ``write``. A ``GET`` is usually ``read``; if the service
+    changes state on one, declare it ``write`` and it is treated as a write
+    everywhere: refused under ``--secrets_writes deny``, held for approval,
+    and reported as ``outcome_unknown`` if it fails. Declaring a
+    state-changing request ``read`` is the one mistake the broker cannot
+    catch for you.
 
 ``egress`` (optional)
     For a private deployment: ``port``, an ``address`` to connect to (TLS still
@@ -156,25 +170,101 @@ URLs are rejected.
 
 Path and query values are restricted to letters, digits and ``-._~``, so a
 request target is built without escaping and cannot be steered by an argument.
-There are no arbitrary query strings, redirects, retries, GraphQL, streaming
-or request bodies beyond the declared string fields.
+A string parameter used only in the path may list values with several such
+segments (``"my-org/my-repo"``). There are no arbitrary query strings,
+redirects, retries, GraphQL, streaming or request bodies beyond the declared
+string fields.
+
+File and directory permissions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The policy, a credential file, a trust anchor, a resolver program and every
+directory leading to them must be owned by you or root and writable by nobody
+else. World-writable is refused unless the directory is sticky (``/tmp``).
+
+Group-writable is accepted only when the group is provably yours alone: it is
+your primary group, it lists no other member, no other account has it as
+*its* primary group, and the host's accounts are all local (``passwd: files``
+or ``files systemd`` in ``/etc/nsswitch.conf``) so that every account can be
+seen. That is the stock Ubuntu arrangement of a per-user group and ``umask
+0002``. On a host with a directory service (``sss``, ``ldap``, ...) other
+accounts cannot be enumerated, so group-writable paths are refused; run
+``chmod g-w`` on the files and directories the error names.
+
+Conditions on live data: ``checks``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An allowlist of identifiers is sometimes not enough: "merge request 101" says
+nothing about who opened it. A manifest can state facts that must hold *right
+now*, fetched from the service before anything else happens::
+
+    "checks": {
+      "pull": {
+        "path": "/repos/{repository}/pulls/{pr}",
+        "require": [
+          {"at": ["number"], "equals_parameter": "pr"},
+          {"at": ["user", "login"], "equals": "octocat", "fold": true}
+        ],
+        "bind": {"head_sha": {"at": ["head", "sha"], "format": "hex"}}
+      }
+    },
+    "operations": [
+      {"name": "pr.view", "effect": "read", "requires": "pull",
+       "returns": "check",
+       "parameters": {"repository": ["my-org/my-repo"], "pr": [7]}},
+      {"name": "pr.checks", "effect": "read", "requires": "pull",
+       "method": "GET",
+       "path": "/repos/{repository}/commits/{head_sha}/check-runs",
+       "parameters": {"repository": ["my-org/my-repo"], "pr": [7]}}
+    ]
+
+An operation that ``requires`` a check first performs that ``GET``. Each
+``require`` entry names a value in the JSON answer by its object keys (``at``)
+and what it must equal: a literal (``equals``) or one of the request's own
+parameters (``equals_parameter``). Types must match exactly; ``"fold": true``
+compares strings without regard to ASCII case. If any fact does not hold, the
+request ends with ``resource_mismatch`` and nothing further is sent.
+
+``bind`` gives a value from the answer a name that later paths may use as a
+``{placeholder}``. It must have the stated ``format`` -- ``hex`` (a 40- or
+64-digit hash), ``integer`` or ``segment`` -- or the request is refused; a
+service cannot steer a request by what it returns.
+
+``"returns": "check"`` makes the verified answer itself the result: such an
+operation has no method or path of its own and must be a read.
+
+Three smaller conveniences live on an operation:
+
+``defaults``
+    Values for parameters a request may omit, e.g. ``{"page": 1}``.
+
+``fold``
+    String parameters to lowercase before they are compared, for services
+    whose names are case-insensitive. The allowlist itself must be lowercase.
+
+``page``
+    ``{"size": 100, "parameter": "page", "at": ["items"]}`` marks a list
+    answer as one page. The reply then carries ``pagination`` with
+    ``possibly_more``, so one page is never mistaken for the whole list.
 
 Shipped examples (under ``docs/examples/``):
 
 ==========================================  ===================================
 ``aivm-secrets-gitlab-merge-request.json``  GitLab merge-request review
 ``aivm-secrets-github-issues.json``         GitHub issues through schema 2
+``aivm-secrets-github-pr.json``             the built-in GitHub PR manifest,
+                                            written out in full
 ``aivm-secrets-huggingface-readonly.json``  a non-Git service
 ``aivm-secrets-selfhosted-pinned.json``     private CA, pinned address and port
 ``aivm-secrets-gitlab-readonly.json``       the smallest possible manifest
-``aivm-secrets-tauceti-readonly.json``      the GitHub PR service (schema 1)
+``aivm-secrets-tauceti-readonly.json``      the GitHub PR shorthand (schema 1)
 ==========================================  ===================================
 
 Writes
 ------
 
-Listing a ``POST`` or ``PATCH`` operation in the policy is not enough. The
-host chooses, per session, how writes are treated::
+Listing an operation whose ``effect`` is ``write`` is not enough. The host
+chooses, per session, how writes are treated::
 
     aivm ssh . --secrets_policy POLICY --secrets_writes MODE
 
@@ -204,17 +294,20 @@ A permitted write can have effects you did not list: a comment can trigger a
 repository bot. Denying a "merge" operation is not proof that nothing can
 cause a merge.
 
-If a write fails, the error says what is known:
+If a write fails, the error says what is known -- and only two things can be:
 
 ``unreachable``
     No connection was made. Nothing was sent.
 
-``upstream_rejected``
-    The service answered with a 4xx status. It did not apply the request.
-
 ``outcome_unknown``
-    The request was sent and no definite answer came back. Inspect the
-    service before retrying; nothing is retried automatically.
+    The request was sent and did not come back as a success. **Any** other
+    answer means this, including a 4xx status (shown as ``outcome_unknown
+    (HTTP 409)``): a service may apply a write and then report a conflict or
+    a validation error, so no status proves that nothing happened. Inspect
+    the service before retrying; nothing is retried automatically.
+
+A failed *read* is different, because there is nothing to have applied:
+``upstream_rejected`` means the service answered 4xx.
 
 Delegating to a helper
 ----------------------
@@ -275,15 +368,12 @@ edited. It cannot detect that the end of a file was cut off unless you kept
 the head digest printed when the session closed. A local file is not
 tamper-proof against the host user or root.
 
-The GitHub pull-request service (schema 1)
-------------------------------------------
+Built-in: GitHub pull requests (schema 1)
+-----------------------------------------
 
-The original integration remains available as a second policy schema. It
-differs from a declarative manifest in one way: every operation first fetches
-the selected pull request and requires its number, base repository, author and
-head repository to match the policy before anything else is read or written.
-
-::
+GitHub pull-request review is supported out of the box, and it is **not a
+special case**. ``schema: 1`` is shorthand for a manifest in exactly the
+format above::
 
     {
       "schema": 1,
@@ -298,19 +388,61 @@ head repository to match the policy before anything else is read or written.
       "max_body_bytes": 8192
     }
 
+``aivm-secrets policy-check`` prints what it stands for: a schema-2 manifest
+for ``api.github.com`` whose ``pull`` check requires the PR's number, base
+repository, author and head repository to match before anything else is read
+or written, and which binds the head commit for ``pr.checks``. The shorthand
+and that manifest are the same policy, with the same digest. Copy the output
+(or ``docs/examples/aivm-secrets-github-pr.json``) to change anything the
+shorthand does not offer.
+
 The credential comes from the owning host user's ``gh auth token``, or from
-``--secrets_token_file``. In the guest the client is also installed under the
-name ``gh``, so these work::
+``--secrets_token_file``. ``pr.comment`` and ``pr.edit`` (title and body
+only) are writes. ``pr.checks`` returns check runs for the validated head
+commit, not workflow logs. List operations return at most 100 records and say
+``pagination.possibly_more``.
+
+Answering to another tool's name: ``cli``
+-----------------------------------------
+
+Agents already know command lines like ``gh pr view 7``. A manifest can teach
+the guest client to accept them::
+
+    "cli": {
+      "gh": [
+        {"command": ["pr", "view"], "operation": "pr.view",
+         "positional": ["pr"],
+         "options": {"--repo": "repository", "-R": "repository"}},
+        {"command": ["pr", "comment"], "operation": "pr.comment",
+         "positional": ["pr"],
+         "options": {"--repo": "repository", "--body": "body",
+                     "--body-file": "@body"}},
+        {"command": ["pr", "diff"], "operation": "pr.diff",
+         "positional": ["pr"], "options": {"--repo": "repository"},
+         "output": "result"}
+      ]
+    }
+
+For every name under ``cli``, the client is also installed in the guest under
+that name. Each row maps the words of one command to an operation:
+``positional`` names the arguments that follow, ``options`` maps flags to
+arguments (``@name`` reads the value from a file, or ``-`` for standard
+input), and ``"output": "result"`` prints just the result, raw if it is text.
+The built-in GitHub manifest ships such a table, which is the whole of its
+``gh`` support::
 
     gh pr view 13861 --repo TauCetiProject/TauCeti
     gh pr reviews 13861 --repo TauCetiProject/TauCeti --page 1
-    gh pr diff 13861 --repo TauCetiProject/TauCeti
+    gh pr diff 13861 -R TauCetiProject/TauCeti
+    gh pr comment 13861 --repo TauCetiProject/TauCeti --body-file notes.md
 
-This is **not stock gh**. Results are broker JSON; ``--json``, ``gh api`` and
-every other subcommand are usage errors, never a fallback. ``pr.comment`` and
-``pr.edit`` (title and body only) are writes. ``pr checks`` returns check runs
-for the validated head commit, not workflow logs. List operations return at
-most 100 records and say ``pagination.possibly_more``.
+``aivm-secrets as gh pr view ...`` is the same thing spelled out. The table is
+a translation aid for the guest and grants nothing: the result is an ordinary
+request, checked on the host like any other.
+
+This is **not the real tool**. Results are broker JSON. A command, flag or
+form the table does not list (``gh api``, ``--json``, ``gh auth token``) is a
+usage error, exit status 2 -- never a fallback to anything else.
 
 Error codes
 -----------
@@ -318,29 +450,36 @@ Error codes
 The client prints one fixed code and exits ``3`` (refused), ``4`` (approval
 needed) or ``2`` (client or transport failure).
 
-=====================  ====================================================
-``denied``             outside the operations, values or sizes granted
-``invalid_request``    not a well-formed request for that operation
-``approval_required``  a host operator must approve this exact write
-``expired``            the grant's lifetime has passed
-``revoked``            the session, or this capability, was revoked
-``exhausted``          the request budget is spent
-``invalid_capability`` not a capability of this session
-``resource_mismatch``  provider metadata does not match the grant (schema 1)
-``unreachable``        no connection; nothing was sent
-``upstream_rejected``  the service refused the request (4xx)
-``upstream_error``     the service failed or redirected; not retried
-``upstream_response``  the response was unusable, oversized, or echoed the
-                       credential
-``outcome_unknown``    a write was sent and its result is not known
-=====================  ====================================================
+======================  ====================================================
+``denied``              outside the operations, values or sizes granted
+``invalid_request``     not a well-formed request for that operation
+``approval_required``   a host operator must approve this exact write
+``expired``             the grant's lifetime has passed
+``revoked``             the session, or this capability, was revoked
+``exhausted``           the request budget is spent
+``invalid_capability``  not a capability of this session
+``resource_mismatch``   a ``checks`` fact fetched from the service does not
+                        hold
+``unreachable``         no connection; nothing was sent
+``upstream_rejected``   the service refused a read (4xx)
+``upstream_error``      the service failed or redirected; not retried
+``upstream_response``   the response was unusable, oversized, or echoed the
+                        credential
+``outcome_unknown``     a write was sent and did not succeed; whatever the
+                        status, it may have been applied
+======================  ====================================================
 
 Running the broker without AIVM
 -------------------------------
 
 The package does not depend on AIVM or libvirt::
 
-    aivm-secrets serve --policy POLICY [--writes MODE] [--token-file FILE]
+    python -I -m aivm_secrets serve --policy POLICY [--writes MODE] \
+        [--token-file FILE]
+
+Start it with ``python -I`` as shown, and from an environment without
+``PYTHONPATH``, ``LD_PRELOAD`` and the like: those variables decide what code
+the broker *is*. ``aivm ssh`` does both for you.
 
 It prints the two environment variables a client needs
 (``AIVM_SECRETS_SOCKET`` and ``AIVM_SECRETS_CAPABILITY_FILE``) and stays in
@@ -349,8 +488,9 @@ private directory under ``$XDG_RUNTIME_DIR/aivm-secrets``; audit files default
 to ``$XDG_STATE_HOME/aivm-secrets/audit``. The listener is local to your UID:
 do not publish or mount it elsewhere as a substitute for an authenticated
 channel. ``--untrusted-root DIR`` declares a directory another party can
-write; the broker then refuses to start if its own code, the policy, the
-credential or the resolver lies inside it.
+write. The broker then refuses to start if the policy, the credential, the
+resolver or a trust anchor is reachable through it, or if its own
+interpreter, module search path or any loaded module comes from it.
 
 What this does not protect against
 ----------------------------------
@@ -363,8 +503,13 @@ What this does not protect against
   directory, credential store, or the broker's installation with a guest.
   A broker installed in editable mode from the very folder you attach, or
   running from a virtualenv inside it, is refused.
+* ``aivm ssh`` starts the broker isolated from ``PYTHONPATH`` and similar
+  variables, but AIVM itself is an ordinary program: if your own shell loads
+  Python code from a folder the guest can write, the guest already runs code
+  as you, and no broker can help.
 * A provider that receives the credential can misuse it; so can a wrong
-  manifest. Review manifests like code.
+  manifest -- in particular one that declares a state-changing request a
+  ``read``. Review manifests like code.
 * Timing, response sizes and the content of permitted responses are visible
   to the guest by design.
 
