@@ -39,3 +39,22 @@ Next: independently implement `identity-v1` in Rust, add live source-port
 parity gates, review verified TLS routing/issuer enrollment with synthetic
 credentials, then continue P4b/P4c without assigning broad `gh` authority to
 an agent before it earns that trust.
+
+## 2026-10-12: P4a managed-VM enrollment/transport
+
+Prepared an opt-in managed-VM binding and identity-only launcher as a delta
+against the prior P4a enrollment overlay. Subject inputs are derived from host
+store and domain UUID; the forced helper operates on the guest-owned software
+key, the CA/envelope operations use isolated host subprocesses, and only the
+mTLS Unix socket is reverse forwarded. The implementation is Python-only and
+real libvirt/SSH testing remains a gate; no Rust assurance is claimed.
+
+
+The integration review caught a critical extensibility concern: directly
+importing the P4a Python authority or kernel in AIVM would defeat the
+independent-backend/process-only design. Refactored the CA signing, CSR
+inspection, registry inspection, revocation and public chain retrieval into
+fixed JSON subprocess verbs behind an isolated interpreter, leaving the
+AIVM process free of implementation-specific imports. Added the host binding
+parity check and cleanup fault injection. This does not yet provide proof of
+Rust/Python agreement or hardware VM attestation.

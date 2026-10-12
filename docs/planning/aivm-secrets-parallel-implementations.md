@@ -143,3 +143,33 @@ first. Compare real cryptographic fixtures independently, and enumerate
 parsing/FS/TLS assumptions before moving the host effect interpreter. The
 Python reference and verified Rust code will be **maintained concurrently**;
 neither backend silently becomes a fallback for the other.
+
+## 2026-10-12: authoritative managed-VM binding contract (Python P4a)
+
+The host adapter `aivm/secrets_identity_vm.py` derives a stable certificate
+subject from authoritative machine-store identity, current active principal,
+and the live libvirt domain UUID; the pure sibling-package reference is
+`aivm_secrets/identity/vm_model.py`. Its 104 frozen decision cases are in
+`tests/secrets_vectors/identity-managed-vm-v1.jsonl`. The corresponding Rust
+parity runner is deliberately unimplemented and skipped until an independent
+executable is configured through `AIVM_SECRETS_RUST_VM_RUNNER`.
+
+The protocol does **not** claim VM attestation or cloned-key resistance. See
+[`aivm-secrets-p4a-managed-vm.md`](aivm-secrets-p4a-managed-vm.md) for its
+trust boundaries and the explicitly opt-in session lifecycle. The future Rust
+adapter should preserve the pure subject decision exactly, while treating
+libvirt, machine-store loading and forced SSH as explicitly trusted inputs.
+
+### Managed-VM deployment as a process contract
+
+The initial opt-in launcher is now in `aivm/secrets_identity_transport.py`,
+but the independent `aivm_secrets` implementation is **not imported** into the
+AIVM orchestrator, except for the shared error table. Host credential and
+identity operations are fixed `identity` subcommands run in isolated child
+processes with JSON responses. These verbs will become the integration points
+for the future Rust backend; do not accidentally introduce Python-object ABI
+contracts between the host launcher and the service.
+
+AIVM's host-side VM subject hash is tested against the independently maintained
+Python identity vectors. The tests compare this contract but are not Rust
+parity tests: no Rust executable exists yet.

@@ -1349,6 +1349,12 @@
           "path": "aivm/cli/vm_connect.py"
         },
         {
+          "imported": "aivm.vm.connectivity",
+          "importer": "aivm.cli.vm_identity",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_identity.py"
+        },
+        {
           "imported": "aivm.firewall",
           "importer": "aivm.cli.vm_lifecycle",
           "occurrences": 1,
@@ -1609,6 +1615,12 @@
           "path": "aivm/cli/vm_connect.py"
         },
         {
+          "imported": "aivm.secrets_identity_transport",
+          "importer": "aivm.cli.vm_connect",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_connect.py"
+        },
+        {
           "imported": "aivm.secrets_transport",
           "importer": "aivm.cli.vm_connect",
           "occurrences": 1,
@@ -1643,6 +1655,18 @@
           "importer": "aivm.cli.vm_guard",
           "occurrences": 1,
           "path": "aivm/cli/vm_guard.py"
+        },
+        {
+          "imported": "aivm.secrets_identity_transport",
+          "importer": "aivm.cli.vm_identity",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_identity.py"
+        },
+        {
+          "imported": "aivm.services",
+          "importer": "aivm.cli.vm_identity",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_identity.py"
         },
         {
           "imported": "aivm.operational_scope",
@@ -1947,6 +1971,12 @@
           "importer": "aivm.cli.vm_guard",
           "occurrences": 1,
           "path": "aivm/cli/vm_guard.py"
+        },
+        {
+          "imported": "aivm.errors",
+          "importer": "aivm.cli.vm_identity",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_identity.py"
         },
         {
           "imported": "aivm.errors",
@@ -3899,6 +3929,12 @@
           "path": "aivm/scoped_store.py"
         },
         {
+          "imported": "aivm.enrollment",
+          "importer": "aivm.secrets_identity_transport",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_transport.py"
+        },
+        {
           "imported": "aivm.host_identity",
           "importer": "aivm.services",
           "occurrences": 1,
@@ -3977,6 +4013,18 @@
           "path": "aivm/scoped_store.py"
         },
         {
+          "imported": "aivm.config_scopes",
+          "importer": "aivm.secrets_identity_transport",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_transport.py"
+        },
+        {
+          "imported": "aivm.config_scopes",
+          "importer": "aivm.secrets_identity_vm",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_vm.py"
+        },
+        {
           "imported": "aivm.config",
           "importer": "aivm.services",
           "occurrences": 1,
@@ -4008,6 +4056,18 @@
       "classification": "accepted",
       "from": "orchestration",
       "imports": [
+        {
+          "imported": "aivm.commands",
+          "importer": "aivm.secrets_identity_transport",
+          "occurrences": 2,
+          "path": "aivm/secrets_identity_transport.py"
+        },
+        {
+          "imported": "aivm.commands",
+          "importer": "aivm.secrets_identity_vm",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_vm.py"
+        },
         {
           "imported": "aivm.commands",
           "importer": "aivm.secrets_transport",
@@ -4125,6 +4185,18 @@
           "importer": "aivm.scoped_store",
           "occurrences": 1,
           "path": "aivm/scoped_store.py"
+        },
+        {
+          "imported": "aivm.config_store",
+          "importer": "aivm.secrets_identity_transport",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_transport.py"
+        },
+        {
+          "imported": "aivm.config_store",
+          "importer": "aivm.secrets_identity_vm",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_vm.py"
         },
         {
           "imported": "aivm.config_store",

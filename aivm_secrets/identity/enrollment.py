@@ -413,6 +413,38 @@ class IdentityAuthority:
                 'ca_sha256': self.ca_sha256,
                 'subjects': self._registry()['subjects']}
 
+    def public_client(self, subject: str) -> dict[str, Any]:
+        """Return ONLY currently active public chain material for delivery.
+
+        This is exposed as an isolated host-service command, so AIVM never
+        loads the private authority implementation into its own process.
+        """
+        _subject(subject)
+        with self._locked():
+            row = self._registry()['subjects'].get(subject)
+            stamp = _stamp()
+            if row is None or not row['active'] or stamp >= row['not_after']:
+                raise SecretsError('revoked')
+            thumb = row['certificate_sha256']
+            import base64
+            try:
+                digest = base64.urlsafe_b64decode(thumb + '=' * (-len(thumb) % 4))
+                if len(digest) != 32:
+                    raise ValueError('invalid certificate thumbprint')
+                cert_pem = self._read('clients/' + digest.hex() + '.pem')
+                cert = _x509()[0].load_pem_x509_certificate(cert_pem)
+                if certificate_thumbprint(_certificate_der(cert)) != thumb:
+                    raise ValueError('client certificate differs from registry')
+            except (ValueError, OSError, TypeError, SecretsError):
+                raise SecretsError('invalid_capability') from None
+            ca_pem = self._read(CA_CERT)
+        return {
+            'subject': subject, 'certificate_sha256': thumb,
+            'certificate_pem_b64': base64.b64encode(cert_pem).decode('ascii'),
+            'ca_pem_b64': base64.b64encode(ca_pem).decode('ascii'),
+            'epoch': row['epoch'], 'not_after': row['not_after'],
+        }
+
     def expectation_for_peer(self, der: bytes, now: int) -> IdentityExpectation:
         """Reload current enrollment on EACH request; reject stale certs.
 

@@ -20,6 +20,23 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   assumption rather than a formal guarantee. No live GitHub smoke test or
   implementation-linked proof is claimed.
 
+### P4a managed-VM identity binding (experimental)
+* New explicit `aivm vm identity_enroll` and `aivm ssh --secrets_identity_root`
+  integrate enrolled certificates with authoritative active machine-store
+  principals and live libvirt UUIDs through a pinned forced-SSH CSR exchange.
+  Only the identity-authenticated Unix socket is forwarded; original broker
+  policy still mediates every operation, and writes remain denied by default.
+* AIVM remains process-only with respect to credential and identity code.
+  Fixed isolated JSON commands perform CA enrollment, public certificate
+  retrieval, token issuance, revocation and mTLS bridge startup. The pure
+  version-1 managed-VM subject has frozen conformance vectors for a future
+  independent Rust implementation.
+* Guest CSR generation uses a minimal fixed subprocess environment; failed
+  installation revokes enrollment, and host service teardown is fault-tested.
+  Old guests require an explicit trusted forced-helper upgrade; no software
+  key attestation, automatic guest upgrade, real libvirt smoke or Lean proof
+  is claimed. See `docs/planning/aivm-secrets-p4a-managed-vm.md`.
+
 ### Added
 * Experimental, fully opt-in Garrett P4a **host enrollment**: private local
   certificate authority, P-256 CSR proof of possession, deliberate per-instance
@@ -879,3 +896,16 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Packaging and docs: `pyproject.toml`, `requirements.txt`, `README.md` and `README.rst`.
 - Initial tests and CI helpers: minimal tests (dry-run/import) under `tests/` and basic CI/workflow files.
 - Minimal, experimental release focused on local libvirt/KVM Ubuntu 24.04 VM management; intended as a starting scaffold for subsequent refactors.
+
+### Experimental P4a managed-VM identity integration (2026-10-12)
+
+- Add pure managed-VM certificate subject binding over machine-store, owner,
+  guest account and system-libvirt domain UUID; freeze cross-language vectors.
+- Add a forced-bootstrap `identity-csr` operation that generates a guest-owned
+  CSR as the non-root account and does not return private keys.
+- Add explicit `aivm vm identity_enroll` and certificate-bound-only SSH
+  launch with separate isolated issuer/bridge processes and existing broker
+  enforcement; no change to ordinary VM access or credential defaults.
+- Require explicit upgrade of existing guests' forced bootstrap helper;
+  preserve the lack of vTPM attestation, OAuth and Rust proofs as documented
+  limitations.

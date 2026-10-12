@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import socket
+import ssl
 import configparser
 from pathlib import Path
 import sys
@@ -163,18 +164,39 @@ def exchange(
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(5)
         sock.connect(socket_path)
-        sock.sendall(wire + b'\n')
-        deadline = time.monotonic() + 60
-        data = bytearray()
-        while b'\n' not in data:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError('response deadline')
-            sock.settimeout(remaining)
-            chunk = sock.recv(min(16384, MAX_REPLY + 1 - len(data)))
-            if not chunk or len(data) + len(chunk) > MAX_REPLY:
-                raise ValueError('invalid response')
-            data.extend(chunk)
+        # The guest client is not a trust boundary, but must never fall back
+        # to the unbound wire when this explicitly provisioned mode is chosen.
+        if os.environ.get('AIVM_SECRETS_IDENTITY_MODE', '') == 'mtls-v1':
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_3
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            ctx.keylog_filename = None
+            ctx.load_verify_locations(cafile=os.environ['AIVM_SECRETS_IDENTITY_CA'])
+            ctx.load_cert_chain(
+                certfile=os.environ['AIVM_SECRETS_IDENTITY_CERT'],
+                keyfile=os.environ['AIVM_SECRETS_IDENTITY_KEY'],
+            )
+            connection = ctx.wrap_socket(sock, server_hostname='localhost')
+        elif os.environ.get('AIVM_SECRETS_IDENTITY_MODE', ''):
+            raise ValueError('invalid identity mode (no plaintext fallback)')
+        else:
+            connection = sock
+        with connection:
+            connection.settimeout(5.0)
+            connection.sendall(wire + b'\n')
+            deadline = time.monotonic() + 60
+            data = bytearray()
+            while b'\n' not in data:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('response deadline')
+                connection.settimeout(remaining)
+                chunk = connection.recv(min(16384, MAX_REPLY + 1 - len(data)))
+                if not chunk or len(data) + len(chunk) > MAX_REPLY:
+                    raise ValueError('invalid response')
+                data.extend(chunk)
     reply = json.loads(bytes(data).decode('utf-8'))
     if type(reply) is not dict:
         raise ValueError('invalid response')

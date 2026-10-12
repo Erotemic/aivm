@@ -269,6 +269,8 @@ def test_aivm_reaches_the_broker_only_as_a_process():
     assert seen == {
         'aivm/cli/vm_connect.py': ['aivm_secrets.errors'],
         'aivm/secrets_transport.py': ['aivm_secrets.errors'],
+        'aivm/secrets_identity_transport.py': ['aivm_secrets.errors'],
+        'aivm/secrets_identity_vm.py': ['aivm_secrets.errors'],
     }
 
 

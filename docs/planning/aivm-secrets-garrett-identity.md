@@ -125,3 +125,14 @@ The *actual provider credential* must always remain host-side in both; no
 selected backend may turn a rejected operation into a privileged unrestricted
 fallback. Neither backend can prevent abuse of operations the operator
 explicitly authorized.
+
+## 2026-10-12 — P4a managed AIVM VM adapter
+
+An opt-in Python adapter now maps a managed, active AIVM access principal and
+live libvirt UUID to a certificate enrollment subject. The restricted bootstrap
+channel returns only a guest-user-owned CSR, and the bridge-only SSH launcher
+never forwards the raw broker Unix socket into the guest. Enrollment and
+JWT signing execute in isolated host subprocesses. Ordinary VM sessions remain
+unchanged. See [`aivm-secrets-p4a-managed-vm.md`](aivm-secrets-p4a-managed-vm.md).
+This is transport binding, not hardware attestation, OAuth, or formally verified
+isolation; the non-exportability and clone/restore problems remain open.

@@ -614,3 +614,24 @@ throwaway certificate authority and a made-up token, so it contacts no third
 party. Neither is a live test against a real provider: before relying on a
 policy, run one read-only session against the real service and confirm that
 an operation outside the policy is refused.
+
+Managed-VM certificate enrollment (experimental)
+-----------------------------------------------
+
+The experimental Python P4a VM adapter is **opt-in**. For an already managed
+VM that has the updated forced bootstrap helper, first initialize an identity
+authority as described above, then explicitly enroll the current host principal::
+
+    aivm vm identity_enroll --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
+
+Enrollment does not grant provider access. After separately creating a host-only
+policy, choose the mTLS-only launcher::
+
+    aivm ssh . --secrets_policy="$HOME/.config/aivm/secrets/lab-readonly.json" --secrets_identity_root="$HOME/.config/aivm/secrets/identity" --secrets_writes=deny
+
+This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
+socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest
+helpers must be upgraded explicitly; there is no silent bootstrap upgrade.
+This is not vTPM/non-exportable-key attestation and has not yet been smoke-tested
+against a live libvirt VM. See ``docs/planning/aivm-secrets-p4a-managed-vm.md``
+for the trust model, cleanup semantics, and known clone/restore limitations.

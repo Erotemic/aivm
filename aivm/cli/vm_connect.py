@@ -624,7 +624,12 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
-        agent_forwarding = _prepare_foreground_agent_forwarding(session)
+        # In certificate-bound mode do not implicitly add *another* secret
+        # transport, even if this VM has an independent forwarded Git agent.
+        agent_forwarding = (
+            None if args.secrets_identity_root else
+            _prepare_foreground_agent_forwarding(session)
+        )
 
         forward_agent_socket = (
             str(agent_forwarding.socket_path) if agent_forwarding else ''
@@ -807,12 +812,21 @@ class VMSSHCLI(_BaseCommand):
             'the host. allow: policy-listed writes proceed.'
         ),
     )
+    secrets_identity_root: str = kwconf.Value(
+        '',
+        help=(
+            'Explicitly select the enrolled certificate-bound identity mode '
+            'using this protected host authority directory. Requires '
+            '--secrets_policy; never forwards the unbound broker socket.'
+        ),
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         if not args.secrets_policy and (
             args.secrets_token_file or args.secrets_writes != 'deny'
+            or args.secrets_identity_root
         ):
             log.error('Secret credential/write options require --secrets_policy.')
             return 1
@@ -839,7 +853,12 @@ class VMSSHCLI(_BaseCommand):
 
         ip = session.ip
         assert ip is not None
-        agent_forwarding = _prepare_foreground_agent_forwarding(session)
+        # In certificate-bound mode do not implicitly add *another* secret
+        # transport, even if this VM has an independent forwarded Git agent.
+        agent_forwarding = (
+            None if args.secrets_identity_root else
+            _prepare_foreground_agent_forwarding(session)
+        )
         ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
             cfg,
             yes=args.yes,
@@ -873,7 +892,15 @@ class VMSSHCLI(_BaseCommand):
             from ..secrets_transport import run_secrets_ssh
 
             try:
-                ssh_result = run_secrets_ssh(
+                executor = run_secrets_ssh
+                if args.secrets_identity_root:
+                    from ..secrets_identity_transport import run_bound_secrets_ssh
+                    executor = run_bound_secrets_ssh
+                identity_kwargs = (
+                    {'identity_root': Path(args.secrets_identity_root)}
+                    if args.secrets_identity_root else {}
+                )
+                ssh_result = executor(
                     session,
                     ssh_cmd,
                     policy_path=Path(args.secrets_policy),
@@ -886,6 +913,7 @@ class VMSSHCLI(_BaseCommand):
                     still_authorized=partial(
                         _access_identity_still_usable, args.config, session
                     ),
+                    **identity_kwargs,
                 )
             except SecretsError as ex:
                 log.error('Secret session failed: {}', ex.for_operator())

@@ -56,6 +56,9 @@ def add_parser(subs):
 
     status = common('status')
 
+    public = common('public-client')
+    public.add_argument('--subject', required=True)
+
     revoke = common('revoke')
     revoke.add_argument('--subject', required=True)
 
@@ -79,6 +82,8 @@ def add_parser(subs):
     bridge.add_argument('--listen', type=Path, required=True)
     bridge.add_argument('--max-connections', type=int, default=64)
     bridge.add_argument('--idle-seconds', type=int, default=900)
+    bridge.add_argument('--exit-on-stdin-eof', action='store_true',
+                        help='Keep the bridge alive only while its parent holds stdin')
 
 
 def _csr_data(path: Path) -> bytes:
@@ -155,6 +160,8 @@ def run(args: argparse.Namespace) -> int:
         result = authority.revoke(args.subject)
     elif args.identity_action == 'status':
         result = authority.status()
+    elif args.identity_action == 'public-client':
+        result = authority.public_client(args.subject)
     elif args.identity_action == 'issue':
         inner = read_owned(args.capability_file.expanduser().absolute(),
                            private=True, untrusted=untrusted,
@@ -173,7 +180,17 @@ def run(args: argparse.Namespace) -> int:
                                'max_connections': bridge.max_connections,
                                'idle_seconds': bridge.idle_seconds}).decode(),
                   flush=True)
-            bridge.serve()
+            if args.exit_on_stdin_eof:
+                import select
+                def lease_closed() -> bool:
+                    # No requests are received over stdin. EOF only releases
+                    # the foreground session's liveness lease.
+                    if not select.select([sys.stdin.buffer], [], [], 0)[0]:
+                        return False
+                    return not sys.stdin.buffer.read(1)
+                bridge.serve(should_stop=lease_closed)
+            else:
+                bridge.serve()
         return 0
     else:
         raise SecretsError('invalid_request')

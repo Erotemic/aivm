@@ -181,3 +181,23 @@ def test_audit_records_intent_before_enrollment_and_revocation(tmp_path):
         assert 'TEST_ONLY_CAPABILITY' not in path.read_text()
     assert ['identity_enroll_intent', 'identity_recorded'] in events
     assert ['identity_revoke_intent', 'identity_recorded'] in events
+
+
+def test_public_client_returns_only_active_certificate_material(tmp_path):
+    import base64
+    authority, key, csr, fingerprint = make(tmp_path)
+    entry = enroll(authority, csr, fingerprint)
+    material = authority.public_client('vm-alpha')
+    assert material['subject'] == 'vm-alpha'
+    assert material['certificate_sha256'] == entry['certificate_sha256']
+    assert base64.b64decode(material['certificate_pem_b64']) == \
+        Path(entry['certificate']).read_bytes()
+    assert base64.b64decode(material['ca_pem_b64']) == \
+        (authority.root / 'ca.pem').read_bytes()
+    serialized = json.dumps(material)
+    assert 'PRIVATE KEY' not in serialized
+    assert 'issuer.aes256' not in serialized
+    authority.revoke('vm-alpha')
+    with pytest.raises(SecretsError) as exc:
+        authority.public_client('vm-alpha')
+    assert exc.value.code == 'revoked'
