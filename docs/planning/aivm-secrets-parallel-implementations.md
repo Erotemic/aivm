@@ -27,6 +27,31 @@ maintained and is not thereby formally verified.
   recovery, or an unsupported operation. Changing backends changes the
   operator's selected assurance level and requires explicit consent.
 
+## Modular implementation and parity contracts (2026-10-12)
+
+Adopt [the modular proof architecture](aivm-secrets-modular-proof-architecture.md) as the proposed decomposition.
+Keep `aivm_secrets.primitives` **inside** the Python distribution, with
+a separately implemented Rust `aivm-secrets-primitives` crate. Rust
+must not call the Python implementation; Python must not silently route
+decisions to Rust. Both consume reviewed, versioned, language-neutral
+input/output specifications and frozen negative as well as positive
+vectors. Shared proof statements are not automatically executable
+guarantees of the Python implementation.
+
+Promote a primitive to a reusable contract only once its boundary is
+stable: closed input/output types and fixed denials, precise overflow
+and time/epoch conventions, independently run vectors, and named
+premises for external adapters. Python can continue evolving its host
+services while a Rust proof for that isolated contract is developed.
+A downstream Rust theorem may use the primitive proof as a lemma
+**only after discharging its premises** (authenticated inputs, exact
+state/effect refinement and any concurrency assumptions).
+
+Do not claim cross-backend parity if a Rust runner was skipped. Do not
+invent an active backend-selection flag until a Rust binary exists.
+If a new module simply reexports a domain-dependent function, leave it
+in that domain rather than creating a nominal primitive.
+
 ## Shared security contract, not shared shortcuts
 
 ```text
@@ -96,11 +121,14 @@ provider semantics, vTPM isolation or soundness of assumed models.
 
 ## Independent work streams and merge gates
 
-**Python P4a (begun in this overlay):** closed identity claims and explicit
-peer/epoch decisions; signed token with AES-GCM-sealed local broker capability;
-real TLS 1.3 client-certificate validation; strictly mediated single-connection
-bridge. No OAuth, provisioning, vTPM, durable ledger, external listener or AIVM
-CLI wiring yet. The bridge never receives an authorization bypass verb.
+**Python P4a (active):** closed identity claims, pure registry and managed-VM
+subject models, signed encrypted local broker capability, real TLS 1.3
+client-certificate validation, host-managed CA/enrollment and an opt-in
+identity-only AIVM launcher. No OAuth, vTPM key custody, rollback-safe
+distributed ledger, or validated live-libvirt deployment yet. The bridge
+never receives an authorization bypass verb. The next decomposition
+moves protocol decisions into a pure Garrett model without bypassing the
+existing authorization broker.
 
 **Rust P1/P2:** first implement `identity-v1` model and JSONL runner, then the
 existing authorization kernel and conformance vectors. Prove typed binding,
@@ -114,9 +142,10 @@ when Rust is promised but absent; no green Python-only status may be labeled
 "cross-language parity". Record compiler, dependencies, extracted Lean hashes,
 assumed functions and external model versions in a proof manifest.
 
-**P4b/P4c later:** full host/browser credential acquisition, real issuer
-service, instance enrollment and key custody, standardized interoperable token
-profiles, renewal, persistent revocation and snapshot/clone authority. Both
+**P4b/P4c later:** full host/browser credential acquisition, hardened
+issuer service, authenticated enrollment lifecycle, key custody, interoperable
+sealed token profiles, renewal, rollback-resistant revocation and snapshot/
+clone authority. Both
 backends must implement or explicitly reject each protocol feature; no default
 pass-through behavior for unknown token/header/operation variants.
 

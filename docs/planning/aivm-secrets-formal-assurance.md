@@ -1,6 +1,6 @@
 # AIVM Secrets: formal assurance and refinement plan
 
-Status: obligations to implement, not completed proofs (updated 2026-10-10).
+Status: obligations to implement, not completed proofs (updated 2026-10-12).
 The delivered system is Python with executable contracts and adversarial
 tests. There are no Lean proof artifacts, extracted Rust functions or
 verified-binary claims in this release. This document is the acceptance
@@ -9,6 +9,8 @@ extraction-shaped kernel, [its specification](aivm-secrets-kernel-spec.md), a
 frozen conformance corpus, a mutation gate, and
 [a machine-readable assumption ledger](aivm-secrets-assumptions.json).
 
+See [the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+for planned leaf proofs and their composition obligations.
 See [the architecture](aivm-secrets-design.md) and the
 [provider-neutral plan](aivm-secrets-agnostic-integrations.md) for source
 references, the threat model, deployment assumptions and milestones. This document's mathematical
@@ -374,3 +376,49 @@ not necessarily observationally pure. A destination-pinning theorem must be
 paired with a TLS/egress assumption and a statement about host DNS and proxy
 behavior. Every claim must distinguish the proved extracted Rust function
 from the unproved Python orchestration and network runtime.
+
+## 8. Primitive theorem reuse and protocol composition (2026-10-12 plan)
+
+The planned `aivm_secrets.primitives` package is an internal source-level
+separation; no primitive module has yet been extracted or proved in Lean.
+Its proposed proof targets are `PRIM-BOUNDS-01`, `PRIM-CANON-01`,
+`PRIM-TIME-01`, `PRIM-EPOCH-01`, `PRIM-BUDGET-01`, `PRIM-BIND-01` and
+`PRIM-SCOPE-01`, specified in
+[the modular architecture](aivm-secrets-modular-proof-architecture.md).
+Treat them as a proof *dependency graph*, not seven certificates of system
+security. The graph is:
+
+```text
+primitive bounds/canonical --> typed parsing refinement
+primitive validity/epoch/binding --> identity acceptance refinement
+primitive scope/budget --> authorization and reservation refinement
+identity + authorization --> protocol transition invariants
+protocol invariants + effect-construction + sole executor + audit contracts
+    --> credentialed-effect trace invariant (under declared TCB assumptions)
+```
+
+To consume a primitive theorem, a higher-level proof must show that the
+primitive's inputs have the stated provenance and normal forms, that its
+output is used as specified, and that state changes occur at the intended
+linearization point. In particular, a thumbprint equality lemma **requires**
+a TLS-authenticated peer and verified token signature before it can assert
+instance binding. Budget accounting needs a serialized or linearizable
+state update. Epoch monotonicity in memory does not prevent rollback of a
+restored authority directory. A read-only GraphQL label alone is not proof
+of provider-side absence of effects.
+
+Design the Garrett issuance/presentation/authorization lifecycle as an
+explicit pure protocol model consuming these contracts. Keep X.509, JWT
+signature/AEAD, OAuth, host files, durable ledger, clocks, and network egress
+in trusted adapters with separate refinement or assumption edges. No
+transaction theorem may assume that a provider write can be rolled back
+just because its network response failed.
+
+Lean proof artifacts must come from the independently built Rust
+implementation via Charon/Aeneas, with pinned tool versions and an explicit
+axiom ledger. Python runs equivalent contract vectors and adversarial traces
+but is **not** formally verified by matching Rust outputs. CI must distinguish
+`python-reference`, `rust-parity` and `rust-verified` status; claimed parity
+fails if the Rust runner is missing. A higher-level theorem only inherits a
+primitive lemma after its premises have been proved, never because a module
+was imported or a type annotation exists.

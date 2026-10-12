@@ -3,7 +3,11 @@
 Status: architecture, implemented in Python through the local-host scope of
 P0-P3 and a limited opt-in P4a identity library (updated 2026-10-12). **No part
 of this implementation is formally verified.** There is not yet a Rust backend
-or a Lean proof, and P4a has no production AIVM listener or VM enrollment.
+or a Lean proof. P4a has an explicitly opt-in managed-VM launcher and
+enrollment adapter, but no live-libvirt validation or verified key custody.
+The [modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+records the planned primitive package, Garrett protocol decomposition,
+and conditional proof-composition rules.
 The [parallel implementations decision](aivm-secrets-parallel-implementations.md)
 retains **both** the Python reference and a separately implemented Rust
 backend; [the Garrett plan](aivm-secrets-garrett-identity.md) names exactly
@@ -30,8 +34,8 @@ A later distribution split must not change the capability protocol.
 Keep **two independent implementations**: this Python reference and a
 small safe-Rust kernel/backend, translated with Charon/Aeneas and verified in
 Lean 4. Frozen, language-neutral tests provide empirical behavioral parity;
-only the extracted Rust implementation can receive those formal claims. Keep this core independent
-of the HTTP framework, VM manager, identity provider, persistence engine, and
+only the extracted Rust implementation can receive those formal claims.
+Keep the pure core independent of the HTTP framework, VM manager, identity provider, persistence engine, and
 agent harness. Evaluate h5i-app as a compatible framework and development tool,
 not as a prerequisite for running a local broker.
 
@@ -138,6 +142,14 @@ exact-content host approvals; it bounds *what* is sent, not what a provider
 then does with it.
 
 ## 4. Package and trust-boundary layout
+
+**Planned decomposition (not yet delivered).** Introduce internal
+`aivm_secrets.primitives` leaf modules, with acyclic imports and contracts
+that can each be ported to independently implemented Rust. Keep Garrett
+credential issuance/redemption as a higher-level identity protocol, not
+a general-purpose primitive. This is a refactor of the tables below, not
+a new runtime feature or a separate distribution. See [the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+for the dependency graph, proof targets and behavioral migration gates.
 
 The delivered Python package is split into a pure kernel and an impure host
 shell. The split is enforced by `tests/test_secrets_purity.py`, not by
@@ -518,8 +530,9 @@ injection, whole-path safety) are delivered **as tested Python, not as
 verified Rust**. From P4, in-memory revocation and one-shot approvals are
 delivered. A separate Python **P4a experimental identity library** now
 implements signed, encrypted certificate-bound JWTs and a one-connection mTLS
-bridge tested with dummy credentials, but does not expose a live AIVM feature.
-P4b OAuth acquisition, vTPM identity custody and P4c durable authority are not
+bridge tested with dummy credentials. An explicit managed-VM launcher and
+enrollment adapter are present, but have not been exercised on a live libvirt
+VM. P4b OAuth acquisition, vTPM identity custody and P4c durable authority are not
 implemented. The Rust work may advance in parallel, not as a prerequisite.
 
 ### P0 - Python vertical slice (original overlay and service-neutral follow-up)
@@ -535,6 +548,11 @@ multi-tenant deployment.
 
 ### P1 - Specification and extraction spike
 
+The first candidate for extraction is a closed, effect-free primitive
+(e.g. validity or epoch transitions); choose after an actual Aeneas
+spike. Formalizing several small modules does not by itself establish
+complete mediation. Follow the M1-M6 staging in [the modular proof architecture](aivm-secrets-modular-proof-architecture.md).
+
 Freeze protocol version 1 with an independent test-vector corpus and negative
 cases. Write an explicit effect grammar and abstract state machine. Port one
 representative slice to safe Rust and extract it into Lean. Prove one positive
@@ -543,6 +561,11 @@ Pin tools and list all axioms/external models. Exit only when the compiled Rust
 and extracted functions consume the same canonical test inputs.
 
 ### P2 - Verified kernel
+
+Reuse proven primitive lemmas only after each domain and protocol layer
+discharges its typed input assumptions. Include effect-trace composition
+and parser/executor refinement obligations; a checked Boolean policy
+function alone does not authorize a verified-system claim.
 
 Port authorization, byte normalization, effect construction and grant state
 transitions. Prove the assurance plan's authorization, binding, attenuation,
@@ -564,16 +587,19 @@ throwaway/narrow credential. Do not automate live writes during ordinary tests.
 
 ### P4 - Remote identity and durable authority (independent of Rust timing)
 
-P4a starts with pure Python certificate-binding decisions, Ed25519-signed JWTs
-with an AES-GCM-encrypted existing local capability, and an opt-in TLS 1.3
-`CERT_REQUIRED` bridge that delegates to the existing reference monitor.
-See [the P4 plan](aivm-secrets-garrett-identity.md) for threat limits and
-missing enrollment/provisioning. P4b adds Garrett-style broker acquisition,
+P4a now includes Python certificate-binding decisions, Ed25519-signed
+JWTs with an encrypted inner local broker capability, an opt-in TLS 1.3
+`CERT_REQUIRED` bridge, host-managed enrollment and an explicit
+managed-VM identity-only launcher. These are not default VM powers and
+have not been validated on a live libvirt VM. The new plan separates
+the pure Garrett protocol transition model from certificate, issuer,
+registry storage and TLS effects, without making Rust a P4 prerequisite.
+See [the P4 plan](aivm-secrets-garrett-identity.md) for remaining
+deployment and credential-acquisition work. P4b adds Garrett-style broker acquisition,
 credential provider OAuth, and standardized interoperable sealed envelopes;
 P4c adds instance-key custody and durable policy state.
 Specify restore/clone/epoch behavior before enabling vTPM or remote
-attestation claims. Specify restore/clone/epoch
-behavior before enabling vTPM or remote attestation claims. Implement revocation,
+attestation claims. Implement revocation,
 refresh and optional one-shot approvals against a durable ledger. Test CA/key
 rotation, dropped/duplicated requests, restart, stale replicas and snapshot
 rollback. Local mode must remain available without a cloud account.

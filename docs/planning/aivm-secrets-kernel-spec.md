@@ -419,3 +419,34 @@ TLS chain validation and certificate identity provisioning are **trusted**
 outside this pure decision and require separate Rust/test/refinement work.
 See [the dual-backend decision](aivm-secrets-parallel-implementations.md)
 and [the P4a protocol](aivm-secrets-garrett-identity.md).
+
+## 11. Planned primitive-level specification and proof dependencies
+
+The existing kernel specification remains the normative description of the
+**current Python state machine**. An incremental refactor is proposed in
+[the modular proof architecture](aivm-secrets-modular-proof-architecture.md);
+its new `aivm_secrets.primitives` package is **not implemented yet**.
+
+Porting should move one behavior at a time behind a compatibility facade,
+not change `aivs1`, policy digests, error codes, or effect bytes. Candidate
+subcontracts are explicit value bounds, time-window membership, epoch
+advance/rejection, certificate/subject binding, semantic scope subset and
+reservation accounting. For each, define the accepted input subset, all
+error variants, overflow cases, and the exact function's role in the higher
+state machine. The domain model must consume the checked result, not recompute
+its own subtly different validation.
+
+The `AuthorizedEffect` and `Ticket` constructors remain confined to
+`kernel/machine.py` until a reviewed authorization transition relocates
+them to an equally restricted Rust module. A primitive may establish a
+semantic scope relation; it must **not** mint an execution permit or invoke
+a provider adapter. Likewise, extracting a validity predicate cannot permit
+calling the effect executor directly.
+
+Extend the AST import and purity gates so `kernel -> primitives` is allowed
+while `primitives -> kernel/identity/host/AIVM` is forbidden. Existing Python
+`tests/test_secrets_purity.py` currently assumes all pure code lives in the
+`kernel` directory; that enforcement must evolve *with* the refactor rather
+than being disabled. Independent Rust modules will consume reviewed shared
+vectors; proofs of their extracted functions become lemmas for later domain
+and trace theorems only after their preconditions are discharged.

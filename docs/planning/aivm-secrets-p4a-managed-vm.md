@@ -205,3 +205,21 @@ smokes on a disposable libvirt VM with synthetic service; signed lifecycle
 journal/counter for snapshot and restore; true non-exportable vTPM identity
 and key policy; separate Rust VM binding runner and proof extraction; OAuth
 and provider credential acquisition without exposing ordinary host tokens.
+
+## Planned module extraction (no change to managed-VM authority)
+
+The next design-only increment introduces
+[primitive contracts and a pure Garrett protocol model](aivm-secrets-modular-proof-architecture.md).
+Keep the managed-VM source of authority here: AIVM's machine store, active
+principal, libvirt UUID and pinned bootstrap SSH. These are external facts
+provided to the `identity/vm_model.py` reference; a reusable primitive cannot
+prove that a guest-generated CSR came from a particular VM merely by
+validating its contents. The trust edge from those host facts to the model
+must remain explicit when moving to Rust.
+
+Retain the **process-only** AIVM-to-`aivm-secrets` command boundary and the
+identity-only forwarded socket. The future `identity/garrett` pure transitions
+may reuse binding and epoch lemmas, but cannot launch a VM, read CA keys,
+receive guest-origin `VerifiedPeer` values as trusted facts, or bypass the
+broker. The installed behavior and opt-in write-denial defaults do not change
+as a consequence of the planning document.

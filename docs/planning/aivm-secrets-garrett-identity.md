@@ -1,7 +1,8 @@
 # Garrett-style instance identity: Python P4a increment and Rust boundary
 
-Status: **experimental Python P4a plus opt-in host enrollment tooling** (2026-10-12). This begins P4 in
-parallel with P1/P2 Rust formal work; it does **not** enable a new VM feature.
+Status: **experimental Python P4a with opt-in managed-VM integration**
+(2026-10-12). This advances P4 independently of P1/P2 Rust formal work;
+existing VMs receive no new secrets access by default.
 No real `gh` or other service credentials are needed for the tests. Consult
 [the parallel-implementations decision](aivm-secrets-parallel-implementations.md).
 
@@ -57,6 +58,29 @@ private key accepted by the configured CA, **not** hardware non-exportability,
 vTPM enrollment, remote attestation, host identity proof or correct guest-agent
 process identity.
 
+## Planned protocol decomposition and reusable primitives
+
+The present `identity/model.py`, `token.py`, `registry_model.py`,
+`vm_model.py`, `enrollment.py`, and mTLS bridge remain the running
+reference implementation. The next refactor proposes a pure
+`identity/garrett/` domain model for **protocol state transitions**,
+not a single transaction containing TLS, OAuth, persistence and network
+effects. `aivm_secrets.primitives` provides reusable validity, epoch,
+certificate-binding and budget/scope rules beneath it. See
+[the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+for the intended import graph, theorem contracts and migration gates.
+
+Issuance consumes *authenticated* operator authority, a current
+enrollment and an opaque credential handle; presentation consumes a
+TLS-verified peer and cryptographically authenticated claims; request
+execution still goes through the original broker authorization and
+effect executor. Pure certificate-thumbprint equality is not TLS
+verification, and a signed token alone does not authorize a provider
+operation. The future model must state ordering, idempotency,
+revocation linearization, and `outcome_unknown` for dispatched writes.
+No second egress path, general-purpose API forwarding or new guest
+power is authorized by this proposed structure.
+
 ## Files and responsibilities
 
 | Path | Boundary / future Rust counterpart |
@@ -78,11 +102,14 @@ client-supplied `sub` to stand in for verified transport identity.
 The follow-up [P4a enrollment increment](aivm-secrets-p4a-enrollment.md)
 provides a principal-owned local CA, a CSR enrollment CLI, persistent per-VM
 certificate/epoch records, an optional foreground Unix mTLS bridge, and a
-restricted TLS client. It **still does not change an existing VM**, provision
-keys or certificates automatically, start a daemon, expose TCP, acquire OAuth
-credentials, or change the default `aivm ssh --secrets_policy` transport.
-A manually enrolled software key can be copied; CSR signature validity is not
-VM attestation, and a human must independently authenticate the CSR source.
+restricted TLS client. This standalone authority does not automatically modify a VM, start a daemon,
+expose TCP, acquire OAuth credentials, or change the default
+`aivm ssh --secrets_policy` transport. The separate opt-in managed-VM adapter
+now provisions an identity through the authenticated bootstrap path, but live
+libvirt and SSH integration remains unvalidated.
+A software key can still be copied; CSR signature validity is not VM
+attestation. Standalone manual enrollment requires independent operator
+authentication of the CSR source.
 
 The signed token's `jti` is informative, not a persisted one-shot replay
 guard. The existing broker still governs operations, attempt budgets and
@@ -101,10 +128,11 @@ issuer rotation, unattended VM enrollment, and verified Rust remain pending.
 2. **P4a deployment hardening (in progress):** host-owned enrollment/key/trust
    files, a manually authenticated CSR workflow, principal-owned Unix socket,
    opt-in CLI, bounded requests, auditable issuance and persistent enrollment
-   epochs are implemented. Remaining: authenticated binding to authoritative
-   AIVM VM and broker records, explicit launcher lifecycle/guest provisioning,
-   issuer API authentication suitable for automation, CA rotation, and real
-   VM integration with a synthetic provider.
+   epochs are implemented. The opt-in managed-VM
+   adapter now binds its identity to the machine store, active principal and
+   live libvirt UUID, and uses pinned bootstrap SSH. Remaining: controlled
+   upgrade of older guest bootstrap helpers, issuer API authentication suitable
+   for automation, CA rotation and real-VM tests with a synthetic provider.
 3. **P4b:** host/browser OAuth authorization and refresh, issuer/broker
    separation, interoperable credential substitution and signed encrypted
    surrogate claims; use the user's host principal, never a shared host token.
