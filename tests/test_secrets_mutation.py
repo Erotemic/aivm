@@ -154,10 +154,10 @@ MUTANTS = [
            'self.name, self.write, self.parameters, self.body_fields',
            "self.name, self.method != 'GET', self.parameters, self.body_fields",
            CHECKS + MACHINE + BROKER),
-    Mutant('AUTH-01', 'a method that sends a body may be declared read-only',
+    Mutant('AUTH-01', 'non-GraphQL POST/PATCH may be declared read-only',
            'kernel/https.py',
-           "            if method != 'GET' and not write:\n", '            if False:\n',
-           CHECKS),
+           "            if method != 'GET' and not write and 'graphql' not in value:\n",
+           '            if False:\n', CHECKS),
     # -- EFFECT-01 / ROUTE-01 / COMP-01 --------------------------------------
     Mutant('EFFECT-01', 'a ticket can be spent on a different request',
            'kernel/machine.py',

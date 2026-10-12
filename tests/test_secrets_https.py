@@ -284,7 +284,7 @@ def test_a_string_used_only_in_a_path_may_span_segments():
 
 
 def test_effect_is_declared_and_never_inferred_from_the_method():
-    """A GET may be a write; a method with a body may never be a read."""
+    """A GET may be a write; only a fixed GraphQL POST may be read-only."""
     with pytest.raises(SecretsError):
         one(effect=None)
     operations = https_policy()['operations']
