@@ -470,3 +470,31 @@ def test_the_table_grants_nothing_a_request_could_not_already_ask_for():
         }
         targets = [t.lstrip('@') for t in row['options'].values()]
         assert set(row['positional']) | set(targets) <= known
+
+
+def test_gh_compat_v2_opt_in_preserves_legacy_policy_digest():
+    """The frozen schema-1 shorthand is unchanged without an explicit opt-in."""
+    legacy = spec()
+    modern = spec(gh_compat=2)
+    assert legacy.digest != modern.digest
+    legacy_rows = legacy.to_dict()['cli']['gh']
+    modern_rows = modern.to_dict()['cli']['gh']
+    old = next(row for row in legacy_rows if row['command'] == ['pr', 'view'])
+    new = next(row for row in modern_rows if row['command'] == ['pr', 'view'])
+    assert 'repository_default' not in old and 'json_fields' not in old
+    assert new['json_fields'] == presets.GH_VIEW_JSON
+    assert new['repository_default']['environment'] == 'GH_REPO'
+    assert parse_policy(modern.to_dict()) == modern
+    with pytest.raises(SecretsError):
+        spec(gh_compat=3)
+
+
+def test_tauceti_opt_in_example_is_read_only():
+    example = json.loads(
+        (EXAMPLES / 'aivm-secrets-tauceti-gh2.json').read_text()
+    )
+    assert example['gh_compat'] == 2
+    result = parse_policy(example)
+    assert not any(item.write for item in result.scope())
+    assert 'pr.summary' in [item.name for item in result.scope()]
+    assert 'pr.review-threads' in [item.name for item in result.scope()]

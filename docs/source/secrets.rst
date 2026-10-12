@@ -147,8 +147,9 @@ keys, wildcards and URLs are rejected.
     left out). ``response`` is ``json`` (default) or ``text``; ``accept``
     overrides the ``Accept`` header.
 
-    ``effect`` is required and is never guessed from the method. ``POST`` and
-    ``PATCH`` must be ``write``. A ``GET`` is usually ``read``; if the service
+    ``effect`` is required and is never guessed from the method. Ordinary
+    ``POST`` and ``PATCH`` must be ``write``. A fixed GraphQL query is the
+    only body-carrying ``read`` exception. A ``GET`` is usually ``read``; if the service
     changes state on one, declare it ``write`` and it is treated as a write
     everywhere: refused under ``--secrets_writes deny``, held for approval,
     and reported as ``outcome_unknown`` if it fails. Declaring a
@@ -172,8 +173,12 @@ Path and query values are restricted to letters, digits and ``-._~``, so a
 request target is built without escaping and cannot be steered by an argument.
 A string parameter used only in the path may list values with several such
 segments (``"my-org/my-repo"``). There are no arbitrary query strings,
-redirects, retries, GraphQL, streaming or request bodies beyond the declared
-string fields.
+redirects, retries, streaming or arbitrary request bodies. A ``graphql``
+block may declare **one fixed named query**, an operation name and a bounded
+map of allowlisted scalar variables. Its operation must be ``POST``, with
+``effect: read``; the query document is taken from the host policy, **never**
+from the guest. GraphQL resolvers being non-mutating is a provider contract,
+not a guarantee obtained by inspecting the query text.
 
 File and directory permissions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -377,10 +382,12 @@ format above::
 
     {
       "schema": 1,
+      "gh_compat": 2,
       "repository": "TauCetiProject/TauCeti",
       "pr_numbers": [13861],
       "operations": ["pr.view", "pr.diff", "pr.comments", "pr.reviews",
-                     "pr.review-comments", "pr.checks"],
+                     "pr.review-comments", "pr.checks", "pr.summary",
+                     "pr.review-threads"],
       "author": "Erotemic",
       "head_repository": "Erotemic/TauCeti",
       "lifetime_seconds": 1800,
@@ -396,11 +403,20 @@ and that manifest are the same policy, with the same digest. Copy the output
 (or ``docs/examples/aivm-secrets-github-pr.json``) to change anything the
 shorthand does not offer.
 
+``gh_compat: 2`` enables the richer command-table syntax. Leaving it out
+preserves the original schema-1 command table and canonical policy digest,
+including the old requirement to specify ``-R`` explicitly. See
+``docs/examples/aivm-secrets-tauceti-gh2.json`` for a read-only example.
+
 The credential comes from the owning host user's ``gh auth token``, or from
 ``--secrets_token_file``. ``pr.comment`` and ``pr.edit`` (title and body
 only) are writes. ``pr.checks`` returns check runs for the validated head
-commit, not workflow logs. List operations return at most 100 records and say
-``pagination.possibly_more``.
+commit, not workflow logs. The optional ``pr.summary`` and
+``pr.review-threads`` operations are **fixed**, reviewed GraphQL reads.
+A schema-1 policy must explicitly grant them. REST lists return at most
+100 records and say ``pagination.possibly_more``; the JSON compatibility
+client refuses to output an incomplete check run list or truncated review
+list as though it were complete.
 
 Answering to another tool's name: ``cli``
 -----------------------------------------
@@ -428,8 +444,8 @@ that name. Each row maps the words of one command to an operation:
 ``positional`` names the arguments that follow, ``options`` maps flags to
 arguments (``@name`` reads the value from a file, or ``-`` for standard
 input), and ``"output": "result"`` prints just the result, raw if it is text.
-The built-in GitHub manifest ships such a table, which is the whole of its
-``gh`` support::
+The built-in GitHub manifest ships such a table; the extension enabled by
+``gh_compat: 2`` adds bounded JSON rendering and repository inference::
 
     gh pr view 13861 --repo TauCetiProject/TauCeti
     gh pr reviews 13861 --repo TauCetiProject/TauCeti --page 1
@@ -440,9 +456,23 @@ The built-in GitHub manifest ships such a table, which is the whole of its
 a translation aid for the guest and grants nothing: the result is an ordinary
 request, checked on the host like any other.
 
-This is **not the real tool**. Results are broker JSON. A command, flag or
-form the table does not list (``gh api``, ``--json``, ``gh auth token``) is a
-usage error, exit status 2 -- never a fallback to anything else.
+This is **not the real tool**. With ``gh_compat: 2``, the command table supports a
+bounded subset of ``--json``, with locally rendered fields and explicit
+repository inference from ``GH_REPO`` or Git remotes. Missing fields are
+not fabricated. The optional ``pr.summary`` operation enables fields such as
+``reviews`` and ``reviewDecision`` through a separately authorized fixed
+GraphQL read. For example::
+
+    gh pr view 13861 -R TauCetiProject/TauCeti --json title,body,number
+    gh pr checks 13861 -R TauCetiProject/TauCeti --json name,state,link
+    gh pr view 13861 -R TauCetiProject/TauCeti --json title,reviews,reviewDecision
+
+The third command requires ``pr.summary`` explicitly in the policy.
+``gh api``, arbitrary GraphQL, workflow logs, ``--jq``, ``--template``,
+implicit PR selection and unsupported flags still fail closed with exit
+status 2. A ``gh`` wrapper provides a **subset**, not drop-in stock CLI
+compatibility. Host policy remains authoritative regardless of what the
+guest infers as a repository.
 
 Error codes
 -----------

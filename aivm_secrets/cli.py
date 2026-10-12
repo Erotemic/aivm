@@ -186,6 +186,7 @@ def _serve(args: argparse.Namespace) -> int:
     from .host.session import (
         CAPABILITY_FILE,
         remove_session_directory,
+        runtime_root,
         session_directory,
     )
     from .host.sources import (
@@ -204,6 +205,9 @@ def _serve(args: argparse.Namespace) -> int:
     untrusted = tuple(args.untrusted_root)
     verify_runtime(untrusted)
     spec = load_policy(args.policy, untrusted)
+    # Reject a guest-writable XDG_RUNTIME_DIR before credential acquisition.
+    # In particular, a rejected session must never resolve a host token.
+    runtime_root(untrusted)
     if args.token_file is not None:
         credential = credential_from_file(
             args.token_file.expanduser(), untrusted=untrusted
@@ -222,7 +226,7 @@ def _serve(args: argparse.Namespace) -> int:
     audit_dir = private_directory(
         (args.audit_dir or default_audit_directory()).expanduser(), untrusted
     )
-    directory = session_directory(channel)
+    directory = session_directory(channel, untrusted)
     broker = None
     announced = False
     stop = threading.Event()

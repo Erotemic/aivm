@@ -49,6 +49,8 @@ PR_READS = (
     'pr.comments',
     'pr.reviews',
     'pr.review-comments',
+    'pr.review-threads',
+    'pr.summary',
     'pr.checks',
 )
 PR_WRITES = ('pr.comment', 'pr.edit')
@@ -121,6 +123,71 @@ def _github_operations(repo: str, numbers: list[int]) -> dict[str, Any]:
                 'at': ['check_runs'],
             },
         ),
+        # GitHub REST does not expose unresolved review threads. This query
+        # is a fixed operator manifest effect; the guest can change only
+        # typed, allowlisted variables, never the GraphQL document or URL.
+        'pr.review-threads': dict(
+            single,
+            effect='read',
+            method='POST',
+            path='/graphql',
+            accept=GITHUB_JSON,
+            parameters=dict(
+                target,
+                owner=[repo.split('/')[0]], name=[repo.split('/')[1]],
+            ),
+            defaults={
+                'owner': repo.split('/')[0], 'name': repo.split('/')[1],
+            },
+            graphql={
+                'operation': 'AivmReviewThreads',
+                'document': (
+                    'query AivmReviewThreads('
+                    '$owner: String!, $name: String!, $number: Int!) { '
+                    'repository(owner: $owner, name: $name) { '
+                    'pullRequest(number: $number) { number '
+                    'reviewThreads(first: 100) { nodes { id isResolved '
+                    'comments(first: 100) { nodes { id body path line '
+                    'author { login } } pageInfo { hasNextPage endCursor } } } '
+                    'pageInfo { hasNextPage endCursor } } } } }'
+                ),
+                'variables': {
+                    'owner': 'owner', 'name': 'name', 'number': 'pr',
+                },
+            },
+        ),
+        'pr.summary': dict(
+            single,
+            effect='read',
+            method='POST',
+            path='/graphql',
+            accept=GITHUB_JSON,
+            parameters=dict(
+                target,
+                owner=[repo.split('/')[0]], name=[repo.split('/')[1]],
+            ),
+            defaults={
+                'owner': repo.split('/')[0], 'name': repo.split('/')[1],
+            },
+            graphql={
+                'operation': 'AivmPullSummary',
+                'document': (
+                    'query AivmPullSummary('
+                    '$owner: String!, $name: String!, $number: Int!) { '
+                    'repository(owner: $owner, name: $name) { '
+                    'pullRequest(number: $number) { number title body '
+                    'url state reviewDecision headRefName baseRefName '
+                    'headRefOid headRepository { nameWithOwner } '
+                    'author { login } '
+                    'reviews(first: 100) { nodes { author { login } body '
+                    'state submittedAt } pageInfo { hasNextPage endCursor } } '
+                    '} } }'
+                ),
+                'variables': {
+                    'owner': 'owner', 'name': 'name', 'number': 'pr',
+                },
+            },
+        ),
         'pr.comment': dict(
             single,
             effect='write',
@@ -143,8 +210,40 @@ def _github_operations(repo: str, numbers: list[int]) -> dict[str, Any]:
     }
 
 
-def _gh_command(name: str) -> dict[str, Any]:
-    """The ``gh pr <word> NUMBER --repo OWNER/NAME`` shape for one operation."""
+# Each field is a projection of an already authorized REST result. These
+# names mimic stock ``gh --json`` where the underlying REST shape is the same.
+# Fields requiring aggregation/GraphQL (reviews, reviewDecision) are *not*
+# silently fabricated. Future adapters may compose explicitly allowed reads.
+GH_VIEW_JSON = {
+    'number': ['number'],
+    'title': ['title'],
+    'body': ['body'],
+    # State is a GraphQL enum (including MERGED); the REST `state` is not.
+    'url': ['html_url'],
+    'isDraft': ['draft'],
+    'headRefName': ['head', 'ref'],
+    'baseRefName': ['base', 'ref'],
+    'headRefOid': ['head', 'sha'],
+    'baseRefOid': ['base', 'sha'],
+    'author': ['user'],
+    'additions': ['additions'],
+    'deletions': ['deletions'],
+    'changedFiles': ['changed_files'],
+    'createdAt': ['created_at'],
+    'updatedAt': ['updated_at'],
+    'mergedAt': ['merged_at'],
+}
+GH_CHECKS_JSON = {
+    'name': ['name'],
+    'link': ['details_url'],
+    'status': ['status'],
+    'state': ['conclusion'],
+    'conclusion': ['conclusion'],
+}
+
+
+def _gh_command(name: str, *, enhanced: bool = False) -> dict[str, Any]:
+    """One declarative CLI row; guest-side inference grants no authority."""
     options = {'--repo': 'repository', '-R': 'repository'}
     if name in ('pr.comments', 'pr.reviews', 'pr.review-comments', 'pr.checks'):
         options['--page'] = 'page'
@@ -159,8 +258,34 @@ def _gh_command(name: str) -> dict[str, Any]:
         'positional': ['pr'],
         'options': options,
     }
+    if enhanced:
+        command['repository_default'] = {
+            'parameter': 'repository', 'environment': 'GH_REPO',
+            'remote': 'upstream', 'host': 'github.com',
+        }
     if name == 'pr.diff':
         command['output'] = 'result'
+    if enhanced and name == 'pr.view':
+        command['json_fields'] = GH_VIEW_JSON
+    if enhanced and name == 'pr.checks':
+        command['json_fields'] = GH_CHECKS_JSON
+        command['json_at'] = ['check_runs']
+        command['json_list'] = True
+        command['json_complete'] = True
+        command['json_rules'] = {
+            'state': {
+                'fallback': ['status'],
+                'map': {
+                    'success': 'SUCCESS', 'failure': 'FAILURE',
+                    'neutral': 'NEUTRAL', 'cancelled': 'CANCELLED',
+                    'skipped': 'SKIPPING', 'timed_out': 'TIMED_OUT',
+                    'action_required': 'ACTION_REQUIRED',
+                    'queued': 'PENDING', 'in_progress': 'PENDING',
+                    'waiting': 'PENDING', 'pending': 'PENDING',
+                    'completed': 'PENDING',
+                },
+            },
+        }
     return command
 
 
@@ -178,10 +303,12 @@ def github_pr(value: Any) -> dict[str, Any]:
                 'head_repository',
             }
         ),
-        frozenset({'lifetime_seconds', 'max_requests', 'max_body_bytes'}),
+        frozenset({'lifetime_seconds', 'max_requests', 'max_body_bytes',
+                   'gh_compat'}),
         code=_CODE,
     )
     grammar.integer(value['schema'], 1, 1, code=_CODE)
+    enhanced = grammar.integer(value.get('gh_compat', 1), 1, 2, code=_CODE) == 2
     numbers, chosen = value['pr_numbers'], value['operations']
     if type(numbers) is not list or not 1 <= len(numbers) <= 256:
         raise SecretsError(_CODE)
@@ -236,7 +363,28 @@ def github_pr(value: Any) -> dict[str, Any]:
         'operations': [
             dict(available[name], name=name) for name in sorted(chosen)
         ],
-        'cli': {'gh': [_gh_command(name) for name in sorted(chosen)]},
+        'cli': {'gh': [
+            dict(
+                _gh_command(name, enhanced=True),
+                json_alternative={
+                    'operation': 'pr.summary',
+                    'json_at': ['data', 'repository', 'pullRequest'],
+                    'incomplete_when': ['reviews', 'pageInfo', 'hasNextPage'],
+                    'json_fields': {
+                        'number': ['number'], 'title': ['title'],
+                        'body': ['body'], 'url': ['url'],
+                        'state': ['state'], 'author': ['author'],
+                        'headRefName': ['headRefName'],
+                        'baseRefName': ['baseRefName'],
+                        'headRefOid': ['headRefOid'],
+                        'reviews': ['reviews', 'nodes'],
+                        'reviewDecision': ['reviewDecision'],
+                    },
+                },
+            ) if enhanced and name == 'pr.view' and 'pr.summary' in chosen
+            else _gh_command(name, enhanced=enhanced)
+            for name in sorted(chosen)
+        ]},
         'lifetime_seconds': grammar.integer(
             value.get('lifetime_seconds', 1800), 1, MAX_LIFETIME, code=_CODE
         ),

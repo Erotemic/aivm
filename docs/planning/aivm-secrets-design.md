@@ -380,7 +380,7 @@ tree is bounded (64 grants, depth 4) and lives in broker memory.
 
 | Client operation | Constructed provider operation | Caveat |
 | --- | --- | --- |
-| `pr view` | Get selected PR | Broker-native JSON, not stock `gh --json` |
+| `pr view` | Get selected PR | Broker-native JSON by default; bounded `--json` with `gh_compat: 2` |
 | `pr diff` | Get selected PR with diff media type | Bounded size; binary/large cases can fail |
 | `pr comments` | List issue comments on selected PR | Explicit page of at most 100 |
 | `pr reviews` | List submitted reviews | Not a GraphQL review-thread model |
@@ -404,17 +404,21 @@ The guest executable is deliberately gh-shaped, not a transparent replacement
 for stock `gh`. It supports only what the table lists, requires `--repo` and
 an explicit PR number, and has no fallback: an unlisted command is a usage
 error in the client, and a request made around the client is still decided by
-the broker. Existing `campaign_ops.py` code using
-`gh api`, GraphQL, arbitrary `--json` selection or workflow logs will need a
-separate adapter. Do not advertise drop-in campaign compatibility.
+the broker. Existing `campaign_ops.py` code using unrestricted `gh api`, arbitrary
+GraphQL documents, `--jq`, full `--json` field sets or workflow logs still
+needs a separate adapter. A bounded `--json` subset and host-pinned GraphQL
+queries are implemented in schema-2 manifests, but must not be described as
+drop-in campaign compatibility.
 
 Supporting the actual stock CLI later is a separate project. An ordinary HTTPS
 CONNECT proxy cannot edit encrypted authorization headers. Interception requires
 a narrowly trusted TLS endpoint or client cooperation, correct certificate
 validation in both directions, and safe treatment of redirects, CONNECT, SNI,
-Host, HTTP versions and connection reuse. GitHub GraphQL needs semantic parsing
-of operation type, selected fields, variables, aliases, fragments, mutations and
-batching. Allowing `POST /graphql` is not a read-only policy. A restricted
+Host, HTTP versions and connection reuse. Accepting **arbitrary guest-supplied** GitHub GraphQL would require semantic
+parsing of operation type, selected fields, variables, aliases, fragments,
+mutations and batching. A host-pinned, named query with fixed variables is now
+supported; its nonmutation is an explicit service assumption, not a theorem.
+Allowing arbitrary `POST /graphql` would not be a read-only policy. A restricted
 broker-native API remains available even if that compatibility layer is added.
 
 The initial provider creates a direct TLS connection to `api.github.com`, does

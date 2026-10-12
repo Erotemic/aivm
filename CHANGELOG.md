@@ -4,6 +4,22 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
 
+### Changed
+* `aivm-secrets` hardening: disable TLS key-log output even for standalone
+  sessions, reject untrusted runtime paths before resolving credentials, and
+  launch the credential broker only with isolated Python `-I` (fail closed for
+  user-site installations).
+* Provider-neutral CLI command tables support bounded JSON projections,
+  repository-default inference, and independently authorized alternate reads.
+  The GitHub shorthand retains its original digest and CLI behavior unless
+  `"gh_compat": 2` is explicitly enabled. See the read-only TauCeti example
+  and `docs/planning/aivm-secrets-2026-10-remediation.md`.
+* Schema-2 HTTPS manifests can declare one static named GraphQL query with
+  typed, allowlisted scalar variables. Query documents are host-controlled,
+  never guest input; read-only resolver semantics remain an explicit service
+  assumption rather than a formal guarantee. No live GitHub smoke test or
+  implementation-linked proof is claimed.
+
 ### Added
 * Experimental secret-use sessions: `aivm ssh --secrets_policy POLICY` lets a
   guest *use* a host-held service credential for a fixed list of named

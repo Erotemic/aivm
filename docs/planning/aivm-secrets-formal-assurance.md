@@ -96,8 +96,9 @@ admit(p, g, b, r, s) = Accepted(s', ticket)
 ```
 
 `isWrite(r)` is the **declared** class of `r`'s operation: a required field of
-the manifest, never a function of the HTTP method. The parser refuses a
-body-carrying method declared read-only; a `GET` declared a write is a write
+the manifest, never a function of the HTTP method. The parser refuses arbitrary
+body-carrying methods declared read-only; a pinned, named GraphQL query can
+be declared a read under SPEC-02, and a `GET` declared a write is a write
 in `admit`, in approval, in the minted authorization and in the meaning of a
 failed dispatch. That a `GET` declared `read` changes nothing at the provider
 is an assumption about the provider (SPEC-02), not a theorem.
@@ -337,9 +338,10 @@ budget, operation membership, typed resource arguments, host write mode and
 bounded payload size, for the grant and each ancestor. Resource arguments are
 checked against a `Scope` the service spec compiles to, so the check is the
 same code for every service. The kernel also computes and grammar-checks each
-effect, and refuses a body-carrying effect for a request admitted as a read,
-so a defective service compiler cannot turn a read into a write or leave the
-effect grammar. It does **not** verify that a compiler's route is the route
+effect, and refuses an ordinary body-carrying effect for a request admitted
+as a read. The admitted exception is a manifest-pinned, named GraphQL query:
+its provider-side nonmutation is assumed, not verified by the query-name
+validator. The executor enforces the fixed document and variable grammar. It does **not** verify that a compiler's route is the route
 the operator meant: there is no machine-checked refinement connecting a
 spec's route to its manifest, and the interpreter around the kernel is
 trusted Python. The tests therefore cannot establish end-to-end complete

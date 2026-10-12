@@ -45,7 +45,7 @@ Planned crate split (unchanged from the design document):
 
 | Crate | Python today | Contents |
 | --- | --- | --- |
-| `secrets-kernel` | `kernel/{model,scope,machine,service,https,github,source}.py` | data, scope algebra, state machine, service specs, effect compiler |
+| `secrets-kernel` | `kernel/{model,scope,machine,service,https,graphql,source}.py` | data, scope algebra, state machine, service specs, effect compiler |
 | `secrets-protocol` | `kernel/{grammar,codec,wire,trace}.py` | alphabets, strict JSON, canonical encoding, frames, trace replay |
 | `secrets-host` | `host/*.py` | AEAD envelope, TLS egress, audit, files, resolvers, sockets |
 
@@ -119,8 +119,9 @@ Capture    { name, at: [key], format: hex|integer|segment }
 Operation  { name, write: bool,            -- declared, never inferred
              requires: Option<check>, returns_check: bool,
              method, path template, parameters, query, body fields,
-             response, accept, defaults, fold, page }
-CLICommand { words, operation, positional, options, output }   -- inert data
+             response, accept, defaults, fold, page, static GraphQL query }
+CLICommand { words, operation, positional, options, output, bounded JSON projection,
+             independently granted alternative read, repository inference }   -- inert data
 ```
 
 `HTTPSpec` provides the total functions the kernel is written against:
@@ -133,12 +134,13 @@ allowlisted arguments and the validated captures. There is no registry
 lookup by name, no dynamic import and no trait object.
 
 **Effect class.** `Operation.write` comes from the manifest's required
-`effect` field. The parser refuses a body-carrying method declared `read`;
-it accepts a `GET` declared `write`. The class is what admission checks
+`effect` field. The parser refuses an ordinary body-carrying method declared `read`,
+but accepts a pinned, named GraphQL **query** as a declared read. It accepts
+a `GET` declared `write`. GraphQL endpoint semantics remain assumed (SPEC-02). The class is what admission checks
 against the host write mode, what an approval is required for, and what
-`AuthorizedEffect.write` carries to the executor. `Effect.is_write` (the
-method carries a body) is used for exactly one thing: a request admitted as
-a read may never emit one.
+`AuthorizedEffect.write` carries to the executor. `Effect.is_write` (an ordinary body-carrying method that is not an admitted
+static GraphQL query) is a backstop: an ordinary read cannot emit a write.
+A GraphQL query is considered read-only only under SPEC-02.
 
 ## 3. Encodings and identities
 
@@ -383,8 +385,9 @@ of section 5 after each one.
   modelled as a transition system with effects. A trace semantics that
   includes `AppendAudit` and `Execute` events is the next specification step.
 * A manifest's declared `effect` is taken on trust (assumption SPEC-02). The
-  kernel can refuse a body-carrying method declared `read`; it cannot know
-  that a `GET` declared `read` changes nothing at the provider.
+  kernel refuses arbitrary body-carrying methods declared `read`, while admitting
+  single host-pinned GraphQL queries under the provider nonmutation assumption.
+  It cannot prove that a `GET` or GraphQL resolver is read-only at the provider.
 * Remote outcomes are conservative, not resolved: every failed write is
   `outcome_unknown`. Idempotency keys and provider-specific reconciliation,
   which could turn some of those into definite answers, are not implemented.

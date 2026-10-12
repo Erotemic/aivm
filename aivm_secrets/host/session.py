@@ -29,19 +29,25 @@ CAPABILITY_FILE = 'capability'
 CONTROL_TIMEOUT = 5.0
 
 
-def runtime_root() -> Path:
-    """The caller's private runtime directory; created ``0700`` if absent."""
+def runtime_root(untrusted: tuple[Path, ...] = ()) -> Path:
+    """A host-only runtime root, outside all guest-writable directories.
+
+    The caller's environment selects a candidate, not an exemption from the
+    trust boundary. File/path validation is the same as for policy and audit.
+    """
     base = os.environ.get('XDG_RUNTIME_DIR', '')
     if base and os.path.isabs(base):
         root = Path(base) / 'aivm-secrets'
     else:
         root = Path(tempfile.gettempdir()) / f'aivm-secrets-{os.getuid()}'
-    return private_directory(root)
+    return private_directory(root, untrusted=untrusted)
 
 
-def session_directory(channel: str) -> Path:
+def session_directory(
+    channel: str, untrusted: tuple[Path, ...] = ()
+) -> Path:
     grammar.hex_string(channel, 32, code='internal_error')
-    return private_directory(runtime_root() / channel)
+    return private_directory(runtime_root(untrusted) / channel, untrusted)
 
 
 def remove_session_directory(directory: Path) -> None:

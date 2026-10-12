@@ -31,6 +31,8 @@ import argparse
 import json
 import os
 import socket
+import configparser
+from pathlib import Path
 import sys
 import time
 from typing import Any
@@ -253,6 +255,134 @@ def _typed(operation: dict[str, Any], name: str, text: str) -> Any:
         raise Usage(f'{_word(name)} must be a number') from None
 
 
+def _repository_from_url(value: str, host: str) -> str:
+    """Interpret recognized remote formats without network access or tools."""
+    text = value.strip()
+    repo = ''
+    for prefix in (
+        f'git@{host}:', f'ssh://git@{host}/', f'https://{host}/',
+    ):
+        if text.startswith(prefix):
+            repo = text[len(prefix):]
+            break
+    if repo.endswith('.git'):
+        repo = repo[:-4]
+    parts = repo.split('/')
+    allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-'
+    if (len(parts) != 2 or not all(parts) or
+            not all(len(part) <= 100 and all(ch in allowed for ch in part)
+                    for part in parts) or any(part in ('.', '..') for part in parts)):
+        raise Usage('cannot infer a valid repository; supply --repo')
+    return repo
+
+
+def _git_config() -> configparser.RawConfigParser | None:
+    """Read local git config as inert data, including linked worktree gitdirs.
+
+    Never invoke ``git`` or its credential helpers; the guest client must
+    remain a single, stdlib-only script that only opens its Unix socket.
+    """
+    directory = Path.cwd()
+    for folder in (directory, *directory.parents):
+        dotgit = folder / '.git'
+        if not dotgit.exists():
+            continue
+        if dotgit.is_dir():
+            config = dotgit / 'config'
+        else:
+            try:
+                pointer = dotgit.read_text(encoding='utf-8')[:4096]
+                if not pointer.startswith('gitdir: '):
+                    return None
+                gitdir = Path(pointer[8:].strip())
+                if not gitdir.is_absolute():
+                    gitdir = folder / gitdir
+                # Worktree gitdir has a commondir pointer to the real config.
+                shared = gitdir / 'commondir'
+                if shared.is_file():
+                    common = Path(shared.read_text(encoding='utf-8')[:4096].strip())
+                    config = (gitdir / common / 'config') if not common.is_absolute() else common / 'config'
+                else:
+                    config = gitdir / 'config'
+            except (OSError, UnicodeError):
+                return None
+        try:
+            if config.stat().st_size > 65536:
+                return None
+            reader = configparser.RawConfigParser(interpolation=None)
+            with config.open(encoding='utf-8') as stream:
+                reader.read_file(stream)
+            return reader
+        except (OSError, UnicodeError, configparser.Error):
+            return None
+    return None
+
+
+def _infer_repository(row: dict[str, Any]) -> tuple[str, str] | None:
+    """Resolve an untrusted guest-side default; host scope still decides."""
+    spec = row.get('repository_default')
+    if not isinstance(spec, dict) or not spec:
+        return None
+    parameter = spec['parameter']
+    env_name = spec['environment']
+    host = spec['host']
+    remote = spec['remote']
+    candidate = os.environ.get(env_name)
+    if candidate:
+        candidate = _repository_from_url(f'git@{host}:{candidate}', host)
+        return parameter, candidate
+    config = _git_config()
+    if config is not None:
+        for name in (remote, 'origin'):
+            section = f'remote "{name}"'
+            if config.has_option(section, 'url'):
+                candidate = _repository_from_url(config.get(section, 'url'), host)
+                return parameter, candidate
+    raise Usage('cannot infer a repository; supply --repo or set ' + env_name)
+
+
+def _projection(data: Any, path: list[str]) -> Any:
+    for key in path:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
+def _render_json_result(reply: dict[str, Any], row: dict[str, Any],
+                        names: list[str]) -> None:
+    """A bounded local projection; the broker already authorized the read."""
+    fields = row['json_fields']
+    data = _projection(reply.get('result'), row.get('json_at', []))
+    if ('reviews' in names and row.get('incomplete_when') and
+            _projection(data, row['incomplete_when']) is True):
+        raise Usage('more review pages exist; this client cannot return a complete review list')
+    if row.get('json_complete') and reply.get('pagination', {}).get('possibly_more'):
+        raise Usage('more result pages exist; use a paged read')
+    rules = row.get('json_rules', {})
+    def field(item: Any, name: str) -> Any:
+        value = _projection(item, fields[name])
+        rule = rules.get(name) if isinstance(rules, dict) else None
+        if isinstance(rule, dict):
+            if value is None:
+                value = _projection(item, rule.get('fallback', []))
+            if isinstance(value, str):
+                value = rule.get('map', {}).get(value, value)
+        return value
+    if row.get('json_list'):
+        if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+            raise ValueError('unexpected list result')
+        result = [
+            {name: field(item, name) for name in names}
+            for item in data
+        ]
+    else:
+        if not isinstance(data, dict):
+            raise ValueError('unexpected object result')
+        result = {name: field(data, name) for name in names}
+    print(json.dumps(result, ensure_ascii=True))
+
+
 def request_from_alias(
     rows: Any, operations: Any, words: list[str]
 ) -> tuple[dict[str, Any], str]:
@@ -269,6 +399,7 @@ def request_from_alias(
         if isinstance(item, dict) and item.get('name') == row.get('operation'):
             operation = item
     arguments: dict[str, Any] = {}
+    json_selection: list[str] | None = None
     values: list[str] = []
     index = 0
     literal = False
@@ -282,6 +413,29 @@ def request_from_alias(
             literal = True
             continue
         flag, joined, attached = token.partition('=')
+        if flag == '--json' and isinstance(row.get('json_fields'), dict):
+            if json_selection is not None:
+                raise Usage('an argument was given twice')
+            if joined:
+                field_text = attached
+            elif index < len(rest):
+                field_text = rest[index]
+                index += 1
+            else:
+                raise Usage('an option is missing its value')
+            json_selection = field_text.split(',')
+            permitted = row['json_fields']
+            alternate = row.get('json_alternative')
+            alternative = (
+                alternate.get('json_fields', {})
+                if isinstance(alternate, dict) else {}
+            )
+            if (not json_selection or len(json_selection) > 32 or
+                    len(set(json_selection)) != len(json_selection) or
+                    (not set(json_selection) <= set(permitted) and
+                     not set(json_selection) <= set(alternative))):
+                raise Usage('unsupported JSON field here')
+            continue
         if not isinstance(options, dict) or flag not in options:
             raise Usage('unsupported option here')
         if joined:
@@ -308,7 +462,18 @@ def request_from_alias(
         if name in arguments:
             raise Usage('an argument was given twice')
         arguments[name] = _typed(operation, str(name), text)
+    if 'repository_default' in row:
+        inferred_param = row['repository_default']['parameter']
+        if inferred_param not in arguments:
+            inferred = _infer_repository(row)
+            if inferred is not None:
+                arguments[inferred[0]] = inferred[1]
     request = {'operation': row.get('operation'), 'arguments': arguments}
+    if json_selection is not None:
+        if not set(json_selection) <= set(row['json_fields']):
+            request['operation'] = row['json_alternative']['operation']
+            return request, 'jsonalt:' + ','.join(json_selection)
+        return request, 'json:' + ','.join(json_selection)
     return request, str(row.get('output', 'reply'))
 
 
@@ -353,7 +518,19 @@ def run_alias(
     reply = exchange(socket_path, capability, request)
     if reply.get('ok') is not True:
         return report_failure(reply)
-    print_result(reply, raw=output == 'result')
+    if output.startswith(('json:', 'jsonalt:')):
+        row, _ = _matching(rows, words)
+        try:
+            if output.startswith('jsonalt:'):
+                _render_json_result(reply, row['json_alternative'],
+                                    output[len('jsonalt:'):].split(','))
+            else:
+                _render_json_result(reply, row, output[5:].split(','))
+        except Usage as problem:
+            print(f'{shown}: {problem}', file=sys.stderr)
+            return 2
+    else:
+        print_result(reply, raw=output == 'result')
     return 0
 
 

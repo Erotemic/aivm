@@ -27,6 +27,7 @@ FORBIDDEN_ENV = frozenset(
         'PYTHONHOME',
         'PYTHONPATH',
         'PYTHONSTARTUP',
+        'SSLKEYLOGFILE',
     }
 )
 

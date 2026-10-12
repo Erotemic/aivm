@@ -45,6 +45,10 @@ MAX_CA_BYTES = 1024 * 1024
 
 def tls_context(egress: Egress, untrusted: Roots = ()) -> ssl.SSLContext:
     """Verified TLS 1.2+ to system roots, or to one operator-pinned anchor."""
+    # Do not use ``ssl.create_default_context``: it honors SSLKEYLOGFILE,
+    # which opens an attacker-selected TLS key log even for the standalone
+    # broker. Construct the context explicitly with key logging disabled.
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     if egress.ca_file:
         try:
             anchors = read_owned(
@@ -54,14 +58,17 @@ def tls_context(egress: Egress, untrusted: Roots = ()) -> ssl.SSLContext:
                 untrusted=untrusted,
                 what='trust anchor',
             ).decode('ascii')
-            context = ssl.create_default_context(cadata=anchors)
+            context.load_verify_locations(cadata=anchors)
         except (UnicodeError, ssl.SSLError, ValueError):
             raise SecretsError(
                 'unsafe_file',
                 detail=f'{egress.ca_file}: not a PEM certificate bundle',
             ) from None
     else:
-        context = ssl.create_default_context()
+        context.load_default_certs(ssl.Purpose.SERVER_AUTH)
+    # Deliberate defense in depth: never export traffic secrets, even if
+    # the process was started outside AIVM's scrubbed environment.
+    context.keylog_filename = None
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.check_hostname = True
     context.verify_mode = ssl.CERT_REQUIRED
@@ -148,7 +155,14 @@ class HTTPSExecutor:
         if (effect.is_write and not write) or (write and not authorized.final):
             raise SecretsError('denied')
         body = None
-        if effect.body is not None:
+        if effect.graphql:
+            fields = dict(effect.body or ())
+            body = codec.dumps({
+                'query': fields['query'],
+                'operationName': fields['operation_name'],
+                'variables': codec.loads(fields['variables'], code='denied'),
+            })
+        elif effect.body is not None:
             body = codec.dumps(dict(effect.body))
         headers = self._headers(authorized, credential)
         connection = _Connection(self.egress, self._context)
@@ -188,9 +202,15 @@ class HTTPSExecutor:
                     return data.decode('utf-8')
                 except UnicodeError:
                     raise SecretsError('upstream_response') from None
-            return codec.loads(
+            result = codec.loads(
                 data, limit=MAX_RESPONSE, code='upstream_response'
             )
+            # GraphQL failures often have HTTP 200 and an `errors` object.
+            # Never expose provider diagnostic text through the guest.
+            if effect.graphql and (type(result) is not dict or result.get('errors')
+                                   or type(result.get('data')) is not dict):
+                raise SecretsError('upstream_response')
+            return result
         except SecretsError as ex:
             # Once a write has been sent, no HTTP status proves it was not
             # applied: a service may act and then answer 409 or 422. The

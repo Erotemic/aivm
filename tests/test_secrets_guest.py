@@ -632,7 +632,7 @@ def test_gh_is_the_same_mechanism_with_the_built_in_table(live, capsys):
         ['repo', 'clone', 'x/y'],
         ['pr', 'merge', '13861', '--repo', REPO],
         ['pr', 'view', '13861', '--repo', REPO, '--web'],
-        ['pr', 'view', '13861', '--repo', REPO, '--json', 'title'],
+        ['pr', 'view', '13861', '--repo', REPO, '--json', 'reviewDecision'],
         ['pr', 'comment', '13861', '--repo', REPO, '--edit-last'],
         ['pr', 'view', '--repo', REPO],
         ['pr', 'checkout', '13861'],
@@ -733,3 +733,147 @@ def test_installed_under_another_name_the_client_answers_to_it(live, tmp_path):
     assert own.returncode == 0 and 'gh' in json.loads(own.stdout)['cli']
     spelled = run('aivm-secrets', 'as', 'gh', 'pr', 'diff', '13861', '-R', REPO)
     assert spelled.stdout.startswith('diff --git')
+
+
+# -- provider-neutral CLI compatibility additions ----------------------------
+
+
+def test_gh_bounded_json_fields_are_local_projection(live, capsys):
+    session = live(github_policy(gh_compat=2))
+    words = [
+        'pr', 'view', '13861', '--repo', REPO,
+        '--json', 'title,body,number,headRefOid',
+    ]
+    assert guest.main(words, alias='gh') == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        'title': 'Proof repair', 'body': 'Example', 'number': 13861,
+        'headRefOid': 'a' * 40,
+    }
+    assert len(session.h.executor.calls) == 1  # preflight, no extra API call
+    for rejected in (
+        'reviewDecision', 'title,secret', 'title,title', 'title,', '',
+    ):
+        assert guest.main(
+            ['pr', 'view', '13861', '-R', REPO, '--json', rejected], alias='gh'
+        ) == 2
+        assert 'unsupported JSON field' in capsys.readouterr().err
+    assert len(session.h.executor.calls) == 1
+
+
+def test_gh_checks_json_is_a_projection_of_checked_commit(live, capsys):
+    live(github_policy(gh_compat=2))
+    words = ['pr', 'checks', '13861', '-R', REPO, '--json', 'name,status']
+    assert guest.main(words, alias='gh') == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {'name': 'lean', 'status': 'completed'}
+    ]
+
+
+def test_gh_default_repository_from_env_and_git_config(tmp_path, monkeypatch):
+    rows, operations = table(github_policy(gh_compat=2), 'gh')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('GH_REPO', REPO)
+    req, _ = guest.request_from_alias(rows, operations, ['pr', 'view', '13861'])
+    assert req['arguments'] == {'pr': 13861, 'repository': REPO}
+    # A malicious environment still cannot expand the policy's scope.
+    monkeypatch.setenv('GH_REPO', 'attacker/other')
+    req, _ = guest.request_from_alias(rows, operations, ['pr', 'view', '13861'])
+    assert req['arguments']['repository'] == 'attacker/other'
+    policy = parse_policy(github_policy(gh_compat=2))
+    from aivm_secrets.kernel.scope import check_arguments, find
+    with pytest.raises(Exception):
+        r = policy.parse_request(req)
+        check_arguments(find(policy.scope(), r.operation), r)
+    monkeypatch.delenv('GH_REPO')
+    (tmp_path / '.git').mkdir()
+    (tmp_path / '.git/config').write_text(
+        '[remote "upstream"]\n'
+        'url = git@github.com:TauCetiProject/TauCeti.git\n'
+        '[remote "origin"]\nurl = https://github.com/Erotemic/TauCeti.git\n'
+    )
+    req, _ = guest.request_from_alias(rows, operations, ['pr', 'view', '13861'])
+    assert req['arguments']['repository'] == REPO
+    # Explicit -R always overrides inferred values.
+    req, _ = guest.request_from_alias(
+        rows, operations, ['pr', 'view', '13861', '-R', 'another/repo']
+    )
+    assert req['arguments']['repository'] == 'another/repo'
+
+
+def test_repository_inference_is_inert_data_and_never_executes(tmp_path, monkeypatch):
+    rows, operations = table(github_policy(gh_compat=2), 'gh')
+    monkeypatch.delenv('GH_REPO', raising=False)
+    monkeypatch.chdir(tmp_path)
+    dotgit = tmp_path / '.git'
+    dotgit.mkdir()
+    # Git configuration can contain executable helpers and aliases; reading
+    # a remote URL as text must never run them.
+    (dotgit / 'config').write_text(
+        '[alias]\nfoo = !touch /tmp/aivm-should-not-run\n'
+        '[remote "origin"]\nurl = https://github.com/TauCetiProject/TauCeti\n'
+    )
+    req, _ = guest.request_from_alias(rows, operations, ['pr', 'view', '13861'])
+    assert req['arguments']['repository'] == REPO
+    (dotgit / 'config').write_text(
+        '[remote "origin"]\nurl = https://attacker.invalid/o/r\n'
+    )
+    with pytest.raises(guest.Usage):
+        guest.request_from_alias(rows, operations, ['pr', 'view', '13861'])
+
+
+def test_gh_review_json_uses_separate_authorized_graphql_read(live, capsys):
+    """Selecting review fields requires an explicit, independently scoped read."""
+    operations = github_policy(gh_compat=2)['operations'] + ['pr.summary']
+    session = live(github_policy(operations=operations, gh_compat=2))
+    session.h.executor.result = {
+        'data': {'repository': {'pullRequest': {
+            'number': 13861, 'title': 'Proof repair', 'body': 'Example',
+            'reviewDecision': 'CHANGES_REQUESTED',
+            'reviews': {
+                'nodes': [{'author': {'login': 'reviewer'},
+                           'body': 'Please revise', 'state': 'CHANGES_REQUESTED',
+                           'submittedAt': '2026-10-10T12:00:00Z'}],
+                'pageInfo': {'hasNextPage': False, 'endCursor': None},
+            },
+        }}},
+    }
+    arguments = [
+        'pr', 'view', '13861', '-R', REPO,
+        '--json', 'title,body,reviews,reviewDecision',
+    ]
+    assert guest.main(arguments, alias='gh') == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result == {
+        'title': 'Proof repair', 'body': 'Example',
+        'reviewDecision': 'CHANGES_REQUESTED',
+        'reviews': [{'author': {'login': 'reviewer'}, 'body': 'Please revise',
+                     'state': 'CHANGES_REQUESTED',
+                     'submittedAt': '2026-10-10T12:00:00Z'}],
+    }
+    preflight, authorized = [item[0] for item in session.h.executor.calls]
+    assert preflight.method == 'GET'
+    assert authorized.path == '/graphql' and authorized.graphql
+    assert 'mutation' not in dict(authorized.body)['query']
+    # The broker, not the guest, selected the exact query and allowed variables.
+    assert json.loads(dict(authorized.body)['variables']) == {
+        'owner': 'taucetiproject', 'name': 'tauceti', 'number': 13861,
+    }
+    session.h.executor.result['data']['repository']['pullRequest'][
+        'reviews']['pageInfo']['hasNextPage'] = True
+    assert guest.main(arguments, alias='gh') == 2
+    output = capsys.readouterr()
+    assert 'more review pages exist' in output.err and output.out == ''
+
+
+def test_gh_checks_json_state_uses_declared_mapping(live, capsys):
+    session = live(github_policy(gh_compat=2))
+    words = ['pr', 'checks', '13861', '-R', REPO,
+             '--json', 'name,state,link']
+    # The fake executor returns one completed run with no conclusion, which
+    # the mapping intentionally cannot claim succeeded.
+    assert guest.main(words, alias='gh') == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {'name': 'lean', 'state': 'PENDING', 'link': None},
+    ]
+    assert session.h.executor.calls[-1][0].path.endswith('/check-runs')

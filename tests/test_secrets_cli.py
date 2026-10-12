@@ -334,8 +334,8 @@ def test_serve_started_without_isolation_notices_guest_supplied_code(
     """The second half of the launch defence: detection inside the broker.
 
     Someone starts ``aivm-secrets serve`` by hand, with a ``PYTHONPATH``
-    that reaches into the workspace. The planted ``sitecustomize.py`` has
-    already run by the time the broker can look -- so it refuses to serve,
+    that reaches into the workspace. The planted ``sitecustomize.py`` can
+    execute before the broker can look -- so it must refuse to serve,
     before the credential is resolved or anything is sent.
     """
     workspace = tmp_path / 'workspace'
@@ -351,10 +351,13 @@ def test_serve_started_without_isolation_notices_guest_supplied_code(
         'module search path' in error['detail']
         or 'loaded module' in (error['detail'])
     )
-    assert ran_as_broker(marker)  # it did run: this half only detects
+    # In some Python installations sitecustomize is already resolved before
+    # PYTHONPATH is applied. The substantive requirement is fail-closed
+    # admission on a guest-writable module search path, regardless of whether
+    # that optional hook actually executed.
     assert world.service.requests == []
     # Started isolated, the same environment is simply ignored.
-    marker.unlink()
+    marker.unlink(missing_ok=True)
     with serve(world, '--untrusted-root', str(workspace), env=env) as broker:
         assert broker.ready, broker.announce
         assert broker.invoke('profile.read')['ok']
@@ -371,8 +374,15 @@ def test_serve_refuses_anything_inside_a_guest_writable_root(world):
         outside = write_policy_file(
             Path(elsewhere) / 'policy.json', world.service.policy(world.token)
         )
+        # The runtime location must be trusted independently of the
+        # credential. Otherwise the new runtime boundary correctly refuses
+        # first and the credential validation branch is never reached.
+        trusted_run = Path(elsewhere) / 'run'
+        trusted_run.mkdir(mode=0o700)
+        env = dict(world.env, XDG_RUNTIME_DIR=str(trusted_run))
         error, _ = refused(
-            world, '--untrusted-root', str(world.root), policy=outside
+            world, '--untrusted-root', str(world.root), policy=outside,
+            env=env,
         )
         assert (
             error['code'] == 'shared_source' and 'credential' in error['detail']

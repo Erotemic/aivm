@@ -183,6 +183,7 @@ _LOADER_NAMES = frozenset(
         'OPENSSL_MODULES',
         'SSL_CERT_DIR',
         'SSL_CERT_FILE',
+        'SSLKEYLOGFILE',
     }
 )
 
@@ -196,9 +197,9 @@ def interpreter_flags() -> list[str]:
     ``sitecustomize.py`` in it. ``-P`` alone does not: it only withholds the
     current directory.
 
-    A broker installed with ``pip install --user`` lives in the user site,
-    which ``-I`` would hide. That one case keeps the user site (``-E -P``):
-    it is under the host user's home, which is not shared with a guest.
+    A user-site install is intentionally unsupported for credential-holding
+    processes: ``-E -P`` still executes user-site ``.pth`` and import hooks.
+    Install in a protected virtualenv or system prefix instead.
     """
     import site
 
@@ -206,8 +207,12 @@ def interpreter_flags() -> list[str]:
 
     package = Path(aivm_secrets.errors.__file__).resolve()
     user_site = Path(site.getusersitepackages()).resolve()
-    if user_site in package.parents:
-        return ['-E', '-P']
+    if package == user_site or user_site in package.parents:
+        raise SecretsError(
+            'unsafe_file',
+            detail='aivm-secrets is installed in the user site; install '
+                   'into a trusted virtualenv or system prefix for -I',
+        )
     return ['-I']
 
 

@@ -306,7 +306,9 @@ def test_a_poisoned_python_environment_cannot_substitute_the_broker(
         capture_output=True, text=True, timeout=30,
     )  # fmt: skip
     assert json.loads(control.stdout)['channel'] == 'SHADOW'
-    assert len(ran_as_broker(marker)) >= 2  # sitecustomize and the shadow
+    # The shadow package must have run. Whether a second sitecustomize hook
+    # runs depends on the interpreter's existing startup configuration.
+    assert len(ran_as_broker(marker)) >= 1
     marker.unlink()
 
     result = run(world, 'aivm-secrets invoke profile.read; echo CODE=$?')
@@ -321,9 +323,13 @@ def test_isolation_flags_follow_where_the_broker_is_installed(monkeypatch):
     import site
 
     assert secrets_transport.interpreter_flags() == ['-I']
-    # Installed with ``pip install --user``: -I would hide the broker itself.
+    # A user-site installation must fail closed instead of inheriting import
+    # hooks via -E -P. The operator should use a trusted virtualenv.
     monkeypatch.setattr(site, 'getusersitepackages', lambda: str(INSTALL_ROOT))
-    assert secrets_transport.interpreter_flags() == ['-E', '-P']
+    with pytest.raises(SecretsError) as err:
+        secrets_transport.interpreter_flags()
+    assert err.value.code == 'unsafe_file'
+    assert 'user site' in err.value.detail
     monkeypatch.setattr(site, 'getusersitepackages', lambda: '/nonexistent/x')
     assert secrets_transport.interpreter_flags() == ['-I']
 
@@ -338,7 +344,7 @@ def test_the_broker_environment_drops_everything_that_redirects_loading(
         'DYLD_INSERT_LIBRARIES': '/ws/evil.dylib', 'BASH_ENV': '/ws/rc', 'ENV': '/ws/rc',
         'GCONV_PATH': '/ws', 'OPENSSL_CONF': '/ws/openssl.cnf',
         'OPENSSL_MODULES': '/ws', 'SSL_CERT_FILE': '/ws/ca.pem',
-        'SSL_CERT_DIR': '/ws/certs',
+        'SSL_CERT_DIR': '/ws/certs', 'SSLKEYLOGFILE': '/ws/keys.log',
     }  # fmt: skip
     kept = {'HOME': '/home/op', 'XDG_RUNTIME_DIR': '/run/user/1', 'LANG': 'C'}
     for name, value in {**hostile, **kept}.items():

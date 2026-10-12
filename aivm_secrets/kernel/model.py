@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import SecretsError
-from . import codec, grammar
+from . import codec, grammar, graphql
 
 Value = int | str
 Arguments = tuple[tuple[str, Value], ...]
@@ -212,10 +212,11 @@ class Effect:
     accept: str = 'application/json'
     response: str = 'json'
     body: tuple[tuple[str, str], ...] | None = field(default=None, repr=False)
+    graphql: bool = False
 
     @property
     def is_write(self) -> bool:
-        return self.method != 'GET'
+        return self.method != 'GET' and not self.graphql
 
     @property
     def target(self) -> str:
@@ -253,6 +254,11 @@ def check_effect(effect: Effect) -> Effect:
         if key in seen:
             raise SecretsError(code)
         seen.add(key)
+    if type(effect.graphql) is not bool:
+        raise SecretsError(code)
+    if effect.graphql and (effect.method != 'POST' or effect.response != 'json'
+                           or effect.query or effect.body is None):
+        raise SecretsError(code)
     if (effect.method == 'GET') != (effect.body is None):
         raise SecretsError(code)
     if effect.body is not None:
@@ -265,6 +271,22 @@ def check_effect(effect: Effect) -> Effect:
             if key in names:
                 raise SecretsError(code)
             names.add(key)
+    if effect.graphql:
+        body = dict(effect.body or ())
+        if set(body) != {'query', 'operation_name', 'variables'}:
+            raise SecretsError(code)
+        graphql.validate(body['query'], body['operation_name'], code=code)
+        variables = codec.loads(body['variables'], code=code)
+        if type(variables) is not dict or len(variables) > MAX_ARGUMENTS:
+            raise SecretsError(code)
+        for key, value in variables.items():
+            grammar.argument_name(key, code=code)
+            if type(value) is str:
+                grammar.text(value, grammar.MAX_TEXT, code=code)
+            elif type(value) is int:
+                grammar.integer(value, 0, grammar.MAX_INT, code=code)
+            else:
+                raise SecretsError(code)
     return effect
 
 

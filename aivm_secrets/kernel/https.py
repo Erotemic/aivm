@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import SecretsError
-from . import codec, grammar
+from . import codec, grammar, graphql
 from .model import MAX_ARGUMENTS, MAX_LIFETIME, Effect, Egress, Request, Value
 from .scope import (
     MAX_OPERATIONS,
@@ -376,6 +376,9 @@ class HTTPOperation:
     page_size: int = 0
     page_at: tuple[str, ...] = ()
     page_parameter: str = ''
+    graphql_document: str = ''
+    graphql_operation: str = ''
+    graphql_variables: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def parse(cls, value: Any, checks: tuple[Check, ...]) -> HTTPOperation:
@@ -396,6 +399,7 @@ class HTTPOperation:
                     'defaults',
                     'fold',
                     'page',
+                    'graphql',
                 }
             ),
             code=_CODE,
@@ -455,10 +459,9 @@ class HTTPOperation:
             accept = grammar.media_type(
                 value.get('accept', default), code=_CODE
             )
-            # A method that sends a body can never be declared read-only. The
-            # converse is deliberately allowed: a state-changing GET exists,
-            # and the manifest is where that is said.
-            if method != 'GET' and not write:
+            # The one exception to POST meaning write is a pinned GraphQL
+            # *query* document. Guest-supplied query text is never accepted.
+            if method != 'GET' and not write and 'graphql' not in value:
                 raise SecretsError(_CODE)
 
         query = []
@@ -492,12 +495,41 @@ class HTTPOperation:
         declared = {key for key, _ in parameters}
         captured = {item.name for item in check.bind} if check else set()
         named = {item.name for item in fields}
+        graphql_document = ''
+        graphql_operation = ''
+        graphql_variables: tuple[tuple[str, str], ...] = ()
+        if 'graphql' in value:
+            g = grammar.exact_keys(
+                value['graphql'],
+                frozenset({'document', 'operation', 'variables'}),
+                code=_CODE,
+            )
+            if (returns_check or write or method != 'POST' or
+                    _references(template) or raw_query or fields or
+                    response != 'json'):
+                raise SecretsError(_CODE)
+            graphql_document, graphql_operation = graphql.validate(
+                g['document'], g['operation'], code=_CODE
+            )
+            raw_vars = g['variables']
+            if type(raw_vars) is not dict or not 1 <= len(raw_vars) <= MAX_ARGUMENTS:
+                raise SecretsError(_CODE)
+            vars_list = []
+            for var, source in sorted(raw_vars.items()):
+                grammar.argument_name(var, code=_CODE)
+                grammar.argument_name(source, code=_CODE)
+                if source not in declared | captured:
+                    raise SecretsError(_CODE)
+                vars_list.append((var, source))
+            graphql_variables = tuple(vars_list)
         if declared & named or declared & captured or named & captured:
             raise SecretsError(_CODE)
         # Every placeholder resolves to an allowlisted parameter or to a
         # validated fact, and every declared parameter is actually used:
         # nothing reaches a request target without an explicit allowlist.
-        placed = set(_references(template)) | in_query
+        placed = set(_references(template)) | in_query | {
+            source for _, source in graphql_variables
+        }
         if not placed <= declared | captured:
             raise SecretsError(_CODE)
         used = placed & declared
@@ -509,7 +541,7 @@ class HTTPOperation:
             raise SecretsError(_CODE)
         if method == 'GET' and fields:
             raise SecretsError(_CODE)
-        if method in ('POST', 'PATCH') and not fields:
+        if method in ('POST', 'PATCH') and not fields and not graphql_document:
             raise SecretsError(_CODE)
 
         specs = dict(parameters)
@@ -572,6 +604,9 @@ class HTTPOperation:
             page_size,
             page_at,
             page_parameter,
+            graphql_document,
+            graphql_operation,
+            graphql_variables,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -606,6 +641,12 @@ class HTTPOperation:
             result['defaults'] = dict(self.defaults)
         if self.fold:
             result['fold'] = list(self.fold)
+        if self.graphql_document:
+            result['graphql'] = {
+                'document': self.graphql_document,
+                'operation': self.graphql_operation,
+                'variables': dict(self.graphql_variables),
+            }
         if self.page_size:
             page: dict[str, Any] = {
                 'size': self.page_size,
@@ -640,7 +681,16 @@ class HTTPOperation:
         given: dict[str, Any] = dict(request.arguments)
         given.update(captured)
         body = None
-        if self.method != 'GET':
+        if self.graphql_document:
+            body = (
+                ('operation_name', self.graphql_operation),
+                ('query', self.graphql_document),
+                ('variables', codec.dumps({
+                    name: given[source]
+                    for name, source in self.graphql_variables
+                }).decode('utf-8')),
+            )
+        elif self.method != 'GET':
             body = tuple(
                 (item.name, str(given[item.name]))
                 for item in self.body_fields
@@ -653,6 +703,7 @@ class HTTPOperation:
             self.accept,
             self.response,
             body,
+            graphql=bool(self.graphql_document),
         )
 
 
@@ -675,13 +726,25 @@ def _find_check(checks: tuple[Check, ...], name: str) -> Check | None:
 
 @dataclass(frozen=True)
 class CLICommand:
-    """One command line the guest client translates into a request."""
+    """Declarative command translation; no privileged tool is executed.
+
+    ``json_fields`` projects only fields of an already permitted response.
+    ``repository_default`` supplies *an argument*, not authority: the kernel
+    independently validates it against the operation's allowlist.
+    """
 
     words: tuple[str, ...]
     operation: str
     positional: tuple[str, ...] = ()
     options: tuple[tuple[str, str], ...] = ()
     output: str = 'reply'
+    json_fields: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    json_at: tuple[str, ...] = ()
+    json_list: bool = False
+    repository_default: tuple[str, str, str, str] = ()
+    json_alternative: tuple[str, tuple[tuple[str, tuple[str, ...]], ...], tuple[str, ...], tuple[str, ...], bool] | None = None
+    json_rules: tuple[tuple[str, tuple[str, ...], tuple[tuple[str, str], ...]], ...] = ()
+    json_complete: bool = False
 
     @classmethod
     def parse(
@@ -690,7 +753,12 @@ class CLICommand:
         value = grammar.exact_keys(
             value,
             frozenset({'command', 'operation'}),
-            frozenset({'positional', 'options', 'output'}),
+            frozenset({
+                'positional', 'options', 'output', 'json_fields', 'json_at',
+                'json_list',
+                'repository_default', 'json_alternative', 'json_rules',
+                'json_complete',
+            }),
             code=_CODE,
         )
         words = value['command']
@@ -730,7 +798,6 @@ class CLICommand:
                 len(flag) != 2 or flag[0] != '-' or flag[1] not in grammar.ALNUM
             ):
                 raise SecretsError(_CODE)
-            # ``@name`` reads the value from a file: only for body fields.
             if destination.startswith('@'):
                 if destination[1:] not in fields:
                     raise SecretsError(_CODE)
@@ -740,18 +807,146 @@ class CLICommand:
         output = value.get('output', 'reply')
         if type(output) is not str or output not in ('reply', 'result'):
             raise SecretsError(_CODE)
+        raw_json = value.get('json_fields', {})
+        if type(raw_json) is not dict or len(raw_json) > 32:
+            raise SecretsError(_CODE)
+        json_fields = []
+        for name, path in sorted(raw_json.items()):
+            grammar.token(
+                name, grammar.ALNUM.replace('0123456789', ''),
+                grammar.ALNUM + '_', 64, code=_CODE
+            )
+            json_fields.append((name, _pointer(path)))
+        json_at = _pointer(value.get('json_at', []))
+        json_list = value.get('json_list', False)
+        if type(json_list) is not bool:
+            raise SecretsError(_CODE)
+        if json_at and not json_fields:
+            raise SecretsError(_CODE)
+        raw_rules = value.get('json_rules', {})
+        if type(raw_rules) is not dict or len(raw_rules) > len(json_fields):
+            raise SecretsError(_CODE)
+        rules = []
+        for key, rule in sorted(raw_rules.items()):
+            if key not in raw_json:
+                raise SecretsError(_CODE)
+            rule = grammar.exact_keys(
+                rule, frozenset({'fallback', 'map'}), code=_CODE
+            )
+            mapping = rule['map']
+            if type(mapping) is not dict or len(mapping) > 32:
+                raise SecretsError(_CODE)
+            normalized = []
+            for original, converted in sorted(mapping.items()):
+                normalized.append((
+                    grammar.text(original, 64, code=_CODE),
+                    grammar.text(converted, 64, code=_CODE),
+                ))
+            rules.append((key, _pointer(rule['fallback']), tuple(normalized)))
+        json_complete = value.get('json_complete', False)
+        if type(json_complete) is not bool or (json_complete and not json_fields):
+            raise SecretsError(_CODE)
+        alternative = None
+        if 'json_alternative' in value:
+            alternate = grammar.exact_keys(
+                value['json_alternative'],
+                frozenset({'operation', 'json_fields', 'json_at'}),
+                frozenset({'incomplete_when', 'json_list'}), code=_CODE,
+            )
+            alternate_op = next(
+                (op for op in operations if op.name == alternate['operation']),
+                None,
+            )
+            if alternate_op is None or alternate_op.write or target.write:
+                raise SecretsError(_CODE)
+            alternative_fields = alternate['json_fields']
+            if (type(alternative_fields) is not dict or
+                    not 1 <= len(alternative_fields) <= 32):
+                raise SecretsError(_CODE)
+            items = []
+            for key, path in sorted(alternative_fields.items()):
+                grammar.token(
+                    key, grammar.LOWER + grammar.UPPER,
+                    grammar.ALNUM + '_', 64, code=_CODE,
+                )
+                items.append((key, _pointer(path)))
+            alternate_list = alternate.get('json_list', False)
+            if type(alternate_list) is not bool:
+                raise SecretsError(_CODE)
+            alternative = (
+                alternate_op.name, tuple(items), _pointer(alternate['json_at']),
+                _pointer(alternate.get('incomplete_when', [])), alternate_list,
+            )
+        raw_repo = value.get('repository_default', {})
+        repo_default: tuple[str, str, str, str] = ()
+        if raw_repo:
+            raw_repo = grammar.exact_keys(
+                raw_repo,
+                frozenset({'parameter', 'environment', 'remote', 'host'}),
+                code=_CODE,
+            )
+            parameter = grammar.argument_name(raw_repo['parameter'], code=_CODE)
+            if parameter not in parameters:
+                raise SecretsError(_CODE)
+            if not isinstance(dict(target.parameters)[parameter], StrSet):
+                raise SecretsError(_CODE)
+            env = grammar.token(
+                raw_repo['environment'], grammar.UPPER,
+                grammar.UPPER + grammar.DIGIT + '_', 48, code=_CODE,
+            )
+            remote = grammar.token(
+                raw_repo['remote'], grammar.ALNUM,
+                grammar.ALNUM + '-_', 32, code=_CODE,
+            )
+            host = grammar.hostname(raw_repo['host'], code=_CODE)
+            repo_default = (parameter, env, remote, host)
         return cls(
-            tuple(words), target.name, tuple(positional), tuple(mapped), output
+            tuple(words), target.name, tuple(positional), tuple(mapped),
+            output, tuple(json_fields), json_at, json_list, repo_default, alternative,
+            tuple(rules), json_complete,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             'command': list(self.words),
             'operation': self.operation,
             'positional': list(self.positional),
             'options': dict(self.options),
             'output': self.output,
         }
+        if self.json_fields:
+            result['json_fields'] = {
+                name: list(path) for name, path in self.json_fields
+            }
+        if self.json_at:
+            result['json_at'] = list(self.json_at)
+        if self.json_list:
+            result['json_list'] = True
+        if self.json_alternative is not None:
+            operation, fields, at, incomplete, as_list = self.json_alternative
+            result['json_alternative'] = {
+                'operation': operation,
+                'json_fields': {key: list(path) for key, path in fields},
+                'json_at': list(at),
+            }
+            if incomplete:
+                result['json_alternative']['incomplete_when'] = list(incomplete)
+            if as_list:
+                result['json_alternative']['json_list'] = True
+        if self.json_rules:
+            result['json_rules'] = {
+                field: {'fallback': list(fallback), 'map': dict(mapping)}
+                for field, fallback, mapping in self.json_rules
+            }
+        if self.json_complete:
+            result['json_complete'] = True
+        if self.repository_default:
+            parameter, env, remote, host = self.repository_default
+            result['repository_default'] = {
+                'parameter': parameter, 'environment': env,
+                'remote': remote, 'host': host,
+            }
+        return result
 
 
 def _parse_cli(

@@ -181,13 +181,17 @@ It cannot supply an HTTP method, URL, token, `Host` header, proxy, body schema,
 or executable path. Every placeholder, in the path or the query, must have an
 explicit allowlist: finite integer or segment-string values, or a bounded
 integer range. Permitted values contain only RFC 3986 unreserved characters,
-so the request target is constructed without escaping. No arbitrary query
-strings, arbitrary HTTP bodies, binary streaming, redirects, retries or GraphQL
-are available in schema 2.
+so the request target is constructed without escaping. No arbitrary query strings, arbitrary HTTP bodies, binary streaming, redirects
+or retries are available in schema 2. Schema 2 admits a host-pinned, named
+GraphQL **query** as a typed read: the document and destination come from
+the reviewed manifest, and only declared scalar variables come from requests.
+The query parser is intentionally not a general GraphQL parser, and its
+nonmutation is a provider assumption (SPEC-02).
 
 **What counts as a write is declared, not inferred.** `effect` is required on
-every operation. A body-carrying method must be `write`; a `GET` may be
-either, and one that changes provider state must be declared `write`. The
+every operation. An ordinary body-carrying method must be `write`; a named, fixed
+GraphQL query is the only currently admitted read-body exception. A `GET` may
+be either, and one that changes provider state must be declared `write`. The
 declaration decides everything downstream: a write requires a host write
 mode of `allow`, or `approve` plus a one-shot approval of the exact request;
 its authorization is marked as a write for the executor; and its failure is
@@ -425,8 +429,9 @@ implementations must reproduce.
   manifest correctness requires service-specific review.
 * The HTTPS policy uses a single fixed hostname. It supports allowlisted query
   parameters, operator-pinned static headers, and operator-pinned port,
-  address and trust anchor. It does not support redirects, arbitrary queries,
-  GraphQL, streaming, request bodies beyond flat string fields, client
+  address and trust anchor. It does not support redirects, arbitrary GraphQL documents from the guest,
+  streaming, request bodies beyond flat string fields or fixed typed GraphQL
+  query variables, client
   certificates, OAuth refresh or SigV4.
 * `aivm-secrets` is an independent Python module in the existing `aivm` wheel.
   It can be split into its own distribution later with the same policy/wire

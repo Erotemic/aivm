@@ -238,9 +238,11 @@ def test_importing_the_package_initializes_nothing():
 
     program = (
         'import sys\n'
+        'already_loaded = set(sys.modules)\n'
         'import aivm_secrets, aivm_secrets.cli, aivm_secrets.kernel.machine\n'
-        'loaded = [m for m in sys.modules if m.split(".")[0] in '
-        '("cryptography", "ssl", "aivm", "http", "socketserver")]\n'
+        'loaded = [m for m in sys.modules if m not in already_loaded and '
+        'm.split(".")[0] in ("cryptography", "ssl", '
+        '"aivm", "http", "socketserver")]\n'
         'print(loaded)\n'
     )
     done = subprocess.run(
