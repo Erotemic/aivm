@@ -1,9 +1,13 @@
 # AIVM Secrets: credential-use capabilities with a verifiable core
 
 Status: architecture, implemented in Python through the local-host scope of
-milestones P0-P3 below (updated 2026-10-10; research date 2026-10-09). **No part
-of this implementation is formally verified.** The Rust kernel, the Lean
-proofs and the remote-identity work of P4 do not exist yet.
+P0-P3 and a limited opt-in P4a identity library (updated 2026-10-12). **No part
+of this implementation is formally verified.** There is not yet a Rust backend
+or a Lean proof, and P4a has no production AIVM listener or VM enrollment.
+The [parallel implementations decision](aivm-secrets-parallel-implementations.md)
+retains **both** the Python reference and a separately implemented Rust
+backend; [the Garrett plan](aivm-secrets-garrett-identity.md) names exactly
+which instance identity mechanisms exist and which are still planned.
 The companion [provider-neutral integration plan](aivm-secrets-agnostic-integrations.md)
 defines schema 2 and supersedes GitHub-specific assumptions below. The
 [kernel specification](aivm-secrets-kernel-spec.md) states the implemented
@@ -23,8 +27,10 @@ Keep imports one-way: the package does not import AIVM. The AIVM adapter resolve
 an access identity, establishes a channel, and controls the session lifetime.
 A later distribution split must not change the capability protocol.
 
-The preferred eventual security core is a small safe-Rust state machine,
-translated with Charon/Aeneas and verified in Lean 4. Keep this core independent
+Keep **two independent implementations**: this Python reference and a
+small safe-Rust kernel/backend, translated with Charon/Aeneas and verified in
+Lean 4. Frozen, language-neutral tests provide empirical behavioral parity;
+only the extracted Rust implementation can receive those formal claims. Keep this core independent
 of the HTTP framework, VM manager, identity provider, persistence engine, and
 agent harness. Evaluate h5i-app as a compatible framework and development tool,
 not as a prerequisite for running a local broker.
@@ -504,13 +510,17 @@ The detailed theorem inventory, refinement obligations and release gates are in
 
 ## 11. Delivery milestones and acceptance gates
 
-Status as of 2026-10-10: P0 is delivered. The Python-expressible parts of P1
+Status as of 2026-10-12: P0 is delivered. The Python-expressible parts of P1
 (frozen vectors, effect grammar, abstract state machine), P2 (kernel
 transitions with trace-level, generated and mutation tests) and P3 (separate
 credential-owning process, real VM lifecycle tests, total deadlines, fault
 injection, whole-path safety) are delivered **as tested Python, not as
 verified Rust**. From P4, in-memory revocation and one-shot approvals are
-delivered; everything involving remote identity or durable state is not.
+delivered. A separate Python **P4a experimental identity library** now
+implements signed, encrypted certificate-bound JWTs and a one-connection mTLS
+bridge tested with dummy credentials, but does not expose a live AIVM feature.
+P4b OAuth acquisition, vTPM identity custody and P4c durable authority are not
+implemented. The Rust work may advance in parallel, not as a prerequisite.
 
 ### P0 - Python vertical slice (original overlay and service-neutral follow-up)
 
@@ -552,10 +562,17 @@ whole-path safety, restrictive service privileges and provider mock-contract
 coverage. Validate one live read-only GitHub session with an explicitly approved
 throwaway/narrow credential. Do not automate live writes during ordinary tests.
 
-### P4 - Remote identity and durable authority
+### P4 - Remote identity and durable authority (independent of Rust timing)
 
-Add Garrett-style broker acquisition, standardized sealed envelopes, mTLS
-certificate binding and instance-key custody. Specify restore/clone/epoch
+P4a starts with pure Python certificate-binding decisions, Ed25519-signed JWTs
+with an AES-GCM-encrypted existing local capability, and an opt-in TLS 1.3
+`CERT_REQUIRED` bridge that delegates to the existing reference monitor.
+See [the P4 plan](aivm-secrets-garrett-identity.md) for threat limits and
+missing enrollment/provisioning. P4b adds Garrett-style broker acquisition,
+credential provider OAuth, and standardized interoperable sealed envelopes;
+P4c adds instance-key custody and durable policy state.
+Specify restore/clone/epoch behavior before enabling vTPM or remote
+attestation claims. Specify restore/clone/epoch
 behavior before enabling vTPM or remote attestation claims. Implement revocation,
 refresh and optional one-shot approvals against a durable ledger. Test CA/key
 rotation, dropped/duplicated requests, restart, stale replicas and snapshot

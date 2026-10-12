@@ -17,7 +17,19 @@ are in ``docs/planning/``:
   Rust port;
 * ``aivm-secrets-formal-assurance.md`` -- what is to be proved, and what is
   only tested today;
-* ``aivm-secrets-validation.md`` -- what was actually run.
+* ``aivm-secrets-validation.md`` -- what was actually run;
+* ``aivm-secrets-parallel-implementations.md`` -- Python/Rust parity decision;
+* ``aivm-secrets-garrett-identity.md`` -- experimental P4a signed, encrypted
+  certificate-bound identity protocol and remaining deployment work.
+
+The Python reference implementation remains supported while a separate Rust
+implementation is developed for implementation-linked proofs. The Rust
+backend does **not** exist in this release; Python/Rust behavioral parity is
+not yet demonstrated. P4a identity code is a host-side experimental library:
+it adds no listener, VM certificate, new SSH flag, or new credential access by
+default. For the first real mTLS deployment, operator-controlled CA and key
+provisioning, listener isolation, identity enrollment, and revocation require
+a separate review. See the P4a plan above.
 
 This is separate from repository SSH deploy keys. Existing guest-key and
 dedicated ssh-agent workflows are unchanged, and ``git push`` is not added by

@@ -400,3 +400,22 @@ of section 5 after each one.
   claim about host snapshot rollback.
 * Approvals are host-memory state too: an approval is lost, not replayed, if
   the broker dies before it is used.
+
+## 10. Parallel implementations and P4 identity (2026-10-12)
+
+The Python program remains a maintained reference beside, not replaced by,
+the planned safe-Rust implementation. Both implement an independent, versioned
+contract and run the same frozen inputs. Parity in tests is evidence, not proof
+of Python. The Lean proof obligations must remain attached to the extracted
+Rust program, not a separately written Lean mirror.
+
+The initial P4a identity decision is in `aivm_secrets/identity/model.py`, with
+64 frozen cases under `tests/secrets_vectors/identity-v1.jsonl` and one
+deterministic signed/encrypted byte-level fixture under `identity-crypto-v1.json`. Its pure inputs
+are signed public claims, trusted issuer/audience/subject/epoch expectations,
+an authenticated mTLS certificate thumbprint and a sampled wall-clock time.
+It either accepts or returns one fixed denial. The actual signature, AEAD,
+TLS chain validation and certificate identity provisioning are **trusted**
+outside this pure decision and require separate Rust/test/refinement work.
+See [the dual-backend decision](aivm-secrets-parallel-implementations.md)
+and [the P4a protocol](aivm-secrets-garrett-identity.md).

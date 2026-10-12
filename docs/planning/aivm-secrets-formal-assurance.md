@@ -242,11 +242,15 @@ hide it behind the word "core".
 
 ## 4. Implementation-linked proof workflow
 
-Use the Rust crate as the single executable source for the kernel. Generate
-LLBC using the pinned Charon/Aeneas preset, then generate Lean definitions and
-prove properties about those definitions. Keep a small independent declarative
-specification for refinement, not a second independently maintained algorithm
-that can drift from the executable. The architecture's Aeneas reference gives
+Maintain **two executable implementations** with a shared, independent
+protocol/specification and frozen conformance vectors. Python is the
+rapid-iteration *reference*, while the Rust crate is the executable source of
+**the Rust implementation's own formal theorems**. Do not silently replace the
+Python implementation with Rust or claim Python has been formally verified.
+Generate LLBC from pinned Rust via Charon/Aeneas and prove properties about
+those generated definitions. A small declarative specification and test data
+form the independent oracle; continuous Python/Rust differential testing
+provides empirical parity, never all-input equivalence. The architecture's Aeneas reference gives
 the upstream command forms; this overlay intentionally does not fabricate
 working version pins or pretend extraction has been run.
 
@@ -296,7 +300,14 @@ required witnesses, and `tests/test_secrets_mutation.py` applies each of those
 deletions.
 
 Run the same independent vectors through Python, compiled Rust and extracted
-Lean definitions; the corpus is `tests/secrets_vectors/` and the replay
+Lean definitions once they exist; no Rust implementation or Lean derivation is
+currently present. The corpus is `tests/secrets_vectors/`, including
+`identity-v1.jsonl` for certificate binding. The Python JSONL runner is
+`aivm_secrets.identity.runner`; the Rust runner must accept the identical
+record protocol. CI must fail if it claims Rust parity but the Rust runner
+was skipped. Extend this with identity signature/AEAD/TLS integration cases
+and record which are outside the pure kernel. Existing protocol vectors live
+under `tests/secrets_vectors/` and the replay
 harness is `aivm_secrets/kernel/trace.py`. Tests separate grammar, policy,
 kernel, envelope, executor, broker, Unix socket transport, operator CLI and
 AIVM orchestration, and include generated traces, crash injection and a
