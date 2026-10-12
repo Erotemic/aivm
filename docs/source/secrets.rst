@@ -534,6 +534,50 @@ write. The broker then refuses to start if the policy, the credential, the
 resolver or a trust anchor is reachable through it, or if its own
 interpreter, module search path or any loaded module comes from it.
 
+Optional P4a certificate-bound identity (experimental)
+------------------------------------------------------
+
+The separate ``aivm-secrets identity`` command family implements **manual**
+certificate enrollment and a bounded TLS 1.3 bridge that ultimately invokes
+the existing broker, not a second privileged executor. Privileged host
+commands require ``python -I -m aivm_secrets identity`` from a trusted install. See
+``docs/planning/aivm-secrets-p4a-enrollment.md`` for the complete operational
+sequence, security assumptions and remaining VM integration work.
+
+On the trusted host, initialize an owner-only local authority explicitly::
+
+    install -d -m 700 "$HOME/.config/aivm/secrets"
+    python -I -m aivm_secrets identity init --root "$HOME/.config/aivm/secrets/identity"
+
+Inside a guest that separately has the secrets package installed, create a
+software private key and CSR (no VM is modified automatically)::
+
+    install -d -m 700 "$HOME/.config/aivm/identity"
+    aivm-secrets identity request \
+        --key "$HOME/.config/aivm/identity/client.key" \
+        --csr "$HOME/.config/aivm/identity/client.csr"
+
+**Enrollment requires independent host verification of the CSR key
+fingerprint and the VM it belongs to.** The signature on a CSR authenticates
+the software key, not the VM. The host explicitly enrolls with isolated Python using
+``python -I -m aivm_secrets identity enroll --subject ... --csr ... --approve-key-fingerprint ...``;
+that operator-approved mapping is not yet integrated with the AIVM machine
+store. The issued public certificate and host CA certificate may be copied
+into the guest. The host CA private key, JWT signer and AEAD key may **not**.
+
+For an existing separately started and scoped AIVS broker, ``identity issue``
+wraps its host-only capability in a signed, encrypted, certificate-bound JWT.
+``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener with fixed limits;
+``identity call`` speaks verified TLS over an explicitly forwarded socket.
+A revoked or replaced certificate is denied on its next request, and the
+broker still checks the operation, resource, budget and approval. No public
+TCP endpoint, OAuth token flow, vTPM or Rust implementation is included.
+
+**This is not enabled by ordinary ``aivm ssh`` or by installing the package.**
+Even ``aivm ssh --secrets_policy`` continues to forward its existing unbound
+broker socket; use an explicitly forwarded P4a identity socket *instead* if
+certificate binding is the desired property. Do not forward both.
+
 What this does not protect against
 ----------------------------------
 

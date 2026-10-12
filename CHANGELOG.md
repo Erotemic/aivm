@@ -21,6 +21,18 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   implementation-linked proof is claimed.
 
 ### Added
+* Experimental, fully opt-in Garrett P4a **host enrollment**: private local
+  certificate authority, P-256 CSR proof of possession, deliberate per-instance
+  certificate enrollment, signed/encrypted certificate-bound token issuance,
+  per-request enrollment/epoch checks, durable manual revocation and an
+  explicitly launched bounded Unix-domain mTLS bridge with a restricted client.
+  Existing VMs and the default `aivm ssh` behavior remain unchanged. No VM
+  attestation, automatic provisioning, production OAuth, Rust parity or formal
+  proof is claimed. See `docs/planning/aivm-secrets-p4a-enrollment.md`.
+* A separate pure Python enrollment transition model and 69 frozen JSONL
+  conformance cases, ready for independent Rust implementation and differential
+  testing. Absence of a Rust runner is an explicit skip, not a passing parity
+  gate.
 * Experimental secret-use sessions: `aivm ssh --secrets_policy POLICY` lets a
   guest *use* a host-held service credential for a fixed list of named
   operations without ever holding it. Shipped as the independent

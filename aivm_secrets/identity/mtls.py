@@ -22,6 +22,7 @@ from ..errors import SecretsError
 from ..host.server import read_frame
 from ..kernel import codec, grammar, wire
 from .token import IdentityTokenVerifier, MAX_JWT_BYTES
+from .model import IdentityExpectation
 
 FRAME_DEADLINE_SECONDS = 5.0
 
@@ -40,6 +41,10 @@ def server_context(*, certificate: Path, private_key: Path,
     ctx.verify_mode = ssl.CERT_REQUIRED
     ctx.options |= ssl.OP_NO_COMPRESSION
     ctx.keylog_filename = None
+    # Session tickets/resumption are unnecessary for one-frame identity calls;
+    # require a fresh certificate-authenticated handshake each connection.
+    if hasattr(ctx, 'num_tickets'):
+        ctx.num_tickets = 0
     ctx.load_verify_locations(cafile=str(client_ca))
     ctx.load_cert_chain(certfile=str(certificate), keyfile=str(private_key))
     return ctx
@@ -50,7 +55,8 @@ class IdentityTLSBridge:
 
     def __init__(self, *, context: ssl.SSLContext,
                  verifier: IdentityTokenVerifier, broker: Any,
-                 wall_clock: Callable[[], float] = time.time):
+                 wall_clock: Callable[[], float] = time.time,
+                 expected_for_peer: Callable[[bytes, int], IdentityExpectation] | None = None):
         if (not isinstance(context, ssl.SSLContext) or
                 context.protocol != ssl.PROTOCOL_TLS_SERVER or
                 context.verify_mode != ssl.CERT_REQUIRED or
@@ -62,6 +68,7 @@ class IdentityTLSBridge:
         self._verifier = verifier
         self._broker = broker
         self._clock = wall_clock
+        self._expected_for_peer = expected_for_peer
 
     def serve_accepted(self, accepted: socket.socket) -> None:
         """Perform a verified TLS handshake and process a single framed call.
@@ -113,9 +120,15 @@ class IdentityTLSBridge:
         outer = fields['capability']
         if type(outer) is not str or len(outer) > MAX_JWT_BYTES:
             raise SecretsError('invalid_request')
+        now = int(self._clock())
+        # When backed by the trusted host enrollment ledger, resolve the
+        # active epoch and certificate pin *fresh* on every request. A sealed
+        # token from a revoked identity must fail before broker dispatch.
+        expected = (None if self._expected_for_peer is None else
+                    self._expected_for_peer(certificate_der, now))
         inner = self._verifier.open(
             outer, authenticated_peer_der=certificate_der,
-            now=int(self._clock()),
+            now=now, expected=expected,
         ).broker_capability
         forwarded = dict(fields)
         forwarded['capability'] = inner

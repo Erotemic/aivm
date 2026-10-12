@@ -153,6 +153,9 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = subs.add_parser('audit-verify', allow_abbrev=False)
     verify.add_argument('files', type=Path, nargs='+')
+
+    from .identity.cli import add_parser as add_identity_parser
+    add_identity_parser(subs)
     return p
 
 
@@ -495,6 +498,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     announce = getattr(args, 'announce', 'text')
     try:
+        if args.command == 'identity':
+            from .identity.cli import run as run_identity
+            return run_identity(args)
         if args.command == 'policy-check':
             from .kernel import codec
 

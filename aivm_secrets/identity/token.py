@@ -138,7 +138,8 @@ class IdentityTokenVerifier:
         self.expected = IdentityExpectation.parse(expected.to_dict())
 
     def open(self, token: str, *, authenticated_peer_der: bytes,
-             now: int) -> OpenedIdentityToken:
+             now: int, expected: IdentityExpectation | None = None
+             ) -> OpenedIdentityToken:
         """Only a trusted caller may supply a certificate from verified mTLS.
 
         This method does NOT validate certificate chains. The host TLS bridge
@@ -167,7 +168,10 @@ class IdentityTokenVerifier:
                 raise ValueError('payload canonicalization')
             ciphertext_text = parsed.pop('enc')
             claims = IdentityClaims.parse(parsed)
-            assess_binding(claims, self.expected,
+            # A host enrollment registry can supply a fresh expectation for
+            # *each* request. It is not supplied by the guest or a JWT claim.
+            expectation = self.expected if expected is None else expected
+            assess_binding(claims, expectation,
                            certificate_thumbprint(authenticated_peer_der), now)
             encrypted = _decode(ciphertext_text, MAX_JWT_BYTES)
             if len(encrypted) < 29:

@@ -43,6 +43,10 @@ EVENTS = (
     'approved',
     'revoked',
     'session_close',
+    'identity_enroll_intent',
+    'identity_revoke_intent',
+    'identity_token_issue_intent',
+    'identity_recorded',
 )
 _FIELDS = frozenset(
     {

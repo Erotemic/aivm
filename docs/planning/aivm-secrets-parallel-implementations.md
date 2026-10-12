@@ -126,3 +126,20 @@ pass-through behavior for unknown token/header/operation variants.
 - [RFC 8705](https://www.rfc-editor.org/rfc/rfc8705) for `cnf.x5t#S256` and proof-of-possession context (does not mandate our token profile).
 - [Aeneas](https://github.com/AeneasVerif/aeneas) and [h5i](https://github.com/h5i-dev/h5i) are Rust/Lean research and tooling options, not currently build dependencies.
 - [Garrett identity increment](aivm-secrets-garrett-identity.md), [kernel specification](aivm-secrets-kernel-spec.md), [formal assurance](aivm-secrets-formal-assurance.md), and [assumption ledger](aivm-secrets-assumptions.json).
+
+## 2026-10-12: enrollment transition contract
+
+The Python reference now also exposes a **pure** enrollment state machine at
+`aivm_secrets/identity/registry_model.py`: versioned bounded registry
+validation, enrollment (including explicit replacement), revocation epoch
+transitions, and current certificate-to-identity lookup. This lives outside
+filesystem, X.509 and TLS code. Its frozen JSONL contract is
+`tests/secrets_vectors/identity-registry-v1.jsonl` (69 cases).
+
+The future Rust runner must produce the same canonical JSON output under the
+explicit `AIVM_SECRETS_RUST_REGISTRY_RUNNER` test gate; absence of a Rust
+runner is a reported skip, **not** a parity pass. Port these pure functions
+first. Compare real cryptographic fixtures independently, and enumerate
+parsing/FS/TLS assumptions before moving the host effect interpreter. The
+Python reference and verified Rust code will be **maintained concurrently**;
+neither backend silently becomes a fallback for the other.

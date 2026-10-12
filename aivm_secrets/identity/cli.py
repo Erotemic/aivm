@@ -1,0 +1,181 @@
+"""Explicit host operator commands for P4a offline enrollment and mTLS.
+
+No default background service. No VM is modified. No external service credential or
+provider API is needed for these commands. Only the `request` subcommand is
+suitable for execution inside the untrusted guest; all other operations are
+host principal-controlled.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+from ..errors import SecretsError
+from ..host.files import private_directory, read_owned
+from ..kernel import codec
+from .enrollment import (IdentityAuthority, MAX_CSR_BYTES,
+                         create_csr, inspect_csr)
+from .service import UnixIdentityService
+
+DEFAULT_ROOT = Path('~/.config/aivm/secrets/identity')
+
+
+def add_parser(subs):
+    p = subs.add_parser('identity', allow_abbrev=False,
+                        help='Opt-in host CA, enrollment and mTLS bridge (P4a)')
+    actions = p.add_subparsers(dest='identity_action', required=True)
+
+    def common(name, *, authority=True):
+        target = actions.add_parser(name, allow_abbrev=False)
+        if authority:
+            target.add_argument('--root', type=Path, default=DEFAULT_ROOT)
+            target.add_argument('--untrusted-root', type=Path, action='append', default=[])
+        return target
+
+    init = common('init')
+    init.add_argument('--issuer', default='aivm.local')
+    init.add_argument('--audience', default='aivm-secrets.identity')
+
+    request = common('request', authority=False)
+    request.add_argument('--key', type=Path, required=True)
+    request.add_argument('--csr', type=Path, required=True)
+
+    inspect = common('inspect-csr', authority=False)
+    inspect.add_argument('--csr', type=Path, required=True)
+
+    enroll = common('enroll')
+    enroll.add_argument('--subject', required=True)
+    enroll.add_argument('--csr', type=Path, required=True)
+    enroll.add_argument('--approve-key-fingerprint', required=True)
+    enroll.add_argument('--replace', action='store_true')
+
+    status = common('status')
+
+    revoke = common('revoke')
+    revoke.add_argument('--subject', required=True)
+
+    issue = common('issue')
+    issue.add_argument('--subject', required=True)
+    issue.add_argument('--capability-file', type=Path, required=True)
+    issue.add_argument('--output', type=Path, required=True)
+    issue.add_argument('--lifetime', type=int, default=900)
+
+    call = common('call', authority=False)
+    call.add_argument('--socket', type=Path, required=True)
+    call.add_argument('--ca', type=Path, required=True)
+    call.add_argument('--certificate', type=Path, required=True)
+    call.add_argument('--key', type=Path, required=True)
+    call.add_argument('--jwt-file', type=Path, required=True)
+    call.add_argument('--request', required=True,
+                      help='JSON operation object, not HTTP or GraphQL text')
+
+    bridge = common('bridge')
+    bridge.add_argument('--broker-socket', type=Path, required=True)
+    bridge.add_argument('--listen', type=Path, required=True)
+    bridge.add_argument('--max-connections', type=int, default=64)
+    bridge.add_argument('--idle-seconds', type=int, default=900)
+
+
+def _csr_data(path: Path) -> bytes:
+    # CSRs are guest-supplied and intentionally untrusted. Open without
+    # following the final symlink and bound the read before parsing ASN.1.
+    path = Path(path).expanduser().absolute()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CSR_BYTES:
+                raise SecretsError('invalid_capability')
+            data = handle.read(MAX_CSR_BYTES + 1)
+            if len(data) > MAX_CSR_BYTES:
+                raise SecretsError('invalid_capability')
+            return data
+    except OSError:
+        raise SecretsError('invalid_capability') from None
+
+
+def run(args: argparse.Namespace) -> int:
+    if args.identity_action == 'request':
+        key = args.key.expanduser().absolute()
+        csr = args.csr.expanduser().absolute()
+        private_directory(key.parent)
+        print(codec.dumps({'key_fingerprint': create_csr(
+            private_key=key, request_file=csr),
+            'csr': str(csr), 'key': str(key),
+            'security': 'exportable software key; no VM attestation',
+        }).decode('ascii'))
+        return 0
+    if args.identity_action == 'inspect-csr':
+        print(codec.dumps({'key_fingerprint': inspect_csr(_csr_data(args.csr))}).decode())
+        return 0
+    if args.identity_action == 'call':
+        from .client import bound_call
+        request = codec.loads(args.request, limit=8192)
+        if type(request) is not dict:
+            raise SecretsError('invalid_request')
+        result = bound_call(
+            socket_path=args.socket, ca=args.ca, certificate=args.certificate,
+            private_key=args.key, jwt_file=args.jwt_file, request=request,
+        )
+        print(codec.dumps(result).decode('ascii'))
+        return 0 if result.get('ok') is True else 1
+
+    # Identity host operations handle CA/signing keys and broker capabilities.
+    # Isolated Python must ignore PYTHONPATH, user-site hooks and CWD BEFORE
+    # this module is imported. Unlike broker spawn, this is a manual command.
+    if not sys.flags.isolated:
+        raise SecretsError('unsafe_file', detail=(
+            'host identity commands require python -I -m aivm_secrets '
+            'identity ... from a trusted installation'))
+    from ..host.hardening import harden_process, verify_runtime
+    untrusted = tuple(args.untrusted_root)
+    harden_process()
+    verify_runtime(untrusted)
+    if args.identity_action == 'init':
+        authority = IdentityAuthority.initialize(
+            args.root, issuer=args.issuer, audience=args.audience,
+            untrusted=untrusted,
+        )
+        print(codec.dumps(authority.status()).decode())
+        return 0
+
+    authority = IdentityAuthority(args.root, untrusted=untrusted)
+    if args.identity_action == 'enroll':
+        result = authority.enroll(
+            subject=args.subject, csr=_csr_data(args.csr),
+            approve_fingerprint=args.approve_key_fingerprint,
+            replace=args.replace,
+        )
+    elif args.identity_action == 'revoke':
+        result = authority.revoke(args.subject)
+    elif args.identity_action == 'status':
+        result = authority.status()
+    elif args.identity_action == 'issue':
+        inner = read_owned(args.capability_file.expanduser().absolute(),
+                           private=True, untrusted=untrusted,
+                           what='local broker capability').decode('ascii')
+        result = authority.issue(
+            subject=args.subject, broker_capability=inner.strip(),
+            output=args.output, lifetime=args.lifetime,
+        )
+    elif args.identity_action == 'bridge':
+        with UnixIdentityService(
+            authority=authority, broker_socket=args.broker_socket,
+            listen=args.listen, max_connections=args.max_connections,
+            idle_seconds=args.idle_seconds,
+        ) as bridge:
+            print(codec.dumps({'listening': str(bridge.listen),
+                               'max_connections': bridge.max_connections,
+                               'idle_seconds': bridge.idle_seconds}).decode(),
+                  flush=True)
+            bridge.serve()
+        return 0
+    else:
+        raise SecretsError('invalid_request')
+    print(codec.dumps(result).decode('ascii'))
+    return 0

@@ -1,6 +1,6 @@
 # Garrett-style instance identity: Python P4a increment and Rust boundary
 
-Status: **experimental host-side library** (2026-10-12). This begins P4 in
+Status: **experimental Python P4a plus opt-in host enrollment tooling** (2026-10-12). This begins P4 in
 parallel with P1/P2 Rust formal work; it does **not** enable a new VM feature.
 No real `gh` or other service credentials are needed for the tests. Consult
 [the parallel-implementations decision](aivm-secrets-parallel-implementations.md).
@@ -73,33 +73,23 @@ chain validation itself; the TLS layer does that before supplying the thumbprint
 Do not allow a guest-supplied JSON `cert`, `thumbprint`, `authenticated` flag or
 client-supplied `sub` to stand in for verified transport identity.
 
-## Current opt-in boundary and deliberately absent features
+## Current deployment boundary and deliberately absent features
 
-The P4a code adds **no** AIVM CLI flag, VM certificate/key provisioning,
-network listener, trusted CA initialization, token acquisition endpoint,
-credential migration, new SSH forwarding, or daemon. Existing VMs do not gain
-any authority simply by installing it. The `IdentityTLSBridge.serve_accepted`
-API operates only when trusted host code supplies a socket and explicitly
-configures its TLS context; the `server_context` helper requires TLS 1.3,
-client CA trust and a client certificate. This is a building block for a
-future carefully reviewed host daemon, not an operator-supported service.
+The follow-up [P4a enrollment increment](aivm-secrets-p4a-enrollment.md)
+provides a principal-owned local CA, a CSR enrollment CLI, persistent per-VM
+certificate/epoch records, an optional foreground Unix mTLS bridge, and a
+restricted TLS client. It **still does not change an existing VM**, provision
+keys or certificates automatically, start a daemon, expose TCP, acquire OAuth
+credentials, or change the default `aivm ssh --secrets_policy` transport.
+A manually enrolled software key can be copied; CSR signature validity is not
+VM attestation, and a human must independently authenticate the CSR source.
 
-Production wiring must first validate every certificate/private-key/CA path
-against the existing descriptor-based host file and untrusted-root checks;
-limit listeners/connections/rate; isolate private keys from the guest; define
-safe enrollment and lifecycle; authenticate issuer requests; rotate keys;
-add durable per-instance revocation and auditable control actions; decide
-host-only vs remote network trust boundaries. Do not wire an unvetted public
-listener to a credentialed broker, and do not auto-fallback to the legacy
-socket if certificate authentication fails.
-
-The signed token's `jti` is currently informative, not a persisted one-shot
-replay guard. Valid requests remain subject to the **inner broker's** request
-and attempt budgets. P4c must specify replay protection, revocation across
-restarts, rollback, cloned vTPM state, key compromise and key-rotation overlap.
-An mTLS client certificate in guest-readable software storage gives
-cryptographic possession, not non-exportability; vTPM support requires a
-separate VM lifecycle design (currently AIVM creates VMs without TPM).
+The signed token's `jti` is informative, not a persisted one-shot replay
+guard. The existing broker still governs operations, attempt budgets and
+session lifetime. The registry provides new-call epoch revocation, but no
+atomic guarantee across an already in-flight request or rollback-resistant
+state across host snapshot restoration. Certificate/key renewal, vTPM,
+issuer rotation, unattended VM enrollment, and verified Rust remain pending.
 
 ## P4 milestones, independent of Rust schedule
 
@@ -108,10 +98,13 @@ separate VM lifecycle design (currently AIVM creates VMs without TPM).
    broker mediation. Exit gate: demonstrate a matching cert succeeds and a
    different cert, no cert, expired token, forged token and revoked epoch fail
    *before effect dispatch*. Existing broker scopes remain operative.
-2. **P4a deployment hardening (next):** host-owned enrollment/key/trust files,
-   principal-scoped certificate service, lifecycle and socket ownership,
-   authenticated issuer API, explicit session opt-in, rate/resource bounds,
-   audited issuance, and real VM integration with dummy provider only.
+2. **P4a deployment hardening (in progress):** host-owned enrollment/key/trust
+   files, a manually authenticated CSR workflow, principal-owned Unix socket,
+   opt-in CLI, bounded requests, auditable issuance and persistent enrollment
+   epochs are implemented. Remaining: authenticated binding to authoritative
+   AIVM VM and broker records, explicit launcher lifecycle/guest provisioning,
+   issuer API authentication suitable for automation, CA rotation, and real
+   VM integration with a synthetic provider.
 3. **P4b:** host/browser OAuth authorization and refresh, issuer/broker
    separation, interoperable credential substitution and signed encrypted
    surrogate claims; use the user's host principal, never a shared host token.
