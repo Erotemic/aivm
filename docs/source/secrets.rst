@@ -598,8 +598,9 @@ wraps its host-only capability in a signed, encrypted, certificate-bound JWT.
 ``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener with fixed limits;
 ``identity call`` speaks verified TLS over an explicitly forwarded socket.
 A revoked or replaced certificate is denied on its next request, and the
-broker still checks the operation, resource, budget and approval. No public
-TCP endpoint, OAuth token flow, vTPM or Rust implementation is included.
+broker still checks the operation, resource, budget and approval. Host-only
+OAuth/PKCE acquisition is described earlier in this guide, but the local
+bridge does not create a public TCP endpoint, vTPM identity, or Rust proof.
 
 **This is not enabled by ordinary ``aivm ssh`` or by installing the package.**
 Even ``aivm ssh --secrets_policy`` continues to forward its existing unbound
@@ -656,6 +657,19 @@ Enrollment does not grant provider access. After separately creating a host-only
 policy, choose the mTLS-only launcher::
 
     aivm ssh . --secrets_policy="$HOME/.config/aivm/secrets/lab-readonly.json" --secrets_identity_root="$HOME/.config/aivm/secrets/identity" --secrets_writes=deny
+
+An explicitly enrolled managed VM can renew its seven-day public certificate
+and revoke the old epoch using the same pinned forced-bootstrap channel::
+
+    aivm vm identity_renew --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
+
+This reuses the existing guest software key; it does not rotate the key or CA.
+A stale epoch or certificate thumbprint fails closed. It requires a fresh
+certificate-bound session token afterward. The separate host-only command
+``python -I -m aivm_secrets identity renew-server --root ...`` renews the
+30-day local TLS server leaf and key beneath the current CA; **restart**
+the identity bridge for that keypair to take effect. The CA itself is not
+rotated. See ``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
 
 This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
 socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest

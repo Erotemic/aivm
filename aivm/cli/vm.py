@@ -34,7 +34,7 @@ from .vm_lifecycle import (
     VMUpCLI,
 )
 from .vm_update import VMUpdateCLI
-from .vm_identity import VMIdentityEnrollCLI
+from .vm_identity import VMIdentityEnrollCLI, VMIdentityRenewCLI
 
 
 class VMModalCLI(kwconf.ModalCLI):
@@ -66,6 +66,7 @@ class VMModalCLI(kwconf.ModalCLI):
     creds = VMCredsModalCLI
     access = VMAccessModalCLI
     identity_enroll = VMIdentityEnrollCLI
+    identity_renew = VMIdentityRenewCLI
 
 
 __all__ = [
@@ -94,4 +95,5 @@ __all__ = [
     'VMCredsModalCLI',
     'VMAccessModalCLI',
     'VMIdentityEnrollCLI',
+    'VMIdentityRenewCLI',
 ]

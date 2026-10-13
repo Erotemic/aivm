@@ -130,7 +130,8 @@ def test_policy_check_explains_refusals_to_the_operator(root, capsys):
 
 def test_shipped_example_policies_are_valid(capsys):
     examples = sorted(
-        (REPO_ROOT / 'docs' / 'examples').glob('aivm-secrets-*.json')
+        (path for path in (REPO_ROOT / 'docs' / 'examples').glob('aivm-secrets-*.json')
+         if not path.name.startswith('aivm-secrets-oauth-'))
     )
     assert len(examples) >= 4
     from aivm_secrets.kernel.service import parse_policy
@@ -138,6 +139,13 @@ def test_shipped_example_policies_are_valid(capsys):
     for path in examples:
         spec = parse_policy(codec.loads(path.read_bytes(), limit=1 << 20))
         assert spec.scope(), path.name
+
+    # Credential-source profiles use a different, closed schema. They must
+    # not accidentally be validated as broker authorization policies.
+    from aivm_secrets.identity.oauth_provider import OAuthProvider
+    for path in (REPO_ROOT / 'docs' / 'examples').glob('aivm-secrets-oauth-*.json'):
+        profile = OAuthProvider.parse(codec.loads(path.read_bytes(), limit=1 << 20))
+        assert profile.name
 
 
 # -- serve -------------------------------------------------------------------

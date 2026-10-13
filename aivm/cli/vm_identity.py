@@ -14,6 +14,30 @@ from ..secrets_identity_transport import enroll_managed_vm
 from ._common import _BaseCommand
 
 
+def _run_identity(args, *, renew: bool) -> int:
+    if not args.identity_root:
+        raise AIVMError('--identity_root is required; identity is opt-in')
+    context, store = load_vm_context_with_path(
+        args.config, vm_opt=args.vm,
+        hydrate_runtime_defaults=False, persist_runtime_defaults=False,
+    )
+    # Do not create, boot, replace or adopt a VM to renew its identity.
+    ip = get_ip_cached(context.effective_cfg) or wait_for_ip(
+        context.effective_cfg, timeout_s=45, dry_run=False)
+    result = enroll_managed_vm(
+        context=context, store=store, ip=ip,
+        authority_root=Path(args.identity_root),
+        replace=(args.replace if not renew else False), renew=renew,
+    )
+    print('Renewed' if renew else 'Enrolled',
+          'certificate-bound identity for ' + result['vm'])
+    print('Managed domain UUID: ' + result['domain_uuid'])
+    print('Subject: ' + result['subject'])
+    print('Certificate SHA-256: ' + result['certificate_sha256'])
+    print('Enrollment epoch: ' + str(result['epoch']))
+    return 0
+
+
 class VMIdentityEnrollCLI(_BaseCommand):
     """Enroll this host principal's managed VM through its forced SSH helper."""
 
@@ -25,24 +49,20 @@ class VMIdentityEnrollCLI(_BaseCommand):
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
-        args = cls.cli(argv=argv, data=kwargs)
-        if not args.identity_root:
-            raise AIVMError('--identity_root is required; identity is opt-in')
-        context, store = load_vm_context_with_path(
-            args.config, vm_opt=args.vm,
-            hydrate_runtime_defaults=False, persist_runtime_defaults=False,
-        )
-        # Refuse to create, recreate, boot or adopt a VM. Enrollment only
-        # operates against an already reachable authoritative guest.
-        ip = get_ip_cached(context.effective_cfg) or wait_for_ip(
-            context.effective_cfg, timeout_s=45, dry_run=False)
-        result = enroll_managed_vm(
-            context=context, store=store, ip=ip,
-            authority_root=Path(args.identity_root), replace=args.replace,
-        )
-        print('Enrolled certificate-bound identity for ' + result['vm'])
-        print('Managed domain UUID: ' + result['domain_uuid'])
-        print('Subject: ' + result['subject'])
-        print('Certificate SHA-256: ' + result['certificate_sha256'])
-        print('Enrollment epoch: ' + str(result['epoch']))
-        return 0
+        return _run_identity(cls.cli(argv=argv, data=kwargs), renew=False)
+
+
+class VMIdentityRenewCLI(_BaseCommand):
+    """Explicitly renew an existing managed VM certificate and epoch.
+
+    Requires the same pinned forced-bootstrap SSH proof as initial enrollment.
+    It reuses the guest-owned software key; it does not rotate guest keys.
+    """
+
+    vm: str = kwconf.Value('', help='Existing managed VM name.')
+    identity_root: str = kwconf.Value(
+        '', help='Existing protected identity authority directory (required).')
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        return _run_identity(cls.cli(argv=argv, data=kwargs), renew=True)

@@ -23,6 +23,7 @@ def evaluate(data: object) -> dict:
             'version', 'action', 'issuer', 'audience', 'state',
         }), frozenset({
             'subject', 'thumbprint', 'not_after', 'replace', 'now',
+            'expected_epoch', 'expected_thumbprint',
         }), code='invalid_capability')
         grammar.integer(data['version'], 1, 1, code='invalid_capability')
         args = {'issuer': data['issuer'], 'audience': data['audience']}
@@ -36,6 +37,19 @@ def evaluate(data: object) -> dict:
                 data['state'], **args, subject=data['subject'],
                 thumbprint=data['thumbprint'], not_after=data['not_after'],
                 replace=data['replace'])
+            return {'ok': True, 'state': state}
+        if action == 'renew':
+            grammar.exact_keys(data, frozenset({
+                'version', 'action', 'issuer', 'audience', 'state', 'subject',
+                'thumbprint', 'not_after', 'expected_epoch',
+                'expected_thumbprint', 'now',
+            }), code='invalid_capability')
+            state = registry_model.renew(
+                data['state'], **args, subject=data['subject'],
+                expected_epoch=data['expected_epoch'],
+                expected_thumbprint=data['expected_thumbprint'],
+                thumbprint=data['thumbprint'], not_after=data['not_after'],
+                now=data['now'])
             return {'ok': True, 'state': state}
         if action == 'revoke':
             grammar.exact_keys(data, frozenset({

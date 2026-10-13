@@ -96,6 +96,15 @@ chain validation itself; the TLS layer does that before supplying the thumbprint
 Do not allow a guest-supplied JSON `cert`, `thumbprint`, `authenticated` flag or
 client-supplied `sub` to stand in for verified transport identity.
 
+## Certificate lifecycle increment (P4c, experimental)
+
+The [certificate lifecycle plan](aivm-secrets-garrett-certificate-lifecycle.md)
+adds explicit managed-VM client-certificate renewal with a pure compare-and-swap
+epoch transition, plus rotation of the local server TLS leaf/key pair under
+the existing CA. Renewal does not rotate software guest keys or the CA, and
+running sessions must be replaced after new certificates are installed.
+Python/Rust parity is specified by the frozen enrollment-renewal corpus.
+
 ## Current deployment boundary and deliberately absent features
 
 The follow-up [P4a enrollment increment](aivm-secrets-p4a-enrollment.md)

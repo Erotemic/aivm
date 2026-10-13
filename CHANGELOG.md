@@ -4,6 +4,17 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
 
+### Garrett certificate renewal and host TLS leaf rotation (Python reference)
+* Add explicit compare-and-swap client certificate renewal through pinned,
+  forced-bootstrap managed-VM SSH, advancing enrollment epochs and invalidating
+  old certificate-bound surrogate tokens without altering ordinary VM access.
+* Rotate local TLS server leaf certificates and keys under the existing CA
+  with immutable generations and atomic selection for newly started bridges.
+  Bridge restart remains mandatory; CA rotation and guest key rotation are
+  separate future milestones.
+* Freeze 48 pure renewal transition vectors for independent future Rust parity,
+  with regression tests for stale/revoked identities and failed rotations.
+
 ### Garrett host OAuth and certificate-bound substitution (Python reference)
 * Add an opt-in host/browser OAuth authorization-code/PKCE issuer with a
   pinned HTTPS token endpoint, strict callback validation and an AES-GCM

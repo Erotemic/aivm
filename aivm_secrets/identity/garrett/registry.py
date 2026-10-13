@@ -79,6 +79,36 @@ def enroll(value: object, *, issuer: str, audience: str, subject: str,
     return validate(result, issuer=issuer, audience=audience)
 
 
+def renew(value: object, *, issuer: str, audience: str, subject: str,
+          expected_epoch: int, expected_thumbprint: str,
+          thumbprint: str, not_after: int, now: int) -> dict[str, Any]:
+    """Compare-and-swap a current enrollment into its next epoch.
+
+    A valid new CSR is verified by the caller. This pure transition cannot
+    authenticate a CSR, certify a VM, or persist the new state. Reject revoked
+    identities, concurrent replacement and same-certificate replay. The
+    trusted host adapter performs the transition under its registry lock.
+    """
+    state = validate(value, issuer=issuer, audience=audience)
+    _name(issuer, audience, subject, 0)
+    if (type(expected_epoch) is not int or
+            not 0 <= expected_epoch <= MAX_EPOCH or
+            type(expected_thumbprint) is not str or
+            type(now) is not int or not 0 <= now <= MAX_TIME or
+            type(not_after) is not int or not now < not_after <= MAX_TIME):
+        raise SecretsError('invalid_capability')
+    prior = state['subjects'].get(subject)
+    if (prior is None or not prior['active'] or
+            prior['epoch'] != expected_epoch or
+            prior['certificate_sha256'] != expected_thumbprint):
+        raise SecretsError('revoked')
+    if thumbprint == expected_thumbprint:
+        raise SecretsError('denied')
+    return enroll(state, issuer=issuer, audience=audience,
+                  subject=subject, thumbprint=thumbprint,
+                  not_after=not_after, replace=True)
+
+
 def revoke(value: object, *, issuer: str, audience: str,
            subject: str) -> dict[str, Any]:
     state = validate(value, issuer=issuer, audience=audience)

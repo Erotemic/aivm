@@ -166,8 +166,9 @@ implemented and must not fall back to unrestricted credential resolution.
   filesystem with working advisory locks.
 - Ed25519 JWT signing and AEAD keys may be rotated and old `kid`s retired.
   Bridges consult the active keyring for **every** JWT presentation, not just
-  at startup. Rotating JWT keys does not rotate the CA or an existing guest
-  identity key/certificate.
+  at startup. JWT rotation is separate from client/server TLS leaf renewal,
+  both documented in [the certificate lifecycle plan](aivm-secrets-garrett-certificate-lifecycle.md).
+  Neither changes the CA or an existing guest's software private key.
 - Idempotency and provider-side effects are outside local transactions.
   A dispatched write may have happened even if the provider reports an error;
   use the broker's `outcome_unknown` handling, idempotency keys and service
@@ -178,7 +179,8 @@ implemented and must not fall back to unrestricted credential resolution.
   Same-UID host malware can access the vault. The provider can independently
   revoke or change a grant; the host detects that only through provider replies.
 - **Not achieved:** vTPM/hardware non-exportable keys, remote attestation,
-  snapshot/clone rollback resistance, CA rotation/renewal, distributed proxy
+  snapshot/clone rollback resistance, CA rotation/renewal, guest key rotation,
+  distributed proxy
   replicas, stateless multi-host quotas/revocation, comprehensive OAuth provider
   interoperability, real libvirt/OAuth smoke, formally verified Python, or
   Rust/Lean parity. The local token profile contains an encrypted *broker
@@ -197,6 +199,13 @@ restricted broker. The frozen `garrett-oauth-v1.jsonl` contract is an independen
 input/output corpus for the future Rust runner, configured with
 `AIVM_SECRETS_RUST_OAUTH_RUNNER`; until implemented, its test is an expected skip,
 not a parity result.
+
+The P4c certificate renewal increment adds an explicit host-controlled
+`identity renew-client` transaction and `aivm vm identity_renew` for managed
+VMs, with epoch+thumbprint CAS. A separate `identity renew-server` rotates
+the local TLS server leaf/key under the current CA and requires bridge restart.
+See [the certificate lifecycle plan](aivm-secrets-garrett-certificate-lifecycle.md).
+These operations do not provide guest key renewal or CA rotation.
 
 The first Rust/Lean slice should cover `PendingAuthorization`, grant scope
 attenuation, expiration and refresh-generation transitions, issuer binding,

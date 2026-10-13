@@ -194,17 +194,19 @@ def test_provider_knowledge_is_data_in_one_module():
     assert preset == {'__future__', 'typing', 'errors', '', 'model'}
 
 
-def test_only_one_module_opens_a_network_connection():
+def test_only_two_explicit_host_adapters_can_open_network_connections():
+    """The OAuth acquisition client is a second deliberately trusted dialer.
+
+    Pure URL parsing (urllib.parse in oauth_provider.py) is not egress. Both
+    permitted connection owners must remain explicit and narrowly scoped:
+    provider-token acquisition and authorized service API execution.
+    """
     openers = set()
     for path in ALL:
         source = path.read_text(encoding='utf-8')
-        if (
-            'create_connection' in source
-            or 'http.client' in source
-            or 'urllib' in source
-        ):
+        if 'create_connection' in source or 'http.client' in source:
             openers.add(str(path.relative_to(PACKAGE)))
-    assert openers == {'host/egress.py'}
+    assert openers == {'host/egress.py', 'identity/oauth_transport.py'}
 
 
 def test_only_one_module_runs_a_program_and_never_through_a_shell():

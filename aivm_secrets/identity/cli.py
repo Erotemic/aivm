@@ -62,6 +62,15 @@ def add_parser(subs):
     revoke = common('revoke')
     revoke.add_argument('--subject', required=True)
 
+    renew_client = common('renew-client')
+    renew_client.add_argument('--subject', required=True)
+    renew_client.add_argument('--csr', type=Path, required=True)
+    renew_client.add_argument('--approve-key-fingerprint', required=True)
+    renew_client.add_argument('--expected-epoch', required=True, type=int)
+    renew_client.add_argument('--expected-certificate-sha256', required=True)
+
+    common('renew-server')
+
     rotate = common('rotate-issuer')
     retire = common('retire-issuer')
     retire.add_argument('--key-id', required=True)
@@ -226,6 +235,15 @@ def run(args: argparse.Namespace) -> int:
         )
     elif args.identity_action == 'revoke':
         result = authority.revoke(args.subject)
+    elif args.identity_action == 'renew-client':
+        result = authority.renew_client(
+            subject=args.subject, csr=_csr_data(args.csr),
+            approve_fingerprint=args.approve_key_fingerprint,
+            expected_epoch=args.expected_epoch,
+            expected_thumbprint=args.expected_certificate_sha256,
+        )
+    elif args.identity_action == 'renew-server':
+        result = authority.renew_server()
     elif args.identity_action == 'status':
         result = authority.status()
     elif args.identity_action == 'rotate-issuer':

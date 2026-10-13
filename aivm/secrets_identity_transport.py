@@ -109,7 +109,8 @@ def _identity_action(manager: CommandManager, *, action: str, root: Path | None,
 
 def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
                      subject: str, csr: bytes, replace: bool,
-                     untrusted: tuple[Path, ...]) -> dict[str, Any]:
+                     untrusted: tuple[Path, ...],
+                     renewal: tuple[int, str] | None = None) -> dict[str, Any]:
     """Certificate parsing and CA signing both occur in isolated processes."""
     with tempfile.NamedTemporaryFile(
         mode='wb', prefix='.csr-', suffix='.pem', dir=authority_root,
@@ -125,9 +126,16 @@ def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
             raise SecretsError('guest_setup', detail='invalid CSR fingerprint')
         options = ['--subject', subject, '--csr', public_file.name,
                    '--approve-key-fingerprint', fingerprint]
-        if replace:
-            options.append('--replace')
-        value = _identity_action(manager, action='enroll', root=authority_root,
+        if renewal is not None:
+            epoch, thumbprint = renewal
+            options += ['--expected-epoch', str(epoch),
+                        '--expected-certificate-sha256', thumbprint]
+            action = 'renew-client'
+        else:
+            if replace:
+                options.append('--replace')
+            action = 'enroll'
+        value = _identity_action(manager, action=action, root=authority_root,
                                  untrusted=untrusted, extra=options)
     if (value.get('subject') != subject or
             type(value.get('certificate_sha256')) is not str or
@@ -196,7 +204,7 @@ def _private_broker_file(path: Path, untrusted: tuple[Path, ...]) -> str:
 
 def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
                       authority_root: Path, replace: bool = False,
-                      uuid_reader=None) -> dict[str, Any]:
+                      renew: bool = False, uuid_reader=None) -> dict[str, Any]:
     """One explicitly requested and authenticated CSR enrollment transaction.
 
     The forced bootstrap private key is controlled by AIVM's machine store.
@@ -204,6 +212,8 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
     just a PKCS#10 CSR. Its host request includes a fresh nonce to reject stale
     replies. The subject is *not* taken from that reply or its CSR CN.
     """
+    if type(renew) is not bool or (renew and replace):
+        raise SecretsError('invalid_policy')
     if uuid_reader is None:
         bound = resolve_managed_identity(context, store)
     else:
@@ -211,8 +221,17 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
     untrusted = guest_writable_roots(store)
     authority_root = Path(authority_root).expanduser().absolute()
     manager = CommandManager.current()
-    _identity_action(manager, action='status', root=authority_root,
-                     untrusted=untrusted)
+    status = _identity_action(manager, action='status', root=authority_root,
+                              untrusted=untrusted)
+    renewal: tuple[int, str] | None = None
+    if renew:
+        subjects = status.get('subjects')
+        row = subjects.get(bound.subject) if type(subjects) is dict else None
+        if (type(row) is not dict or row.get('active') is not True or
+                type(row.get('epoch')) is not int or
+                type(row.get('certificate_sha256')) is not str):
+            raise SecretsError('revoked', detail='identity is not enrolled')
+        renewal = (row['epoch'], row['certificate_sha256'])
     nonce = secrets.token_hex(16)
     request = {'operation': 'identity-csr', 'guest_user': bound.guest_user,
                'uid': bound.host_uid, 'nonce': nonce}
@@ -253,7 +272,10 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
         raise SecretsError('revoked', detail='VM identity changed during enrollment')
     record = _isolated_enroll(manager, authority_root=authority_root,
                               subject=bound.subject, csr=csr,
-                              replace=replace, untrusted=untrusted)
+                              replace=replace, untrusted=untrusted,
+                              **({'renewal': renewal} if renew else {}))
+    if renew and record['epoch'] != renewal[0] + 1:
+        raise SecretsError('guest_setup', detail='unexpected certificate renewal epoch')
     # Obtain only public certificate material from the separately isolated
     # authority. Never load CA keys or the certificate parser into AIVM.
     public = _public_client(manager, root=authority_root,

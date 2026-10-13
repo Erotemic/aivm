@@ -52,6 +52,9 @@ LOCK = '.enrollment.lock'
 KEYRING = 'issuer-keyring.json'
 KEY_DIRECTORY = 'issuer-keys'
 MAX_ISSUER_KEYS = 8
+SERVER_SELECTION = 'server-selection.json'
+SERVER_DIRECTORY = 'server-generations'
+MAX_SERVER_GENERATIONS = 64
 
 
 def _x509():
@@ -393,6 +396,58 @@ class IdentityAuthority:
                     'certificate': str(path), 'certificate_sha256': thumb,
                     'not_after': record['not_after']}
 
+    def renew_client(self, *, subject: str, csr: bytes,
+                     approve_fingerprint: str, expected_epoch: int,
+                     expected_thumbprint: str,
+                     now: int | None = None) -> dict[str, Any]:
+        """Renew one client certificate with an epoch+thumbprint CAS.
+
+        A current enrollment, trusted CSR transport and explicit key-fingerprint
+        confirmation are prerequisites. The new certificate invalidates old
+        JWTs/peer certificates immediately via the enrollment registry. This
+        does NOT rotate a reused guest key or attest where it was generated.
+        """
+        _subject(subject)
+        request, fp = _read_csr(csr)
+        if type(approve_fingerprint) is not str or fp != approve_fingerprint:
+            raise SecretsError('denied', detail='CSR key fingerprint not confirmed')
+        stamp = _stamp(now)
+        with self._locked():
+            state = self._registry()
+            # Check state before performing expensive crypto and again in the
+            # pure renewal transition below, under the same host lock.
+            row = state['subjects'].get(subject)
+            if (type(expected_epoch) is not int or
+                    type(expected_thumbprint) is not str):
+                raise SecretsError('invalid_capability')
+            if (row is None or not row['active'] or
+                    row['epoch'] != expected_epoch or
+                    row['certificate_sha256'] != expected_thumbprint):
+                raise SecretsError('revoked')
+            ca_key, ca_cert = self._load_ca()
+            if stamp + CLIENT_DAYS * 86400 >= int(ca_cert.not_valid_after_utc.timestamp()):
+                raise SecretsError('expired', detail='host CA requires renewal')
+            cert = _leaf_certificate(ca_key, ca_cert, request.public_key(),
+                                     name='aivm-guest', now=stamp,
+                                     days=CLIENT_DAYS, server=False)
+            der = _certificate_der(cert)
+            thumb = certificate_thumbprint(der)
+            updated = registry_model.renew(
+                state, issuer=self.issuer, audience=self.audience,
+                subject=subject, expected_epoch=expected_epoch,
+                expected_thumbprint=expected_thumbprint,
+                thumbprint=thumb, not_after=int(cert.not_valid_after_utc.timestamp()),
+                now=stamp)
+            record = updated['subjects'][subject]
+            path = self.root / 'clients' / (hashlib.sha256(der).hexdigest() + '.pem')
+            with self._audit('identity_renew_intent', subject, stamp,
+                             hashlib.sha256(der).hexdigest()):
+                write_new(path, _certificate_pem(cert))
+                self._update(updated)
+            return {'subject': subject, 'epoch': record['epoch'],
+                    'certificate': str(path), 'certificate_sha256': thumb,
+                    'not_after': record['not_after']}
+
     def revoke(self, subject: str, *, now: int | None = None) -> dict[str, Any]:
         _subject(subject)
         stamp = _stamp(now)
@@ -616,13 +671,98 @@ class IdentityAuthority:
         """Return a revocation-aware verifier that reads live key selection."""
         return _AuthorityTokenVerifier(self, expected)
 
+    def _server_selection(self) -> tuple[str, str, int]:
+        """Resolve one immutable TLS keypair from an atomic selection file.
+
+        Authorities created before server-key rotation use server.pem/key.
+        A malformed or missing selected generation fails closed, never falls
+        back to legacy host identity or silently regenerates certificates.
+        """
+        path = self.root / SERVER_SELECTION
+        if path.is_symlink():
+            raise SecretsError('unsafe_file')
+        if not path.exists():
+            return SERVER_CERT, SERVER_KEY, 2
+        value = codec.loads(self._read(SERVER_SELECTION, 4096),
+                            limit=4096, code='invalid_capability')
+        value = grammar.exact_keys(value, frozenset({
+            'schema', 'active', 'next_number',
+        }), code='invalid_capability')
+        if (type(value['schema']) is not int or value['schema'] != 1 or
+                type(value['active']) is not int or
+                not 2 <= value['active'] <= MAX_SERVER_GENERATIONS or
+                type(value['next_number']) is not int or
+                value['next_number'] != value['active'] + 1):
+            raise SecretsError('invalid_capability')
+        prefix = f'{SERVER_DIRECTORY}/server-{value["active"]}'
+        return prefix + '.pem', prefix + '.key', value['next_number']
+
+    def _commit_server_selection(self, *, active: int) -> None:
+        payload = codec.dumps({'schema': 1, 'active': active,
+                               'next_number': active + 1})
+        tmp = self.root / ('.server-' + secrets.token_hex(12) + '.tmp')
+        try:
+            write_new(tmp, payload)
+            os.replace(tmp, self.root / SERVER_SELECTION)
+            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    def renew_server(self, *, now: int | None = None) -> dict[str, Any]:
+        """Rotate the host TLS leaf key and certificate under the existing CA.
+
+        Each generation is immutable and installed before a single atomic
+        selection commit. New bridge processes read that selection; running
+        TLS contexts retain their previous leaf until explicitly restarted.
+        """
+        stamp = _stamp(now)
+        x509, _, _, ec, _, _ = _x509()
+        with self._locked():
+            _, _, generation = self._server_selection()
+            directory = self.root / SERVER_DIRECTORY
+            private_directory(directory, self.untrusted)
+            # An interrupted rotation can leave an unselected immutable
+            # generation. Never overwrite it or strand future rotations.
+            while generation <= MAX_SERVER_GENERATIONS:
+                prefix = directory / f'server-{generation}'
+                if not (os.path.lexists(str(prefix) + '.key') or
+                        os.path.lexists(str(prefix) + '.pem')):
+                    break
+                generation += 1
+            if generation > MAX_SERVER_GENERATIONS:
+                raise SecretsError('exhausted')
+            ca_key, ca_cert = self._load_ca()
+            if stamp + SERVER_DAYS * 86400 >= int(ca_cert.not_valid_after_utc.timestamp()):
+                raise SecretsError('expired', detail='host CA requires renewal')
+            private = ec.generate_private_key(ec.SECP256R1())
+            cert = _leaf_certificate(ca_key, ca_cert, private.public_key(),
+                                     name='localhost', now=stamp,
+                                     days=SERVER_DAYS, server=True)
+            prefix = directory / f'server-{generation}'
+            with self._audit('identity_server_renew_intent', 'localhost', stamp,
+                             hashlib.sha256(_certificate_der(cert)).hexdigest()):
+                write_new(Path(str(prefix) + '.key'), _key_pem(private))
+                write_new(Path(str(prefix) + '.pem'), _certificate_pem(cert))
+                self._commit_server_selection(active=generation)
+            return {'generation': generation,
+                    'certificate_sha256': certificate_thumbprint(_certificate_der(cert)),
+                    'not_after': int(cert.not_valid_after_utc.timestamp()),
+                    'restart_required': True}
+
     def tls_paths(self) -> tuple[Path, Path, Path]:
-        # Check each path *before* ssl.load_cert_chain opens the pathname.
-        for name in (SERVER_CERT, SERVER_KEY, CA_CERT):
+        # Read the selected immutable pair and CA; the authority tree is
+        # host-owned and declared guest-writable roots are forbidden.
+        cert, key, _ = self._server_selection()
+        for name in (cert, key, CA_CERT):
             self._read(name)
-        return (self.root / SERVER_CERT,
-                self.root / SERVER_KEY,
-                self.root / CA_CERT)
+        return (self.root / cert, self.root / key, self.root / CA_CERT)
 
 
 class _AuthorityTokenVerifier:
