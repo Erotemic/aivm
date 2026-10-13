@@ -499,11 +499,12 @@ their certificates expire. If `<root>`, the vault or the host was restored,
 treat every piece of trust state as possibly stale, and run no
 `identity_renew` until these steps are done:
 
-1. `identity rotate-ca`. This ends every enrollment by changing the trust
-   root. Old certificates no longer chain to a trusted CA, whatever epochs
-   the restored registry holds. Today it empties the registry. **Decided:**
-   it will revoke every row instead, and will require
-   `--expected-ca-sha256`, taken from `identity status`.
+1. `identity rotate-ca --expected-ca-sha256 <sha256 from identity status>`.
+   This ends every enrollment by changing the trust root. Old certificates
+   no longer chain to a trusted CA, whatever epochs the restored registry
+   holds. It revokes every row (each epoch advances by one, saturating)
+   rather than emptying the registry, and the required CAS refuses a stale
+   second run.
 2. Replace the issuer keys, in this order. The `active` kid and the
    `enabled` list are in `<root>/issuer-keyring.json`.
    1. `identity retire-issuer --key-id K` for every enabled kid except the

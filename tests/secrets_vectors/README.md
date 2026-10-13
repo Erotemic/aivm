@@ -102,3 +102,21 @@ After the freeze, version 1 files change only to add cases. A change to an
 existing expectation is then a protocol change: it needs a new version
 directory, an entry in the changelog, and a review of the affected theorem in
 `docs/planning/aivm-secrets-formal-assurance.md`.
+
+## Garrett identity corpora
+
+The top-level `identity-*.jsonl` and `garrett-*.jsonl` files pin the pure
+Garrett identity decisions (registry, renewal, guarded revocation, key
+rotation and reuse, trust generations, managed-VM subjects, protocol, OAuth),
+one JSON object per line, each replayed by the runner its test names. Their
+`-v1` suffix names the contract, not a frozen release: none of them has
+shipped in a release yet. **Until the first release that ships them they are
+edited in place**, never forked into a `-v2` file, and every edit to an
+existing expectation is recorded in the changelog. The `v1/` kernel files
+above are not affected by this rule and stay byte-identical.
+
+Edits so far: registry rows gained `key_sha256` and `retired_keys` (and
+`enroll`/`renew` inputs a `key_sha256`) for key custody, carried through every
+existing row unchanged; and `revoke_epoch_3` in `identity-registry-v1.jsonl`
+now expects revocation at the maximum epoch to deactivate the row in place,
+where it previously expected a `revoked` failure that left the row active.

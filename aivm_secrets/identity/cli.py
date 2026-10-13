@@ -53,6 +53,10 @@ def add_parser(subs):
     enroll.add_argument('--csr', type=Path, required=True)
     enroll.add_argument('--approve-key-fingerprint', required=True)
     enroll.add_argument('--replace', action='store_true')
+    # Optional compare-and-swap for --replace: both or neither. Without them a
+    # replacement is unconditional (the operator's emergency path).
+    enroll.add_argument('--expected-epoch', type=int)
+    enroll.add_argument('--expected-certificate-sha256')
 
     status = common('status')
 
@@ -81,7 +85,14 @@ def add_parser(subs):
     rekey.add_argument('--expected-certificate-sha256', required=True)
 
     common('renew-server')
-    common('rotate-ca')
+    rotate_ca = common('rotate-ca')
+    # Required CAS: the SHA-256 of the active CA certificate (identity status
+    # prints it as ca_sha256). A stale or repeated run is refused.
+    rotate_ca.add_argument('--expected-ca-sha256', required=True)
+
+    forget = common('forget')
+    forget.add_argument('--subject', required=True)
+    common('prune')
 
     rotate = common('rotate-issuer')
     retire = common('retire-issuer')
@@ -243,7 +254,8 @@ def run(args: argparse.Namespace) -> int:
         result = authority.enroll(
             subject=args.subject, csr=_csr_data(args.csr),
             approve_fingerprint=args.approve_key_fingerprint,
-            replace=args.replace,
+            replace=args.replace, expected_epoch=args.expected_epoch,
+            expected_thumbprint=args.expected_certificate_sha256,
         )
     elif args.identity_action == 'revoke':
         result = authority.revoke(args.subject)
@@ -269,7 +281,11 @@ def run(args: argparse.Namespace) -> int:
     elif args.identity_action == 'renew-server':
         result = authority.renew_server()
     elif args.identity_action == 'rotate-ca':
-        result = authority.rotate_ca()
+        result = authority.rotate_ca(expected_ca_sha256=args.expected_ca_sha256)
+    elif args.identity_action == 'forget':
+        result = authority.forget(args.subject)
+    elif args.identity_action == 'prune':
+        result = authority.prune()
     elif args.identity_action == 'status':
         result = authority.status()
     elif args.identity_action == 'rotate-issuer':

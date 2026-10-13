@@ -36,6 +36,19 @@ def test_python_contract_and_frozen_vectors():
                examples) == expected
 
 
+def test_reuse_rows_pin_the_same_key_renewal_rule() -> None:
+    """REN-07 shares the corpus: enough accepted and refused reuse rows."""
+    reuse = [x for x in cases() if x['input'].get('action') == 'reuse']
+    assert len(reuse) >= 40
+    assert sum(x['expected_result'] == {'ok': True} for x in reuse) >= 10
+    assert sum(x['expected_result'] == {'ok': False, 'code': 'denied'}
+               for x in reuse) >= 5
+    assert sum(x['expected_result'].get('code') == 'invalid_capability'
+               for x in reuse) >= 20
+    names = [x['name'] for x in cases()]
+    assert len(names) == len(set(names))
+
+
 def test_rust_key_rotation_parity_once_implemented():
     runner = os.getenv('AIVM_SECRETS_RUST_KEY_ROTATION_RUNNER')
     if not runner:

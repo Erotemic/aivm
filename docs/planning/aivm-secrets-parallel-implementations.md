@@ -188,10 +188,13 @@ pass-through behavior for unknown token/header/operation variants.
 
 The Python reference now also exposes a **pure** enrollment state machine at
 `aivm_secrets/identity/garrett/registry.py`: versioned bounded registry
-validation, enrollment (including explicit replacement), revocation epoch
-transitions, and current certificate-to-identity lookup. This lives outside
-filesystem, X.509 and TLS code. Its frozen JSONL contract is
-`tests/secrets_vectors/identity-registry-v1.jsonl` (69 cases).
+validation, enrollment (including explicit and compare-and-swap
+replacement), key fingerprint custody, revocation epoch transitions
+(including revoke-all for CA rotation), forget/prune of expired revoked rows,
+and current certificate-to-identity lookup. This lives outside filesystem,
+X.509 and TLS code. Its JSONL contract is
+`tests/secrets_vectors/identity-registry-v1.jsonl` (161 cases; edited in
+place until a release ships it).
 
 The future Rust runner must produce the same canonical JSON output under the
 explicit `AIVM_SECRETS_RUST_REGISTRY_RUNNER` test gate; absence of a Rust

@@ -65,6 +65,52 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   identity and managed-VM parity gates, so a runner answering `"ok": 1` or
   `"value": 2.0` no longer passes as parity (Python's `==` equates `true`, `1`
   and `1.0`).
+* aivm-secrets identity: `renew-client` (AIVM `identity_renew`) now re-
+  certifies only the enrolled key (REN-07). A CSR for any other key is refused
+  with `denied`, and a missing or unparsable stored leaf fails closed. Guests
+  rotated with the current helper still send their pre-rotation `client.csr`,
+  so they must regenerate it from `client.key` inside the guest before
+  renewing (`openssl req -new -key client.key -out client.csr -subj /CN=aivm-
+  guest`). Do not rotate again in place of a renewal.
+* aivm-secrets identity: added key-fingerprint custody (REN-08). Registry rows
+  record `key_sha256` and up to 8 retired key fingerprints (oldest dropped).
+  `enroll`, `enroll --replace`, `renew-client` and `rotate-client-key` refuse
+  a key retired for that subject, or a key certified for another active
+  subject. Retirement is per subject, bounded, and discarded when the row is
+  forgotten. The two refusals carry distinct operator-only details; the code
+  is `denied`. Breaking for experimental authorities: an `enrollments.json`
+  without these fields is refused; initialize a new authority.
+* aivm-secrets identity: `identity enroll --replace` accepts an optional
+  compare-and-swap, `--expected-epoch N --expected-certificate-sha256 T` (both
+  together, only with `--replace`). It refuses the replacement with `revoked`
+  if the row changed. Plain `--replace` is unchanged.
+* aivm-secrets identity: revocation always deactivates. A row at the maximum
+  epoch is deactivated without advancing, and a later enrollment of it is
+  `exhausted` (B10). The `revoke_epoch_3` registry vector was edited in place.
+* aivm-secrets identity (breaking CLI): `identity rotate-ca` now requires
+  `--expected-ca-sha256` (the `ca_sha256` from `identity status`). A stale or
+  repeated run is refused with `revoked` before anything is staged. The
+  command revokes every registry row (inactive, epoch advanced, saturating)
+  instead of erasing the registry, so epochs stay monotonic. It returns the
+  revoked `{subject, epoch, certificate_sha256}` list and audits it before the
+  registry commit.
+* aivm-secrets identity: new locked, audited `identity forget --subject S` and
+  `identity prune` verbs remove only inactive rows whose certificate has
+  expired, so the 128-row registry can be reused (B9). Forgetting restarts the
+  subject at epoch 0, which is harmless because its certificate has expired.
+  It also discards the row's retired keys, so before re-enrolling a VM that
+  still exists, regenerate its CSR from `client.key` or reset its guest
+  identity.
+* aivm-secrets identity: `authority_runner` and `registry_runner` refuse a
+  list or object `action` instead of crashing the reply stream (B18).
+  `authority_runner` gains `require-ca`. `registry_runner` gains `replace-if-
+  current`, `revoke-all`, `forget` and `prune`, and accepts a full registry on
+  one line. `key_rotation_runner` gains the `reuse` action.
+* tests/secrets_vectors: the Garrett/identity JSONL corpora (everything except
+  kernel `v1/`) are edited in place until the first release that ships them
+  (README updated). In this increment every earlier expectation is unchanged
+  except `revoke_epoch_3`. Kernel `v1/` traces and policy digests are byte-
+  identical.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection

@@ -51,6 +51,37 @@ def test_rust_authority_backend_parity_when_available():
         [sys.executable, '-m', 'aivm_secrets.identity.authority_runner'], entries)
 
 
+def test_a_malformed_action_does_not_end_the_reply_stream() -> None:
+    """B18: an unhashable action used to raise TypeError and kill the runner."""
+    valid = {'version': 1, 'action': 'init', 'issuer': 'aivm.local',
+             'audience': 'aivm-secrets.identity', 'created_at': 1,
+             'ca_sha256': 'a' * 64}
+    entries = [{'input': {'version': 1, 'action': ['x']}},
+               {'input': {'version': 1, 'action': {}}},
+               {'input': valid}]
+    replies = run([sys.executable, '-m', 'aivm_secrets.identity.authority_runner'],
+                  entries)
+    assert replies[:2] == [{'ok': False, 'code': 'invalid_capability'}] * 2
+    assert replies[2]['ok'] is True
+
+
+def test_require_ca_is_the_rotation_compare_and_swap() -> None:
+    state = authority.initial(issuer='aivm.local',
+        audience='aivm-secrets.identity', created_at=100, ca_sha256='a' * 64)
+    assert authority.require_ca(state, expected_sha256='a' * 64) == state
+    with pytest.raises(SecretsError) as exc:
+        authority.require_ca(state, expected_sha256='b' * 64)
+    assert exc.value.code == 'revoked'
+    rotated = authority.activate_ca(state, ca_generation=2, ca_sha256='b' * 64,
+                                    server_generation=2)
+    with pytest.raises(SecretsError) as exc:
+        authority.require_ca(rotated, expected_sha256='a' * 64)
+    assert exc.value.code == 'revoked'
+    actions = {row['input'].get('action') for row in rows()
+               if type(row['input'].get('action')) is str}
+    assert 'require-ca' in actions
+
+
 def test_sequential_renewal_and_ca_rotation_only_increase_generation():
     state = authority.initial(issuer='aivm.local',
         audience='aivm-secrets.identity', created_at=100, ca_sha256='a'*64)

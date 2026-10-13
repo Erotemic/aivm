@@ -678,11 +678,102 @@ certificate-bound session token afterward. The separate host-only command
 30-day local TLS server leaf and key beneath the current CA; **restart**
 the identity bridge for that keypair to take effect. For an explicit,
 fail-closed CA replacement with **no dual-root grace period**, use the
-host-only ``identity rotate-ca --root ...`` command. CA rotation revokes all
-enrollments and requires bridge restart, distribution of the NEW public CA,
-explicit re-enrollment and new bound session tokens. Do not run it to renew a
-server leaf. See ``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
+host-only ``identity rotate-ca --root ... --expected-ca-sha256 SHA`` command,
+where ``SHA`` is the ``ca_sha256`` that ``identity status`` prints. The
+expected root is required: a stale or repeated run is refused before anything
+changes, so it cannot revoke enrollments made under the new root. CA rotation
+revokes every enrollment (each row becomes inactive and its epoch advances,
+so a re-enrollment is newer unless the row was forgotten in between, see
+below), prints and audits the revoked ``{subject, epoch, certificate_sha256}``
+list, and requires bridge restart,
+distribution of the NEW public CA, explicit re-enrollment (a VM that has run
+``identity_rotate_key`` first needs the CSR step described below) and new
+bound session tokens. Do not run it to renew a server leaf. See
+``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
 ``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
+
+The host enforces key custody on every enrollment change. ``identity_renew``
+(``identity renew-client``) re-certifies only the enrolled key; a CSR for any
+other key is refused. A key replaced by ``identity_rotate_key`` or
+``identity enroll --replace`` is retired for the VM's identity subject
+(below). It is refused for that subject while it is among the last 8 keys
+retired for it, and only until that subject's enrollment is forgotten (see
+``identity forget`` below); retirement does not follow the VM to a new
+subject. A key enrolled for one active subject is refused for any other, so a
+cloned guest's copied key cannot gain a second identity while the original
+enrollment is active. AIVM reports either refusal only as "identity service
+refused the operation"; the host-only ``aivm-secrets identity`` command says
+which rule refused.
+
+A VM's identity subject is derived from its name, its machine store, the
+owning principal and its libvirt domain UUID. Renaming a VM, moving it to
+another store or changing its owning principal gives it a new subject, with
+no retired keys, while the old enrollment may still be active and hold the
+guest's key. If it does, ``identity_enroll`` for the renamed VM is refused,
+because another active subject holds the key. Until AIVM offers to revoke the
+old enrollment on rename, revoke it by hand first. Inside the guest, this
+prints the key's fingerprint::
+
+    openssl pkey -in ~/.config/aivm/identity/client.key -pubout -outform DER | sha256sum
+
+Find the row with that ``key_sha256`` in ``identity status``, and run
+``identity revoke --root ... --subject OLD`` with that row's subject. If the
+VM has ever run ``identity_rotate_key``, regenerate its CSR first (below):
+its stale CSR carries the original key, which nothing refuses under the new
+subject.
+
+**Guests rotated with the current helper.** After ``identity_rotate_key`` the
+current guest helper never replaces ``client.csr``. That file keeps the CSR
+for the *original* key while ``client.key`` holds the new one, and every
+later CSR request sends it. For such a VM ``identity_renew`` is refused, and
+so is ``identity_enroll`` (with or without ``--replace``) after its
+enrollment was revoked, for example by ``rotate-ca``, because the original
+key is retired. Until the helper regenerates the CSR (a later increment),
+regenerate it by hand inside the guest, as the guest user, before renewing or
+re-enrolling::
+
+    cd ~/.config/aivm/identity && umask 077 &&
+      openssl req -new -key client.key -out client.csr -subj /CN=aivm-guest
+
+Do the same before enrolling such a VM under a subject that has no retired
+keys (after a rename, or after its row was forgotten): nothing would refuse
+the stale CSR there, and the original key would be certified again.
+
+Do not run ``identity_rotate_key`` again in place of a renewal. Each rotation
+retires one more key. After nine, the original key (the one the stale CSR
+carries) is no longer among the last 8 retired, and any later re-enrollment
+of the stale CSR would certify it again.
+
+If ``identity_rotate_key`` fails while activating the new key, AIVM revokes
+the new enrollment. The guest is left on its old key, which is now retired,
+so re-enrolling it is refused. Reset the guest identity instead: inside the
+guest, remove ``client.key``, ``client.csr``, ``client.rotate.key`` and
+``client.rotate.csr`` from ``~/.config/aivm/identity``, then run
+``identity_enroll``, which generates a fresh key.
+
+``identity enroll --replace`` accepts an optional compare-and-swap,
+``--expected-epoch N --expected-certificate-sha256 T`` (both together), which
+refuses the replacement if the enrollment changed since it was inspected.
+
+The registry holds at most 128 enrollments, revoked ones included. Two
+locked, audited host-only verbs free slots::
+
+    python -I -m aivm_secrets identity forget --root ... --subject SUBJECT
+    python -I -m aivm_secrets identity prune --root ...
+
+Both remove only enrollments that are revoked **and** whose certificate has
+expired, and print the removed ``{subject, epoch, certificate_sha256}`` list.
+A forgotten subject would restart at epoch 0, which is harmless: its
+certificate has expired and every token bound to it expired no later.
+Managed-VM subjects embed the libvirt domain UUID, so a recreated VM is a new
+subject anyway. A VM that still exists keeps its subject, though, through
+revocation and ``rotate-ca``, and ``prune`` also removes its row once it is
+revoked and its last certificate (valid for 7 days) has expired. Forgetting a
+row discards the keys retired for it, so the next enrollment of that VM
+certifies whatever key its CSR carries, including a key it rotated away from.
+Before enrolling such a VM again, make sure its ``client.csr`` was made from
+its current ``client.key`` (regenerate it as above), or reset its guest
+identity.
 
 This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
 socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest

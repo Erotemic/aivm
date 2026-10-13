@@ -145,7 +145,20 @@ against real libvirt/SSH hardware in this environment.**
   certificate installation failure, revoke the newly enrolled identity.
 - **Domain UUID changes on VM recreation:** derived subject changes; old
   registry entry/token cannot satisfy the new session and must be explicitly
-  replaced or revoked. The old registry entry remains until operator review.
+  replaced or revoked. The old registry entry remains until operator review;
+  once it is revoked and its certificate has expired, `identity forget` or
+  `identity prune` frees its slot (the subject embeds the old domain's UUID,
+  so it does not come back once that domain is gone). `prune` also removes
+  the revoked, expired row of a VM that still exists; re-enrolling such a VM
+  starts without its retired keys, so regenerate its CSR from `client.key`
+  first (see `aivm-secrets-garrett-certificate-lifecycle.md`).
+- **VM rename or store move:** the derived subject changes while the old
+  enrollment may stay active and hold the guest key; if it does, enrolling
+  the renamed VM is refused until the old row is revoked by hand (AIVM does
+  not yet prompt for it). Keys retired for the old subject are not retired
+  for the new one, so a VM that ran `identity_rotate_key` must regenerate its
+  stale CSR before enrolling under the new subject (see
+  `aivm-secrets-garrett-certificate-lifecycle.md`).
 - **Clone/rollback preserving UUID, SSH host key and software private key:**
   **not protected**. A privileged host administrator or restored guest that
   preserves all identity state can reproduce the certificate. Future vTPM,

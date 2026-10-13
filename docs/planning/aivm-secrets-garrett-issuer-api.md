@@ -100,18 +100,17 @@ without it name an invocation that no longer parses, and the test fails.
 | `public-client` | read-only | implemented | certificate delivery; bound-session start | returns only public certificate material |
 | `enroll` | operator-only | implemented | `identity_enroll` | creates authority for a subject, or reactivates a revoked one at a new epoch |
 | `enroll --replace` | operator-only | implemented | `identity_enroll --replace` | displaces an active enrollment without a CAS |
-| `enroll --replace --expected-epoch --expected-certificate-sha256` | operator-only | planned | none | the CAS removes the race, but this still replaces the key a VM is enrolled with |
+| `enroll --replace --expected-epoch --expected-certificate-sha256` | operator-only | implemented | none (`identity_enroll --replace` does not pass the CAS yet) | the CAS removes the race, but this still replaces the key a VM is enrolled with |
 | `renew-client` | automation-safe | implemented | `identity_renew` | CAS-guarded; same subject; a new seven-day certificate |
 | `rotate-client-key` | automation-safe | implemented | `identity_rotate_key` | CAS-guarded; requires a different key |
 | `revoke-if-current` | automation-safe | implemented | compensation after a failed certificate delivery | CAS-guarded; never revokes a newer enrollment |
 | `revoke` | operator-only | implemented | none | unconditional; can revoke an enrollment another writer just made |
-| `forget` | operator-only | planned | none | deletes an inactive row whose certificate has expired |
-| `prune` | operator-only | planned | none | deletes every such row |
+| `forget` | operator-only | implemented | none | deletes an inactive row whose certificate has expired, and that subject's retired-key custody with it |
+| `prune` | operator-only | implemented | none | deletes every such row |
 | `issue` | automation-safe | implemented | bound-session start | a token of at most one hour, capped at the certificate's expiry; no registry write |
 | `bridge` | automation-safe | implemented | bound session | serves broker verbs; no state change |
 | `renew-server` | operator-only | implemented | none | uses one of 2048 server generations; bridges must restart |
-| `rotate-ca` | operator-only | implemented | none | replaces the trust root and ends every enrollment |
-| `rotate-ca --expected-ca-sha256` | operator-only | planned | none | the CAS stops a stale second run from revoking later enrollments |
+| `rotate-ca --expected-ca-sha256` | operator-only | implemented | none | replaces the trust root and revokes every enrollment (epochs advance); the required CAS stops a stale second run from revoking later enrollments |
 | `rotate-issuer` | operator-only | implemented | none | adds a signing key; at most 8 can be enabled |
 | `retire-issuer` | operator-only | implemented | none | every live token signed by that kid fails at its next presentation |
 | `prune-keys --superseded` | operator-only | planned | never; AIVM does not wrap it | destroys private keys irreversibly |

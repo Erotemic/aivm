@@ -66,7 +66,17 @@ explicit trusted administrative process before cleanup and retry. A failure
 *after* new-epoch issuance may require manual guest repair, and the host attempts a conditional revocation of exactly its new
 enrollment if installation fails; it must not revoke a concurrent replacement.
 If the guarded cleanup cannot be confirmed, manual reconciliation is required. A fresh operator-approved
-enrollment is then required. An in-flight request previously admitted by
+enrollment is then required, and with key custody it cannot reuse the old
+key: the host committed the new key K2 and retired the old key K1 before the
+guest activated K2, so after the compensating revocation a re-enrollment of
+K1 (the guest's `client.key` and `client.csr`) is `denied`, while renewal and
+rotation are refused because the row is inactive. Reset the guest identity
+(remove `client.key`, `client.csr`, `client.rotate.key` and
+`client.rotate.csr` from `~/.config/aivm/identity` inside the guest), then
+run `identity_enroll`, which generates a fresh key. Input for the
+guest-helper increment: a re-enrollment after a failed activation could use
+the staged `client.rotate.csr`, whose key K2 is the row's current, unretired
+key. An in-flight request previously admitted by
 the bridge is not canceled by epoch replacement; revoke/stop the original
 broker too when immediate cancellation is required.
 
@@ -104,5 +114,14 @@ SSH, TLS, cryptography and the filesystem adapters.
 - The forced helper executes only fixed programs as the unprivileged guest.
 - An existing VM does not gain secret access or trigger key rotation without
   an explicit operator command.
-- `identity_renew` keeps reusing the existing key; all existing vectors pass.
+- `identity_renew` keeps reusing the existing key, and the host now enforces
+  that (REN-07 in `aivm-secrets-garrett-certificate-lifecycle.md`): a renewal
+  CSR for any other key is `denied`, and the rotated-away key is retired for
+  the subject. The current helper leaves the original `client.csr` in place
+  after a rotation, so renewing (or, once revoked, re-enrolling) a rotated
+  guest is refused until `client.csr` is regenerated from `client.key`: by
+  hand for now, by the helper in a later increment (see
+  `aivm-secrets-garrett-certificate-lifecycle.md`). Rotating again instead
+  is not a safe substitute: after nine rotations the original key ages out
+  of the bounded retired list and the stale CSR would be certified again.
 - No provider credential or private guest key appears in host command stdout.

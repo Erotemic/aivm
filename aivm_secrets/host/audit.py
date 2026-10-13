@@ -48,6 +48,8 @@ EVENTS = (
     'identity_server_renew_intent',
     'identity_ca_rotate_intent',
     'identity_revoke_intent',
+    'identity_forget_intent',
+    'identity_prune_intent',
     'identity_token_issue_intent',
     'identity_key_rotate_intent',
     'identity_key_retire_intent',

@@ -59,6 +59,21 @@ def initial(*, issuer: str, audience: str, created_at: int,
                      'server': {'generation': 1, 'ca_generation': 1}})
 
 
+def require_ca(value: object, *, expected_sha256: str) -> dict[str, Any]:
+    """Compare-and-swap guard: the active CA is the one the caller inspected.
+
+    A CA rotation revokes every enrollment, so it must name the root it is
+    replacing. A stale or repeated invocation (the operator's second run of
+    the same command) is refused instead of revoking enrollments made under
+    the root the first run installed.
+    """
+    current = validate(value)
+    grammar.hex_string(expected_sha256, 64, code='invalid_capability')
+    if current['ca']['sha256'] != expected_sha256:
+        raise SecretsError('revoked')
+    return current
+
+
 def activate_ca(value: object, *, ca_generation: int, ca_sha256: str,
                 server_generation: int) -> dict[str, Any]:
     """One-way trust cutover: both active TLS and CA identities change.

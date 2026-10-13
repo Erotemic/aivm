@@ -55,8 +55,10 @@ credentials, or the default secrets transport. Nothing starts automatically.
    intent before the action, and an outcome afterwards. The operator should
    retain audit-chain heads externally to detect tail truncation.
 6. A **pure** `aivm_secrets.identity.garrett.registry` owns the bounded schema,
-   allowed enrollment transitions, revocation and certificate lookup. A
-   language-neutral JSONL runner has **69 frozen enrollment vectors**, alongside
+   allowed enrollment transitions, revocation, key custody, forget/prune
+   and certificate lookup. A language-neutral JSONL runner replays **161
+   enrollment vectors** (`identity-registry-v1.jsonl`, edited in place until
+   it ships in a release), alongside
    the existing 64 identity-decision vectors and deterministic cryptographic
    fixture. This is the parity contract for an independently built Rust port.
 

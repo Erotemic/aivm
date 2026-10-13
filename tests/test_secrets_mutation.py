@@ -412,6 +412,176 @@ MUTANTS = [
            'host/hardening.py',
            '    for name, module in list(sys.modules.items()):',
            '    for name, module in ():', ('test_secrets_hardening.py',)),
+    # -- REN-07: renewal re-certifies only the enrolled key ------------------
+    Mutant('REN-07', 'renewal accepts a different key',
+           'identity/garrett/key_rotation.py',
+           "    if enrolled_key_fingerprint != candidate_key_fingerprint:\n        raise SecretsError('denied')",
+           "    if False:\n        raise SecretsError('denied')",
+           ('test_secrets_identity_key_rotation_parity.py',
+            'test_secrets_identity_lifecycle.py')),
+    Mutant('REN-07', 'the host renews without the same-key rule',
+           'identity/enrollment.py',
+           '                authorize_key_reuse(enrolled_key_fingerprint=enrolled,\n'
+           '                                    candidate_key_fingerprint=fp)',
+           '                pass', ('test_secrets_identity_lifecycle.py',)),
+    Mutant('REN-07', 'the enrolled key is not checked against the registry',
+           'identity/enrollment.py',
+           "            if enrolled != row['key_sha256']:",
+           '            if False:', ('test_secrets_identity_lifecycle.py',)),
+    # -- REN-08: key fingerprint custody ---------------------------------------
+    Mutant('REN-08', 'a key retired for a subject is certified for it again',
+           'identity/garrett/registry.py',
+           "    if prior is not None and key_sha256 in prior['retired_keys']:\n",
+           '    if False:\n',
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_lifecycle.py')),
+    Mutant('REN-08', "another active subject's key is certified for a second subject",
+           'identity/garrett/registry.py',
+           "        if name != subject and row['active'] and row['key_sha256'] == key_sha256:",
+           '        if False:',
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    Mutant('REN-08', 'a replaced key is not retired',
+           'identity/garrett/registry.py',
+           "    if prior['key_sha256'] != key_sha256:\n        kept.append(prior['key_sha256'])",
+           "    if False:\n        kept.append(prior['key_sha256'])",
+           ('test_secrets_identity_registry_parity.py',)),
+    Mutant('REN-08', 'the retired-key list is not bounded',
+           'identity/garrett/registry.py',
+           '    if len(kept) > MAX_RETIRED_KEYS:', '    if False:',
+           ('test_secrets_identity_registry_parity.py',)),
+    Mutant('REN-08', 'a registry with one key on two active rows is accepted',
+           'identity/garrett/registry.py',
+           "            if current in active_keys:\n                raise SecretsError('invalid_capability')",
+           "            if False:\n                raise SecretsError('invalid_capability')",
+           ('test_secrets_identity_registry_parity.py',)),
+    Mutant('REN-08', 'enroll --replace ignores its compare-and-swap',
+           'identity/garrett/registry.py',
+           "    if (prior is None or prior['epoch'] != expected_epoch or\n"
+           "            prior['certificate_sha256'] != expected_thumbprint):",
+           '    if prior is None:',
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    Mutant('REN-08', 'a partial enroll CAS becomes an unconditional replace',
+           'identity/enrollment.py',
+           '        if type(replace) is not bool or (cas and (\n'
+           '                not replace or type(expected_epoch) is not int or\n'
+           '                type(expected_thumbprint) is not str)):',
+           '        if type(replace) is not bool:',
+           ('test_secrets_identity_enrollment.py',)),
+    Mutant('REN-08', 'a registry with an unbounded retired-key list is accepted',
+           'identity/garrett/registry.py',
+           '        if type(retired) is not list or len(retired) > MAX_RETIRED_KEYS:',
+           '        if type(retired) is not list:',
+           ('test_secrets_identity_registry_parity.py',)),
+    Mutant('REN-08', "a registry that retires a row's current key is accepted",
+           'identity/garrett/registry.py',
+           '            if _key(item) == current or item in seen:',
+           "            if _key(item) == '' or item in seen:",
+           ('test_secrets_identity_registry_parity.py',)),
+    Mutant('REN-08', 'a registry with a duplicate retired key is accepted',
+           'identity/garrett/registry.py',
+           '            if _key(item) == current or item in seen:',
+           '            if _key(item) == current:',
+           ('test_secrets_identity_registry_parity.py',)),
+    # -- REG-01/REG-02: fail-safe revocation and a reusable registry ----------
+    Mutant('REG-01', 'revoking at the maximum epoch leaves the row active',
+           'identity/garrett/registry.py',
+           "    if row['epoch'] != MAX_EPOCH:\n"
+           "        result['epoch'] = epochs.advance(row['epoch'], maximum=MAX_EPOCH)\n",
+           "    result['epoch'] = epochs.advance(row['epoch'], maximum=MAX_EPOCH)\n",
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    Mutant('REG-01', 'a saturated row is re-enrolled instead of exhausted',
+           'identity/garrett/registry.py',
+           "    if prior is not None and prior['epoch'] == MAX_EPOCH:\n"
+           "        raise SecretsError('exhausted')",
+           "    if False:\n        raise SecretsError('exhausted')",
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    Mutant('REN-02', 'renewing a saturated enrollment is not revoked',
+           'identity/garrett/registry.py',
+           "    if prior['epoch'] == MAX_EPOCH:\n"
+           '        # An enrollment that cannot advance cannot be renewed: it is over.\n',
+           '    if False:\n',
+           ('test_secrets_identity_renewal_parity.py',)),
+    Mutant('REG-02', 'prune commits before auditing each forgotten row',
+           'identity/enrollment.py',
+           "                    for item in forgotten:\n"
+           "                        log.record('identity_forget_intent', timestamp=stamp,\n"
+           "                                   resource={'subject': item['subject'],\n"
+           "                                             'epoch': item['epoch']},\n"
+           "                                   digest=item['certificate_sha256'])\n"
+           "                    self._update(updated)\n",
+           "                    self._update(updated)\n"
+           "                    for item in forgotten:\n"
+           "                        log.record('identity_forget_intent', timestamp=stamp,\n"
+           "                                   resource={'subject': item['subject'],\n"
+           "                                             'epoch': item['epoch']},\n"
+           "                                   digest=item['certificate_sha256'])\n",
+           ('test_secrets_identity_enrollment.py',)),
+    Mutant('REG-02', 'an active row can be forgotten',
+           'identity/garrett/registry.py',
+           "    return not row['active'] and now >= row['not_after']",
+           "    return now >= row['not_after']",
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    Mutant('REG-02', 'a row can be forgotten before its certificate expires',
+           'identity/garrett/registry.py',
+           "    return not row['active'] and now >= row['not_after']",
+           "    return not row['active']",
+           ('test_secrets_identity_registry_parity.py',
+            'test_secrets_identity_enrollment.py')),
+    # -- CA-04/CA-05: revoke-all on rotation, guarded by the active root ------
+    Mutant('CA-04', 'CA rotation leaves enrollments active',
+           'identity/garrett/registry.py',
+           "        if row['active']:\n            result['subjects'][subject] = _deactivated(row)",
+           "        if False:\n            result['subjects'][subject] = _deactivated(row)",
+           ('test_secrets_identity_registry_parity.py', 'test_secrets_ca_rotation.py')),
+    Mutant('CA-04', 'CA rotation erases the registry and restarts epochs',
+           'identity/enrollment.py', '                self._update(revoked_registry)',
+           "                self._update({'schema': registry_model.SCHEMA, 'subjects': {}})",
+           ('test_secrets_ca_rotation.py',)),
+    Mutant('CA-04', 'CA rotation commits before auditing each revocation',
+           'identity/enrollment.py',
+           "                for item in revoked:\n"
+           "                    log.record('identity_revoke_intent', timestamp=stamp,\n"
+           "                               resource={'subject': item['subject'],\n"
+           "                                         'epoch': item['epoch']},\n"
+           "                               digest=item['certificate_sha256'])\n"
+           "                self._update(revoked_registry)\n"
+           "                self._write_selected_manifest(selection)\n",
+           "                self._update(revoked_registry)\n"
+           "                self._write_selected_manifest(selection)\n"
+           "                for item in revoked:\n"
+           "                    log.record('identity_revoke_intent', timestamp=stamp,\n"
+           "                               resource={'subject': item['subject'],\n"
+           "                                         'epoch': item['epoch']},\n"
+           "                               digest=item['certificate_sha256'])\n",
+           ('test_secrets_ca_rotation.py',)),
+    Mutant('CA-05', 'the root compare-and-swap accepts any expected root',
+           'identity/garrett/authority.py',
+           "    if current['ca']['sha256'] != expected_sha256:\n        raise SecretsError('revoked')",
+           "    if False:\n        raise SecretsError('revoked')",
+           ('test_secrets_authority_parity.py',)),
+    Mutant('CA-05', 'rotate-ca runs without its compare-and-swap',
+           'identity/enrollment.py',
+           '            authority_model.require_ca(current, expected_sha256=expected_ca_sha256)\n',
+           '', ('test_secrets_ca_rotation.py',)),
+    Mutant('CA-03', 'a server leaf from an older CA generation is selectable',
+           'identity/garrett/authority.py',
+           "    if server['ca_generation'] != ca['generation']:\n        raise SecretsError('invalid_capability')",
+           "    if False:\n        raise SecretsError('invalid_capability')",
+           ('test_secrets_authority_parity.py',)),
+    Mutant('RUNNER-01', 'an unhashable action ends the trust-generation stream',
+           'identity/authority_runner.py',
+           '        if type(action) is not str or action not in fields:',
+           '        if action not in fields:', ('test_secrets_authority_parity.py',)),
+    Mutant('RUNNER-01', 'an unhashable action ends the registry stream',
+           'identity/registry_runner.py',
+           '        if type(action) is not str or action not in ACTIONS:',
+           '        if action not in ACTIONS:',
+           ('test_secrets_identity_registry_parity.py',)),
 ]  # fmt: skip
 
 SUPPORT = ('__init__.py', 'secrets_helpers.py')

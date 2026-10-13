@@ -47,4 +47,20 @@ def authorize_key_rotation(*, expected_epoch: int, actual_epoch: int,
     return advance(actual_epoch, maximum=MAX_EPOCH)
 
 
-__all__ = ['authorize_key_rotation']
+def authorize_key_reuse(*, enrolled_key_fingerprint: str,
+                        candidate_key_fingerprint: str) -> None:
+    """Allow a certificate-only renewal iff the candidate key is unchanged.
+
+    REN-07: a renewal re-certifies the key the subject already holds and
+    nothing else. Without this rule a renewal after a key rotation (a stale
+    CSR, a reverted guest snapshot, an old guest helper) would re-certify the
+    rotated-away key. Changing the key is the separate, CAS-guarded
+    `authorize_key_rotation` decision, never a side effect of renewal.
+    """
+    _fingerprint(enrolled_key_fingerprint)
+    _fingerprint(candidate_key_fingerprint)
+    if enrolled_key_fingerprint != candidate_key_fingerprint:
+        raise SecretsError('denied')
+
+
+__all__ = ['authorize_key_reuse', 'authorize_key_rotation']

@@ -116,6 +116,95 @@ def test_no_implicit_vm_actions_or_broker_start(tmp_path, capsys):
     assert not list(root.glob('*.jwt'))
 
 
+def test_rotate_ca_cli_requires_and_enforces_the_expected_root(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root, key, csr = tmp_path / 'authority', tmp_path / 'guest.key', tmp_path / 'guest.csr'
+    assert cli(capsys, 'init', '--root', root, '--issuer', 'aivm.test')[0] == 0
+    _, request, _ = cli(capsys, 'request', '--key', key, '--csr', csr)
+    _, enrolled, _ = cli(capsys, 'enroll', '--root', root, '--subject', 'vm-a',
+                         '--csr', csr, '--approve-key-fingerprint',
+                         request['key_fingerprint'])
+    _, status, _ = cli(capsys, 'status', '--root', root)
+    # The CAS is mandatory: argparse refuses the bare verb.
+    done = subprocess.run([sys.executable, '-I', '-m', 'aivm_secrets',
+                           'identity', 'rotate-ca', '--root', str(root)],
+                          capture_output=True, text=True, timeout=15)
+    assert done.returncode == 2 and '--expected-ca-sha256' in done.stderr
+    code, _, error = cli(capsys, 'rotate-ca', '--root', root,
+                         '--expected-ca-sha256', 'b' * 64)
+    assert code == 1 and 'revoked' in error.lower()
+    assert cli(capsys, 'status', '--root', root)[1] == status
+    code, rotated, _ = cli(capsys, 'rotate-ca', '--root', root,
+                           '--expected-ca-sha256', status['ca_sha256'])
+    assert code == 0
+    assert rotated['revoked'] == [{
+        'subject': 'vm-a', 'epoch': enrolled['epoch'],
+        'certificate_sha256': enrolled['certificate_sha256']}]
+    # Re-enroll under the new root, then replay the first command: refused,
+    # and the new enrollment survives.
+    _, again, _ = cli(capsys, 'enroll', '--root', root, '--subject', 'vm-a',
+                      '--csr', csr, '--approve-key-fingerprint',
+                      request['key_fingerprint'])
+    assert again['epoch'] == enrolled['epoch'] + 2
+    code, _, _ = cli(capsys, 'rotate-ca', '--root', root,
+                     '--expected-ca-sha256', status['ca_sha256'])
+    assert code == 1
+    _, after, _ = cli(capsys, 'status', '--root', root)
+    assert after['subjects']['vm-a']['active'] is True
+    assert after['subjects']['vm-a']['epoch'] == again['epoch']
+
+
+def test_enroll_replace_cli_takes_an_optional_complete_cas(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    root, key, csr = tmp_path / 'authority', tmp_path / 'guest.key', tmp_path / 'guest.csr'
+    assert cli(capsys, 'init', '--root', root, '--issuer', 'aivm.test')[0] == 0
+    _, request, _ = cli(capsys, 'request', '--key', key, '--csr', csr)
+    base = ['enroll', '--root', root, '--subject', 'vm-a', '--csr', csr,
+            '--approve-key-fingerprint', request['key_fingerprint']]
+    _, first, _ = cli(capsys, *base)
+    stale = ['--expected-epoch', first['epoch'] + 1,
+             '--expected-certificate-sha256', first['certificate_sha256']]
+    current = ['--expected-epoch', first['epoch'],
+               '--expected-certificate-sha256', first['certificate_sha256']]
+    for refused in (base + ['--replace'] + stale,
+                    base + ['--replace', '--expected-epoch', first['epoch']],
+                    base + current):
+        assert cli(capsys, *refused)[0] == 1
+    assert cli(capsys, 'status', '--root', root)[1]['subjects']['vm-a'][
+        'epoch'] == first['epoch']
+    code, replaced, _ = cli(capsys, *base, '--replace', *current)
+    assert code == 0 and replaced['epoch'] == first['epoch'] + 1
+    # Plain --replace without a CAS keeps working.
+    code, plain, _ = cli(capsys, *base, '--replace')
+    assert code == 0 and plain['epoch'] == first['epoch'] + 2
+
+
+def test_forget_and_prune_cli_remove_only_expired_revoked_rows(
+        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from aivm_secrets.identity.certificates import create_csr
+    root = tmp_path / 'authority'
+    past = 1_700_000_000
+    authority = IdentityAuthority.initialize(
+        root, issuer='aivm.test', audience='aivm-secrets.identity', now=past)
+    csr = tmp_path / 'guest.csr'
+    fingerprint = create_csr(private_key=tmp_path / 'guest.key', request_file=csr)
+    for subject in ('vm-a', 'vm-b', 'vm-c'):
+        authority.enroll(subject=subject, csr=csr.read_bytes(),
+                         approve_fingerprint=fingerprint, now=past)
+        if subject != 'vm-c':
+            authority.revoke(subject, now=past)
+    # vm-c is still active: never forgotten, even with an expired certificate.
+    code, _, _ = cli(capsys, 'forget', '--root', root, '--subject', 'vm-c')
+    assert code == 1
+    code, forgot, _ = cli(capsys, 'forget', '--root', root, '--subject', 'vm-a')
+    assert code == 0 and [x['subject'] for x in forgot['forgotten']] == ['vm-a']
+    code, pruned, _ = cli(capsys, 'prune', '--root', root)
+    assert code == 0 and [x['subject'] for x in pruned['forgotten']] == ['vm-b']
+    code, again, _ = cli(capsys, 'prune', '--root', root)
+    assert code == 0 and again == {'forgotten': []}
+    assert set(cli(capsys, 'status', '--root', root)[1]['subjects']) == {'vm-c'}
+
+
 def test_host_operator_commands_require_isolated_interpreter(tmp_path, capsys):
     unsafe = tmp_path / 'not-created'
     code = main(['identity', 'init', '--root', str(unsafe)])
