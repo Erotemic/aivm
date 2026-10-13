@@ -138,6 +138,51 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   runs requests one at a time and finishes every frame it has read, so a
   request queued behind a slow one may still be applied after that answer. The
   guest client's hint now says so.
+* Never present a possibly consumed rotating OAuth refresh token again without
+  an operator's decision. Garrett OAuth vault records move to schema 2 with
+  `refresh_state` (`none` / `in_doubt` / `reauth_required`). `in_doubt` is
+  made durable before the refresh request and replaced atomically by the
+  successor grant. The pure `classify_refresh_failure` lets only a failed
+  connect or TLS handshake (`refresh_not_sent`) restore the record, and only a
+  400 `invalid_grant` move it to `reauth_required`. Everything else stays in
+  doubt: a reply lost or late after the request was read, or an outcome the
+  disk refuses to store. Sessions and leases refuse both states. `identity
+  oauth-refresh --retry-in-doubt` makes one deliberate retry; `oauth-revoke`
+  and `oauth-login --replace` also end them. Pre-deployment schema-1 vault
+  records are refused; no migration is provided.
+* The vault audit log records every refresh outcome as
+  `oauth_refresh_not_sent`, `oauth_refresh_rejected` or
+  `oauth_refresh_in_doubt`, with the closed error code `credential_source`.
+  `oauth-status` shows `refresh_state`, `generation` and `has_refresh`. A
+  grant already at the last refresh generation (2^31-1) is refused with
+  `exhausted` before its refresh token is sent.
+* An edited OAuth provider profile can inspect, revoke and replace its AEAD-
+  authenticated vault record: the epoch advances and the old digest prefix is
+  kept. Sessions still require the current profile. Vault revocation at the
+  maximum epoch now deactivates instead of failing open. `oauth-login` checks
+  the vault before the browser flow. It reports `grant orphaned upstream`
+  whenever the provider may hold a grant that nothing stored: the vault
+  refused it after the exchange, or the exchange ended `exchange_in_doubt`,
+  which now includes a 200 reply the contract refuses. Automatic upstream
+  revocation is not implemented.
+* The `oauth-login` loopback callback is bounded: 5 s per connection operation
+  and an absolute per-request deadline inside the login's own. `--timeout`
+  (1..600 s) is now also the authorization lifetime. A matching RFC 6749 / RFC
+  9207 error callback, with up to all five parameters, fails fast with
+  `authorization_denied` without echoing provider text. A busy port reports
+  `callback_port_unavailable`.
+* The standalone OAuth token client ignores `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`. It trusts only a pinned anchor, read as a trusted host file,
+  or OpenSSL's compiled-in roots, and it closes every response. Tests set each
+  variable to an impostor's CA, the directory as a correctly hashed CA store.
+* The OAuth contract no longer has Python-specific behaviour. Scopes split on
+  exactly SP and `,`. `allowed_scopes` must be a list, `expected_issuer` a
+  string, and times integers, never booleans. The PKCE verifier and `state`
+  are 43..128 unreserved characters. Provider error text is bounded in UTF-8
+  bytes with no NUL or lone surrogate, and a classified refresh `error` must
+  be RFC 6749 NQSCHAR ASCII. The unshipped `garrett-oauth-v1.jsonl` corpus is
+  edited in place: it grows from 70 to 148 rows, adds a `classify` action and
+  changes no earlier expectation. 29 mutants cover the new checks.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection
@@ -184,8 +229,9 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * Permit explicit OAuth-backed managed-VM sessions with the authorized VM
   subject and identity-only forwarded socket. Mixed token sources fail closed;
   ordinary SSH and previously configured credentials do not change.
-* Freeze a provider-neutral OAuth transition vector corpus for future Rust
-  parity and document the remaining formal and deployment assumptions.
+* Add a provider-neutral OAuth transition vector corpus (unreleased; edited
+  in place until it ships) for future Rust parity and document the remaining
+  formal and deployment assumptions.
 
 ### Garrett protocol modularization (experimental)
 * Extract pure Garrett claims, enrollment, VM identity and issue/present

@@ -239,8 +239,11 @@ parity tests: no Rust executable exists yet.
 The reference implementation now defines a separate pure OAuth contract in
 `aivm_secrets.identity.garrett.oauth_contract` (PKCE pending state, callback,
 scopes, access/refresh generation and expiration) and an independent JSONL
-runner at `python -m aivm_secrets.identity.oauth_runner`. A frozen
-`garrett-oauth-v1.jsonl` suite contains positive and negative transitions.
+runner at `python -m aivm_secrets.identity.oauth_runner`. The
+`garrett-oauth-v1.jsonl` suite (unreleased, edited in place until the first
+release that ships it) contains positive and negative transitions,
+including RFC 7636-length callback values, error callbacks, and classify
+and refreshable actions.
 The future Rust runner selected with `AIVM_SECRETS_RUST_OAUTH_RUNNER` must
 produce the same canonical output. Test agreement is not a Python proof.
 

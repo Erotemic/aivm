@@ -14,6 +14,7 @@ import os
 import stat
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
 from ..errors import SecretsError
 from ..host.files import private_directory, read_owned
@@ -126,7 +127,15 @@ def add_parser(subs):
             oauth.add_argument('--subject', required=True)
         if name == 'oauth-login':
             oauth.add_argument('--replace', action='store_true')
-            oauth.add_argument('--timeout', type=int, default=180)
+            oauth.add_argument(
+                '--timeout', type=int, default=180,
+                help='Seconds (1..600) the authorization stays valid and '
+                     'the callback is awaited')
+        if name == 'oauth-refresh':
+            oauth.add_argument(
+                '--retry-in-doubt', action='store_true',
+                help='Deliberately present a refresh token whose previous '
+                     'refresh had an unknown outcome, exactly once')
 
     bridge = common('bridge')
     bridge.add_argument('--broker-socket', type=Path, required=True)
@@ -158,6 +167,89 @@ def _csr_data(path: Path) -> bytes:
             return data
     except OSError:
         raise SecretsError('invalid_capability') from None
+
+
+ORPHANED_GRANT = (
+    'grant orphaned upstream: the provider issued, or may have issued, a '
+    'grant that this vault did not store; revoke it at the provider')
+
+
+def _orphaned(error: SecretsError) -> SecretsError:
+    """``error`` with its code and status, told as an orphaned grant."""
+    note = f' ({error.detail})' if error.detail else ''
+    return SecretsError(error.code, status=error.status,
+                        detail=ORPHANED_GRANT + note)
+
+
+def oauth_command(args: argparse.Namespace, roots: tuple[Path, ...], *,
+                  transport: Any = None,
+                  browser: Callable[[str], None] | None = None) -> dict:
+    """Run one ``identity oauth-*`` verb and return its JSON answer.
+
+    ``transport`` is the token endpoint and ``browser`` the operator's
+    browser, the two boundaries an interactive login crosses. ``run`` passes
+    neither: the pinned HTTPS endpoint, and an operator who opens the URL.
+    """
+    import time
+
+    from .oauth_provider import load_provider
+    from .oauth_transport import (
+        EXCHANGE_IN_DOUBT,
+        HostCallback,
+        PinnedOAuthHTTP,
+        authorization_url,
+        exchange_code,
+        new_pending,
+    )
+    from .oauth_vault import OAuthVault
+
+    if args.identity_action == 'oauth-init':
+        OAuthVault.initialize(args.vault, untrusted=roots)
+        return {'initialized': True}
+    provider = load_provider(args.provider_config, untrusted=roots)
+    vault = OAuthVault(args.vault, untrusted=roots)
+    if args.identity_action == 'oauth-status':
+        return vault.status(provider, args.subject)
+    if args.identity_action == 'oauth-revoke':
+        return vault.revoke(provider, args.subject)
+    if args.identity_action == 'oauth-refresh':
+        # Explicit refresh; the returned token stays in this host process.
+        return vault.refresh(provider, args.subject, transport=transport,
+                             retry_in_doubt=args.retry_in_doubt)
+    if args.identity_action != 'oauth-login':
+        raise SecretsError('invalid_request')
+    if not 1 <= args.timeout <= 600:
+        raise SecretsError('invalid_policy')
+    # Refuse before the browser flow: a refusal after the code exchange
+    # would leave a freshly minted grant upstream with no record of it.
+    vault.can_enroll(provider, args.subject, replace=args.replace)
+    sender = (transport if transport is not None
+              else PinnedOAuthHTTP(untrusted=roots))
+    # The operator's --timeout is the authorization's own lifetime too, so
+    # the wait is not silently cut short by a shorter default.
+    pending = new_pending(provider, ttl=args.timeout)
+    with HostCallback(provider, pending) as callback:
+        url = authorization_url(provider, pending)
+        print('Open this URL in a trusted host browser:', flush=True)
+        print(url, flush=True)
+        if browser is not None:
+            browser(url)
+        params = callback.wait(timeout=args.timeout)
+    try:
+        grant = exchange_code(provider, pending, params, now=int(time.time()),
+                              transport=sender, untrusted=roots)
+    except SecretsError as error:
+        # Sent and answered unusably, or sent with no usable answer: the
+        # provider may hold a grant that nothing here will ever store.
+        if error.detail == EXCHANGE_IN_DOUBT:
+            raise _orphaned(error) from None
+        raise
+    try:
+        return vault.enroll(provider, args.subject, grant, replace=args.replace)
+    except SecretsError as error:
+        raise _orphaned(error) from None
+    except Exception:
+        raise _orphaned(SecretsError('credential_source')) from None
 
 
 def run(args: argparse.Namespace) -> int:
@@ -192,47 +284,10 @@ def run(args: argparse.Namespace) -> int:
         if not sys.flags.isolated:
             raise SecretsError('unsafe_file', detail='OAuth host commands require python -I')
         from ..host.hardening import harden_process, verify_runtime
-        from .oauth_provider import load_provider
-        from .oauth_vault import OAuthVault
-        from .oauth_transport import (HostCallback, PinnedOAuthHTTP,
-                                      new_pending, authorization_url,
-                                      exchange_code)
-        import time
         roots = tuple(args.untrusted_root)
         harden_process()
         verify_runtime(roots)
-        if args.identity_action == 'oauth-init':
-            OAuthVault.initialize(args.vault, untrusted=roots)
-            print(codec.dumps({'initialized': True}).decode())
-            return 0
-        provider = load_provider(args.provider_config, untrusted=roots)
-        vault = OAuthVault(args.vault, untrusted=roots)
-        if args.identity_action == 'oauth-status':
-            answer = vault.status(provider, args.subject)
-        elif args.identity_action == 'oauth-revoke':
-            answer = vault.revoke(provider, args.subject)
-        elif args.identity_action == 'oauth-refresh':
-            # Explicit refresh; the return token stays in this host process.
-            vault.credential_for_session(provider, args.subject,
-                                         resource_host=provider.resource_host,
-                                         force_refresh=True)
-            answer = vault.status(provider, args.subject)
-        elif args.identity_action == 'oauth-login':
-            if not 1 <= args.timeout <= 600:
-                raise SecretsError('invalid_policy')
-            pending = new_pending(provider)
-            with HostCallback(provider, pending) as callback:
-                print('Open this URL in a trusted host browser:', flush=True)
-                print(authorization_url(provider, pending), flush=True)
-                params = callback.wait(timeout=args.timeout)
-            grant = exchange_code(provider, pending, params,
-                                  now=int(time.time()), transport=PinnedOAuthHTTP(),
-                                  untrusted=roots)
-            answer = vault.enroll(provider, args.subject, grant,
-                                  replace=args.replace)
-        else:
-            raise SecretsError('invalid_request')
-        print(codec.dumps(answer).decode('ascii'))
+        print(codec.dumps(oauth_command(args, roots)).decode('ascii'))
         return 0
 
     # Identity host operations handle CA/signing keys and broker capabilities.

@@ -49,10 +49,10 @@ headers, host commands, `gh api`, or GraphQL documents supplied by an agent.
 
 | Component | Interface | Trusted inputs and remaining effects |
 | --- | --- | --- |
-| `identity/garrett/oauth_contract.py` | `PendingAuthorization`, `accept_callback`, `assess_token_response`, `require_active`, grant parsing | Pure. Authenticated callback/response source, explicit time, allowed scopes supplied by adapters. Rust JSONL corpus `garrett-oauth-v1.jsonl` |
+| `identity/garrett/oauth_contract.py` | `PendingAuthorization`, `callback_outcome`/`accept_callback`, `assess_token_response`, `require_active`, `classify_refresh_failure`, grant parsing | Pure. Authenticated callback/response source, explicit time, allowed scopes supplied by adapters. Rust JSONL corpus `garrett-oauth-v1.jsonl` |
 | `identity/oauth_provider.py` | Closed, canonical, host-owned provider profile | File provenance, service behavior, profile pin, public OAuth registration |
-| `identity/oauth_transport.py` | PKCE S256, loopback callback, pinned TLS POST, no redirects | Python SSL/HTTP, crypto/hash, browser/operator, external authorization server |
-| `identity/oauth_vault.py` | AES-GCM at rest, atomic record changes, revoked/rotated credential leases | Host FS, locks, process and kernel, durable audit, hardware rollback protection not provided |
+| `identity/oauth_transport.py` | PKCE S256, bounded loopback callback, pinned TLS POST with compiled-in trust roots, no redirects, sent/not-sent reporting | Python SSL/HTTP, crypto/hash, browser/operator, external authorization server |
+| `identity/oauth_vault.py` | AES-GCM at rest, durable atomic record replacement, refresh-outcome state, revoked/rotated credential leases | Host FS, locks, process and kernel, durable audit, hardware rollback protection not provided |
 | `identity/enrollment.py` | `rotate_issuer`, `retire_issuer`, `issue` | Host CA, X.509 crypto, key custody, live per-request issuer checks |
 | `host/broker.py` | Optional host-selected credential guard | Enforces existing `machine.admit`/`emit_final` and effect executor; no new API bypass |
 | `aivm/secrets_identity_transport.py` | Bound session and isolated broker command arguments | VM store, pinned SSH and libvirt UUID; no import of Python backend into AIVM |
@@ -146,24 +146,129 @@ A running broker with the old access token then **fails closed**; start a new
 bound session to use the refreshed token. Session renewal in-place is not
 implemented and must not fall back to unrestricted credential resolution.
 
+`oauth-status` prints only nonsecret metadata: `active`, `epoch`,
+`refresh_state`, `generation`, `has_refresh`, `expires_at`, `scopes`,
+`profile_current` and `previous_digest`. When it reports
+`refresh_state: in_doubt` (see below), decide deliberately between:
+
+```bash
+# Present the possibly spent refresh token exactly once more.
+python -I -m aivm_secrets identity oauth-refresh --retry-in-doubt \
+  --vault "$HOME/.config/aivm/secrets/oauth-vault" \
+  --provider-config "$HOME/.config/aivm/secrets/oauth-profile.json" \
+  --subject vm-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+# ...or authorize again, which replaces the record.
+python -I -m aivm_secrets identity oauth-login --replace ...
+# ...or abandon the grant without presenting its token again.
+python -I -m aivm_secrets identity oauth-revoke ...
+```
+
+`oauth-login --timeout N` (1..600 seconds, default 180) is both how long the
+command waits for the browser and the lifetime of the pending authorization.
+The login checks that the vault would accept the subject (`--replace` for an
+active record) *before* binding the callback port or printing a URL. Once the
+code exchange has been sent, two failures can leave a grant at the provider
+that nothing stored, and both fail with `grant orphaned upstream` (keeping
+their own code): the vault still refuses after the exchange -- another login
+for the same subject finished first -- or the exchange ended
+`exchange_in_doubt`, which includes a 200 reply the contract refuses (for
+example scopes broader than the profile allows, or no Bearer token type) and
+a request whose reply was lost. The operator must then revoke the grant at
+the provider. An `exchange_rejected` (400 `invalid_grant`: the code was
+refused) or `exchange_not_sent` failure issued nothing and is reported
+plainly. Automatic upstream revocation is not implemented.
+
 ## Credential and lifecycle semantics
 
 - Public OAuth clients must use the configured rotating refresh-token profile;
   missing/reused rotation is denied. Confidential clients can explicitly
-  choose a nonrotating profile. Ambiguous refresh HTTP responses are **not**
-  automatically retried; the operator may need to reauthorize.
+  choose a nonrotating profile.
+- A refresh token is never presented twice without an operator's decision,
+  **across processes and crashes**, not only within one call. Before the
+  refresh POST the vault durably records `refresh_state: in_doubt`; the
+  successor grant replaces that marker in one atomic replacement. A failure is
+  classified by the pure `classify_refresh_failure`: only a failed connection
+  or TLS handshake (`refresh_not_sent`) restores the previous state, and only
+  a 400 `invalid_grant` (`refresh_rejected`) is definite, moving the record to
+  `reauth_required`. Everything else -- a lost or late reply, a 5xx, a
+  redirect, an unusable 200, a crash -- leaves `in_doubt`, because the
+  provider may already have rotated the token and RFC 9700 reuse detection
+  would revoke the whole grant family on a replay. Whether bytes were sent is
+  judged conservatively: once the handshake has completed, every failure
+  counts as sent. Sessions (`session_snapshot`) and running leases
+  (`active_lease`) refuse an `in_doubt` or `reauth_required` record with
+  those fixed reasons (`refresh_in_doubt`, `reauth_required`). If the vault
+  cannot store a definite outcome -- the successor grant, or the state a
+  `refresh_not_sent` / `refresh_rejected` answer allows -- because the disk
+  refuses the write, the marker stays and the failure is reported as
+  `refresh_in_doubt` too. In the vault's audit log every refresh starts with
+  `oauth_refresh_intent` and, while the process is running, ends with
+  `oauth_recorded` (success), `oauth_refresh_not_sent`,
+  `oauth_refresh_rejected` or `oauth_refresh_in_doubt`; failure records carry
+  the closed code `credential_source`, and the event names the outcome. A
+  process that is killed or interrupted mid-request records nothing more:
+  its intent simply has no outcome event after it, and the record on disk
+  still says `in_doubt`. Only `oauth-refresh --retry-in-doubt` (exactly one
+  deliberate retry), `oauth-login --replace` or `oauth-revoke` (which
+  deactivates the record without presenting the token) leaves `in_doubt`;
+  only `oauth-login --replace` or `oauth-revoke` leaves `reauth_required`.
+- A grant's refresh generation is bounded at 2^31-1. A record already at the
+  maximum is refused with `exhausted` (`refresh_exhausted`) before any
+  refresh request is made, since the contract could accept no successor and
+  presenting the rotating refresh token would only spend it; reauthorize with
+  `oauth-login --replace`.
 - A provider response must report a Bearer access token. Reported OAuth scopes
   must be a subset of configured scopes and previously granted scopes. When
   providers omit `scope`, the contract assumes their documented default and
   cannot itself prove upstream permissions. A provider may choose shorter
   expirations; all requests deny expired session credentials.
-- AES-GCM vault records bind provider-profile digest and subject in AAD and
-  plaintext. A separate host vault key is protected by strict filesystem
-  checks. Writes are atomic with fsync; a cross-process `flock` protects
-  refresh, revocation and broker effect leasing. In-flight external effects
-  can complete before a revocation returns, but once revocation returns,
-  old-lease requests cannot dispatch. This assumes a single host/kernel and
-  filesystem with working advisory locks.
+- AES-GCM vault records (schema 2) bind the account (provider name and
+  subject) in AAD, and the provider-profile digest and subject in plaintext.
+  A separate host vault key is protected by strict filesystem checks. Each
+  record change writes a new file, fsyncs it, renames it over the record and
+  fsyncs the directory before returning (`replace_durable`), so the
+  `in_doubt` marker is on disk before the request it marks. A cross-process
+  `flock` protects refresh, revocation and broker effect leasing. In-flight
+  external effects can complete before a revocation returns, but once
+  revocation returns, old-lease requests cannot dispatch. This assumes a
+  single host/kernel and filesystem with working advisory locks and honest
+  `fsync`. Schema-1 records from earlier development builds are refused; no
+  migration is provided.
+- Using a record for a session requires the *current* provider profile
+  digest: an edited profile never silently inherits a grant issued under the
+  old one (`profile_changed`). Because the record file is named by provider
+  name and subject only, an edited profile still reaches it, so `oauth-status`,
+  `oauth-revoke` and `oauth-login --replace` accept a record that the vault key
+  authenticates but an earlier profile wrote. Revoke and replace adopt it
+  under the new profile, advance its epoch and keep the first 16 hex digits
+  of the old digest as `previous_digest`.
+- Revocation always deactivates. At the maximum epoch (2^31-1) a record is
+  deactivated without advancing; a later enrollment of that subject is then
+  refused with `exhausted`.
+- The token client trusts either one pinned anchor file (read as a trusted
+  host file, as the broker executor does) or the root store compiled into
+  OpenSSL. It deliberately does not call `load_default_certs`, which lets
+  `SSL_CERT_FILE` / `SSL_CERT_DIR` replace the trust store: the `identity
+  oauth-*` commands run in the operator's own shell, not in the scrubbed
+  environment AIVM gives the broker.
+- The loopback callback is reachable by any local process. Each connection
+  has a 5 s per-operation timeout and is cut at an absolute 5 s deadline that
+  never extends past the login's own deadline, so an idle or trickling
+  client cannot hold the login open. An exact RFC 6749 error response
+  (`error`, `state`, optionally `error_description`, `error_uri`, `iss`)
+  whose state matches ends the login at once with `authorization_denied`;
+  provider text is never echoed. A response carrying another state is
+  ignored. A port already in use is `callback_port_unavailable`.
+- The contract is language-neutral: reported scopes split on exactly SP and
+  `,` (not on "whitespace", which differs between Python and Rust),
+  `allowed_scopes` must be a JSON list, `expected_issuer` a string, times
+  JSON integers (never booleans), and the PKCE verifier and `state` 43..128
+  RFC 3986 unreserved characters. An error callback's `error_description`
+  and `error_uri` are bounded as `grammar.text` bounds text: 1..2048 UTF-8
+  bytes with no NUL and no lone surrogate (other control characters, such as
+  the CR LF some providers put in descriptions, are opaque provider text). A
+  classified refresh `error` value is RFC 6749 NQSCHAR, so ASCII; anything
+  else is refused rather than measured.
 - Ed25519 JWT signing and AEAD keys may be rotated and old `kid`s retired.
   Bridges consult the active keyring for **every** JWT presentation, not just
   at startup. JWT rotation is separate from client/server TLS leaf renewal,
@@ -182,7 +287,8 @@ implemented and must not fall back to unrestricted credential resolution.
   snapshot/clone rollback resistance, CA rotation/renewal, guest key rotation,
   distributed proxy
   replicas, stateless multi-host quotas/revocation, comprehensive OAuth provider
-  interoperability, real libvirt/OAuth smoke, formally verified Python, or
+  interoperability, real libvirt/OAuth smoke, formally verified Python,
+  automatic upstream revocation of an orphaned or replaced grant, or
   Rust/Lean parity. The local token profile contains an encrypted *broker
   capability*, which itself encloses the provider bearer; it is not a general
   unmodified-CLI HTTPS interception proxy and is not the exact single-layer
@@ -195,10 +301,23 @@ Use `tests/test_secrets_garrett_oauth*.py`,
 `tests/test_secrets_garrett_broker_guard.py`,
 `tests/test_secrets_vm_enrollment_transport.py`. The e2e suite uses synthetic
 OAuth and an actual local TLS 1.3 client certificate to exercise the existing
-restricted broker. The frozen `garrett-oauth-v1.jsonl` contract is an independent
+restricted broker. The `garrett-oauth-v1.jsonl` contract is an independent
 input/output corpus for the future Rust runner, configured with
 `AIVM_SECRETS_RUST_OAUTH_RUNNER`; until implemented, its test is an expected skip,
-not a parity result.
+not a parity result. It has not shipped in a release and is still edited in
+place: its callback rows use RFC 7636-length PKCE values, and it covers error
+callbacks (a refusal row carries `reason` only for the contract's own fixed
+reasons, today `authorization_denied`), the scope separator set, list-typed
+`allowed_scopes`, string-typed issuers, integer-typed times, byte-measured
+provider error text and a `classify` action for refresh failures. The
+in-doubt, profile-edit, callback and trust-store behaviour is tested against
+the real vault, loopback listener and a real TLS server on loopback --
+including a refresh whose reply is lost or late after the request was read,
+and `SSL_CERT_FILE` and a correctly hashed `SSL_CERT_DIR` each naming the
+impostor's CA -- with a mutant in `tests/test_secrets_mutation.py` for each
+new check (the runner's own copies of the contract's type checks excepted:
+deleting one alone changes no output, so it is an equivalent mutant); no
+live provider has been exercised.
 
 The P4c certificate renewal increment adds an explicit host-controlled
 `identity renew-client` transaction and `aivm vm identity_renew` for managed
