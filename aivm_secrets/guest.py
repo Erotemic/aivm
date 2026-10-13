@@ -31,7 +31,6 @@ import argparse
 import json
 import os
 import socket
-import ssl
 import configparser
 from pathlib import Path
 import sys
@@ -167,6 +166,10 @@ def exchange(
         # The guest client is not a trust boundary, but must never fall back
         # to the unbound wire when this explicitly provisioned mode is chosen.
         if os.environ.get('AIVM_SECRETS_IDENTITY_MODE', '') == 'mtls-v1':
+            # Keep ordinary client imports pure. TLS is required only when
+            # the operator explicitly enables a certificate-bound session.
+            import ssl
+
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.minimum_version = ssl.TLSVersion.TLSv1_3
             ctx.maximum_version = ssl.TLSVersion.TLSv1_3

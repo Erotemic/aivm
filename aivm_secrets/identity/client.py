@@ -13,8 +13,8 @@ from typing import Any
 
 from ..errors import SecretsError
 from ..host.files import read_owned
-from ..host.server import read_frame
-from ..kernel import codec, wire
+from ..transport.framing import read_frame
+from ..primitives import codec, wire
 
 
 def bound_call(*, socket_path: Path, ca: Path, certificate: Path,

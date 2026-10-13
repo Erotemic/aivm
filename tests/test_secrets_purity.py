@@ -53,8 +53,10 @@ def test_kernel_modules_import_only_pure_code(path):
         elif level == 1:
             pass  # a sibling kernel module
         else:
-            # Above the kernel, only the fixed error table is visible.
-            assert (level, name) == (2, 'errors'), f'{path.name} imports {name}'
+            # Shared value primitives are the only additional dependency.
+            assert (level, name) == (2, 'errors') or (
+                level == 2 and name.startswith('primitives.')
+            ), f'{path.name} imports {name}'
 
 
 @pytest.mark.parametrize('path', KERNEL, ids=lambda path: path.name)
@@ -250,6 +252,34 @@ def test_importing_the_package_initializes_nothing():
         capture_output=True,
         text=True,
         cwd='/',
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == '[]'
+
+
+def test_import_purity_from_cold_interpreter():
+    """Do not let a site hook's pre-imported ssl mask an eager import.
+
+    Disable ``site`` and explicitly locate the source package, so this test
+    checks a fresh interpreter even when a virtualenv starts with ``ssl``.
+    """
+    import subprocess
+
+    program = (
+        'import sys\n'
+        'already_loaded = set(sys.modules)\n'
+        'import aivm_secrets, aivm_secrets.cli, aivm_secrets.kernel.machine\n'
+        'loaded = [m for m in sys.modules if m not in already_loaded and '
+        'm.split(".")[0] in ("cryptography", "ssl", '
+        '"aivm", "http", "socketserver")]\n'
+        'print(loaded)\n'
+    )
+    done = subprocess.run(
+        [sys.executable, '-S', '-P', '-c', program],
+        capture_output=True,
+        text=True,
+        cwd='/',
+        env={'PYTHONPATH': str(ROOT)},
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == '[]'

@@ -18,7 +18,8 @@ from typing import Callable
 
 from ..errors import SecretsError
 from ..host.files import outside, private_directory
-from ..host.server import GUEST_SOCKET, read_frame
+from ..transport.names import GUEST_SOCKET
+from ..transport.framing import read_frame
 from ..kernel import codec
 from .enrollment import IdentityAuthority
 from .model import IdentityExpectation

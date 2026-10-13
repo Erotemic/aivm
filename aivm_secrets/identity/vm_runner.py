@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from ..errors import SecretsError
-from ..kernel import codec
+from ..primitives import codec
 from .vm_model import subject
 
 

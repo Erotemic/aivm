@@ -14,7 +14,7 @@ from __future__ import annotations
 import sys
 
 from ..errors import SecretsError
-from ..kernel import codec, grammar
+from ..primitives import codec, grammar
 from .model import IdentityClaims, IdentityExpectation, assess_binding
 
 MAX_LINE = 8192

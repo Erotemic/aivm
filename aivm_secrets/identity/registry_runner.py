@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 
 from ..errors import SecretsError
-from ..kernel import codec, grammar
+from ..primitives import codec, grammar
 from . import registry_model
 
 MAX_LINE = 32768

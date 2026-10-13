@@ -1,11 +1,11 @@
 # AIVM Secrets: primitive contracts and compositional proof architecture
 
-Status: **approved design direction; planned refactor, not implemented**
-(2026-10-12). This document specifies the *next* modularization increment.
-No `aivm_secrets.primitives` implementation, Rust implementation, extracted
-Lean theorem, or end-to-end proof is delivered by this plan. Current code and
-its existing tests continue to define the observable Python behavior until a
-versioned contract is explicitly changed.
+Status: **M1 and selected M2/M4 Python modules implemented (2026-10-12).**
+The `primitives` package and self-contained *pure* Garrett protocol now exist;
+see [implementation record](aivm-secrets-garrett-modular-refactor.md). This
+remains the target design for unfinished M3, M5 and M6. No Rust crate,
+extracted Lean theorem, or end-to-end proof is delivered. Existing protocol
+bytes and CLI behavior remain the compatibility contract.
 
 Related plans: [overall design](aivm-secrets-design.md),
 [dual implementations](aivm-secrets-parallel-implementations.md),
@@ -29,7 +29,7 @@ The names `primitives` and `identity.garrett` describe distinct roles:
 - A **primitive** is a small domain-neutral, deterministic function or
   transition (interval membership, budget reservation, scope subset, binding
   equality, epoch advance, bounded normalization). It must not open files,
-  read the clock, hold secrets, perform cryptography, contact a service, or
+  read the clock, hold secrets, perform secret-key cryptography, contact a service, or
   depend on AIVM-specific VM concepts.
 - A **domain model** combines primitives into authorization and identity
   decisions, with explicitly typed input assumptions.
@@ -49,42 +49,44 @@ can establish the properties proved for the extracted Rust code.
 
 ## 2. Dependency rules and intended package shape
 
-Proposed target layout (not an assertion about today's filesystem):
+Current Python layout, with pending verification units called out separately:
 
 ```text
 aivm_secrets/
-    primitives/
-        bounded.py       # length, bounded integers, closed grammar
-        canonical.py     # pure canonical encoding rules
-        validity.py      # bounded time intervals, explicit sampled clock
-        epochs.py        # epoch check and monotone transition
-        budgets.py       # reservation transitions / remaining budget
-        binding.py       # equality of authenticated identity claims
-        scope.py         # finite membership and semantic subset
+    primitives/               # implemented; pure, no host/kernel imports
+        grammar.py            # bounded fields, closed alphabets
+        codec.py              # strict canonical JSON and hashes
+        wire.py               # v1 broker frames
+        validity.py           # exclusive expiry
+        epochs.py             # bounded monotonically increasing epochs
+        binding.py            # exact identity comparisons
     kernel/
-        ...              # auth policy, grants, tickets, approved effects
+        grammar.py            # compatible re-export of primitives.grammar
+        codec.py              # compatible re-export of primitives.codec
+        wire.py               # compatible re-export of primitives.wire
+        ...                   # still owns policy, grants, effects
     identity/
-        model.py         # identity decision from authenticated inputs
-        registry_model.py
-        vm_model.py
+        model.py              # compatible re-export
+        registry_model.py     # compatible re-export
+        vm_model.py           # compatible re-export
         garrett/
-            model.py     # pure issuance/redemption/revocation transitions
-            claims.py    # *validated* claim shapes, no crypto here
-            protocol.py  # explicit transition/effect specification
-        ...              # credential, X.509, file and TLS adapters
-    host/
-        ...              # broker, held credentials, audit, egress
+            claims.py         # public claim validation and peer binding
+            registry.py       # pure enrollment/revocation/lookup
+            vm.py             # pure managed-VM subject construction
+            protocol.py       # pure issue/present intents
+        garrett_runner.py     # versioned JSONL conformance runner
+        token.py              # authenticated JWT/AEAD adapter
+        enrollment.py         # X.509/CA, host-owned persistence and audit
+        mtls.py, service.py   # authenticated transport to existing broker
+    transport/
+        framing.py            # bounded, impure socket reads
+        names.py              # fixed Unix socket names
+    host/                     # original broker, credential custody, egress
 
-rust/
-    crates/
-        aivm-secrets-primitives/
-        aivm-secrets-core/
-        aivm-secrets-service/
-proofs/
-    Primitives/
-    Identity/
-    Authorization/
-    Composition/
+Future:
+    primitives/budgets.py, scope.py
+    rust/crates/aivm-secrets-primitives, aivm-secrets-core, ...
+    proofs/Primitives, Identity, Authorization, Composition, ...
 ```
 
 The internal Python package is `aivm_secrets.primitives`, **not** a new
@@ -109,18 +111,16 @@ pure value-types module. Convert primitive result variants to existing
 `SecretsError` codes at a higher compatibility facade; keep current public
 errors and protocol bytes unchanged during refactoring.
 
-Today's code deliberately imports `kernel.grammar` from `identity.model`
-and uses `host.files`/`host.audit` inside `identity.enrollment`. These are
-migration targets, not evidence that the present code violates this future
-rule. Existing `tests/test_secrets_purity.py` gates the **current** kernel;
-update its dependency graph checks *alongside* migration so a kernel-to-
-primitives import is allowed, primitives-to-kernel is forbidden, and host
-credential/effect-construction restrictions are preserved. Never weaken the
-existing sole-`AuthorizedEffect` constructor gate to make migration pass.
+The present `identity.garrett` core no longer imports `kernel` or `host`.
+`identity.enrollment` still uses the trusted shared host filesystem/audit
+adapters. `tests/test_secrets_purity.py` now allows kernel-to-primitives imports
+and retains the sole-`AuthorizedEffect` constructor gate. Separate structural
+checks forbid imports in the opposite direction. Those checks are not proofs
+of every possible dynamic Python import behavior.
 
 ## 3. Primitive specifications and proof targets
 
-These are proposed contract names, not currently existing Python APIs.
+Some contracts now have Python APIs; others remain planned as below.
 Use versioned, immutable value records; closed enums/results; bounded input
 sizes; and no ambient reads. A primitive receives `now`, `epoch`, `peer`,
 `claims`, and identifiers as explicit parameters. Define failure and overflow
@@ -156,7 +156,7 @@ separates provider credential acquisition, signed encrypted substitute tokens,
 and certificate-bound use through mTLS. AIVM adds independent authorization,
 resource constraints, audit and a reference monitor at the point of effect.
 
-Propose `aivm_secrets.identity.garrett` as the conceptual owner of the
+`aivm_secrets.identity.garrett` is now the conceptual owner of the
 **protocol**, consuming primitive contracts without implementing crypto, TLS,
 file storage or provider-specific calls itself. Keep the present
 `identity/model.py`, `token.py`, `registry_model.py`, and the current service
@@ -288,11 +288,11 @@ it is runnable; the operator's chosen threat model must remain explicit.
 
 | Increment | Scope | Exit gate |
 | --- | --- | --- |
-| M0 - Plan (this overlay) | Record internal primitives and Garrett protocol boundary, theorem graph and two-backend contract | Docs agree; no code/behavior changes |
-| M1 - Primitive boundary | Add package, pure import/dependency gates and result-value conventions; inventory current call sites | No circular imports; existing conformance and broker tests pass unchanged |
-| M2 - Leaf extraction | Extract validity, epochs, binding and bounded validators behind compatible Python facades | Explicit time/epoch boundary vectors; no protocol digest or serialized-byte drift |
+| M0 - Plan (completed earlier) | Record internal primitives and Garrett protocol boundary, theorem graph and two-backend contract | Planning overlay accepted |
+| M1 - Primitive boundary (implemented) | Shared grammar/codec/wire, validity/epochs/binding, pure import gates and compatibility facades | Selected existing conformance and broker tests remain the gate |
+| M2 - Leaf extraction (identity portion implemented) | Validity, epoch, binding and bounded validators with old-path facades; budget/scope still future | Identity, registry and canonical-byte vectors stay unchanged |
 | M3 - Authorization extraction | Extract budget and scope rules, refactor large `kernel/machine.py` only at stable state boundaries | Existing grant, revocation, audit and mutation tests still detect bypasses |
-| M4 - Garrett protocol model | Introduce pure claims/transition model consuming leaf contracts; keep issuer, TLS, X.509 and registry persistence in adapters | Synthetic end-to-end tests and managed-VM tests unchanged; no second egress route |
+| M4 - Garrett protocol model (pure part implemented) | Closed claims/registry/VM decisions and issue/present intents; issuer, TLS, X.509, persistence remain adapters | Frozen issue/present vectors, identity TLS tests; no second egress route |
 | M5 - Rust/Lean primitives | Implement matching independent Rust units and Aeneas extraction of one representative theorem, then extend | Pinned proof manifest, nonvacuous witnesses, Lean kernel checks and Rust/Python parity |
 | M6 - Composed effect assurance | Prove typed authorization and protocol composition; connect to constrained Rust executor | Named effect-trace theorem plus declared trust assumptions; no end-to-end claim before this |
 

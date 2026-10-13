@@ -53,6 +53,22 @@ class Mutant:
 
 
 MUTANTS = [
+    # -- independent primitive and Garrett protocol contracts ---------------
+    Mutant('PRIM-BIND-01', 'certificate binding equality is ignored',
+           'primitives/binding.py', 'or actual != expected):',
+           'or False):', ('test_secrets_garrett_modularity.py',)),
+    Mutant('PRIM-TIME-01', 'identity expiry becomes inclusive',
+           'primitives/validity.py', 'not not_before <= now < expires_at):',
+           'not not_before <= now <= expires_at):',
+           ('test_secrets_garrett_modularity.py',)),
+    Mutant('PRIM-EPOCH-01', 'an exhausted enrollment epoch wraps or advances',
+           'primitives/epochs.py', '    if current == maximum:',
+           '    if False:', ('test_secrets_garrett_modularity.py',)),
+    Mutant('GARRETT-ISSUE-01', 'issuance ignores enrollment revocation',
+           'identity/garrett/protocol.py',
+           "if record is None or not record['active'] or now >= record['not_after']:",
+           "if record is None or now >= record['not_after']:",
+           ('test_secrets_garrett_modularity.py',)),
     # -- BIND-01 ------------------------------------------------------------
     Mutant('BIND-01', 'capability binding is not compared with the channel',
            'kernel/machine.py', 'claims.binding != binding\n', 'False\n', MACHINE),
@@ -186,7 +202,7 @@ MUTANTS = [
            '        return grammar.segment(found, code=code)', '        return found',
            CHECKS),
     Mutant('ROUTE-01', 'dot segments are allowed in a path',
-           'kernel/grammar.py', "    if value in ('.', '..'):", '    if False:',
+           'primitives/grammar.py', "    if value in ('.', '..'):", '    if False:',
            ('test_secrets_grammar.py', 'test_secrets_model.py', 'test_secrets_https.py')),
     Mutant('ROUTE-01', 'a GET may carry a body',
            'kernel/model.py',
@@ -236,12 +252,12 @@ MUTANTS = [
            'if item.digest == wanted', MACHINE),
     # -- CODEC-01 -----------------------------------------------------------
     Mutant('CODEC-01', 'duplicate JSON keys are accepted',
-           'kernel/codec.py',
+           'primitives/codec.py',
            "        if key in result:\n            raise ValueError('duplicate key')",
            '        if False:\n            pass',
            ('test_secrets_codec.py', 'test_secrets_vectors.py')),
     Mutant('CODEC-01', 'NaN and Infinity are accepted',
-           'kernel/codec.py',
+           'primitives/codec.py',
            "def _constant(value: str) -> None:\n    raise ValueError('non-finite number')",
            "def _constant(value: str) -> None:\n    return None",
            ('test_secrets_codec.py', 'test_secrets_vectors.py')),

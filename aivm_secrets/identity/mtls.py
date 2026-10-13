@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..errors import SecretsError
-from ..host.server import read_frame
-from ..kernel import codec, grammar, wire
+from ..transport.framing import read_frame
+from ..primitives import codec, grammar, wire
 from .token import IdentityTokenVerifier, MAX_JWT_BYTES
 from .model import IdentityExpectation
 
