@@ -51,6 +51,16 @@ def evaluate(data: object) -> dict:
                 thumbprint=data['thumbprint'], not_after=data['not_after'],
                 now=data['now'])
             return {'ok': True, 'state': state}
+        if action == 'revoke-if-current':
+            grammar.exact_keys(data, frozenset({
+                'version', 'action', 'issuer', 'audience', 'state', 'subject',
+                'expected_epoch', 'expected_thumbprint',
+            }), code='invalid_capability')
+            state, revoked = registry_model.revoke_if_current(
+                data['state'], **args, subject=data['subject'],
+                expected_epoch=data['expected_epoch'],
+                expected_thumbprint=data['expected_thumbprint'])
+            return {'ok': True, 'state': state, 'revoked': revoked}
         if action == 'revoke':
             grammar.exact_keys(data, frozenset({
                 'version', 'action', 'issuer', 'audience', 'state', 'subject',

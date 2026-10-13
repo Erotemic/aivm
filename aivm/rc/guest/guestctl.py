@@ -186,7 +186,7 @@ class GuestIdentityCSRRequest:
     attestation. The private key belongs to the ordinary guest user.
     """
 
-    operation: Literal['identity-csr']
+    operation: Literal['identity-csr', 'identity-key-rotate-csr']
     guest_user: str
     uid: int
     nonce: str
@@ -199,14 +199,14 @@ class GuestIdentityCSRRequest:
             raise GuestEnrollmentError('invalid CSR request') from None
         if (not isinstance(raw, dict) or set(raw) != {
                 'operation', 'guest_user', 'uid', 'nonce'} or
-                raw['operation'] != 'identity-csr' or
+                raw['operation'] not in ('identity-csr', 'identity-key-rotate-csr') or
                 not isinstance(raw['guest_user'], str) or
                 not _GUEST_USER_RE.fullmatch(raw['guest_user']) or
                 type(raw['uid']) is not int or raw['uid'] <= 0 or
                 type(raw['nonce']) is not str or
                 not re.fullmatch(r'[0-9a-f]{32}', raw['nonce'])):
             raise GuestEnrollmentError('invalid CSR request')
-        return cls('identity-csr', raw['guest_user'], raw['uid'], raw['nonce'])
+        return cls(raw['operation'], raw['guest_user'], raw['uid'], raw['nonce'])
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True)
@@ -254,8 +254,9 @@ def prepare_guest_identity_csr(request: GuestIdentityCSRRequest) -> dict[str, ob
     if not home.is_absolute() or str(home) == '/':
         raise GuestEnrollmentError('invalid guest home')
     directory = home / '.config' / 'aivm' / 'identity'
-    key = directory / 'client.key'
-    csr = directory / 'client.csr'
+    rotating = request.operation == 'identity-key-rotate-csr'
+    key = directory / ('client.rotate.key' if rotating else 'client.key')
+    csr = directory / ('client.rotate.csr' if rotating else 'client.csr')
     _run_as_guest(request.guest_user,
                   ['/usr/bin/install', '-d', '-m', '0700', str(directory)])
     # Never overwrite a key. If a prior enrollment attempt completed CSR
@@ -276,9 +277,17 @@ def prepare_guest_identity_csr(request: GuestIdentityCSRRequest) -> dict[str, ob
             raise GuestEnrollmentError('CSR operation failed')
         return result.returncode == 0
     key_exists, csr_exists = present(key), present(csr)
-    if key_exists != csr_exists:
+    if rotating:
+        # Existing identity must be installed, and a pending rotation must
+        # never be overwritten automatically. On failure, an operator must
+        # explicitly reconcile/remove the pending files before retrying.
+        if not present(directory / 'client.key') or not present(directory / 'client.pem'):
+            raise GuestEnrollmentError('cannot rotate an uninstalled identity')
+        if key_exists or csr_exists:
+            raise GuestEnrollmentError('pending key rotation exists; manual repair required')
+    elif key_exists != csr_exists:
         raise GuestEnrollmentError('incomplete guest identity; manual repair required')
-    if not key_exists:
+    if rotating or not key_exists:
         _run_as_guest(request.guest_user, [
             '/usr/bin/openssl', 'req', '-new', '-newkey', 'ec',
             '-pkeyopt', 'ec_paramgen_curve:P-256', '-noenc',
@@ -295,7 +304,7 @@ def prepare_guest_identity_csr(request: GuestIdentityCSRRequest) -> dict[str, ob
         pem = data.decode('ascii')
     except UnicodeDecodeError:
         raise GuestEnrollmentError('invalid guest CSR') from None
-    return {'status': 'ok', 'operation': 'identity-csr',
+    return {'status': 'ok', 'operation': request.operation,
             'nonce': request.nonce, 'guest_user': request.guest_user,
             'uid': request.uid, 'csr': pem}
 
@@ -635,7 +644,7 @@ def _forced_main() -> int:
         elif operation == 'disable-principal':
             access_request = GuestAccessRequest.from_json(text)
             report = disable_guest_principal(access_request)
-        elif operation == 'identity-csr':
+        elif operation in ('identity-csr', 'identity-key-rotate-csr'):
             csr_request = GuestIdentityCSRRequest.from_json(text)
             report = prepare_guest_identity_csr(csr_request)
         else:

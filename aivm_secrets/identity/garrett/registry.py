@@ -127,6 +127,30 @@ def revoke(value: object, *, issuer: str, audience: str,
     return result
 
 
+def revoke_if_current(value: object, *, issuer: str, audience: str,
+                      subject: str, expected_epoch: int,
+                      expected_thumbprint: str) -> tuple[dict[str, Any], bool]:
+    """Revoke only the exact enrollment installed by an in-flight transaction.
+
+    Return the original validated state and False after concurrent replacement.
+    A failed guest install must never revoke a *newer* enrollment.
+    """
+    state = validate(value, issuer=issuer, audience=audience)
+    _name(issuer, audience, subject, 0)
+    if (type(expected_epoch) is not int or not 0 <= expected_epoch <= MAX_EPOCH
+            or type(expected_thumbprint) is not str):
+        raise SecretsError('invalid_capability')
+    row = state['subjects'].get(subject)
+    if (row is None or row['active'] is not True or
+            row['epoch'] != expected_epoch or
+            row['certificate_sha256'] != expected_thumbprint):
+        return {'schema': SCHEMA,
+                'subjects': {name: dict(row)
+                             for name, row in state['subjects'].items()}}, False
+    return revoke(state, issuer=issuer, audience=audience,
+                  subject=subject), True
+
+
 def expectation(value: object, *, issuer: str, audience: str,
                 thumbprint: str, now: int) -> IdentityExpectation:
     state = validate(value, issuer=issuer, audience=audience)

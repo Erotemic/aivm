@@ -61,6 +61,10 @@ def add_parser(subs):
 
     revoke = common('revoke')
     revoke.add_argument('--subject', required=True)
+    guarded_revoke = common('revoke-if-current')
+    guarded_revoke.add_argument('--subject', required=True)
+    guarded_revoke.add_argument('--expected-epoch', type=int, required=True)
+    guarded_revoke.add_argument('--expected-certificate-sha256', required=True)
 
     renew_client = common('renew-client')
     renew_client.add_argument('--subject', required=True)
@@ -68,6 +72,13 @@ def add_parser(subs):
     renew_client.add_argument('--approve-key-fingerprint', required=True)
     renew_client.add_argument('--expected-epoch', required=True, type=int)
     renew_client.add_argument('--expected-certificate-sha256', required=True)
+
+    rekey = common('rotate-client-key')
+    rekey.add_argument('--subject', required=True)
+    rekey.add_argument('--csr', type=Path, required=True)
+    rekey.add_argument('--approve-key-fingerprint', required=True)
+    rekey.add_argument('--expected-epoch', required=True, type=int)
+    rekey.add_argument('--expected-certificate-sha256', required=True)
 
     common('renew-server')
 
@@ -235,8 +246,20 @@ def run(args: argparse.Namespace) -> int:
         )
     elif args.identity_action == 'revoke':
         result = authority.revoke(args.subject)
+    elif args.identity_action == 'revoke-if-current':
+        result = authority.revoke_if_current(
+            subject=args.subject, expected_epoch=args.expected_epoch,
+            expected_thumbprint=args.expected_certificate_sha256,
+        )
     elif args.identity_action == 'renew-client':
         result = authority.renew_client(
+            subject=args.subject, csr=_csr_data(args.csr),
+            approve_fingerprint=args.approve_key_fingerprint,
+            expected_epoch=args.expected_epoch,
+            expected_thumbprint=args.expected_certificate_sha256,
+        )
+    elif args.identity_action == 'rotate-client-key':
+        result = authority.rotate_client_key(
             subject=args.subject, csr=_csr_data(args.csr),
             approve_fingerprint=args.approve_key_fingerprint,
             expected_epoch=args.expected_epoch,

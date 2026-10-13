@@ -398,7 +398,7 @@ class IdentityAuthority:
 
     def renew_client(self, *, subject: str, csr: bytes,
                      approve_fingerprint: str, expected_epoch: int,
-                     expected_thumbprint: str,
+                     expected_thumbprint: str, require_new_key: bool = False,
                      now: int | None = None) -> dict[str, Any]:
         """Renew one client certificate with an epoch+thumbprint CAS.
 
@@ -411,6 +411,8 @@ class IdentityAuthority:
         request, fp = _read_csr(csr)
         if type(approve_fingerprint) is not str or fp != approve_fingerprint:
             raise SecretsError('denied', detail='CSR key fingerprint not confirmed')
+        if type(require_new_key) is not bool:
+            raise SecretsError('invalid_capability')
         stamp = _stamp(now)
         with self._locked():
             state = self._registry()
@@ -424,6 +426,19 @@ class IdentityAuthority:
                     row['epoch'] != expected_epoch or
                     row['certificate_sha256'] != expected_thumbprint):
                 raise SecretsError('revoked')
+            if require_new_key:
+                # The host validates that a different key is being enrolled,
+                # not just that the CA issued a different certificate.
+                from .garrett.key_rotation import authorize_key_rotation
+                enrolled_cert = self._current_client_certificate(row)
+                authorize_key_rotation(
+                    expected_epoch=expected_epoch, actual_epoch=row['epoch'],
+                    expected_thumbprint=expected_thumbprint,
+                    actual_thumbprint=row['certificate_sha256'],
+                    enrolled_key_fingerprint=_key_fingerprint(
+                        enrolled_cert.public_key()),
+                    candidate_key_fingerprint=fp,
+                )
             ca_key, ca_cert = self._load_ca()
             if stamp + CLIENT_DAYS * 86400 >= int(ca_cert.not_valid_after_utc.timestamp()):
                 raise SecretsError('expired', detail='host CA requires renewal')
@@ -440,7 +455,8 @@ class IdentityAuthority:
                 now=stamp)
             record = updated['subjects'][subject]
             path = self.root / 'clients' / (hashlib.sha256(der).hexdigest() + '.pem')
-            with self._audit('identity_renew_intent', subject, stamp,
+            with self._audit('identity_rekey_intent' if require_new_key
+                             else 'identity_renew_intent', subject, stamp,
                              hashlib.sha256(der).hexdigest()):
                 write_new(path, _certificate_pem(cert))
                 self._update(updated)
@@ -467,10 +483,64 @@ class IdentityAuthority:
                 record = state['subjects'][subject]
             return {'subject': subject, 'epoch': record['epoch'], 'active': False}
 
+    def revoke_if_current(self, *, subject: str, expected_epoch: int,
+                          expected_thumbprint: str,
+                          now: int | None = None) -> dict[str, Any]:
+        """Rollback compensation that cannot revoke another writer's grant.
+
+        This is deliberately distinct from the operator's unconditional
+        `revoke`: the caller may be handling a delayed installation failure.
+        """
+        _subject(subject)
+        stamp = _stamp(now)
+        with self._locked():
+            state, revoked = registry_model.revoke_if_current(
+                self._registry(), issuer=self.issuer,
+                audience=self.audience, subject=subject,
+                expected_epoch=expected_epoch,
+                expected_thumbprint=expected_thumbprint,
+            )
+            if revoked:
+                with self._audit('identity_revoke_intent', subject, stamp,
+                                 expected_thumbprint):
+                    self._update(state)
+            current = state['subjects'].get(subject)
+            return {'subject': subject, 'revoked': revoked,
+                    'epoch': current['epoch'] if current is not None else None}
+
     def status(self) -> dict[str, Any]:
         return {'issuer': self.issuer, 'audience': self.audience,
                 'ca_sha256': self.ca_sha256,
                 'subjects': self._registry()['subjects']}
+
+    def _current_client_certificate(self, row: dict[str, Any]):
+        """Read the current leaf using its registry-validated thumbprint."""
+        import base64
+        thumb = row['certificate_sha256']
+        try:
+            digest = base64.urlsafe_b64decode(thumb + '=' * (-len(thumb) % 4))
+            if len(digest) != 32:
+                raise ValueError('invalid thumbprint')
+            cert = _x509()[0].load_pem_x509_certificate(
+                self._read('clients/' + digest.hex() + '.pem'))
+            if certificate_thumbprint(_certificate_der(cert)) != thumb:
+                raise ValueError('certificate/registry mismatch')
+            return cert
+        except (ValueError, OSError, TypeError, SecretsError):
+            raise SecretsError('invalid_capability') from None
+
+    def rotate_client_key(self, *, subject: str, csr: bytes,
+                          approve_fingerprint: str, expected_epoch: int,
+                          expected_thumbprint: str,
+                          now: int | None = None) -> dict[str, Any]:
+        """Require a fresh public key under the same epoch-CAS renewal gate."""
+        return self.renew_client(
+            subject=subject, csr=csr,
+            approve_fingerprint=approve_fingerprint,
+            expected_epoch=expected_epoch,
+            expected_thumbprint=expected_thumbprint,
+            require_new_key=True, now=now,
+        )
 
     def public_client(self, subject: str) -> dict[str, Any]:
         """Return ONLY currently active public chain material for delivery.

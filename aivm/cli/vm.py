@@ -34,7 +34,8 @@ from .vm_lifecycle import (
     VMUpCLI,
 )
 from .vm_update import VMUpdateCLI
-from .vm_identity import VMIdentityEnrollCLI, VMIdentityRenewCLI
+from .vm_identity import (VMIdentityEnrollCLI, VMIdentityRenewCLI,
+                          VMIdentityRotateKeyCLI)
 
 
 class VMModalCLI(kwconf.ModalCLI):
@@ -67,6 +68,7 @@ class VMModalCLI(kwconf.ModalCLI):
     access = VMAccessModalCLI
     identity_enroll = VMIdentityEnrollCLI
     identity_renew = VMIdentityRenewCLI
+    identity_rotate_key = VMIdentityRotateKeyCLI
 
 
 __all__ = [

@@ -1,10 +1,10 @@
 """Backward-compatible enrollment state-machine API, implemented in Garrett.
 """
 from .garrett.registry import (
-    SCHEMA, MAX_SUBJECTS, MAX_TIME, validate, enroll, renew, revoke, expectation,
+    SCHEMA, MAX_SUBJECTS, MAX_TIME, validate, enroll, renew, revoke, revoke_if_current, expectation,
 )
 
 __all__ = [
     'SCHEMA', 'MAX_SUBJECTS', 'MAX_TIME', 'validate', 'enroll', 'renew', 'revoke',
-    'expectation',
+    'revoke_if_current', 'expectation',
 ]

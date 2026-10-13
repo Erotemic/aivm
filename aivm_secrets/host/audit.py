@@ -44,7 +44,7 @@ EVENTS = (
     'revoked',
     'session_close',
     'identity_enroll_intent',
-    'identity_renew_intent',
+    'identity_renew_intent', 'identity_rekey_intent',
     'identity_server_renew_intent',
     'identity_revoke_intent',
     'identity_token_issue_intent',

@@ -44,7 +44,10 @@ def guest_writable_roots(store: Path) -> tuple[Path, ...]:
     return tuple(result)
 
 
-def _bootstrap_ssh(context: ResolvedVMContext, store: Path, ip: str) -> list[str]:
+def _bootstrap_ssh(context: ResolvedVMContext, store: Path, ip: str,
+                   *, operation: str = 'identity-csr') -> list[str]:
+    if operation not in ('identity-csr', 'identity-key-rotate-csr'):
+        raise SecretsError('invalid_request')
     scope = resolve_store_scope(str(store))
     if not scope.is_machine or scope.machine_layout is None:
         raise SecretsError('denied', detail='requires managed machine store')
@@ -62,7 +65,7 @@ def _bootstrap_ssh(context: ResolvedVMContext, store: Path, ip: str) -> list[str
                        strict_host_key_checking='yes', batch_mode=True,
                        connect_timeout=10,
                        user_known_hosts_file=str(identity.known_hosts)),
-        f'{BOOTSTRAP_GUEST_USER}@{ip}', 'identity-csr',
+        f'{BOOTSTRAP_GUEST_USER}@{ip}', operation,
     ]
 
 
@@ -110,8 +113,11 @@ def _identity_action(manager: CommandManager, *, action: str, root: Path | None,
 def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
                      subject: str, csr: bytes, replace: bool,
                      untrusted: tuple[Path, ...],
-                     renewal: tuple[int, str] | None = None) -> dict[str, Any]:
+                     renewal: tuple[int, str] | None = None,
+                     rotate_key: bool = False) -> dict[str, Any]:
     """Certificate parsing and CA signing both occur in isolated processes."""
+    if rotate_key and renewal is None:
+        raise SecretsError('invalid_policy')
     with tempfile.NamedTemporaryFile(
         mode='wb', prefix='.csr-', suffix='.pem', dir=authority_root,
     ) as public_file:
@@ -130,7 +136,7 @@ def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
             epoch, thumbprint = renewal
             options += ['--expected-epoch', str(epoch),
                         '--expected-certificate-sha256', thumbprint]
-            action = 'renew-client'
+            action = 'rotate-client-key' if rotate_key else 'renew-client'
         else:
             if replace:
                 options.append('--replace')
@@ -202,9 +208,55 @@ def _private_broker_file(path: Path, untrusted: tuple[Path, ...]) -> str:
         raise SecretsError('unsafe_file') from None
 
 
+def _guest_install_script(*, rotate_key: bool) -> str:
+    """Install public material; for rekey verify and activate the staged key.
+
+    All command text is fixed at development time. The new private key is
+    created by the forced guest bootstrap helper under the guest UID, never
+    conveyed over SSH or handled by the host. A failed install is fenced on
+    the host via enrollment revocation; no credential fallback is attempted.
+    """
+    prefix = (
+        'umask 077 && set -e && '
+        'install -d -m 700 "$HOME/.config/aivm/identity" && '
+        'cd "$HOME/.config/aivm/identity" && '
+        'IFS= read -r certificate && IFS= read -r ca && '
+        'printf "%s" "$certificate" | base64 -d > client.pem.new && '
+        'printf "%s" "$ca" | base64 -d > ca.pem.new && '
+        'chmod 600 client.pem.new ca.pem.new && '
+    )
+    if not rotate_key:
+        return prefix + 'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem'
+    # X.509's SPKI and the pending key's SPKI must match. Compare the active
+    # key's SPKI too, to rule out an accidental no-op. The host independently
+    # performs this *same-key* rejection against the enrolled leaf.
+    return prefix + (
+        'test -f client.key && test -f client.rotate.key && '
+        'test ! -L client.rotate.key && '
+        'test -f client.rotate.csr && test ! -L client.rotate.csr && '
+        'scratch="$(mktemp -d ./.rekey-check.XXXXXXXX)" && '
+        'openssl pkey -in client.rotate.key -pubout -outform DER '
+        '-out "$scratch/new.der" && '
+        'openssl pkey -in client.key -pubout -outform DER '
+        '-out "$scratch/old.der" && '
+        'openssl x509 -in client.pem.new -pubkey -noout '
+        '> "$scratch/cert.pub" && '
+        'openssl pkey -pubin -in "$scratch/cert.pub" '
+        '-outform DER -out "$scratch/cert.der" && '
+        'cmp -s "$scratch/new.der" "$scratch/cert.der" && '
+        '! cmp -s "$scratch/new.der" "$scratch/old.der" && '
+        'cp client.rotate.key client.key.new && chmod 600 client.key.new && '
+        'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem && '
+        'mv -f client.key.new client.key && '
+        'rm -f client.rotate.key client.rotate.csr && '
+        'rm -rf -- "$scratch"'
+    )
+
+
 def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
                       authority_root: Path, replace: bool = False,
-                      renew: bool = False, uuid_reader=None) -> dict[str, Any]:
+                      renew: bool = False, rotate_key: bool = False,
+                      uuid_reader=None) -> dict[str, Any]:
     """One explicitly requested and authenticated CSR enrollment transaction.
 
     The forced bootstrap private key is controlled by AIVM's machine store.
@@ -212,7 +264,8 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
     just a PKCS#10 CSR. Its host request includes a fresh nonce to reject stale
     replies. The subject is *not* taken from that reply or its CSR CN.
     """
-    if type(renew) is not bool or (renew and replace):
+    if (type(renew) is not bool or type(rotate_key) is not bool or
+            (renew and replace) or (rotate_key and not renew)):
         raise SecretsError('invalid_policy')
     if uuid_reader is None:
         bound = resolve_managed_identity(context, store)
@@ -233,13 +286,14 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
             raise SecretsError('revoked', detail='identity is not enrolled')
         renewal = (row['epoch'], row['certificate_sha256'])
     nonce = secrets.token_hex(16)
-    request = {'operation': 'identity-csr', 'guest_user': bound.guest_user,
+    csr_operation = 'identity-key-rotate-csr' if rotate_key else 'identity-csr'
+    request = {'operation': csr_operation, 'guest_user': bound.guest_user,
                'uid': bound.host_uid, 'nonce': nonce}
     scope = resolve_store_scope(str(store))
     assert scope.machine_layout is not None
     bootstrap = require_bootstrap_identity(bound.vm, layout=scope.machine_layout)
     result = manager.run(
-        _bootstrap_ssh(context, store, ip),
+        _bootstrap_ssh(context, store, ip, operation=csr_operation),
         sudo=bootstrap.use_sudo, role='modify', capture=True, check=False,
         input_text=json.dumps(request, sort_keys=True) + '\n', timeout=60,
         summary='Retrieve guest-owned CSR over the forced bootstrap channel',
@@ -253,7 +307,7 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
         data = json.loads(result.stdout)
         if (type(data) is not dict or set(data) != {
                 'status', 'operation', 'guest_user', 'uid', 'nonce', 'csr'} or
-                data['status'] != 'ok' or data['operation'] != 'identity-csr' or
+                data['status'] != 'ok' or data['operation'] != csr_operation or
                 data['guest_user'] != bound.guest_user or
                 type(data['uid']) is not int or data['uid'] != bound.host_uid or
                 data['nonce'] != nonce or type(data['csr']) is not str):
@@ -273,41 +327,48 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
     record = _isolated_enroll(manager, authority_root=authority_root,
                               subject=bound.subject, csr=csr,
                               replace=replace, untrusted=untrusted,
-                              **({'renewal': renewal} if renew else {}))
-    if renew and record['epoch'] != renewal[0] + 1:
-        raise SecretsError('guest_setup', detail='unexpected certificate renewal epoch')
-    # Obtain only public certificate material from the separately isolated
-    # authority. Never load CA keys or the certificate parser into AIVM.
-    public = _public_client(manager, root=authority_root,
-                            subject=bound.subject, untrusted=untrusted)
-    if public['certificate_sha256'] != record['certificate_sha256']:
-        raise SecretsError('revoked', detail='certificate changed during enrollment')
-    script = (
-        'umask 077 && set -e && '
-        'install -d -m 700 "$HOME/.config/aivm/identity" && '
-        'cd "$HOME/.config/aivm/identity" && '
-        'IFS= read -r certificate && IFS= read -r ca && '
-        'printf "%s" "$certificate" | base64 -d > client.pem.new && '
-        'printf "%s" "$ca" | base64 -d > ca.pem.new && '
-        'chmod 600 client.pem.new ca.pem.new && '
-        'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem'
-    )
-    payload = public['certificate_pem_b64'] + '\n' + public['ca_pem_b64'] + '\n'
+                              **({'renewal': renewal} if renew else {}),
+                              **({'rotate_key': True} if rotate_key else {}))
     try:
+        if renew and record['epoch'] != renewal[0] + 1:
+            raise SecretsError('guest_setup',
+                               detail='unexpected certificate renewal epoch')
+        # Obtain only public material from the isolated authority. Failure
+        # after issuance must be compensated just like guest delivery failure.
+        public = _public_client(manager, root=authority_root,
+                                subject=bound.subject, untrusted=untrusted)
+        if public['certificate_sha256'] != record['certificate_sha256']:
+            raise SecretsError('revoked', detail='certificate changed during enrollment')
+        script = _guest_install_script(rotate_key=rotate_key)
+        payload = public['certificate_pem_b64'] + '\n' + public['ca_pem_b64'] + '\n'
         installed = manager.run(
             [*_login_ssh(context, ip), script], input_text=payload,
             sudo=False, role='modify', ownership='tool', capture=True,
             check=False, timeout=30,
-            summary='Install public identity certificate and CA in guest',
+            summary=('Activate guest key rotation and public certificate'
+                     if rotate_key else 'Install public identity certificate and CA in guest'),
         )
         if installed.code:
             raise SecretsError('guest_setup', detail='guest certificate install failed')
     except Exception:
-        # A provisioned-but-unusable identity must not remain active. If
-        # revocation also fails the original error remains visible in logs;
-        # the operator must manually revoke before another attempt.
-        _identity_action(manager, action='revoke', root=authority_root,
-                         untrusted=untrusted, extra=['--subject', bound.subject])
+        # A delayed failure must NEVER revoke an enrollment that another
+        # operator has already replaced. Use host-locked epoch+thumbprint CAS.
+        # If the compensation itself fails, surface the unresolved state.
+        try:
+            answer = _identity_action(
+                manager, action='revoke-if-current', root=authority_root,
+                untrusted=untrusted,
+                extra=['--subject', bound.subject,
+                       '--expected-epoch', str(record['epoch']),
+                       '--expected-certificate-sha256',
+                       record['certificate_sha256']],
+            )
+            if type(answer.get('revoked')) is not bool:
+                raise SecretsError('guest_setup', detail='invalid cleanup result')
+        except Exception:
+            raise SecretsError('guest_setup',
+                detail='guest identity delivery failed; guarded revocation '
+                       'failed; manually inspect enrollment') from None
         raise
     return {'vm': bound.vm, 'domain_uuid': bound.uuid,
             'subject': bound.subject, 'principal_id': bound.principal_id,

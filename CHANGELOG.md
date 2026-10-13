@@ -1,3 +1,12 @@
+## Unreleased: opt-in Garrett managed-VM guest-key rotation
+
+- Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
+  forced-bootstrap SSH channel and guest-owned staged P-256 key. The host
+  checks different-key proof, current enrollment CAS, and revocation-on-failed
+  activation. Keep normal VM/SSH and `identity_renew` behavior unchanged.
+- Add an independent, Rust-portable key-rotation decision model with frozen
+  vectors, real X.509 and shell activation tests, plus deployment limitations.
+
 # Changelog
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).

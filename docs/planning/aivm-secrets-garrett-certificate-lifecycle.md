@@ -34,11 +34,13 @@ identity epoch or trust root. The host snapshots the expected enrollment
 **before** the authenticated CSR round trip. The final transition rejects
 concurrent replacement rather than overwriting it.
 
-The current forced helper **reuses the existing software client key**; that
-is adequate for routine certificate renewal but does not recover from guest
-key compromise. A later key-rotation protocol must stage a new guest key,
-confirm independent provenance, install public material, and revoke the old
-identity without falling back to it.
+The routine renewal path **reuses the existing software client key**.
+An independently opt-in guest-key rotation command is now implemented as the
+next increment: it stages a new guest-owned key, validates an authenticated
+CSR against the old public key under the host CAS lock, and activates matching
+public and private material. See
+[a separate key-rotation plan](aivm-secrets-garrett-guest-key-rotation.md).
+This is not vTPM non-exportability or full failure-atomic host/guest migration.
 
 ## Operator commands
 

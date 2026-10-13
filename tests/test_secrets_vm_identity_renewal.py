@@ -35,7 +35,9 @@ def setup(tmp_path, monkeypatch, *, enroll_first=True):
     monkeypatch.setattr(module, 'guest_writable_roots', lambda _: ())
     monkeypatch.setattr(module, '_identity_action', lambda manager, *, action,
                         extra=None, **kw: authority.status() if action=='status'
-                        else authority.revoke(extra[-1]))
+                        else authority.revoke_if_current(
+                            subject=extra[1], expected_epoch=int(extra[3]),
+                            expected_thumbprint=extra[5]))
     monkeypatch.setattr(module, '_isolated_enroll', lambda manager, **kw:
                         authority.renew_client(subject=kw['subject'],csr=kw['csr'],
                             approve_fingerprint=inspect_csr(kw['csr']),

@@ -663,7 +663,15 @@ and revoke the old epoch using the same pinned forced-bootstrap channel::
 
     aivm vm identity_renew --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
-This reuses the existing guest software key; it does not rotate the key or CA.
+This reuses the existing guest software key and does not rotate the CA.
+To explicitly replace the guest-owned software key and its client certificate
+with epoch fencing, run (on a managed VM with the updated forced helper)::
+
+    aivm vm identity_rotate_key --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
+
+A key-rotation attempt is never automatic. A failed activation revokes the
+new enrollment; operator recovery may be required. See
+``docs/planning/aivm-secrets-garrett-guest-key-rotation.md``.
 A stale epoch or certificate thumbprint fails closed. It requires a fresh
 certificate-bound session token afterward. The separate host-only command
 ``python -I -m aivm_secrets identity renew-server --root ...`` renews the
