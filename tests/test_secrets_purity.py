@@ -344,3 +344,60 @@ def test_the_assumption_ledger_is_wellformed_and_points_at_real_files():
         'Specification', 'Cryptography', 'Channel identity', 'Host isolation',
         'Time', 'Persistence', 'Provider', 'Executor', 'Files and audit',
     } <= {entry['boundary'] for entry in entries}  # fmt: skip
+
+
+# Each Garrett policy document and the ledger obligations it settles.
+GARRETT_POLICIES = {
+    'aivm-secrets-garrett-rollback-clone-policy.md': ('ROLLBACK-01', 'CLONE-01'),
+    'aivm-secrets-garrett-vtpm-policy.md': ('VTPM-01',),
+    'aivm-secrets-garrett-issuer-api.md': ('ISSUER-API-01',),
+    'aivm-secrets-garrett-operations-policy.md': (),
+}
+
+
+def test_garrett_policies_are_linked_and_their_obligations_recorded() -> None:
+    """A policy that bounds a claim is reachable, and its obligations ledgered.
+
+    Each policy is linked from the identity plan, names its obligations, and
+    each obligation has a ledger entry that cites the policy back -- so a
+    claim cannot outgrow its policy without a ledger edit somebody reviews.
+    """
+    import json
+
+    planning = ROOT / 'docs' / 'planning'
+    ledger = {
+        entry['id']: entry
+        for entry in json.loads(
+            (planning / 'aivm-secrets-assumptions.json').read_text()
+        )['assumptions']
+    }
+    plan = (planning / 'aivm-secrets-garrett-identity.md').read_text(
+        encoding='utf-8'
+    )
+    for name, obligations in GARRETT_POLICIES.items():
+        text = (planning / name).read_text(encoding='utf-8')
+        assert f']({name})' in plan, f'{name} is not linked from the plan'
+        for obligation in obligations:
+            assert obligation in text, (name, obligation)
+            assert obligation in ledger, f'{obligation} has no ledger entry'
+            cited = ledger[obligation]['assumption']
+            assert f'docs/planning/{name}' in cited, (obligation, name)
+
+
+def test_aivm_never_names_the_key_destruction_verb() -> None:
+    """Private keys are destroyed only by an operator running prune-keys.
+
+    The issuer API policy reserves that verb for a direct operator
+    invocation, so no AIVM code may spell it, not even behind a prompt.
+    """
+    found = []
+    for path in sorted((ROOT / 'aivm').rglob('*.py')):
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and 'prune-keys' in node.value
+            ):
+                found.append(f'{path.relative_to(ROOT)}:{node.lineno}')
+    assert found == []

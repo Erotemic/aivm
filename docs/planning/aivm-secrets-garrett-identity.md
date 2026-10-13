@@ -10,6 +10,22 @@ for the current executable contract and remaining P4c limitations.
 No real `gh` or other service credentials are needed for the tests. Consult
 [the parallel-implementations decision](aivm-secrets-parallel-implementations.md).
 
+## Policies
+
+Each policy separates what is implemented from what is only decided:
+
+- [Rollback and clone](aivm-secrets-garrett-rollback-clone-policy.md): how
+  restores, snapshot reverts, clones and disk copies affect identity state,
+  the required outcome for each, and the anchors that could detect them
+  (ROLLBACK-01, CLONE-01).
+- [vTPM keys](aivm-secrets-garrett-vtpm-policy.md): swtpm state, the key
+  template, TPM2_Certify evidence, and exactly what AIVM may claim (VTPM-01).
+- [Issuer API authorization](aivm-secrets-garrett-issuer-api.md): which
+  identity verbs automation may run, and how AIVM must run operator-only ones
+  (ISSUER-API-01).
+- [Operations](aivm-secrets-garrett-operations-policy.md): single-host scope,
+  `jti` and retried writes, and supported weekly renewal.
+
 ## Reference architecture
 
 Garrett's [Securing agentic identity](https://codon.org.uk/~mjg59/blog/p/securing-agentic-identity/)

@@ -10,6 +10,31 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   section underline that broke the documented `./run_docs.sh` build; a
   dependency-free test now guards RST underlines because CI does not run
   Sphinx.
+* Add design policies for Garrett identity (design only; nothing is
+  implemented by them). Rollback and clone policy: seven threat cases with
+  required outcomes; one host key custody rule (key_sha256 plus at most eight
+  retired keys per row, 'denied' refusals, and its stated limits); anchor
+  options with a fixed journal, pointer, anchor commit order; the recovery
+  epoch rule; and a manual restore recipe. vTPM key policy: swtpm lifecycle,
+  key template, TPM2_Certify evidence with AK attribute checks, and the exact
+  wording AIVM may claim. Issuer API authorization policy: verb classes, every
+  registry write ownership='user', and operator-only confirmations that only
+  --yes skips. Operations policy: single-host scope, jti and retry semantics,
+  and a daily `aivm vm identity_renew --all` cadence with CA-horizon handling
+  and a session-start warning, with no daemon.
+* Record open assumption-ledger obligations ROLLBACK-01, CLONE-01, VTPM-01 and
+  ISSUER-API-01, and link the four policies from the Garrett identity plan.
+* Document known defects these policies depend on. Every `identity_renew`
+  after `identity_rotate_key` re-certifies the rotated-away key, because the
+  guest re-presents a stale client.csr; a guest-side workaround is documented.
+  A restored enrollment registry reactivates revoked enrollments, which stay
+  renewable whatever the copy's age. CommandManager's yes_sudo (from
+  --yes_sudo, --yes or behavior.yes_sudo) approves every confirmable write,
+  not only sudo prompts.
+* Test the issuer-API verb table against the real `aivm-secrets identity`
+  parser in every direction. A test now fails for an unclassified verb, a
+  'planned' row that has shipped, and an 'implemented' row that omits a flag
+  the parser now requires.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection
