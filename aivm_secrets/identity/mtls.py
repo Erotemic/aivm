@@ -1,8 +1,11 @@
-"""Opt-in one-connection mTLS bridge for P4a certificate-bound capabilities.
+"""Per-connection mTLS bridge for P4a certificate-bound capabilities.
 
-No CLI or persistent listener is installed: a trusted caller must explicitly
-choose the TLS CA/certificate paths and pass an accepted socket. The existing
-Broker remains the *only* interpreter authorized to use provider credentials.
+This module serves one already-accepted connection; it owns no listener.
+``identity/service.py`` is the listener, started explicitly by the host-only
+``python -I -m aivm_secrets identity bridge`` command, which ``aivm ssh
+--secrets_identity_root`` launches for a bound session. Nothing starts it
+implicitly, and it never opens a TCP port. The existing Broker remains the
+*only* interpreter authorized to use provider credentials.
 
 CRITICAL: do not turn this into an unverified HTTP forwarding proxy. A bridge
 request can only be a signed, certificate-bound wrapper around one of the
@@ -19,12 +22,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..errors import SecretsError
-from ..transport.framing import read_frame
+from ..transport.framing import FRAME_TIMEOUT, read_frame
 from ..primitives import codec, grammar, wire
 from .token import IdentityTokenVerifier, MAX_JWT_BYTES
 from .garrett.claims import IdentityExpectation
 
-FRAME_DEADLINE_SECONDS = 5.0
+# Each of the bridge's own legs: the handshake, the request frame and the
+# answer. ``RELAYED_REPLY_DEADLINE`` counts on this being ``FRAME_TIMEOUT``.
+FRAME_DEADLINE_SECONDS = FRAME_TIMEOUT
 
 
 def server_context(*, certificate: Path, private_key: Path,
@@ -32,8 +37,8 @@ def server_context(*, certificate: Path, private_key: Path,
     """Require real client certificate chain validation, not a spoofed header.
 
     Trusted callers MUST validate configuration-path ownership and exclusion
-    from guest shares before passing files. This is deliberately not hooked
-    into AIVM's session CLI while such operator plumbing remains incomplete.
+    from guest shares before passing files; ``IdentityAuthority.tls_paths``
+    does so for the files the identity CLI and the AIVM launcher pass here.
     """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -50,32 +55,52 @@ def server_context(*, certificate: Path, private_key: Path,
     return ctx
 
 
+def _keylog(context: ssl.SSLContext) -> str | None:
+    # Typeshed calls this ``str``; at runtime an unset key log is None.
+    return context.keylog_filename
+
+
 class IdentityTLSBridge:
     """One P4a authenticated channel feeding exactly one existing broker."""
 
     def __init__(self, *, context: ssl.SSLContext,
                  verifier: IdentityTokenVerifier, broker: Any,
                  wall_clock: Callable[[], float] = time.time,
-                 expected_for_peer: Callable[[bytes, int], IdentityExpectation] | None = None):
+                 expected_for_peer: Callable[[bytes, int], IdentityExpectation] | None = None,
+                 subject: str | None = None):
+        # A subject pin is judged against the *registry's* answer for the
+        # peer, so it is meaningless without one.
+        if subject is not None and (type(subject) is not str or not subject or
+                                    expected_for_peer is None):
+            raise SecretsError('invalid_policy')
         if (not isinstance(context, ssl.SSLContext) or
                 context.protocol != ssl.PROTOCOL_TLS_SERVER or
                 context.verify_mode != ssl.CERT_REQUIRED or
                 context.minimum_version < ssl.TLSVersion.TLSv1_3):
             raise SecretsError('invalid_policy')
-        if context.keylog_filename is not None:
+        if _keylog(context) is not None:
             raise SecretsError('invalid_policy')
         self._context = context
         self._verifier = verifier
         self._broker = broker
         self._clock = wall_clock
         self._expected_for_peer = expected_for_peer
+        self._subject = subject
 
     def serve_accepted(self, accepted: socket.socket) -> None:
         """Perform a verified TLS handshake and process a single framed call.
 
-        This service is deliberately not a daemon and never opens a TCP port.
-        Connection limits, listener binding, host-path validation, logging,
-        key lifecycle and process isolation remain deployment obligations.
+        Listener binding, concurrency, host-path validation and lifetime are
+        ``UnixIdentityService``'s; process isolation is the launcher's
+        (``python -I``). This method may run on several threads at once: it
+        keeps no state between calls, and every per-request read it makes
+        through the verifier and ``expected_for_peer`` is side-effect free.
+
+        Only a failed handshake sends the caller a TLS alert. Once the
+        handshake has succeeded the bridge answers or hangs up, and never
+        sends one: a client takes an alert before any reply byte to mean that
+        its certificate was refused and nothing was read
+        (``identity/client.py``).
         """
         accepted.settimeout(FRAME_DEADLINE_SECONDS)
         with self._context.wrap_socket(accepted, server_side=True) as channel:
@@ -126,6 +151,11 @@ class IdentityTLSBridge:
         # token from a revoked identity must fail before broker dispatch.
         expected = (None if self._expected_for_peer is None else
                     self._expected_for_peer(certificate_der, now))
+        # A bridge pinned to one subject serves that subject only, whoever
+        # else the same CA has enrolled; refused before any token is opened.
+        if self._subject is not None and (
+                expected is None or expected.subject != self._subject):
+            raise SecretsError('wrong_binding')
         inner = self._verifier.open(
             outer, authenticated_peer_der=certificate_der,
             now=now, expected=expected,

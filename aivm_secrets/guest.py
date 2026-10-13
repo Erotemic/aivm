@@ -20,7 +20,8 @@ policy; nothing about any particular tool is built into this file, and a
 command the table does not list is an error, never a fallback.
 
 Exit status: 0 success, 2 client or transport failure, 3 refused by the
-broker, 4 a host operator must approve this exact write first.
+broker (or ``outcome_unknown``: sent, but no answer came), 4 a host operator
+must approve this exact write first.
 
 There is no fallback to a host tool, an unrestricted API, a shell or a URL.
 """
@@ -41,6 +42,25 @@ MAX_FRAME = 65536
 MAX_REPLY = 2 * 1024 * 1024 + 65536
 MAX_INPUT = 16384
 WORD = 'abcdefghijklmnopqrstuvwxyz0123456789-'
+# How long to wait for an answer once a request is sent. It must outlast
+# every hop behind it: the broker's own egress and the identity bridge's wait
+# for it, plus the bridge's own legs (``RELAYED_REPLY_DEADLINE`` in the host
+# package's transport/framing.py, which this standalone file cannot import),
+# so that the hop nearest the broker is the one that gives up first and says
+# why.
+RESPONSE_DEADLINE = 150.0
+OUTCOME_UNKNOWN_MESSAGE = (
+    'A dispatched request may have completed; reconcile before retrying.'
+)
+
+
+def unanswered() -> dict[str, Any]:
+    """The reply for a request that was sent and never answered."""
+    return {
+        'version': 1,
+        'ok': False,
+        'error': {'code': 'outcome_unknown', 'message': OUTCOME_UNKNOWN_MESSAGE},
+    }
 
 
 def parser() -> argparse.ArgumentParser:
@@ -151,9 +171,19 @@ def request_from_args(args: argparse.Namespace) -> Any:
 
 
 def exchange(
-    socket_path: str, capability: str, payload: Any, verb: str = 'request'
+    socket_path: str,
+    capability: str,
+    payload: Any,
+    verb: str = 'request',
+    *,
+    deadline: float = RESPONSE_DEADLINE,
 ) -> dict[str, Any]:
-    """Send one frame and read one reply. One connection per request."""
+    """Send one frame and read one reply. One connection per request.
+
+    If no reply arrives within ``deadline`` of the frame being sent, the
+    answer is ``outcome_unknown``, as the broker itself would put it: the
+    request may be running, or have run, on the host.
+    """
     wire = json.dumps(
         {'version': 1, 'capability': capability, verb: payload},
         allow_nan=False,
@@ -189,14 +219,20 @@ def exchange(
         with connection:
             connection.settimeout(5.0)
             connection.sendall(wire + b'\n')
-            deadline = time.monotonic() + 60
+            # From here on the host may be acting on the request.
+            end = time.monotonic() + deadline
             data = bytearray()
             while b'\n' not in data:
-                remaining = deadline - time.monotonic()
+                remaining = end - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('response deadline')
+                    return unanswered()
                 connection.settimeout(remaining)
-                chunk = connection.recv(min(16384, MAX_REPLY + 1 - len(data)))
+                try:
+                    chunk = connection.recv(
+                        min(16384, MAX_REPLY + 1 - len(data))
+                    )
+                except socket.timeout:
+                    return unanswered()
                 if not chunk or len(data) + len(chunk) > MAX_REPLY:
                     raise ValueError('invalid response')
                 data.extend(chunk)
@@ -220,6 +256,13 @@ def report_failure(reply: dict[str, Any]) -> int:
     status = error.get('status')
     suffix = f' (HTTP {status})' if type(status) is int else ''
     print(f'aivm-secrets: {code}{suffix}', file=sys.stderr)
+    if code == 'outcome_unknown':
+        # A request queued on the host can still run after this answer.
+        print(
+            'aivm-secrets: the request was sent and may have been applied, '
+            'or may still be; check before repeating it.',
+            file=sys.stderr,
+        )
     if code == 'approval_required':
         approval = reply.get('approval')
         digest = approval.get('digest') if isinstance(approval, dict) else ''

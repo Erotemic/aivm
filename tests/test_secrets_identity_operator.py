@@ -4,17 +4,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import select
 import stat
 import threading
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from aivm_secrets import guest
 from aivm_secrets.cli import main
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.server import LocalServer
+from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.enrollment import IdentityAuthority
 from aivm_secrets.identity.service import UnixIdentityService
 from tests.secrets_helpers import Harness, REPO
@@ -366,3 +371,78 @@ def test_the_verb_table_check_reports_each_disagreement(
     else:
         assert len(problems) == 1, problems
         assert all(fragment in problems[0] for fragment in expected), problems
+
+
+def _line(stream: Any, seconds: float = 20.0) -> bytes:
+    """One line from a child's pipe, or nothing if it never comes."""
+    data = b''
+    deadline = time.monotonic() + seconds
+    while not data.endswith(b'\n'):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([stream], [], [], remaining)[0]:
+            break
+        chunk = os.read(stream.fileno(), 4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+@pytest.mark.parametrize('extra,cap', [
+    pytest.param([], None, id='no-connection-cap-by-default'),
+    pytest.param(['--max-connections', '256'], 256, id='an-explicit-cap-is-still-accepted'),
+])  # fmt: skip
+def test_bridge_command_serves_a_pinned_subject_until_its_lease_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[str],
+    cap: int | None,
+) -> None:
+    authority = IdentityAuthority.initialize(
+        tmp_path / 'authority', issuer='aivm.test',
+        audience='aivm-secrets.identity')
+    key, csr = tmp_path / 'guest.key', tmp_path / 'guest.csr'
+    fingerprint = create_csr(private_key=key, request_file=csr)
+    entry = authority.enroll(subject='vm-a', csr=csr.read_bytes(),
+                             approve_fingerprint=fingerprint)
+    harness = Harness(tmp_path)
+    jwt = tmp_path / 'bound.jwt'
+    authority.issue(subject='vm-a', broker_capability=harness.capability,
+                    output=jwt)
+    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_MODE', 'mtls-v1')
+    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_CA', str(authority.tls_paths()[2]))
+    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_CERT', entry['certificate'])
+    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_KEY', str(key))
+    listen = tmp_path / 'bridge' / 'identity.sock'
+    try:
+        with LocalServer(harness.broker, tmp_path / 'broker') as broker:
+            child = subprocess.Popen(
+                [sys.executable, '-I', '-m', 'aivm_secrets', 'identity',
+                 'bridge', '--root', str(tmp_path / 'authority'),
+                 '--broker-socket', str(broker.socket_path),
+                 '--listen', str(listen), '--subject', 'vm-a',
+                 '--exit-on-stdin-eof', *extra],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd='/')
+            assert child.stdin is not None and child.stdout is not None
+            try:
+                ready = _line(child.stdout)
+                assert json.loads(ready) == {
+                    'listening': str(listen), 'max_connections': cap,
+                    'idle_seconds': 900, 'subject': 'vm-a',
+                }
+                request = {'operation': 'pr.view',
+                           'arguments': {'repository': REPO, 'pr': 13861}}
+                reply = guest.exchange(str(listen), jwt.read_text(), request)
+                assert reply['ok'] is True
+                assert reply['result']['number'] == 13861
+            finally:
+                # Closing the lease is how its parent ends the bridge.
+                child.stdin.close()
+                code = child.wait(timeout=30)
+                child.stdout.close()
+                if child.stderr is not None:
+                    child.stderr.close()
+            assert code == 0
+            assert not listen.exists()
+            assert len(harness.executor.calls) == 1
+    finally:
+        harness.broker.close()

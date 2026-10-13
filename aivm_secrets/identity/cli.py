@@ -131,8 +131,13 @@ def add_parser(subs):
     bridge = common('bridge')
     bridge.add_argument('--broker-socket', type=Path, required=True)
     bridge.add_argument('--listen', type=Path, required=True)
-    bridge.add_argument('--max-connections', type=int, default=64)
+    bridge.add_argument('--max-connections', type=int, default=None,
+                        help='Exit after this many connections (default: '
+                             'no cap; the idle timeout and stdin lease end it)')
     bridge.add_argument('--idle-seconds', type=int, default=900)
+    bridge.add_argument('--subject', default=None,
+                        help='Serve only this enrolled subject; any other '
+                             'certificate is refused before the broker')
     bridge.add_argument('--exit-on-stdin-eof', action='store_true',
                         help='Keep the bridge alive only while its parent holds stdin')
 
@@ -306,11 +311,12 @@ def run(args: argparse.Namespace) -> int:
         with UnixIdentityService(
             authority=authority, broker_socket=args.broker_socket,
             listen=args.listen, max_connections=args.max_connections,
-            idle_seconds=args.idle_seconds,
+            idle_seconds=args.idle_seconds, subject=args.subject,
         ) as bridge:
             print(codec.dumps({'listening': str(bridge.listen),
                                'max_connections': bridge.max_connections,
-                               'idle_seconds': bridge.idle_seconds}).decode(),
+                               'idle_seconds': bridge.idle_seconds,
+                               'subject': bridge.subject}).decode(),
                   flush=True)
             if args.exit_on_stdin_eof:
                 import select

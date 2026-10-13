@@ -40,6 +40,7 @@ CHECKS = (
     'test_secrets_presets.py',
     'test_secrets_vectors.py',
 )
+IDENTITY_BRIDGE = ('test_secrets_identity_service.py',)
 
 
 @dataclass(frozen=True)
@@ -373,6 +374,54 @@ MUTANTS = [
     Mutant('AUDIT-01', 'the audit chain is not checked',
            'host/audit.py', "or row['prev'] != head", 'or False',
            ('test_secrets_audit.py',)),
+    Mutant('AUDIT-01', 'the identity bridge calls an unanswered dispatch malformed',
+           'identity/service.py',
+           "            except Exception:\n"
+           "                raise SecretsError('outcome_unknown') from None\n"
+           "        if type(result) is not dict:\n"
+           "            raise SecretsError('outcome_unknown')",
+           "            except Exception:\n"
+           "                raise SecretsError('invalid_request') from None\n"
+           "        if type(result) is not dict:\n"
+           "            raise SecretsError('invalid_request')",
+           IDENTITY_BRIDGE),
+    # -- the identity bridge's wiring ----------------------------------------
+    Mutant('BIND-01', 'a bridge pinned to one subject serves any enrolled one',
+           'identity/mtls.py',
+           '        if self._subject is not None and (\n'
+           '                expected is None or expected.subject != self._subject):',
+           '        if False:', IDENTITY_BRIDGE),
+    Mutant('BRIDGE', 'the bridge may forward to a socket not named broker.sock',
+           'identity/service.py',
+           "        if self.path.name != GUEST_SOCKET:\n            raise SecretsError('unsafe_file')",
+           "        if False:\n            raise SecretsError('unsafe_file')",
+           IDENTITY_BRIDGE),
+    Mutant('BRIDGE', 'the broker socket is judged only when the bridge starts',
+           'identity/service.py',
+           '        # for a link or loosened since the bridge started.\n'
+           '        self._validate()\n',
+           '        # for a link or loosened since the bridge started.\n',
+           IDENTITY_BRIDGE),
+    Mutant('AUDIT-01', 'bound_call calls a refused certificate an unknown outcome',
+           'identity/client.py',
+           '            if not data and _refused_handshake(ex):\n'
+           "                raise SecretsError('unreachable') from None\n",
+           '', IDENTITY_BRIDGE),
+    # -- the identity bridge's lifetime --------------------------------------
+    Mutant('BRIDGE', 'a bridge exits without letting the answers in flight out',
+           'identity/service.py',
+           '        self._drain(workers, should_stop, stopping)\n', '',
+           IDENTITY_BRIDGE),
+    Mutant('BRIDGE', 'a bridge whose lease closed keeps listening while it drains',
+           'identity/service.py',
+           '        self._close_listener()\n'
+           '        self._drain(workers, should_stop, stopping)\n',
+           '        self._drain(workers, should_stop, stopping)\n',
+           IDENTITY_BRIDGE),
+    Mutant('BRIDGE', 'a bridge whose lease closed waits out a slow provider',
+           'identity/service.py',
+           '            self.stop_drain if stopping else DRAIN_SECONDS)',
+           '            DRAIN_SECONDS)', IDENTITY_BRIDGE),
     # -- host file safety ----------------------------------------------------
     Mutant('FILES', 'a world-writable ancestor directory is trusted',
            'host/files.py',

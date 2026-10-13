@@ -354,6 +354,26 @@ If a write fails, the error says what is known -- and only two things can be:
 A failed *read* is different, because there is nothing to have applied:
 ``upstream_rejected`` means the service answered 4xx.
 
+The same rule holds on the way back to the guest. When the identity bridge
+has handed a request to the broker and gets no well-formed answer in time
+(or the broker hangs up), the guest is told ``outcome_unknown``, whether or
+not it was a write, because the bridge cannot tell whether the broker acted.
+The guest client says the same when its own wait runs out after sending; a
+reply it cannot read is a client or transport failure (exit ``2``), which is
+not retried either. Each hop waits longer than the one behind it (the
+broker's worst case for one request is two provider calls of at most 45 s
+each; the bridge waits 120 s for it, the guest client 150 s), so the hop
+nearest the broker is normally the one that answers.
+
+``outcome_unknown`` does not mean the request is over. The broker runs one
+request at a time and never abandons a request it has read, and those 120 s
+count only a request's own work, not the time it waited behind others (or
+behind another session holding an OAuth vault). So a request answered
+``outcome_unknown`` -- typically one of several sent at once to a slow
+service -- may still be carried out *after* that answer. A check made
+straight away that finds nothing applied is not proof that nothing will be;
+look again once the session's other requests have finished.
+
 Delegating to a helper
 ----------------------
 
@@ -535,8 +555,9 @@ needed) or ``2`` (client or transport failure).
 ``upstream_error``      the service failed or redirected; not retried
 ``upstream_response``   the response was unusable, oversized, or echoed the
                         credential
-``outcome_unknown``     a write was sent and did not succeed; whatever the
-                        status, it may have been applied
+``outcome_unknown``     a write was sent and did not succeed, or a request
+                        was sent and no answer came back in time; either
+                        way it may have been applied
 ======================  ====================================================
 
 Running the broker without AIVM
@@ -595,8 +616,23 @@ into the guest. The host CA private key, JWT signer and AEAD key may **not**.
 
 For an existing separately started and scoped AIVS broker, ``identity issue``
 wraps its host-only capability in a signed, encrypted, certificate-bound JWT.
-``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener with fixed limits;
-``identity call`` speaks verified TLS over an explicitly forwarded socket.
+``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener.
+It serves up to 16 connections at once, so a slow provider call no longer
+holds up other callers' TLS handshakes or the answers the bridge gives by
+itself (a refused delegation, a wrong binding, a revoked certificate). The
+broker behind it still runs requests one at a time: a call that needs the
+broker -- every ``describe`` and ``request`` -- waits behind the one in
+progress, and that wait counts against the caller's deadline. It has no
+connection cap by default: it ends when its operator stops it, when the
+parent holding ``--exit-on-stdin-eof`` closes its stdin, or after
+``--idle-seconds`` with nothing in flight (``--max-connections N`` is still
+accepted, for a deliberately short-lived bridge). When the lease closes it
+stops listening and removes its socket at once, and gives a call still in
+flight a few seconds to be answered, not the full provider wait. ``--subject NAME`` pins it to one enrolled subject: a certificate the
+same CA enrolled for anyone else is refused (``wrong_binding``) before
+anything reaches the broker. It forwards only to a socket named
+``broker.sock``, and checks that socket's type, owner and mode again on every
+request. ``identity call`` speaks verified TLS over an explicitly forwarded socket.
 A revoked or replaced certificate is denied on its next request, and the
 broker still checks the operation, resource, budget and approval. Host-only
 OAuth/PKCE acquisition is described earlier in this guide, but the local

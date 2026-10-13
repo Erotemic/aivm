@@ -111,6 +111,33 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   (README updated). In this increment every earlier expectation is unchanged
   except `revoke_epoch_3`. Kernel `v1/` traces and policy digests are byte-
   identical.
+* The identity bridge no longer reports a forwarded request that got no usable
+  broker answer as `invalid_request`. After its 120 s wait, an EOF, a reset or
+  a malformed reply it answers `outcome_unknown`, because the broker may have
+  acted. A failure before the frame reaches the broker stays definite
+  (`internal_error`). `identity call` and the guest client follow the same
+  rule; the guest now waits 150 s.
+* The identity bridge serves up to 16 connections at once and no longer exits
+  after a fixed number of connections (`--max-connections` is optional,
+  default none). A bound session is no longer cut off after about 128 `gh`
+  calls. Requests that need the broker still run one at a time.
+* Add `identity bridge --subject S` to pin a bridge to one enrolled subject. A
+  certificate the same CA enrolled for anyone else is refused with
+  `wrong_binding` before anything reaches the broker.
+* When its stdin lease closes, the identity bridge stops listening and removes
+  its socket at once, then gives calls in flight at most 5 s. Ending a bound
+  `aivm ssh` session no longer stalls until AIVM's 10 s stop timeout kills the
+  bridge and leaves `identity.sock` behind.
+* `identity call` reports a client certificate refused during the TLS 1.3
+  handshake (unknown CA, expired, wrong) as `unreachable`, since nothing
+  reached the broker, instead of `outcome_unknown`.
+* The identity bridge relays broker replies up to the full reply limit (2 MiB
+  plus envelope) instead of misreporting anything over the 64 KiB request-
+  frame limit.
+* Document that `outcome_unknown` does not mean a request is over. The broker
+  runs requests one at a time and finishes every frame it has read, so a
+  request queued behind a slow one may still be applied after that answer. The
+  guest client's hint now says so.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection
