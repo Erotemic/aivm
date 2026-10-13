@@ -624,12 +624,10 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
-        # In certificate-bound mode do not implicitly add *another* secret
-        # transport, even if this VM has an independent forwarded Git agent.
-        agent_forwarding = (
-            None if args.secrets_identity_root else
-            _prepare_foreground_agent_forwarding(session)
-        )
+        # The VS Code launcher has no secrets-identity mode. Preserve its
+        # existing optional repository SSH-agent forwarding independently of
+        # the certificate-bound SSH launcher below.
+        agent_forwarding = _prepare_foreground_agent_forwarding(session)
 
         forward_agent_socket = (
             str(agent_forwarding.socket_path) if agent_forwarding else ''
