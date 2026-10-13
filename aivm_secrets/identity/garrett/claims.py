@@ -15,6 +15,9 @@ from ...errors import SecretsError
 from ...primitives import grammar, binding, epochs, validity
 
 MAX_IDENTITY_LIFETIME = 3600
+# The latest issue time whose longest token still expires within MAX_TIME,
+# so `exp` is always a signed 64-bit value (and a valid validity bound).
+MAX_ISSUED_AT = validity.MAX_TIME - MAX_IDENTITY_LIFETIME
 MAX_EPOCH = 2**31 - 1
 B64URL = grammar.ALNUM + '-_'
 
@@ -57,7 +60,7 @@ class IdentityClaims:
         }), code='invalid_capability')
         cnf = grammar.exact_keys(data['cnf'], frozenset({'x5t#S256'}),
                                  code='invalid_capability')
-        issued_at = grammar.integer(data['iat'], 0, 2**63 - MAX_IDENTITY_LIFETIME,
+        issued_at = grammar.integer(data['iat'], 0, MAX_ISSUED_AT,
                                     code='invalid_capability')
         expires_at = grammar.integer(data['exp'], issued_at + 1,
                                      issued_at + MAX_IDENTITY_LIFETIME,

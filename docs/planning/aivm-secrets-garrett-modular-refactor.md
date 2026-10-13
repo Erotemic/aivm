@@ -54,12 +54,15 @@ inside a pure primitive), and both server and mTLS client consume it.
   types, explicit time sample (`PRIM-TIME-01`). A verified clock or service
   deadline is an external assumption.
 * `primitives.epochs.advance` and `require_current`: bounded monotonic
-  increments and stale-epoch rejection (`PRIM-EPOCH-01`). Durable store
-  linearizability and rollback resistance are external assumptions.
+  increments and stale-epoch rejection (`PRIM-EPOCH-01`). An epoch or
+  maximum outside `[0, 2^63 - 1]` is refused rather than compared. Durable
+  store linearizability and rollback resistance are external assumptions.
 * `primitives.binding.require_match`: exact typed identity equality
   (`PRIM-BIND-01`). It **does not** authenticate signatures or TLS peers.
 * `garrett.claims.IdentityClaims`, `IdentityExpectation`, `assess_binding`:
-  closed token claim grammar and binding acceptance.
+  closed token claim grammar and binding acceptance. `iat` is at most
+  `MAX_ISSUED_AT = 2^63 - 1 - MAX_IDENTITY_LIFETIME`, so `exp` always fits a
+  signed 64-bit word.
 * `garrett.registry`: enrollment/revocation/lookup state transitions over
   caller-supplied snapshots. No filesystem operations or locks.
 * `garrett.vm.subject`: deterministic versioned managed-VM subject computed
@@ -100,6 +103,14 @@ remain separate contracts; ordinary AIVM VM defaults are unchanged.
   enroll or use provider credentials. `AIVM_SECRETS_RUST_GARRETT_RUNNER`
   selects a separately built Rust runner for differential comparison once
   available; absence is explicitly skipped, **not** labeled parity.
+* `tests/secrets_vectors/primitives/*-v1.jsonl` state the validity, epoch,
+  binding, digest and wire primitives one at a time, for
+  `python -m aivm_secrets.primitives_runner` (a closed table of primitive
+  names, one flushed reply per line). `AIVM_SECRETS_RUST_PRIMITIVES_RUNNER`
+  selects the future Rust runner; unset, that comparison is skipped. The
+  runner does I/O, so it sits beside the pure package, not in it, and the
+  kernel purity gates now cover `primitives/` as well. Budget and scope
+  primitives (M3) do not exist yet and have no corpus.
 * Structural gates reject imports from `aivm_secrets.host`, `kernel`,
   `transport` or the AIVM package inside the pure Garrett and primitives
   modules. Mutation tests explicitly remove interval, epoch, binding and

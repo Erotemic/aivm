@@ -35,6 +35,36 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   parser in every direction. A test now fails for an unclassified verb, a
   'planned' row that has shipped, and an 'implemented' row that omits a flag
   the parser now requires.
+* Harden the canonical codec for fixed-width ports. `loads` refuses a lone-
+  surrogate escape anywhere in a document, so a provider response holding one
+  now fails closed as `upstream_response`. `digest` refuses floats, integers
+  outside the signed 64-bit range, non-string keys and lone surrogates. `-0`
+  is pinned as the integer zero. `v1/codec.json` only gains cases, including
+  raw-byte `hex` inputs; the 17 kernel traces and every policy digest are
+  byte-identical.
+* Bound identity-claim `iat` at `2^63 - 1 - MAX_IDENTITY_LIFETIME`, so `exp`
+  always fits a signed 64-bit word. Refuse epochs and epoch maxima outside
+  `[0, 2^63 - 1]` instead of comparing them. Boundary rows are added (new rows
+  only) to `identity-v1.jsonl` and `garrett-protocol-v1.jsonl`.
+* Count the 32,768 frame-capability bound in UTF-8 bytes, not code points, as
+  the kernel spec states for every length limit. A non-ASCII capability over
+  32,768 bytes now gets `invalid_request` at the frame instead of
+  `invalid_capability` from the envelope. Issued `aivs1` capabilities and
+  bound JWTs are ASCII and are unaffected.
+* Fix the identity conformance runner, which answered an oversized line out of
+  order (its reply came out last), and flush every managed-VM runner reply.
+  The Rust identity and managed-VM parity gates now also require in-order
+  framing and per-line flushing.
+* Add `python -m aivm_secrets.primitives_runner` (a closed table of primitive
+  names, one flushed reply per line) with per-primitive corpora in
+  `tests/secrets_vectors/primitives/` for validity, epochs, binding, digest
+  and wire frames. Raw-byte rows pin `-0`, exponent spellings and raw UTF-8.
+  The Rust comparison is gated on `AIVM_SECRETS_RUST_PRIMITIVES_RUNNER` and
+  skipped when unset; no Rust parity is claimed.
+* Compare conformance-runner replies as canonical JSON in the primitives,
+  identity and managed-VM parity gates, so a runner answering `"ok": 1` or
+  `"value": 2.0` no longer passes as parity (Python's `==` equates `true`, `1`
+  and `1.0`).
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection

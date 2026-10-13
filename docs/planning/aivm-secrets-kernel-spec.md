@@ -155,12 +155,25 @@ matter most:
   what makes it safe to place in exactly one header value.
 
 **Strict JSON** (`codec.py`). Reject: duplicate object keys, `NaN`/`Infinity`,
-numbers with no finite value, invalid UTF-8, trailing data, more than 64 levels
-of nesting, more than 65,536 bytes per frame.
+numbers with no finite value, invalid UTF-8, a `\uD800`-`\uDFFF` escape that is
+not one half of a surrogate pair (so every accepted string has a UTF-8
+encoding), trailing data, more than 64 levels of nesting, more than 65,536
+bytes per frame. `-0` is a spelling of the integer zero. Finite floats are
+accepted, because provider responses may contain them.
+
+**Frames** (`wire.py`). A guest frame is one object holding `version: 1`, a
+`capability` string of at most 32,768 UTF-8 bytes, and exactly one verb of
+the closed set. The bound is in bytes, as every length limit is (section 8):
+a non-ASCII capability with fewer code points than that but more bytes is
+`invalid_request` at the frame. Issued capabilities are ASCII, so for them
+the two units agree.
 
 **Canonical encoding**: object keys sorted by code point, no whitespace, ASCII
 output with `\uXXXX` escapes (surrogate pairs above the BMP). Digested
-documents contain only objects, arrays, strings and integers.
+documents contain only objects with string keys, arrays, strings, booleans,
+`null` and integers in `[-2^63, 2^63 - 1]`: `digest` refuses a float or any
+other integer, because no other implementation is bound to render or hold it
+the same way.
 
 **Digests** are SHA-256 over canonical encodings, as lowercase hex:
 
@@ -348,7 +361,7 @@ single deleted checks that the named tests must detect
 | BUDGET-01 | `admit`, `note_attempt` | exhaustion, no-refund, concurrency | 05, 09, 13 | 4 |
 | ATTEN-01 | `delegate`, `scope.narrow`, `scope.is_subset` | exhaustive `spec_subset`, brute-force scope oracle, invariants | 09–11 | 4 |
 | APPROVAL-01 | `approve`, `admit` | one-shot, exact-bytes, expiry, grant-bound | 12 | 3 |
-| CODEC-01 | `codec.loads`, `codec.dumps`, `grammar.*` | regex oracles, strictness negatives | `codec`, `grammar` | 2 |
+| CODEC-01 | `codec.loads`, `codec.dumps`, `codec.digest`, `grammar.*`, `wire.parse_frame` | regex oracles, strictness negatives, lone surrogates, digest-domain refusals, capability byte bound | `codec`, `grammar`, `primitives/digest`, `primitives/wire` | 10 |
 | CONF-01 | (interpreter) | reflection tripwire, guest disk/env search in the e2e suite | — | 2 |
 | AUDIT-01 | (interpreter, executor) | ordering test, fault injection, chain verification, apply-then-4xx provider | — | 7 |
 | RESTART-01 | (envelope) | cross-session and post-crash replay, unit and e2e | `envelope` | — |

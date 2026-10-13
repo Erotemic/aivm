@@ -1,5 +1,5 @@
 {
- "about": "Strict JSON acceptance and canonical encoding (CODEC-01). \"canonical\" is specified by hand; \"sha256\" is a regression pin of SHA-256(canonical).",
+ "about": "Strict JSON acceptance and canonical encoding (CODEC-01). The input of a case is \"text\" (its UTF-8 encoding) or \"hex\" (the exact raw bytes, lowercase hex). \"hex\" states raw bytes exactly and is required where they are not valid UTF-8. \"canonical\" is specified by hand; \"sha256\" is a regression pin of SHA-256(canonical).",
  "limits": {
   "max_frame_bytes": 65536,
   "max_depth": 64
@@ -135,6 +135,178 @@
   {
    "name": "empty",
    "text": "",
+   "valid": false
+  },
+  {
+   "name": "negative zero is the integer zero",
+   "text": "[-0]",
+   "valid": true,
+   "canonical": "[0]",
+   "sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97"
+  },
+  {
+   "name": "negative zero in an object",
+   "text": "{\"a\":-0,\"b\":[-0,0]}",
+   "valid": true,
+   "canonical": "{\"a\":0,\"b\":[0,0]}",
+   "sha256": "ae86694fce44e84887aa02c49cbd13bc7415f39d6c89672cf1f96e692565d4cf"
+  },
+  {
+   "name": "signed 64-bit edges",
+   "text": "[-9223372036854775808,9223372036854775807]",
+   "valid": true,
+   "canonical": "[-9223372036854775808,9223372036854775807]",
+   "sha256": "f207540f474c6784d05310911d84d0f9aab8237f67c5c99cbb390ee571a17344"
+  },
+  {
+   "name": "escaped surrogate pair",
+   "text": "[\"\\ud83d\\ude00\"]",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\"]",
+   "sha256": "167ad31c823aaea3b1ddcd805ed4adb05b30ac67ae9bf8183afc8df4f029fcd0"
+  },
+  {
+   "name": "uppercase escapes are lowercased",
+   "text": "[\"\\uD83D\\uDE00\",\"\\u00E9\"]",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\",\"\\u00e9\"]",
+   "sha256": "33ea3b433d75f6ce2f6933eafd859fba58d99cffefc0c3a2c55f9dbd5355a7bc"
+  },
+  {
+   "name": "code point key order above the BMP",
+   "text": "{\"\\ud83d\\ude00\":2,\"\\uffff\":1}",
+   "valid": true,
+   "canonical": "{\"\\uffff\":1,\"\\ud83d\\ude00\":2}",
+   "sha256": "7399aff294a6b56f657db5fc869921bc94cd5f74936711c78e04981c8fb1b3e4"
+  },
+  {
+   "name": "DEL is escaped",
+   "text": "[\"\\u007f\"]",
+   "valid": true,
+   "canonical": "[\"\\u007f\"]",
+   "sha256": "b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed"
+  },
+  {
+   "name": "lone high surrogate",
+   "text": "[\"\\ud800\"]",
+   "valid": false
+  },
+  {
+   "name": "lone low surrogate",
+   "text": "[\"\\udc00\"]",
+   "valid": false
+  },
+  {
+   "name": "uppercase lone surrogate",
+   "text": "[\"\\uDBFF\"]",
+   "valid": false
+  },
+  {
+   "name": "reversed surrogate pair",
+   "text": "[\"\\ude00\\ud83d\"]",
+   "valid": false
+  },
+  {
+   "name": "high surrogate then a non-surrogate escape",
+   "text": "[\"\\ud83d\\u0041\"]",
+   "valid": false
+  },
+  {
+   "name": "high surrogate at the end of a string",
+   "text": "[\"a\\ud83d\"]",
+   "valid": false
+  },
+  {
+   "name": "lone surrogate in a key",
+   "text": "{\"\\ud800\":1}",
+   "valid": false
+  },
+  {
+   "name": "nested lone surrogate",
+   "text": "{\"a\":[{\"b\":\"\\udfff\"}]}",
+   "valid": false
+  },
+  {
+   "name": "raw two-byte UTF-8",
+   "hex": "5b22c3a9225d",
+   "valid": true,
+   "canonical": "[\"\\u00e9\"]",
+   "sha256": "d8f81e7a2fa1455720e881bd1d164699bdc9bd7dd91641754a2ead7107c1ea0a"
+  },
+  {
+   "name": "raw four-byte UTF-8",
+   "hex": "5b22f09f9880225d",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\"]",
+   "sha256": "167ad31c823aaea3b1ddcd805ed4adb05b30ac67ae9bf8183afc8df4f029fcd0"
+  },
+  {
+   "name": "raw DEL",
+   "hex": "5b227f225d",
+   "valid": true,
+   "canonical": "[\"\\u007f\"]",
+   "sha256": "b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed"
+  },
+  {
+   "name": "raw JSON whitespace",
+   "hex": "095b312c0d0a325d0a",
+   "valid": true,
+   "canonical": "[1,2]",
+   "sha256": "49a64717d5d4cb19952e6eac2946415cf6879adacf9908e7d872332d32c6e684"
+  },
+  {
+   "name": "invalid UTF-8 byte",
+   "hex": "5b22ff225d",
+   "valid": false
+  },
+  {
+   "name": "Latin-1 text",
+   "hex": "5b22e9225d",
+   "valid": false
+  },
+  {
+   "name": "UTF-8 encoded surrogate",
+   "hex": "5b22eda080225d",
+   "valid": false
+  },
+  {
+   "name": "overlong UTF-8",
+   "hex": "5b22c0af225d",
+   "valid": false
+  },
+  {
+   "name": "truncated UTF-8 sequence",
+   "hex": "5b22c3225d",
+   "valid": false
+  },
+  {
+   "name": "code point above U+10FFFF",
+   "hex": "5b22f4908080225d",
+   "valid": false
+  },
+  {
+   "name": "UTF-8 byte order mark",
+   "hex": "efbbbf7b7d",
+   "valid": false
+  },
+  {
+   "name": "raw newline in a string",
+   "hex": "5b220a225d",
+   "valid": false
+  },
+  {
+   "name": "raw NUL in a string",
+   "hex": "5b2200225d",
+   "valid": false
+  },
+  {
+   "name": "NUL after the document",
+   "hex": "5b305d00",
+   "valid": false
+  },
+  {
+   "name": "non-breaking space is not whitespace",
+   "hex": "5bc2a0315d",
    "valid": false
   }
  ]

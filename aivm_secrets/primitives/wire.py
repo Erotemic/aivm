@@ -27,6 +27,8 @@ from . import grammar
 
 VERSION = 1
 VERBS = ('request', 'describe', 'delegate', 'renounce')
+# In UTF-8 bytes. Issued capabilities are ASCII, where bytes and code points
+# agree, but a guest may send anything.
 MAX_CAPABILITY = 32768
 # One reply is a bounded provider response plus a bounded envelope.
 MAX_RESPONSE = 2 * 1024 * 1024
@@ -38,6 +40,18 @@ class Frame:
     verb: str
     capability: str
     payload: Any
+
+
+def _capability_fits(capability: str) -> bool:
+    """Whether ``capability`` is at most :data:`MAX_CAPABILITY` UTF-8 bytes.
+
+    The unit is the byte, as for every length limit (a port's ``str::len()``),
+    not the code point. A lone surrogate has no UTF-8 encoding, so no length.
+    """
+    try:
+        return grammar.byte_length(capability) <= MAX_CAPABILITY
+    except UnicodeError:
+        return False
 
 
 def parse_frame(value: Any) -> Frame:
@@ -52,7 +66,7 @@ def parse_frame(value: Any) -> Frame:
     )
     grammar.integer(value['version'], VERSION, VERSION)
     capability = value['capability']
-    if type(capability) is not str or len(capability) > MAX_CAPABILITY:
+    if type(capability) is not str or not _capability_fits(capability):
         raise SecretsError('invalid_request')
     payload = value[verb]
     if verb in ('describe', 'renounce') and payload is not True:

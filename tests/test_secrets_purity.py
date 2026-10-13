@@ -17,6 +17,11 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / 'aivm_secrets'
 KERNEL = sorted((PACKAGE / 'kernel').glob('*.py'))
+# The shared value primitives are in the kernel's trusted base, so they are
+# held to the same extraction rules. Their conformance runner does I/O and
+# therefore lives outside that package (``aivm_secrets/primitives_runner.py``).
+PRIMITIVES = sorted((PACKAGE / 'primitives').glob('*.py'))
+PURE = KERNEL + PRIMITIVES
 HOST = sorted((PACKAGE / 'host').glob('*.py'))
 ALL = sorted(PACKAGE.rglob('*.py'))
 
@@ -43,7 +48,14 @@ def imports(path: Path) -> list[tuple[int, str]]:
     return found
 
 
-@pytest.mark.parametrize('path', KERNEL, ids=lambda path: path.name)
+def label(path: Path) -> str:
+    """A kernel module by its name, as before; a primitive by its folder too."""
+    return path.name if path.parent.name == 'kernel' else (
+        f'{path.parent.name}/{path.name}'
+    )
+
+
+@pytest.mark.parametrize('path', PURE, ids=lambda path: label(path))
 def test_kernel_modules_import_only_pure_code(path):
     for level, name in imports(path):
         if level == 0:
@@ -59,7 +71,7 @@ def test_kernel_modules_import_only_pure_code(path):
             ), f'{path.name} imports {name}'
 
 
-@pytest.mark.parametrize('path', KERNEL, ids=lambda path: path.name)
+@pytest.mark.parametrize('path', PURE, ids=lambda path: label(path))
 def test_kernel_modules_use_no_ambient_authority(path):
     """No name that reads the world, even via an allowed import."""
     tree = ast.parse(path.read_text(encoding='utf-8'))
@@ -77,7 +89,7 @@ def test_kernel_modules_use_no_ambient_authority(path):
         )  # fmt: skip
 
 
-@pytest.mark.parametrize('path', KERNEL, ids=lambda path: path.name)
+@pytest.mark.parametrize('path', PURE, ids=lambda path: label(path))
 def test_kernel_functions_are_first_order(path):
     """No closures: every function is defined at module or class level.
 
@@ -96,7 +108,7 @@ def test_kernel_functions_are_first_order(path):
 
 def test_kernel_state_is_immutable():
     """Every kernel dataclass is frozen: transitions return new values."""
-    for path in KERNEL:
+    for path in PURE:
         for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
             if not isinstance(node, ast.ClassDef):
                 continue

@@ -64,6 +64,22 @@ A Rust runner can be selected with `AIVM_SECRETS_RUST_GARRETT_RUNNER`; absent
 Rust still means **no cross-language result**. Earlier identity, registry,
 managed-VM and crypto vectors remain frozen and authoritative.
 
+The leaf primitives have their own corpora, one per primitive, in
+`tests/secrets_vectors/primitives/`, run by `python -m
+aivm_secrets.primitives_runner` and, once one exists, by the Rust
+`aivm-secrets-primitives` runner named in `AIVM_SECRETS_RUST_PRIMITIVES_RUNNER`.
+They pin the conventions a fixed-width port must reproduce: integers outside
+the signed 64-bit range are refused (by a digest, an epoch and a claim's
+time alike) rather than compared, floats are never digested, and a lone
+surrogate is never accepted. The same suite checks both runners on raw
+bytes: one flushed reply per line, in input order, oversized lines
+included, and the spellings a canonical re-encoding would erase (`-0`, an
+exponent, raw UTF-8 in a capability). Replies are compared as canonical
+JSON, so a runner that answers `"ok": 1` or `"value": 2.0` fails although
+Python's `==` would equate them. The identity and managed-VM parity gates
+compare replies the same way and hold a Rust runner to the same framing
+and flushing; the other Garrett parity gates still compare with `==`.
+
 ## Shared security contract, not shared shortcuts
 
 ```text
