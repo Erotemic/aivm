@@ -287,6 +287,52 @@ def test_write_new_never_replaces_or_follows(tmp_path):
     assert victim.read_bytes() == b'keep'
 
 
+def test_write_durable_creates_private_file_and_refuses_existing(tmp_path: Path) -> None:
+    path = tmp_path / 'leaf.pem'
+    files.write_durable(path, b'cert')
+    assert path.read_bytes() == b'cert'
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    unsafe(files.write_durable, path, b'other')
+    assert path.read_bytes() == b'cert'
+
+
+def test_replace_durable_swaps_atomically_and_leaves_no_temporary(tmp_path: Path) -> None:
+    tmp_path = tmp_path / 'root'
+    tmp_path.mkdir(mode=0o700)
+    target = tmp_path / 'keyring.json'
+    target.write_bytes(b'old')
+    files.replace_durable(target, b'new', prefix='.keyring')
+    assert target.read_bytes() == b'new'
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['keyring.json']
+    # A symlinked target is replaced, never written through.
+    victim = write_private(tmp_path / 'victim', b'keep')
+    link = tmp_path / 'link'
+    link.symlink_to(victim)
+    files.replace_durable(link, b'replaced')
+    assert victim.read_bytes() == b'keep'
+    assert not link.is_symlink() and link.read_bytes() == b'replaced'
+
+
+def test_replace_durable_failure_keeps_previous_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tmp_path = tmp_path / 'root'
+    tmp_path.mkdir(mode=0o700)
+    target = tmp_path / 'enrollments.json'
+    target.write_bytes(b'previous')
+
+    def refuse(*args: object, **kwargs: object) -> None:  # kernel boundary
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(files.os, 'replace', refuse)
+    with pytest.raises(SecretsError) as caught:
+        files.replace_durable(target, b'next')
+    assert caught.value.code == 'audit_failed'
+    assert target.read_bytes() == b'previous'
+    assert sorted(p.name for p in tmp_path.iterdir()) == ['enrollments.json']
+
+
 def test_outside_refuses_guest_writable_locations(tmp_path):
     workspace = tmp_path / 'workspace'
     (workspace / 'sub').mkdir(parents=True)

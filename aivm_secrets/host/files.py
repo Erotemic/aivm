@@ -28,6 +28,7 @@ from __future__ import annotations
 import grp
 import os
 import pwd
+import secrets
 import stat
 from pathlib import Path
 
@@ -365,6 +366,66 @@ def write_new(path: Path, data: bytes) -> None:
             stream.write(data)
     except OSError as ex:
         raise _unsafe(path, ex.strerror or 'cannot create') from None
+
+
+def sync_directory(path: Path) -> None:
+    """``fsync`` a directory so the entries created or renamed in it persist."""
+    try:
+        fd = os.open(path, _DIR_FLAGS)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        raise SecretsError('audit_failed') from None
+
+
+def write_durable(path: Path, data: bytes) -> None:
+    """:func:`write_new`, then make the file and its directory entry durable.
+
+    Use it for material a later pointer commit will name (a key, a certificate,
+    a staged record): a crash must never leave the pointer naming an empty or
+    missing file. Creation refusals keep :func:`write_new`'s ``unsafe_file``;
+    a failure to make the data durable is ``audit_failed``.
+    """
+    write_new(path, data)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        fd = os.open(path, flags)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        raise SecretsError('audit_failed') from None
+    sync_directory(path.parent)
+
+
+def replace_durable(target: Path, data: bytes, *, prefix: str = '.replace') -> None:
+    """Atomically replace ``target`` with ``data``, durable before it returns.
+
+    A uniquely named sibling is written with :func:`write_durable`, renamed
+    over ``target`` and the directory synced; the temporary never survives.
+    ``os.replace`` replaces a symbolic link rather than following it, so the
+    caller's own read of the old ``target`` decides whether it was trusted.
+    Any failure leaves the previous ``target`` bytes in place and raises
+    ``audit_failed`` (or ``unsafe_file`` if the sibling could not be created).
+    """
+    tmp = target.parent / f'{prefix}-{secrets.token_hex(12)}.tmp'
+    try:
+        write_durable(tmp, data)
+        try:
+            os.replace(tmp, target)
+        except OSError:
+            raise SecretsError('audit_failed') from None
+        sync_directory(target.parent)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
 
 def outside(path: Path, roots: Roots, *, what: str) -> Path:

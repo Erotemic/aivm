@@ -1,31 +1,36 @@
-## Unreleased: single-active Garrett CA generations (pre-deployment)
-
-- Replace the flat, original host CA and implicit issuer/server selection
-  fallbacks with a strict version-2 authority manifest. One atomic trust
-  record selects both active CA and TLS server identity; no migration of
-  never-deployed schema-1 authorities is supported.
-- Add explicit fail-closed CA rotation. Stage and sync fresh P-256 CA and
-  server identities, revoke all enrollments, then switch the single active
-  authority record. Old bridges reject subsequent requests, and new bridges
-  require re-enrollment; no dual-root transition is promised.
-- Move X.509/CSR effects into a certificate adapter; remove undeployed
-  identity model facades and retain canonical pure Garrett modules. Add 60
-  Rust-targeted trust-state vectors, crash and TLS regression tests.
-
-## Unreleased: opt-in Garrett managed-VM guest-key rotation
-
-- Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
-  forced-bootstrap SSH channel and guest-owned staged P-256 key. The host
-  checks different-key proof, current enrollment CAS, and revocation-on-failed
-  activation. Keep normal VM/SSH and `identity_renew` behavior unchanged.
-- Add an independent, Rust-portable key-rotation decision model with frozen
-  vectors, real X.509 and shell activation tests, plus deployment limitations.
-
 # Changelog
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
+
+### Garrett identity completion (experimental)
+* Add durable `write_durable` / `replace_durable` host file helpers (fsync the
+  data and its directory entry before a pointer commit names it), and fix a
+  section underline that broke the documented `./run_docs.sh` build; a
+  dependency-free test now guards RST underlines because CI does not run
+  Sphinx.
+
+### Single-active Garrett CA generations (pre-deployment)
+* Replace the flat, original host CA and implicit issuer/server selection
+  fallbacks with a strict version-2 authority manifest. One atomic trust
+  record selects both active CA and TLS server identity; no migration of
+  never-deployed schema-1 authorities is supported.
+* Add explicit fail-closed CA rotation. Stage and sync fresh P-256 CA and
+  server identities, revoke all enrollments, then switch the single active
+  authority record. Old bridges reject subsequent requests, and new bridges
+  require re-enrollment; no dual-root transition is promised.
+* Move X.509/CSR effects into a certificate adapter; remove undeployed
+  identity model facades and retain canonical pure Garrett modules. Add 60
+  Rust-targeted trust-state vectors, crash and TLS regression tests.
+
+### Opt-in Garrett managed-VM guest-key rotation
+* Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
+  forced-bootstrap SSH channel and guest-owned staged P-256 key. The host
+  checks different-key proof, current enrollment CAS, and revocation-on-failed
+  activation. Keep normal VM/SSH and `identity_renew` behavior unchanged.
+* Add an independent, Rust-portable key-rotation decision model with frozen
+  vectors, real X.509 and shell activation tests, plus deployment limitations.
 
 ### Garrett certificate renewal and host TLS leaf rotation (Python reference)
 * Add explicit compare-and-swap client certificate renewal through pinned,

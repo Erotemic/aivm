@@ -645,7 +645,7 @@ policy, run one read-only session against the real service and confirm that
 an operation outside the policy is refused.
 
 Managed-VM certificate enrollment (experimental)
------------------------------------------------
+------------------------------------------------
 
 The experimental Python P4a VM adapter is **opt-in**. For an already managed
 VM that has the updated forced bootstrap helper, first initialize an identity
