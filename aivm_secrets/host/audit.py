@@ -46,6 +46,12 @@ EVENTS = (
     'identity_enroll_intent',
     'identity_revoke_intent',
     'identity_token_issue_intent',
+    'identity_key_rotate_intent',
+    'identity_key_retire_intent',
+    'oauth_enroll_intent',
+    'oauth_refresh_intent',
+    'oauth_revoke_intent',
+    'oauth_recorded',
     'identity_recorded',
 )
 _FIELDS = frozenset(

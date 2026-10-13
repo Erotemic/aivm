@@ -1,8 +1,12 @@
 # Garrett-style instance identity: Python P4a increment and Rust boundary
 
-Status: **experimental Python P4a with opt-in managed-VM integration**
-(2026-10-12). This advances P4 independently of P1/P2 Rust formal work;
-existing VMs receive no new secrets access by default.
+Status: **experimental Python P4a/P4b local functional flow with opt-in managed-VM integration**
+(2026-10-12). The host OAuth credential issuer, encrypted vault, refresh,
+local revocation and issuer signing-key rotation are now implemented. This
+advances P4 independently of P1/P2 Rust formal work; existing VMs gain no
+new credential access by default. See
+[OAuth acquisition and substitution](aivm-secrets-garrett-oauth-implementation.md)
+for the current executable contract and remaining P4c limitations.
 No real `gh` or other service credentials are needed for the tests. Consult
 [the parallel-implementations decision](aivm-secrets-parallel-implementations.md).
 
@@ -58,35 +62,30 @@ private key accepted by the configured CA, **not** hardware non-exportability,
 vTPM enrollment, remote attestation, host identity proof or correct guest-agent
 process identity.
 
-## Planned protocol decomposition and reusable primitives
+## Self-contained Garrett protocol and shared primitives (implemented)
 
-The present `identity/model.py`, `token.py`, `registry_model.py`,
-`vm_model.py`, `enrollment.py`, and mTLS bridge remain the running
-reference implementation. The next refactor proposes a pure
-`identity/garrett/` domain model for **protocol state transitions**,
-not a single transaction containing TLS, OAuth, persistence and network
-effects. `aivm_secrets.primitives` provides reusable validity, epoch,
-certificate-binding and budget/scope rules beneath it. See
-[the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
-for the intended import graph, theorem contracts and migration gates.
+The pure `aivm_secrets.identity.garrett` package now owns closed public
+claims, certificate binding, enrollment transitions, managed-VM subject
+calculation and pure `prepare_issue`/`present` intent construction. It
+has no imports from `kernel`, `host`, TLS, X.509 or the AIVM manager. The
+reusable bounded JSON/wire, validity, epoch and binding operations now live
+in `aivm_secrets.primitives`; old module names re-export the same functions
+and types. See the [refactor implementation record](aivm-secrets-garrett-modular-refactor.md).
 
-Issuance consumes *authenticated* operator authority, a current
-enrollment and an opaque credential handle; presentation consumes a
-TLS-verified peer and cryptographically authenticated claims; request
-execution still goes through the original broker authorization and
-effect executor. Pure certificate-thumbprint equality is not TLS
-verification, and a signed token alone does not authorize a provider
-operation. The future model must state ordering, idempotency,
-revocation linearization, and `outcome_unknown` for dispatched writes.
-No second egress path, general-purpose API forwarding or new guest
-power is authorized by this proposed structure.
+This makes **the pure protocol model**, not the cryptographic credential
+service, self-contained. The Python issuer still owns filesystem and CA
+operations, `identity.token` still uses library-backed Ed25519/AES-GCM and
+the mTLS bridge still forwards only into the original broker. It creates
+no new privileged API endpoint or authorization bypass. TLS/authenticated
+claims, registry snapshots and clock samples are *trusted inputs* to pure
+models, not facts proved by calling those models.
 
 ## Files and responsibilities
 
 | Path | Boundary / future Rust counterpart |
 | --- | --- |
-| `aivm_secrets/identity/model.py` | Pure typed claims, expectations, explicit time/cert/epoch decision; port directly to safe Rust |
-| `aivm_secrets/identity/runner.py` | Language-neutral JSONL parity runner, no secret input |
+| `aivm_secrets/identity/garrett/claims.py` | Pure typed claims, expectations, explicit time/cert/epoch decision; `identity/model.py` is an old-path facade |
+| `aivm_secrets/identity/garrett_runner.py` | New pure issue/present JSONL runner; original `identity/runner.py` remains for binding vectors |
 | `aivm_secrets/identity/token.py` | Host-only Ed25519 JWT and AES-GCM envelope; verify library-backed crypto and document assumptions |
 | `aivm_secrets/identity/mtls.py` | One-connection TLS 1.3 CERT_REQUIRED gate; gets real peer DER from SSL before calling the broker |
 | `tests/secrets_vectors/identity-v1.jsonl`, `identity-crypto-v1.json` | Independent frozen binding decisions and deterministic, test-only JWT/AEAD byte-level fixture |
@@ -103,7 +102,7 @@ The follow-up [P4a enrollment increment](aivm-secrets-p4a-enrollment.md)
 provides a principal-owned local CA, a CSR enrollment CLI, persistent per-VM
 certificate/epoch records, an optional foreground Unix mTLS bridge, and a
 restricted TLS client. This standalone authority does not automatically modify a VM, start a daemon,
-expose TCP, acquire OAuth credentials, or change the default
+expose TCP, or change the default
 `aivm ssh --secrets_policy` transport. The separate opt-in managed-VM adapter
 now provisions an identity through the authenticated bootstrap path, but live
 libvirt and SSH integration remains unvalidated.
@@ -115,8 +114,10 @@ The signed token's `jti` is informative, not a persisted one-shot replay
 guard. The existing broker still governs operations, attempt budgets and
 session lifetime. The registry provides new-call epoch revocation, but no
 atomic guarantee across an already in-flight request or rollback-resistant
-state across host snapshot restoration. Certificate/key renewal, vTPM,
-issuer rotation, unattended VM enrollment, and verified Rust remain pending.
+state across host snapshot restoration. Client certificate/key renewal, CA rotation, vTPM, unattended VM enrollment,
+and verified Rust remain pending. **Issuer JWT key rotation and retirement are
+implemented separately** from CA rotation. OAuth refresh/revocation are local
+host-vault operations, with no cross-snapshot rollback resistance.
 
 ## P4 milestones, independent of Rust schedule
 
@@ -133,12 +134,17 @@ issuer rotation, unattended VM enrollment, and verified Rust remain pending.
    live libvirt UUID, and uses pinned bootstrap SSH. Remaining: controlled
    upgrade of older guest bootstrap helpers, issuer API authentication suitable
    for automation, CA rotation and real-VM tests with a synthetic provider.
-3. **P4b:** host/browser OAuth authorization and refresh, issuer/broker
-   separation, interoperable credential substitution and signed encrypted
-   surrogate claims; use the user's host principal, never a shared host token.
-4. **P4c:** durable revocation/epochs, rotating issuers, renewal, snapshot/
-   clone semantics, key custody in vTPM or hardware where available, fail-closed
-   backend unavailability, and recovery/migration tests.
+3. **P4b (Python local implementation complete, broad interoperability pending):**
+   host-browser authorization-code/PKCE, pinned HTTPS exchange, encrypted host
+   credential vault, explicit refresh and revocation, existing restricted
+   broker substitution, plus signed/encrypted certificate-bound surrogates.
+   This deliberately does not intercept arbitrary existing clients or become
+   a cross-host stateless OAuth proxy. The local principal owns its vault.
+4. **P4c (partially implemented):** local encrypted-vault revocation,
+   refresh-generation fencing and rotating/retirable JWT issuers are in the
+   Python implementation. Still needed: CA/client renewal, durable cross-host
+   revocation, rollback/clone resistance, vTPM/hardware key custody,
+   and recovery/migration tests.
 5. **Rust parity:** port model first, then crypto protocol/transport; compare
    canonical on-wire behavior and adversarial traces. Verify Rust pure rules
    through Aeneas/Lean and separately account for Rust TLS and other I/O

@@ -25,16 +25,44 @@ are in ``docs/planning/``:
 The Python reference implementation remains supported while a separate Rust
 implementation is developed for implementation-linked proofs. The Rust
 backend does **not** exist in this release; Python/Rust behavioral parity is
-not yet demonstrated. P4a identity code is a host-side experimental library:
-it adds no listener, VM certificate, new SSH flag, or new credential access by
-default. For the first real mTLS deployment, operator-controlled CA and key
-provisioning, listener isolation, identity enrollment, and revocation require
-a separate review. See the P4a plan above.
+not yet demonstrated. P4a/P4b identity and OAuth facilities are explicit opt-in host services,
+with an enrolled-VM launcher. They add no listener, certificate, credential
+access or session flag activation by default. No real-VM or provider smoke
+validation has been completed.
 
 This is separate from repository SSH deploy keys. Existing guest-key and
 dedicated ssh-agent workflows are unchanged, and ``git push`` is not added by
 this feature. Only foreground ``aivm ssh`` is integrated; VS Code and detached
 sessions are not.
+
+Opt-in Garrett OAuth-backed identity sessions
+---------------------------------------------
+
+The Python reference now supports a host-only OAuth authorization-code + PKCE
+acquisition and refresh workflow with an encrypted credential vault. Its
+certificate-bound identity bridge forwards only restricted operations to the
+existing broker. This functionality is **never enabled automatically** by
+installing or updating AIVM. It is not a generic transparent proxy for every
+third-party CLI.
+
+See ``docs/planning/aivm-secrets-garrett-oauth-implementation.md`` for the
+provider profile, host login, vault, revocation and key-rotation commands,
+including the synthetic-only example. The explicit managed-VM session adds
+these options to the existing enrolled identity mode::
+
+    aivm ssh ~/code/project \
+      --secrets_policy="$HOME/.config/aivm/secrets/readonly-policy.json" \
+      --secrets_identity_root="$HOME/.config/aivm/secrets/identity" \
+      --secrets_oauth_vault="$HOME/.config/aivm/secrets/oauth-vault" \
+      --secrets_oauth_provider_config="$HOME/.config/aivm/secrets/oauth-profile.json" \
+      --secrets_writes=deny
+
+The OAuth account subject is derived from the managed-VM identity. Selecting
+OAuth and a token file together is refused. A completed local vault revocation
+or refresh prevents the old session broker from dispatching subsequent
+authorized effects. Refreshing an account requires a new bound session to use
+the newly issued access token. Real provider and libvirt validation is still
+pending; no Rust/Lean proof is claimed.
 
 Quick start
 -----------

@@ -25,9 +25,10 @@ from typing import Any, Iterator
 from ..errors import SecretsError
 from ..host.audit import AuditLog
 from ..host.files import private_directory, read_owned, write_new
-from ..kernel import codec, grammar
-from .model import IdentityClaims, IdentityExpectation, MAX_EPOCH, MAX_IDENTITY_LIFETIME
+from ..primitives import codec, grammar
+from .model import IdentityExpectation, MAX_EPOCH, MAX_IDENTITY_LIFETIME
 from . import registry_model
+from .garrett.protocol import prepare_issue
 from .token import (IdentityTokenIssuer, certificate_thumbprint,
                     _crypto as _token_crypto)
 
@@ -48,6 +49,9 @@ JWT_KEY = 'issuer.key'
 JWT_PUBLIC = 'issuer.pub'
 AEAD_KEY = 'issuer.aes256'
 LOCK = '.enrollment.lock'
+KEYRING = 'issuer-keyring.json'
+KEY_DIRECTORY = 'issuer-keys'
+MAX_ISSUER_KEYS = 8
 
 
 def _x509():
@@ -459,6 +463,111 @@ class IdentityAuthority:
             thumbprint=thumb, now=stamp,
         )
 
+    def _keyring(self) -> dict[str, Any]:
+        """Legacy authorities start with `local-1` and no keyring file."""
+        path = self.root / KEYRING
+        if path.is_symlink():
+            raise SecretsError('unsafe_file')
+        if not path.exists():
+            return {'schema': 1, 'active': 'local-1', 'enabled': ['local-1'],
+                    'next_number': 2}
+        state = codec.loads(self._read(KEYRING, 4096),
+                            limit=4096, code='invalid_capability')
+        state = grammar.exact_keys(state, frozenset({
+            'schema', 'active', 'enabled', 'next_number',
+        }), code='invalid_capability')
+        if state['schema'] != 1 or type(state['schema']) is not int:
+            raise SecretsError('invalid_capability')
+        n = grammar.integer(state['next_number'], 2, 100000,
+                            code='invalid_capability')
+        enabled = state['enabled']
+        if type(enabled) is not list or not 1 <= len(enabled) <= MAX_ISSUER_KEYS:
+            raise SecretsError('invalid_capability')
+        seen = set()
+        for kid in enabled:
+            if type(kid) is not str or kid in seen or not kid.startswith('local-'):
+                raise SecretsError('invalid_capability')
+            grammar.token(kid, grammar.ALNUM, grammar.ALNUM + '-_', 32,
+                          code='invalid_capability')
+            seen.add(kid)
+        if state['active'] not in seen:
+            raise SecretsError('invalid_capability')
+        return {'schema': 1, 'active': state['active'], 'enabled': enabled,
+                'next_number': n}
+
+    def _keys_for(self, kid: str) -> tuple[bytes, bytes, bytes]:
+        if kid == 'local-1':
+            return self._read(JWT_KEY), self._read(JWT_PUBLIC), self._read(AEAD_KEY)
+        # Values never become path segments without validation against the
+        # host-owned, canonical keyring.
+        grammar.token(kid, grammar.ALNUM, grammar.ALNUM + '-_', 32,
+                      code='invalid_capability')
+        prefix = f'{KEY_DIRECTORY}/{kid}'
+        return (self._read(prefix + '.key'), self._read(prefix + '.pub'),
+                self._read(prefix + '.aes256'))
+
+    def _commit_keyring(self, state: dict[str, Any]) -> None:
+        data = codec.dumps(state)
+        tmp = self.root / ('.keyring-' + secrets.token_hex(12) + '.tmp')
+        try:
+            write_new(tmp, data)
+            os.replace(tmp, self.root / KEYRING)
+            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    def rotate_issuer(self) -> dict[str, Any]:
+        """Rotate JWT signing/AEAD keys; preserve old verification until retired.
+
+        Fresh token issuance switches atomically after all key files are
+        durable. Running bridges re-read the active keyring per request.
+        """
+        Private, _, _ = _token_crypto()
+        _, _, serialization, _, _, _ = _x509()
+        with self._locked():
+            state = self._keyring()
+            if len(state['enabled']) >= MAX_ISSUER_KEYS:
+                raise SecretsError('exhausted')
+            kid = f'local-{state["next_number"]}'
+            folder = self.root / KEY_DIRECTORY
+            if not folder.exists():
+                private_directory(folder, self.untrusted)
+            else:
+                private_directory(folder, self.untrusted)
+            signer = Private.generate()
+            prefix = folder / kid
+            with self._audit('identity_key_rotate_intent', 'issuer', _stamp(),
+                             hashlib.sha256(kid.encode()).hexdigest()):
+                write_new(Path(str(prefix) + '.key'), _key_pem(signer))
+                write_new(Path(str(prefix) + '.pub'), signer.public_key().public_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PublicFormat.SubjectPublicKeyInfo))
+                write_new(Path(str(prefix) + '.aes256'), secrets.token_bytes(32))
+                state['enabled'].append(kid)
+                state['active'] = kid
+                state['next_number'] += 1
+                self._commit_keyring(state)
+            return {'active': kid, 'enabled': state['enabled']}
+
+    def retire_issuer(self, kid: str) -> dict[str, Any]:
+        """Stop accepting an old issuer key on the next presentation."""
+        with self._locked():
+            state = self._keyring()
+            if kid == state['active'] or kid not in state['enabled']:
+                raise SecretsError('denied')
+            with self._audit('identity_key_retire_intent', 'issuer', _stamp(),
+                             hashlib.sha256(kid.encode()).hexdigest()):
+                state['enabled'].remove(kid)
+                self._commit_keyring(state)
+            return {'active': state['active'], 'enabled': state['enabled']}
+
     def issue(self, *, subject: str, broker_capability: str,
               output: Path, lifetime: int = 900,
               now: int | None = None) -> dict[str, Any]:
@@ -474,24 +583,26 @@ class IdentityAuthority:
                 not 1 <= lifetime <= MAX_IDENTITY_LIFETIME):
             raise SecretsError('invalid_capability')
         with self._locked():
-            row = self._registry()['subjects'].get(subject)
+            state = self._registry()
+            row = state['subjects'].get(subject)
             if row is None or not row['active'] or stamp >= row['not_after']:
                 raise SecretsError('invalid_capability')
             exp = min(stamp + lifetime, row['not_after'])
             if exp <= stamp:
                 raise SecretsError('invalid_capability')
-            claims = IdentityClaims.parse({
-                'iss': self.issuer, 'aud': self.audience, 'sub': subject,
-                'jti': secrets.token_hex(16), 'iat': stamp, 'exp': exp,
-                'epoch': row['epoch'],
-                'cnf': {'x5t#S256': row['certificate_sha256']},
-            })
+            claims = prepare_issue(
+                state, issuer=self.issuer, audience=self.audience,
+                subject=subject, token_id=secrets.token_hex(16),
+                now=stamp, lifetime=lifetime,
+            ).claims
             _, _, serialization, _, _, _ = _x509()
+            active_key = self._keyring()['active']
+            private_pem, _, aead_bytes = self._keys_for(active_key)
             try:
-                key = serialization.load_pem_private_key(self._read(JWT_KEY), password=None)
+                key = serialization.load_pem_private_key(private_pem, password=None)
             except (ValueError, TypeError):
                 raise SecretsError('invalid_capability') from None
-            issuer = IdentityTokenIssuer(key, self._read(AEAD_KEY), key_id='local-1')
+            issuer = IdentityTokenIssuer(key, aead_bytes, key_id=active_key)
             sealed = issuer.issue(claims, broker_capability)
             output = Path(output).expanduser().absolute()
             private_directory(output.parent, self.untrusted)
@@ -502,14 +613,8 @@ class IdentityAuthority:
                     'certificate_sha256': row['certificate_sha256']}
 
     def token_verifier(self, expected: IdentityExpectation):
-        from .token import IdentityTokenVerifier
-        _, _, serialization, _, _, _ = _x509()
-        try:
-            public = serialization.load_pem_public_key(self._read(JWT_PUBLIC))
-        except (ValueError, TypeError):
-            raise SecretsError('invalid_capability') from None
-        return IdentityTokenVerifier(public, self._read(AEAD_KEY),
-                                     key_id='local-1', expected=expected)
+        """Return a revocation-aware verifier that reads live key selection."""
+        return _AuthorityTokenVerifier(self, expected)
 
     def tls_paths(self) -> tuple[Path, Path, Path]:
         # Check each path *before* ssl.load_cert_chain opens the pathname.
@@ -518,3 +623,33 @@ class IdentityAuthority:
         return (self.root / SERVER_CERT,
                 self.root / SERVER_KEY,
                 self.root / CA_CERT)
+
+
+class _AuthorityTokenVerifier:
+    """Key rotation/retirement takes effect at the next mTLS request.
+
+    The untrusted `kid` merely selects one of the host's allowlisted keys;
+    the matching verifier validates the *whole* JWT signature and AEAD.
+    """
+
+    def __init__(self, authority: IdentityAuthority,
+                 expected: IdentityExpectation):
+        self.authority = authority
+        self.expected = expected
+
+    def open(self, token: str, *, authenticated_peer_der: bytes, now: int,
+             expected: IdentityExpectation | None = None):
+        from .token import IdentityTokenVerifier, _trusted_kid
+        _, _, serialization, _, _, _ = _x509()
+        try:
+            kid = _trusted_kid(token)
+            if kid not in self.authority._keyring()['enabled']:
+                raise SecretsError('invalid_capability')
+            _, public_pem, aead = self.authority._keys_for(kid)
+            public = serialization.load_pem_public_key(public_pem)
+            return IdentityTokenVerifier(public, aead, key_id=kid,
+                expected=self.expected).open(token,
+                authenticated_peer_der=authenticated_peer_der, now=now,
+                expected=expected)
+        except Exception:
+            raise SecretsError('invalid_capability') from None

@@ -23,6 +23,8 @@ slow provider; the next emission simply observes it.
 from __future__ import annotations
 
 import secrets
+from contextlib import nullcontext
+from typing import ContextManager
 import threading
 import time
 from dataclasses import dataclass
@@ -67,11 +69,13 @@ class Broker:
         untrusted: Roots = (),
         wall_clock: Callable[[], float] = time.time,
         monotonic_clock: Callable[[], float] = time.monotonic,
+        credential_guard: Callable[[], ContextManager[None]] | None = None,
     ):
         self.spec = reparse(spec)
         self.binding = Binding.parse(binding.to_dict())
         self._wall_clock = wall_clock
         self._monotonic_clock = monotonic_clock
+        self._credential_guard = credential_guard
         self._codec: EnvelopeCodec | None = EnvelopeCodec()
         self._state, claims = machine.open_session(
             self.spec,
@@ -218,6 +222,21 @@ class Broker:
         return wire.success()
 
     def _request(
+        self,
+        payload: Any,
+        opened: OpenedCapability,
+        request_id: str,
+        trace: _Trace,
+    ) -> dict[str, Any]:
+        # A host-selected credential source can require a durable revocation
+        # lease. No guest protocol field or authorization decision selects it.
+        # This covers preflight and final effects under one linearization lock.
+        guard = (self._credential_guard() if self._credential_guard is not None
+                 else nullcontext())
+        with guard:
+            return self._request_under_guard(payload, opened, request_id, trace)
+
+    def _request_under_guard(
         self,
         payload: Any,
         opened: OpenedCapability,

@@ -241,8 +241,21 @@ def broker_command(
     vm: str,
     audit_dir: Path,
     untrusted: list[Path],
+    oauth_vault: Path | None = None,
+    oauth_provider_config: Path | None = None,
+    oauth_subject: str = '',
 ) -> list[str]:
-    """The exact child command line. It never contains a credential."""
+    """The exact child command line. It never contains a credential.
+
+    OAuth is a host-only, explicitly selected source. AIVM must never mix it
+    with a file source or forward either OAuth token to the guest. The subject
+    is derived from the authoritative managed VM identity by the caller.
+    """
+    if oauth_vault is not None:
+        if token_file is not None or oauth_provider_config is None or not oauth_subject:
+            raise SecretsError('invalid_policy')
+    elif oauth_provider_config is not None or oauth_subject:
+        raise SecretsError('invalid_policy')
     argv = [
         sys.executable,
         *interpreter_flags(),
@@ -265,6 +278,10 @@ def broker_command(
     ]
     if token_file is not None:
         argv += ['--token-file', str(token_file)]
+    if oauth_vault is not None:
+        argv += ['--oauth-vault', str(oauth_vault),
+                 '--oauth-provider-config', str(oauth_provider_config),
+                 '--oauth-subject', oauth_subject]
     for root in untrusted:
         argv += ['--untrusted-root', str(root)]
     return argv

@@ -4,6 +4,34 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
 
+### Garrett host OAuth and certificate-bound substitution (Python reference)
+* Add an opt-in host/browser OAuth authorization-code/PKCE issuer with a
+  pinned HTTPS token endpoint, strict callback validation and an AES-GCM
+  encrypted host-only vault for access and rotating refresh tokens.
+* Add host broker credential leases: completed vault revocation or refresh
+  prevents a stale bound session from performing further provider effects.
+  Preserve the existing policy, approval, budget and egress reference monitor.
+* Support JWT signing/encryption issuer key rotation and explicit old-key
+  retirement, rechecked on every mTLS presentation. CA/client-key renewal,
+  non-exportable keys and snapshot rollback resilience remain future work.
+* Permit explicit OAuth-backed managed-VM sessions with the authorized VM
+  subject and identity-only forwarded socket. Mixed token sources fail closed;
+  ordinary SSH and previously configured credentials do not change.
+* Freeze a provider-neutral OAuth transition vector corpus for future Rust
+  parity and document the remaining formal and deployment assumptions.
+
+### Garrett protocol modularization (experimental)
+* Extract pure Garrett claims, enrollment, VM identity and issue/present
+  decisions into the self-contained `aivm_secrets.identity.garrett` package.
+  The existing host CA, certificate and broker adapters continue unchanged,
+  without granting new VM authority.
+* Consolidate shared JSON grammar, canonical encoding and versioned wire
+  parsing in `aivm_secrets.primitives`, with old module paths as compatible
+  re-exports. Add independent validity, epoch and binding contracts, frozen
+  Garrett protocol vectors, structural import checks and mutation targets.
+* Keep the Python reference independently maintained and Rust/Lean proof
+  verification pending. No claim of end-to-end verification is made.
+
 ### Changed
 * `aivm-secrets` hardening: disable TLS key-log output even for standalone
   sessions, reject untrusted runtime paths before resolving credentials, and

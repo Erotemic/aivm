@@ -1,10 +1,12 @@
 # AIVM Secrets: credential-use capabilities with a verifiable core
 
 Status: architecture, implemented in Python through the local-host scope of
-P0-P3 and a limited opt-in P4a identity library (updated 2026-10-12). **No part
+P0-P3 and an opt-in local Python P4a/P4b credential-identity flow (updated 2026-10-12). **No part
 of this implementation is formally verified.** There is not yet a Rust backend
-or a Lean proof. P4a has an explicitly opt-in managed-VM launcher and
-enrollment adapter, but no live-libvirt validation or verified key custody.
+or a Lean proof. The Python reference now includes host-browser OAuth/PKCE acquisition,
+an AES-GCM-protected host vault, refresh and revocation fencing, issuer
+key rotation, and an opt-in OAuth-backed bound-VM launcher. There is still
+no live-libvirt/provider validation, hardware key custody, or Lean proof.
 The [modular proof architecture](aivm-secrets-modular-proof-architecture.md)
 records the planned primitive package, Garrett protocol decomposition,
 and conditional proof-composition rules.

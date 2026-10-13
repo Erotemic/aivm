@@ -338,3 +338,59 @@ def test_guest_setup_failure_shuts_down_both_host_services(tmp_path, monkeypatch
         assert exc.value.code == 'guest_setup'
     assert events == ['bridge', 'broker']
     assert not (secure / 'bound.jwt').exists()
+
+
+def test_bound_oauth_uses_managed_subject_and_only_host_paths(tmp_path, monkeypatch):
+    """OAuth account selection is host-derived, never guest-supplied."""
+    import aivm.secrets_identity_transport as module
+    import aivm.secrets_transport as transport
+    context, bound, store = fixture_context(tmp_path)
+    workspace = tmp_path / 'project'
+    workspace.mkdir()
+    session = PreparedSession(
+        context=context, cfg_path=store, reg_path=store, host_src=workspace,
+        attachment_mode='persistent', share_source_dir=str(workspace),
+        share_tag='hostcode', share_guest_dst='/home/lab-agent/code/project',
+        ip='10.0.0.2', meta_path=None,
+    )
+    vault = tmp_path / 'vault'
+    profile = tmp_path / 'provider.json'
+    seen = []
+    class ReachedBroker(Exception):
+        pass
+    def stop_at_broker(manager, argv):
+        seen.append(argv)
+        raise ReachedBroker()
+    monkeypatch.setattr(module, 'resolve_managed_identity', lambda *a, **kw: bound)
+    monkeypatch.setattr(module, 'guest_writable_roots', lambda _: ())
+    monkeypatch.setattr(module, '_public_client', lambda *a, **kw:
+                        {'subject': bound.subject, 'certificate_sha256': 'synthetic'})
+    monkeypatch.setattr(module.CommandManager, 'current', lambda:
+                        SimpleNamespace(run=lambda *a, **kw: None))
+    monkeypatch.setattr(transport, 'interpreter_flags', lambda: ['-I'])
+    monkeypatch.setattr(transport.BrokerProcess, 'start', stop_at_broker)
+    with pytest.raises(ReachedBroker):
+        run_bound_secrets_ssh(
+            session, ['ssh', 'lab-agent@10.0.0.2', 'exec $SHELL -l'],
+            policy_path=tmp_path / 'readonly-policy.json',
+            identity_root=tmp_path / 'authority',
+            oauth_vault=vault, oauth_provider_config=profile,
+            uuid_reader=lambda _: UUID,
+        )
+    assert len(seen) == 1
+    cmd = seen[0]
+    assert cmd[cmd.index('--oauth-subject') + 1] == bound.subject
+    assert cmd[cmd.index('--oauth-vault') + 1] == str(vault)
+    assert cmd[cmd.index('--oauth-provider-config') + 1] == str(profile)
+    assert '--token-file' not in cmd and '--token-stdin' not in cmd
+    assert '--writes' in cmd and cmd[cmd.index('--writes') + 1] == 'deny'
+
+    # Invalid source combinations fail before any broker is started.
+    with pytest.raises(SecretsError) as wrong:
+        run_bound_secrets_ssh(
+            session, ['ssh', 'lab-agent@10.0.0.2', 'exec $SHELL -l'],
+            policy_path=tmp_path / 'readonly-policy.json',
+            identity_root=tmp_path / 'authority', token_file=tmp_path / 'token',
+            oauth_vault=vault, oauth_provider_config=profile,
+        )
+    assert wrong.value.code == 'invalid_policy'

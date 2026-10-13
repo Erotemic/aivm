@@ -91,10 +91,16 @@ def _parser() -> argparse.ArgumentParser:
         help='Private host file to use instead of the policy credential source.',
     )
     token.add_argument(
+        '--oauth-vault', type=Path,
+        help='Explicit host-only encrypted OAuth vault credential source.',
+    )
+    token.add_argument(
         '--token-stdin',
         action='store_true',
         help='Read the credential from stdin instead of the policy source.',
     )
+    serve.add_argument('--oauth-provider-config', type=Path)
+    serve.add_argument('--oauth-subject', default='')
     serve.add_argument('--access-identity', default='')
     serve.add_argument('--vm', default='')
     serve.add_argument(
@@ -199,6 +205,13 @@ def _serve(args: argparse.Namespace) -> int:
     )
     from .kernel.model import Binding
 
+    if bool(args.oauth_vault) != bool(args.oauth_provider_config and args.oauth_subject):
+        raise SecretsError('invalid_policy')
+    if args.oauth_vault is None and (args.oauth_provider_config or args.oauth_subject):
+        raise SecretsError('invalid_policy')
+    if args.oauth_vault is not None and (args.token_file is not None or args.token_stdin):
+        # Ambiguous sources must fail; never silently ignore a host credential.
+        raise SecretsError('invalid_policy')
     if args.token_stdin and args.exit_on_stdin_eof:
         raise SecretsError(
             'credential_source',
@@ -211,7 +224,20 @@ def _serve(args: argparse.Namespace) -> int:
     # Reject a guest-writable XDG_RUNTIME_DIR before credential acquisition.
     # In particular, a rejected session must never resolve a host token.
     runtime_root(untrusted)
-    if args.token_file is not None:
+    credential_guard = None
+    if args.oauth_vault is not None:
+        from .identity.oauth_provider import load_provider
+        from .identity.oauth_vault import OAuthVault
+        provider = load_provider(args.oauth_provider_config, untrusted=untrusted)
+        if spec.egress.authentication != 'bearer':
+            raise SecretsError('invalid_policy')
+        vault = OAuthVault(args.oauth_vault, untrusted=untrusted)
+        snapshot = vault.session_snapshot(
+            provider, args.oauth_subject, resource_host=spec.egress.host)
+        credential = snapshot.credential
+        credential_guard = lambda: vault.active_lease(
+            provider, args.oauth_subject, snapshot)
+    elif args.token_file is not None:
         credential = credential_from_file(
             args.token_file.expanduser(), untrusted=untrusted
         )
@@ -241,6 +267,7 @@ def _serve(args: argparse.Namespace) -> int:
             audit_dir / f'{channel}.jsonl',
             writes=args.writes,
             untrusted=untrusted,
+            credential_guard=credential_guard,
         )
         del credential
         for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):

@@ -820,15 +820,37 @@ class VMSSHCLI(_BaseCommand):
             '--secrets_policy; never forwards the unbound broker socket.'
         ),
     )
+    secrets_oauth_vault: str = kwconf.Value(
+        '',
+        help=(
+            'Explicitly use a host-encrypted OAuth credential vault for this '
+            'bound VM. Requires --secrets_identity_root, --secrets_policy, '
+            'and --secrets_oauth_provider_config; no token enters the guest.'
+        ),
+    )
+    secrets_oauth_provider_config: str = kwconf.Value(
+        '',
+        help='Protected host OAuth provider profile for --secrets_oauth_vault.',
+    )
 
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
         if not args.secrets_policy and (
             args.secrets_token_file or args.secrets_writes != 'deny'
-            or args.secrets_identity_root
+            or args.secrets_identity_root or args.secrets_oauth_vault
+            or args.secrets_oauth_provider_config
         ):
             log.error('Secret credential/write options require --secrets_policy.')
+            return 1
+        if (bool(args.secrets_oauth_vault) !=
+                bool(args.secrets_oauth_provider_config)):
+            log.error('OAuth vault and provider profile must be specified together.')
+            return 1
+        if args.secrets_oauth_vault and (
+            not args.secrets_identity_root or args.secrets_token_file
+        ):
+            log.error('OAuth credentials require bound identity mode and no token file.')
             return 1
         log.trace(
             'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
@@ -897,7 +919,13 @@ class VMSSHCLI(_BaseCommand):
                     from ..secrets_identity_transport import run_bound_secrets_ssh
                     executor = run_bound_secrets_ssh
                 identity_kwargs = (
-                    {'identity_root': Path(args.secrets_identity_root)}
+                    {
+                        'identity_root': Path(args.secrets_identity_root),
+                        'oauth_vault': Path(args.secrets_oauth_vault)
+                            if args.secrets_oauth_vault else None,
+                        'oauth_provider_config': Path(args.secrets_oauth_provider_config)
+                            if args.secrets_oauth_provider_config else None,
+                    }
                     if args.secrets_identity_root else {}
                 )
                 ssh_result = executor(

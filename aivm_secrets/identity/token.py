@@ -21,8 +21,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..errors import SecretsError
-from ..kernel import codec, grammar
-from .model import (IdentityClaims, IdentityExpectation, assess_binding)
+from ..primitives import codec, grammar
+from .model import (IdentityClaims, IdentityExpectation)
+from .garrett.protocol import present
 
 TOKEN_TYPE = 'aivm-bound+jwt'
 ALGORITHM = 'EdDSA'
@@ -171,8 +172,8 @@ class IdentityTokenVerifier:
             # A host enrollment registry can supply a fresh expectation for
             # *each* request. It is not supplied by the guest or a JWT claim.
             expectation = self.expected if expected is None else expected
-            assess_binding(claims, expectation,
-                           certificate_thumbprint(authenticated_peer_der), now)
+            present(claims, expectation,
+                    certificate_thumbprint(authenticated_peer_der), now=now)
             encrypted = _decode(ciphertext_text, MAX_JWT_BYTES)
             if len(encrypted) < 29:
                 raise ValueError('ciphertext size')
@@ -188,3 +189,23 @@ class IdentityTokenVerifier:
             # Rejects all signatures, bindings, crypto failures and decodes
             # with the same public response, without reflecting input bytes.
             raise SecretsError('invalid_capability') from None
+
+
+def _trusted_kid(token: str) -> str:
+    """Extract *only* a bounded key-selection hint from an untrusted JWT."""
+    try:
+        if type(token) is not str or len(token) > MAX_JWT_BYTES:
+            raise ValueError('size')
+        h, _, _ = token.split('.')
+        header_bytes = _decode(h, 4096)
+        header = grammar.exact_keys(codec.loads(header_bytes),
+                                    frozenset({'alg', 'typ', 'kid'}),
+                                    code='invalid_capability')
+        if (codec.dumps(header) != header_bytes or header['alg'] != ALGORITHM
+                or header['typ'] != TOKEN_TYPE):
+            raise ValueError('header')
+        return grammar.token(header['kid'], grammar.ALNUM,
+                             grammar.ALNUM + '-_', 32,
+                             code='invalid_capability')
+    except Exception:
+        raise SecretsError('invalid_capability') from None

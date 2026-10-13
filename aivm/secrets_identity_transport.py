@@ -364,6 +364,8 @@ def _isolated_issue(manager: CommandManager, *, authority_root: Path,
 def run_bound_secrets_ssh(
     session, ssh_cmd: list[str], *, policy_path: Path,
     identity_root: Path, token_file: Path | None = None,
+    oauth_vault: Path | None = None,
+    oauth_provider_config: Path | None = None,
     writes: str = 'deny', still_authorized=None, uuid_reader=None,
 ):
     """Only bridge mTLS; NEVER forward the original unbound broker socket.
@@ -377,6 +379,11 @@ def run_bound_secrets_ssh(
                                      _watch_identity, broker_command)
 
     if writes not in WRITE_MODES or session.ip is None:
+        raise SecretsError('invalid_policy')
+    if oauth_vault is not None:
+        if token_file is not None or oauth_provider_config is None:
+            raise SecretsError('invalid_policy')
+    elif oauth_provider_config is not None:
         raise SecretsError('invalid_policy')
     context = session.context
     store = Path(session.reg_path)
@@ -411,6 +418,11 @@ def run_bound_secrets_ssh(
             writes=writes, access_identity=bound.principal_id, vm=bound.vm,
             audit_dir=Path(context.profile.state_dir).expanduser() / 'secrets-audit',
             untrusted=list(untrusted),
+            oauth_vault=Path(oauth_vault).expanduser().absolute()
+                if oauth_vault is not None else None,
+            oauth_provider_config=Path(oauth_provider_config).expanduser().absolute()
+                if oauth_provider_config is not None else None,
+            oauth_subject=bound.subject if oauth_vault is not None else '',
         ))
         info = broker.announce()
         if info.writes != writes:

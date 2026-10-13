@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ..errors import SecretsError
 from ..host.files import private_directory, read_owned
-from ..kernel import codec
+from ..primitives import codec
 from .enrollment import (IdentityAuthority, MAX_CSR_BYTES,
                          create_csr, inspect_csr)
 from .service import UnixIdentityService
@@ -62,6 +62,10 @@ def add_parser(subs):
     revoke = common('revoke')
     revoke.add_argument('--subject', required=True)
 
+    rotate = common('rotate-issuer')
+    retire = common('retire-issuer')
+    retire.add_argument('--key-id', required=True)
+
     issue = common('issue')
     issue.add_argument('--subject', required=True)
     issue.add_argument('--capability-file', type=Path, required=True)
@@ -76,6 +80,21 @@ def add_parser(subs):
     call.add_argument('--jwt-file', type=Path, required=True)
     call.add_argument('--request', required=True,
                       help='JSON operation object, not HTTP or GraphQL text')
+
+    # Separate host-only OAuth credential acquisition, without an AIVM VM or
+    # trusted Garrett identity authority. Provider manifests and vault contents
+    # stay on the host; the ordinary authorized broker consumes access tokens.
+    for name in ('oauth-init', 'oauth-login', 'oauth-status',
+                 'oauth-revoke', 'oauth-refresh'):
+        oauth = common(name, authority=False)
+        oauth.add_argument('--vault', type=Path, required=True)
+        oauth.add_argument('--untrusted-root', type=Path, action='append', default=[])
+        if name != 'oauth-init':
+            oauth.add_argument('--provider-config', type=Path, required=True)
+            oauth.add_argument('--subject', required=True)
+        if name == 'oauth-login':
+            oauth.add_argument('--replace', action='store_true')
+            oauth.add_argument('--timeout', type=int, default=180)
 
     bridge = common('bridge')
     bridge.add_argument('--broker-socket', type=Path, required=True)
@@ -130,6 +149,55 @@ def run(args: argparse.Namespace) -> int:
         print(codec.dumps(result).decode('ascii'))
         return 0 if result.get('ok') is True else 1
 
+    # The OAuth layer is independently usable; no enrollment CA, VM or
+    # provider credential is initialized by merely importing this CLI.
+    if args.identity_action.startswith('oauth-'):
+        if not sys.flags.isolated:
+            raise SecretsError('unsafe_file', detail='OAuth host commands require python -I')
+        from ..host.hardening import harden_process, verify_runtime
+        from .oauth_provider import load_provider
+        from .oauth_vault import OAuthVault
+        from .oauth_transport import (HostCallback, PinnedOAuthHTTP,
+                                      new_pending, authorization_url,
+                                      exchange_code)
+        import time
+        roots = tuple(args.untrusted_root)
+        harden_process()
+        verify_runtime(roots)
+        if args.identity_action == 'oauth-init':
+            OAuthVault.initialize(args.vault, untrusted=roots)
+            print(codec.dumps({'initialized': True}).decode())
+            return 0
+        provider = load_provider(args.provider_config, untrusted=roots)
+        vault = OAuthVault(args.vault, untrusted=roots)
+        if args.identity_action == 'oauth-status':
+            answer = vault.status(provider, args.subject)
+        elif args.identity_action == 'oauth-revoke':
+            answer = vault.revoke(provider, args.subject)
+        elif args.identity_action == 'oauth-refresh':
+            # Explicit refresh; the return token stays in this host process.
+            vault.credential_for_session(provider, args.subject,
+                                         resource_host=provider.resource_host,
+                                         force_refresh=True)
+            answer = vault.status(provider, args.subject)
+        elif args.identity_action == 'oauth-login':
+            if not 1 <= args.timeout <= 600:
+                raise SecretsError('invalid_policy')
+            pending = new_pending(provider)
+            with HostCallback(provider, pending) as callback:
+                print('Open this URL in a trusted host browser:', flush=True)
+                print(authorization_url(provider, pending), flush=True)
+                params = callback.wait(timeout=args.timeout)
+            grant = exchange_code(provider, pending, params,
+                                  now=int(time.time()), transport=PinnedOAuthHTTP(),
+                                  untrusted=roots)
+            answer = vault.enroll(provider, args.subject, grant,
+                                  replace=args.replace)
+        else:
+            raise SecretsError('invalid_request')
+        print(codec.dumps(answer).decode('ascii'))
+        return 0
+
     # Identity host operations handle CA/signing keys and broker capabilities.
     # Isolated Python must ignore PYTHONPATH, user-site hooks and CWD BEFORE
     # this module is imported. Unlike broker spawn, this is a manual command.
@@ -160,6 +228,10 @@ def run(args: argparse.Namespace) -> int:
         result = authority.revoke(args.subject)
     elif args.identity_action == 'status':
         result = authority.status()
+    elif args.identity_action == 'rotate-issuer':
+        result = authority.rotate_issuer()
+    elif args.identity_action == 'retire-issuer':
+        result = authority.retire_issuer(args.key_id)
     elif args.identity_action == 'public-client':
         result = authority.public_client(args.subject)
     elif args.identity_action == 'issue':

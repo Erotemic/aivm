@@ -52,6 +52,18 @@ invent an active backend-selection flag until a Rust binary exists.
 If a new module simply reexports a domain-dependent function, leave it
 in that domain rather than creating a nominal primitive.
 
+## Extracted Python Garrett protocol (2026-10-12)
+
+The reference identity claims, registry and VM decisions live in
+`identity/garrett` and consume the `primitives` package without importing
+host, kernel, TLS or certificate adapters. `prepare_issue` and `present`
+produce only immutable intents; they do not authorize provider requests.
+`garrett-protocol-v1.jsonl` supplies a new independent issue/present decision
+corpus, runnable with `python -m aivm_secrets.identity.garrett_runner`.
+A Rust runner can be selected with `AIVM_SECRETS_RUST_GARRETT_RUNNER`; absent
+Rust still means **no cross-language result**. Earlier identity, registry,
+managed-VM and crypto vectors remain frozen and authoritative.
+
 ## Shared security contract, not shared shortcuts
 
 ```text
@@ -202,3 +214,22 @@ contracts between the host launcher and the service.
 AIVM's host-side VM subject hash is tested against the independently maintained
 Python identity vectors. The tests compare this contract but are not Rust
 parity tests: no Rust executable exists yet.
+
+## Python P4b local OAuth contract (2026-10-12)
+
+The reference implementation now defines a separate pure OAuth contract in
+`aivm_secrets.identity.garrett.oauth_contract` (PKCE pending state, callback,
+scopes, access/refresh generation and expiration) and an independent JSONL
+runner at `python -m aivm_secrets.identity.oauth_runner`. A frozen
+`garrett-oauth-v1.jsonl` suite contains positive and negative transitions.
+The future Rust runner selected with `AIVM_SECRETS_RUST_OAUTH_RUNNER` must
+produce the same canonical output. Test agreement is not a Python proof.
+
+OAuth HTTPS token exchange, strict host callback parsing, encrypted vault,
+file-locking, JWT issuer keyring rotation and actual TLS client authentication
+are separate effect adapters and are not silently assumed proven by the
+model. A permitted credentialed effect additionally requires the original
+broker authorization and a current vault lease; the Python host broker
+serializes these locally using `flock`. This is not a shared-state multi-host
+protocol or a proof of remote provider transaction atomicity. See
+[the complete local operator contract](aivm-secrets-garrett-oauth-implementation.md).
