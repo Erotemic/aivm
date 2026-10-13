@@ -56,7 +56,7 @@ def test_rust_registry_runner_requires_explicit_independent_executable():
 
 
 def test_registry_transitions_leave_input_unchanged():
-    from aivm_secrets.identity.registry_model import enroll, revoke
+    from aivm_secrets.identity.garrett.registry import enroll, revoke
     from aivm_secrets.identity.token import certificate_thumbprint
     state = {'schema': 1, 'subjects': {}}
     original = codec.dumps(state)

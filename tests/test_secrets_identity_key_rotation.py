@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import IdentityAuthority, create_csr
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.token import certificate_thumbprint
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -126,7 +127,7 @@ def test_rotated_key_real_mtls_accepts_only_new_epoch(tmp_path):
     import ssl
     import threading
     from aivm_secrets.identity.mtls import IdentityTLSBridge, server_context
-    from aivm_secrets.identity.model import IdentityExpectation
+    from aivm_secrets.identity.garrett.claims import IdentityExpectation
     from aivm_secrets.primitives import codec
 
     authority, old, candidate = setup(tmp_path)

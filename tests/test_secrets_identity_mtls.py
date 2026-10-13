@@ -15,7 +15,7 @@ import threading
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.model import IdentityClaims, IdentityExpectation
+from aivm_secrets.identity.garrett.claims import IdentityClaims, IdentityExpectation
 from aivm_secrets.identity.mtls import IdentityTLSBridge, server_context
 from aivm_secrets.identity.token import (
     IdentityTokenIssuer, IdentityTokenVerifier, certificate_thumbprint,

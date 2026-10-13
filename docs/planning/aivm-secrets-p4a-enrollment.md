@@ -1,6 +1,14 @@
 # P4a enrollment: host CA, operator issuance, and opt-in Unix mTLS bridge
 
-Status: **experimental Python reference**, 2026-10-12. This increment builds on
+Status: **historical P4a increment**, 2026-10-12. For the current
+single-root schema-2 authority and CLI paths see
+[aivm-secrets-garrett-ca-lifecycle.md](aivm-secrets-garrett-ca-lifecycle.md).
+Older flat-file examples and lifetime statements below describe the original
+prototype and are **not** current operator instructions. The former
+`identity/registry_model.py` facade has been deleted; the canonical pure
+model is `identity/garrett/registry.py`.
+
+This increment builds on
 `docs/planning/aivm-secrets-garrett-identity.md` and the **two parallel
 implementations** decision. It does not change VM creation, `aivm ssh`, Git
 credentials, or the default secrets transport. Nothing starts automatically.
@@ -46,7 +54,7 @@ credentials, or the default secrets transport. Nothing starts automatically.
    replacement. Enrollment, issuance and revocation record a hash-chained
    intent before the action, and an outcome afterwards. The operator should
    retain audit-chain heads externally to detect tail truncation.
-6. A **pure** `aivm_secrets.identity.registry_model` owns the bounded schema,
+6. A **pure** `aivm_secrets.identity.garrett.registry` owns the bounded schema,
    allowed enrollment transitions, revocation and certificate lookup. A
    language-neutral JSONL runner has **69 frozen enrollment vectors**, alongside
    the existing 64 identity-decision vectors and deterministic cryptographic

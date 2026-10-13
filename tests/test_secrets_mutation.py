@@ -53,6 +53,22 @@ class Mutant:
 
 
 MUTANTS = [
+    # -- CA-01/CA-04: single active trust root -----------------------------
+    Mutant('CA-01', 'CA generation can be reused rather than advanced',
+           'identity/garrett/authority.py',
+           "grammar.integer(ca_generation, current['ca']['generation'] + 1,",
+           "grammar.integer(ca_generation, 1,",
+           ('test_secrets_authority_parity.py',)),
+    Mutant('CA-01', 'CA key fingerprint need not change on rollover',
+           'identity/garrett/authority.py',
+           "if ca_sha256 == current['ca']['sha256']:",
+           'if False:', ('test_secrets_authority_parity.py',)),
+    Mutant('CA-04', 'old bound bridges ignore a changed root manifest',
+           'identity/enrollment.py',
+           '        self._assert_current_ca()\n        thumb = certificate_thumbprint(der)',
+           '        thumb = certificate_thumbprint(der)',
+           ('test_secrets_ca_rotation.py',)),
+
     # -- independent primitive and Garrett protocol contracts ---------------
     Mutant('PRIM-BIND-01', 'certificate binding equality is ignored',
            'primitives/binding.py', 'or actual != expected):',

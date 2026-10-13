@@ -17,7 +17,7 @@ version-1 record, all from **host authority**, not untrusted guest arguments:
 - the current **active**, owner-UID-matching, persisted access principal ID,
   associated host UID and guest username.
 
-The pure `aivm_secrets.identity.vm_model.subject` generates
+The pure `aivm_secrets.identity.garrett.vm.subject` generates
 `vm-` + SHA-256(`aivm-secrets/managed-vm/v1\0` || canonical JSON). Store,
 principal, name, UUID or guest username changes therefore change the subject
 under the SHA-256 collision-resistance assumption. This is a **derived name**,
@@ -176,7 +176,7 @@ this process boundary. The server still owns every authorized effect.
 This interface is intentionally suitable for a future Rust executable that
 implements the same closed JSON command contract. The host's lightweight
 version-1 subject digest uses the same canonical encoding as the independent
-Python reference (`identity/vm_model.py`), and cross-checks every *valid* case
+Python reference (`identity/garrett/vm.py`), and cross-checks every *valid* case
 in the frozen vector corpus. The host adapter's other input validation relies
 on its authoritative VM/principal readers; the pure reference rejects arbitrary
 malformed values. Do not treat this as proof of equivalence over all inputs.
@@ -212,7 +212,7 @@ The next design-only increment introduces
 [primitive contracts and a pure Garrett protocol model](aivm-secrets-modular-proof-architecture.md).
 Keep the managed-VM source of authority here: AIVM's machine store, active
 principal, libvirt UUID and pinned bootstrap SSH. These are external facts
-provided to the `identity/vm_model.py` reference; a reusable primitive cannot
+provided to the `identity/garrett/vm.py` reference; a reusable primitive cannot
 prove that a guest-generated CSR came from a particular VM merely by
 validating its contents. The trust edge from those host facts to the model
 must remain explicit when moving to Rust.

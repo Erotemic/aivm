@@ -94,7 +94,7 @@ def test_guest_client_cli_real_tls_to_host_broker(tmp_path, capsys):
                 thread.start()
                 code, result, err = cli(
                     capsys, 'call', '--socket', listen,
-                    '--ca', root / 'ca.pem',
+                    '--ca', IdentityAuthority(root).tls_paths()[2],
                     '--certificate', enrolled['certificate'],
                     '--key', key, '--jwt-file', tokenfile,
                     '--request', json.dumps({'operation': 'pr.view',

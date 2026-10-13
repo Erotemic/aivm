@@ -6,7 +6,7 @@ import sys
 
 from ..errors import SecretsError
 from ..primitives import codec
-from .vm_model import subject
+from .garrett.vm import subject
 
 
 def evaluate(value: object) -> dict:

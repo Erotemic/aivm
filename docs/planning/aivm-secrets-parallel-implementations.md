@@ -86,7 +86,7 @@ names defeats independent review.
 The same separation applies to P4 identity: public certificate-binding claims
 and decisions are pure; JWT signing, authenticated encryption, TLS certificate
 validation, key custody, clock, and revocation are explicit impure adapters.
-`aivm_secrets/identity/model.py` is the Python reference to port; its wire
+`aivm_secrets/identity/garrett/claims.py` is the Python reference to port; its wire
 corpus lives in `tests/secrets_vectors/identity-v1.jsonl`, and a deterministic Ed25519/AES-GCM golden
 fixture in `tests/secrets_vectors/identity-crypto-v1.json`. The JSONL runner
 at `python -m aivm_secrets.identity.runner`. The first Rust runner must consume
@@ -171,7 +171,7 @@ pass-through behavior for unknown token/header/operation variants.
 ## 2026-10-12: enrollment transition contract
 
 The Python reference now also exposes a **pure** enrollment state machine at
-`aivm_secrets/identity/registry_model.py`: versioned bounded registry
+`aivm_secrets/identity/garrett/registry.py`: versioned bounded registry
 validation, enrollment (including explicit replacement), revocation epoch
 transitions, and current certificate-to-identity lookup. This lives outside
 filesystem, X.509 and TLS code. Its frozen JSONL contract is
@@ -190,7 +190,7 @@ neither backend silently becomes a fallback for the other.
 The host adapter `aivm/secrets_identity_vm.py` derives a stable certificate
 subject from authoritative machine-store identity, current active principal,
 and the live libvirt domain UUID; the pure sibling-package reference is
-`aivm_secrets/identity/vm_model.py`. Its 104 frozen decision cases are in
+`aivm_secrets/identity/garrett/vm.py`. Its 104 frozen decision cases are in
 `tests/secrets_vectors/identity-managed-vm-v1.jsonl`. The corresponding Rust
 parity runner is deliberately unimplemented and skipped until an independent
 executable is configured through `AIVM_SECRETS_RUST_VM_RUNNER`.
@@ -233,3 +233,18 @@ broker authorization and a current vault lease; the Python host broker
 serializes these locally using `flock`. This is not a shared-state multi-host
 protocol or a proof of remote provider transaction atomicity. See
 [the complete local operator contract](aivm-secrets-garrett-oauth-implementation.md).
+
+## Pre-deployment authority v2 (2026-10-12)
+
+The active Python authority now uses a single immutable CA generation plus a
+single matching TLS server generation, atomically selected in schema-2
+`authority.json`. This replaces schema 1 outright; no experimental authority
+has been deployed to a VM and no migration adapters are maintained. The pure
+model lives in `identity/garrett/authority.py`, and
+`identity/authority_runner.py` consumes the 60 frozen
+`identity-trust-generation-v1.jsonl` vectors. When Rust exists, its independent
+runner must match, and the extracted proof chain must include the monotonic
+trust-generation and complete-mediation obligations in the new
+`aivm-secrets-garrett-ca-lifecycle.md` plan. Removing the pre-deployment
+`identity/model.py`, `registry_model.py` and `vm_model.py` re-exports prevents
+multiple apparently authoritative modules with the same meaning.

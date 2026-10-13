@@ -11,9 +11,8 @@ from pathlib import Path
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import (
-    IdentityAuthority, create_csr, inspect_csr,
-)
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr, inspect_csr
 from aivm_secrets.identity.garrett import registry
 from aivm_secrets.identity.mtls import server_context
 from aivm_secrets.identity.token import certificate_thumbprint
@@ -145,14 +144,14 @@ def test_server_rotation_uses_immutable_generations_and_valid_tls_pair(tmp_path)
 def test_interrupted_server_rotation_preserves_previous_selection(tmp_path, monkeypatch):
     authority, _, _, _, _ = authority_and_client(tmp_path)
     old = authority.tls_paths()
-    original = authority._commit_server_selection
-    def fail(*, active):
+    original = authority._write_selected_manifest
+    def fail(state):
         raise SecretsError('audit_failed')
-    monkeypatch.setattr(authority, '_commit_server_selection', fail)
+    monkeypatch.setattr(authority, '_write_selected_manifest', fail)
     with pytest.raises(SecretsError):
         authority.renew_server()
     assert authority.tls_paths() == old
-    monkeypatch.setattr(authority, '_commit_server_selection', original)
+    monkeypatch.setattr(authority, '_write_selected_manifest', original)
     next_record = authority.renew_server()
     assert next_record['generation'] == 3  # orphaned 2 never overwritten
     assert authority.tls_paths()[0].name == 'server-3.pem'
@@ -160,8 +159,8 @@ def test_interrupted_server_rotation_preserves_previous_selection(tmp_path, monk
 
 def test_malformed_server_selection_denied_no_legacy_fallback(tmp_path):
     authority, _, _, _, _ = authority_and_client(tmp_path)
-    path = authority.root / 'server-selection.json'
-    path.write_text('{"schema":1,"active":2,"next_number":99}')
+    path = authority.root / 'authority.json'
+    path.write_text('{"schema":2,"server":{"generation":99}}')
     path.chmod(0o600)
     with pytest.raises(SecretsError) as exc:
         authority.tls_paths()
@@ -172,7 +171,7 @@ def test_new_operations_do_not_change_default_vm_or_live_provider(tmp_path):
     authority, _, _, _, _ = authority_and_client(tmp_path)
     assert not (authority.root / 'server-selection.json').exists()
     assert set(authority.status()['subjects']) == {'vm-alpha'}
-    assert not (authority.root / 'server-generations').exists()
+    assert (authority.root / 'server-generations/server-1.pem').is_file()
 
 
 def test_pure_renewal_is_nonmutating_monotone_and_requires_cas():
@@ -202,7 +201,7 @@ def test_real_mtls_after_client_and_server_renewal_denies_old_peer(tmp_path):
     import socket
     import threading
     from aivm_secrets.identity.mtls import IdentityTLSBridge
-    from aivm_secrets.identity.model import IdentityExpectation
+    from aivm_secrets.identity.garrett.claims import IdentityExpectation
     from aivm_secrets.primitives import codec
 
     authority, key, csr, fp, old = authority_and_client(tmp_path)

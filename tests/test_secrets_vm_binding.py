@@ -12,7 +12,7 @@ from aivm.config import AgentVMConfig
 from aivm.config_store import PrincipalEntry, Store, VMEntry
 from aivm.secrets_identity_vm import resolve_managed_identity
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.vm_model import subject
+from aivm_secrets.identity.garrett.vm import subject
 from aivm_secrets.identity.vm_runner import evaluate
 from tests.helpers import resolved_test_context
 

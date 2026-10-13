@@ -113,15 +113,15 @@ def test_issuer_does_not_mutate_enrollment_and_cannot_issue_after_revocation():
     assert exc.value.code == 'invalid_capability'
 
 
-def test_reuse_original_model_types_and_vm_subject_encoding():
-    from aivm_secrets.identity.model import IdentityClaims as OldClaims
-    from aivm_secrets.identity.model import IdentityExpectation as OldExpected
-    from aivm_secrets.identity.registry_model import enroll as old_enroll
-    from aivm_secrets.identity.vm_model import subject as old_subject
-    assert OldClaims is IdentityClaims
-    assert OldExpected is IdentityExpectation
-    assert old_enroll is registry.enroll
-    assert old_subject is vm.subject
+def test_only_canonical_garrett_modules_define_identity_decisions():
+    """No compatibility facades for identity protocols that were never deployed."""
+    from aivm_secrets.identity import IdentityClaims as public_claims
+    from aivm_secrets.identity import IdentityExpectation as public_expectation
+    assert public_claims is IdentityClaims
+    assert public_expectation is IdentityExpectation
+    assert not (ROOT / 'aivm_secrets/identity/model.py').exists()
+    assert not (ROOT / 'aivm_secrets/identity/registry_model.py').exists()
+    assert not (ROOT / 'aivm_secrets/identity/vm_model.py').exists()
 
 
 def test_primitives_and_garrett_core_have_no_host_or_kernel_dependencies():

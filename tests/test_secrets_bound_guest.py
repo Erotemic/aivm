@@ -16,7 +16,7 @@ from tests.test_secrets_identity_service import start, view_request
 def test_guest_shim_real_mtls_and_denied_unauthorized_operation(tmp_path, monkeypatch):
     authority, key, entry, jwt, harness = start(tmp_path)
     monkeypatch.setenv('AIVM_SECRETS_IDENTITY_MODE', 'mtls-v1')
-    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_CA', str(authority.root / 'ca.pem'))
+    monkeypatch.setenv('AIVM_SECRETS_IDENTITY_CA', str(authority.tls_paths()[2]))
     monkeypatch.setenv('AIVM_SECRETS_IDENTITY_CERT', entry['certificate'])
     monkeypatch.setenv('AIVM_SECRETS_IDENTITY_KEY', str(key))
     try:

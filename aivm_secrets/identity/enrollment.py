@@ -26,14 +26,18 @@ from ..errors import SecretsError
 from ..host.audit import AuditLog
 from ..host.files import private_directory, read_owned, write_new
 from ..primitives import codec, grammar
-from .model import IdentityExpectation, MAX_EPOCH, MAX_IDENTITY_LIFETIME
-from . import registry_model
+from .garrett.claims import IdentityExpectation, MAX_EPOCH, MAX_IDENTITY_LIFETIME
+from .garrett import registry as registry_model
 from .garrett.protocol import prepare_issue
+from .garrett import authority as authority_model
 from .token import (IdentityTokenIssuer, certificate_thumbprint,
                     _crypto as _token_crypto)
+from .certificates import (
+    _x509, _key_pem, _certificate_pem, _certificate_der,
+    _key_fingerprint, _leaf_certificate, _read_csr, create_ca,
+)
 
-SCHEMA = 1
-MAX_CSR_BYTES = 8192
+SCHEMA = authority_model.SCHEMA
 MAX_REGISTRY_BYTES = 131072
 MAX_SUBJECTS = 128
 CA_DAYS = 365
@@ -41,31 +45,14 @@ SERVER_DAYS = 30
 CLIENT_DAYS = 7
 MANIFEST = 'authority.json'
 REGISTRY = 'enrollments.json'
-CA_CERT = 'ca.pem'
-CA_KEY = 'ca.key'
-SERVER_CERT = 'server.pem'
-SERVER_KEY = 'server.key'
-JWT_KEY = 'issuer.key'
-JWT_PUBLIC = 'issuer.pub'
-AEAD_KEY = 'issuer.aes256'
+CA_DIRECTORY = 'ca-generations'
 LOCK = '.enrollment.lock'
 KEYRING = 'issuer-keyring.json'
 KEY_DIRECTORY = 'issuer-keys'
 MAX_ISSUER_KEYS = 8
-SERVER_SELECTION = 'server-selection.json'
 SERVER_DIRECTORY = 'server-generations'
-MAX_SERVER_GENERATIONS = 64
-
-
-def _x509():
-    try:
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-    except ImportError:
-        raise SecretsError('missing_crypto') from None
-    return x509, hashes, serialization, ec, ExtendedKeyUsageOID, NameOID
+MAX_SERVER_GENERATIONS = authority_model.MAX_SERVER_GENERATIONS
+MAX_CA_GENERATIONS = authority_model.MAX_CA_GENERATIONS
 
 
 def _subject(value: str) -> str:
@@ -82,110 +69,6 @@ def _stamp(now: int | None = None) -> int:
     return result
 
 
-def _utc(value: int) -> dt.datetime:
-    return dt.datetime.fromtimestamp(value, dt.timezone.utc)
-
-
-def _key_pem(key: Any) -> bytes:
-    _, _, serialization, _, _, _ = _x509()
-    return key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    )
-
-
-def _certificate_pem(cert: Any) -> bytes:
-    _, _, serialization, _, _, _ = _x509()
-    return cert.public_bytes(serialization.Encoding.PEM)
-
-
-def _certificate_der(cert: Any) -> bytes:
-    _, _, serialization, _, _, _ = _x509()
-    return cert.public_bytes(serialization.Encoding.DER)
-
-
-def _key_fingerprint(public_key: Any) -> str:
-    _, _, serialization, _, _, _ = _x509()
-    return hashlib.sha256(public_key.public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )).hexdigest()
-
-
-def _name(value: str):
-    x509, _, _, _, _, NameOID = _x509()
-    return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, value[:64])])
-
-
-def _leaf_certificate(ca_key: Any, ca_cert: Any, public_key: Any,
-                      *, name: str, now: int, days: int, server: bool):
-    x509, hashes, _, _, ExtendedKeyUsageOID, _ = _x509()
-    builder = (x509.CertificateBuilder()
-        .subject_name(_name(name)).issuer_name(ca_cert.subject)
-        .public_key(public_key).serial_number(x509.random_serial_number())
-        .not_valid_before(_utc(now - 60))
-        .not_valid_after(_utc(now + days * 86400))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
-        .add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(
-            ca_key.public_key()), False)
-        .add_extension(x509.KeyUsage(
-            digital_signature=True, content_commitment=False,
-            key_encipherment=False, data_encipherment=False,
-            key_agreement=False, key_cert_sign=False, crl_sign=False,
-            encipher_only=False, decipher_only=False,
-        ), True)
-        .add_extension(x509.ExtendedKeyUsage([
-            ExtendedKeyUsageOID.SERVER_AUTH if server
-            else ExtendedKeyUsageOID.CLIENT_AUTH,
-        ]), False))
-    if server:
-        builder = builder.add_extension(
-            x509.SubjectAlternativeName([x509.DNSName('localhost')]), False)
-    return builder.sign(ca_key, hashes.SHA256())
-
-
-def _read_csr(data: bytes):
-    x509, _, _, ec, _, _ = _x509()
-    if type(data) is not bytes or not 1 <= len(data) <= MAX_CSR_BYTES:
-        raise SecretsError('invalid_capability')
-    try:
-        request = x509.load_pem_x509_csr(data)
-        key = request.public_key()
-        if (not request.is_signature_valid or
-                not isinstance(key, ec.EllipticCurvePublicKey) or
-                not isinstance(key.curve, ec.SECP256R1) or
-                len(request.extensions)):
-            raise ValueError('unsupported or unauthenticated CSR')
-        return request, _key_fingerprint(key)
-    except (ValueError, TypeError, x509.DuplicateExtension):
-        raise SecretsError('invalid_capability') from None
-
-
-def inspect_csr(data: bytes) -> str:
-    """A public P-256 CSR key fingerprint for out-of-band operator confirmation."""
-    return _read_csr(data)[1]
-
-
-def create_csr(*, private_key: Path, request_file: Path) -> str:
-    """Generate an EXPORTABLE guest software key, and a CSR signed by it.
-
-    Both destinations must not exist. This does not enroll the key and cannot
-    attest the VM; the user must compare its fingerprint out of band.
-    """
-    x509, hashes, _, ec, _, _ = _x509()
-    key = ec.generate_private_key(ec.SECP256R1())
-    request = (x509.CertificateSigningRequestBuilder()
-               .subject_name(_name('aivm-untrusted-request'))
-               .sign(key, hashes.SHA256()))
-    # Never return the secret; never overwrite an existing identity key.
-    write_new(Path(private_key).expanduser().absolute(), _key_pem(key))
-    write_new(Path(request_file).expanduser().absolute(),
-              request.public_bytes(_x509()[2].Encoding.PEM))
-    return _key_fingerprint(key.public_key())
-
-
 class IdentityAuthority:
     """Private, per-host-principal CA, enrollment registry and JWT issuer.
 
@@ -199,36 +82,22 @@ class IdentityAuthority:
         if not self.root.exists():
             raise SecretsError('unsafe_file', detail='authority not initialized')
         private_directory(self.root, self.untrusted)
-        manifest = codec.loads(self._read(MANIFEST), code='invalid_capability')
-        manifest = grammar.exact_keys(manifest, frozenset({
-            'schema', 'issuer', 'audience', 'ca_sha256', 'created_at',
-        }), code='invalid_capability')
-        if type(manifest['schema']) is not int or manifest['schema'] != SCHEMA:
-            raise SecretsError('invalid_capability')
-        self.issuer = IdentityExpectation.parse({
-            'issuer': manifest['issuer'], 'audience': manifest['audience'],
-            'subject': 'init', 'epoch': 0,
-        }).issuer
+        manifest = self._manifest()
+        self.issuer = manifest['issuer']
         self.audience = manifest['audience']
-        IdentityExpectation.parse({
-            'issuer': self.issuer, 'audience': self.audience,
-            'subject': 'init', 'epoch': 0,
-        })
-        # Compare the immutable trust anchor before trusting the registry.
-        x509, _, _, _, _, _ = _x509()
-        try:
-            ca = x509.load_pem_x509_certificate(self._read(CA_CERT))
-        except ValueError:
-            raise SecretsError('invalid_capability') from None
-        self.ca_sha256 = hashlib.sha256(_certificate_der(ca)).hexdigest()
-        if self.ca_sha256 != manifest['ca_sha256']:
+        self.ca_sha256 = manifest['ca']['sha256']
+        self.ca_generation = manifest['ca']['generation']
+        # Do not trust an authority manifest without validating its selected
+        # immutable root. No legacy root paths or implicit migration exist.
+        ca = self._certificate_for_active_ca()
+        if hashlib.sha256(_certificate_der(ca)).hexdigest() != self.ca_sha256:
             raise SecretsError('invalid_capability')
 
     @classmethod
     def initialize(cls, root: Path, *, issuer: str, audience: str,
                    untrusted: tuple[Path, ...] = (), now: int | None = None):
         """Create a new private authority; never adopt or reset an old one."""
-        x509, hashes, _, ec, _, _ = _x509()
+        _, _, _, ec, _, _ = _x509()
         Private, _, _ = _token_crypto()
         expected = IdentityExpectation.parse({
             'issuer': issuer, 'audience': audience, 'subject': 'init', 'epoch': 0,
@@ -244,47 +113,39 @@ class IdentityAuthority:
             raise SecretsError('unsafe_file', detail='authority directory exists') from None
         private_directory(root, untrusted)
         stamp = _stamp(now)
-        ca_key = ec.generate_private_key(ec.SECP256R1())
-        ca = (x509.CertificateBuilder().subject_name(_name('aivm-secrets host CA'))
-              .issuer_name(_name('aivm-secrets host CA'))
-              .public_key(ca_key.public_key())
-              .serial_number(x509.random_serial_number())
-              .not_valid_before(_utc(stamp - 60))
-              .not_valid_after(_utc(stamp + CA_DAYS * 86400))
-              .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
-              .add_extension(x509.SubjectKeyIdentifier.from_public_key(
-                  ca_key.public_key()), False)
-              .add_extension(x509.KeyUsage(
-                  digital_signature=True, content_commitment=False,
-                  key_encipherment=False, data_encipherment=False,
-                  key_agreement=False, key_cert_sign=True, crl_sign=True,
-                  encipher_only=False, decipher_only=False), True)
-              .sign(ca_key, hashes.SHA256()))
+        ca_key, ca = create_ca(now=stamp, days=CA_DAYS)
         server_key = ec.generate_private_key(ec.SECP256R1())
         server = _leaf_certificate(ca_key, ca, server_key.public_key(),
                                    name='localhost', now=stamp,
                                    days=SERVER_DAYS, server=True)
         signer = Private.generate()
+        ca_hash = hashlib.sha256(_certificate_der(ca)).hexdigest()
+        # This pre-deployment v2 format has no fallback to the original flat
+        # authority files. Each identity belongs to exactly one active root.
+        for folder in (CA_DIRECTORY, SERVER_DIRECTORY, KEY_DIRECTORY,
+                       'clients', 'audit'):
+            private_directory(root / folder, untrusted)
+        authority_manifest = authority_model.initial(
+            issuer=expected.issuer, audience=expected.audience,
+            created_at=stamp, ca_sha256=ca_hash)
         entries = {
-            CA_KEY: _key_pem(ca_key), CA_CERT: _certificate_pem(ca),
-            SERVER_KEY: _key_pem(server_key), SERVER_CERT: _certificate_pem(server),
-            JWT_KEY: _key_pem(signer),
-            JWT_PUBLIC: signer.public_key().public_bytes(
+            f'{CA_DIRECTORY}/ca-1.key': _key_pem(ca_key),
+            f'{CA_DIRECTORY}/ca-1.pem': _certificate_pem(ca),
+            f'{SERVER_DIRECTORY}/server-1.key': _key_pem(server_key),
+            f'{SERVER_DIRECTORY}/server-1.pem': _certificate_pem(server),
+            f'{KEY_DIRECTORY}/local-1.key': _key_pem(signer),
+            f'{KEY_DIRECTORY}/local-1.pub': signer.public_key().public_bytes(
                 _x509()[2].Encoding.PEM,
                 _x509()[2].PublicFormat.SubjectPublicKeyInfo),
-            AEAD_KEY: secrets.token_bytes(32),
-            MANIFEST: codec.dumps({
-                'schema': SCHEMA, 'issuer': expected.issuer,
-                'audience': expected.audience, 'created_at': stamp,
-                'ca_sha256': hashlib.sha256(_certificate_der(ca)).hexdigest(),
-            }),
-            REGISTRY: codec.dumps({'schema': SCHEMA, 'subjects': {}}),
+            f'{KEY_DIRECTORY}/local-1.aes256': secrets.token_bytes(32),
+            MANIFEST: codec.dumps(authority_manifest),
+            REGISTRY: codec.dumps({'schema': registry_model.SCHEMA, 'subjects': {}}),
+            KEYRING: codec.dumps({'schema': 1, 'active': 'local-1',
+                                  'enabled': ['local-1'], 'next_number': 2}),
             LOCK: b'',
         }
         for name, data in entries.items():
             write_new(root / name, data)
-        private_directory(root / 'clients', untrusted)
-        private_directory(root / 'audit', untrusted)
         return cls(root, untrusted=untrusted)
 
     def _read(self, name: str, limit: int = 65536) -> bytes:
@@ -351,16 +212,159 @@ class IdentityAuthority:
         finally:
             log.close()
 
-    def _load_ca(self):
-        x509, _, serialization, _, _, _ = _x509()
+    def _manifest(self) -> dict[str, Any]:
+        return authority_model.validate(codec.loads(
+            self._read(MANIFEST, 4096), limit=4096,
+            code='invalid_capability'))
+
+    def _assert_current_ca(self) -> dict[str, Any]:
+        """Fence an already-running TLS bridge after host CA cutover.
+
+        An old bridge can still complete an mTLS handshake against the old
+        root until stopped, but it must not authorize another broker request.
+        """
+        current = self._manifest()
+        if (current['ca']['generation'] != self.ca_generation or
+                current['ca']['sha256'] != self.ca_sha256):
+            raise SecretsError('revoked')
+        return current
+
+    @staticmethod
+    def _ca_names(generation: int) -> tuple[str, str]:
+        return (f'{CA_DIRECTORY}/ca-{generation}.key',
+                f'{CA_DIRECTORY}/ca-{generation}.pem')
+
+    @staticmethod
+    def _server_names(generation: int) -> tuple[str, str]:
+        return (f'{SERVER_DIRECTORY}/server-{generation}.key',
+                f'{SERVER_DIRECTORY}/server-{generation}.pem')
+
+    def _certificate_for_active_ca(self):
+        x509, _, _, _, _, _ = _x509()
+        _, cert_path = self._ca_names(self.ca_generation)
         try:
-            key = serialization.load_pem_private_key(self._read(CA_KEY), password=None)
-            cert = x509.load_pem_x509_certificate(self._read(CA_CERT))
-            if _key_fingerprint(key.public_key()) != _key_fingerprint(cert.public_key()):
-                raise ValueError('wrong CA key')
+            return x509.load_pem_x509_certificate(self._read(cert_path))
+        except ValueError:
+            raise SecretsError('invalid_capability') from None
+
+    def _load_ca(self):
+        self._assert_current_ca()
+        x509, _, serialization, _, _, _ = _x509()
+        key_path, cert_path = self._ca_names(self.ca_generation)
+        try:
+            key = serialization.load_pem_private_key(
+                self._read(key_path), password=None)
+            cert = x509.load_pem_x509_certificate(self._read(cert_path))
+            if (_key_fingerprint(key.public_key()) !=
+                    _key_fingerprint(cert.public_key()) or
+                    hashlib.sha256(_certificate_der(cert)).hexdigest() !=
+                    self.ca_sha256):
+                raise ValueError('CA identity differs from active manifest')
             return key, cert
         except (ValueError, TypeError):
             raise SecretsError('invalid_capability') from None
+
+    def _write_selected_manifest(self, state: dict[str, Any]) -> None:
+        """Single atomic trust+server selection; no split selection files."""
+        data = codec.dumps(authority_model.validate(state))
+        tmp = self.root / ('.authority-' + secrets.token_hex(12) + '.tmp')
+        try:
+            write_new(tmp, data)
+            self._fsync_file(tmp)
+            os.replace(tmp, self.root / MANIFEST)
+            self._fsync_dir(self.root)
+        except OSError:
+            raise SecretsError('audit_failed') from None
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def _fsync_file(path: Path) -> None:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _fsync_dir(path: Path) -> None:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _stage_pair(self, first: Path, first_data: bytes,
+                    second: Path, second_data: bytes) -> None:
+        """Stage immutable credential material before pointer publication."""
+        write_new(first, first_data)
+        self._fsync_file(first)
+        write_new(second, second_data)
+        self._fsync_file(second)
+        self._fsync_dir(first.parent)
+        if second.parent != first.parent:
+            self._fsync_dir(second.parent)
+
+    def _next_generation(self, directory: str, label: str,
+                         previous: int, maximum: int) -> int:
+        # Never reuse a partially written, non-selected generation.
+        generation = previous + 1
+        while generation <= maximum:
+            prefix = self.root / directory / f'{label}-{generation}'
+            if not (os.path.lexists(str(prefix) + '.key') or
+                    os.path.lexists(str(prefix) + '.pem')):
+                return generation
+            generation += 1
+        raise SecretsError('exhausted')
+
+    def rotate_ca(self, *, now: int | None = None) -> dict[str, Any]:
+        """Fail-closed root rollover; all enrolled identities are revoked.
+
+        There is deliberately no dual-anchor overlap. The host operator must
+        stop/restart bound sessions, redistribute the public CA and explicitly
+        re-enroll guests. No VM has been enrolled in this pre-deployment format.
+
+        Commit order matters: stage private CA/server material, revoke every
+        client in the registry, then atomically activate the new trust pointer.
+        A crash at any stage cannot authorize an old client under a new root.
+        """
+        stamp = _stamp(now)
+        _, _, _, ec, _, _ = _x509()
+        with self._locked():
+            current = self._assert_current_ca()
+            ca_number = self._next_generation(
+                CA_DIRECTORY, 'ca', self.ca_generation, MAX_CA_GENERATIONS)
+            server_number = self._next_generation(
+                SERVER_DIRECTORY, 'server',
+                current['server']['generation'], MAX_SERVER_GENERATIONS)
+            ca_key, ca = create_ca(now=stamp, days=CA_DAYS)
+            leaf_key = ec.generate_private_key(ec.SECP256R1())
+            leaf_cert = _leaf_certificate(
+                ca_key, ca, leaf_key.public_key(), name='localhost',
+                now=stamp, days=SERVER_DAYS, server=True)
+            root_hash = hashlib.sha256(_certificate_der(ca)).hexdigest()
+            selection = authority_model.activate_ca(
+                current, ca_generation=ca_number, ca_sha256=root_hash,
+                server_generation=server_number)
+            ca_key_name, ca_cert_name = self._ca_names(ca_number)
+            leaf_key_name, leaf_cert_name = self._server_names(server_number)
+            with self._audit('identity_ca_rotate_intent', 'issuer', stamp,
+                             root_hash):
+                self._stage_pair(self.root / ca_key_name, _key_pem(ca_key),
+                                 self.root / ca_cert_name, _certificate_pem(ca))
+                self._stage_pair(self.root / leaf_key_name, _key_pem(leaf_key),
+                                 self.root / leaf_cert_name,
+                                 _certificate_pem(leaf_cert))
+                # Retire the entire enrollment set before trust activation.
+                # A partial transaction fails closed; never restore old rows.
+                self._update({'schema': registry_model.SCHEMA, 'subjects': {}})
+                self._write_selected_manifest(selection)
+            return {'ca_generation': ca_number, 'ca_sha256': root_hash,
+                    'server_generation': server_number,
+                    'enrollments_revoked': True, 'restart_required': True}
 
     def enroll(self, *, subject: str, csr: bytes, approve_fingerprint: str,
                replace: bool = False, now: int | None = None) -> dict[str, Any]:
@@ -509,8 +513,11 @@ class IdentityAuthority:
                     'epoch': current['epoch'] if current is not None else None}
 
     def status(self) -> dict[str, Any]:
+        selection = self._assert_current_ca()
         return {'issuer': self.issuer, 'audience': self.audience,
                 'ca_sha256': self.ca_sha256,
+                'ca_generation': self.ca_generation,
+                'server_generation': selection['server']['generation'],
                 'subjects': self._registry()['subjects']}
 
     def _current_client_certificate(self, row: dict[str, Any]):
@@ -566,7 +573,9 @@ class IdentityAuthority:
                     raise ValueError('client certificate differs from registry')
             except (ValueError, OSError, TypeError, SecretsError):
                 raise SecretsError('invalid_capability') from None
-            ca_pem = self._read(CA_CERT)
+            self._assert_current_ca()
+            _, ca_file = self._ca_names(self.ca_generation)
+            ca_pem = self._read(ca_file)
         return {
             'subject': subject, 'certificate_sha256': thumb,
             'certificate_pem_b64': base64.b64encode(cert_pem).decode('ascii'),
@@ -581,6 +590,7 @@ class IdentityAuthority:
         certificate validator, and cannot authenticate caller-supplied bytes.
         """
         stamp = _stamp(now)
+        self._assert_current_ca()
         thumb = certificate_thumbprint(der)
         state = self._registry()
         return registry_model.expectation(
@@ -589,13 +599,8 @@ class IdentityAuthority:
         )
 
     def _keyring(self) -> dict[str, Any]:
-        """Legacy authorities start with `local-1` and no keyring file."""
-        path = self.root / KEYRING
-        if path.is_symlink():
-            raise SecretsError('unsafe_file')
-        if not path.exists():
-            return {'schema': 1, 'active': 'local-1', 'enabled': ['local-1'],
-                    'next_number': 2}
+        """Exactly one canonical keyring format; pre-deployment migration is not supported."""
+        self._assert_current_ca()
         state = codec.loads(self._read(KEYRING, 4096),
                             limit=4096, code='invalid_capability')
         state = grammar.exact_keys(state, frozenset({
@@ -621,8 +626,6 @@ class IdentityAuthority:
                 'next_number': n}
 
     def _keys_for(self, kid: str) -> tuple[bytes, bytes, bytes]:
-        if kid == 'local-1':
-            return self._read(JWT_KEY), self._read(JWT_PUBLIC), self._read(AEAD_KEY)
         # Values never become path segments without validation against the
         # host-owned, canonical keyring.
         grammar.token(kid, grammar.ALNUM, grammar.ALNUM + '-_', 32,
@@ -708,6 +711,7 @@ class IdentityAuthority:
                 not 1 <= lifetime <= MAX_IDENTITY_LIFETIME):
             raise SecretsError('invalid_capability')
         with self._locked():
+            self._assert_current_ca()
             state = self._registry()
             row = state['subjects'].get(subject)
             if row is None or not row['active'] or stamp >= row['not_after']:
@@ -741,98 +745,47 @@ class IdentityAuthority:
         """Return a revocation-aware verifier that reads live key selection."""
         return _AuthorityTokenVerifier(self, expected)
 
-    def _server_selection(self) -> tuple[str, str, int]:
-        """Resolve one immutable TLS keypair from an atomic selection file.
-
-        Authorities created before server-key rotation use server.pem/key.
-        A malformed or missing selected generation fails closed, never falls
-        back to legacy host identity or silently regenerates certificates.
-        """
-        path = self.root / SERVER_SELECTION
-        if path.is_symlink():
-            raise SecretsError('unsafe_file')
-        if not path.exists():
-            return SERVER_CERT, SERVER_KEY, 2
-        value = codec.loads(self._read(SERVER_SELECTION, 4096),
-                            limit=4096, code='invalid_capability')
-        value = grammar.exact_keys(value, frozenset({
-            'schema', 'active', 'next_number',
-        }), code='invalid_capability')
-        if (type(value['schema']) is not int or value['schema'] != 1 or
-                type(value['active']) is not int or
-                not 2 <= value['active'] <= MAX_SERVER_GENERATIONS or
-                type(value['next_number']) is not int or
-                value['next_number'] != value['active'] + 1):
-            raise SecretsError('invalid_capability')
-        prefix = f'{SERVER_DIRECTORY}/server-{value["active"]}'
-        return prefix + '.pem', prefix + '.key', value['next_number']
-
-    def _commit_server_selection(self, *, active: int) -> None:
-        payload = codec.dumps({'schema': 1, 'active': active,
-                               'next_number': active + 1})
-        tmp = self.root / ('.server-' + secrets.token_hex(12) + '.tmp')
-        try:
-            write_new(tmp, payload)
-            os.replace(tmp, self.root / SERVER_SELECTION)
-            fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-        finally:
-            try:
-                tmp.unlink()
-            except FileNotFoundError:
-                pass
-
     def renew_server(self, *, now: int | None = None) -> dict[str, Any]:
-        """Rotate the host TLS leaf key and certificate under the existing CA.
+        """Stage an immutable leaf under the current CA and switch one pointer.
 
-        Each generation is immutable and installed before a single atomic
-        selection commit. New bridge processes read that selection; running
-        TLS contexts retain their previous leaf until explicitly restarted.
+        A running TLS context keeps the previous leaf until restarted. A root
+        cutover, in contrast, fences *every* old authority process on its next
+        broker request.
         """
         stamp = _stamp(now)
-        x509, _, _, ec, _, _ = _x509()
+        _, _, _, ec, _, _ = _x509()
         with self._locked():
-            _, _, generation = self._server_selection()
-            directory = self.root / SERVER_DIRECTORY
-            private_directory(directory, self.untrusted)
-            # An interrupted rotation can leave an unselected immutable
-            # generation. Never overwrite it or strand future rotations.
-            while generation <= MAX_SERVER_GENERATIONS:
-                prefix = directory / f'server-{generation}'
-                if not (os.path.lexists(str(prefix) + '.key') or
-                        os.path.lexists(str(prefix) + '.pem')):
-                    break
-                generation += 1
-            if generation > MAX_SERVER_GENERATIONS:
-                raise SecretsError('exhausted')
+            current = self._assert_current_ca()
+            generation = self._next_generation(
+                SERVER_DIRECTORY, 'server', current['server']['generation'],
+                MAX_SERVER_GENERATIONS)
             ca_key, ca_cert = self._load_ca()
             if stamp + SERVER_DAYS * 86400 >= int(ca_cert.not_valid_after_utc.timestamp()):
-                raise SecretsError('expired', detail='host CA requires renewal')
+                raise SecretsError('expired', detail='host CA requires rotation')
             private = ec.generate_private_key(ec.SECP256R1())
             cert = _leaf_certificate(ca_key, ca_cert, private.public_key(),
                                      name='localhost', now=stamp,
                                      days=SERVER_DAYS, server=True)
-            prefix = directory / f'server-{generation}'
+            selection = authority_model.activate_server(
+                current, server_generation=generation)
+            key_name, cert_name = self._server_names(generation)
             with self._audit('identity_server_renew_intent', 'localhost', stamp,
                              hashlib.sha256(_certificate_der(cert)).hexdigest()):
-                write_new(Path(str(prefix) + '.key'), _key_pem(private))
-                write_new(Path(str(prefix) + '.pem'), _certificate_pem(cert))
-                self._commit_server_selection(active=generation)
+                self._stage_pair(self.root / key_name, _key_pem(private),
+                                 self.root / cert_name, _certificate_pem(cert))
+                self._write_selected_manifest(selection)
             return {'generation': generation,
                     'certificate_sha256': certificate_thumbprint(_certificate_der(cert)),
                     'not_after': int(cert.not_valid_after_utc.timestamp()),
                     'restart_required': True}
 
     def tls_paths(self) -> tuple[Path, Path, Path]:
-        # Read the selected immutable pair and CA; the authority tree is
-        # host-owned and declared guest-writable roots are forbidden.
-        cert, key, _ = self._server_selection()
-        for name in (cert, key, CA_CERT):
+        selection = self._assert_current_ca()
+        key, cert = self._server_names(selection['server']['generation'])
+        _, ca = self._ca_names(self.ca_generation)
+        for name in (cert, key, ca):
             self._read(name)
-        return (self.root / cert, self.root / key, self.root / CA_CERT)
+        return (self.root / cert, self.root / key, self.root / ca)
 
 
 class _AuthorityTokenVerifier:

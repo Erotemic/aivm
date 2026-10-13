@@ -59,7 +59,7 @@ def test_deterministic_crypto_interop_fixture(monkeypatch):
     """Freeze exact JWT/JWS/AEAD bytes for a future independent Rust codec."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from aivm_secrets.identity import token as token_module
-    from aivm_secrets.identity.model import IdentityClaims, IdentityExpectation
+    from aivm_secrets.identity.garrett.claims import IdentityClaims, IdentityExpectation
     from aivm_secrets.identity.token import (
         IdentityTokenIssuer, IdentityTokenVerifier,
     )

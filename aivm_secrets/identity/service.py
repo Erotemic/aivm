@@ -22,7 +22,7 @@ from ..transport.names import GUEST_SOCKET
 from ..transport.framing import read_frame
 from ..kernel import codec
 from .enrollment import IdentityAuthority
-from .model import IdentityExpectation
+from .garrett.claims import IdentityExpectation
 from .mtls import IdentityTLSBridge, server_context
 
 MAX_CONNECTIONS = 256

@@ -22,7 +22,7 @@ from typing import Any
 
 from ..errors import SecretsError
 from ..primitives import codec, grammar
-from .model import (IdentityClaims, IdentityExpectation)
+from .garrett.claims import IdentityClaims, IdentityExpectation
 from .garrett.protocol import present
 
 TOKEN_TYPE = 'aivm-bound+jwt'

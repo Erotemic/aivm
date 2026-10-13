@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.model import (
+from aivm_secrets.identity.garrett.claims import (
     IdentityClaims, IdentityExpectation, assess_binding,
 )
 from aivm_secrets.identity.runner import evaluate

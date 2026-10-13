@@ -22,7 +22,7 @@ from ..errors import SecretsError
 from ..transport.framing import read_frame
 from ..primitives import codec, grammar, wire
 from .token import IdentityTokenVerifier, MAX_JWT_BYTES
-from .model import IdentityExpectation
+from .garrett.claims import IdentityExpectation
 
 FRAME_DEADLINE_SECONDS = 5.0
 

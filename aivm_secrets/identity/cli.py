@@ -18,8 +18,8 @@ from pathlib import Path
 from ..errors import SecretsError
 from ..host.files import private_directory, read_owned
 from ..primitives import codec
-from .enrollment import (IdentityAuthority, MAX_CSR_BYTES,
-                         create_csr, inspect_csr)
+from .enrollment import IdentityAuthority
+from .certificates import MAX_CSR_BYTES, create_csr, inspect_csr
 from .service import UnixIdentityService
 
 DEFAULT_ROOT = Path('~/.config/aivm/secrets/identity')
@@ -81,6 +81,7 @@ def add_parser(subs):
     rekey.add_argument('--expected-certificate-sha256', required=True)
 
     common('renew-server')
+    common('rotate-ca')
 
     rotate = common('rotate-issuer')
     retire = common('retire-issuer')
@@ -267,6 +268,8 @@ def run(args: argparse.Namespace) -> int:
         )
     elif args.identity_action == 'renew-server':
         result = authority.renew_server()
+    elif args.identity_action == 'rotate-ca':
+        result = authority.rotate_ca()
     elif args.identity_action == 'status':
         result = authority.status()
     elif args.identity_action == 'rotate-issuer':

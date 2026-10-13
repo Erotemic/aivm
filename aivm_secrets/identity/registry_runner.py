@@ -12,7 +12,7 @@ import sys
 
 from ..errors import SecretsError
 from ..primitives import codec, grammar
-from . import registry_model
+from .garrett import registry as registry_model
 
 MAX_LINE = 32768
 

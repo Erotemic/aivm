@@ -42,7 +42,7 @@ Original broker is still the ONLY provider credential/effect executor.
 There is **one canonical implementation** of `grammar`, `codec` and `wire`:
 under `primitives/`. The previous `kernel` paths explicitly re-export those
 same functions and classes, so existing callers and cryptographic bytes remain
-unchanged. The old `identity/model.py`, `registry_model.py` and `vm_model.py`
+initially. The former `identity/model.py`, `registry_model.py` and `vm_model.py`
 likewise re-export the same Garrett model and state-transition functions.
 Moving the implementation instead of copying it avoids two subtly divergent
 validators. The shared bounded framing utility lives in `transport/` (not
@@ -78,18 +78,16 @@ result as a substitute for the actual TLS and token checks. In the Python
 reference, types and process separation aid review but do not constitute
 unforgeable proof witnesses.
 
-## Public API and behavior preservation
+## Pre-deployment API consolidation
 
-Existing Python imports continue working, including
-`aivm_secrets.identity.model.IdentityClaims`,
-`identity.registry_model.{enroll,revoke,expectation}` and
-`identity.vm_model.subject`. Actual class/function objects are re-exported;
-no duplicate decision implementations remain. The host issuer invokes the
-new `prepare_issue` and the verified-token adapter invokes `present`.
-Existing `aivm-secrets identity ...` commands, token headers, AEAD associated
-data, JSON encoding, policy digests and AIVM CLI defaults are deliberately
-unchanged. The role of each external adapter remains the same; no new
-credentialed socket or guest-visible permission is introduced.
+The original modularization increment temporarily kept
+`identity/model.py`, `identity/registry_model.py` and `identity/vm_model.py`
+as compatibility facades. The subsequent single-root CA refactor **deleted**
+all three before any VM enrollment or public deployment. Canonical imports
+are `identity.garrett.claims`, `identity.garrett.registry`, and
+`identity.garrett.vm`. There is intentionally no migration API or facade for
+unused experimental layouts. Token/signature and broker authorization formats
+remain separate contracts; ordinary AIVM VM defaults are unchanged.
 
 ## Independent test and proof contract
 

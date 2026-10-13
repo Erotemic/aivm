@@ -8,9 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from aivm_secrets.identity.enrollment import (
-    IdentityAuthority, create_csr, inspect_csr,
-)
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr, inspect_csr
 from aivm_secrets.identity.oauth_provider import OAuthProvider
 from aivm_secrets.identity.oauth_transport import (
     new_pending, exchange_code,
@@ -75,7 +74,7 @@ def test_full_local_garrett_chain_and_revocation(tmp_path):
                 thread.start()
                 def call():
                     return bound_call(socket_path=service.listen,
-                        ca=authority.root/'ca.pem',
+                        ca=authority.tls_paths()[2],
                         certificate=Path(enrollment['certificate']),
                         private_key=key, jwt_file=jwt_file,
                         request={'operation':'pr.view','arguments':{

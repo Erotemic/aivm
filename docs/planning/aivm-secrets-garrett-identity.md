@@ -84,7 +84,7 @@ models, not facts proved by calling those models.
 
 | Path | Boundary / future Rust counterpart |
 | --- | --- |
-| `aivm_secrets/identity/garrett/claims.py` | Pure typed claims, expectations, explicit time/cert/epoch decision; `identity/model.py` is an old-path facade |
+| `aivm_secrets/identity/garrett/claims.py` | Pure typed claims, expectations, explicit time/cert/epoch decision; the old-path facade was removed before deployment |
 | `aivm_secrets/identity/garrett_runner.py` | New pure issue/present JSONL runner; original `identity/runner.py` remains for binding vectors |
 | `aivm_secrets/identity/token.py` | Host-only Ed25519 JWT and AES-GCM envelope; verify library-backed crypto and document assumptions |
 | `aivm_secrets/identity/mtls.py` | One-connection TLS 1.3 CERT_REQUIRED gate; gets real peer DER from SSL before calling the broker |
@@ -142,7 +142,9 @@ host-vault operations, with no cross-snapshot rollback resistance.
    adapter now binds its identity to the machine store, active principal and
    live libvirt UUID, and uses pinned bootstrap SSH. Remaining: controlled
    upgrade of older guest bootstrap helpers, issuer API authentication suitable
-   for automation, CA rotation and real-VM tests with a synthetic provider.
+   for automation, and real-VM tests with a synthetic provider. Fail-closed
+   single-root CA rotation is now available in the Python reference (see
+   `aivm-secrets-garrett-ca-lifecycle.md`).
 3. **P4b (Python local implementation complete, broad interoperability pending):**
    host-browser authorization-code/PKCE, pinned HTTPS exchange, encrypted host
    credential vault, explicit refresh and revocation, existing restricted
@@ -151,8 +153,9 @@ host-vault operations, with no cross-snapshot rollback resistance.
    a cross-host stateless OAuth proxy. The local principal owns its vault.
 4. **P4c (partially implemented):** local encrypted-vault revocation,
    refresh-generation fencing and rotating/retirable JWT issuers are in the
-   Python implementation. Still needed: CA/client renewal, durable cross-host
-   revocation, rollback/clone resistance, vTPM/hardware key custody,
+   Python implementation. Client renewal and software-key rotation and single-root CA cutover
+   are now implemented. Still needed: durable cross-host revocation,
+   rollback/clone resistance, vTPM/hardware key custody,
    and recovery/migration tests.
 5. **Rust parity:** port model first, then crypto protocol/transport; compare
    canonical on-wire behavior and adversarial traces. Verify Rust pure rules

@@ -676,8 +676,13 @@ A stale epoch or certificate thumbprint fails closed. It requires a fresh
 certificate-bound session token afterward. The separate host-only command
 ``python -I -m aivm_secrets identity renew-server --root ...`` renews the
 30-day local TLS server leaf and key beneath the current CA; **restart**
-the identity bridge for that keypair to take effect. The CA itself is not
-rotated. See ``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
+the identity bridge for that keypair to take effect. For an explicit,
+fail-closed CA replacement with **no dual-root grace period**, use the
+host-only ``identity rotate-ca --root ...`` command. CA rotation revokes all
+enrollments and requires bridge restart, distribution of the NEW public CA,
+explicit re-enrollment and new bound session tokens. Do not run it to renew a
+server leaf. See ``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
+``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
 
 This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
 socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest

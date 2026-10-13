@@ -15,7 +15,8 @@ import pytest
 
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.server import LocalServer, read_frame
-from aivm_secrets.identity.enrollment import IdentityAuthority, create_csr
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.service import UnixIdentityService
 from aivm_secrets.kernel import codec
 from tests.secrets_helpers import Harness, REPO, TOKEN
@@ -37,7 +38,7 @@ def start(tmp_path):
 
 
 def call(path, authority, entry, key, jwt, request, *, use_key=True):
-    ctx = ssl.create_default_context(cafile=str(authority.root / 'ca.pem'))
+    ctx = ssl.create_default_context(cafile=str(authority.tls_paths()[2]))
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3
     if use_key:
         ctx.load_cert_chain(entry['certificate'], str(key))

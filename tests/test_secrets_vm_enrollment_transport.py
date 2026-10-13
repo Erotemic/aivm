@@ -15,7 +15,8 @@ from aivm.secrets_identity_vm import ManagedIdentity
 from aivm.secrets_transport import BrokerSession
 from aivm.services import PreparedSession
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import IdentityAuthority, create_csr, inspect_csr
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr, inspect_csr
 from tests.helpers import resolved_test_context
 
 UUID = '123e4567-e89b-12d3-a456-426614174000'
@@ -65,8 +66,10 @@ def test_forced_csr_enrolls_only_host_selected_subject(tmp_path, monkeypatch):
     def operator(manager, *, action, root, extra=None, **kw):
         if action == 'status':
             return IdentityAuthority(authority_root).status()
-        if action == 'revoke':
-            return IdentityAuthority(authority_root).revoke(extra[-1])
+        if action == 'revoke-if-current':
+            return IdentityAuthority(authority_root).revoke_if_current(
+                subject=extra[1], expected_epoch=int(extra[3]),
+                expected_thumbprint=extra[5])
         raise AssertionError(action)
     monkeypatch.setattr(module, '_identity_action', operator)
     calls = []
@@ -221,8 +224,10 @@ def test_failed_guest_install_revokes_new_identity(tmp_path, monkeypatch):
     def operator(manager, *, action, root, extra=None, **kw):
         if action == 'status':
             return IdentityAuthority(authority_root).status()
-        if action == 'revoke':
-            return IdentityAuthority(authority_root).revoke(extra[-1])
+        if action == 'revoke-if-current':
+            return IdentityAuthority(authority_root).revoke_if_current(
+                subject=extra[1], expected_epoch=int(extra[3]),
+                expected_thumbprint=extra[5])
         raise AssertionError(action)
     monkeypatch.setattr(module, '_identity_action', operator)
     def fake_run(cmd, **kwargs):

@@ -15,7 +15,7 @@ import sys
 
 from ..errors import SecretsError
 from ..primitives import codec, grammar
-from .model import IdentityClaims, IdentityExpectation, assess_binding
+from .garrett.claims import IdentityClaims, IdentityExpectation, assess_binding
 
 MAX_LINE = 8192
 

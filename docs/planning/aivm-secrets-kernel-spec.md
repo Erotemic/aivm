@@ -409,7 +409,7 @@ contract and run the same frozen inputs. Parity in tests is evidence, not proof
 of Python. The Lean proof obligations must remain attached to the extracted
 Rust program, not a separately written Lean mirror.
 
-The initial P4a identity decision is in `aivm_secrets/identity/model.py`, with
+The initial P4a identity decision is in `aivm_secrets/identity/garrett/claims.py`, with
 64 frozen cases under `tests/secrets_vectors/identity-v1.jsonl` and one
 deterministic signed/encrypted byte-level fixture under `identity-crypto-v1.json`. Its pure inputs
 are signed public claims, trusted issuer/audience/subject/epoch expectations,

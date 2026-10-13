@@ -81,7 +81,7 @@ python -I -m aivm_secrets identity renew-server \
 Then **restart** the identity bridge/session. Existing TLS contexts keep the
 old server certificate in memory. Newly started bridges select one immutable
 `server-generations/server-N.{pem,key}` pair through an atomically written
-`server-selection.json`. Old server keypairs are retained for audit/recovery;
+`authority.json` (schema 2), which simultaneously selects the active CA and TLS server generation. Old server public certificates remain available;
 there is no automatic deletion. If a crash leaves an unused generation, the
 next renewal skips it and never overwrites its files. Missing/malformed
 selection fails closed instead of selecting a different trusted pair.
@@ -117,7 +117,10 @@ assumptions for future composed theorems.
 
 ## Outstanding Garrett work
 
-CA rollover and revocation across multiple roots, host/guest key renewal,
+CA rollover is now implemented as a fail-closed, single-active-root cutover
+with mandatory re-enrollment and bridge restart (see
+`aivm-secrets-garrett-ca-lifecycle.md`). Multi-root interoperability,
+certificate provenance across distinct hosts, host/guest key renewal,
 optional vTPM key custody, restoration/cloning semantics, rollback-resistant
 state, distributed issuers, live VM/provider tests, and transparent
 interoperability with arbitrary existing third-party CLIs remain separate

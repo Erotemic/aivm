@@ -66,17 +66,17 @@ aivm_secrets/
         wire.py               # compatible re-export of primitives.wire
         ...                   # still owns policy, grants, effects
     identity/
-        model.py              # compatible re-export
-        registry_model.py     # compatible re-export
-        vm_model.py           # compatible re-export
         garrett/
             claims.py         # public claim validation and peer binding
             registry.py       # pure enrollment/revocation/lookup
             vm.py             # pure managed-VM subject construction
             protocol.py       # pure issue/present intents
+            authority.py      # pure single-active-root trust generations
+        certificates.py       # X.509 and CSR trusted-effect adapter
+        authority_runner.py   # trust-generation conformance runner
         garrett_runner.py     # versioned JSONL conformance runner
         token.py              # authenticated JWT/AEAD adapter
-        enrollment.py         # X.509/CA, host-owned persistence and audit
+        enrollment.py         # host-only CA lifecycle, persistence and audit
         mtls.py, service.py   # authenticated transport to existing broker
     transport/
         framing.py            # bounded, impure socket reads
@@ -131,10 +131,10 @@ that runs user-provided code.
 | --- | --- | --- | --- |
 | `bounded` | `kernel/grammar.py` | Accepted values satisfy exactly the stated byte/length/integer bounds; rejection is total (`PRIM-BOUNDS-01`) | Actual byte-to-value parser |
 | `canonical` | `kernel/codec.py` | One canonical encoding per admitted structured value; no accepted duplicate keys (`PRIM-CANON-01`) | Input JSON decoding, hash collision resistance |
-| `validity` | `identity/model.py`, `kernel/machine.py` | At an explicit time sample, acceptance implies `not_before <= now < expires`; expiration is exclusive (`PRIM-TIME-01`) | Correctness/monotonicity of sampled clocks |
-| `epochs` | `identity/registry_model.py`, `kernel/machine.py` | For successful transitions, the epoch never decreases; stale-epoch claims are rejected (`PRIM-EPOCH-01`) | Durable linearizable store, rollback prevention |
+| `validity` | `identity/garrett/claims.py`, `kernel/machine.py` | At an explicit time sample, acceptance implies `not_before <= now < expires`; expiration is exclusive (`PRIM-TIME-01`) | Correctness/monotonicity of sampled clocks |
+| `epochs` | `identity/garrett/registry.py`, `kernel/machine.py` | For successful transitions, the epoch never decreases; stale-epoch claims are rejected (`PRIM-EPOCH-01`) | Durable linearizable store, rollback prevention |
 | `budgets` | `kernel/machine.py` | Each reservation consumes strictly bounded authority and cannot silently refund it (`PRIM-BUDGET-01`) | Serial dispatch or atomic state commit |
-| `binding` | `identity/model.py`, `kernel/model.py` | Acceptance requires equality of the expected subject/peer binding/epoch (`PRIM-BIND-01`) | Verified token signature, TLS peer authenticity |
+| `binding` | `identity/garrett/claims.py`, `kernel/model.py` | Acceptance requires equality of the expected subject/peer binding/epoch (`PRIM-BIND-01`) | Verified token signature, TLS peer authenticity |
 | `scope` | `kernel/scope.py` | Semantic child permission set is a subset of the parent; subset is transitive (`PRIM-SCOPE-01`) | Compiler faithfully maps a manifest into a closed scope |
 
 Do not introduce duplicates just because existing modules combine related
@@ -159,9 +159,10 @@ resource constraints, audit and a reference monitor at the point of effect.
 `aivm_secrets.identity.garrett` is now the conceptual owner of the
 **protocol**, consuming primitive contracts without implementing crypto, TLS,
 file storage or provider-specific calls itself. Keep the present
-`identity/model.py`, `token.py`, `registry_model.py`, and the current service
-entrypoints operational during migration; a new module must not create a
-second live authorization route.
+`identity/garrett/claims.py`, `identity/garrett/registry.py`,
+`identity/garrett/authority.py`, `token.py` and the single existing service
+entrypoint as the only active protocol implementation. No compatibility
+facades or alternate privileged routes are retained for undeployed formats.
 
 A pure state machine should describe separate steps such as:
 

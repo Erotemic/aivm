@@ -12,7 +12,8 @@ import pytest
 
 from aivm.commands import CommandResult
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import IdentityAuthority, create_csr, inspect_csr
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr, inspect_csr
 from tests.test_secrets_vm_enrollment_transport import fixture_context, UUID
 
 

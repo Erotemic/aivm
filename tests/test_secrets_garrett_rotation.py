@@ -3,7 +3,8 @@ import time
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import IdentityAuthority, create_csr
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.token import certificate_thumbprint
 
 
@@ -12,7 +13,7 @@ def test_issuer_rotation_and_retirement_are_enforced_per_presentation(tmp_path):
     authority = IdentityAuthority.initialize(tmp_path / 'identity',
         issuer='aivm.local', audience='aivm-secrets.identity', now=now)
     create_csr(private_key=tmp_path / 'key.pem', request_file=tmp_path / 'csr.pem')
-    from aivm_secrets.identity.enrollment import inspect_csr
+    from aivm_secrets.identity.certificates import inspect_csr
     issued = authority.enroll(subject='vm-demo', csr=(tmp_path / 'csr.pem').read_bytes(),
                              approve_fingerprint=inspect_csr((tmp_path / 'csr.pem').read_bytes()),
                              now=now)

@@ -9,9 +9,8 @@ from pathlib import Path
 import pytest
 
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import (
-    IdentityAuthority, create_csr, inspect_csr,
-)
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from aivm_secrets.identity.certificates import create_csr, inspect_csr
 from aivm_secrets.identity.token import certificate_thumbprint
 
 
@@ -193,7 +192,7 @@ def test_public_client_returns_only_active_certificate_material(tmp_path):
     assert base64.b64decode(material['certificate_pem_b64']) == \
         Path(entry['certificate']).read_bytes()
     assert base64.b64decode(material['ca_pem_b64']) == \
-        (authority.root / 'ca.pem').read_bytes()
+        authority.tls_paths()[2].read_bytes()
     serialized = json.dumps(material)
     assert 'PRIVATE KEY' not in serialized
     assert 'issuer.aes256' not in serialized

@@ -1,3 +1,17 @@
+## Unreleased: single-active Garrett CA generations (pre-deployment)
+
+- Replace the flat, original host CA and implicit issuer/server selection
+  fallbacks with a strict version-2 authority manifest. One atomic trust
+  record selects both active CA and TLS server identity; no migration of
+  never-deployed schema-1 authorities is supported.
+- Add explicit fail-closed CA rotation. Stage and sync fresh P-256 CA and
+  server identities, revoke all enrollments, then switch the single active
+  authority record. Old bridges reject subsequent requests, and new bridges
+  require re-enrollment; no dual-root transition is promised.
+- Move X.509/CSR effects into a certificate adapter; remove undeployed
+  identity model facades and retain canonical pure Garrett modules. Add 60
+  Rust-targeted trust-state vectors, crash and TLS regression tests.
+
 ## Unreleased: opt-in Garrett managed-VM guest-key rotation
 
 - Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
