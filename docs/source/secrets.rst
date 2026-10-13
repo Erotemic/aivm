@@ -689,6 +689,16 @@ authority as described above, then explicitly enroll the current host principal:
 
     aivm vm identity_enroll --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
+Every principal-account SSH step of enrollment checks the guest's host key
+strictly against the VM's pinned bootstrap ``known_hosts`` -- or, on a shared
+machine store where that file is root-only, against your own
+``known_hosts`` -- never trusting a key on first use. The live libvirt UUID
+read runs through sudo, announced, on hosts where ``virsh`` needs it. An
+expected failure (an old forced helper, an unpinned host key, a renewal
+conflict, a changed domain UUID) prints one ``Identity operation failed:``
+line with its operator detail and exits with status 1; a declined prompt
+aborts the command as your decision.
+
 Enrollment does not grant provider access. After separately creating a host-only
 policy, choose the mTLS-only launcher::
 
@@ -699,14 +709,28 @@ and revoke the old epoch using the same pinned forced-bootstrap channel::
 
     aivm vm identity_renew --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
-This reuses the existing guest software key and does not rotate the CA.
+This reuses the guest's *active* software key and does not rotate the CA:
+the guest first re-signs its CSR with ``client.key`` (even with an older
+forced helper, through a fixed host-delivered step), so a renewal after a key
+rotation certifies the rotated key. Every install checks that the issued
+certificate's public key is the guest key it will be used with before
+replacing anything.
 To explicitly replace the guest-owned software key and its client certificate
 with epoch fencing, run (on a managed VM with the updated forced helper)::
 
     aivm vm identity_rotate_key --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
 A key-rotation attempt is never automatic. A failed activation revokes the
-new enrollment; operator recovery may be required. See
+new enrollment with an epoch+thumbprint guarded revocation; when that cannot
+complete, or when you decline or interrupt a step after the certificate was
+issued, AIVM prints the exact
+``python -I -m aivm_secrets identity revoke-if-current ...`` command to run
+instead of continuing. If the certificate authority's reply is lost after it
+may have committed, the command fails with ``outcome_unknown`` and names the
+certificate the registry now holds; that may instead be another operator's
+concurrent enrollment, so check before revoking it. An interrupt while the
+authority is issuing logs the registry read and the guarded revocation to
+fill in, and runs nothing more. See
 ``docs/planning/aivm-secrets-garrett-guest-key-rotation.md``.
 A stale epoch or certificate thumbprint fails closed. It requires a fresh
 certificate-bound session token afterward. The separate host-only command
@@ -758,27 +782,18 @@ VM has ever run ``identity_rotate_key``, regenerate its CSR first (below):
 its stale CSR carries the original key, which nothing refuses under the new
 subject.
 
-**Guests rotated with the current helper.** After ``identity_rotate_key`` the
-current guest helper never replaces ``client.csr``. That file keeps the CSR
-for the *original* key while ``client.key`` holds the new one, and every
-later CSR request sends it. For such a VM ``identity_renew`` is refused, and
-so is ``identity_enroll`` (with or without ``--replace``) after its
-enrollment was revoked, for example by ``rotate-ca``, because the original
-key is retired. Until the helper regenerates the CSR (a later increment),
-regenerate it by hand inside the guest, as the guest user, before renewing or
-re-enrolling::
+**Guests rotated before the CSR fix.** The original activation script left
+the original key's CSR in ``client.csr``. The host refuses that stale CSR
+instead of re-certifying the rotated-away key, so AIVM regenerates
+``client.csr`` from ``client.key`` over the pinned principal channel before
+every ``identity_enroll`` and ``identity_renew``, and the updated forced
+helper signs a fresh CSR with ``client.key`` on every request. Managed
+renewals therefore present the active key even when the guest's helper
+predates the fix. Only a standalone enrollment from an operator-supplied CSR
+still needs the manual step, run inside the guest as the guest user::
 
     cd ~/.config/aivm/identity && umask 077 &&
       openssl req -new -key client.key -out client.csr -subj /CN=aivm-guest
-
-Do the same before enrolling such a VM under a subject that has no retired
-keys (after a rename, or after its row was forgotten): nothing would refuse
-the stale CSR there, and the original key would be certified again.
-
-Do not run ``identity_rotate_key`` again in place of a renewal. Each rotation
-retires one more key. After nine, the original key (the one the stale CSR
-carries) is no longer among the last 8 retired, and any later re-enrollment
-of the stale CSR would certify it again.
 
 If ``identity_rotate_key`` fails while activating the new key, AIVM revokes
 the new enrollment. The guest is left on its old key, which is now retired,

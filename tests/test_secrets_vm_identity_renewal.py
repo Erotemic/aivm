@@ -10,9 +10,14 @@ import pytest
 from aivm.commands import CommandResult
 from aivm.secrets_identity_transport import enroll_managed_vm
 from aivm_secrets.errors import SecretsError
-from aivm_secrets.identity.enrollment import IdentityAuthority
 from aivm_secrets.identity.certificates import create_csr, inspect_csr
-from tests.test_secrets_vm_enrollment_transport import fixture_context, UUID
+from aivm_secrets.identity.enrollment import IdentityAuthority
+from tests.test_secrets_vm_enrollment_transport import (
+    UUID,
+    ScriptedManager,
+    fixture_context,
+    guarded_revoke,
+)
 
 
 def setup(tmp_path, monkeypatch, *, enroll_first=True):
@@ -36,9 +41,7 @@ def setup(tmp_path, monkeypatch, *, enroll_first=True):
     monkeypatch.setattr(module, 'guest_writable_roots', lambda _: ())
     monkeypatch.setattr(module, '_identity_action', lambda manager, *, action,
                         extra=None, **kw: authority.status() if action=='status'
-                        else authority.revoke_if_current(
-                            subject=extra[1], expected_epoch=int(extra[3]),
-                            expected_thumbprint=extra[5]))
+                        else guarded_revoke(authority, extra))
     monkeypatch.setattr(module, '_isolated_enroll', lambda manager, **kw:
                         authority.renew_client(subject=kw['subject'],csr=kw['csr'],
                             approve_fingerprint=inspect_csr(kw['csr']),
@@ -56,9 +59,10 @@ def setup(tmp_path, monkeypatch, *, enroll_first=True):
                 'status':'ok','operation':'identity-csr','nonce':nonce,
                 'guest_user':bound.guest_user,'uid':bound.host_uid,
                 'csr':csr.read_text()}),'')
-        assert 'client.pem.new' in cmd[-1]
+        assert ('client.pem.new' in cmd[-1] or
+                'openssl req -new -key client.key' in cmd[-1])
         return CommandResult(0,'','')
-    monkeypatch.setattr(module.CommandManager,'current',lambda:SimpleNamespace(run=run))
+    monkeypatch.setattr(module.CommandManager,'current',lambda:ScriptedManager(run))
     return module,context,bound,store,authority,root,old,calls
 
 
@@ -69,7 +73,7 @@ def test_managed_renewal_uses_authenticated_channel_and_cas(tmp_path,monkeypatch
     assert new['subject']==bound.subject
     assert new['epoch']==old['epoch']+1
     assert new['certificate_sha256']!=old['certificate_sha256']
-    assert len(calls)==2
+    assert len(calls)==3  # CSR refresh, forced CSR fetch, install
     assert 'BEGIN PRIVATE KEY' not in str(calls)
 
 
@@ -95,9 +99,15 @@ def test_concurrent_replacement_fences_stale_renewal(tmp_path,monkeypatch):
     with pytest.raises(SecretsError) as exc:
         enroll_managed_vm(context=ctx,store=store,ip='10.0.0.2',
             authority_root=root,renew=True,uuid_reader=lambda _:UUID)
+    # The stale renewal is refused by the authority's compare-and-swap, and
+    # the other operator's replacement stays active. (This stub raises the
+    # authority's own refusal in-process; through the real issuing child,
+    # whose exit status cannot prove nothing was committed, see
+    # test_competing_renewal_is_reported_without_blaming_or_revoking_it.)
     assert exc.value.code=='revoked'
-    assert authority.status()['subjects'][bound.subject]['epoch']==old['epoch']+1
-    assert len(calls)==1  # no public certificate was installed
+    row=authority.status()['subjects'][bound.subject]
+    assert row['epoch']==old['epoch']+1 and row['active'] is True
+    assert len(calls)==2  # refresh and CSR fetch; nothing was installed
 
 
 def test_renewal_flag_does_not_combine_with_replace(tmp_path,monkeypatch):
@@ -115,16 +125,16 @@ def test_managed_vm_cli_exposes_separate_explicit_renewal_command():
 
 
 def test_failed_renewal_delivery_revokes_new_epoch_not_old(tmp_path,monkeypatch):
-    import aivm.secrets_identity_transport as module
     module,ctx,bound,store,authority,root,old,calls=setup(tmp_path,monkeypatch)
     csr=(tmp_path/'client.csr').read_bytes()
-    monkeypatch.setattr(module.CommandManager,'current',lambda:SimpleNamespace(
-        run=lambda cmd, **kw: CommandResult(0,json.dumps({
+    monkeypatch.setattr(module.CommandManager,'current',lambda:ScriptedManager(
+        lambda cmd, **kw: CommandResult(0,json.dumps({
                 'status':'ok','operation':'identity-csr',
                 'nonce':json.loads(kw['input_text'])['nonce'],
                 'guest_user':bound.guest_user,'uid':bound.host_uid,
                 'csr':csr.decode()}),'') if cmd[-1]=='identity-csr'
-            else CommandResult(1,'','delivery failed')))
+            else CommandResult(1,'','delivery failed') if 'client.pem.new' in cmd[-1]
+            else CommandResult(0,'','')))
     with pytest.raises(SecretsError):
         enroll_managed_vm(context=ctx,store=store,ip='10.0.0.2',
             authority_root=root,renew=True,uuid_reader=lambda _:UUID)

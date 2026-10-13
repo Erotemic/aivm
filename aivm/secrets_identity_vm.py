@@ -18,10 +18,9 @@ from aivm_secrets.errors import SecretsError
 
 from .commands import CommandManager
 from .config_store import find_principal, load_store
+from .privilege import virsh_needs_sudo
 from .runtime import virsh_cmd
 from .config_scopes import ResolvedVMContext
-
-
 
 
 def _vm_subject(binding: dict[str, object]) -> str:
@@ -47,10 +46,18 @@ class ManagedIdentity:
 
 
 def live_uuid(name: str) -> str:
-    """Read the *live system-libvirt* domain identity, never guest output."""
+    """Read the *live system-libvirt* domain identity, never guest output.
+
+    This is the same system-libvirt read as every other ``virsh`` probe, so
+    it escalates exactly when they do: a host user outside the libvirt group
+    reaches ``qemu:///system`` only through sudo. It stays ``role='read'``,
+    and an escalated read is still announced at INFO under the sudo
+    call-out policy.
+    """
     reply = CommandManager.current().run(
-        virsh_cmd('domuuid', name), sudo=False, check=False, capture=True,
-        role='read', timeout=15, summary='Identify the managed VM incarnation',
+        virsh_cmd('domuuid', name), sudo=virsh_needs_sudo(), check=False,
+        capture=True, role='read', timeout=15,
+        summary='Identify the managed VM incarnation',
     )
     if reply.code:
         raise SecretsError('guest_setup', detail='libvirt UUID unavailable')

@@ -46,29 +46,27 @@ rotated-away key whenever the guest sent its stale `client.csr` (an old
 helper, a reverted snapshot), leaving a certificate for the old key next to
 the new `client.key`.
 
-**Consequence for guests rotated with the current helper:** their
-`client.csr` still holds the original key, so `identity_renew` is now
-refused with `denied` instead of re-certifying that key. Because the
-rotated-away key is retired (below), `identity_enroll` (with or without
-`--replace`) with the stale CSR is refused too, for example after
-`rotate-ca` revoked the enrollment, and `identity_rotate_key` needs an
-active enrollment. Until the guest helper regenerates the CSR from
-`client.key` (a later increment), the operator regenerates it inside the
-guest, as the guest user, and then renews or re-enrolls as usual:
+**Guests rotated before the CSR fix.** The original activation script left
+the original key's CSR in `client.csr`. REN-07 refuses that stale CSR
+(`denied`) instead of re-certifying the rotated-away key, and while that key
+is retired for the subject `identity_enroll` (with or without `--replace`)
+refuses it too. AIVM therefore regenerates `client.csr` from `client.key`
+over the pinned principal channel before every non-rotating enrollment, and
+the updated forced helper signs a fresh CSR with `client.key` on every
+request, so managed renewals present the active key even on a guest whose
+helper predates the fix. Only the standalone path (an operator-supplied CSR
+for `identity enroll`/`renew-client`) still needs the manual step, run inside
+the guest as the guest user:
 
 ```bash
 cd ~/.config/aivm/identity && umask 077 &&
   openssl req -new -key client.key -out client.csr -subj /CN=aivm-guest
 ```
 
-Rotating again instead of renewing is **not** a safe substitute: each
-rotation retires one more key, and after nine the original key, which is the
-one the stale CSR carries, has aged out of the bounded retired list (below),
-so any later re-enrollment would certify it again. The custody rules refuse
-the stale CSR only while its key is still retired *for that subject*; under
-a subject with no retired keys (a renamed VM, or a row that was forgotten)
-nothing refuses it, so the CSR must be regenerated before such an
-enrollment too.
+The custody rules refuse a stale CSR only while its key is still retired
+*for that subject*; under a subject with no retired keys (a renamed VM, or a
+row that was forgotten) nothing refuses it, which is why the regeneration
+must precede every enrollment rather than rely on custody.
 
 **A failed rotation activation** strands the guest the same way. The host
 committed the new key K2 and retired K1 before the guest activates K2; on

@@ -312,6 +312,8 @@ def test_aivm_reaches_the_broker_only_as_a_process():
             seen[str(path.relative_to(ROOT))] = sorted(set(names))
     assert seen == {
         'aivm/cli/vm_connect.py': ['aivm_secrets.errors'],
+        # Reports an identity SecretsError as an operator error line.
+        'aivm/cli/vm_identity.py': ['aivm_secrets.errors'],
         'aivm/secrets_transport.py': ['aivm_secrets.errors'],
         'aivm/secrets_identity_transport.py': ['aivm_secrets.errors'],
         'aivm/secrets_identity_vm.py': ['aivm_secrets.errors'],

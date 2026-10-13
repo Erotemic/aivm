@@ -18,14 +18,17 @@ import shlex
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+from loguru import logger as log
 
 from aivm_secrets.errors import SecretsError
 
-from .commands import CommandManager
+from .commands import CommandError, CommandManager, Elided
 from .config_scopes import ResolvedVMContext
 from .config_store import load_store
 from .enrollment import BOOTSTRAP_GUEST_USER, require_bootstrap_identity
+from .errors import CommandControlError
 from .runtime import require_ssh_identity, ssh_base_args
 from .scoped_store import resolve_store_scope
 from .secrets_identity_vm import ManagedIdentity, resolve_managed_identity
@@ -69,12 +72,123 @@ def _bootstrap_ssh(context: ResolvedVMContext, store: Path, ip: str,
     ]
 
 
-def _login_ssh(context: ResolvedVMContext, ip: str) -> list[str]:
+def _principal_known_hosts(context: ResolvedVMContext, store: Path) -> str | None:
+    """The VM's pinned host-key file, when this caller is able to read it.
+
+    The principal account reaches the same guest sshd as the forced bootstrap
+    channel, so it is held to the same pinned key rather than to whatever
+    ambient ``~/.ssh/known_hosts`` holds for a possibly reused address. A
+    missing or empty pin refuses, exactly as the bootstrap channel does.
+
+    On a *shared* machine store the bootstrap directory is ``root:<group>``
+    ``0750`` (``BOOTSTRAP_DIRECTORY_MODE``) and ``known_hosts`` is written by
+    ``ssh`` running under sudo, so its mode is whatever umask root had then:
+    a trusted-group member can usually read it, but not always. Escalating
+    an interactive principal login just to read a public file is not worth
+    it, so then this returns ``None`` and the caller keeps
+    ``StrictHostKeyChecking=yes`` against the principal's own known_hosts,
+    which ``aivm vm access reconcile`` populated when it verified this
+    principal's login. That is never trust-on-first-use: an unknown or
+    changed host key still refuses the connection. A *personal* store is the
+    caller's own, so an unreadable pin there is an error, not a fallback.
+    """
+    scope = resolve_store_scope(str(store))
+    if not scope.is_machine or scope.machine_layout is None:
+        raise SecretsError('denied', detail='requires managed machine store')
+    identity = require_bootstrap_identity(context.machine.vm.name,
+                                          layout=scope.machine_layout)
+    try:
+        info = identity.known_hosts.stat()
+    except OSError:
+        info = None
+    if info is None or not stat.S_ISREG(info.st_mode) or not info.st_size:
+        raise SecretsError('guest_setup', detail='bootstrap SSH host key not pinned')
+    if os.access(identity.known_hosts, os.R_OK):
+        return str(identity.known_hosts)
+    if not identity.use_sudo:
+        raise SecretsError('unsafe_file',
+                           detail='pinned SSH host key file is not readable')
+    log.info('The pinned host key for VM {} is root-only on this shared store; '
+             'principal SSH checks the guest host key strictly against your '
+             'own known_hosts instead.', context.machine.vm.name)
+    return None
+
+
+def _principal_ssh(context: ResolvedVMContext, store: Path, ip: str) -> list[str]:
+    """Isolated, strictly host-key-checked SSH as the owning principal.
+
+    Used for every principal-account step of identity enrollment: the CSR
+    refresh before issuance and the public-material install after it.
+    """
+    known_hosts = _principal_known_hosts(context, store)
     return ['ssh', '-F', '/dev/null', '-o', 'ForwardAgent=no',
             '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+            '-o', 'ClearAllForwardings=yes',
             *ssh_base_args(require_ssh_identity(context.profile.ssh_identity_file),
                            strict_host_key_checking='yes', batch_mode=True,
-                           connect_timeout=10), context.ssh_target(ip)]
+                           connect_timeout=10, user_known_hosts_file=known_hosts),
+            context.ssh_target(ip)]
+
+
+# ssh exits 255 when the channel itself fails: no route, or a host key that
+# does not match the pin. Re-enrollment re-pins a *new address*; a changed
+# key at the same address stays refused until the pin is deliberately reset.
+_SSH_CHANNEL_HINT = ('if the VM address changed, run `aivm vm access '
+                     'reconcile`; a changed host key stays refused')
+
+
+def _principal_ssh_failure(code: int, what: str) -> SecretsError:
+    """Say what failed; never echo guest output, which the guest controls."""
+    if code == 255:
+        return SecretsError('guest_setup', detail=(
+            f'{what}: principal SSH to the guest failed; {_SSH_CHANNEL_HINT}'))
+    return SecretsError('guest_setup', detail=f'{what} (guest exit status {code})')
+
+
+def _identity_command(action: str, *, root: Path | None,
+                      untrusted: tuple[Path, ...] = (),
+                      extra: list[str] | None = None) -> list[str]:
+    """The exact argv of one isolated identity-service operation."""
+    from .secrets_transport import interpreter_flags
+
+    cmd = [sys.executable, *interpreter_flags(), '-m', 'aivm_secrets',
+           'identity', action]
+    if root is not None:
+        cmd += ['--root', str(Path(root).expanduser().absolute())]
+        for path in untrusted:
+            cmd += ['--untrusted-root', str(path)]
+    cmd += list(extra or ())
+    return cmd
+
+
+def _guarded_revoke_extra(subject: str, epoch: int | str,
+                          thumbprint: str) -> list[str]:
+    # Each option and its value are one argv word. A base64url thumbprint
+    # begins with '-' for about one certificate in 64, and argparse reads a
+    # separate word like that as an option and refuses the whole command.
+    return [f'--subject={subject}', f'--expected-epoch={epoch}',
+            f'--expected-certificate-sha256={thumbprint}']
+
+
+def _manual_revoke(*, authority_root: Path, untrusted: tuple[Path, ...],
+                   subject: str, epoch: int | str, thumbprint: str) -> str:
+    """The command an operator runs to fence one undelivered certificate.
+
+    ``epoch`` and ``thumbprint`` may be placeholders when the certificate
+    is not known yet.
+
+    It is the same compare-and-swap revocation AIVM itself would run, so it
+    can never revoke a later enrollment that replaced this one.
+    """
+    return shlex.join(_identity_command(
+        'revoke-if-current', root=authority_root, untrusted=untrusted,
+        extra=_guarded_revoke_extra(subject, epoch, thumbprint)))
+
+
+def _manual_status(*, authority_root: Path, untrusted: tuple[Path, ...]) -> str:
+    """The command an operator runs to read the identity registry."""
+    return shlex.join(_identity_command('status', root=authority_root,
+                                        untrusted=untrusted))
 
 
 def _identity_action(manager: CommandManager, *, action: str, root: Path | None,
@@ -85,15 +199,9 @@ def _identity_action(manager: CommandManager, *, action: str, root: Path | None,
     Rust can implement these same verbs and output shapes without changing
     the VM adapter. No bearer credential or signing key crosses stdout.
     """
-    from .secrets_transport import broker_environment, interpreter_flags
+    from .secrets_transport import broker_environment
 
-    cmd = [sys.executable, *interpreter_flags(), '-m', 'aivm_secrets',
-           'identity', action]
-    if root is not None:
-        cmd += ['--root', str(Path(root).expanduser().absolute())]
-        for path in untrusted:
-            cmd += ['--untrusted-root', str(path)]
-    cmd += list(extra or ())
+    cmd = _identity_command(action, root=root, untrusted=untrusted, extra=extra)
     result = manager.run(
         cmd, sudo=False, role='modify', ownership='tool',
         env=broker_environment(), capture=True, check=False, timeout=timeout,
@@ -114,8 +222,17 @@ def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
                      subject: str, csr: bytes, replace: bool,
                      untrusted: tuple[Path, ...],
                      renewal: tuple[int, str] | None = None,
-                     rotate_key: bool = False) -> dict[str, Any]:
-    """Certificate parsing and CA signing both occur in isolated processes."""
+                     rotate_key: bool = False,
+                     observed: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Certificate parsing and CA signing both occur in isolated processes.
+
+    ``observed`` is the subject's registry row as read before this attempt
+    (``None``: no row). Once the issuing child has been dispatched, a
+    failure no longer proves that nothing was issued, so it is settled
+    against that row (:func:`_settle_failed_issuance`) before it propagates.
+    A failure before that point -- including a refused CSR inspection --
+    issued nothing and propagates as it is.
+    """
     if rotate_key and renewal is None:
         raise SecretsError('invalid_policy')
     with tempfile.NamedTemporaryFile(
@@ -130,24 +247,42 @@ def _isolated_enroll(manager: CommandManager, *, authority_root: Path,
         if (type(fingerprint) is not str or len(fingerprint) != 64 or
                 any(char not in '0123456789abcdef' for char in fingerprint)):
             raise SecretsError('guest_setup', detail='invalid CSR fingerprint')
-        options = ['--subject', subject, '--csr', public_file.name,
+        options = [f'--subject={subject}', '--csr', public_file.name,
                    '--approve-key-fingerprint', fingerprint]
         if renewal is not None:
             epoch, thumbprint = renewal
-            options += ['--expected-epoch', str(epoch),
-                        '--expected-certificate-sha256', thumbprint]
+            # One word each: a thumbprint may begin with '-' (see
+            # _guarded_revoke_extra).
+            options += [f'--expected-epoch={epoch}',
+                        f'--expected-certificate-sha256={thumbprint}']
             action = 'rotate-client-key' if rotate_key else 'renew-client'
         else:
             if replace:
                 options.append('--replace')
             action = 'enroll'
-        value = _identity_action(manager, action=action, root=authority_root,
-                                 untrusted=untrusted, extra=options)
-    if (value.get('subject') != subject or
-            type(value.get('certificate_sha256')) is not str or
-            type(value.get('epoch')) is not int or
-            type(value.get('not_after')) is not int):
-        raise SecretsError('guest_setup', detail='invalid CA enrollment reply')
+        try:
+            value = _identity_action(manager, action=action, root=authority_root,
+                                     untrusted=untrusted, extra=options)
+            if (value.get('subject') != subject or
+                    type(value.get('certificate_sha256')) is not str or
+                    type(value.get('epoch')) is not int or
+                    type(value.get('not_after')) is not int):
+                raise SecretsError('guest_setup', detail='invalid CA enrollment reply')
+        except (CommandError, SecretsError) as failure:
+            # A refusal (CommandControlError) is not caught: the issuing
+            # command was declined before it ran, so it issued nothing.
+            _settle_failed_issuance(manager, authority_root=authority_root,
+                                    untrusted=untrusted, subject=subject,
+                                    observed=observed, failure=failure)
+            raise
+        except KeyboardInterrupt:
+            # The interrupt reached the child too, which may already have
+            # committed. Running another command would continue past it, so
+            # only say how to find out, then re-raise unchanged.
+            _warn_unsettled_issuance(authority_root=authority_root,
+                                     untrusted=untrusted, subject=subject,
+                                     observed=observed)
+            raise
     return value
 
 
@@ -209,12 +344,18 @@ def _private_broker_file(path: Path, untrusted: tuple[Path, ...]) -> str:
 
 
 def _guest_install_script(*, rotate_key: bool) -> str:
-    """Install public material; for rekey verify and activate the staged key.
+    """Install public material only for the key the guest will present.
 
-    All command text is fixed at development time. The new private key is
-    created by the forced guest bootstrap helper under the guest UID, never
-    conveyed over SSH or handled by the host. A failed install is fenced on
-    the host via enrollment revocation; no credential fallback is attempted.
+    All command text is fixed at development time. Before anything is moved
+    into place the guest compares the SubjectPublicKeyInfo of the issued
+    certificate with its private key: ``client.key`` for an enrollment or
+    renewal, the staged ``client.rotate.key`` for a key rotation (which must
+    also differ from the active key, to rule out a no-op). A mismatch exits
+    nonzero and leaves the installed files untouched, and the host then
+    fences the undelivered certificate with its guarded revocation. The new
+    private key is created by the forced guest bootstrap helper under the
+    guest UID, never conveyed over SSH or handled by the host; no credential
+    fallback is attempted.
     """
     prefix = (
         'umask 077 && set -e && '
@@ -224,67 +365,279 @@ def _guest_install_script(*, rotate_key: bool) -> str:
         'printf "%s" "$certificate" | base64 -d > client.pem.new && '
         'printf "%s" "$ca" | base64 -d > ca.pem.new && '
         'chmod 600 client.pem.new ca.pem.new && '
-    )
-    if not rotate_key:
-        return prefix + 'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem'
-    # X.509's SPKI and the pending key's SPKI must match. Compare the active
-    # key's SPKI too, to rule out an accidental no-op. The host independently
-    # performs this *same-key* rejection against the enrolled leaf.
-    return prefix + (
-        'test -f client.key && test -f client.rotate.key && '
-        'test ! -L client.rotate.key && '
-        'test -f client.rotate.csr && test ! -L client.rotate.csr && '
-        'scratch="$(mktemp -d ./.rekey-check.XXXXXXXX)" && '
-        'openssl pkey -in client.rotate.key -pubout -outform DER '
-        '-out "$scratch/new.der" && '
-        'openssl pkey -in client.key -pubout -outform DER '
-        '-out "$scratch/old.der" && '
+        'test -f client.key && test ! -L client.key && '
+        'scratch="$(mktemp -d ./.identity-check.XXXXXXXX)" && '
+        'trap \'rm -rf -- "$scratch"\' EXIT && '
         'openssl x509 -in client.pem.new -pubkey -noout '
         '> "$scratch/cert.pub" && '
         'openssl pkey -pubin -in "$scratch/cert.pub" '
         '-outform DER -out "$scratch/cert.der" && '
+        'openssl pkey -in client.key -pubout -outform DER '
+        '-out "$scratch/active.der" && '
+    )
+    if not rotate_key:
+        return prefix + (
+            'cmp -s "$scratch/active.der" "$scratch/cert.der" && '
+            'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem'
+        )
+    # The host independently performs the *same-key* rejection against the
+    # enrolled leaf. Activation moves the staged CSR over client.csr too, so
+    # the cached request always belongs to the active key.
+    return prefix + (
+        'test -f client.rotate.key && test ! -L client.rotate.key && '
+        'test -f client.rotate.csr && test ! -L client.rotate.csr && '
+        'openssl pkey -in client.rotate.key -pubout -outform DER '
+        '-out "$scratch/new.der" && '
         'cmp -s "$scratch/new.der" "$scratch/cert.der" && '
-        '! cmp -s "$scratch/new.der" "$scratch/old.der" && '
+        '! cmp -s "$scratch/new.der" "$scratch/active.der" && '
         'cp client.rotate.key client.key.new && chmod 600 client.key.new && '
         'mv -f client.pem.new client.pem && mv -f ca.pem.new ca.pem && '
         'mv -f client.key.new client.key && '
-        'rm -f client.rotate.key client.rotate.csr && '
-        'rm -rf -- "$scratch"'
+        'mv -f client.rotate.csr client.csr && rm -f client.rotate.key'
     )
+
+
+def _guest_csr_refresh_script() -> str:
+    """Re-sign ``client.csr`` with the guest's active ``client.key``.
+
+    Guests keep the forced helper they were created with until an explicit
+    helper upgrade, and an older helper answers ``identity-csr`` by replaying
+    ``client.csr`` verbatim. Every guest that ever ran identity_rotate_key
+    under the old activation script still holds the CSR for its *retired*
+    key there, so a renewal would re-certify the key rotation retired. This
+    fixed step runs first, over the same strictly pinned principal SSH as the
+    install, and regenerates the CSR as the guest user (scratch name, then
+    rename) so any helper presents the active key. A guest with no
+    ``client.key`` yet is left alone: the helper creates its first key.
+    """
+    return (
+        'umask 077 && cd "$HOME" && '
+        'if test -e .config/aivm/identity/client.key || '
+        'test -L .config/aivm/identity/client.key; then '
+        'cd .config/aivm/identity && test -f client.key && '
+        'test ! -L client.key && '
+        'scratch="$(mktemp ./.client.csr.XXXXXXXX)" && '
+        'trap \'rm -f -- "$scratch"\' EXIT && '
+        'openssl req -new -key client.key -subj /CN=aivm-guest '
+        '-out "$scratch" && '
+        'mv -f -- "$scratch" client.csr; fi'
+    )
+
+
+def _subject_row(status: dict[str, Any], subject: str) -> dict[str, Any] | None:
+    subjects = status.get('subjects')
+    row = subjects.get(subject) if type(subjects) is dict else None
+    return row if type(row) is dict else None
+
+
+def _active_certificate(row: dict[str, Any] | None) -> tuple[int, str] | None:
+    """``(epoch, thumbprint)`` of an active, well-formed registry row."""
+    if (row is None or row.get('active') is not True or
+            type(row.get('epoch')) is not int or
+            type(row.get('certificate_sha256')) is not str):
+        return None
+    return row['epoch'], row['certificate_sha256']
+
+
+def _issued_since(observed: dict[str, Any] | None,
+                  row: dict[str, Any] | None) -> tuple[int, str] | None:
+    """The active certificate ``row`` holds that ``observed`` did not.
+
+    Compared by certificate, not by epoch: epochs only increase while a row
+    exists, and a row that is removed (pruned, forgotten, or erased by a CA
+    rollover) and then enrolled again restarts at epoch 0.
+    """
+    current = _active_certificate(row)
+    if current is None:
+        return None
+    before = _active_certificate(observed)
+    if before is not None and before[1] == current[1]:
+        return None
+    return current
+
+
+def _warn_unsettled_issuance(*, authority_root: Path,
+                             untrusted: tuple[Path, ...], subject: str,
+                             observed: dict[str, Any] | None) -> None:
+    """Say how to find and fence an issuance that may have committed.
+
+    Used when an interrupt or a refusal stops AIVM from checking. No further
+    command may run then, so the operator is given the registry read and
+    the guarded revocation (with placeholders) to run themselves.
+    """
+    before = _active_certificate(observed)
+    unless = ('' if before is None else
+              f' other than epoch {before[0]} (certificate {before[1]})')
+    log.warning(
+        'Certificate issuance for {} was interrupted or refused before its '
+        'outcome was known, and may already have committed a certificate '
+        'that no guest will receive. Read the registry with `{}`; if {} now '
+        'holds an active certificate{} that is not another operator\'s '
+        'enrollment, revoke it with: {}',
+        subject, _manual_status(authority_root=authority_root,
+                                untrusted=untrusted),
+        subject, unless,
+        _manual_revoke(authority_root=authority_root, untrusted=untrusted,
+                       subject=subject, epoch='EPOCH',
+                       thumbprint='CERTIFICATE_SHA256'))
+
+
+def _settle_failed_issuance(manager: CommandManager, *, authority_root: Path,
+                            untrusted: tuple[Path, ...], subject: str,
+                            observed: dict[str, Any] | None,
+                            failure: BaseException) -> None:
+    """Raise ``outcome_unknown`` when a failed issuance may still have landed.
+
+    The CA child commits the registry before it prints its reply, and it can
+    fail after that commit: a timeout, a crash, a failed audit record or
+    directory sync after the registry was replaced, or a malformed reply.
+    Its exit status does not separate those from a refusal, so every
+    failure of the issuing child is settled here. Re-read the registry: if
+    the subject now holds an active certificate it did not hold before the
+    attempt, report exactly which one and the compare-and-swap command that
+    revokes it. That certificate is either this attempt's lost issuance or
+    an enrollment another operator made meanwhile -- a competing renewal is
+    also what makes a renewal fail its compare-and-swap -- and nothing here
+    can tell which. So the operator is asked to check, and it is never
+    revoked from here. Return (so the original error stands) when the
+    registry shows nothing new.
+    """
+    after: dict[str, Any] = {}
+    try:
+        with manager.attempt('Re-read the identity registry after a failed issuance',
+                             catch=(CommandError, SecretsError)) as rereading:
+            after = _identity_action(manager, action='status',
+                                     root=authority_root, untrusted=untrusted)
+    except (CommandControlError, KeyboardInterrupt):
+        # The re-read itself was refused: that decision stands, unchanged.
+        _warn_unsettled_issuance(authority_root=authority_root,
+                                 untrusted=untrusted, subject=subject,
+                                 observed=observed)
+        raise
+    if rereading.failed:
+        raise SecretsError('outcome_unknown', detail=(
+            f'certificate issuance for {subject} did not return a usable reply '
+            'and the registry could not be re-read to tell whether it '
+            'committed; inspect it with: '
+            + _manual_status(authority_root=authority_root, untrusted=untrusted))
+        ) from failure
+    issued = _issued_since(observed, _subject_row(after, subject))
+    if issued is None:
+        return
+    epoch, thumbprint = issued
+    command = _manual_revoke(authority_root=authority_root, untrusted=untrusted,
+                             subject=subject, epoch=epoch, thumbprint=thumbprint)
+    raise SecretsError('outcome_unknown', detail=(
+        f'certificate issuance for {subject} did not return a usable reply, '
+        'and the registry has changed since this command read it: it now '
+        f'holds active epoch {epoch} (certificate {thumbprint}). That is '
+        'either this attempt\'s certificate, committed but never delivered, '
+        'or an enrollment another operator made meanwhile (a competing '
+        'renewal also makes this one fail). Check which before revoking; '
+        'only if it is not another operator\'s, revoke it with: '
+        + command)) from failure
+
+
+def _warn_undelivered(*, subject: str, epoch: int, command: str) -> None:
+    log.warning(
+        'Certificate epoch {} for {} was issued but never delivered to the '
+        'guest, and the rest of the enrollment was refused or interrupted. '
+        'It stays active until revoked; revoke it with: {}',
+        epoch, subject, command)
+
+
+def _revoke_undelivered(manager: CommandManager, *, authority_root: Path,
+                        untrusted: tuple[Path, ...], subject: str,
+                        record: dict[str, Any], failure: BaseException) -> None:
+    """Fence a certificate that failed delivery, without touching a newer one.
+
+    The revocation is host-locked and compare-and-swap on the exact epoch and
+    thumbprint just issued, so it can never revoke an enrollment another
+    operator has since replaced it with. Raises when the undo itself did not
+    complete; returns so the caller re-raises the original failure otherwise.
+    """
+    command = _manual_revoke(authority_root=authority_root, untrusted=untrusted,
+                             subject=subject, epoch=record['epoch'],
+                             thumbprint=record['certificate_sha256'])
+    answer: dict[str, Any] = {}
+    try:
+        with manager.attempt('Revoke the undelivered enrollment',
+                             why='A certificate the guest never installed must '
+                                 'not stay active.',
+                             catch=(CommandError, SecretsError)) as undo:
+            answer = _identity_action(
+                manager, action='revoke-if-current', root=authority_root,
+                untrusted=untrusted,
+                extra=_guarded_revoke_extra(subject, record['epoch'],
+                                            record['certificate_sha256']))
+            if type(answer.get('revoked')) is not bool:
+                raise SecretsError('guest_setup', detail='invalid cleanup result')
+    except (CommandControlError, KeyboardInterrupt):
+        # The user refused the undo itself: that decision stands, unchanged.
+        _warn_undelivered(subject=subject, epoch=record['epoch'], command=command)
+        raise
+    if undo.failed:
+        raise SecretsError('guest_setup', detail=(
+            'guest identity delivery failed and the guarded revocation of '
+            f'certificate epoch {record["epoch"]} for {subject} did not '
+            'complete; revoke it with: ' + command)) from failure
+    if answer.get('revoked') is True:
+        log.info('Revoked undelivered certificate epoch {} for {}.',
+                 record['epoch'], subject)
+    else:
+        log.info('Undelivered certificate epoch {} for {} was already replaced '
+                 'or revoked; nothing to undo.', record['epoch'], subject)
 
 
 def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
                       authority_root: Path, replace: bool = False,
                       renew: bool = False, rotate_key: bool = False,
-                      uuid_reader=None) -> dict[str, Any]:
+                      uuid_reader: Callable[[str], str] | None = None,
+                      ) -> dict[str, Any]:
     """One explicitly requested and authenticated CSR enrollment transaction.
 
     The forced bootstrap private key is controlled by AIVM's machine store.
     `identity-csr` runs only fixed non-root commands in the guest and returns
     just a PKCS#10 CSR. Its host request includes a fresh nonce to reject stale
     replies. The subject is *not* taken from that reply or its CSR CN.
+
+    Every principal-account step uses the VM's pinned host key (see
+    :func:`_principal_known_hosts`). A failure after the CA issues the
+    certificate is compensated by a guarded revocation of exactly that
+    certificate; a *refusal* after issuance is never overridden by running
+    that revocation, and is re-raised once the manual undo is logged.
     """
     if (type(renew) is not bool or type(rotate_key) is not bool or
             (renew and replace) or (rotate_key and not renew)):
         raise SecretsError('invalid_policy')
-    if uuid_reader is None:
-        bound = resolve_managed_identity(context, store)
-    else:
-        bound = resolve_managed_identity(context, store, uuid_reader=uuid_reader)
+    lookup = {} if uuid_reader is None else {'uuid_reader': uuid_reader}
+    bound = resolve_managed_identity(context, store, **lookup)
     untrusted = guest_writable_roots(store)
     authority_root = Path(authority_root).expanduser().absolute()
     manager = CommandManager.current()
     status = _identity_action(manager, action='status', root=authority_root,
                               untrusted=untrusted)
+    row = _subject_row(status, bound.subject)
     renewal: tuple[int, str] | None = None
     if renew:
-        subjects = status.get('subjects')
-        row = subjects.get(bound.subject) if type(subjects) is dict else None
-        if (type(row) is not dict or row.get('active') is not True or
+        if (row is None or row.get('active') is not True or
                 type(row.get('epoch')) is not int or
                 type(row.get('certificate_sha256')) is not str):
             raise SecretsError('revoked', detail='identity is not enrolled')
         renewal = (row['epoch'], row['certificate_sha256'])
+    # Resolve the pinned principal channel before touching the guest, so an
+    # unpinned VM is refused before anything runs, let alone gets issued.
+    principal_ssh = _principal_ssh(context, store, ip)
+    if not rotate_key:
+        refreshed = manager.run(
+            [*principal_ssh, Elided(_guest_csr_refresh_script(),
+                                    're-sign guest CSR with its active key')],
+            sudo=False, role='modify', ownership='tool', capture=True,
+            check=False, timeout=30,
+            summary='Re-sign the cached guest CSR with its active key',
+        )
+        if refreshed.code:
+            raise _principal_ssh_failure(refreshed.code, 'guest CSR refresh failed')
     nonce = secrets.token_hex(16)
     csr_operation = 'identity-key-rotate-csr' if rotate_key else 'identity-csr'
     request = {'operation': csr_operation, 'guest_user': bound.guest_user,
@@ -298,6 +651,9 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
         input_text=json.dumps(request, sort_keys=True) + '\n', timeout=60,
         summary='Retrieve guest-owned CSR over the forced bootstrap channel',
     )
+    if result.code == 255:
+        raise SecretsError('guest_setup', detail=(
+            f'forced CSR bootstrap SSH failed; {_SSH_CHANNEL_HINT}'))
     if result.code:
         # Existing guests may not yet have the updated forced helper. Do not
         # fall back to interactive SSH or unauthenticated CSR retrieval.
@@ -320,17 +676,17 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
     # Check that domain incarnation and access ownership did not change while
     # the bootstrap roundtrip ran. This is a best-effort TOCTOU reduction, not
     # a proof against host administrators or guest snapshot attacks.
-    check = (resolve_managed_identity(context, store) if uuid_reader is None else
-             resolve_managed_identity(context, store, uuid_reader=uuid_reader))
-    if check != bound:
+    if resolve_managed_identity(context, store, **lookup) != bound:
         raise SecretsError('revoked', detail='VM identity changed during enrollment')
+    # A failure of the issuing child itself is settled against ``row`` in
+    # there: it may have committed a certificate before failing (MISSING-8).
     record = _isolated_enroll(manager, authority_root=authority_root,
                               subject=bound.subject, csr=csr,
                               replace=replace, untrusted=untrusted,
-                              **({'renewal': renewal} if renew else {}),
-                              **({'rotate_key': True} if rotate_key else {}))
+                              renewal=renewal, rotate_key=rotate_key,
+                              observed=row)
     try:
-        if renew and record['epoch'] != renewal[0] + 1:
+        if renewal is not None and record['epoch'] != renewal[0] + 1:
             raise SecretsError('guest_setup',
                                detail='unexpected certificate renewal epoch')
         # Obtain only public material from the isolated authority. Failure
@@ -339,36 +695,36 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
                                 subject=bound.subject, untrusted=untrusted)
         if public['certificate_sha256'] != record['certificate_sha256']:
             raise SecretsError('revoked', detail='certificate changed during enrollment')
-        script = _guest_install_script(rotate_key=rotate_key)
+        script = Elided(_guest_install_script(rotate_key=rotate_key),
+                        'SPKI-checked guest key activation' if rotate_key
+                        else 'SPKI-checked guest certificate install')
         payload = public['certificate_pem_b64'] + '\n' + public['ca_pem_b64'] + '\n'
         installed = manager.run(
-            [*_login_ssh(context, ip), script], input_text=payload,
+            [*principal_ssh, script], input_text=payload,
             sudo=False, role='modify', ownership='tool', capture=True,
             check=False, timeout=30,
             summary=('Activate guest key rotation and public certificate'
                      if rotate_key else 'Install public identity certificate and CA in guest'),
         )
         if installed.code:
-            raise SecretsError('guest_setup', detail='guest certificate install failed')
-    except Exception:
+            raise _principal_ssh_failure(installed.code,
+                                         'guest certificate install failed')
+    except (CommandControlError, KeyboardInterrupt):
+        # The user declined (or could not approve) a step after the CA issued
+        # this certificate. Running the revocation now would continue past
+        # that decision, so only say how to undo it, and re-raise unchanged.
+        _warn_undelivered(subject=bound.subject, epoch=record['epoch'],
+                          command=_manual_revoke(
+                              authority_root=authority_root, untrusted=untrusted,
+                              subject=bound.subject, epoch=record['epoch'],
+                              thumbprint=record['certificate_sha256']))
+        raise
+    except Exception as failure:
         # A delayed failure must NEVER revoke an enrollment that another
-        # operator has already replaced. Use host-locked epoch+thumbprint CAS.
-        # If the compensation itself fails, surface the unresolved state.
-        try:
-            answer = _identity_action(
-                manager, action='revoke-if-current', root=authority_root,
-                untrusted=untrusted,
-                extra=['--subject', bound.subject,
-                       '--expected-epoch', str(record['epoch']),
-                       '--expected-certificate-sha256',
-                       record['certificate_sha256']],
-            )
-            if type(answer.get('revoked')) is not bool:
-                raise SecretsError('guest_setup', detail='invalid cleanup result')
-        except Exception:
-            raise SecretsError('guest_setup',
-                detail='guest identity delivery failed; guarded revocation '
-                       'failed; manually inspect enrollment') from None
+        # operator has already replaced: the undo is epoch+thumbprint CAS.
+        _revoke_undelivered(manager, authority_root=authority_root,
+                            untrusted=untrusted, subject=bound.subject,
+                            record=record, failure=failure)
         raise
     return {'vm': bound.vm, 'domain_uuid': bound.uuid,
             'subject': bound.subject, 'principal_id': bound.principal_id,

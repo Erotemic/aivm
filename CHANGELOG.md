@@ -183,6 +183,48 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   be RFC 6749 NQSCHAR ASCII. The unshipped `garrett-oauth-v1.jsonl` corpus is
   edited in place: it grows from 70 to 148 rows, adds a `classify` action and
   changes no earlier expectation. 29 mutants cover the new checks.
+* Fix `aivm vm identity_renew` and `identity_enroll --replace` after
+  `identity_rotate_key` re-certifying the rotated-away guest key (B1). The
+  forced helper's `identity-csr` re-signs a fresh CSR with the installed
+  `client.key` on every request. Key activation moves `client.rotate.csr` over
+  `client.csr`. Before every non-rotating enrollment AIVM runs a fixed step
+  over pinned principal SSH that regenerates `client.csr` from `client.key`,
+  so guests still on the old helper also present their active key. Every
+  certificate install, not only rotation, compares the certificate's public
+  key with the key it will be used with before replacing anything; a mismatch
+  fails the install and triggers the guarded revocation.
+* The guest helper writes a first identity key, or a staged rotation key,
+  under per-request scratch names and publishes it with `ln`, which refuses an
+  existing name. Concurrent requests can no longer overwrite a key or pair it
+  with another request's CSR, and the loser of a first-key race signs with the
+  winner's key.
+* `identity_enroll`, `identity_renew`, `identity_rotate_key` and bound `aivm
+  ssh` now read the libvirt domain UUID through sudo on hosts where `virsh`
+  needs it. The read is announced, like every escalated read.
+* Principal-account SSH during identity enrollment checks the guest host key
+  strictly against the VM's pinned bootstrap `known_hosts`. On a shared
+  machine store where that file is root-only, it checks strictly against the
+  principal's own `known_hosts`, never trusting a key on first use. A failed
+  channel suggests `aivm vm access reconcile`.
+* A refusal or interrupt after a certificate is issued now propagates
+  unchanged: AIVM runs no further command and logs the exact `python -I -m
+  aivm_secrets identity revoke-if-current ...` command at WARNING. Other
+  delivery failures run the epoch+thumbprint guarded revocation, and name that
+  command if the revocation itself fails.
+* If the issuing child fails after it may have committed (timeout, crash,
+  failed audit write, malformed reply), AIVM re-reads the registry, comparing
+  certificates rather than epochs. When the subject holds a new active
+  certificate, the command fails with `outcome_unknown`, naming the subject,
+  epoch, thumbprint and guarded revocation command, and says it may be another
+  operator's concurrent enrollment. AIVM never revokes it itself. An interrupt
+  during issuance logs how to check and what to revoke.
+* Fix guarded revocation, renewal and key rotation failing for certificates
+  whose base64url thumbprint begins with `-` (about 1 in 64): every identity
+  argv now passes it as one `--expected-certificate-sha256=<thumbprint>` word.
+* `aivm vm identity_enroll/renew/rotate_key` report an expected failure as one
+  `Identity operation failed:` line with its operator detail and exit status
+  1, instead of a traceback. A declined prompt still aborts as the user's
+  decision. `VMIdentityRotateKeyCLI` is exported from `aivm.cli.vm`.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection

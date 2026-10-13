@@ -4069,6 +4069,12 @@
           "path": "aivm/secrets_identity_vm.py"
         },
         {
+          "imported": "aivm.privilege",
+          "importer": "aivm.secrets_identity_vm",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_vm.py"
+        },
+        {
           "imported": "aivm.commands",
           "importer": "aivm.secrets_transport",
           "occurrences": 1,
@@ -4235,6 +4241,12 @@
           "importer": "aivm.scoped_store",
           "occurrences": 1,
           "path": "aivm/scoped_store.py"
+        },
+        {
+          "imported": "aivm.errors",
+          "importer": "aivm.secrets_identity_transport",
+          "occurrences": 1,
+          "path": "aivm/secrets_identity_transport.py"
         },
         {
           "imported": "aivm.errors",

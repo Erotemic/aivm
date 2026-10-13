@@ -10,11 +10,17 @@ import pytest
 
 from aivm.config import AgentVMConfig
 from aivm.config_store import PrincipalEntry, Store, VMEntry
-from aivm.secrets_identity_vm import resolve_managed_identity
+from aivm.secrets_identity_vm import live_uuid, resolve_managed_identity
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.identity.garrett.vm import subject
 from aivm_secrets.identity.vm_runner import evaluate
-from tests.helpers import resolved_test_context
+from tests.helpers import (
+    FakeProc,
+    activate_manager,
+    capture_logs,
+    command_recorder,
+    resolved_test_context,
+)
 
 UUID_A = '123e4567-e89b-12d3-a456-426614174000'
 UUID_B = '123e4567-e89b-12d3-a456-426614174001'
@@ -86,3 +92,29 @@ def test_aivm_host_binding_matches_all_python_reference_vectors():
         case = json.loads(line)
         if case['expected_result']['ok']:
             assert _vm_subject(case['input']) == case['expected_result']['subject']
+
+
+@pytest.mark.parametrize('mode, libvirt_group, escalates', [
+    pytest.param('always', False, True, id='always'),
+    pytest.param('as-needed', False, True, id='as-needed-outside-libvirt-group'),
+    pytest.param('as-needed', True, False, id='as-needed-in-libvirt-group'),
+    pytest.param('never', False, False, id='never'),
+])
+def test_live_uuid_reads_system_libvirt_like_every_other_virsh_probe(
+        monkeypatch: pytest.MonkeyPatch, mode: str, libvirt_group: bool,
+        escalates: bool) -> None:
+    """B5: a host user outside the libvirt group reaches it through sudo."""
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok',
+                        lambda: libvirt_group)
+    activate_manager(monkeypatch, privilege_mode=mode)
+    rec = command_recorder(monkeypatch, {
+        'virsh domuuid': FakeProc(0, UUID_A + '\n')})
+    announced = capture_logs(monkeypatch, 'aivm.commands.log', levels=('info',))
+    assert live_uuid('lab') == UUID_A
+    assert rec.normalized == [['virsh', 'domuuid', 'lab']]
+    # The recorder normalizes the prefix away; the raw argv keeps it.
+    assert (rec.calls[0][:2] == ['sudo', '-n']) is escalates
+    # A privileged read is still announced (the sudo call-out policy); an
+    # unprivileged one is plumbing, held back for --verbose 2.
+    ran = [line for line in announced if 'domuuid' in line]
+    assert bool(ran) is escalates
