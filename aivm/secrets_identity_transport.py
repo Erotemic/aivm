@@ -840,13 +840,15 @@ def run_bound_secrets_ssh(
     lookup = {} if uuid_reader is None else {'uuid_reader': uuid_reader}
     bound = resolve_managed_identity(context, store, **lookup)
     if uuid_reader is None:
-        # The background watchdog cannot inherit this foreground command
-        # manager's approvals and must never ask the user for sudo. Before
-        # starting either credential-owning service, verify that a strictly
-        # noninteractive libvirt read works and matches the enrolled VM.
+        # Use a separate command manager for the watchdog: the foreground
+        # manager is context-local, interactive and not thread-safe. Retain
+        # its privilege policy and prove the read works before any broker
+        # holds credentials. The background check never asks for a password.
+        watcher_manager = CommandManager(
+            privilege_mode=str(CommandManager.current().privilege_mode))
         needs_sudo = virsh_needs_sudo()
         watched_uuid = lambda vm: live_uuid_unattended(
-            vm, needs_sudo=needs_sudo)
+            vm, needs_sudo=needs_sudo, manager=watcher_manager)
         if watched_uuid(bound.vm) != bound.uuid:
             raise SecretsError('revoked')
         lookup = {'uuid_reader': watched_uuid}

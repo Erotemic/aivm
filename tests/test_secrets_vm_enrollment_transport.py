@@ -192,8 +192,8 @@ def test_bound_session_refuses_unattended_uuid_failure_before_broker(
     monkeypatch.setattr(module, 'virsh_needs_sudo', lambda: True)
     observed = []
 
-    def unavailable(vm, *, needs_sudo):
-        observed.append((vm, needs_sudo))
+    def unavailable(vm, *, needs_sudo, manager):
+        observed.append((vm, needs_sudo, str(manager.privilege_mode)))
         raise SecretsError('guest_setup', detail='unattended probe refused')
 
     monkeypatch.setattr(module, 'live_uuid_unattended', unavailable)
@@ -204,7 +204,7 @@ def test_bound_session_refuses_unattended_uuid_failure_before_broker(
             identity_root=tmp_path / 'authority',
         )
     assert failure.value.code == 'guest_setup'
-    assert observed == [(bound.vm, True)]
+    assert observed == [(bound.vm, True, 'as-needed')]
     # The session was refused before the broker or its credential source
     # could be started: this fails even without a command manager fixture.
 

@@ -28,34 +28,59 @@ UUID_B = '123e4567-e89b-12d3-a456-426614174001'
 
 
 def test_unattended_uuid_uses_no_tty_and_noninteractive_sudo(monkeypatch):
-    """Watchdog reads never try to use interactive sudo from its thread."""
+    """The watcher uses CommandManager without prompting even on a TTY."""
     import aivm.secrets_identity_vm as module
+    from aivm.commands import CommandManager
     seen = []
+    manager = activate_manager(monkeypatch, isatty=True, yes_sudo=False)
 
     def fake_run(argv, **kw):
         seen.append((argv, kw))
-        return SimpleNamespace(returncode=0, stdout=UUID_A + '\n')
+        return SimpleNamespace(returncode=0, stdout=UUID_A + '\n', stderr='')
 
-    monkeypatch.setattr(module.subprocess, 'run', fake_run)
-    assert module.live_uuid_unattended('lab', needs_sudo=True) == UUID_A
-    assert module.live_uuid_unattended('lab', needs_sudo=False) == UUID_A
+    monkeypatch.setattr('aivm.commands.subprocess.run', fake_run)
+    monkeypatch.setattr(CommandManager, 'confirm_sudo_scope',
+                        lambda *a, **k: pytest.fail('watchdog prompted for sudo'))
+    assert module.live_uuid_unattended(
+        'lab', needs_sudo=True, manager=manager) == UUID_A
+    assert module.live_uuid_unattended(
+        'lab', needs_sudo=False, manager=manager) == UUID_A
     assert seen[0][0] == ['sudo', '-n', 'virsh', '-c', 'qemu:///system',
                           'domuuid', 'lab']
     assert seen[1][0] == ['virsh', '-c', 'qemu:///system', 'domuuid', 'lab']
     for _, options in seen:
-        assert options['stdin'] is module.subprocess.DEVNULL
+        # Sending an empty input closes stdin rather than inheriting a TTY.
+        assert options['input'] == ''
         assert options['timeout'] <= 15
         assert options['capture_output'] is True
 
 
 def test_unattended_uuid_failure_is_not_a_cached_identity(monkeypatch):
     import aivm.secrets_identity_vm as module
-    monkeypatch.setattr(module.subprocess, 'run',
-                        lambda *a, **k: SimpleNamespace(returncode=1, stdout=''))
+    manager = activate_manager(monkeypatch, isatty=True, yes_sudo=False)
+    monkeypatch.setattr('aivm.commands.subprocess.run',
+                        lambda *a, **k: SimpleNamespace(
+                            returncode=1, stdout='', stderr='permission denied'))
     with pytest.raises(SecretsError) as error:
-        module.live_uuid_unattended('lab', needs_sudo=True)
+        module.live_uuid_unattended(
+            'lab', needs_sudo=True, manager=manager)
     assert error.value.code == 'guest_setup'
     assert 'unattended' in error.value.detail
+
+
+def test_unattended_uuid_respects_never_sudo_policy(monkeypatch):
+    """Noninteractive probes cannot bypass the caller's never-sudo policy."""
+    import aivm.secrets_identity_vm as module
+    manager = activate_manager(monkeypatch, privilege_mode='never',
+                               yes_sudo=False)
+    calls = []
+    monkeypatch.setattr('aivm.commands.subprocess.run',
+                        lambda *a, **k: calls.append(a) or None)
+    with pytest.raises(SecretsError) as error:
+        module.live_uuid_unattended(
+            'lab', needs_sudo=True, manager=manager)
+    assert error.value.code == 'guest_setup'
+    assert calls == []
 
 
 def sample():

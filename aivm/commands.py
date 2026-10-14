@@ -975,6 +975,8 @@ class CommandManager:
         # has already been shown to have no usable sudo, turning one clear
         # failure into a run of identical ones.
         self._sudo_unavailable_result: CommandResult | None = None
+        # Periodic unattended reads are announced once, not every poll.
+        self._announced_unattended_reads: set[tuple[str, ...]] = set()
         # Scratch space for modules to memoize read-only probe results
         # (e.g. domain XML) for the lifetime of this manager. Entries are
         # expected to be validated against ``mutation_generation`` so any
@@ -1220,6 +1222,37 @@ class CommandManager:
         return self._submit_request(
             request, eager=True, _stacklevel=2
         ).result(_stacklevel=2)
+
+    def run_unattended_read(
+        self,
+        cmd: Sequence[str],
+        *,
+        sudo: bool = False,
+        timeout: float = 15,
+        summary: str = '',
+    ) -> CommandResult:
+        """Run a trusted, read-only probe without a prompt or inherited stdin.
+
+        This is for a foreground-preflighted background watcher, not a way to
+        bypass sudo policy. Enforce ``privilege_mode=never`` before constructing
+        a literal ``sudo -n`` argv. Hand execution back to ``run`` so command
+        authority and subprocess handling remain centralized.
+        """
+        self._reject_sudo_if_forbidden(cmd, needs_sudo=sudo)
+        argv = list(cmd)
+        if sudo and os.geteuid() != 0:
+            argv = ['sudo', '-n', *argv]
+            # The watchdog repeats this read often. Announce the exact sudo
+            # command once at INFO and leave subsequent invocations at DEBUG.
+            command = tuple(argv)
+            if command not in self._announced_unattended_reads:
+                log.info('Recurring unattended sudo read:\n{}', shell_join(argv))
+                self._announced_unattended_reads.add(command)
+        return self.run(
+            argv, sudo=False, role='read', ownership='tool',
+            capture=True, check=False, input_text='', timeout=timeout,
+            summary=summary,
+        )
 
     def _preview_request(
         self, request: CommandRequest, *, _stacklevel: int = 1

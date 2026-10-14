@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Callable
 from aivm_secrets.errors import SecretsError
 
 from .commands import CommandManager
+from .errors import CommandControlError
 from .config_store import find_principal, load_store
 from .privilege import virsh_needs_sudo
 from .runtime import virsh_cmd
@@ -72,33 +72,26 @@ def live_uuid(name: str) -> str:
     return candidate
 
 
-def live_uuid_unattended(name: str, *, needs_sudo: bool) -> str:
-    """Read libvirt's UUID without a terminal, prompt or command manager.
+def live_uuid_unattended(
+    name: str, *, needs_sudo: bool, manager: CommandManager,
+) -> str:
+    """Check the live UUID through an isolated, non-prompting command manager.
 
-    An opt-in bound SSH session uses this in a background identity watcher.
-    The manager is context-local and may prompt in an interactive shell;
-    recreating it on a worker thread changes the privilege policy. Instead,
-    choose escalation on the foreground thread, and use only ``sudo -n``
-    thereafter. The foreground launcher also probes this path *before*
-    starting a broker, so an unusable unattended permission fails closed
-    before issuing any capability. For a long session, use group access or
-    narrowly scoped NOPASSWD permission rather than a sudo timestamp.
+    The foreground launcher constructs this manager with its own privilege
+    policy and proves the probe works before starting credential services.
+    The watchdog then reuses it, separately from the interactive manager.
     """
-    argv = virsh_cmd('domuuid', name)
-    if needs_sudo:
-        argv = ['sudo', '-n', *argv]
     try:
-        result = subprocess.run(
-            argv, check=False, capture_output=True, text=True,
-            stdin=subprocess.DEVNULL, timeout=15,
-            env={**os.environ, 'LC_ALL': 'C'},
+        result = manager.run_unattended_read(
+            virsh_cmd('domuuid', name), sudo=needs_sudo, timeout=15,
+            summary='Check managed VM identity without interactive privileges',
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, CommandControlError):
         raise SecretsError('guest_setup', detail=(
             'unattended libvirt UUID check unavailable; grant this operator '
             'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
         )) from None
-    if result.returncode:
+    if result.code:
         raise SecretsError('guest_setup', detail=(
             'unattended libvirt UUID check refused; grant this operator '
             'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
