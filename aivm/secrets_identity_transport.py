@@ -733,9 +733,16 @@ def enroll_managed_vm(*, context: ResolvedVMContext, store: Path, ip: str,
 
 
 def _bridge_process(manager: CommandManager, *, authority_root: Path,
-                    broker_socket: Path, listen: Path,
+                    broker_socket: Path, listen: Path, subject: str,
                     untrusted: tuple[Path, ...], idle_seconds: int):
-    """Run the credential-related bridge under a fresh isolated interpreter."""
+    """Run the credential-related bridge under a fresh isolated interpreter.
+
+    The bridge serves exactly one VM, so it is pinned to that VM's subject: a
+    presentation for any other enrolled subject is refused before dispatch.
+    It has no connection cap -- its idle timeout and the stdin lease bound its
+    lifetime -- because a cap would end a healthy session after a fixed
+    number of guest commands.
+    """
     import select
     import sys
     import time
@@ -745,7 +752,7 @@ def _bridge_process(manager: CommandManager, *, authority_root: Path,
            'identity', 'bridge', '--root', str(authority_root),
            '--broker-socket', str(broker_socket), '--listen', str(listen),
            '--idle-seconds', str(min(3600, max(60, idle_seconds))),
-           '--max-connections', '256', '--exit-on-stdin-eof']
+           f'--subject={subject}', '--exit-on-stdin-eof']
     for root in untrusted:
         cmd += ['--untrusted-root', str(root)]
     child = manager.spawn(
@@ -769,7 +776,8 @@ def _bridge_process(manager: CommandManager, *, authority_root: Path,
                 raise SecretsError('guest_setup', detail='identity bridge exited')
             data += chunk
         ready = json.loads(data.decode('utf-8'))
-        if type(ready) is not dict or ready.get('listening') != str(listen):
+        if (type(ready) is not dict or ready.get('listening') != str(listen)
+                or ready.get('subject') != subject):
             raise SecretsError('guest_setup', detail='invalid identity bridge readiness')
         if child.poll() is not None:
             raise SecretsError('guest_setup', detail='identity bridge exited')
@@ -877,7 +885,7 @@ def run_bound_secrets_ssh(
         bound_socket = info.socket.parent / 'identity.sock'
         bridge = _bridge_process(
             manager, authority_root=authority_root, broker_socket=info.socket,
-            listen=bound_socket, untrusted=untrusted,
+            listen=bound_socket, subject=bound.subject, untrusted=untrusted,
             idle_seconds=info.lifetime_seconds + 60,
         )
         guest_dir = f'/tmp/aivm-bound-{info.channel}'

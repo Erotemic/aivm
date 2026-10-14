@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 import pytest
 
@@ -1163,3 +1163,70 @@ def test_renewal_of_a_certificate_whose_thumbprint_begins_with_a_dash(
     row = world.row()
     assert row is not None and row['active'] is True
     assert row['certificate_sha256'] == renewed['certificate_sha256']
+
+
+class _SpawnRecorder:
+    """Stands in for the manager at its ``spawn`` process boundary.
+
+    The bridge child is a real process that announces readiness and then
+    holds its stdin lease, so the launcher's handshake and shutdown run for
+    real; only the program it executes is replaced.
+    """
+
+    def __init__(self, announced_subject: str):
+        self.argv: list[list[str]] = []
+        self.announced_subject = announced_subject
+        self.processes: list[Any] = []
+
+    def spawn(self, cmd: Sequence[str], **kwargs: Any) -> Any:
+        import subprocess
+
+        from aivm.commands import SupervisedProcess
+
+        self.argv.append([str(part) for part in cmd])
+        listen = next(part.split('=', 1)[1] if '=' in part else cmd[i + 1]
+                      for i, part in enumerate(cmd)
+                      if part == '--listen' or part.startswith('--listen='))
+        ready = json.dumps({'listening': listen, 'max_connections': None,
+                            'idle_seconds': 900,
+                            'subject': self.announced_subject})
+        process = subprocess.Popen(
+            [sys.executable, '-c',
+             f'import sys; print({ready!r}, flush=True); sys.stdin.read()'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.processes.append(process)
+        return SupervisedProcess(process)
+
+
+@pytest.mark.parametrize('announced,accepted', [
+    pytest.param('subject-a', True, id='bridge-pinned-to-its-subject'),
+    pytest.param('subject-b', False, id='bridge-pinned-elsewhere-is-refused'),
+])  # fmt: skip
+def test_bound_bridge_is_pinned_to_its_subject_without_a_connection_cap(
+    tmp_path: Path, announced: str, accepted: bool,
+) -> None:
+    from aivm import secrets_identity_transport as module
+
+    recorder = _SpawnRecorder(announced)
+    listen = tmp_path / 'identity.sock'
+
+    def launch() -> Any:
+        return module._bridge_process(
+            cast(CommandManager, recorder),
+            authority_root=tmp_path / 'authority',
+            broker_socket=tmp_path / 'broker.sock', listen=listen,
+            subject='subject-a', untrusted=(), idle_seconds=600)
+
+    if accepted:
+        bridge = launch()
+        bridge.stop()
+    else:
+        with pytest.raises(SecretsError) as caught:
+            launch()
+        assert caught.value.code == 'guest_setup'
+    [argv] = recorder.argv
+    assert '--subject=subject-a' in argv
+    assert not any(part.startswith('--max-connections') for part in argv)
+    # Accepted or refused, the lease is released and the child is gone.
+    [process] = recorder.processes
+    assert process.wait(timeout=10) == 0

@@ -225,6 +225,10 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `Identity operation failed:` line with its operator detail and exit status
   1, instead of a traceback. A declined prompt still aborts as the user's
   decision. `VMIdentityRotateKeyCLI` is exported from `aivm.cli.vm`.
+* Pin the bound-session identity bridge to its VM's subject and drop its
+  256-connection cap, which ended a healthy `aivm ssh --secrets_identity_root`
+  session after about 128 guest commands; the launcher also refuses a bridge
+  whose readiness names a different subject.
 
 ### Single-active Garrett CA generations (pre-deployment)
 * Replace the flat, original host CA and implicit issuer/server selection
