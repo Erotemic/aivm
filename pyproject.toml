@@ -149,7 +149,7 @@ rules.unused-ignore-comment = "ignore"
 rules.unused-type-ignore-comment = "ignore"
 
 [tool.pytest]
-ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
+ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs --ignore-glob=submodules"
 ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
 ini_options.markers = [
   "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",
