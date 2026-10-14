@@ -181,6 +181,34 @@ def test_bootstrap_nonce_mismatch_does_not_issue_certificate(tmp_path, monkeypat
     assert IdentityAuthority(authority_root).status()['subjects'] == {}
 
 
+def test_bound_session_refuses_unattended_uuid_failure_before_broker(
+    tmp_path, monkeypatch,
+):
+    import aivm.secrets_identity_transport as module
+    context, bound, store = fixture_context(tmp_path)
+    session = SimpleNamespace(context=context, reg_path=store, ip='10.0.0.2')
+    monkeypatch.setattr(module, 'resolve_managed_identity',
+                        lambda *args, **kwargs: bound)
+    monkeypatch.setattr(module, 'virsh_needs_sudo', lambda: True)
+    observed = []
+
+    def unavailable(vm, *, needs_sudo):
+        observed.append((vm, needs_sudo))
+        raise SecretsError('guest_setup', detail='unattended probe refused')
+
+    monkeypatch.setattr(module, 'live_uuid_unattended', unavailable)
+    with pytest.raises(SecretsError) as failure:
+        run_bound_secrets_ssh(
+            session, ['ssh', 'lab-agent@10.0.0.2', 'true'],
+            policy_path=tmp_path / 'policy',
+            identity_root=tmp_path / 'authority',
+        )
+    assert failure.value.code == 'guest_setup'
+    assert observed == [(bound.vm, True)]
+    # The session was refused before the broker or its credential source
+    # could be started: this fails even without a command manager fixture.
+
+
 def test_bound_session_forwards_no_unbound_socket_and_revokes(tmp_path, monkeypatch):
     import aivm.secrets_identity_transport as module
     import aivm.secrets_transport as transport

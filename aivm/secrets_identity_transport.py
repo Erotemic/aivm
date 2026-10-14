@@ -31,7 +31,10 @@ from .enrollment import BOOTSTRAP_GUEST_USER, require_bootstrap_identity
 from .errors import CommandControlError
 from .runtime import require_ssh_identity, ssh_base_args
 from .scoped_store import resolve_store_scope
-from .secrets_identity_vm import ManagedIdentity, resolve_managed_identity
+from .secrets_identity_vm import (
+    ManagedIdentity, live_uuid_unattended, resolve_managed_identity,
+)
+from .privilege import virsh_needs_sudo
 
 
 def guest_writable_roots(store: Path) -> tuple[Path, ...]:
@@ -836,6 +839,17 @@ def run_bound_secrets_ssh(
     store = Path(session.reg_path)
     lookup = {} if uuid_reader is None else {'uuid_reader': uuid_reader}
     bound = resolve_managed_identity(context, store, **lookup)
+    if uuid_reader is None:
+        # The background watchdog cannot inherit this foreground command
+        # manager's approvals and must never ask the user for sudo. Before
+        # starting either credential-owning service, verify that a strictly
+        # noninteractive libvirt read works and matches the enrolled VM.
+        needs_sudo = virsh_needs_sudo()
+        watched_uuid = lambda vm: live_uuid_unattended(
+            vm, needs_sudo=needs_sudo)
+        if watched_uuid(bound.vm) != bound.uuid:
+            raise SecretsError('revoked')
+        lookup = {'uuid_reader': watched_uuid}
     untrusted = (*guest_writable_roots(store), session.host_src,
                  Path(session.share_source_dir))
     manager = CommandManager.current()

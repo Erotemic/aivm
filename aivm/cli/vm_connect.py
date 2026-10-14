@@ -912,35 +912,34 @@ class VMSSHCLI(_BaseCommand):
             from ..secrets_transport import run_secrets_ssh
 
             try:
-                executor = run_secrets_ssh
+                policy = Path(args.secrets_policy)
+                token_file = (
+                    Path(args.secrets_token_file)
+                    if args.secrets_token_file else None
+                )
+                still_authorized = partial(
+                    _access_identity_still_usable, args.config, session
+                )
                 if args.secrets_identity_root:
                     from ..secrets_identity_transport import run_bound_secrets_ssh
-                    executor = run_bound_secrets_ssh
-                identity_kwargs = (
-                    {
-                        'identity_root': Path(args.secrets_identity_root),
-                        'oauth_vault': Path(args.secrets_oauth_vault)
-                            if args.secrets_oauth_vault else None,
-                        'oauth_provider_config': Path(args.secrets_oauth_provider_config)
-                            if args.secrets_oauth_provider_config else None,
-                    }
-                    if args.secrets_identity_root else {}
-                )
-                ssh_result = executor(
-                    session,
-                    ssh_cmd,
-                    policy_path=Path(args.secrets_policy),
-                    token_file=(
-                        Path(args.secrets_token_file)
-                        if args.secrets_token_file
-                        else None
-                    ),
-                    writes=args.secrets_writes,
-                    still_authorized=partial(
-                        _access_identity_still_usable, args.config, session
-                    ),
-                    **identity_kwargs,
-                )
+
+                    ssh_result = run_bound_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        identity_root=Path(args.secrets_identity_root),
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                        oauth_vault=(Path(args.secrets_oauth_vault)
+                                     if args.secrets_oauth_vault else None),
+                        oauth_provider_config=(
+                            Path(args.secrets_oauth_provider_config)
+                            if args.secrets_oauth_provider_config else None),
+                    )
+                else:
+                    ssh_result = run_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                    )
             except SecretsError as ex:
                 log.error('Secret session failed: {}', ex.for_operator())
                 return 1

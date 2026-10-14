@@ -745,6 +745,25 @@ def cli_env(root: Path, **extra: str) -> dict[str, str]:
     return env
 
 
+def isolated_broker_install_root() -> Path:
+    """Find the source tree imported by the *isolated broker process*.
+
+    With a built sdist, the parent pytest process often imports from the
+    checkout while ``python -I`` runs the installed copy. Security tests
+    must mark the latter as untrusted, not a different checkout path.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, '-I', '-c',
+         'from pathlib import Path; import aivm_secrets; '
+         'print(Path(aivm_secrets.__file__).resolve().parent.parent)'],
+        check=True, capture_output=True, text=True, cwd='/', timeout=20,
+    )
+    return Path(result.stdout.strip())
+
+
 def run_cli_process(
     argv: list[str], *, env: dict[str, str], input: str | None = None
 ) -> Any:

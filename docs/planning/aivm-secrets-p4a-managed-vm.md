@@ -225,6 +225,11 @@ against real libvirt/SSH hardware in this environment.**
 - **Changing access principal state:** the session watchdog stops its broker,
   including if the persisted access principal is disabled during the shell.
   Watchdog polling has a delay and is not an atomic revocation fence.
+  It uses noninteractive libvirt UUID reads, preflighted before broker launch.
+  On hosts requiring sudo, ``sudo -n virsh domuuid`` must work for the entire
+  session (prefer libvirt group access or a narrowly scoped NOPASSWD rule);
+  an expired password cache causes fail-closed session shutdown after three
+  unsuccessful probes. The background watcher never opens an approval prompt.
 - **Guest logout, crash, SSH loss, broker crash:** the bridge and broker
   processes close on lease end. Guest cleanup is best effort; stale sealed
   material has no live host credential executor when both services have exited.

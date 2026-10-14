@@ -693,7 +693,14 @@ Every principal-account SSH step of enrollment checks the guest's host key
 strictly against the VM's pinned bootstrap ``known_hosts`` -- or, on a shared
 machine store where that file is root-only, against your own
 ``known_hosts`` -- never trusting a key on first use. The live libvirt UUID
-read runs through sudo, announced, on hosts where ``virsh`` needs it. An
+read runs through sudo, announced, on hosts where ``virsh`` needs it. A
+certificate-bound session also needs **unattended read access** to
+``qemu:///system`` for its running identity watchdog: the foreground launcher
+checks this before issuing a session capability, and the watchdog uses only
+``sudo -n``, never a password prompt. Use direct libvirt group access or a
+narrowly scoped ``NOPASSWD`` permission for ``virsh domuuid``. A cached sudo
+password may expire mid-session, in which case the broker fails closed after
+three unsuccessful polls. Ordinary ``aivm ssh`` needs none of this. An
 expected failure (an old forced helper, an unpinned host key, a renewal
 conflict, a changed domain UUID) prints one ``Identity operation failed:``
 line with its operator detail and exits with status 1; a declined prompt

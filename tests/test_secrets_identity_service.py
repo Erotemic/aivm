@@ -29,6 +29,7 @@ import pytest
 from aivm_secrets import guest
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.server import LocalServer, read_frame
+from aivm_secrets.identity import client as identity_client
 from aivm_secrets.identity import service as bridge_service
 from aivm_secrets.identity.client import bound_call
 from aivm_secrets.identity.enrollment import IdentityAuthority
@@ -852,6 +853,94 @@ def test_a_refused_connect_is_internal_error_and_sends_nothing(
             reply = ask(listen, alpha)
     assert reply['error']['code'] == 'internal_error'
     assert fake.frames == []
+
+
+def test_broker_sendall_failure_after_complete_frame_is_outcome_unknown(
+    short_root: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sendall exception does not prove that the broker lacked a frame."""
+    with FakeBroker(short_root / 'session') as fake:
+        proxy = bridge_service.LocalBrokerProxy(fake.path)
+        real_socket = socket.socket
+
+        class SendThenFail:
+            def __init__(self, *args: Any):
+                self.connection = real_socket(*args)
+
+            def __enter__(self) -> 'SendThenFail':
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                self.connection.close()
+
+            def settimeout(self, timeout: float) -> None:
+                self.connection.settimeout(timeout)
+
+            def connect(self, path: str) -> None:
+                self.connection.connect(path)
+
+            def sendall(self, data: bytes) -> None:
+                self.connection.sendall(data)
+                raise OSError('injected: all bytes sent, reply lost')
+
+        class SocketFactory:
+            AF_UNIX = socket.AF_UNIX
+            SOCK_STREAM = socket.SOCK_STREAM
+
+            @staticmethod
+            def socket(*args: Any) -> SendThenFail:
+                return SendThenFail(*args)
+
+        monkeypatch.setattr(bridge_service, 'socket', SocketFactory)
+        with pytest.raises(SecretsError) as failed:
+            proxy.handle(b'{"operation":"read"}')
+        assert failed.value.code == 'outcome_unknown'
+        wait_for(lambda: fake.frames)
+        assert fake.frames == [b'{"operation":"read"}\n']
+
+
+def test_client_sendall_failure_after_frame_is_outcome_unknown(
+    short_root: Path, host: tuple[IdentityAuthority, Identity],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TLS write may have reached the bridge even when sendall raises."""
+    authority, alpha = host
+    with FakeBroker(short_root / 'session',
+                    respond=lambda _: b'{"version":1,"ok":true}\n') as fake:
+        with serving(UnixIdentityService(
+                authority=authority, broker_socket=fake.path,
+                listen=short_root / 'bridge' / 'id.sock')) as listen:
+            original = ssl.SSLSocket.sendall
+
+            def sent_then_failed(channel: ssl.SSLSocket,
+                                 data: bytes, flags: int = 0) -> None:
+                original(channel, data, flags)
+                # Do not disturb the bridge's reply writer on its worker.
+                if threading.current_thread() is threading.main_thread():
+                    raise OSError('injected: sent TLS application data')
+
+            with monkeypatch.context() as patch:
+                patch.setattr(ssl.SSLSocket, 'sendall', sent_then_failed)
+                with pytest.raises(SecretsError) as failed:
+                    identity_client.bound_call(
+                        socket_path=listen, ca=authority.tls_paths()[2],
+                        certificate=alpha.certificate,
+                        private_key=alpha.key, jwt_file=alpha.jwt,
+                        request=PROFILE)
+            assert failed.value.code == 'outcome_unknown'
+            wait_for(lambda: fake.frames)
+    assert len(fake.frames) == 1
+    assert json.loads(fake.frames[0])['request'] == PROFILE
+
+
+def test_only_certificate_alerts_prove_handshake_refusal() -> None:
+    failure = ssl.SSLError(ssl.SSL_ERROR_SSL, 'synthetic')
+    failure.reason = 'TLSV1_ALERT_UNKNOWN_CA'
+    assert identity_client._refused_handshake(failure)
+    failure.reason = 'SSLV3_ALERT_HANDSHAKE_FAILURE'
+    assert not identity_client._refused_handshake(failure)
+    failure.reason = 'SSLV3_ALERT_BAD_RECORD_MAC'
+    assert not identity_client._refused_handshake(failure)
 
 
 def test_two_callers_are_forwarded_to_the_broker_at_once(

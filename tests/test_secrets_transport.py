@@ -42,6 +42,7 @@ from tests.secrets_helpers import (
     TOKEN,
     TLSService,
     github_policy,
+    isolated_broker_install_root,
     poison,
     ran_as_broker,
     write_policy_file,
@@ -50,6 +51,7 @@ from tests.secrets_helpers import (
 
 # Wherever the broker under test is installed: a checkout or site-packages.
 INSTALL_ROOT = Path(aivm_secrets.__file__).resolve().parent.parent
+ISOLATED_INSTALL_ROOT = isolated_broker_install_root()
 
 
 class LocalGuest:
@@ -484,7 +486,8 @@ def test_adapter_rejects_shared_credential_and_resolver(world):
 def test_adapter_refuses_a_broker_installed_from_the_shared_workspace(world):
     """Dogfooding guard: an editable install inside the attached folder."""
     session = replace(
-        world.session, host_src=INSTALL_ROOT, share_source_dir=str(INSTALL_ROOT)
+        world.session, host_src=ISOLATED_INSTALL_ROOT,
+        share_source_dir=str(ISOLATED_INSTALL_ROOT),
     )
     with pytest.raises(SecretsError) as caught:
         run_secrets_ssh(

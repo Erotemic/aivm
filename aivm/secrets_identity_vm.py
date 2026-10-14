@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,47 @@ def live_uuid(name: str) -> str:
     if reply.code:
         raise SecretsError('guest_setup', detail='libvirt UUID unavailable')
     candidate = reply.stdout.strip()
+    try:
+        parsed = uuid.UUID(candidate)
+    except (ValueError, AttributeError):
+        raise SecretsError('guest_setup', detail='invalid libvirt UUID') from None
+    if str(parsed) != candidate:
+        raise SecretsError('guest_setup', detail='noncanonical libvirt UUID')
+    return candidate
+
+
+def live_uuid_unattended(name: str, *, needs_sudo: bool) -> str:
+    """Read libvirt's UUID without a terminal, prompt or command manager.
+
+    An opt-in bound SSH session uses this in a background identity watcher.
+    The manager is context-local and may prompt in an interactive shell;
+    recreating it on a worker thread changes the privilege policy. Instead,
+    choose escalation on the foreground thread, and use only ``sudo -n``
+    thereafter. The foreground launcher also probes this path *before*
+    starting a broker, so an unusable unattended permission fails closed
+    before issuing any capability. For a long session, use group access or
+    narrowly scoped NOPASSWD permission rather than a sudo timestamp.
+    """
+    argv = virsh_cmd('domuuid', name)
+    if needs_sudo:
+        argv = ['sudo', '-n', *argv]
+    try:
+        result = subprocess.run(
+            argv, check=False, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=15,
+            env={**os.environ, 'LC_ALL': 'C'},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise SecretsError('guest_setup', detail=(
+            'unattended libvirt UUID check unavailable; grant this operator '
+            'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
+        )) from None
+    if result.returncode:
+        raise SecretsError('guest_setup', detail=(
+            'unattended libvirt UUID check refused; grant this operator '
+            'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
+        ))
+    candidate = result.stdout.strip()
     try:
         parsed = uuid.UUID(candidate)
     except (ValueError, AttributeError):

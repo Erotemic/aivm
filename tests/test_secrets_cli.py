@@ -27,6 +27,7 @@ from tests.secrets_helpers import (
     ServeProcess,
     TLSService,
     cli_env,
+    isolated_broker_install_root,
     github_policy,
     https_policy,
     poison,
@@ -37,8 +38,6 @@ from tests.secrets_helpers import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Wherever the package under test is installed: a checkout or site-packages.
-INSTALL_ROOT = Path(cli.__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -396,7 +395,8 @@ def test_serve_refuses_anything_inside_a_guest_writable_root(world):
             error['code'] == 'shared_source' and 'credential' in error['detail']
         )
     # The broker's own code: an editable install from a shared checkout.
-    error, _ = refused(world, '--untrusted-root', str(INSTALL_ROOT))
+    error, _ = refused(
+        world, '--untrusted-root', str(isolated_broker_install_root()))
     assert error['code'] == 'shared_source' and 'broker code' in error['detail']
     # ...or its interpreter and libraries: a virtualenv inside the workspace.
     error, _ = refused(world, '--untrusted-root', sys.prefix)

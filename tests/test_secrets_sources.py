@@ -12,6 +12,7 @@ import pytest
 
 from aivm_secrets.errors import SecretsError
 from aivm_secrets.host import sources
+from aivm_secrets.host.files import verify_program
 from aivm_secrets.host.sources import (
     credential_from_command,
     credential_from_file,
@@ -22,7 +23,25 @@ from aivm_secrets.kernel.presets import GH_SOURCE
 from tests.secrets_helpers import write_private
 
 TOKEN = 'NOT_REAL_generic_host_command_token_1234'
-PYTHON = sys.executable
+def _trusted_test_python() -> str:
+    """Use a Python executable whose entire path passes the real policy.
+
+    Hosted CI can install its Python under a world-writable ``/opt``. That
+    interpreter correctly cannot be a secrets resolver. The system Python
+    runs these stdlib-only subprocess fixtures instead, while the security
+    checks on the real credential path stay unchanged.
+    """
+    for candidate in (sys.executable, '/usr/bin/python3', '/usr/bin/python'):
+        try:
+            return str(verify_program(Path(candidate)))
+        except SecretsError:
+            continue
+    return ''
+
+
+PYTHON = _trusted_test_python()
+if not PYTHON:
+    raise RuntimeError('secrets resolver tests need a trusted Python interpreter')
 
 
 def failed(call, *args, code='credential_source', **kwargs):

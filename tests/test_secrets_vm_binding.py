@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,37 @@ from tests.helpers import (
 
 UUID_A = '123e4567-e89b-12d3-a456-426614174000'
 UUID_B = '123e4567-e89b-12d3-a456-426614174001'
+
+
+def test_unattended_uuid_uses_no_tty_and_noninteractive_sudo(monkeypatch):
+    """Watchdog reads never try to use interactive sudo from its thread."""
+    import aivm.secrets_identity_vm as module
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append((argv, kw))
+        return SimpleNamespace(returncode=0, stdout=UUID_A + '\n')
+
+    monkeypatch.setattr(module.subprocess, 'run', fake_run)
+    assert module.live_uuid_unattended('lab', needs_sudo=True) == UUID_A
+    assert module.live_uuid_unattended('lab', needs_sudo=False) == UUID_A
+    assert seen[0][0] == ['sudo', '-n', 'virsh', '-c', 'qemu:///system',
+                          'domuuid', 'lab']
+    assert seen[1][0] == ['virsh', '-c', 'qemu:///system', 'domuuid', 'lab']
+    for _, options in seen:
+        assert options['stdin'] is module.subprocess.DEVNULL
+        assert options['timeout'] <= 15
+        assert options['capture_output'] is True
+
+
+def test_unattended_uuid_failure_is_not_a_cached_identity(monkeypatch):
+    import aivm.secrets_identity_vm as module
+    monkeypatch.setattr(module.subprocess, 'run',
+                        lambda *a, **k: SimpleNamespace(returncode=1, stdout=''))
+    with pytest.raises(SecretsError) as error:
+        module.live_uuid_unattended('lab', needs_sudo=True)
+    assert error.value.code == 'guest_setup'
+    assert 'unattended' in error.value.detail
 
 
 def sample():

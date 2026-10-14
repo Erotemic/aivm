@@ -94,14 +94,12 @@ class LocalBrokerProxy:
     def handle(self, data: bytes) -> dict[str, Any]:
         """Forward one frame and report honestly what is known of its fate.
 
-        Until the whole frame, newline included, has been handed to the
-        kernel, the broker cannot have a request to act on (it only parses a
-        complete line), so a failure is ``internal_error``: nothing was
-        dispatched. From then on the broker may be executing it -- a write,
-        for all the bridge can tell -- so a timeout, EOF, reset or unusable
-        reply is ``outcome_unknown``. It is never ``invalid_request``: telling
-        a caller its request was malformed invites a retry of a write that
-        may already have been applied.
+        Before connecting, no request was dispatched, so a failure is
+        ``internal_error``. Once sending begins, even ``sendall`` failure is
+        ``outcome_unknown``: the API does not expose how many bytes reached
+        the kernel, and the broker might have received a full frame. A lost,
+        timed-out or unusable reply is unknown for the same reason. Never
+        invite a retry of a write that may already have been applied.
         """
         # The socket is judged again on every call: it may have been swapped
         # for a link or loosened since the bridge started.
@@ -114,9 +112,16 @@ class LocalBrokerProxy:
             try:
                 conn.settimeout(CONNECT_TIMEOUT)
                 conn.connect(str(self.path))
+            except OSError:
+                # Nothing has crossed the broker boundary yet.
+                raise SecretsError('internal_error') from None
+            try:
                 conn.sendall(data + b'\n')
             except OSError:
-                raise SecretsError('internal_error') from None
+                # sendall can write some or all bytes before failing. It does
+                # not report a byte count, so the broker might already have
+                # received and executed a complete newline-terminated frame.
+                raise SecretsError('outcome_unknown') from None
             try:
                 # A reply is a bounded provider response plus an envelope:
                 # far larger than any request frame.

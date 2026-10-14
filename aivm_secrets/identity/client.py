@@ -19,25 +19,32 @@ from ..transport.framing import (
 )
 from ..primitives import codec, wire
 
-# How OpenSSL names a TLS alert *received from the peer*. A fault this side
-# detects (a bad record, an unexpected EOF) is named otherwise.
-_PEER_ALERT = ('SSLV3_ALERT_', 'TLSV1_ALERT_', 'TLSV13_ALERT_')
+# Certificate-refusal alerts mean the bridge rejected the mTLS handshake
+# before reading an application frame. Other TLS alerts might be raised
+# *after* dispatch and must not be mistaken for a definite non-dispatch.
+_CERTIFICATE_REFUSAL_ALERTS = frozenset({
+    'SSLV3_ALERT_BAD_CERTIFICATE',
+    'SSLV3_ALERT_UNSUPPORTED_CERTIFICATE',
+    'SSLV3_ALERT_CERTIFICATE_REVOKED',
+    'SSLV3_ALERT_CERTIFICATE_EXPIRED',
+    'SSLV3_ALERT_CERTIFICATE_UNKNOWN',
+    'TLSV1_ALERT_UNKNOWN_CA',
+    'TLSV1_ALERT_CERTIFICATE_REQUIRED',
+})
 
 
 def _refused_handshake(error: ssl.SSLError) -> bool:
     """Whether the bridge refused this client's certificate.
 
-    In TLS 1.3 the client's side of the handshake completes before the server
-    has judged the client certificate, so a refusal (an unknown CA, an
-    expired or wrong certificate) arrives as an alert on the first read,
-    after the frame was sent. Only the bridge's handshake sends an alert
-    (``identity/mtls.py``), and it reads nothing before its handshake
-    succeeds, so such an alert means nothing was dispatched.
+    TLS 1.3 can report a peer's certificate refusal on the first reply
+    read, after our send has returned. Only explicit certificate-validation
+    alerts establish that the bridge never read the application frame;
+    generic peer alerts do not.
     """
     if isinstance(error, (ssl.SSLEOFError, ssl.SSLZeroReturnError)):
         return False  # A hang-up, not a verdict.
     reason = error.reason
-    return type(reason) is str and reason.startswith(_PEER_ALERT)
+    return type(reason) is str and reason in _CERTIFICATE_REFUSAL_ALERTS
 
 
 def _read_reply(channel: ssl.SSLSocket, deadline: float) -> bytes:
@@ -72,11 +79,11 @@ def bound_call(*, socket_path: Path, ca: Path, certificate: Path,
                reply_deadline: float = RELAYED_REPLY_DEADLINE) -> dict[str, Any]:
     """One framed call; caller supplies no server identity or TLS override.
 
-    Before the frame is sent, a failure is ``unreachable``: nothing left this
-    process. So is the bridge refusing this client's certificate, which in
-    TLS 1.3 is only seen on the first read: it refuses before reading
-    anything. Otherwise, once the frame is sent the bridge and broker may be
-    acting on it, so a timeout, EOF, reset or unusable reply is
+    Before a send is attempted, a failure is ``unreachable``: nothing left
+    this process. So is a *specific certificate-refusal alert* received on
+    the first read: the bridge refused the handshake before reading a frame.
+    Once a send starts, even a ``sendall`` exception could follow complete
+    delivery, so a timeout, EOF, reset or unusable reply is
     ``outcome_unknown`` -- the same answer the bridge gives when its own wait
     for the broker runs out, and never a claim that the request was
     malformed. ``reply_deadline`` exceeds the bridge's wait for the broker;
@@ -117,7 +124,9 @@ def bound_call(*, socket_path: Path, ca: Path, certificate: Path,
                 secure.settimeout(FRAME_TIMEOUT)
                 secure.sendall(data)
             except (OSError, ssl.SSLError):
-                raise SecretsError('unreachable') from None
+                # sendall gives no partial-byte count. The bridge may have
+                # received the complete request even if the call raised.
+                raise SecretsError('outcome_unknown') from None
             line = _read_reply(secure, reply_deadline)
     try:
         reply = codec.loads(line, limit=wire.MAX_REPLY)
