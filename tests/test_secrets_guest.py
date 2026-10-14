@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from aivm_secrets import guest
+from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.server import LocalServer
 from aivm_secrets.kernel.service import parse_policy
 from tests.secrets_helpers import (
@@ -828,9 +829,11 @@ def test_gh_default_repository_from_env_and_git_config(tmp_path, monkeypatch):
     assert req['arguments']['repository'] == 'attacker/other'
     policy = parse_policy(github_policy(gh_compat=2))
     from aivm_secrets.kernel.scope import check_arguments, find
-    with pytest.raises(Exception):
+    with pytest.raises(SecretsError):
         r = policy.parse_request(req)
-        check_arguments(find(policy.scope(), r.operation), r)
+        operation = find(policy.scope(), r.operation)
+        assert operation is not None
+        check_arguments(operation, r)
     monkeypatch.delenv('GH_REPO')
     (tmp_path / '.git').mkdir()
     (tmp_path / '.git/config').write_text(

@@ -11,7 +11,7 @@ from aivm_secrets.identity.enrollment import IdentityAuthority
 from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.token import certificate_thumbprint
 from cryptography import x509
-from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 def setup(tmp_path):
@@ -50,8 +50,10 @@ def test_distinct_key_advances_epoch_and_invalidates_old_identity(tmp_path):
     assert new['epoch'] == old[3]['epoch'] + 1
     assert new['certificate_sha256'] != old[3]['certificate_sha256']
     assert certificate_thumbprint(der(new['certificate'])) == new['certificate_sha256']
-    old_pub = x509.load_der_x509_certificate(old_cert_der).public_key().public_numbers()
-    new_pub = x509.load_der_x509_certificate(der(new['certificate'])).public_key().public_numbers()
+    old_pub = x509.load_der_x509_certificate(old_cert_der).public_key().public_bytes(
+        Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    new_pub = x509.load_der_x509_certificate(der(new['certificate'])).public_key().public_bytes(
+        Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     assert old_pub != new_pub
     assert candidate[0].read_bytes() != old[0].read_bytes()
     with pytest.raises(SecretsError):

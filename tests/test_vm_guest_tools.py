@@ -368,7 +368,7 @@ def test_guest_pi_script_uses_official_installer() -> None:
 
 
 def test_pi_status_check_is_identity_aware() -> None:
-    check = GUEST_TOOL_REGISTRY.get('pi').status_check
+    check = GUEST_TOOL_REGISTRY.require('pi').status_check
     assert check is not None
     # The probe must attribute npm-global installs to their package and
     # understand Pi's managed release layout without trusting a bare binary.
@@ -382,7 +382,7 @@ def test_pi_status_check_is_identity_aware() -> None:
     assert 'exit 12' in check
     # Every other tool keeps the generic command -v probe.
     for name in ('uv', 'rust', 'code', 'claude', 'codex'):
-        assert GUEST_TOOL_REGISTRY.get(name).status_check is None
+        assert GUEST_TOOL_REGISTRY.require(name).status_check is None
 
 
 def test_tools_config_roundtrip(tmp_path: Path) -> None:
@@ -1076,7 +1076,7 @@ def _run_pi_status_check(
 ) -> subprocess.CompletedProcess:
     """Execute the pi status fragment exactly the way aivm/status.py
     does (as a standalone remote command under set -e)."""
-    fragment = GUEST_TOOL_REGISTRY.get('pi').status_check
+    fragment = GUEST_TOOL_REGISTRY.require('pi').status_check
     assert fragment is not None
     harness.write_run_script('set -e\n' + fragment)
     return harness.run(path_dirs=path_dirs)

@@ -339,26 +339,25 @@ def test_isolated_ca_enrollment_uses_only_trusted_interpreter(tmp_path, monkeypa
     authority = IdentityAuthority.initialize(root, issuer='aivm.test',
                                             audience='aivm-secrets.identity')
     observed = []
-    class Manager:
-        def run(self, cmd, **kwargs):
-            observed.append((cmd, kwargs))
-            assert '-I' in cmd
-            assert '-m' in cmd and 'aivm_secrets' in cmd
-            if 'enroll' in cmd:
-                assert '--untrusted-root' in cmd
-            assert kwargs['env'].get('PYTHONPATH') is None
-            assert kwargs['env'].get('SSLKEYLOGFILE') is None
-            csr_idx = cmd.index('--csr') + 1
-            assert Path(cmd[csr_idx]).read_bytes() == b'SYNTHETIC PUBLIC CSR'
-            if 'inspect-csr' in cmd:
-                return CommandResult(0, json.dumps({
-                    'key_fingerprint': '0' * 64}), '')
+    def fake_run(cmd, **kwargs):
+        observed.append((cmd, kwargs))
+        assert '-I' in cmd
+        assert '-m' in cmd and 'aivm_secrets' in cmd
+        if 'enroll' in cmd:
+            assert '--untrusted-root' in cmd
+        assert kwargs['env'].get('PYTHONPATH') is None
+        assert kwargs['env'].get('SSLKEYLOGFILE') is None
+        csr_idx = cmd.index('--csr') + 1
+        assert Path(cmd[csr_idx]).read_bytes() == b'SYNTHETIC PUBLIC CSR'
+        if 'inspect-csr' in cmd:
             return CommandResult(0, json.dumps({
-                'subject': 'vm-' + 'a' * 64,
-                'certificate_sha256': 'synthetic', 'epoch': 1,
-                'not_after': 9999999999,
-            }), '')
-    reply = module._isolated_enroll(Manager(), authority_root=authority.root,
+                'key_fingerprint': '0' * 64}), '')
+        return CommandResult(0, json.dumps({
+            'subject': 'vm-' + 'a' * 64,
+            'certificate_sha256': 'synthetic', 'epoch': 1,
+            'not_after': 9999999999,
+        }), '')
+    reply = module._isolated_enroll(ScriptedManager(fake_run), authority_root=authority.root,
               subject='vm-' + 'a' * 64, csr=b'SYNTHETIC PUBLIC CSR',
               replace=False, untrusted=(tmp_path / 'shared',))
     assert reply['epoch'] == 1
@@ -423,6 +422,7 @@ def test_guest_setup_failure_shuts_down_both_host_services(tmp_path, monkeypatch
             policy_path=tmp_path / 'policy', identity_root=secure,
             uuid_reader=lambda _: UUID)
     if not bridge_raises:
+        assert isinstance(exc.value, SecretsError)
         assert exc.value.code == 'guest_setup'
     assert events == ['bridge', 'broker']
     assert not (secure / 'bound.jwt').exists()

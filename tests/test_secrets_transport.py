@@ -854,16 +854,26 @@ def test_aivm_access_disable_revokes_a_live_secret_session(world, monkeypatch):
 
 def test_oauth_broker_argv_requires_an_unambiguous_host_credential_source(world):
     """The subprocess args contain only vault/profile paths and bound identity."""
-    options = dict(
-        policy_path=world.policy, token_file=None,
-        writes='deny', access_identity='principal-test', vm='test-vm',
-        audit_dir=world.state / 'secrets-audit', untrusted=[world.workspace],
-    )
+    def broker_argv(
+        *, token_file: Path | None = None,
+        oauth_vault: Path | None = None,
+        oauth_provider_config: Path | None = None,
+        oauth_subject: str = '',
+    ) -> list[str]:
+        return secrets_transport.broker_command(
+            policy_path=world.policy, token_file=token_file,
+            writes='deny', access_identity='principal-test', vm='test-vm',
+            audit_dir=world.state / 'secrets-audit', untrusted=[world.workspace],
+            oauth_vault=oauth_vault,
+            oauth_provider_config=oauth_provider_config,
+            oauth_subject=oauth_subject,
+        )
+
     vault = world.state / 'oauth-vault'
     profile = world.state / 'oauth-provider.json'
-    command = secrets_transport.broker_command(
-        **options, oauth_vault=vault,
-        oauth_provider_config=profile, oauth_subject='vm-' + 'a' * 64,
+    command = broker_argv(
+        oauth_vault=vault, oauth_provider_config=profile,
+        oauth_subject='vm-' + 'a' * 64,
     )
     assert command[1] == '-I'
     assert command[command.index('--oauth-vault') + 1] == str(vault)
@@ -872,13 +882,10 @@ def test_oauth_broker_argv_requires_an_unambiguous_host_credential_source(world)
     assert '--token-file' not in command and '--token-stdin' not in command
     assert SERVICE_TOKEN not in ' '.join(command)
     with pytest.raises(SecretsError) as confused:
-        secrets_transport.broker_command(
-            **{**options, 'token_file': world.token},
-            oauth_vault=vault, oauth_provider_config=profile,
-            oauth_subject='vm-' + 'a' * 64,
+        broker_argv(
+            token_file=world.token, oauth_vault=vault,
+            oauth_provider_config=profile, oauth_subject='vm-' + 'a' * 64,
         )
     assert confused.value.code == 'invalid_policy'
     with pytest.raises(SecretsError):
-        secrets_transport.broker_command(
-            **options, oauth_vault=vault, oauth_subject='vm-' + 'a' * 64,
-        )
+        broker_argv(oauth_vault=vault, oauth_subject='vm-' + 'a' * 64)

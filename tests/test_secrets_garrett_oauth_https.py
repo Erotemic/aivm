@@ -148,11 +148,12 @@ def test_actual_tls_token_exchange_verifies_name_and_refuses_redirect(
     worker.start()
     original_connect = socket.create_connection
 
-    def local_connect(destination, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, **kwargs):
+    def local_connect(destination, *args, **kwargs):
         # Only DNS/routing is mocked: the production HTTPS client still
         # negotiates TLS and authenticates login.example.org through SNI.
+        # Preserve socket.create_connection's default-timeout semantics.
         assert destination[0] == 'login.example.org' and destination[1] == 443
-        return original_connect(address, timeout=timeout, source_address=source_address)
+        return original_connect(address, *args, **kwargs)
 
     monkeypatch.setattr(socket, 'create_connection', local_connect)
     monkeypatch.setenv('SSLKEYLOGFILE', str(tmp_path / 'leaked.keys'))

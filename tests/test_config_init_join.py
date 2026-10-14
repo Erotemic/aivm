@@ -659,7 +659,7 @@ def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
         'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
         tmp_path / 'var-lib-aivm-machine',
     )
-    seen: list[object] = []
+    seen: list[tuple[object, ...]] = []
 
     def fake_capability(capability: HostCapability, **kwargs: object) -> None:
         seen.append(('capability', capability, kwargs))
