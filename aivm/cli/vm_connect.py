@@ -907,10 +907,15 @@ class VMSSHCLI(_BaseCommand):
             ]
         )
         if args.secrets_policy:
-            from aivm_secrets.errors import SecretsError
-
-            from ..secrets_transport import run_secrets_ssh
-
+            try:
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import run_secrets_ssh
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require optional AIVM '
+                              'secrets support (install aivm[secrets] on this branch).')
+                    return 1
+                raise
             try:
                 policy = Path(args.secrets_policy)
                 token_file = (
@@ -943,6 +948,11 @@ class VMSSHCLI(_BaseCommand):
             except SecretsError as ex:
                 log.error('Secret session failed: {}', ex.for_operator())
                 return 1
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require optional AIVM '                               'secrets support (install aivm[secrets] on this branch).')
+                    return 1
+                raise
             except OSError:
                 log.error('Secret session host or transport setup failed.')
                 return 1

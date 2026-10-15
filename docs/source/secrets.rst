@@ -12,6 +12,8 @@ The architecture, the plan for a verified Rust kernel and the precise claims
 are in ``docs/planning/``:
 
 * ``aivm-secrets-design.md`` -- architecture and threat model;
+* ``aivm-secrets-repository-boundary.md`` -- temporary branch policy,
+  optional AIVM integration and the future separate-repository gate;
 * ``aivm-secrets-agnostic-integrations.md`` -- the service manifest contract;
 * ``aivm-secrets-kernel-spec.md`` -- the state machine, as specified for the
   Rust port;

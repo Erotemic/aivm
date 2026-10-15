@@ -13,6 +13,11 @@ executable source of truth. A future compiled Rust binary is the executable
 source for **its own extracted Lean proofs**; Python remains independently
 maintained and is not thereby formally verified.
 
+The [repository boundary plan](aivm-secrets-repository-boundary.md) permits
+continued experimental work in this feature branch without making AIVM
+dependent on secrets. Both implementations, protocol corpora and assurance
+work are intended to move to a standalone `aivm-secrets` repository later.
+
 ## Why two implementations
 
 - Python supports rapid protocol and operator-experience iteration, concise

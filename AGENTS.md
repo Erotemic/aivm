@@ -127,6 +127,32 @@ copy the shown commands and perform the equivalent work without AIVM.
   private keys, tokens, and other sensitive values; expose the operation and
   destination without leaking the secret material.
 
+## Experimental secrets project boundary (mandatory)
+- `aivm_secrets` is an experimental, unaudited credential broker and identity
+  project. It may be developed on the current branch temporarily but is
+  intended for an independent `aivm-secrets` repository and distribution.
+- Do **not** introduce non-optional dependencies on `aivm_secrets`,
+  cryptography for secrets, broker processes, CA/identity state, TPM, or
+  OAuth in ordinary AIVM packaging, imports, CLI initialization, VM
+  lifecycle, SSH/code launch, guest provisioning or machine-store schema.
+  Normal AIVM must work when `aivm_secrets` cannot be imported.
+- Existing explicitly selected secret-session/managed-identity adapters
+  may continue as **temporary experimental exceptions** in this branch.
+  Do not add new AIVM integration surfaces; missing extras fail clearly
+  only when selected. Do not broaden credentials or silently fall back.
+- Keep the implementation and all authorization decisions in
+  `aivm_secrets`; it must never depend on `aivm` internals. Prefer a
+  versioned process protocol over Python-object interfaces. A process
+  boundary is necessary but does not make the project production-ready.
+- Do not market or release the experimental secrets implementation as
+  audited or formally verified. Future Rust/Lean work and hardware
+  identity are separate, optional assurance efforts; local broker use
+  needs neither TPM nor a second VM/container.
+- **Read first:** `docs/planning/aivm-secrets-repository-boundary.md`
+  for the binding decision, current coupling inventory, extraction gates
+  and security review requirements. Do not start the repository split
+  without explicit maintainer direction.
+
 ## Safety Expectations
 - Do not silently broaden VM host-path exposure.
 - Avoid attaching the same host folder to multiple VMs unless user forces it.

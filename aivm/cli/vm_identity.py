@@ -8,12 +8,9 @@ from typing import Any
 import kwconf
 from loguru import logger as log
 
-from aivm_secrets.errors import SecretsError
-
 from ..errors import AIVMError
 from ..services import load_vm_context_with_path
 from ..vm.connectivity import get_ip_cached, wait_for_ip
-from ..secrets_identity_transport import enroll_managed_vm
 from ._common import _BaseCommand
 
 
@@ -29,6 +26,16 @@ def _run_identity(args: Any, *, renew: bool, rotate_key: bool = False) -> int:
     """
     if not args.identity_root:
         raise AIVMError('--identity_root is required; identity is opt-in')
+    # The ordinary AIVM command tree must import without aivm_secrets present.
+    # Load the experimental adapter only for an explicitly requested action.
+    try:
+        from aivm_secrets.errors import SecretsError
+        from ..secrets_identity_transport import enroll_managed_vm
+    except ModuleNotFoundError as ex:
+        if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+            log.error('Identity enrollment requires optional AIVM secrets support '                       '(install aivm[secrets] on this branch).')
+            return 1
+        raise
     context, store = load_vm_context_with_path(
         args.config, vm_opt=args.vm,
         hydrate_runtime_defaults=False, persist_runtime_defaults=False,
