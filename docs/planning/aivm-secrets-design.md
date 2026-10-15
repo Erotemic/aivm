@@ -23,15 +23,20 @@ obligations and the evidence needed before making stronger claims; the
 [assumption ledger](aivm-secrets-assumptions.json) lists what is trusted. See
 [the operator guide](../source/secrets.rst) for the commands, and
 [the validation record](aivm-secrets-validation.md) for what was run.
+The [repository boundary and extraction decision](aivm-secrets-repository-boundary.md)
+governs optional AIVM integration and the planned independent repository.
 
 ## 1. Decision and scope
 
 Build `aivm-secrets` as an independent secret-*use* service, not a mechanism for
-copying provider tokens into VMs. Initially ship `aivm_secrets` beside `aivm`
-inside the existing Python distribution, with its own `aivm-secrets` executable.
-Keep imports one-way: the package does not import AIVM. The AIVM adapter resolves
-an access identity, establishes a channel, and controls the session lifetime.
-A later distribution split must not change the capability protocol.
+copying provider tokens into VMs. **Temporary branch state:** `aivm_secrets`
+ships beside `aivm` in the current Python distribution with its own executable,
+but this is not the intended release boundary. Keep imports one-way: the secrets
+package does not import AIVM. Existing AIVM opt-in adapters may resolve an
+access identity, establish a channel, and control session lifetime; no new
+mandatory AIVM dependency or normal-workflow activation is permitted.
+The eventual separate repository/distribution must preserve the versioned
+capability/process protocol. See the [boundary decision](aivm-secrets-repository-boundary.md).
 
 Keep **two independent implementations**: this Python reference and a
 small safe-Rust kernel/backend, translated with Charon/Aeneas and verified in
@@ -192,9 +197,12 @@ to arbitrary Python that still owns the token does not establish complete
 mediation. The executor must be constrained to kernel-generated effects.
 
 Keep optional integrations optional. The initial crypto dependency is an
-`aivm[secrets]` extra; importing ordinary AIVM or running existing SSH paths does
-not initialize a credential service or require crypto. The package can be
-extracted into its own repository/distribution without carrying libvirt code.
+`aivm[secrets]` extra. Ordinary AIVM must import and run without the secrets
+implementation installed or cryptographic extras available; explicit opt-in
+features fail clearly if unavailable. Both packages are still included in
+the same source distribution **on this branch only**; packaging independence
+is a pending extraction gate, not an accomplished property. See the
+[repository boundary and extraction plan](aivm-secrets-repository-boundary.md).
 
 ## 5. Credential lifecycle and Garrett-style envelopes
 

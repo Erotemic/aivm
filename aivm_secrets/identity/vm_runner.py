@@ -25,6 +25,8 @@ def main() -> int:
         except SecretsError:
             result = {'ok': False, 'code': 'invalid_capability'}
         sys.stdout.buffer.write(codec.dumps(result) + b'\n')
+        # One flushed reply per line, so a driver can wait for each one.
+        sys.stdout.buffer.flush()
     return 0
 
 

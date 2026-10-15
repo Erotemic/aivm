@@ -1,31 +1,255 @@
-## Unreleased: single-active Garrett CA generations (pre-deployment)
-
-- Replace the flat, original host CA and implicit issuer/server selection
-  fallbacks with a strict version-2 authority manifest. One atomic trust
-  record selects both active CA and TLS server identity; no migration of
-  never-deployed schema-1 authorities is supported.
-- Add explicit fail-closed CA rotation. Stage and sync fresh P-256 CA and
-  server identities, revoke all enrollments, then switch the single active
-  authority record. Old bridges reject subsequent requests, and new bridges
-  require re-enrollment; no dual-root transition is promised.
-- Move X.509/CSR effects into a certificate adapter; remove undeployed
-  identity model facades and retain canonical pure Garrett modules. Add 60
-  Rust-targeted trust-state vectors, crash and TLS regression tests.
-
-## Unreleased: opt-in Garrett managed-VM guest-key rotation
-
-- Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
-  forced-bootstrap SSH channel and guest-owned staged P-256 key. The host
-  checks different-key proof, current enrollment CAS, and revocation-on-failed
-  activation. Keep normal VM/SSH and `identity_renew` behavior unchanged.
-- Add an independent, Rust-portable key-rotation decision model with frozen
-  vectors, real X.509 and shell activation tests, plus deployment limitations.
-
 # Changelog
 We [keep a changelog](https://keepachangelog.com/en/1.0.0/).
 We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Version 0.6.2 - Unreleased
+
+### Garrett identity completion (experimental)
+* Add durable `write_durable` / `replace_durable` host file helpers (fsync the
+  data and its directory entry before a pointer commit names it), and fix a
+  section underline that broke the documented `./run_docs.sh` build; a
+  dependency-free test now guards RST underlines because CI does not run
+  Sphinx.
+* Add design policies for Garrett identity (design only; nothing is
+  implemented by them). Rollback and clone policy: seven threat cases with
+  required outcomes; one host key custody rule (key_sha256 plus at most eight
+  retired keys per row, 'denied' refusals, and its stated limits); anchor
+  options with a fixed journal, pointer, anchor commit order; the recovery
+  epoch rule; and a manual restore recipe. vTPM key policy: swtpm lifecycle,
+  key template, TPM2_Certify evidence with AK attribute checks, and the exact
+  wording AIVM may claim. Issuer API authorization policy: verb classes, every
+  registry write ownership='user', and operator-only confirmations that only
+  --yes skips. Operations policy: single-host scope, jti and retry semantics,
+  and a daily `aivm vm identity_renew --all` cadence with CA-horizon handling
+  and a session-start warning, with no daemon.
+* Record open assumption-ledger obligations ROLLBACK-01, CLONE-01, VTPM-01 and
+  ISSUER-API-01, and link the four policies from the Garrett identity plan.
+* Document known defects these policies depend on. Every `identity_renew`
+  after `identity_rotate_key` re-certifies the rotated-away key, because the
+  guest re-presents a stale client.csr; a guest-side workaround is documented.
+  A restored enrollment registry reactivates revoked enrollments, which stay
+  renewable whatever the copy's age. CommandManager's yes_sudo (from
+  --yes_sudo, --yes or behavior.yes_sudo) approves every confirmable write,
+  not only sudo prompts.
+* Test the issuer-API verb table against the real `aivm-secrets identity`
+  parser in every direction. A test now fails for an unclassified verb, a
+  'planned' row that has shipped, and an 'implemented' row that omits a flag
+  the parser now requires.
+* Harden the canonical codec for fixed-width ports. `loads` refuses a lone-
+  surrogate escape anywhere in a document, so a provider response holding one
+  now fails closed as `upstream_response`. `digest` refuses floats, integers
+  outside the signed 64-bit range, non-string keys and lone surrogates. `-0`
+  is pinned as the integer zero. `v1/codec.json` only gains cases, including
+  raw-byte `hex` inputs; the 17 kernel traces and every policy digest are
+  byte-identical.
+* Bound identity-claim `iat` at `2^63 - 1 - MAX_IDENTITY_LIFETIME`, so `exp`
+  always fits a signed 64-bit word. Refuse epochs and epoch maxima outside
+  `[0, 2^63 - 1]` instead of comparing them. Boundary rows are added (new rows
+  only) to `identity-v1.jsonl` and `garrett-protocol-v1.jsonl`.
+* Count the 32,768 frame-capability bound in UTF-8 bytes, not code points, as
+  the kernel spec states for every length limit. A non-ASCII capability over
+  32,768 bytes now gets `invalid_request` at the frame instead of
+  `invalid_capability` from the envelope. Issued `aivs1` capabilities and
+  bound JWTs are ASCII and are unaffected.
+* Fix the identity conformance runner, which answered an oversized line out of
+  order (its reply came out last), and flush every managed-VM runner reply.
+  The Rust identity and managed-VM parity gates now also require in-order
+  framing and per-line flushing.
+* Add `python -m aivm_secrets.primitives_runner` (a closed table of primitive
+  names, one flushed reply per line) with per-primitive corpora in
+  `tests/secrets_vectors/primitives/` for validity, epochs, binding, digest
+  and wire frames. Raw-byte rows pin `-0`, exponent spellings and raw UTF-8.
+  The Rust comparison is gated on `AIVM_SECRETS_RUST_PRIMITIVES_RUNNER` and
+  skipped when unset; no Rust parity is claimed.
+* Compare conformance-runner replies as canonical JSON in the primitives,
+  identity and managed-VM parity gates, so a runner answering `"ok": 1` or
+  `"value": 2.0` no longer passes as parity (Python's `==` equates `true`, `1`
+  and `1.0`).
+* aivm-secrets identity: `renew-client` (AIVM `identity_renew`) now re-
+  certifies only the enrolled key (REN-07). A CSR for any other key is refused
+  with `denied`, and a missing or unparsable stored leaf fails closed. Guests
+  rotated with the current helper still send their pre-rotation `client.csr`,
+  so they must regenerate it from `client.key` inside the guest before
+  renewing (`openssl req -new -key client.key -out client.csr -subj /CN=aivm-
+  guest`). Do not rotate again in place of a renewal.
+* aivm-secrets identity: added key-fingerprint custody (REN-08). Registry rows
+  record `key_sha256` and up to 8 retired key fingerprints (oldest dropped).
+  `enroll`, `enroll --replace`, `renew-client` and `rotate-client-key` refuse
+  a key retired for that subject, or a key certified for another active
+  subject. Retirement is per subject, bounded, and discarded when the row is
+  forgotten. The two refusals carry distinct operator-only details; the code
+  is `denied`. Breaking for experimental authorities: an `enrollments.json`
+  without these fields is refused; initialize a new authority.
+* aivm-secrets identity: `identity enroll --replace` accepts an optional
+  compare-and-swap, `--expected-epoch N --expected-certificate-sha256 T` (both
+  together, only with `--replace`). It refuses the replacement with `revoked`
+  if the row changed. Plain `--replace` is unchanged.
+* aivm-secrets identity: revocation always deactivates. A row at the maximum
+  epoch is deactivated without advancing, and a later enrollment of it is
+  `exhausted` (B10). The `revoke_epoch_3` registry vector was edited in place.
+* aivm-secrets identity (breaking CLI): `identity rotate-ca` now requires
+  `--expected-ca-sha256` (the `ca_sha256` from `identity status`). A stale or
+  repeated run is refused with `revoked` before anything is staged. The
+  command revokes every registry row (inactive, epoch advanced, saturating)
+  instead of erasing the registry, so epochs stay monotonic. It returns the
+  revoked `{subject, epoch, certificate_sha256}` list and audits it before the
+  registry commit.
+* aivm-secrets identity: new locked, audited `identity forget --subject S` and
+  `identity prune` verbs remove only inactive rows whose certificate has
+  expired, so the 128-row registry can be reused (B9). Forgetting restarts the
+  subject at epoch 0, which is harmless because its certificate has expired.
+  It also discards the row's retired keys, so before re-enrolling a VM that
+  still exists, regenerate its CSR from `client.key` or reset its guest
+  identity.
+* aivm-secrets identity: `authority_runner` and `registry_runner` refuse a
+  list or object `action` instead of crashing the reply stream (B18).
+  `authority_runner` gains `require-ca`. `registry_runner` gains `replace-if-
+  current`, `revoke-all`, `forget` and `prune`, and accepts a full registry on
+  one line. `key_rotation_runner` gains the `reuse` action.
+* tests/secrets_vectors: the Garrett/identity JSONL corpora (everything except
+  kernel `v1/`) are edited in place until the first release that ships them
+  (README updated). In this increment every earlier expectation is unchanged
+  except `revoke_epoch_3`. Kernel `v1/` traces and policy digests are byte-
+  identical.
+* The identity bridge no longer reports a forwarded request that got no usable
+  broker answer as `invalid_request`. After its 120 s wait, an EOF, a reset or
+  a malformed reply it answers `outcome_unknown`, because the broker may have
+  acted. A failure before the frame reaches the broker stays definite
+  (`internal_error`). `identity call` and the guest client follow the same
+  rule; the guest now waits 150 s.
+* The identity bridge serves up to 16 connections at once and no longer exits
+  after a fixed number of connections (`--max-connections` is optional,
+  default none). A bound session is no longer cut off after about 128 `gh`
+  calls. Requests that need the broker still run one at a time.
+* Add `identity bridge --subject S` to pin a bridge to one enrolled subject. A
+  certificate the same CA enrolled for anyone else is refused with
+  `wrong_binding` before anything reaches the broker.
+* When its stdin lease closes, the identity bridge stops listening and removes
+  its socket at once, then gives calls in flight at most 5 s. Ending a bound
+  `aivm ssh` session no longer stalls until AIVM's 10 s stop timeout kills the
+  bridge and leaves `identity.sock` behind.
+* `identity call` reports a client certificate refused during the TLS 1.3
+  handshake (unknown CA, expired, wrong) as `unreachable`, since nothing
+  reached the broker, instead of `outcome_unknown`.
+* The identity bridge relays broker replies up to the full reply limit (2 MiB
+  plus envelope) instead of misreporting anything over the 64 KiB request-
+  frame limit.
+* Document that `outcome_unknown` does not mean a request is over. The broker
+  runs requests one at a time and finishes every frame it has read, so a
+  request queued behind a slow one may still be applied after that answer. The
+  guest client's hint now says so.
+* Never present a possibly consumed rotating OAuth refresh token again without
+  an operator's decision. Garrett OAuth vault records move to schema 2 with
+  `refresh_state` (`none` / `in_doubt` / `reauth_required`). `in_doubt` is
+  made durable before the refresh request and replaced atomically by the
+  successor grant. The pure `classify_refresh_failure` lets only a failed
+  connect or TLS handshake (`refresh_not_sent`) restore the record, and only a
+  400 `invalid_grant` move it to `reauth_required`. Everything else stays in
+  doubt: a reply lost or late after the request was read, or an outcome the
+  disk refuses to store. Sessions and leases refuse both states. `identity
+  oauth-refresh --retry-in-doubt` makes one deliberate retry; `oauth-revoke`
+  and `oauth-login --replace` also end them. Pre-deployment schema-1 vault
+  records are refused; no migration is provided.
+* The vault audit log records every refresh outcome as
+  `oauth_refresh_not_sent`, `oauth_refresh_rejected` or
+  `oauth_refresh_in_doubt`, with the closed error code `credential_source`.
+  `oauth-status` shows `refresh_state`, `generation` and `has_refresh`. A
+  grant already at the last refresh generation (2^31-1) is refused with
+  `exhausted` before its refresh token is sent.
+* An edited OAuth provider profile can inspect, revoke and replace its AEAD-
+  authenticated vault record: the epoch advances and the old digest prefix is
+  kept. Sessions still require the current profile. Vault revocation at the
+  maximum epoch now deactivates instead of failing open. `oauth-login` checks
+  the vault before the browser flow. It reports `grant orphaned upstream`
+  whenever the provider may hold a grant that nothing stored: the vault
+  refused it after the exchange, or the exchange ended `exchange_in_doubt`,
+  which now includes a 200 reply the contract refuses. Automatic upstream
+  revocation is not implemented.
+* The `oauth-login` loopback callback is bounded: 5 s per connection operation
+  and an absolute per-request deadline inside the login's own. `--timeout`
+  (1..600 s) is now also the authorization lifetime. A matching RFC 6749 / RFC
+  9207 error callback, with up to all five parameters, fails fast with
+  `authorization_denied` without echoing provider text. A busy port reports
+  `callback_port_unavailable`.
+* The standalone OAuth token client ignores `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`. It trusts only a pinned anchor, read as a trusted host file,
+  or OpenSSL's compiled-in roots, and it closes every response. Tests set each
+  variable to an impostor's CA, the directory as a correctly hashed CA store.
+* The OAuth contract no longer has Python-specific behaviour. Scopes split on
+  exactly SP and `,`. `allowed_scopes` must be a list, `expected_issuer` a
+  string, and times integers, never booleans. The PKCE verifier and `state`
+  are 43..128 unreserved characters. Provider error text is bounded in UTF-8
+  bytes with no NUL or lone surrogate, and a classified refresh `error` must
+  be RFC 6749 NQSCHAR ASCII. The unshipped `garrett-oauth-v1.jsonl` corpus is
+  edited in place: it grows from 70 to 148 rows, adds a `classify` action and
+  changes no earlier expectation. 29 mutants cover the new checks.
+* Fix `aivm vm identity_renew` and `identity_enroll --replace` after
+  `identity_rotate_key` re-certifying the rotated-away guest key (B1). The
+  forced helper's `identity-csr` re-signs a fresh CSR with the installed
+  `client.key` on every request. Key activation moves `client.rotate.csr` over
+  `client.csr`. Before every non-rotating enrollment AIVM runs a fixed step
+  over pinned principal SSH that regenerates `client.csr` from `client.key`,
+  so guests still on the old helper also present their active key. Every
+  certificate install, not only rotation, compares the certificate's public
+  key with the key it will be used with before replacing anything; a mismatch
+  fails the install and triggers the guarded revocation.
+* The guest helper writes a first identity key, or a staged rotation key,
+  under per-request scratch names and publishes it with `ln`, which refuses an
+  existing name. Concurrent requests can no longer overwrite a key or pair it
+  with another request's CSR, and the loser of a first-key race signs with the
+  winner's key.
+* `identity_enroll`, `identity_renew`, `identity_rotate_key` and bound `aivm
+  ssh` now read the libvirt domain UUID through sudo on hosts where `virsh`
+  needs it. The read is announced, like every escalated read.
+* Principal-account SSH during identity enrollment checks the guest host key
+  strictly against the VM's pinned bootstrap `known_hosts`. On a shared
+  machine store where that file is root-only, it checks strictly against the
+  principal's own `known_hosts`, never trusting a key on first use. A failed
+  channel suggests `aivm vm access reconcile`.
+* A refusal or interrupt after a certificate is issued now propagates
+  unchanged: AIVM runs no further command and logs the exact `python -I -m
+  aivm_secrets identity revoke-if-current ...` command at WARNING. Other
+  delivery failures run the epoch+thumbprint guarded revocation, and name that
+  command if the revocation itself fails.
+* If the issuing child fails after it may have committed (timeout, crash,
+  failed audit write, malformed reply), AIVM re-reads the registry, comparing
+  certificates rather than epochs. When the subject holds a new active
+  certificate, the command fails with `outcome_unknown`, naming the subject,
+  epoch, thumbprint and guarded revocation command, and says it may be another
+  operator's concurrent enrollment. AIVM never revokes it itself. An interrupt
+  during issuance logs how to check and what to revoke.
+* Fix guarded revocation, renewal and key rotation failing for certificates
+  whose base64url thumbprint begins with `-` (about 1 in 64): every identity
+  argv now passes it as one `--expected-certificate-sha256=<thumbprint>` word.
+* `aivm vm identity_enroll/renew/rotate_key` report an expected failure as one
+  `Identity operation failed:` line with its operator detail and exit status
+  1, instead of a traceback. A declined prompt still aborts as the user's
+  decision. `VMIdentityRotateKeyCLI` is exported from `aivm.cli.vm`.
+* Pin the bound-session identity bridge to its VM's subject and drop its
+  256-connection cap, which ended a healthy `aivm ssh --secrets_identity_root`
+  session after about 128 guest commands; the launcher also refuses a bridge
+  whose readiness names a different subject.
+
+### Single-active Garrett CA generations (pre-deployment)
+* Replace the flat, original host CA and implicit issuer/server selection
+  fallbacks with a strict version-2 authority manifest. One atomic trust
+  record selects both active CA and TLS server identity; no migration of
+  never-deployed schema-1 authorities is supported.
+* Add explicit fail-closed CA rotation. Stage and sync fresh P-256 CA and
+  server identities, revoke all enrollments, then switch the single active
+  authority record. Old bridges reject subsequent requests, and new bridges
+  require re-enrollment; no dual-root transition is promised.
+* Move X.509/CSR effects into a certificate adapter; remove undeployed
+  identity model facades and retain canonical pure Garrett modules. Add 60
+  Rust-targeted trust-state vectors, crash and TLS regression tests.
+
+### Opt-in Garrett managed-VM guest-key rotation
+* Add an explicit `aivm vm identity_rotate_key` flow using the authenticated
+  forced-bootstrap SSH channel and guest-owned staged P-256 key. The host
+  checks different-key proof, current enrollment CAS, and revocation-on-failed
+  activation. Keep normal VM/SSH and `identity_renew` behavior unchanged.
+* Add an independent, Rust-portable key-rotation decision model with frozen
+  vectors, real X.509 and shell activation tests, plus deployment limitations.
 
 ### Garrett certificate renewal and host TLS leaf rotation (Python reference)
 * Add explicit compare-and-swap client certificate renewal through pinned,
@@ -51,8 +275,9 @@ We aim to adhere to [semantic versioning](https://semver.org/spec/v2.0.0.html).
 * Permit explicit OAuth-backed managed-VM sessions with the authorized VM
   subject and identity-only forwarded socket. Mixed token sources fail closed;
   ordinary SSH and previously configured credentials do not change.
-* Freeze a provider-neutral OAuth transition vector corpus for future Rust
-  parity and document the remaining formal and deployment assumptions.
+* Add a provider-neutral OAuth transition vector corpus (unreleased; edited
+  in place until it ships) for future Rust parity and document the remaining
+  formal and deployment assumptions.
 
 ### Garrett protocol modularization (experimental)
 * Extract pure Garrett claims, enrollment, VM identity and issue/present

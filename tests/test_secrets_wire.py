@@ -49,12 +49,37 @@ def test_each_verb_parses_to_one_frame(verb, payload):
         {**frame(request={}), 'capability': 7},
         {**frame(request={}), 'capability': None},
         {**frame(request={}), 'capability': 'x' * (wire.MAX_CAPABILITY + 1)},
+        # The bound is in UTF-8 bytes: these have at most MAX_CAPABILITY
+        # code points but more bytes.
+        {**frame(request={}),
+         'capability': '\u00e9' * (wire.MAX_CAPABILITY // 2 + 1)},
+        {**frame(request={}),
+         'capability': 'x' * (wire.MAX_CAPABILITY - 1) + '\u00e9'},
+        # A lone surrogate has no UTF-8 encoding, so no byte length at all.
+        {**frame(request={}), 'capability': '\ud800'},
     ],
 )  # fmt: skip
 def test_frames_are_a_closed_grammar(value):
     with pytest.raises(SecretsError) as caught:
         parse_frame(value)
     assert caught.value.code == 'invalid_request'
+
+
+@pytest.mark.parametrize(
+    'capability',
+    [
+        pytest.param('x' * wire.MAX_CAPABILITY, id='ascii'),
+        pytest.param('\u00e9' * (wire.MAX_CAPABILITY // 2), id='two-byte'),
+        pytest.param('\U0001f600' * (wire.MAX_CAPABILITY // 4), id='four-byte'),
+    ],
+)
+def test_a_capability_of_exactly_the_bound_in_bytes_is_accepted(
+    capability: str,
+) -> None:
+    assert len(capability.encode('utf-8')) == wire.MAX_CAPABILITY
+    assert parse_frame(frame(describe=True) | {'capability': capability}) == (
+        Frame('describe', capability, True)
+    )
 
 
 def test_the_verb_set_has_no_host_plane_verbs():

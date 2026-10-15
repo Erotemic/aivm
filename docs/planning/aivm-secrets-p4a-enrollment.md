@@ -44,9 +44,22 @@ credentials, or the default secrets transport. Nothing starts automatically.
    rechecks **current** enrollment and epoch, and forwards the resulting
    request to the existing authorized broker over its `broker.sock` only.
    It cannot use `control.sock`, publish a TCP listener, mint child grants, or
-   reach the HTTPS executor. It has finite idle and connection limits; the
-   foreground operator owns its lifetime. `identity call` is the restricted
-   CLI client for a deliberately forwarded Unix socket.
+   reach the HTTPS executor. It serves at most 16 connections at once and,
+   by default, any number in sequence: an idle timeout, a stdin lease
+   (`--exit-on-stdin-eof`) and the foreground operator own its lifetime, and
+   `--max-connections` is an optional cap. Concurrency covers handshakes and
+   the bridge's own refusals; the broker still runs forwarded requests one at
+   a time. When the lease closes the bridge stops listening and unlinks its
+   socket before giving in-flight calls a short drain (5 s, inside AIVM's
+   10 s stop timeout). `--subject` pins it to one enrolled
+   subject (anyone else: `wrong_binding`, before dispatch). Once a frame has
+   been forwarded, a broker that does not answer within 120 s, hangs up or
+   answers garbage yields `outcome_unknown`, never `invalid_request`: the
+   request may have been executed, or -- if it was queued behind another --
+   may still be. `identity call` is the restricted
+   CLI client for a deliberately forwarded Unix socket; it reports a TLS
+   alert that refuses its certificate as `unreachable`, since the bridge
+   reads nothing before its handshake succeeds.
 5. `identity revoke` increments the **persisted** epoch and deactivates the
    client certificate; `enroll --replace` similarly rotates its certificate
    and epoch. New TLS calls consult the registry every time. Changes are
@@ -55,8 +68,10 @@ credentials, or the default secrets transport. Nothing starts automatically.
    intent before the action, and an outcome afterwards. The operator should
    retain audit-chain heads externally to detect tail truncation.
 6. A **pure** `aivm_secrets.identity.garrett.registry` owns the bounded schema,
-   allowed enrollment transitions, revocation and certificate lookup. A
-   language-neutral JSONL runner has **69 frozen enrollment vectors**, alongside
+   allowed enrollment transitions, revocation, key custody, forget/prune
+   and certificate lookup. A language-neutral JSONL runner replays **161
+   enrollment vectors** (`identity-registry-v1.jsonl`, edited in place until
+   it ships in a release), alongside
    the existing 64 identity-decision vectors and deterministic cryptographic
    fixture. This is the parity contract for an independently built Rust port.
 

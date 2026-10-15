@@ -11,7 +11,7 @@ from aivm_secrets.identity.enrollment import IdentityAuthority
 from aivm_secrets.identity.certificates import create_csr
 from aivm_secrets.identity.token import certificate_thumbprint
 from cryptography import x509
-from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 
 def setup(tmp_path):
@@ -50,8 +50,10 @@ def test_distinct_key_advances_epoch_and_invalidates_old_identity(tmp_path):
     assert new['epoch'] == old[3]['epoch'] + 1
     assert new['certificate_sha256'] != old[3]['certificate_sha256']
     assert certificate_thumbprint(der(new['certificate'])) == new['certificate_sha256']
-    old_pub = x509.load_der_x509_certificate(old_cert_der).public_key().public_numbers()
-    new_pub = x509.load_der_x509_certificate(der(new['certificate'])).public_key().public_numbers()
+    old_pub = x509.load_der_x509_certificate(old_cert_der).public_key().public_bytes(
+        Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    new_pub = x509.load_der_x509_certificate(der(new['certificate'])).public_key().public_bytes(
+        Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
     assert old_pub != new_pub
     assert candidate[0].read_bytes() != old[0].read_bytes()
     with pytest.raises(SecretsError):
@@ -104,9 +106,17 @@ def test_stored_enrollment_certificate_tampering_fails_closed(tmp_path):
 def test_guarded_compensation_cannot_revoke_concurrent_replacement(tmp_path):
     authority, old, candidate = setup(tmp_path)
     first = rotate(authority, old, candidate)
+    # The rotated-away key is retired: even an unconditional replace refuses it.
+    with pytest.raises(SecretsError) as exc:
+        authority.enroll(subject='vm-alpha', csr=old[1].read_bytes(),
+                         approve_fingerprint=old[2], replace=True)
+    assert exc.value.code == 'denied'
+    assert authority.status()['subjects']['vm-alpha']['epoch'] == first['epoch']
     # Another operator installs another credential before delayed cleanup.
-    current = authority.enroll(subject='vm-alpha', csr=old[1].read_bytes(),
-        approve_fingerprint=old[2], replace=True)
+    third_key, third_csr = tmp_path / 'three.key', tmp_path / 'three.csr'
+    third_fp = create_csr(private_key=third_key, request_file=third_csr)
+    current = authority.enroll(subject='vm-alpha', csr=third_csr.read_bytes(),
+        approve_fingerprint=third_fp, replace=True)
     cleanup = authority.revoke_if_current(subject='vm-alpha',
         expected_epoch=first['epoch'],
         expected_thumbprint=first['certificate_sha256'])

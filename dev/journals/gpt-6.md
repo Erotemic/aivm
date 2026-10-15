@@ -58,3 +58,38 @@ fixed JSON subprocess verbs behind an isolated interpreter, leaving the
 AIVM process free of implementation-specific imports. Added the host binding
 parity check and cleanup fault injection. This does not yet provide proof of
 Rust/Python agreement or hardware VM attestation.
+## 2026-10-15: remove non-optional secrets distribution coupling
+
+Worked from the clean `bee5239` branch snapshot after the maintainer's
+repository-boundary decision. The previous runtime lazy-import gate was real,
+but the AIVM wheel and sdist still co-shipped the entire experimental
+`aivm_secrets` package and its console script. The `all` and `tests` extras
+also pulled in secrets cryptography, making ordinary packaging and validation
+unnecessarily dependent on the experiment.
+
+Created an independent, explicitly installed `aivm-secrets` Python distribution
+in the existing `aivm_secrets/` source folder while keeping the code on this
+branch. AIVM's package discovery now includes only `aivm` and its descendants;
+the root distribution no longer owns the broker CLI or any secret-specific
+extras/dependencies. The sibling build owns the 65 broker Python modules, its
+CLI, and its cryptography dependency. I deliberately **did not** point any
+AIVM extra at a not-yet-published package: doing so could break resolution of
+otherwise unrelated AIVM environments. An opt-in operator installs from the
+trusted checkout using `python -m pip install ./aivm_secrets`.
+
+Added no-secrets CI smoke and archive-content checks for two independent wheels
+and the core sdist, retaining the combined experimental test suite for now.
+Explicit secrets SSH sessions preflight the optional package and crypto before
+a foreground SSH invocation can bootstrap a VM. Normal SSH remains free of
+secrets imports. Regenerated the one changed architecture dependency inventory.
+Agent guidance and the extraction plan reflect that packaging separation is
+complete *within this checkout*, while repository extraction and independent
+security audit are still future work. The optional AIVM integration adapters
+and guest identity helper remain temporary code debt, not a production claim.
+
+The wheel/sdist builds, repository-boundary checks, focused SSH/CLI tests,
+architecture check and offline `uv lock --check` succeeded in the work
+container. One wider CLI identity test requires a non-root guest UID; this
+container runs as root, so I did not treat that environment-dependent failure
+as evidence of a code regression. Full user CI and a real-VM experiment remain
+unverified here.

@@ -38,20 +38,53 @@ def includes(actual, expected) -> bool:
     return actual == expected
 
 
+def case_bytes(case: dict) -> bytes:
+    """A codec case's input: its ``text`` as UTF-8, or its raw ``hex``."""
+    if 'hex' in case:
+        return bytes.fromhex(case['hex'])
+    return case['text'].encode('utf-8')
+
+
 @pytest.mark.parametrize(
     'case', load('codec.json')['cases'], ids=lambda c: c['name']
 )
 def test_codec_vectors(case):
     if not case['valid']:
         with pytest.raises(SecretsError):
-            codec.loads(case['text'])
+            codec.loads(case_bytes(case))
         return
-    value = codec.loads(case['text'])
+    value = codec.loads(case_bytes(case))
     canonical = codec.dumps(value)
     assert canonical.decode('ascii') == case['canonical']
     assert codec.digest(value) == case['sha256']
     assert hashlib.sha256(canonical).hexdigest() == case['sha256']
     assert codec.dumps(codec.loads(canonical)) == canonical  # a fixed point
+
+
+def test_codec_corpus_has_the_required_witnesses() -> None:
+    """Vacuity guards: each hardening rule is witnessed both ways."""
+    cases = load('codec.json')['cases']
+    for case in cases:
+        assert ('text' in case) != ('hex' in case), case['name']
+        if 'hex' in case:
+            assert case['hex'] == bytes.fromhex(case['hex']).hex(), case['name']
+    raw = [case for case in cases if 'hex' in case]
+    assert any(case['valid'] for case in raw)
+    assert sum(not case['valid'] for case in raw) >= 8
+    # Raw bytes that are not UTF-8 can only be stated in hex.
+    undecodable = []
+    for case in raw:
+        try:
+            bytes.fromhex(case['hex']).decode('utf-8')
+        except UnicodeDecodeError:
+            undecodable.append(case)
+    assert len(undecodable) >= 5 and not any(c['valid'] for c in undecodable)
+    escapes = [case for case in cases
+               if '\\ud' in case.get('text', '').lower()]
+    assert any(case['valid'] for case in escapes), 'a surrogate pair'
+    assert sum(not case['valid'] for case in escapes) >= 5, 'lone surrogates'
+    by_name = {case['name']: case for case in cases}
+    assert by_name['negative zero is the integer zero']['canonical'] == '[0]'
 
 
 def test_codec_limits_are_the_documented_ones():

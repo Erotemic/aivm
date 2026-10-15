@@ -35,13 +35,14 @@ def evaluate(value: object) -> dict[str, object]:
 
 
 def main() -> int:
+    # Every reply, an oversized line's included, takes the one binary path
+    # and is flushed before the next line is read: replies stay in input
+    # order, and a driver can wait for each one.
     for line in sys.stdin.buffer:
-        if len(line) > MAX_LINE:
-            print(codec.dumps({'ok': False, 'code': 'invalid_capability'}).decode())
-            continue
         try:
-            value = codec.loads(line, limit=MAX_LINE)
-            reply = evaluate(value)
+            if len(line) > MAX_LINE:
+                raise SecretsError('invalid_capability')
+            reply = evaluate(codec.loads(line, limit=MAX_LINE))
         except SecretsError:
             reply = {'ok': False, 'code': 'invalid_capability'}
         sys.stdout.buffer.write(codec.dumps(reply) + b'\n')

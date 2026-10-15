@@ -42,6 +42,7 @@ from tests.secrets_helpers import (
     TOKEN,
     TLSService,
     github_policy,
+    isolated_broker_install_root,
     poison,
     ran_as_broker,
     write_policy_file,
@@ -50,6 +51,7 @@ from tests.secrets_helpers import (
 
 # Wherever the broker under test is installed: a checkout or site-packages.
 INSTALL_ROOT = Path(aivm_secrets.__file__).resolve().parent.parent
+ISOLATED_INSTALL_ROOT = isolated_broker_install_root()
 
 
 class LocalGuest:
@@ -484,7 +486,8 @@ def test_adapter_rejects_shared_credential_and_resolver(world):
 def test_adapter_refuses_a_broker_installed_from_the_shared_workspace(world):
     """Dogfooding guard: an editable install inside the attached folder."""
     session = replace(
-        world.session, host_src=INSTALL_ROOT, share_source_dir=str(INSTALL_ROOT)
+        world.session, host_src=ISOLATED_INSTALL_ROOT,
+        share_source_dir=str(ISOLATED_INSTALL_ROOT),
     )
     with pytest.raises(SecretsError) as caught:
         run_secrets_ssh(
@@ -664,6 +667,38 @@ def test_cli_secret_options_without_policy_do_not_prepare_vm(monkeypatch):
     assert VMSSHCLI.main(argv=False, secrets_token_file='token', yes=True) == 1
     assert VMSSHCLI.main(argv=False, secrets_writes='allow', yes=True) == 1
     assert VMSSHCLI.main(argv=False, secrets_writes='approve', yes=True) == 1
+
+
+@pytest.mark.parametrize('missing', ['aivm_secrets.errors', 'cryptography'])
+def test_cli_explicit_secrets_missing_dependency_does_not_prepare_vm(
+    monkeypatch, missing,
+):
+    """A missing experimental install cannot trigger VM bootstrapping."""
+    import builtins
+    from aivm.cli.vm_connect import VMSSHCLI
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session',
+        lambda args: pytest.fail('VM prepared before checking optional support'),
+    )
+    original = builtins.__import__
+
+    def refuse_optional(name, *args, **kwargs):
+        if name == missing:
+            raise ModuleNotFoundError(name=name)
+        return original(name, *args, **kwargs)
+
+    if missing == 'cryptography':
+        import importlib.util
+        original_find_spec = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, 'find_spec',
+            lambda fullname: None if fullname == 'cryptography'
+            else original_find_spec(fullname),
+        )
+    else:
+        monkeypatch.setattr(builtins, '__import__', refuse_optional)
+    assert VMSSHCLI.main(argv=False, secrets_policy='demo.json', yes=True) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -851,16 +886,26 @@ def test_aivm_access_disable_revokes_a_live_secret_session(world, monkeypatch):
 
 def test_oauth_broker_argv_requires_an_unambiguous_host_credential_source(world):
     """The subprocess args contain only vault/profile paths and bound identity."""
-    options = dict(
-        policy_path=world.policy, token_file=None,
-        writes='deny', access_identity='principal-test', vm='test-vm',
-        audit_dir=world.state / 'secrets-audit', untrusted=[world.workspace],
-    )
+    def broker_argv(
+        *, token_file: Path | None = None,
+        oauth_vault: Path | None = None,
+        oauth_provider_config: Path | None = None,
+        oauth_subject: str = '',
+    ) -> list[str]:
+        return secrets_transport.broker_command(
+            policy_path=world.policy, token_file=token_file,
+            writes='deny', access_identity='principal-test', vm='test-vm',
+            audit_dir=world.state / 'secrets-audit', untrusted=[world.workspace],
+            oauth_vault=oauth_vault,
+            oauth_provider_config=oauth_provider_config,
+            oauth_subject=oauth_subject,
+        )
+
     vault = world.state / 'oauth-vault'
     profile = world.state / 'oauth-provider.json'
-    command = secrets_transport.broker_command(
-        **options, oauth_vault=vault,
-        oauth_provider_config=profile, oauth_subject='vm-' + 'a' * 64,
+    command = broker_argv(
+        oauth_vault=vault, oauth_provider_config=profile,
+        oauth_subject='vm-' + 'a' * 64,
     )
     assert command[1] == '-I'
     assert command[command.index('--oauth-vault') + 1] == str(vault)
@@ -869,13 +914,10 @@ def test_oauth_broker_argv_requires_an_unambiguous_host_credential_source(world)
     assert '--token-file' not in command and '--token-stdin' not in command
     assert SERVICE_TOKEN not in ' '.join(command)
     with pytest.raises(SecretsError) as confused:
-        secrets_transport.broker_command(
-            **{**options, 'token_file': world.token},
-            oauth_vault=vault, oauth_provider_config=profile,
-            oauth_subject='vm-' + 'a' * 64,
+        broker_argv(
+            token_file=world.token, oauth_vault=vault,
+            oauth_provider_config=profile, oauth_subject='vm-' + 'a' * 64,
         )
     assert confused.value.code == 'invalid_policy'
     with pytest.raises(SecretsError):
-        secrets_transport.broker_command(
-            **options, oauth_vault=vault, oauth_subject='vm-' + 'a' * 64,
-        )
+        broker_argv(oauth_vault=vault, oauth_subject='vm-' + 'a' * 64)

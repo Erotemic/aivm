@@ -12,6 +12,7 @@ import subprocess
 import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -89,8 +90,10 @@ def test_binding_checks_all_authenticated_fields():
     binding.require_match('same', 'same')
     with pytest.raises(SecretsError):
         binding.require_match('peer-a', 'peer-b')
+    # Exercise the runtime validator with a deliberately ill-typed value.
+    invalid: Any = 5
     with pytest.raises(SecretsError):
-        binding.require_match(5, 5)
+        binding.require_match(invalid, invalid)
 
 
 def test_issuer_does_not_mutate_enrollment_and_cannot_issue_after_revocation():
@@ -103,7 +106,7 @@ def test_issuer_does_not_mutate_enrollment_and_cannot_issue_after_revocation():
     assert isinstance(result.claims, IdentityClaims)
     assert codec.dumps(state) == encoded
     with pytest.raises(FrozenInstanceError):
-        result.claims = None
+        setattr(result, 'claims', None)
     after = registry.revoke(state, issuer=row['issuer'],
                             audience=row['audience'], subject=row['subject'])
     with pytest.raises(SecretsError) as exc:

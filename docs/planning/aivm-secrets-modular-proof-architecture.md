@@ -60,6 +60,7 @@ aivm_secrets/
         validity.py           # exclusive expiry
         epochs.py             # bounded monotonically increasing epochs
         binding.py            # exact identity comparisons
+    primitives_runner.py      # JSONL conformance runner (does I/O, so outside)
     kernel/
         grammar.py            # compatible re-export of primitives.grammar
         codec.py              # compatible re-export of primitives.codec
@@ -113,8 +114,10 @@ errors and protocol bytes unchanged during refactoring.
 
 The present `identity.garrett` core no longer imports `kernel` or `host`.
 `identity.enrollment` still uses the trusted shared host filesystem/audit
-adapters. `tests/test_secrets_purity.py` now allows kernel-to-primitives imports
-and retains the sole-`AuthorizedEffect` constructor gate. Separate structural
+adapters. `tests/test_secrets_purity.py` now allows kernel-to-primitives imports,
+applies the kernel's import, ambient-authority, first-order and frozen-state
+rules to `primitives/` too, and retains the sole-`AuthorizedEffect`
+constructor gate. Separate structural
 checks forbid imports in the opposite direction. Those checks are not proofs
 of every possible dynamic Python import behavior.
 

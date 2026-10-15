@@ -27,7 +27,7 @@ def setup(tmp_path):
         'access_token': 'SYNTHETIC_HOST_ONLY_CREDENTIAL',
         'token_type': 'Bearer', 'expires_in': 3600,
         'scope': 'read', 'refresh_token': 'ROTATING_REFRESH_TOKEN',
-    }, now=int(time.time()), allowed_scopes=p.scopes)
+    }, now=int(time.time()), allowed_scopes=list(p.scopes))
     vault.enroll(p, 'vm-a', grant)
     snapshot = vault.session_snapshot(p, 'vm-a', resource_host=p.resource_host)
     instance = Harness(tmp_path / 'harness')

@@ -433,9 +433,12 @@ implementations must reproduce.
   streaming, request bodies beyond flat string fields or fixed typed GraphQL
   query variables, client
   certificates, OAuth refresh or SigV4.
-* `aivm-secrets` is an independent Python module in the existing `aivm` wheel.
-  It can be split into its own distribution later with the same policy/wire
-  contracts, after protocol stability and a compatibility period.
+* `aivm-secrets` is currently an independently organized Python package
+  **temporarily bundled** into the `aivm` wheel on the experimental branch.
+  The intended destination is a separate repository and distribution,
+  preserving the versioned policy/process/wire contracts. Do not create
+  new non-optional AIVM dependencies during this interim period; see the
+  [repository boundary decision](aivm-secrets-repository-boundary.md).
 
 ### Executable provenance caveat
 

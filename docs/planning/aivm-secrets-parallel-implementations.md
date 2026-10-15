@@ -13,6 +13,11 @@ executable source of truth. A future compiled Rust binary is the executable
 source for **its own extracted Lean proofs**; Python remains independently
 maintained and is not thereby formally verified.
 
+The [repository boundary plan](aivm-secrets-repository-boundary.md) permits
+continued experimental work in this feature branch without making AIVM
+dependent on secrets. Both implementations, protocol corpora and assurance
+work are intended to move to a standalone `aivm-secrets` repository later.
+
 ## Why two implementations
 
 - Python supports rapid protocol and operator-experience iteration, concise
@@ -63,6 +68,22 @@ corpus, runnable with `python -m aivm_secrets.identity.garrett_runner`.
 A Rust runner can be selected with `AIVM_SECRETS_RUST_GARRETT_RUNNER`; absent
 Rust still means **no cross-language result**. Earlier identity, registry,
 managed-VM and crypto vectors remain frozen and authoritative.
+
+The leaf primitives have their own corpora, one per primitive, in
+`tests/secrets_vectors/primitives/`, run by `python -m
+aivm_secrets.primitives_runner` and, once one exists, by the Rust
+`aivm-secrets-primitives` runner named in `AIVM_SECRETS_RUST_PRIMITIVES_RUNNER`.
+They pin the conventions a fixed-width port must reproduce: integers outside
+the signed 64-bit range are refused (by a digest, an epoch and a claim's
+time alike) rather than compared, floats are never digested, and a lone
+surrogate is never accepted. The same suite checks both runners on raw
+bytes: one flushed reply per line, in input order, oversized lines
+included, and the spellings a canonical re-encoding would erase (`-0`, an
+exponent, raw UTF-8 in a capability). Replies are compared as canonical
+JSON, so a runner that answers `"ok": 1` or `"value": 2.0` fails although
+Python's `==` would equate them. The identity and managed-VM parity gates
+compare replies the same way and hold a Rust runner to the same framing
+and flushing; the other Garrett parity gates still compare with `==`.
 
 ## Shared security contract, not shared shortcuts
 
@@ -172,10 +193,13 @@ pass-through behavior for unknown token/header/operation variants.
 
 The Python reference now also exposes a **pure** enrollment state machine at
 `aivm_secrets/identity/garrett/registry.py`: versioned bounded registry
-validation, enrollment (including explicit replacement), revocation epoch
-transitions, and current certificate-to-identity lookup. This lives outside
-filesystem, X.509 and TLS code. Its frozen JSONL contract is
-`tests/secrets_vectors/identity-registry-v1.jsonl` (69 cases).
+validation, enrollment (including explicit and compare-and-swap
+replacement), key fingerprint custody, revocation epoch transitions
+(including revoke-all for CA rotation), forget/prune of expired revoked rows,
+and current certificate-to-identity lookup. This lives outside filesystem,
+X.509 and TLS code. Its JSONL contract is
+`tests/secrets_vectors/identity-registry-v1.jsonl` (161 cases; edited in
+place until a release ships it).
 
 The future Rust runner must produce the same canonical JSON output under the
 explicit `AIVM_SECRETS_RUST_REGISTRY_RUNNER` test gate; absence of a Rust
@@ -220,8 +244,11 @@ parity tests: no Rust executable exists yet.
 The reference implementation now defines a separate pure OAuth contract in
 `aivm_secrets.identity.garrett.oauth_contract` (PKCE pending state, callback,
 scopes, access/refresh generation and expiration) and an independent JSONL
-runner at `python -m aivm_secrets.identity.oauth_runner`. A frozen
-`garrett-oauth-v1.jsonl` suite contains positive and negative transitions.
+runner at `python -m aivm_secrets.identity.oauth_runner`. The
+`garrett-oauth-v1.jsonl` suite (unreleased, edited in place until the first
+release that ships it) contains positive and negative transitions,
+including RFC 7636-length callback values, error callbacks, and classify
+and refreshable actions.
 The future Rust runner selected with `AIVM_SECRETS_RUST_OAUTH_RUNNER` must
 produce the same canonical output. Test agreement is not a Python proof.
 

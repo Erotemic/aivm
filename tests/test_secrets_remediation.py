@@ -110,7 +110,9 @@ def test_graphql_is_fixed_query_not_a_generic_read_post():
                 'operation': 'pr.review-threads', 'arguments': wrong,
             })
             from aivm_secrets.kernel.scope import check_arguments, find
-            check_arguments(find(spec.scope(), parsed.operation), parsed)
+            operation = find(spec.scope(), parsed.operation)
+            assert operation is not None
+            check_arguments(operation, parsed)
 
 
 @pytest.mark.parametrize('document', [
@@ -148,6 +150,7 @@ def test_generic_service_supports_fixed_query_templates():
     })
     effect = must(spec.final(req, None))
     assert not effect.is_write and effect.graphql
+    assert effect.body is not None
     assert json.loads(dict(effect.body)['variables']) == {'widget': 7}
     assert spec == parse_policy(spec.to_dict())
 

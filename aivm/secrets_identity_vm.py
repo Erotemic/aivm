@@ -17,11 +17,11 @@ from typing import Callable
 from aivm_secrets.errors import SecretsError
 
 from .commands import CommandManager
+from .errors import CommandControlError
 from .config_store import find_principal, load_store
+from .privilege import virsh_needs_sudo
 from .runtime import virsh_cmd
 from .config_scopes import ResolvedVMContext
-
-
 
 
 def _vm_subject(binding: dict[str, object]) -> str:
@@ -47,14 +47,56 @@ class ManagedIdentity:
 
 
 def live_uuid(name: str) -> str:
-    """Read the *live system-libvirt* domain identity, never guest output."""
+    """Read the *live system-libvirt* domain identity, never guest output.
+
+    This is the same system-libvirt read as every other ``virsh`` probe, so
+    it escalates exactly when they do: a host user outside the libvirt group
+    reaches ``qemu:///system`` only through sudo. It stays ``role='read'``,
+    and an escalated read is still announced at INFO under the sudo
+    call-out policy.
+    """
     reply = CommandManager.current().run(
-        virsh_cmd('domuuid', name), sudo=False, check=False, capture=True,
-        role='read', timeout=15, summary='Identify the managed VM incarnation',
+        virsh_cmd('domuuid', name), sudo=virsh_needs_sudo(), check=False,
+        capture=True, role='read', timeout=15,
+        summary='Identify the managed VM incarnation',
     )
     if reply.code:
         raise SecretsError('guest_setup', detail='libvirt UUID unavailable')
     candidate = reply.stdout.strip()
+    try:
+        parsed = uuid.UUID(candidate)
+    except (ValueError, AttributeError):
+        raise SecretsError('guest_setup', detail='invalid libvirt UUID') from None
+    if str(parsed) != candidate:
+        raise SecretsError('guest_setup', detail='noncanonical libvirt UUID')
+    return candidate
+
+
+def live_uuid_unattended(
+    name: str, *, needs_sudo: bool, manager: CommandManager,
+) -> str:
+    """Check the live UUID through an isolated, non-prompting command manager.
+
+    The foreground launcher constructs this manager with its own privilege
+    policy and proves the probe works before starting credential services.
+    The watchdog then reuses it, separately from the interactive manager.
+    """
+    try:
+        result = manager.run_unattended_read(
+            virsh_cmd('domuuid', name), sudo=needs_sudo, timeout=15,
+            summary='Check managed VM identity without interactive privileges',
+        )
+    except (OSError, CommandControlError):
+        raise SecretsError('guest_setup', detail=(
+            'unattended libvirt UUID check unavailable; grant this operator '
+            'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
+        )) from None
+    if result.code:
+        raise SecretsError('guest_setup', detail=(
+            'unattended libvirt UUID check refused; grant this operator '
+            'read access to system libvirt (or narrowly scoped NOPASSWD sudo)'
+        ))
+    candidate = result.stdout.strip()
     try:
         parsed = uuid.UUID(candidate)
     except (ValueError, AttributeError):

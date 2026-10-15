@@ -98,4 +98,5 @@ __all__ = [
     'VMAccessModalCLI',
     'VMIdentityEnrollCLI',
     'VMIdentityRenewCLI',
+    'VMIdentityRotateKeyCLI',
 ]

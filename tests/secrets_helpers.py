@@ -44,6 +44,75 @@ def must(value: T | None) -> T:
     return value
 
 
+def runner_replies(
+    argv: list[str], payload: bytes, *, timeout: float = 60
+) -> list[bytes]:
+    """Every reply line a JSONL conformance runner child writes for ``payload``.
+
+    The runner's standard streams are the boundary its contract is stated
+    on, so it runs as a real process.
+    """
+    import subprocess
+
+    done = subprocess.run(
+        argv, input=payload, capture_output=True, check=True, timeout=timeout
+    )
+    return done.stdout.splitlines()
+
+
+def typed(value: Any) -> bytes:
+    """``value`` as canonical JSON, so that equality also compares JSON types.
+
+    Python's ``==`` cannot tell ``true`` from ``1`` from ``1.0``
+    (``True == 1 == 1.0``), yet a runner that answers ``"ok": 1`` or
+    ``"value": 2.0`` has given a different reply, one a fixed-width port must
+    not give. Their canonical encodings (``true``, ``1``, ``1.0``) differ.
+    """
+    return codec.dumps(value)
+
+
+def typed_replies(
+    argv: list[str], payload: bytes, *, timeout: float = 60
+) -> list[bytes]:
+    """Each reply line of ``argv`` for ``payload``, decoded then :func:`typed`.
+
+    A runner need not write canonical bytes, only the same JSON values with
+    the same JSON types; re-encoding states exactly that.
+    """
+    return [
+        typed(codec.loads(reply))
+        for reply in runner_replies(argv, payload, timeout=timeout)
+    ]
+
+
+def reply_while_open(argv: list[str], line: bytes, *, timeout: float = 30) -> bytes:
+    """The reply to one line, read while the runner's input is still open.
+
+    A runner that holds its replies until end of input fails here, just as a
+    driver that waits for each answer before sending the next would hang.
+    """
+    import select
+    import subprocess
+
+    child = subprocess.Popen(
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE
+    )
+    stdin, stdout = must(child.stdin), must(child.stdout)
+    try:
+        stdin.write(line)
+        stdin.flush()
+        ready, _, _ = select.select([stdout], [], [], timeout)
+        assert ready, 'no reply while input was open: replies are not flushed'
+        return stdout.readline()
+    finally:
+        stdin.close()
+        try:
+            child.wait(timeout)
+        finally:
+            child.kill()  # a no-op once it has exited
+            stdout.close()
+
+
 def github_policy(**changes: Any) -> dict[str, Any]:
     data = {
         'schema': 1,
@@ -674,6 +743,25 @@ def cli_env(root: Path, **extra: str) -> dict[str, str]:
         **extra,
     )
     return env
+
+
+def isolated_broker_install_root() -> Path:
+    """Find the source tree imported by the *isolated broker process*.
+
+    With a built sdist, the parent pytest process often imports from the
+    checkout while ``python -I`` runs the installed copy. Security tests
+    must mark the latter as untrusted, not a different checkout path.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, '-I', '-c',
+         'from pathlib import Path; import aivm_secrets; '
+         'print(Path(aivm_secrets.__file__).resolve().parent.parent)'],
+        check=True, capture_output=True, text=True, cwd='/', timeout=20,
+    )
+    return Path(result.stdout.strip())
 
 
 def run_cli_process(

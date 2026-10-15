@@ -850,6 +850,28 @@ class VMSSHCLI(_BaseCommand):
         ):
             log.error('OAuth credentials require bound identity mode and no token file.')
             return 1
+        if args.secrets_policy and not args.dry_run:
+            # An explicit experiment must not bootstrap/create/attach a VM and
+            # only then discover that the optional broker is not installed.
+            try:
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import interpreter_flags
+                from importlib.util import find_spec
+
+                if find_spec('cryptography') is None:
+                    raise ModuleNotFoundError(name='cryptography')
+                interpreter_flags()
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {
+                    'aivm_secrets', 'cryptography'
+                }:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
+                    return 1
+                raise
+            except SecretsError as ex:
+                log.error('Secret session host setup failed: {}', ex.for_operator())
+                return 1
         log.trace(
             'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
             args.host_src,
@@ -907,43 +929,53 @@ class VMSSHCLI(_BaseCommand):
             ]
         )
         if args.secrets_policy:
-            from aivm_secrets.errors import SecretsError
-
-            from ..secrets_transport import run_secrets_ssh
-
             try:
-                executor = run_secrets_ssh
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import run_secrets_ssh
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
+                    return 1
+                raise
+            try:
+                policy = Path(args.secrets_policy)
+                token_file = (
+                    Path(args.secrets_token_file)
+                    if args.secrets_token_file else None
+                )
+                still_authorized = partial(
+                    _access_identity_still_usable, args.config, session
+                )
                 if args.secrets_identity_root:
                     from ..secrets_identity_transport import run_bound_secrets_ssh
-                    executor = run_bound_secrets_ssh
-                identity_kwargs = (
-                    {
-                        'identity_root': Path(args.secrets_identity_root),
-                        'oauth_vault': Path(args.secrets_oauth_vault)
-                            if args.secrets_oauth_vault else None,
-                        'oauth_provider_config': Path(args.secrets_oauth_provider_config)
-                            if args.secrets_oauth_provider_config else None,
-                    }
-                    if args.secrets_identity_root else {}
-                )
-                ssh_result = executor(
-                    session,
-                    ssh_cmd,
-                    policy_path=Path(args.secrets_policy),
-                    token_file=(
-                        Path(args.secrets_token_file)
-                        if args.secrets_token_file
-                        else None
-                    ),
-                    writes=args.secrets_writes,
-                    still_authorized=partial(
-                        _access_identity_still_usable, args.config, session
-                    ),
-                    **identity_kwargs,
-                )
+
+                    ssh_result = run_bound_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        identity_root=Path(args.secrets_identity_root),
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                        oauth_vault=(Path(args.secrets_oauth_vault)
+                                     if args.secrets_oauth_vault else None),
+                        oauth_provider_config=(
+                            Path(args.secrets_oauth_provider_config)
+                            if args.secrets_oauth_provider_config else None),
+                    )
+                else:
+                    ssh_result = run_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                    )
             except SecretsError as ex:
                 log.error('Secret session failed: {}', ex.for_operator())
                 return 1
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
+                    return 1
+                raise
             except OSError:
                 log.error('Secret session host or transport setup failed.')
                 return 1

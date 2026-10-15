@@ -12,6 +12,8 @@ The architecture, the plan for a verified Rust kernel and the precise claims
 are in ``docs/planning/``:
 
 * ``aivm-secrets-design.md`` -- architecture and threat model;
+* ``aivm-secrets-repository-boundary.md`` -- temporary branch policy,
+  optional AIVM integration and the future separate-repository gate;
 * ``aivm-secrets-agnostic-integrations.md`` -- the service manifest contract;
 * ``aivm-secrets-kernel-spec.md`` -- the state machine, as specified for the
   Rust port;
@@ -67,10 +69,12 @@ pending; no Rust/Lean proof is claimed.
 Quick start
 -----------
 
-Install the optional dependency from a host checkout **the guest cannot
-modify**, write a policy, and validate it::
+Install the experimental ``aivm-secrets`` distribution explicitly from a
+trusted host checkout **the guest cannot modify**. Ordinary ``pip install aivm``
+installs neither this package nor its cryptographic dependencies. Until the
+separate repository/distribution is published, use the sibling project::
 
-    python -m pip install '.[secrets]'
+    python -m pip install ./aivm_secrets
     install -d -m 700 "$HOME/.config/aivm/secrets"
     install -m 600 docs/examples/aivm-secrets-gitlab-merge-request.json \
         "$HOME/.config/aivm/secrets/gitlab.json"
@@ -354,6 +358,26 @@ If a write fails, the error says what is known -- and only two things can be:
 A failed *read* is different, because there is nothing to have applied:
 ``upstream_rejected`` means the service answered 4xx.
 
+The same rule holds on the way back to the guest. When the identity bridge
+has handed a request to the broker and gets no well-formed answer in time
+(or the broker hangs up), the guest is told ``outcome_unknown``, whether or
+not it was a write, because the bridge cannot tell whether the broker acted.
+The guest client says the same when its own wait runs out after sending; a
+reply it cannot read is a client or transport failure (exit ``2``), which is
+not retried either. Each hop waits longer than the one behind it (the
+broker's worst case for one request is two provider calls of at most 45 s
+each; the bridge waits 120 s for it, the guest client 150 s), so the hop
+nearest the broker is normally the one that answers.
+
+``outcome_unknown`` does not mean the request is over. The broker runs one
+request at a time and never abandons a request it has read, and those 120 s
+count only a request's own work, not the time it waited behind others (or
+behind another session holding an OAuth vault). So a request answered
+``outcome_unknown`` -- typically one of several sent at once to a slow
+service -- may still be carried out *after* that answer. A check made
+straight away that finds nothing applied is not proof that nothing will be;
+look again once the session's other requests have finished.
+
 Delegating to a helper
 ----------------------
 
@@ -535,8 +559,9 @@ needed) or ``2`` (client or transport failure).
 ``upstream_error``      the service failed or redirected; not retried
 ``upstream_response``   the response was unusable, oversized, or echoed the
                         credential
-``outcome_unknown``     a write was sent and did not succeed; whatever the
-                        status, it may have been applied
+``outcome_unknown``     a write was sent and did not succeed, or a request
+                        was sent and no answer came back in time; either
+                        way it may have been applied
 ======================  ====================================================
 
 Running the broker without AIVM
@@ -595,8 +620,23 @@ into the guest. The host CA private key, JWT signer and AEAD key may **not**.
 
 For an existing separately started and scoped AIVS broker, ``identity issue``
 wraps its host-only capability in a signed, encrypted, certificate-bound JWT.
-``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener with fixed limits;
-``identity call`` speaks verified TLS over an explicitly forwarded socket.
+``python -I -m aivm_secrets identity bridge`` starts a foreground **Unix** listener.
+It serves up to 16 connections at once, so a slow provider call no longer
+holds up other callers' TLS handshakes or the answers the bridge gives by
+itself (a refused delegation, a wrong binding, a revoked certificate). The
+broker behind it still runs requests one at a time: a call that needs the
+broker -- every ``describe`` and ``request`` -- waits behind the one in
+progress, and that wait counts against the caller's deadline. It has no
+connection cap by default: it ends when its operator stops it, when the
+parent holding ``--exit-on-stdin-eof`` closes its stdin, or after
+``--idle-seconds`` with nothing in flight (``--max-connections N`` is still
+accepted, for a deliberately short-lived bridge). When the lease closes it
+stops listening and removes its socket at once, and gives a call still in
+flight a few seconds to be answered, not the full provider wait. ``--subject NAME`` pins it to one enrolled subject: a certificate the
+same CA enrolled for anyone else is refused (``wrong_binding``) before
+anything reaches the broker. It forwards only to a socket named
+``broker.sock``, and checks that socket's type, owner and mode again on every
+request. ``identity call`` speaks verified TLS over an explicitly forwarded socket.
 A revoked or replaced certificate is denied on its next request, and the
 broker still checks the operation, resource, budget and approval. Host-only
 OAuth/PKCE acquisition is described earlier in this guide, but the local
@@ -645,13 +685,30 @@ policy, run one read-only session against the real service and confirm that
 an operation outside the policy is refused.
 
 Managed-VM certificate enrollment (experimental)
------------------------------------------------
+------------------------------------------------
 
 The experimental Python P4a VM adapter is **opt-in**. For an already managed
 VM that has the updated forced bootstrap helper, first initialize an identity
 authority as described above, then explicitly enroll the current host principal::
 
     aivm vm identity_enroll --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
+
+Every principal-account SSH step of enrollment checks the guest's host key
+strictly against the VM's pinned bootstrap ``known_hosts`` -- or, on a shared
+machine store where that file is root-only, against your own
+``known_hosts`` -- never trusting a key on first use. The live libvirt UUID
+read runs through sudo, announced, on hosts where ``virsh`` needs it. A
+certificate-bound session also needs **unattended read access** to
+``qemu:///system`` for its running identity watchdog: the foreground launcher
+checks this before issuing a session capability, and the watchdog uses only
+``sudo -n``, never a password prompt. Use direct libvirt group access or a
+narrowly scoped ``NOPASSWD`` permission for ``virsh domuuid``. A cached sudo
+password may expire mid-session, in which case the broker fails closed after
+three unsuccessful polls. Ordinary ``aivm ssh`` needs none of this. An
+expected failure (an old forced helper, an unpinned host key, a renewal
+conflict, a changed domain UUID) prints one ``Identity operation failed:``
+line with its operator detail and exits with status 1; a declined prompt
+aborts the command as your decision.
 
 Enrollment does not grant provider access. After separately creating a host-only
 policy, choose the mTLS-only launcher::
@@ -663,14 +720,28 @@ and revoke the old epoch using the same pinned forced-bootstrap channel::
 
     aivm vm identity_renew --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
-This reuses the existing guest software key and does not rotate the CA.
+This reuses the guest's *active* software key and does not rotate the CA:
+the guest first re-signs its CSR with ``client.key`` (even with an older
+forced helper, through a fixed host-delivered step), so a renewal after a key
+rotation certifies the rotated key. Every install checks that the issued
+certificate's public key is the guest key it will be used with before
+replacing anything.
 To explicitly replace the guest-owned software key and its client certificate
 with epoch fencing, run (on a managed VM with the updated forced helper)::
 
     aivm vm identity_rotate_key --vm=lab --identity_root="$HOME/.config/aivm/secrets/identity"
 
 A key-rotation attempt is never automatic. A failed activation revokes the
-new enrollment; operator recovery may be required. See
+new enrollment with an epoch+thumbprint guarded revocation; when that cannot
+complete, or when you decline or interrupt a step after the certificate was
+issued, AIVM prints the exact
+``python -I -m aivm_secrets identity revoke-if-current ...`` command to run
+instead of continuing. If the certificate authority's reply is lost after it
+may have committed, the command fails with ``outcome_unknown`` and names the
+certificate the registry now holds; that may instead be another operator's
+concurrent enrollment, so check before revoking it. An interrupt while the
+authority is issuing logs the registry read and the guarded revocation to
+fill in, and runs nothing more. See
 ``docs/planning/aivm-secrets-garrett-guest-key-rotation.md``.
 A stale epoch or certificate thumbprint fails closed. It requires a fresh
 certificate-bound session token afterward. The separate host-only command
@@ -678,11 +749,93 @@ certificate-bound session token afterward. The separate host-only command
 30-day local TLS server leaf and key beneath the current CA; **restart**
 the identity bridge for that keypair to take effect. For an explicit,
 fail-closed CA replacement with **no dual-root grace period**, use the
-host-only ``identity rotate-ca --root ...`` command. CA rotation revokes all
-enrollments and requires bridge restart, distribution of the NEW public CA,
-explicit re-enrollment and new bound session tokens. Do not run it to renew a
-server leaf. See ``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
+host-only ``identity rotate-ca --root ... --expected-ca-sha256 SHA`` command,
+where ``SHA`` is the ``ca_sha256`` that ``identity status`` prints. The
+expected root is required: a stale or repeated run is refused before anything
+changes, so it cannot revoke enrollments made under the new root. CA rotation
+revokes every enrollment (each row becomes inactive and its epoch advances,
+so a re-enrollment is newer unless the row was forgotten in between, see
+below), prints and audits the revoked ``{subject, epoch, certificate_sha256}``
+list, and requires bridge restart,
+distribution of the NEW public CA, explicit re-enrollment (a VM that has run
+``identity_rotate_key`` first needs the CSR step described below) and new
+bound session tokens. Do not run it to renew a server leaf. See
+``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
 ``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
+
+The host enforces key custody on every enrollment change. ``identity_renew``
+(``identity renew-client``) re-certifies only the enrolled key; a CSR for any
+other key is refused. A key replaced by ``identity_rotate_key`` or
+``identity enroll --replace`` is retired for the VM's identity subject
+(below). It is refused for that subject while it is among the last 8 keys
+retired for it, and only until that subject's enrollment is forgotten (see
+``identity forget`` below); retirement does not follow the VM to a new
+subject. A key enrolled for one active subject is refused for any other, so a
+cloned guest's copied key cannot gain a second identity while the original
+enrollment is active. AIVM reports either refusal only as "identity service
+refused the operation"; the host-only ``aivm-secrets identity`` command says
+which rule refused.
+
+A VM's identity subject is derived from its name, its machine store, the
+owning principal and its libvirt domain UUID. Renaming a VM, moving it to
+another store or changing its owning principal gives it a new subject, with
+no retired keys, while the old enrollment may still be active and hold the
+guest's key. If it does, ``identity_enroll`` for the renamed VM is refused,
+because another active subject holds the key. Until AIVM offers to revoke the
+old enrollment on rename, revoke it by hand first. Inside the guest, this
+prints the key's fingerprint::
+
+    openssl pkey -in ~/.config/aivm/identity/client.key -pubout -outform DER | sha256sum
+
+Find the row with that ``key_sha256`` in ``identity status``, and run
+``identity revoke --root ... --subject OLD`` with that row's subject. If the
+VM has ever run ``identity_rotate_key``, regenerate its CSR first (below):
+its stale CSR carries the original key, which nothing refuses under the new
+subject.
+
+**Guests rotated before the CSR fix.** The original activation script left
+the original key's CSR in ``client.csr``. The host refuses that stale CSR
+instead of re-certifying the rotated-away key, so AIVM regenerates
+``client.csr`` from ``client.key`` over the pinned principal channel before
+every ``identity_enroll`` and ``identity_renew``, and the updated forced
+helper signs a fresh CSR with ``client.key`` on every request. Managed
+renewals therefore present the active key even when the guest's helper
+predates the fix. Only a standalone enrollment from an operator-supplied CSR
+still needs the manual step, run inside the guest as the guest user::
+
+    cd ~/.config/aivm/identity && umask 077 &&
+      openssl req -new -key client.key -out client.csr -subj /CN=aivm-guest
+
+If ``identity_rotate_key`` fails while activating the new key, AIVM revokes
+the new enrollment. The guest is left on its old key, which is now retired,
+so re-enrolling it is refused. Reset the guest identity instead: inside the
+guest, remove ``client.key``, ``client.csr``, ``client.rotate.key`` and
+``client.rotate.csr`` from ``~/.config/aivm/identity``, then run
+``identity_enroll``, which generates a fresh key.
+
+``identity enroll --replace`` accepts an optional compare-and-swap,
+``--expected-epoch N --expected-certificate-sha256 T`` (both together), which
+refuses the replacement if the enrollment changed since it was inspected.
+
+The registry holds at most 128 enrollments, revoked ones included. Two
+locked, audited host-only verbs free slots::
+
+    python -I -m aivm_secrets identity forget --root ... --subject SUBJECT
+    python -I -m aivm_secrets identity prune --root ...
+
+Both remove only enrollments that are revoked **and** whose certificate has
+expired, and print the removed ``{subject, epoch, certificate_sha256}`` list.
+A forgotten subject would restart at epoch 0, which is harmless: its
+certificate has expired and every token bound to it expired no later.
+Managed-VM subjects embed the libvirt domain UUID, so a recreated VM is a new
+subject anyway. A VM that still exists keeps its subject, though, through
+revocation and ``rotate-ca``, and ``prune`` also removes its row once it is
+revoked and its last certificate (valid for 7 days) has expired. Forgetting a
+row discards the keys retired for it, so the next enrollment of that VM
+certifies whatever key its CSR carries, including a key it rotated away from.
+Before enrolling such a VM again, make sure its ``client.csr`` was made from
+its current ``client.key`` (regenerate it as above), or reset its guest
+identity.
 
 This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
 socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest

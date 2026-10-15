@@ -17,11 +17,13 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from aivm_secrets import guest
+from aivm_secrets.errors import SecretsError
 from aivm_secrets.host.server import LocalServer
 from aivm_secrets.kernel.service import parse_policy
 from tests.secrets_helpers import (
@@ -295,11 +297,16 @@ def test_missing_session_and_transport_failures_exit_2(
 
 
 class Impostor:
-    """A socket that answers one frame with whatever a test dictates."""
+    """A socket that answers one frame with whatever a test dictates.
 
-    def __init__(self, directory: Path, answer: bytes):
+    ``hold`` is how long it sits on a frame before answering: a peer that
+    has the request and has not replied yet.
+    """
+
+    def __init__(self, directory: Path, answer: bytes, hold: float = 0.0):
         self.path = directory / 'fake.sock'
         self._answer = answer
+        self._hold = hold
         self._listener = socket.socket(socket.AF_UNIX)
         self._listener.bind(str(self.path))
         self._listener.listen(4)
@@ -315,6 +322,7 @@ class Impostor:
             with peer:
                 try:
                     peer.recv(65536)
+                    time.sleep(self._hold)
                     peer.sendall(self._answer)
                 except OSError:
                     pass
@@ -339,6 +347,8 @@ class Impostor:
         (b'{"ok":false,"error":"denied"}\n', 3, 'request_failed', ''),
         (b'{"ok":false,"error":{"code":"upstream_rejected","status":404}}\n', 3,
          'upstream_rejected (HTTP 404)', ''),
+        (b'{"ok":false,"error":{"code":"outcome_unknown","status":409}}\n', 3,
+         'sent and may have been applied', ''),
         (b'{"ok":false,"error":{"code":"denied","status":"<script>"}}\n', 3,
          'denied', 'script'),
         (b'{"ok":false,"error":{"code":"approval_required"},'
@@ -381,6 +391,43 @@ def test_exchange_bounds_both_directions():
                 guest.exchange(str(fake.path), 'c', {'operation': 'x'})
         finally:
             fake.close()
+
+
+def test_a_request_sent_and_never_answered_is_outcome_unknown() -> None:
+    """A peer that took the frame and has not answered may still act on it."""
+    with tempfile.TemporaryDirectory(prefix='as-', dir='/tmp') as directory:
+        fake = Impostor(Path(directory), b'{"ok":true}\n', hold=1.0)
+        try:
+            reply = guest.exchange(
+                str(fake.path), 'c', {'operation': 'x', 'arguments': {}},
+                deadline=0.3,
+            )
+        finally:
+            fake.close()
+    assert reply['ok'] is False
+    assert reply['error']['code'] == 'outcome_unknown'
+
+
+def test_each_hop_waits_longer_than_the_hop_behind_it() -> None:
+    """The hop nearest the broker gives up first, and so is the one to say.
+
+    The guest client is a standalone file and cannot import these constants,
+    so this is what keeps its own copy from drifting below them.
+    """
+    from aivm_secrets.host import egress
+    from aivm_secrets.identity import mtls
+    from aivm_secrets.transport import framing
+
+    # The broker's worst case: a preflight and a final call, each bounded.
+    assert framing.BROKER_REPLY_DEADLINE > 2 * egress.TOTAL_DEADLINE + framing.FRAME_TIMEOUT
+    # Every leg the bridge may still take once its client has sent: finish
+    # reading the frame, connect to the broker, send it on, wait, answer.
+    bridge_legs = (
+        mtls.FRAME_DEADLINE_SECONDS + 2 * framing.CONNECT_TIMEOUT
+        + framing.BROKER_REPLY_DEADLINE + mtls.FRAME_DEADLINE_SECONDS
+    )
+    assert framing.RELAYED_REPLY_DEADLINE >= bridge_legs
+    assert guest.RESPONSE_DEADLINE > framing.RELAYED_REPLY_DEADLINE
 
 
 def test_the_client_runs_as_a_copied_standalone_script(session, tmp_path):
@@ -782,9 +829,11 @@ def test_gh_default_repository_from_env_and_git_config(tmp_path, monkeypatch):
     assert req['arguments']['repository'] == 'attacker/other'
     policy = parse_policy(github_policy(gh_compat=2))
     from aivm_secrets.kernel.scope import check_arguments, find
-    with pytest.raises(Exception):
+    with pytest.raises(SecretsError):
         r = policy.parse_request(req)
-        check_arguments(find(policy.scope(), r.operation), r)
+        operation = find(policy.scope(), r.operation)
+        assert operation is not None
+        check_arguments(operation, r)
     monkeypatch.delenv('GH_REPO')
     (tmp_path / '.git').mkdir()
     (tmp_path / '.git/config').write_text(

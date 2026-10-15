@@ -180,20 +180,21 @@ def test_pure_renewal_is_nonmutating_monotone_and_requires_cas():
         return base64.urlsafe_b64encode(bytes([value])*32).rstrip(b'=').decode('ascii')
     source = {'schema': 1, 'subjects': {'vm-alpha': {
         'epoch': 10, 'active': True, 'certificate_sha256': thumb(1),
-        'not_after': 1000,
+        'not_after': 1000, 'key_sha256': '1' * 64, 'retired_keys': ['0' * 64],
     }}}
     original = json.loads(json.dumps(source))
     fresh = registry.renew(source, issuer='aivm.test', audience='bound',
                            subject='vm-alpha', expected_epoch=10,
                            expected_thumbprint=thumb(1), thumbprint=thumb(2),
-                           not_after=2000, now=100)
+                           key_sha256='2' * 64, not_after=2000, now=100)
     assert source == original
     assert fresh['subjects']['vm-alpha']['epoch'] == 11
+    assert fresh['subjects']['vm-alpha']['retired_keys'] == ['0' * 64, '1' * 64]
     with pytest.raises(SecretsError):
         registry.renew(fresh, issuer='aivm.test', audience='bound',
                        subject='vm-alpha', expected_epoch=10,
                        expected_thumbprint=thumb(1), thumbprint=thumb(3),
-                       not_after=3000, now=100)
+                       key_sha256='2' * 64, not_after=3000, now=100)
 
 
 def test_real_mtls_after_client_and_server_renewal_denies_old_peer(tmp_path):
@@ -275,3 +276,82 @@ def test_real_mtls_after_client_and_server_renewal_denies_old_peer(tmp_path):
     assert new_reply['ok'] is True
     assert len(accepted) == 1
     assert accepted[0]['capability'] == 'aivs1.NEW'
+
+
+def files_under(root: Path) -> dict[str, bytes]:
+    return {str(path.relative_to(root)): path.read_bytes()
+            for path in sorted(root.rglob('*')) if path.is_file()}
+
+
+def test_renewal_with_a_different_key_is_denied_without_any_write(
+        tmp_path: Path) -> None:
+    """REN-07: renew-client re-certifies the enrolled key and nothing else."""
+    authority, _, _, _, old = authority_and_client(tmp_path)
+    other_key, other_csr = tmp_path / 'other.key', tmp_path / 'other.csr'
+    other_fp = create_csr(private_key=other_key, request_file=other_csr)
+    before = files_under(authority.root)
+    status = authority.status()
+    with pytest.raises(SecretsError) as exc:
+        renew(authority, other_csr, other_fp, old)
+    assert exc.value.code == 'denied'
+    assert authority.status() == status
+    # No clients/*.pem, no audit file, no registry change: byte-identical.
+    assert files_under(authority.root) == before
+    assert len(list((authority.root / 'clients').iterdir())) == 1
+    assert len(list((authority.root / 'audit').iterdir())) == 1
+
+
+def test_renewal_after_key_rotation_refuses_the_rotated_away_key(
+        tmp_path: Path) -> None:
+    """B1: a stale CSR for the old key must not be re-certified."""
+    authority, _, csr, fp, old = authority_and_client(tmp_path)
+    new_key, new_csr = tmp_path / 'new.key', tmp_path / 'new.csr'
+    new_fp = create_csr(private_key=new_key, request_file=new_csr)
+    rotated = authority.rotate_client_key(
+        subject='vm-alpha', csr=new_csr.read_bytes(),
+        approve_fingerprint=new_fp, expected_epoch=old['epoch'],
+        expected_thumbprint=old['certificate_sha256'])
+    row = authority.status()['subjects']['vm-alpha']
+    assert row['key_sha256'] == new_fp and row['retired_keys'] == [fp]
+    before = files_under(authority.root)
+    # The old guest helper sends the original client.csr on renewal.
+    with pytest.raises(SecretsError) as exc:
+        renew(authority, csr, fp, rotated)
+    assert exc.value.code == 'denied'
+    # Nor can an unconditional --replace bring the retired key back.
+    with pytest.raises(SecretsError) as exc:
+        authority.enroll(subject='vm-alpha', csr=csr.read_bytes(),
+                         approve_fingerprint=fp, replace=True)
+    assert exc.value.code == 'denied'
+    assert files_under(authority.root) == before
+    # The rotated-to key renews normally.
+    renewed = renew(authority, new_csr, new_fp, rotated)
+    assert renewed['epoch'] == rotated['epoch'] + 1
+    assert renewed['certificate_sha256'] != rotated['certificate_sha256']
+    assert authority.status()['subjects']['vm-alpha']['key_sha256'] == new_fp
+
+
+def test_renewal_without_the_enrolled_leaf_fails_closed(tmp_path: Path) -> None:
+    authority, _, csr, fp, old = authority_and_client(tmp_path)
+    Path(old['certificate']).unlink()
+    status = authority.status()
+    with pytest.raises(SecretsError) as exc:
+        renew(authority, csr, fp, old)
+    assert exc.value.code == 'invalid_capability'
+    assert 'identity enroll --replace' in exc.value.detail
+    assert authority.status() == status
+    assert list((authority.root / 'clients').iterdir()) == []
+
+
+def test_renewal_with_a_leaf_that_differs_from_the_registry_fails_closed(
+        tmp_path: Path) -> None:
+    authority, _, csr, fp, old = authority_and_client(tmp_path)
+    path = authority.root / 'enrollments.json'
+    data = json.loads(path.read_text())
+    data['subjects']['vm-alpha']['key_sha256'] = 'f' * 64
+    path.write_text(json.dumps(data))
+    path.chmod(0o600)
+    with pytest.raises(SecretsError) as exc:
+        renew(authority, csr, fp, old)
+    assert exc.value.code == 'invalid_capability'
+    assert authority.status()['subjects']['vm-alpha']['epoch'] == old['epoch']

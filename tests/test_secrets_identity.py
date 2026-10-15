@@ -139,6 +139,30 @@ def test_claims_fail_on_unknown_fields_or_bool_epoch():
         claims.epoch = 4
 
 
+def test_claims_expiry_always_fits_a_signed_64_bit_word() -> None:
+    """``iat`` is bounded so that ``iat + MAX_IDENTITY_LIFETIME`` is an i64.
+
+    The bound used to be one second later, which admitted ``exp == 2**63``:
+    a value no ``i64`` holds, refused only later by the validity primitive.
+    """
+    from aivm_secrets.identity.garrett.claims import (
+        MAX_IDENTITY_LIFETIME,
+        MAX_ISSUED_AT,
+    )
+
+    top = 2**63 - 1
+    assert MAX_ISSUED_AT + MAX_IDENTITY_LIFETIME == top
+    base = {'iss': 'aivm.test', 'aud': 'aivm-secrets.remote',
+            'sub': 'instance-7', 'jti': 'a' * 32, 'epoch': 3,
+            'cnf': {'x5t#S256': 'A' * 43}}
+    latest = IdentityClaims.parse({**base, 'iat': MAX_ISSUED_AT, 'exp': top})
+    assert (latest.issued_at, latest.expires_at) == (MAX_ISSUED_AT, top)
+    for iat, exp in [(MAX_ISSUED_AT + 1, top), (MAX_ISSUED_AT, top + 1),
+                     (MAX_ISSUED_AT + 1, top + 1)]:
+        denial(lambda c={**base, 'iat': iat, 'exp': exp}:
+               IdentityClaims.parse(c))
+
+
 def test_token_size_and_bad_shapes_refused():
     issuer, verifier, claims, _, der = pair()
     denial(lambda: issuer.issue(claims, 'plaintext-not-sealed'))

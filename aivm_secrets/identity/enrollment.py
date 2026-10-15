@@ -28,6 +28,7 @@ from ..host.files import private_directory, read_owned, write_new
 from ..primitives import codec, grammar
 from .garrett.claims import IdentityExpectation, MAX_EPOCH, MAX_IDENTITY_LIFETIME
 from .garrett import registry as registry_model
+from .garrett.key_rotation import authorize_key_reuse, authorize_key_rotation
 from .garrett.protocol import prepare_issue
 from .garrett import authority as authority_model
 from .token import (IdentityTokenIssuer, certificate_thumbprint,
@@ -200,13 +201,18 @@ class IdentityAuthority:
 
     @contextmanager
     def _audit(self, event: str, subject: str, now: int,
-               fingerprint: str) -> Iterator[None]:
+               fingerprint: str) -> Iterator[AuditLog]:
+        """Record intent first and completion last; yield the open log.
+
+        A transaction that changes several rows records one row event per
+        change inside this bracket, before the commit that makes it.
+        """
         log = AuditLog(self.root / 'audit' / f'{secrets.token_hex(16)}.jsonl',
                        secrets.token_hex(16))
         try:
             log.record(event, timestamp=now, resource={'subject': subject},
                        digest=fingerprint)
-            yield
+            yield log
             log.record('identity_recorded', timestamp=now,
                        resource={'subject': subject}, digest=fingerprint)
         finally:
@@ -320,21 +326,40 @@ class IdentityAuthority:
             generation += 1
         raise SecretsError('exhausted')
 
-    def rotate_ca(self, *, now: int | None = None) -> dict[str, Any]:
+    def rotate_ca(self, *, expected_ca_sha256: str,
+                  now: int | None = None) -> dict[str, Any]:
         """Fail-closed root rollover; all enrolled identities are revoked.
 
         There is deliberately no dual-anchor overlap. The host operator must
         stop/restart bound sessions, redistribute the public CA and explicitly
-        re-enroll guests. No VM has been enrolled in this pre-deployment format.
+        re-enroll guests.
+
+        `expected_ca_sha256` is a compare-and-swap on the active root: a stale
+        or repeated run is refused ('revoked') before anything is staged, so
+        it can never revoke enrollments made under the root a first run
+        installed.
 
         Commit order matters: stage private CA/server material, revoke every
         client in the registry, then atomically activate the new trust pointer.
         A crash at any stage cannot authorize an old client under a new root.
+        Revocation keeps the rows (inactive, epoch advanced, saturating) so a
+        re-enrollment gets a strictly higher epoch than anything issued under
+        the old root, unless the row is forgotten in between (see
+        `garrett.registry.forget`); each revoked enrollment is audited
+        before the commit.
         """
         stamp = _stamp(now)
         _, _, _, ec, _, _ = _x509()
         with self._locked():
             current = self._assert_current_ca()
+            authority_model.require_ca(current, expected_sha256=expected_ca_sha256)
+            registry = self._registry()
+            revoked = [{'subject': subject, 'epoch': row['epoch'],
+                        'certificate_sha256': row['certificate_sha256']}
+                       for subject, row in sorted(registry['subjects'].items())
+                       if row['active']]
+            revoked_registry = registry_model.revoke_all(
+                registry, issuer=self.issuer, audience=self.audience)
             ca_number = self._next_generation(
                 CA_DIRECTORY, 'ca', self.ca_generation, MAX_CA_GENERATIONS)
             server_number = self._next_generation(
@@ -352,7 +377,7 @@ class IdentityAuthority:
             ca_key_name, ca_cert_name = self._ca_names(ca_number)
             leaf_key_name, leaf_cert_name = self._server_names(server_number)
             with self._audit('identity_ca_rotate_intent', 'issuer', stamp,
-                             root_hash):
+                             root_hash) as log:
                 self._stage_pair(self.root / ca_key_name, _key_pem(ca_key),
                                  self.root / ca_cert_name, _certificate_pem(ca))
                 self._stage_pair(self.root / leaf_key_name, _key_pem(leaf_key),
@@ -360,16 +385,38 @@ class IdentityAuthority:
                                  _certificate_pem(leaf_cert))
                 # Retire the entire enrollment set before trust activation.
                 # A partial transaction fails closed; never restore old rows.
-                self._update({'schema': registry_model.SCHEMA, 'subjects': {}})
+                for item in revoked:
+                    log.record('identity_revoke_intent', timestamp=stamp,
+                               resource={'subject': item['subject'],
+                                         'epoch': item['epoch']},
+                               digest=item['certificate_sha256'])
+                self._update(revoked_registry)
                 self._write_selected_manifest(selection)
             return {'ca_generation': ca_number, 'ca_sha256': root_hash,
                     'server_generation': server_number,
-                    'enrollments_revoked': True, 'restart_required': True}
+                    'enrollments_revoked': True, 'revoked': revoked,
+                    'restart_required': True}
 
     def enroll(self, *, subject: str, csr: bytes, approve_fingerprint: str,
-               replace: bool = False, now: int | None = None) -> dict[str, Any]:
-        """Host operator attests CSR provenance out of band; never trust CSR CN."""
+               replace: bool = False, expected_epoch: int | None = None,
+               expected_thumbprint: str | None = None,
+               now: int | None = None) -> dict[str, Any]:
+        """Host operator attests CSR provenance out of band; never trust CSR CN.
+
+        With `expected_epoch` and `expected_thumbprint` (both, and only with
+        `replace`), the replacement is a compare-and-swap on the row the
+        caller inspected; a concurrent change makes it 'revoked'. The key
+        custody rules of the pure registry apply either way: a key retired for
+        this subject, or certified for another active subject, is 'denied'.
+        """
         _subject(subject)
+        cas = expected_epoch is not None or expected_thumbprint is not None
+        if type(replace) is not bool or (cas and (
+                not replace or type(expected_epoch) is not int or
+                type(expected_thumbprint) is not str)):
+            raise SecretsError('invalid_capability', detail=(
+                'an enrollment CAS needs --replace, --expected-epoch and '
+                '--expected-certificate-sha256 together'))
         request, fp = _read_csr(csr)
         if type(approve_fingerprint) is not str or fp != approve_fingerprint:
             raise SecretsError('denied', detail='CSR key fingerprint not confirmed')
@@ -384,12 +431,18 @@ class IdentityAuthority:
                                      days=CLIENT_DAYS, server=False)
             der = _certificate_der(cert)
             thumb = certificate_thumbprint(der)
-            state = registry_model.enroll(
-                state, issuer=self.issuer, audience=self.audience,
-                subject=subject, thumbprint=thumb,
-                not_after=int(cert.not_valid_after_utc.timestamp()),
-                replace=replace,
-            )
+            not_after = int(cert.not_valid_after_utc.timestamp())
+            if expected_epoch is not None and expected_thumbprint is not None:
+                state = registry_model.replace_if_current(
+                    state, issuer=self.issuer, audience=self.audience,
+                    subject=subject, expected_epoch=expected_epoch,
+                    expected_thumbprint=expected_thumbprint,
+                    thumbprint=thumb, key_sha256=fp, not_after=not_after)
+            else:
+                state = registry_model.enroll(
+                    state, issuer=self.issuer, audience=self.audience,
+                    subject=subject, thumbprint=thumb, key_sha256=fp,
+                    not_after=not_after, replace=replace)
             record = state['subjects'][subject]
             path = self.root / 'clients' / (hashlib.sha256(der).hexdigest() + '.pem')
             with self._audit('identity_enroll_intent', subject, stamp,
@@ -410,6 +463,11 @@ class IdentityAuthority:
         confirmation are prerequisites. The new certificate invalidates old
         JWTs/peer certificates immediately via the enrollment registry. This
         does NOT rotate a reused guest key or attest where it was generated.
+
+        Without `require_new_key` the CSR must carry the enrolled key
+        (REN-07, 'denied' otherwise); with it, a different key that is
+        neither retired for this subject nor held by another active subject.
+        A refusal writes no certificate, registry change or audit record.
         """
         _subject(subject)
         request, fp = _read_csr(csr)
@@ -430,19 +488,29 @@ class IdentityAuthority:
                     row['epoch'] != expected_epoch or
                     row['certificate_sha256'] != expected_thumbprint):
                 raise SecretsError('revoked')
+            # The enrolled key is read from the stored leaf the registry
+            # names, and must be the key the registry recorded for it.
+            enrolled = _key_fingerprint(
+                self._current_client_certificate(row).public_key())
+            if enrolled != row['key_sha256']:
+                raise SecretsError('invalid_capability', detail=(
+                    'enrolled certificate differs from the registry; use '
+                    'identity enroll --replace'))
             if require_new_key:
                 # The host validates that a different key is being enrolled,
                 # not just that the CA issued a different certificate.
-                from .garrett.key_rotation import authorize_key_rotation
-                enrolled_cert = self._current_client_certificate(row)
                 authorize_key_rotation(
                     expected_epoch=expected_epoch, actual_epoch=row['epoch'],
                     expected_thumbprint=expected_thumbprint,
                     actual_thumbprint=row['certificate_sha256'],
-                    enrolled_key_fingerprint=_key_fingerprint(
-                        enrolled_cert.public_key()),
+                    enrolled_key_fingerprint=enrolled,
                     candidate_key_fingerprint=fp,
                 )
+            else:
+                # REN-07: a renewal re-certifies the enrolled key and no
+                # other, even if an old guest helper sends a stale CSR.
+                authorize_key_reuse(enrolled_key_fingerprint=enrolled,
+                                    candidate_key_fingerprint=fp)
             ca_key, ca_cert = self._load_ca()
             if stamp + CLIENT_DAYS * 86400 >= int(ca_cert.not_valid_after_utc.timestamp()):
                 raise SecretsError('expired', detail='host CA requires renewal')
@@ -455,7 +523,8 @@ class IdentityAuthority:
                 state, issuer=self.issuer, audience=self.audience,
                 subject=subject, expected_epoch=expected_epoch,
                 expected_thumbprint=expected_thumbprint,
-                thumbprint=thumb, not_after=int(cert.not_valid_after_utc.timestamp()),
+                thumbprint=thumb, key_sha256=fp,
+                not_after=int(cert.not_valid_after_utc.timestamp()),
                 now=stamp)
             record = updated['subjects'][subject]
             path = self.root / 'clients' / (hashlib.sha256(der).hexdigest() + '.pem')
@@ -512,6 +581,57 @@ class IdentityAuthority:
             return {'subject': subject, 'revoked': revoked,
                     'epoch': current['epoch'] if current is not None else None}
 
+    def forget(self, subject: str, *, now: int | None = None) -> dict[str, Any]:
+        """Drop one inactive row whose certificate has expired; audited.
+
+        This frees a registry slot (there are MAX_SUBJECTS) without touching
+        any other row. The subject's public client certificates stay under
+        `clients/`. See `garrett.registry.forget` for why an epoch restart
+        after this is harmless, and for the retired-key custody it discards.
+        """
+        _subject(subject)
+        stamp = _stamp(now)
+        with self._locked():
+            state = self._registry()
+            updated = registry_model.forget(
+                state, issuer=self.issuer, audience=self.audience,
+                subject=subject, now=stamp)
+            row = state['subjects'][subject]
+            with self._audit('identity_forget_intent', subject, stamp,
+                             row['certificate_sha256']):
+                self._update(updated)
+            return {'forgotten': [{
+                'subject': subject, 'epoch': row['epoch'],
+                'certificate_sha256': row['certificate_sha256']}]}
+
+    def prune(self, *, now: int | None = None) -> dict[str, Any]:
+        """Forget every inactive row whose certificate has expired; audited.
+
+        Nothing eligible means nothing is written, as for an idempotent
+        revoke. Otherwise each forgotten row is audited before the commit.
+        """
+        stamp = _stamp(now)
+        with self._locked():
+            state = self._registry()
+            updated = registry_model.prune(
+                state, issuer=self.issuer, audience=self.audience, now=stamp)
+            forgotten = [{'subject': subject, 'epoch': row['epoch'],
+                          'certificate_sha256': row['certificate_sha256']}
+                         for subject, row in sorted(state['subjects'].items())
+                         if subject not in updated['subjects']]
+            if forgotten:
+                digest = hashlib.sha256(codec.dumps(
+                    [item['subject'] for item in forgotten])).hexdigest()
+                with self._audit('identity_prune_intent', 'issuer', stamp,
+                                 digest) as log:
+                    for item in forgotten:
+                        log.record('identity_forget_intent', timestamp=stamp,
+                                   resource={'subject': item['subject'],
+                                             'epoch': item['epoch']},
+                                   digest=item['certificate_sha256'])
+                    self._update(updated)
+            return {'forgotten': forgotten}
+
     def status(self) -> dict[str, Any]:
         selection = self._assert_current_ca()
         return {'issuer': self.issuer, 'audience': self.audience,
@@ -534,7 +654,9 @@ class IdentityAuthority:
                 raise ValueError('certificate/registry mismatch')
             return cert
         except (ValueError, OSError, TypeError, SecretsError):
-            raise SecretsError('invalid_capability') from None
+            raise SecretsError('invalid_capability', detail=(
+                'enrolled certificate unavailable; use identity enroll '
+                '--replace')) from None
 
     def rotate_client_key(self, *, subject: str, csr: bytes,
                           approve_fingerprint: str, expected_epoch: int,

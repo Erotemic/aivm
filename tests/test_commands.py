@@ -12,7 +12,9 @@ from aivm.commands import (
     CommandError,
     CommandManager,
     CommandManagerInvariantError,
+    CommandOwnership,
     CommandResult,
+    CommandRole,
     Elided,
 )
 from aivm.errors import (
@@ -1312,15 +1314,17 @@ def test_spawn_asks_before_an_unowned_state_change(
         mgr.spawn(argv, role='modify')
     assert started == []
     # Declared exemptions, never inferred ones, lift the question.
-    for exemption in (
-        {'role': 'read'},
-        {'role': 'modify', 'ownership': 'tool'},
-    ):
-        child = mgr.spawn(argv, **exemption)
+    def exercise_exemption(
+        role: CommandRole, ownership: CommandOwnership = 'user'
+    ) -> None:
+        child = mgr.spawn(argv, role=role, ownership=ownership)
         assert child is not None
         child.release()
         assert child.wait(20) == 0
         child.stdout.close()
+
+    exercise_exemption('read')
+    exercise_exemption('modify', 'tool')
     assert len(started) == 2
 
 

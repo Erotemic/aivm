@@ -94,7 +94,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.restart` | `aivm/vm/update/restart.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py` | 2 |
 
-## Path-based `StoreScope` reconstruction sites (20)
+## Path-based `StoreScope` reconstruction sites (21)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -111,7 +111,7 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.credentials.agent_transport` | `store_path` | `aivm/credentials/agent_transport.py` | 1 |
 | `aivm.credentials.service` | `store_path` | `aivm/credentials/service.py` | 1 |
 | `aivm.operational_scope` | `path` | `aivm/operational_scope.py` | 1 |
-| `aivm.secrets_identity_transport` | `store` | `aivm/secrets_identity_transport.py` | 2 |
+| `aivm.secrets_identity_transport` | `store` | `aivm/secrets_identity_transport.py` | 3 |
 | `aivm.services` | `store_path` | `aivm/services.py` | 1 |
 | `aivm.services` | `target` | `aivm/services.py` | 1 |
 | `aivm.vm.create` | `config_store_path` | `aivm/vm/create.py` | 1 |

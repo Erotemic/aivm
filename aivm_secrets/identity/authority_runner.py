@@ -12,7 +12,8 @@ from ..primitives import codec, grammar
 from .garrett import authority
 
 FIELDS = frozenset({'version', 'action', 'issuer', 'audience', 'created_at',
-                    'ca_sha256', 'state', 'ca_generation', 'server_generation'})
+                    'ca_sha256', 'state', 'ca_generation', 'server_generation',
+                    'expected_ca_sha256'})
 
 
 def evaluate(request: object) -> dict[str, object]:
@@ -25,8 +26,11 @@ def evaluate(request: object) -> dict[str, object]:
         fields = {'init': {'issuer', 'audience', 'created_at', 'ca_sha256'},
                   'validate': {'state'},
                   'rotate-ca': {'state', 'ca_generation', 'ca_sha256', 'server_generation'},
-                  'renew-server': {'state', 'server_generation'}}
-        if action not in fields:
+                  'renew-server': {'state', 'server_generation'},
+                  'require-ca': {'state', 'expected_ca_sha256'}}
+        # Type first: a list or object action is a refusal, not a TypeError
+        # that kills the stream and every later reply.
+        if type(action) is not str or action not in fields:
             raise SecretsError('invalid_capability')
         grammar.exact_keys(value, frozenset({'version', 'action'}) | fields[action],
                            code='invalid_capability')
@@ -37,6 +41,9 @@ def evaluate(request: object) -> dict[str, object]:
                                       ca_sha256=value['ca_sha256'])
         elif action == 'validate':
             state = authority.validate(value['state'])
+        elif action == 'require-ca':
+            state = authority.require_ca(
+                value['state'], expected_sha256=value['expected_ca_sha256'])
         elif action == 'rotate-ca':
             state = authority.activate_ca(value['state'],
                                           ca_generation=value['ca_generation'],
