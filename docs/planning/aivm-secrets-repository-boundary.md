@@ -46,7 +46,7 @@ repository on this branch: development may continue here temporarily.
 
 | Boundary | Present code | Assessment / required direction |
 | --- | --- | --- |
-| Co-distribution | `pyproject.toml` includes both `aivm*` Python packages and the `aivm-secrets` console script; `aivm[secrets]` adds cryptography | **Temporary packaging debt.** Do not add secrets to `project.dependencies`. Separate distribution before a general AIVM release carrying this work. |
+| Packaging | The ordinary AIVM wheel includes only `aivm` and its CLI; `aivm_secrets/pyproject.toml` builds the experimental `aivm-secrets` distribution and CLI | **Separated within this checkout.** Secrets must be installed explicitly from the sibling source project; there is no `aivm[secrets]` extra until an independently published/reviewed distribution exists. |
 | Default CLI imports | `aivm/cli/vm.py` registers `vm_identity` on ordinary CLI startup | Identity implementation must be imported only after explicit selection; the ordinary CLI must start with `aivm_secrets` unavailable. |
 | Foreground SSH | `aivm/cli/vm_connect.py` offers `--secrets_policy`, plus bound identity and OAuth flags | Existing flags are experimental opt-ins. Normal SSH dispatch stays independent and no secrets services launch by default. |
 | Broker/identity adapters | `aivm/secrets_transport.py`, `secrets_identity_transport.py`, `secrets_identity_vm.py`, `cli/vm_identity.py` | Exception for existing experimental adapters, not an invitation to expand AIVM's trust boundary. Remove or move appropriate pieces at extraction. |
@@ -55,10 +55,17 @@ repository on this branch: development may continue here temporarily.
 | Testing | Secret test modules, protocol vectors and real-VM integration tests are currently interleaved with AIVM CI | Preserve coverage now; move broker-specific suites to independent CI later, leaving a small cross-project integration matrix. |
 | Assurance | Python reference + synthetic TLS/provider tests; no shipped independent Rust backend, no implementation-linked Lean proof, no live managed-VM identity/provider validation | Keep experimental label and require explicit security/e2e gates before broader release. |
 
-The existing AIVM package itself still contains the `aivm_secrets` source.
-A successful **no-import smoke test** is therefore only evidence of runtime
-independence, **not** evidence of separate wheel contents or an independently
-published package.
+The two packages are co-located in source **but are separate build/install
+artifacts**. Neither the normal install nor any AIVM extra (`tests`, `all`,
+`optional`, `docs`) depends on the experimental package. The previously
+advertised `aivm[secrets]` extra is intentionally absent until the separate
+project is published and explicitly approved. This is a pre-extraction packaging boundary, not an independently
+published or security-audited secrets release. An AIVM-only wheel must contain
+no `aivm_secrets` modules, `aivm-secrets` entry point, or required crypto
+metadata. The experimental sibling wheel must contain no `aivm` code.
+Source-checkout use of the opt-in broker first installs the sibling project
+(`python -m pip install ./aivm_secrets`) in a trusted host environment;
+standard `pip install aivm` does not pull it in.
 
 ## Rules for all work while sharing this branch
 
@@ -121,12 +128,13 @@ published package.
 
 ### Extraction PR(s): move responsibility, do not redesign security
 
-- Move `aivm_secrets/`, `aivm-secrets` CLI, standalone docs, conformance
-  vectors and broker/identity/OAuth test suites to the new repository. Keep
+- Move `aivm_secrets/`, its already separate packaging/CLI, standalone docs,
+  conformance vectors and broker/identity/OAuth test suites to the new repository. Keep
   author attribution and meaningful history where feasible.
-- Make `aivm` depend on the separately published distribution **only via a
-  version-constrained optional extra**, if AIVM integration is still desired
-  and approved; a minimal, no-secrets installation must install/run cleanly.
+- After independent publication and review, decide whether to **add a
+  version-constrained optional `aivm[secrets]` extra**. Until then, CI and
+  developers explicitly install the sibling from this checkout; normal AIVM
+  installation and dependency resolution stay independent of secrets.
   Preserve an explicit executable/process interface so a Rust backend can be
   selected deliberately in the future. No implicit Python or weaker fallback.
 - Reduce or remove the temporary `aivm` secrets adapters. Keep only reviewed,
@@ -138,11 +146,10 @@ published package.
 
 ### Release/security gates (separate decisions)
 
-- **AIVM release gate:** `pip install aivm` contains neither a hard dependency
-  on `aivm-secrets` nor a default secrets startup path; normal CLI/VM/SSH/code
-  behavior is tested with the secrets package absent. The experimental
-  implementation must not remain bundled in a general AIVM wheel without
-  a separate, explicit maintainer security/release decision. An ordinary
+- **AIVM release gate:** `pip install aivm` contains no broker implementation,
+  `aivm-secrets` executable, mandatory secret dependency or default secrets
+  startup path. CI checks both built wheel contents and normal CLI/VM/SSH/code
+  behavior with the secrets distribution absent. An ordinary
   AIVM user must not need to understand Garrett identity, certificates or OAuth.
 - **Secrets release gate:** security review of complete mediation, credential
   sources and process boundary, transport outcome ambiguity, revocation,

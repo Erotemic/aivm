@@ -850,6 +850,28 @@ class VMSSHCLI(_BaseCommand):
         ):
             log.error('OAuth credentials require bound identity mode and no token file.')
             return 1
+        if args.secrets_policy and not args.dry_run:
+            # An explicit experiment must not bootstrap/create/attach a VM and
+            # only then discover that the optional broker is not installed.
+            try:
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import interpreter_flags
+                from importlib.util import find_spec
+
+                if find_spec('cryptography') is None:
+                    raise ModuleNotFoundError(name='cryptography')
+                interpreter_flags()
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {
+                    'aivm_secrets', 'cryptography'
+                }:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
+                    return 1
+                raise
+            except SecretsError as ex:
+                log.error('Secret session host setup failed: {}', ex.for_operator())
+                return 1
         log.trace(
             'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
             args.host_src,
@@ -912,8 +934,8 @@ class VMSSHCLI(_BaseCommand):
                 from ..secrets_transport import run_secrets_ssh
             except ModuleNotFoundError as ex:
                 if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
-                    log.error('Secret-use sessions require optional AIVM '
-                              'secrets support (install aivm[secrets] on this branch).')
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
                     return 1
                 raise
             try:
@@ -950,7 +972,8 @@ class VMSSHCLI(_BaseCommand):
                 return 1
             except ModuleNotFoundError as ex:
                 if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
-                    log.error('Secret-use sessions require optional AIVM '                               'secrets support (install aivm[secrets] on this branch).')
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package.')
                     return 1
                 raise
             except OSError:

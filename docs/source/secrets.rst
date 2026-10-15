@@ -69,10 +69,12 @@ pending; no Rust/Lean proof is claimed.
 Quick start
 -----------
 
-Install the optional dependency from a host checkout **the guest cannot
-modify**, write a policy, and validate it::
+Install the experimental ``aivm-secrets`` distribution explicitly from a
+trusted host checkout **the guest cannot modify**. Ordinary ``pip install aivm``
+installs neither this package nor its cryptographic dependencies. Until the
+separate repository/distribution is published, use the sibling project::
 
-    python -m pip install '.[secrets]'
+    python -m pip install ./aivm_secrets
     install -d -m 700 "$HOME/.config/aivm/secrets"
     install -m 600 docs/examples/aivm-secrets-gitlab-merge-request.json \
         "$HOME/.config/aivm/secrets/gitlab.json"

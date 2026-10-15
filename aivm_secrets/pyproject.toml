@@ -1,0 +1,41 @@
+# Experimental broker distribution, co-located until the repository extraction.
+# Building this subproject must never install or bundle the AIVM VM manager.
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aivm-secrets"
+version = "0.2.0"
+readme = "README.md"
+description = "Experimental credential-use broker and identity reference implementation"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{name = "Jon Crall", email = "erotemic@gmail.com"}]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+]
+dependencies = ["cryptography>=46.0.0"]
+
+[project.scripts]
+aivm-secrets = "aivm_secrets.cli:main"
+
+[tool.setuptools]
+include-package-data = false
+packages = [
+  "aivm_secrets",
+  "aivm_secrets.host",
+  "aivm_secrets.identity",
+  "aivm_secrets.identity.garrett",
+  "aivm_secrets.kernel",
+  "aivm_secrets.primitives",
+  "aivm_secrets.transport",
+]
+
+# The distribution project lives *inside* the Python package for now.
+# Keep this one mapping until aivm-secrets has its own repository root.
+[tool.setuptools.package-dir]
+aivm_secrets = "."

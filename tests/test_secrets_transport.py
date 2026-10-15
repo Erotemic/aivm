@@ -669,6 +669,38 @@ def test_cli_secret_options_without_policy_do_not_prepare_vm(monkeypatch):
     assert VMSSHCLI.main(argv=False, secrets_writes='approve', yes=True) == 1
 
 
+@pytest.mark.parametrize('missing', ['aivm_secrets.errors', 'cryptography'])
+def test_cli_explicit_secrets_missing_dependency_does_not_prepare_vm(
+    monkeypatch, missing,
+):
+    """A missing experimental install cannot trigger VM bootstrapping."""
+    import builtins
+    from aivm.cli.vm_connect import VMSSHCLI
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_connect._prepare_foreground_session',
+        lambda args: pytest.fail('VM prepared before checking optional support'),
+    )
+    original = builtins.__import__
+
+    def refuse_optional(name, *args, **kwargs):
+        if name == missing:
+            raise ModuleNotFoundError(name=name)
+        return original(name, *args, **kwargs)
+
+    if missing == 'cryptography':
+        import importlib.util
+        original_find_spec = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, 'find_spec',
+            lambda fullname: None if fullname == 'cryptography'
+            else original_find_spec(fullname),
+        )
+    else:
+        monkeypatch.setattr(builtins, '__import__', refuse_optional)
+    assert VMSSHCLI.main(argv=False, secrets_policy='demo.json', yes=True) == 1
+
+
 # ---------------------------------------------------------------------------
 # The access identity behind a session, re-read from the real machine store
 # ---------------------------------------------------------------------------

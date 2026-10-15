@@ -50,11 +50,11 @@ dependencies = [
   "kwconf>=0.12.0",
   "PyYAML>=6.0.2",
 ]
-optional-dependencies.secrets = [
-  "cryptography>=46.0.0",
-]
+# Experimental secrets live in their own separately installed distribution.
+# Do not introduce an extra requiring an unpublished package; developers
+# install ./aivm_secrets explicitly until repository extraction/review.
+# The experimental secrets package must not be pulled in by the all extra.
 optional-dependencies.all = [
-  "aivm[secrets]",
   "aivm[docs]",
   "aivm[optional]",
   "aivm[tests]",
@@ -72,8 +72,9 @@ optional-dependencies.docs = [
 optional-dependencies.optional = [
   "pygments>=2.19.2",
 ]
+# Core test dependencies are intentionally independent of the optional broker.
+# The experimental suites additionally need `pip install ./aivm_secrets`.
 optional-dependencies.tests = [
-  "aivm[secrets]",
   "coverage>=6.1.1",
   "pytest>=6.2.5",
   "pytest-cov>=3.0.0",
@@ -83,7 +84,6 @@ optional-dependencies.tests = [
 ]
 urls.Homepage = "https://github.com/Erotemic/aivm"
 scripts.aivm = "aivm.cli:main"
-scripts.aivm-secrets = "aivm_secrets.cli:main"
 
 [tool.setuptools]
 include-package-data = true
@@ -99,7 +99,8 @@ packages.find.where = [
   ".",
 ]
 packages.find.include = [
-  "aivm*",
+  "aivm",
+  "aivm.*",
 ]
 
 [tool.ruff]

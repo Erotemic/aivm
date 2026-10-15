@@ -1623,7 +1623,7 @@
         {
           "imported": "aivm.secrets_transport",
           "importer": "aivm.cli.vm_connect",
-          "occurrences": 1,
+          "occurrences": 2,
           "path": "aivm/cli/vm_connect.py"
         },
         {

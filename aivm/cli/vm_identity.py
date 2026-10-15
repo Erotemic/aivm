@@ -33,7 +33,8 @@ def _run_identity(args: Any, *, renew: bool, rotate_key: bool = False) -> int:
         from ..secrets_identity_transport import enroll_managed_vm
     except ModuleNotFoundError as ex:
         if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
-            log.error('Identity enrollment requires optional AIVM secrets support '                       '(install aivm[secrets] on this branch).')
+            log.error('Identity enrollment requires the separately installed '
+                      'experimental aivm-secrets package.')
             return 1
         raise
     context, store = load_vm_context_with_path(

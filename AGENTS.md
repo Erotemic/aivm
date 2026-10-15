@@ -129,8 +129,9 @@ copy the shown commands and perform the equivalent work without AIVM.
 
 ## Experimental secrets project boundary (mandatory)
 - `aivm_secrets` is an experimental, unaudited credential broker and identity
-  project. It may be developed on the current branch temporarily but is
-  intended for an independent `aivm-secrets` repository and distribution.
+  project. For now its **separate Python distribution** is built from the
+  `aivm_secrets/` subproject in this branch. Its own repository comes later.
+  Never bundle it in AIVM's ordinary wheel or introduce mandatory dependencies.
 - Do **not** introduce non-optional dependencies on `aivm_secrets`,
   cryptography for secrets, broker processes, CA/identity state, TPM, or
   OAuth in ordinary AIVM packaging, imports, CLI initialization, VM
