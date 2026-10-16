@@ -129,8 +129,10 @@ copy the shown commands and perform the equivalent work without AIVM.
 
 ## Experimental secrets project boundary (mandatory)
 - `aivm_secrets` is an experimental, unaudited credential broker and identity
-  project. For now its **separate Python distribution** is built from the
-  `aivm_secrets/` subproject in this branch. Its own repository comes later.
+  project. Its standalone repository has been started in the sibling
+  `../aivm-secrets` checkout with preserved Git attribution. During the initial
+  port, this branch still builds its **separate Python distribution** from the
+  `aivm_secrets/` subproject pending the coordinated cutover.
   Never bundle it in AIVM's ordinary wheel or introduce mandatory dependencies.
 - Do **not** introduce non-optional dependencies on `aivm_secrets`,
   cryptography for secrets, broker processes, CA/identity state, TPM, or
@@ -151,8 +153,9 @@ copy the shown commands and perform the equivalent work without AIVM.
   needs neither TPM nor a second VM/container.
 - **Read first:** `docs/planning/aivm-secrets-repository-boundary.md`
   for the binding decision, current coupling inventory, extraction gates
-  and security review requirements. Do not start the repository split
-  without explicit maintainer direction.
+  and security review requirements. The initial standalone port is authorized;
+  follow the recorded cutover plan before removing this checkout's copy or
+  changing integration ownership.
 
 ## Safety Expectations
 - Do not silently broaden VM host-path exposure.
