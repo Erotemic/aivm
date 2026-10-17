@@ -1,2 +1,2 @@
 #!/bin/bash
-ty check aivm tests && mypy aivm tests --disallow-untyped-defs --disallow-incomplete-defs
+ty check aivm aivm_secrets tests && mypy aivm aivm_secrets tests --disallow-untyped-defs --disallow-incomplete-defs

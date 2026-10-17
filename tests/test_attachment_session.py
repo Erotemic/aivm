@@ -869,9 +869,15 @@ def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
     monkeypatch.setattr(
         'aivm.cli.vm_connect._prepare_foreground_session', lambda args: session
     )
+    agent_forwarding_calls: list[Any] = []
+
+    def prepare_agent_forwarding(prepared_session: Any) -> None:
+        agent_forwarding_calls.append(prepared_session)
+        return None
+
     monkeypatch.setattr(
         'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
-        lambda session: None,
+        prepare_agent_forwarding,
     )
     monkeypatch.setattr(
         'aivm.cli.vm_connect._upsert_ssh_config_entry',
@@ -898,6 +904,7 @@ def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
     )
 
     assert rc == 0
+    assert agent_forwarding_calls == [session]
     assert len(tunnel_calls) == 1
     assert warnings == [
         'Could not update the managed SSH config entry for '

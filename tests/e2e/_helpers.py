@@ -484,3 +484,152 @@ def e2e_teardown(
         timeout_s=timeout_s,
         extra_args=extra_args,
     )
+
+
+# ---------------------------------------------------------------------------
+# Interactive sessions
+# ---------------------------------------------------------------------------
+
+
+class Terminal:
+    """Run a command on a real pseudo-terminal and converse with it.
+
+    ``aivm ssh`` hands the terminal to an interactive login shell, so it can
+    only be exercised honestly through a pty: piping a script into its stdin
+    is consumed by the setup commands that run first.  The transcript is
+    noisy (prompts, colour codes, echoed input), so callers should use it
+    for synchronization and diagnostics and carry *results* out of the guest
+    some other way --- typically files in the shared workspace.
+    """
+
+    def __init__(
+        self, argv: Sequence[str], *, env: Mapping[str, str], cwd: Path
+    ):
+        import pty
+
+        self.argv = list(argv)
+        self.output = ''
+        self.returncode: int | None = None
+        # A pty pair handed to an ordinary child, rather than ``forkpty``:
+        # forking a multi-threaded test process is not safe.
+        self._fd, slave = pty.openpty()
+        try:
+            self._process = subprocess.Popen(
+                self.argv,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                env=dict(env),
+                cwd=str(cwd),
+                start_new_session=True,
+            )
+        finally:
+            os.close(slave)
+        self.pid = self._process.pid
+
+    def _pump(self, wait: float) -> bool:
+        """Read what is available; return False once the child is gone."""
+        import select
+
+        if self.returncode is not None:
+            return False
+        ready, _, _ = select.select([self._fd], [], [], wait)
+        if ready:
+            try:
+                chunk = os.read(self._fd, 65536)
+            except OSError:
+                chunk = b''
+            if chunk:
+                text = chunk.decode('utf-8', 'replace')
+                self.output += text
+                sys.stdout.write(text)
+                sys.stdout.flush()
+        if self._process.poll() is not None:
+            # Drain anything written just before exit.
+            while select.select([self._fd], [], [], 0.2)[0]:
+                try:
+                    chunk = os.read(self._fd, 65536)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                self.output += chunk.decode('utf-8', 'replace')
+            self.returncode = self._process.returncode
+            os.close(self._fd)
+            return False
+        return True
+
+    def expect(self, text: str, *, timeout: float) -> None:
+        """Wait until ``text`` appears in the transcript."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        while text not in self.output:
+            if not self._pump(0.2) and text not in self.output:
+                raise AssertionError(
+                    f'process exited ({self.returncode}) before {text!r}:\n'
+                    f'{self.output[-4000:]}'
+                )
+            if time.monotonic() > deadline:
+                self.kill()
+                raise AssertionError(
+                    f'timed out waiting for {text!r}:\n{self.output[-4000:]}'
+                )
+
+    def send(self, text: str) -> None:
+        os.write(self._fd, text.encode('utf-8'))
+
+    def ready(self, *, timeout: float) -> None:
+        """Wait until an interactive shell is actually executing input.
+
+        The probe's *output* (``42``) differs from its echoed *input*
+        (``$((6*7))``), so a terminal that merely echoes is not mistaken for
+        a shell that runs commands.
+        """
+        import time
+
+        deadline = time.monotonic() + timeout
+        while '__AIVM_SHELL_42__' not in self.output:
+            self.send('echo __AIVM_SHELL_$((6*7))__\n')
+            until = time.monotonic() + 2.0
+            while (
+                time.monotonic() < until
+                and '__AIVM_SHELL_42__' not in self.output
+            ):
+                if not self._pump(0.2):
+                    raise AssertionError(
+                        f'process exited ({self.returncode}) before a shell '
+                        f'was ready:\n{self.output[-4000:]}'
+                    )
+            if time.monotonic() > deadline:
+                self.kill()
+                raise AssertionError(
+                    f'no interactive shell appeared:\n{self.output[-4000:]}'
+                )
+
+    def wait(self, *, timeout: float) -> int:
+        import time
+
+        deadline = time.monotonic() + timeout
+        while self._pump(0.2):
+            if time.monotonic() > deadline:
+                self.kill()
+                raise AssertionError(
+                    f'timed out waiting for exit:\n{self.output[-4000:]}'
+                )
+        assert self.returncode is not None
+        return self.returncode
+
+    def kill(self) -> None:
+        """SIGKILL the process: no handler runs, as in a crash."""
+        import signal
+
+        if self.returncode is None:
+            # Only the process itself: what it leaves running is the point.
+            self._process.send_signal(signal.SIGKILL)
+            self.returncode = self._process.wait()
+            try:
+                # Its children lose their terminal, as when a window closes.
+                os.close(self._fd)
+            except OSError:
+                pass

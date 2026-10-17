@@ -8,9 +8,12 @@ mounts it ends up creating and the diagnostics it writes to stderr.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -18,6 +21,20 @@ from tests.persistent_helpers import (
     _exec_guest_replay_helper,
     _make_guest_replay_fake_run,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_stdlib_patched_through_the_helper_namespace() -> Iterator[None]:
+    """Undo ``ns['os'].makedirs = ...`` and ``ns['subprocess'].run = ...``.
+
+    The executed helper's ``os`` and ``subprocess`` are the real modules, so
+    assigning through its namespace patches them for the whole process.
+    Without this, every test that ran afterwards saw a no-op
+    ``os.makedirs``.
+    """
+    saved = os.makedirs, subprocess.run
+    yield
+    os.makedirs, subprocess.run = saved
 
 
 def test_persistent_replay_helper_uses_guest_local_manifest_and_skips_bad_records(

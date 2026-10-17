@@ -1,0 +1,20 @@
+{"expected_result":{"ok":true,"value":null},"input":{"args":{"actual":"vm-1","expected":"vm-1"},"primitive":"binding.require_match","version":1},"name":"equal"}
+{"expected_result":{"ok":true,"value":null},"input":{"args":{"actual":"el0jyA0qAGBrMcPyFU0JaEU0EIITnB-6RwdwjABMTHs","expected":"el0jyA0qAGBrMcPyFU0JaEU0EIITnB-6RwdwjABMTHs"},"primitive":"binding.require_match","version":1},"name":"equal-thumbprint"}
+{"expected_result":{"ok":true,"value":null},"input":{"args":{"actual":"","expected":""},"primitive":"binding.require_match","version":1},"name":"equal-empty"}
+{"expected_result":{"ok":true,"value":null},"input":{"args":{"actual":"\u00e9\ud83d\ude00","expected":"\u00e9\ud83d\ude00"},"primitive":"binding.require_match","version":1},"name":"equal-non-ascii"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"peer-a","expected":"peer-b"},"primitive":"binding.require_match","version":1},"name":"different"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"VM-1","expected":"vm-1"},"primitive":"binding.require_match","version":1},"name":"case-differs"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"vm-1","expected":"vm-10"},"primitive":"binding.require_match","version":1},"name":"prefix"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"vm-1 ","expected":"vm-1"},"primitive":"binding.require_match","version":1},"name":"trailing-space"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"vm-1\u0000","expected":"vm-1"},"primitive":"binding.require_match","version":1},"name":"trailing-nul"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"\u00e9","expected":"e\u0301"},"primitive":"binding.require_match","version":1},"name":"not-unicode-normalized"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"","expected":"vm-1"},"primitive":"binding.require_match","version":1},"name":"one-side-empty"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":5,"expected":5},"primitive":"binding.require_match","version":1},"name":"integers"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":true,"expected":true},"primitive":"binding.require_match","version":1},"name":"booleans"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":null,"expected":null},"primitive":"binding.require_match","version":1},"name":"nulls"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":["vm-1"],"expected":["vm-1"]},"primitive":"binding.require_match","version":1},"name":"arrays"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":{"sub":"vm-1"},"expected":{"sub":"vm-1"}},"primitive":"binding.require_match","version":1},"name":"objects"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":"5","expected":5},"primitive":"binding.require_match","version":1},"name":"string-and-integer"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":5,"expected":"5"},"primitive":"binding.require_match","version":1},"name":"integer-and-string"}
+{"expected_result":{"code":"invalid_capability","ok":false},"input":{"args":{"actual":1.5,"expected":1.5},"primitive":"binding.require_match","version":1},"name":"floats"}
+{"expected_result":{"code":"invalid_request","ok":false},"input":{"args":{"actual":"vm-1"},"primitive":"binding.require_match","version":1},"name":"missing-expected"}

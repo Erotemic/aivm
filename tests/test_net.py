@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Generator
 
 import pytest
 from pytest import MonkeyPatch
@@ -373,7 +373,7 @@ def test_net_destroy_reloads_under_lock_and_rejects_concurrent_vm(
         include_store: bool,
         networks: tuple[str, ...],
         **kwargs: object,
-    ) -> Iterator[None]:
+    ) -> Generator[None, None, None]:
         del layout, group_gid, kwargs
         lock_args.append((include_store, tuple(networks)))
         yield
