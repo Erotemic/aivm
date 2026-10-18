@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (264)
+## Canonical `AgentVMConfig` references (269)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -86,6 +86,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.provision` | `aivm/vm/provision.py` | 2 |
 | `aivm.vm.rename` | `aivm/vm/rename.py` | 5 |
 | `aivm.vm.share` | `aivm/vm/share.py` | 9 |
+| `aivm.vm.tpm` | `aivm/vm/tpm.py` | 5 |
 | `aivm.vm.update.apply` | `aivm/vm/update/apply.py` | 1 |
 | `aivm.vm.update.detect` | `aivm/vm/update/detect.py` | 3 |
 | `aivm.vm.update.fdguard` | `aivm/vm/update/fdguard.py` | 3 |
@@ -94,7 +95,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.restart` | `aivm/vm/update/restart.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py` | 2 |
 
-## Path-based `StoreScope` reconstruction sites (21)
+## Path-based `StoreScope` reconstruction sites (22)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -116,3 +117,4 @@ They are reported for visibility and are not yet forbidden.
 | `aivm.services` | `target` | `aivm/services.py` | 1 |
 | `aivm.vm.create` | `config_store_path` | `aivm/vm/create.py` | 1 |
 | `aivm.vm.create_ops` | `cfg_path` | `aivm/vm/create_ops.py` | 1 |
+| `aivm.vm.tpm` | `store_path` | `aivm/vm/tpm.py` | 1 |

@@ -30,7 +30,7 @@ assumption (ROLLBACK-01), not a property.
 | OAuth vault | the operator-chosen vault directory | `aivm_secrets` OAuth verbs |
 | Guest key, CSR, certificate and CA | `~/.config/aivm/identity/` in the guest user's home (`client.key`, `client.csr`, `client.pem`, `ca.pem`, and `client.rotate.*` during a rotation) | `aivm-guestctl` and AIVM's install script, as the guest user |
 | Managed subject inputs | AIVM machine store (VM and principal records) and the live libvirt domain UUID | AIVM, libvirt |
-| vTPM state | none: AIVM creates VMs with `virt-install --tpm none` | -- |
+| vTPM state | optional emulator device; current identity keys remain software-held | -- |
 
 Facts the cases below depend on (all **implemented**):
 
@@ -309,7 +309,7 @@ A disk is copied by hand and defined as a domain.
 
 ### 7. Copied vTPM state
 
-Not applicable today: no VM has a TPM. If vTPM keys are introduced, copying
+Device provisioning is now optional; TPM-backed identity keys remain unimplemented. If vTPM keys are introduced, copying
 the swtpm state copies the TPM-resident key, so two TPMs then hold one key.
 TPM2_Certify evidence verifies equally for both copies, and pinning the EK
 does not separate them, because a byte copy has the same EK.

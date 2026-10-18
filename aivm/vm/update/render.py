@@ -9,6 +9,8 @@ from .util import _bytes_to_gib
 
 def _print_vm_update_plan(cfg: AgentVMConfig, drift: VMUpdateDrift) -> None:
     print(f'Planned VM update for {cfg.vm.name}:')
+    if drift.tpm_add:
+        print('  - TPM: add emulator TPM 2.0 (VM must be shut off)')
     if drift.cpus is not None:
         cur, want = drift.cpus
         print(f'  - cpus: {cur} -> {want}')

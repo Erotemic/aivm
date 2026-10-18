@@ -2439,3 +2439,38 @@ The standalone wheel and sdist build successfully and pass twine metadata checks
 The source contributor guidance now records that the sibling port exists while this branch continues using its co-located copy until cutover. The extracted repo has an annotated baseline tag and a committed relocation of the README and pyproject, ensuring ordinary git log --follow retains their path history. The remaining suite work is the inherited mutation gate, which repeatedly removes security checks from temporary copies and verifies that their tests fail.
 
 Final validation on Python 3.12.3: 1,861 tests passed and 10 tests skipped in 254.25 seconds, including a passing security mutation gate. All skips are for unavailable independent Rust runners, not asserted parity. Both distribution archives passed twine check, source-archive installation succeeded without AIVM, isolated policy-check and identity help worked, Git fsck passed, and the 46-commit attribution verifier passed again. I am confident this is a usable independent starting point. Coordinated removal of the AIVM copy, guest-helper deployment ownership, cross-project compatibility CI, hosting/publication and security release review remain explicit follow-up work documented in the new extraction record.
+
+## 2026-10-17 23:13:11 -0400
+
+Finished the requested optional vTPM device increment before resuming the
+standalone broker goal. Creation accepts `--tpm emulator`; an existing managed
+VM can be cleanly shut down and upgraded with `vm update --tpm emulator`.
+The hardware choice is persisted without reenrolling access identities or
+rewriting their profiles. I deliberately used a validated persistent redefine:
+libvirt's current QEMU driver does not support persistent TPM attach-device.
+The upgrade refuses active/unknown power states, managed saves, conflicting
+TPMs and changed definitions, and preserves UUID, storage and other devices.
+Default creation remains TPM-free. Delete/recreate keep `undefine --tpm` on
+every retry for emulator devices. An uncertain removal records the UUID in the
+error and cannot be forgotten on the next deletion-journal recovery attempt.
+
+I'm confident in the control-flow and regression evidence, but I do not want
+the optional device to be mistaken for TPM-backed Garrett identity. No keys
+were migrated; signing-provider TLS and enrollment evidence are separate work.
+This environment lacks virsh/virt-install, so actual daemon startup, persistent
+swtpm state across power cycles, and physical cleanup remain live-host gates.
+The hardware unit tests use a simulated daemon. Domain administrators must
+serialize their own concurrent edits; repeated inspections are not a libvirt
+compare-and-swap. The convenience tradeoff is an explicit cold shutdown for
+an upgrade, with no automatic shutdown or reset of existing TPM state.
+
+Validation: 1,547 AIVM core tests passed, one skipped, 34 e2e tests deselected;
+22 focused TPM tests passed, and the earlier combined boundary/lifecycle check
+passed 93 tests. Full type checking and architecture regeneration/check passed;
+wheel and sdist builds succeeded. The initial broad co-located secrets run was
+stopped after 2,285 passes, nine skips and one unrelated diagnostic-order
+failure in `test_serve_refuses_anything_inside_a_guest_writable_root` (installed
+code is found under the environment before the environment check). Earlier
+runs also exposed the runner's group-writable umask and long pytest socket
+paths; validation uses umask 077 and a short private temporary root. Secrets
+runtime/proof work will continue in its standalone repository, not this copy.

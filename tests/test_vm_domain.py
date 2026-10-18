@@ -361,8 +361,9 @@ def test_domain_storage_capture_includes_cdrom_media(
     )
 
 
+@pytest.mark.parametrize('with_tpm', [False, True])
 def test_domain_undefine_never_retries_without_storage_removal(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, with_tpm: bool,
 ) -> None:
     """Every undefine attempt preserves the remove-all-storage contract."""
     activate_manager(monkeypatch)
@@ -374,6 +375,9 @@ def test_domain_undefine_never_retries_without_storage_removal(
     rec = command_recorder(
         monkeypatch,
         {
+            'virsh dumpxml': FakeProc(0, '<domain><devices>' + (
+                '<tpm><backend type="emulator"/></tpm>' if with_tpm else ''
+            ) + '</devices></domain>', ''),
             'virsh destroy': FakeProc(0, '', ''),
             'virsh undefine': FakeProc(1, '', 'metadata flag rejected'),
         },
@@ -389,6 +393,7 @@ def test_domain_undefine_never_retries_without_storage_removal(
     ]
     assert len(undefines) == 3
     assert all('--remove-all-storage' in cmd for cmd in undefines)
+    assert all(('--tpm' in cmd) == with_tpm for cmd in undefines)
 
 
 def test_domain_undefine_refuses_changed_explicit_storage_inventory(

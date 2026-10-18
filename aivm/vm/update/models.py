@@ -77,6 +77,7 @@ class FirewallDrift:
 
 @dataclass(frozen=True)
 class VMUpdateDrift:
+    tpm_add: bool = False
     cpus: tuple[int, int] | None = None
     ram_mb: tuple[int, int] | None = None
     disk_bytes: tuple[int, int] | None = None
@@ -90,6 +91,7 @@ class VMUpdateDrift:
     def has_changes(self) -> bool:
         return any(
             (
+                self.tpm_add,
                 self.cpus,
                 self.ram_mb,
                 self.disk_bytes,

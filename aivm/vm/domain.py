@@ -258,6 +258,16 @@ def _destroy_and_undefine_vm(
     mgr = CommandManager.current()
     if _vm_defined(name):
         require_expected_inventory()
+        from .tpm import TPM_REMOVAL_UNCONFIRMED, domain_xml, emulator_tpm
+
+        tpm_xml = mgr.run(
+            virsh_cmd('dumpxml', name, '--inactive'),
+            sudo=virsh_needs_sudo(), role='read', check=True, capture=True,
+            summary=f'Inspect TPM state ownership before deleting {name}',
+        )
+        # Keep this flag on every retry: never orphan retained swtpm state.
+        tpm_root = domain_xml(tpm_xml.stdout)
+        tpm_flags = ['--tpm'] if emulator_tpm(tpm_root) else []
         mgr.run(
             virsh_cmd('destroy', name),
             sudo=virsh_needs_sudo(),
@@ -287,6 +297,7 @@ def _destroy_and_undefine_vm(
         ]
         errs: list[str] = []
         for cmd in attempts:
+            cmd += tpm_flags
             res = mgr.run(
                 cmd,
                 sudo=virsh_needs_sudo(),
@@ -299,6 +310,12 @@ def _destroy_and_undefine_vm(
                 if msg:
                     errs.append(f'{cmd}: {msg}')
             if not _vm_defined(name):
+                if tpm_flags and res.code != 0:
+                    raise AIVMError(
+                        f'{TPM_REMOVAL_UNCONFIRMED}: domain {name}, UUID '
+                        f'{tpm_root.findtext("uuid") or "unknown"}. '
+                        'Retain recovery records and inspect libvirt state before retrying.'
+                    )
                 break
         if _vm_defined(name):
             detail = '\n'.join(errs[-3:]) if errs else '(no details)'

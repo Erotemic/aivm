@@ -1403,6 +1403,12 @@
           "path": "aivm/cli/vm_lifecycle.py"
         },
         {
+          "imported": "aivm.vm.tpm",
+          "importer": "aivm.cli.vm_update",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_update.py"
+        },
+        {
           "imported": "aivm.vm.update",
           "importer": "aivm.cli.vm_update",
           "occurrences": 1,
@@ -3114,6 +3120,12 @@
         },
         {
           "imported": "aivm.config",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
+        },
+        {
+          "imported": "aivm.config",
           "importer": "aivm.vm.update.apply",
           "occurrences": 1,
           "path": "aivm/vm/update/apply.py"
@@ -3406,6 +3418,18 @@
         },
         {
           "imported": "aivm.commands",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
+        },
+        {
+          "imported": "aivm.privilege",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
+        },
+        {
+          "imported": "aivm.commands",
           "importer": "aivm.vm.update.apply",
           "occurrences": 1,
           "path": "aivm/vm/update/apply.py"
@@ -3576,6 +3600,18 @@
         },
         {
           "imported": "aivm.runtime",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
+        },
+        {
+          "imported": "aivm.scoped_store",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
+        },
+        {
+          "imported": "aivm.runtime",
           "importer": "aivm.vm.update.apply",
           "occurrences": 1,
           "path": "aivm/vm/update/apply.py"
@@ -3701,6 +3737,12 @@
           "importer": "aivm.vm.rename",
           "occurrences": 1,
           "path": "aivm/vm/rename.py"
+        },
+        {
+          "imported": "aivm.config_store",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
         }
       ],
       "note": "",
@@ -3871,6 +3913,12 @@
           "importer": "aivm.vm.share",
           "occurrences": 1,
           "path": "aivm/vm/share.py"
+        },
+        {
+          "imported": "aivm.errors",
+          "importer": "aivm.vm.tpm",
+          "occurrences": 1,
+          "path": "aivm/vm/tpm.py"
         },
         {
           "imported": "aivm.errors",

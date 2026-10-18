@@ -256,6 +256,46 @@ Reconcile VM drift
 ``vm update`` includes the managed nftables firewall. Changes to firewall
 ports or policy are applied live and do not require restarting the VM.
 
+Optional virtual TPM
+--------------------
+
+Create a new VM with a software TPM 2.0:
+
+.. code-block:: bash
+
+   aivm vm create --vm tpm-lab --tpm emulator
+
+Add one to an existing managed VM without recreating its disk:
+
+.. code-block:: bash
+
+   aivm vm down
+   aivm vm update --tpm emulator --dry_run
+   aivm vm update --tpm emulator
+   aivm vm up
+
+Both commands persist ``vm.tpm = "emulator"``. You can also select it through
+``aivm vm edit`` and apply it with ``aivm vm update``. The default is ``none``.
+A missing request never removes an existing device. Replacement, removal and
+TPM-state copying are not provided by this workflow.
+
+The libvirt host needs ``swtpm`` and ``swtpm-tools`` with advertised TPM 2.0
+emulator / ``tpm-crb`` support. AIVM checks the selected daemon and does not
+install packages or fall back to a weaker device. An upgrade requires a cleanly
+shut-off VM without a managed-save image; it preserves the UUID, disk, other
+devices and domain metadata. AIVM asks libvirt to validate the new definition.
+Deletion and recreation use ``virsh undefine --tpm`` whenever an emulated TPM
+is present, including every undefine retry. Unsupported deletion flags fail
+closed. Libvirt owns the TPM state and its removal; filesystem removal and
+restart persistence still need validation on a real libvirt host. Current
+coverage uses a simulated daemon and does not establish live-VM behavior.
+
+Adding the device does not move existing identity keys into it or install guest
+TPM tooling. A software vTPM is host-managed state: it does not protect against
+an administrator who can copy that state. Broker use remains optional and needs
+no TPM. Key generation, enrollment evidence and provider-backed TLS belong to
+the independent secrets project's assurance work.
+
 Run without sudo
 ----------------
 
