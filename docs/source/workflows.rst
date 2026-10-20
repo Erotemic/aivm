@@ -274,16 +274,35 @@ Add one to an existing managed VM without recreating its disk:
    aivm vm update --tpm emulator
    aivm vm up
 
-Both commands persist ``vm.tpm = "emulator"``. You can also select it through
-``aivm vm edit`` and apply it with ``aivm vm update``. The default is ``none``.
+``vm update --dry_run`` previews the inspection and conditional update workflow
+without executing host or guest probes or writing configuration. Live drift,
+host TPM support and restart requirements remain unknown until an actual run.
+
+Creation and a successful update persist ``vm.tpm = "emulator"``. You can also
+select it through ``aivm vm edit`` and apply it with ``aivm vm update``. The default is ``none``.
 A missing request never removes an existing device. Replacement, removal and
 TPM-state copying are not provided by this workflow.
 
 The libvirt host needs ``swtpm`` and ``swtpm-tools`` with advertised TPM 2.0
 emulator / ``tpm-crb`` support. AIVM checks the selected daemon and does not
-install packages or fall back to a weaker device. An upgrade requires a cleanly
-shut-off VM without a managed-save image; it preserves the UUID, disk, other
-devices and domain metadata. AIVM asks libvirt to validate the new definition.
+install packages or fall back to a weaker device. A physical host TPM and
+``/dev/tpm*`` devices are not required for this software backend. To inspect
+what the system daemon advertises:
+
+.. code-block:: bash
+
+   sudo virsh -c qemu:///system domcapabilities | sed -n '/<tpm /,/tpm>/p'
+
+Look for ``emulator`` under ``backendModel``, ``2.0`` under ``backendVersion``,
+and ``tpm-crb`` under ``model``. Missing values describe what libvirt has not
+recognized; installing packages alone does not establish daemon support.
+If ``backendVersion`` is absent, check ``virsh -c qemu:///system version`` and
+``swtpm_setup --print-capabilities``. Older libvirt or swtpm tools may omit
+version reporting even when an emulator is available; AIVM still requires
+explicit TPM 2.0 advertisement.
+An upgrade requires a cleanly shut-off VM without a managed-save image; it
+preserves the UUID, disk, other devices and domain metadata. AIVM asks libvirt
+to validate the new definition.
 Deletion and recreation use ``virsh undefine --tpm`` whenever an emulated TPM
 is present, including every undefine retry. Unsupported deletion flags fail
 closed. Libvirt owns the TPM state and its removal; filesystem removal and

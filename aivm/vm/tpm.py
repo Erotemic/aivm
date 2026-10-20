@@ -67,26 +67,42 @@ def require_tpm_capability(*, dry_run: bool = False) -> None:
         print('DRYRUN: would require libvirt emulator TPM 2.0 / tpm-crb support '
               '(host packages swtpm and swtpm-tools).')
         return
-    result = CommandManager.current().run(
-        virsh_cmd('domcapabilities'), sudo=virsh_needs_sudo(),
-        role='read', check=True, capture=True,
-        summary='Check libvirt software TPM capabilities',
-    )
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Inspect libvirt software TPM capabilities',
+        why='Check the selected daemon for emulator TPM 2.0 and tpm-crb support.',
+    ):
+        result = mgr.run(
+            virsh_cmd('domcapabilities'), sudo=virsh_needs_sudo(),
+            role='read', check=True, capture=True,
+            summary='Check libvirt software TPM capabilities',
+        )
     try:
         root = ET.fromstring(result.stdout)
     except ET.ParseError as ex:
         raise AIVMError('Could not parse libvirt TPM capabilities.') from ex
     tpm = root.find('./devices/tpm')
-    if tpm is not None and tpm.get('supported') == 'yes':
-        enums = {e.get('name'): {v.text for v in e.findall('value')}
+    enums: dict[str | None, set[str]] = {}
+    supported = tpm.get('supported', 'unknown') if tpm is not None else 'missing'
+    if tpm is not None:
+        enums = {e.get('name'): {(v.text or '').strip() for v in e.findall('value')}
                  for e in tpm.findall('enum')}
-        if ('emulator' in enums.get('backendModel', set())
-                and '2.0' in enums.get('backendVersion', set())
-                and 'tpm-crb' in enums.get('model', set())):
-            return
+    required = {'backendModel': 'emulator', 'backendVersion': '2.0', 'model': 'tpm-crb'}
+    missing = [f'{name}={value}' for name, value in required.items()
+               if value not in enums.get(name, set())]
+    if supported == 'yes' and not missing:
+        return
+    advertised = '; '.join(
+        f'{name}={",".join(sorted(enums.get(name, set()))) or "(not advertised)"}'
+        for name in required
+    )
     raise AIVMError('Selected libvirt daemon does not advertise emulator TPM 2.0 '
-                    'with tpm-crb. Install/configure swtpm and swtpm-tools on '
-                    'the libvirt host and retry; no weaker fallback is used.')
+                    f'with tpm-crb. Reported TPM supported={supported}; {advertised}. '
+                    f'Missing requirements: {", ".join(missing) or "TPM supported=yes"}. '
+                    'Install/configure swtpm and swtpm-tools on the libvirt host '
+                    'and inspect the domcapabilities command shown above; '
+                    'no weaker fallback is used. A physical host TPM '
+                    '(/dev/tpm*) is not required for the emulator backend.')
 
 
 def tpm_update_needed(cfg: AgentVMConfig) -> bool:

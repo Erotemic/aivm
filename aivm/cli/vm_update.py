@@ -25,6 +25,7 @@ from ..vm.update import (
     _print_vm_update_plan,
     _vm_update_drift,
 )
+from ..vm.update.render import _preview_vm_update
 from ._common import _BaseCommand
 
 
@@ -50,6 +51,10 @@ def normalize_restart_policy(value: object) -> str:
 def run_vm_update(request: VMUpdateRequest) -> int:
     """Reconcile VM config drift against live host/libvirt state."""
     cfg = request.cfg
+    if request.dry_run:
+        # A dry run executes no probes, so it cannot compute live drift.
+        _preview_vm_update(cfg)
+        return 0
     drift, vm_running = _vm_update_drift(cfg, yes=request.yes)
     if drift.notes:
         print('Detected diagnostics (not auto-applied):')

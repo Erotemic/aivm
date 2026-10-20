@@ -118,6 +118,28 @@ def test_missing_host_support_does_not_downgrade(daemon):
     assert daemon['definitions'] == []
 
 
+@pytest.mark.parametrize('name,value', [
+    ('backendModel', 'emulator'), ('backendVersion', '2.0'), ('model', 'tpm-crb'),
+])
+@pytest.mark.parametrize('omitted', [False, True])
+def test_capability_failure_reports_missing_requirement(daemon, name, value, omitted):
+    root = ET.fromstring(CAPS)
+    enum = root.find(f'./devices/tpm/enum[@name="{name}"]')
+    if omitted:
+        root.find('./devices/tpm').remove(enum)
+    else:
+        enum.clear()
+        enum.set('name', name)
+    daemon['caps'] = ET.tostring(root, encoding='unicode')
+    with pytest.raises(AIVMError) as exc:
+        tpm.add_tpm(cfg(), dry_run=False)
+    message = str(exc.value)
+    assert f'Missing requirements: {name}={value}.' in message
+    assert f'{name}=(not advertised)' in message
+    assert 'A physical host TPM (/dev/tpm*) is not required' in message
+    assert daemon['definitions'] == []
+
+
 def test_conflicting_existing_device_is_never_replaced(daemon):
     daemon['xml'] = XML.replace('</devices>', '<tpm model="tpm-tis"><backend type="passthrough"/></tpm></devices>')
     with pytest.raises(AIVMError, match='refusing replacement'):

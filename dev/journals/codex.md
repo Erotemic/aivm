@@ -2474,3 +2474,47 @@ code is found under the environment before the environment check). Earlier
 runs also exposed the runner's group-writable umask and long pytest socket
 paths; validation uses umask 077 and a short private temporary root. Secrets
 runtime/proof work will continue in its standalone repository, not this copy.
+
+## 2026-10-20 11:11:31 -0400
+
+Investigated the aiq-gpu report of a failed offline vTPM update after installing
+swtpm. The dry-run failure is reproducible from the code: update detection
+consumes a CommandResult although the manager deliberately skips every process
+in dry-run mode. I kept that execution policy and added a conditional preview
+that reports unknown live drift instead of manufacturing a successful probe or
+claiming the VM is synchronized. The CLI regression checks forbid subprocesses,
+privilege probes and prompts, and verify the saved store is unchanged.
+
+I am confident in this dry-run fix and in keeping the existing strict TPM
+requirements. The host's actual capability output is still pending, so I cannot
+claim to have diagnosed its missing emulator support. Missing /dev/tpm* is not
+an obstacle for a software TPM. I checked libvirt's documentation and source:
+its capability enums distinguish the guest device model, emulator backend and
+TPM version. Errors now show all advertised values and missing requirements,
+and the inspection command is visible at INFO through a named read step. The
+tradeoff is that a no-execution dry-run previews the conditional workflow, not
+an exact live diff; the documentation makes that limitation explicit. No daemon
+restart or VM mutation was performed on either host. Real libvirt/vTPM startup
+remains unverified here; simulated daemon tests cannot establish that behavior.
+
+Validation: 67 focused TPM/update/dry-run tests passed; type checking of the
+three changed production modules and git diff --check passed.
+
+## 2026-10-20 11:14:50 -0400
+
+Preparing the requested commit after the host capability output arrived. It
+advertises tpm-crb and emulator but omits backendVersion entirely. This pinpoints
+AIVM's rejection without proving the host cannot emulate TPM 2.0. I checked
+libvirt's older implementation and swtpm_setup documentation: older reporting
+surfaces can omit the version, and modern libvirt derives the version from
+swtpm_setup's capabilities. I extended the diagnostic regression to cover
+omitted enums as well as empty enums, matching the reported XML, and documented
+the next read-only version/setup checks.
+
+I am confident this commit fixes the planning crash and makes this failure
+understandable. I am deliberately retaining the explicit version requirement;
+accepting absence as support would conceal the uncertainty rather than resolve
+it. Host versions and setup capability output are still needed to distinguish
+old reporting from a tool discovery problem. No host service or VM was changed.
+Validation: 70 focused tests passed, production type checks passed, and the diff
+has no whitespace errors.
