@@ -30,6 +30,12 @@ usually breaks reconciliation into:
 * sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
+Attachment recording during ``aivm ssh .`` and ``aivm code .`` skips its config
+store write when it produces no persisted changes. New attachments
+and changed records still use the locked store transaction. Live workspace
+checks and persistent replay continue on each entry; this optimization does
+not cache mount readiness or change filesystem identity handling.
+
 Provision specific guest tools
 ------------------------------
 

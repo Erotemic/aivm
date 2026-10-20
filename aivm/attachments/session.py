@@ -218,6 +218,7 @@ def _record_attachment(
     update_store(
         mutate,
         cfg_path,
+        skip_if_unchanged=True,
         reason=(
             f'Persist attachment record for {host_src} on VM {cfg.vm.name} '
             f'(owner={owner or "legacy"}, mode={mode}, access={access}, '

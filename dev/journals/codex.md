@@ -2543,3 +2543,37 @@ configuration nor the user's VM has been touched from this checkout.
 Validation: 97 focused TPM/create/update/dry-run tests passed, including real
 CommandManager dispatch with a simulated subprocess seam and missing executable.
 Changed production modules pass type checks; git diff --check passes.
+
+## 2026-10-20 12:14:09 -0400
+
+Implemented the first deliberately narrow change discussed with the maintainer:
+attachment recording opts into skipping an unchanged store write. The callback
+still runs against a freshly loaded store under the existing lock. Comparing
+canonical serialized content, rather than dataclass equality, matters because
+machine runtime configurations carry principal/profile values that are not
+persisted. The comparison does not alter attachment resolution, identity pins,
+mount checking/replay, credential preparation, or SSH/code launch ordering.
+
+I kept this opt-in instead of changing every store writer at once. Explicit
+layout writes and missing-store initialization retain their old behavior, and
+pending split transactions are recovered before taking the comparison snapshot.
+One non-obvious correctness detail was retaining optimistic-concurrency metadata
+on a returned unchanged store: without marking that revision, a later save could
+lose its stale-update protection. The tests now exercise that contract, actual
+multiprocess writers, and recovery through the no-op path.
+
+I am confident about avoiding the redundant config replacement while preserving
+existing mutations. Tests inspect every split fragment's content and inode/time
+evidence, forbid the write primitive on repeated recording, preserve operator
+comments, and confirm that access/destination/alias/hardware changes still save.
+The existing source-identity recomputation is intentionally unchanged; its
+cross-boot durability remains a separate investigation, not a performance fix.
+This patch adds two serialization passes, trading modest local computation for
+avoiding a staged, fsynced store transaction. It is not expected to remove the
+remaining SSH round trips or noticeably shorten every session by itself.
+
+Validation: 327 store/session/persistent/config/released-format tests passed,
+plus five E2E tests using real temporary mounts inside this VM. Full `ty check
+aivm` and git diff --check passed. KVM and a reachable, empty local system
+libvirt are available, but I did not run a complete nested VM lifecycle or
+claim ext4/Btrfs/ZFS cross-boot coverage. No working VM was opened or modified.
