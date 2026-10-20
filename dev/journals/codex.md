@@ -2577,3 +2577,49 @@ plus five E2E tests using real temporary mounts inside this VM. Full `ty check
 aivm` and git diff --check passed. KVM and a reachable, empty local system
 libvirt are available, but I did not run a complete nested VM lifecycle or
 claim ext4/Btrfs/ZFS cross-boot coverage. No working VM was opened or modified.
+
+## 2026-10-20 12:57:15 -0400
+
+Took the next step as validation of foreground attachment safety, rather than
+removing checks while the maintainer's live-mount warning remains unexplained.
+The repeated host output confirms the earlier redundant store write is gone.
+A fresh nested VM now also exercises two actual `aivm ssh` shells and checks
+that split-store bytes, inodes, and modification times remain unchanged.
+
+The important new evidence is a deterministic reproduction of the warning on
+a newly created VM. Expiring only a disposable guest's source-side virtiofs
+automount, then traversing a child to recreate it, produces two directory views
+with different device numbers, matching inode numbers, and SOURCE=none. A busy
+workspace bind retains the older view. Replay reports degraded state, keeps its
+mount ID unchanged, and leaves the process and sentinel file usable. This is
+not merely a pre-0.4 migration oddity. The test deliberately characterizes the
+current safe refusal; it does not claim that automatic recovery is implemented.
+
+I remain cautious about interpreting matching inodes or FUSE file handles as
+proof across separate superblocks/connections. The working guest has the same
+pattern, but that similarity is not authorization to unmount or replace it.
+The next recovery change needs trustworthy mount provenance, including the
+exact export/token and protection against cross-filesystem inode collisions.
+No production replay behavior, identity pin, or working mount changed here.
+This test covers virtiofs submount recreation, not ext4/Btrfs/ZFS reboots.
+
+The reproduction exposed two genuine cleanup issues. The storage-removal
+probe incorrectly selected sudo from libvirt access, although a libvirt-group
+caller may not traverse the storage directories. It now uses the existing
+filesystem-read privilege policy and retains fail-closed error handling. The
+E2E teardown also ignored cleanup exit codes and could report success with
+resources retained. It now reports cleanup failures after attempting both
+operations, while preserving an original test exception. Earlier fixture runs
+needed quoting and automount-trigger corrections; all their disposable VM and
+network resources were subsequently removed using ordinary AIVM lifecycle
+commands. One expired fixture needed its task-owned recovery coordinates
+reconstructed before that cleanup. This reinforced why durable recovery records
+and trustworthy teardown outcomes matter more than a green test summary.
+
+Validation: the final nested-VM lifecycle passed in 38.29 seconds, including
+both real SSH sessions, the busy-workspace reproduction, and successful VM/
+network teardown. Local libvirt is empty again apart from its preexisting
+default network. The 62 domain/deletion/authority/teardown unit tests pass,
+as do full `ty check aivm` and `git diff --check`. I am confident in the narrow
+cleanup fix and the reproduction's safety assertions; faster foreground entry
+and proven automatic recovery remain separate work.

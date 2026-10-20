@@ -438,7 +438,7 @@ class E2ETeardown:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> Literal[False]:
-        _run_cli(
+        deletion = _run_cli(
             [
                 'vm',
                 'delete',
@@ -452,7 +452,7 @@ class E2ETeardown:
             env=self.env,
             check=False,
         )
-        _run_cli(
+        network_cleanup = _run_cli(
             [
                 'host',
                 'net',
@@ -467,6 +467,15 @@ class E2ETeardown:
             env=self.env,
             check=False,
         )
+        # Preserve an original test failure, but never report a successful E2E
+        # run when its disposable VM or network could not be cleaned up.
+        if exc_type is None and (deletion.returncode or network_cleanup.returncode):
+            raise AssertionError(
+                'E2E cleanup failed.\n'
+                f'VM deletion (exit {deletion.returncode}):\n{deletion.stdout}\n'
+                f'Network cleanup (exit {network_cleanup.returncode}):\n'
+                f'{network_cleanup.stdout}'
+            )
         return False
 
 
