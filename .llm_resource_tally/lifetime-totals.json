@@ -19,16 +19,16 @@
     "non_committing_work": "requires_reconcile",
     "compaction_usage": "measured_signals_only_when_runtime_omits_usage"
   },
-  "through": "2026-08-13T21:07:08.722721+00:00",
-  "ledger_rows": 11,
-  "commits_accounted": 8,
-  "turns": 1143,
+  "through": "2026-10-10T18:32:43.208430+00:00",
+  "ledger_rows": 16,
+  "commits_accounted": 12,
+  "turns": 1494,
   "tokens": {
-    "input": 2810777,
-    "cache_write": 885165,
-    "cache_read": 170566629,
-    "output": 547146,
-    "billable_input": 174262571
+    "input": 2811477,
+    "cache_write": 3097863,
+    "cache_read": 347533346,
+    "output": 1342140,
+    "billable_input": 353442686
   },
   "by_model": {
     "gpt-5.3-codex": {
@@ -54,14 +54,26 @@
       "cache_write": 0,
       "cache_read": 19864192,
       "output": 39333
+    },
+    "claude-opus-5-5": {
+      "input": 700,
+      "cache_write": 2212698,
+      "cache_read": 176966717,
+      "output": 794994
+    },
+    "<synthetic>": {
+      "input": 0,
+      "cache_write": 0,
+      "cache_read": 0,
+      "output": 0
     }
   },
   "by_activity": {
     "unlabeled": {
-      "input": 2810777,
-      "cache_write": 885165,
-      "cache_read": 170566629,
-      "output": 547146
+      "input": 2811477,
+      "cache_write": 3097863,
+      "cache_read": 347533346,
+      "output": 1342140
     }
   },
   "by_agent": {
@@ -72,10 +84,10 @@
       "output": 244121
     },
     "claude-code": {
-      "input": 1805,
-      "cache_write": 885165,
-      "cache_read": 97419493,
-      "output": 303025
+      "input": 2505,
+      "cache_write": 3097863,
+      "cache_read": 274386210,
+      "output": 1098019
     }
   },
   "server_tool_calls": {
@@ -83,12 +95,12 @@
     "web_fetch": 0
   },
   "time": {
-    "wall_clock_s": 48759.6
+    "wall_clock_s": 98473.3
   },
   "compaction_signals": {
-    "events": 0,
-    "peak_context_tokens": 0,
-    "summary_chars": 0
+    "events": 1,
+    "peak_context_tokens": 960560,
+    "summary_chars": 29470
   },
   "modeled_post_hoc": "inference_seconds, energy_kwh, carbon_gco2e, usd — derived from the measurements above by `estimate`; not stored here."
 }
