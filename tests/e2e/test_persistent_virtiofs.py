@@ -89,6 +89,18 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
         before = {
             path: (path.read_bytes(), path.stat()) for path in fragments.values()
         }
+        def manifest_stat():
+            result = run_ssh_command(
+                user=cfg.vm.user, ip=ip, identity_file=private_key,
+                remote=['python3', '-c', shlex.quote(
+                    'import os,json; s=os.stat("/var/lib/aivm/attachments.json"); '
+                    'print(json.dumps([s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode]))'
+                )], cwd=REPO_ROOT, env=env, timeout=timeout,
+            )
+            assert result.returncode == 0, result.stderr
+            return result.stdout.strip()
+
+        guest_manifest_before = manifest_stat()
         for _ in range(2):
             terminal = Terminal(
                 [sys.executable, '-m', 'aivm', 'ssh', str(workspace), '--yes',
@@ -102,10 +114,13 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
                 assert 'Writing split config store' not in terminal.output
                 assert 'OMITTED FROM THE COMMAND ABOVE' not in terminal.output
                 assert 'Reconcile guest attachment symlink' not in terminal.output
+                assert 'Sync persistent attachment manifest into guest' not in terminal.output
+                assert '--dry-run' in terminal.output
                 assert 'completed in degraded mode' not in terminal.output
             finally:
                 if terminal.returncode is None:
                     terminal.kill()
+        assert manifest_stat() == guest_manifest_before
         for path, (content, info) in before.items():
             assert path.read_bytes() == content
             current = path.stat()

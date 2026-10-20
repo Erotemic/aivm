@@ -296,11 +296,12 @@ def _run_rsync_with_retry(
     detail: str,
     dry_run: bool,
     check: bool = True,
+    role: CommandRole = 'modify',
     retries: int = 3,
 ) -> CommandResult | None:
     request = CommandManager.current().request(
         cmd,
-        role='modify',
+        role=role,
         check=False,
         capture=True,
         summary=summary,

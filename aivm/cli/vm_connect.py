@@ -427,7 +427,7 @@ def _print_remote_session_recipe(
     print(f'  Tunnel:  {tunnel_name}')
     if ssh_cfg_updated:
         print(f'SSH entry updated on this host in {ssh_cfg}')
-    print(f'Folder registered in {session.reg_path}')
+    print(f'Attachment configuration: {session.reg_path}')
 
 
 def _prepare_foreground_agent_forwarding(
@@ -713,7 +713,7 @@ class VMCodeCLI(_BaseCommand):
         )
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
-        print(f'Folder registered in {session.reg_path}')
+        print(f'Attachment configuration: {session.reg_path}')
         return 0
 
 
@@ -1006,5 +1006,5 @@ class VMSSHCLI(_BaseCommand):
             )
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
-        print(f'Folder registered in {session.reg_path}')
+        print(f'Attachment configuration: {session.reg_path}')
         return 0

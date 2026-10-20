@@ -36,6 +36,15 @@ and changed records still use the locked store transaction. Live workspace
 checks and persistent replay continue on each entry; this optimization does
 not cache mount readiness or change filesystem identity handling.
 
+Guest manifest synchronization also starts with a read-only directory check
+and ``rsync --dry-run --checksum --itemize-changes`` preview. If content and
+the metadata preserved by the transfer already match, AIVM skips directory
+creation, transfer, and their approval. Missing state or drift still takes the
+approved repair path. The preview uses the same transfer options so a matching
+checksum cannot hide permission or timestamp drift. Inspection failures are
+reported as errors, not treated as an unchanged manifest. Live mount replay
+and helper checks still run; this is not a cached readiness result.
+
 Foreground entry preserves an existing live workspace. Virtiofs can recreate
 a source submount with a different device number while the old workspace bind
 remains valid. Guest replay now retains a private bind reference for each

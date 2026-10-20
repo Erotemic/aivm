@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
@@ -494,7 +497,12 @@ def test_persistent_manifest_sync_uses_checksum_rsync(
     assert changed is True
     ssh_cmd = rec.only('ssh')
     assert ssh_cmd[:3] == ['ssh', '-o', 'BatchMode=yes']
-    rsync_cmd = rec.only('rsync')
+    rsync_calls = [cmd for cmd in rec.normalized if cmd[:1] == ['rsync']]
+    assert len(rsync_calls) == 2
+    assert '--dry-run' in rsync_calls[0]
+    rsync_cmd = rsync_calls[1]
+    assert '--dry-run' not in rsync_cmd
+    assert [arg for arg in rsync_calls[0] if arg != '--dry-run'] == rsync_cmd
     assert '--checksum' in rsync_cmd
     assert '--itemize-changes' in rsync_cmd
     # The push writes through the guest's privileged rsync.
@@ -550,8 +558,8 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     )
 
     assert changed is True
-    assert attempts['rsync'] == 2
-    assert rec.count('rsync') == 2
+    assert attempts['rsync'] == 3  # two preview attempts, then the real transfer
+    assert rec.count('rsync') == 3
     ssh_cmd = rec.calls[0]
     assert ssh_cmd[0] == 'ssh'
     assert any('ConnectTimeout=15' in arg for arg in ssh_cmd)
@@ -584,7 +592,122 @@ def test_persistent_manifest_sync_returns_false_when_unchanged(
     )
 
     assert changed is False
-    assert rec.ran('rsync')
+    assert '--dry-run' in rec.only('rsync')
+    assert all('mkdir' not in script for script in _ssh_scripts(rec))
+
+
+@pytest.mark.parametrize('state', ['healthy', 'content', 'mode', 'mtime', 'symlink', 'missing-file', 'missing-directory'])
+def test_manifest_preview_preserves_real_rsync_repairs_and_approval(
+    monkeypatch, tmp_path, state,
+):
+    """Run real rsync locally; replace only the SSH transport boundary."""
+    if shutil.which('rsync') is None:
+        pytest.skip('rsync is required for filesystem comparison coverage')
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-manifest-preview'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/test-key'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
+    local = _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    guest = tmp_path / 'guest' / 'attachments.json'
+    monkeypatch.setattr(persistent_manifest, 'PERSISTENT_ATTACHMENT_GUEST_STATE_PATH', str(guest))
+    if state != 'missing-directory':
+        guest.parent.mkdir()
+    if state not in ('missing-directory', 'missing-file'):
+        shutil.copy2(local, guest)
+        guest.chmod(0o644)
+    if state == 'content':
+        info = guest.stat()
+        guest.write_bytes(b'[' + local.read_bytes()[1:])
+        os.utime(guest, ns=(info.st_atime_ns, info.st_mtime_ns))
+    elif state == 'mode':
+        guest.chmod(0o600)
+    elif state == 'mtime':
+        os.utime(guest, ns=(guest.stat().st_atime_ns, local.stat().st_mtime_ns - 10_000_000_000))
+    elif state == 'symlink':
+        other = tmp_path / 'unrelated'
+        guest.rename(other)
+        guest.symlink_to(other)
+    before = guest.stat() if guest.exists() else None
+    prompts = []
+    monkeypatch.setattr('builtins.input', lambda message: prompts.append(message) or 'y')
+    real_run = subprocess.run
+
+    def ssh(cmd):
+        args = shlex.split(cmd[-1])
+        assert args[:2] == ['sudo', '-n']
+        if args[2:4] == ['test', '-d']:
+            return FakeProc(0 if Path(args[-1]).is_dir() else 1)
+        assert args[2:4] == ['mkdir', '-p']
+        Path(args[-1]).mkdir(parents=True, exist_ok=True)
+        return FakeProc()
+
+    def rsync(cmd):
+        args = list(cmd)
+        server = args[args.index('--rsync-path') + 1]
+        if 'mkdir -p' in server:
+            ssh(['ssh', server.split(' && ', 1)[0]])
+        for option in ('-e', '--rsync-path'):
+            index = args.index(option)
+            del args[index:index + 2]
+        args[-1] = str(guest)
+        return real_run(args, capture_output=True, text=True)
+
+    recorder = command_recorder(monkeypatch, {'ssh': ssh, 'rsync': rsync}, stub_sudo_scope=False)
+    changed = _sync_persistent_attachment_manifest_to_guest(cfg, '10.0.0.5', dry_run=False)
+    assert changed == (state != 'healthy')
+    assert len(prompts) == int(state != 'healthy')
+    assert guest.read_bytes() == local.read_bytes()
+    assert not guest.is_symlink()
+    assert guest.stat().st_mode & 0o777 == 0o644
+    assert int(guest.stat().st_mtime) == int(local.stat().st_mtime)
+    if state == 'healthy':
+        assert before is not None
+        after = guest.stat()
+        assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+            before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
+        )
+        assert '--dry-run' in recorder.only('rsync')
+    if state == 'symlink':
+        assert other.read_bytes() == local.read_bytes()
+
+
+@pytest.mark.parametrize('phase', ['preview-error', 'directory-error', 'dry-run'])
+@pytest.mark.parametrize('check', [True, False])
+def test_manifest_inspection_errors_and_cli_dry_run_do_not_write(
+    monkeypatch, tmp_path, phase, check,
+):
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-manifest-inspection-failure'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/test-key'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    monkeypatch.setattr('builtins.input', lambda prompt: pytest.fail('inspection requested write approval'))
+    recorder = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(2 if phase == 'directory-error' else 0, stderr='inspection failed'),
+         'rsync': FakeProc(23, stderr='receiver permission denied')},
+        stub_sudo_scope=False,
+    )
+    if phase == 'dry-run':
+        assert not _sync_persistent_attachment_manifest_to_guest(
+            cfg, '10.0.0.5', dry_run=True, check=check,
+        )
+        assert recorder.normalized == []
+    else:
+        with pytest.raises(CommandError):
+            _sync_persistent_attachment_manifest_to_guest(
+                cfg, '10.0.0.5', dry_run=False, check=check,
+            )
+        assert all('mkdir' not in script for script in _ssh_scripts(recorder))
+        assert all('--dry-run' in cmd for cmd in recorder.normalized if cmd[:1] == ['rsync'])
 
 
 @pytest.mark.parametrize(

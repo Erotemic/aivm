@@ -2679,3 +2679,45 @@ Full `ty check aivm` and git diff --check pass. I am confident about this tested
 kernel/virtiofs topology and the fail-closed cases, but have not established
 Btrfs/ZFS or cross-kernel coverage. The rest of foreground reconciliation still
 runs on each entry; this is not a broad readiness-cache optimization.
+
+## 2026-10-20 14:28:56 -0400
+
+The maintainer's two consecutive host transcripts confirmed that helper
+installation is now one-time and a correct symlink no longer asks for repair.
+They also made the next avoidable prompt concrete: manifest synchronization
+always scheduled mkdir/rsync as writes, even when rsync would do nothing.
+The older unidentified workspace still correctly reports degraded provenance;
+I have not treated successful SSH entry as proof that it is safe to replace.
+
+Added a live read-only directory check and rsync --dry-run comparison before
+the manifest write plan. Using rsync's own comparison preserves the existing
+checksum, type, permission, and timestamp repair rules; a checksum-only gate
+would have weakened self-repair. The upstream rsync manual documents matching
+itemization between preview and transfer (https://download.samba.org/pub/rsync/rsync.1).
+An empty successful preview returns unchanged without mkdir or transfer. Missing
+state or drift still uses an approved transfer, while inspection errors never
+authorize a no-op or a write. Missing-directory mkdir and rsync now appear
+together in the remote rsync-path command, so one approval and the existing
+transport retry cover both known operations. A real approval test exposed the
+otherwise separate second prompt when those commands were submitted eagerly.
+
+I am confident this removes an unnecessary manifest approval without declaring
+the VM ready from a cached result. It does not promise fewer warm network round
+trips: directory inspection and preview replace mkdir and transfer attempts.
+The original checksum rsync already avoided rewriting identical contents; the
+new distinction is that no write-capable transfer is scheduled for a healthy
+manifest. Live replay and credential preparation still run and may require
+their own approvals. Reworded the unconditional "Folder registered" footer as
+"Attachment configuration" so it reports location without implying a new store
+write. No working guest mount or source identity changed during this work.
+
+Validation: 304 focused attachment/persistent/session/cloud-init/tunnel and
+released-path regressions pass. Seven new cases run real local rsync against
+healthy, content-drifted, mode-drifted, time-drifted, symlinked, missing-file,
+and missing-directory destinations. They verify exact repair behavior and zero
+healthy approvals versus one repair approval. Six error/dry-run cases verify
+no write attempts or prompts. The nested VM E2E passes in 65.31 seconds, retaining
+the previous recovery/restart/detach checks and additionally comparing guest
+manifest inode/size/mode/mtime/ctime across two warm SSH entries with no manifest
+sync step. Full `ty check aivm` and git diff --check pass. Disposable VM/network
+cleanup succeeded; no wider filesystem or cross-kernel coverage is implied.

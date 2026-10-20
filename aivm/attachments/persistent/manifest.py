@@ -383,39 +383,58 @@ def _sync_persistent_attachment_manifest_to_guest(
             f'{manifest_path} -> {remote_target}'
         )
         return False
+    parent = shlex.quote(str(Path(PERSISTENT_ATTACHMENT_GUEST_STATE_PATH).parent))
+    rsync_args = [
+        'rsync', '--archive', '--checksum', '--itemize-changes',
+        '--no-owner', '--no-group', '--chmod=F644',
+        '--rsync-path', 'sudo -n rsync', '-e', shlex.join(ssh_args),
+    ]
+    endpoints = [str(manifest_path), remote_target]
+    with mgr.step(
+        'Inspect guest persistent attachment manifest',
+        why=(
+            'Preview the same checksum and metadata comparison used by the '
+            'transfer so an unchanged manifest needs no write or approval.'
+        ),
+    ):
+        directory = transport._run_guest_root_script(
+            cfg, ip, script=f'sudo -n test -d {parent}',
+            summary='Check guest persistent manifest directory',
+            detail=f'target={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}',
+            dry_run=False, role='read', allowed_exit_codes=(0, 1),
+        )
+        assert directory is not None
+        parent_exists = directory.code == 0
+    if parent_exists:
+        with mgr.step(
+            'Preview guest persistent manifest changes',
+            why='Compare content and metadata without writing the guest replay input.',
+        ):
+            # Ask rsync itself, preserving its existing content, mode, type,
+            # and timestamp repair rules. A hash-only shortcut would lose
+            # metadata repairs. Errors must never count as an empty preview.
+            preview = transport._run_rsync_with_retry(
+                [*rsync_args, '--dry-run', *endpoints],
+                summary='Preview guest persistent manifest changes',
+                detail=f'source={manifest_path} target={remote_target}',
+                dry_run=False, role='read',
+            )
+            assert preview is not None
+            if not (preview.stdout or '').strip():
+                return False
     with mgr.step(
         'Sync persistent attachment manifest into guest',
         why='Push the host canonical manifest into the guest-local replay input using a checksum-based rsync so unchanged content stays untouched.',
         approval_scope=f'persistent-manifest-sync:{cfg.vm.name}',
     ):
-        transport._run_guest_ssh_script_with_retry(
-            cfg,
-            ip,
-            script=(
-                f'sudo -n mkdir -p {shlex.quote(str(Path(PERSISTENT_ATTACHMENT_GUEST_STATE_PATH).parent))}'
-            ),
-            summary='Prepare guest persistent manifest directory',
-            detail=f'target={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}',
-            dry_run=dry_run,
-            role='modify',
-            check=check,
-        )
+        if not parent_exists:
+            # Both operations are known now: show/approve them together and
+            # let the same rsync transport retry cover directory creation too.
+            rsync_args[rsync_args.index('--rsync-path') + 1] = (
+                f'sudo -n mkdir -p {parent} && sudo -n rsync'
+            )
         result = transport._run_rsync_with_retry(
-            [
-                'rsync',
-                '--archive',
-                '--checksum',
-                '--itemize-changes',
-                '--no-owner',
-                '--no-group',
-                '--chmod=F644',
-                '--rsync-path',
-                'sudo -n rsync',
-                '-e',
-                ' '.join(shlex.quote(arg) for arg in ssh_args),
-                str(manifest_path),
-                remote_target,
-            ],
+            [*rsync_args, *endpoints],
             summary='Sync persistent attachment manifest to guest',
             detail=f'source={manifest_path} target={remote_target}',
             dry_run=dry_run,
