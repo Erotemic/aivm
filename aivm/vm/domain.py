@@ -14,7 +14,7 @@ from ..commands import CommandManager
 from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..host import HostCapability, require_host_capability
-from ..privilege import virsh_needs_sudo
+from ..privilege import path_read_needs_sudo, virsh_needs_sudo
 from ..runtime import pin_locale, virsh_cmd, virsh_domain_missing
 from .connectivity import get_ip_cached
 from .paths import _paths
@@ -199,7 +199,8 @@ def _host_path_exists(path: Path) -> bool:
     """Return a definitive storage-path presence answer or fail closed."""
     result = CommandManager.current().run(
         pin_locale(['stat', '--format=%F', '--', str(path)]),
-        sudo=virsh_needs_sudo(),
+        # Direct filesystem access is independent of system-libvirt access.
+        sudo=path_read_needs_sudo(path),
         role='read',
         check=False,
         capture=True,

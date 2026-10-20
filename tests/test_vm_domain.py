@@ -562,3 +562,24 @@ def test_host_storage_probe_accepts_confirmed_enoent(
         ),
     )
     assert _host_path_exists(Path('/managed/disk')) is False
+
+
+@pytest.mark.parametrize('readable', [False, True])
+def test_storage_probe_privilege_is_independent_of_libvirt_access(
+    monkeypatch: MonkeyPatch, readable: bool,
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch, privilege_mode='as-needed')
+    monkeypatch.setattr('aivm.vm.domain.virsh_needs_sudo', lambda: False)
+    monkeypatch.setattr('aivm.privilege.user_can_read_path', lambda path: readable)
+    privileges = []
+
+    def run(self, cmd, **kwargs):
+        privileges.append(kwargs['sudo'])
+        assert kwargs['role'] == 'read'
+        return CommandResult(0, 'regular file', '')
+
+    monkeypatch.setattr('aivm.vm.domain.CommandManager.run', run)
+    assert _host_path_exists(Path('/managed/disk'))
+    assert privileges == [not readable]
