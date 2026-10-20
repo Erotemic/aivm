@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
+"""Replay the guest-local attachment manifest, or verify one foreground path.
+
+Verified bindings get a private reference under /run/aivm-persistent-mounts.
+That reference pins the original directory object even when virtiofs recreates
+its source automount. Only that proof (or explicit kernel token provenance)
+permits an idle foreground rebind; busy and unidentified mounts are preserved.
+References are boot-local, root-controlled, and pruned during lifecycle replay.
+"""
+
 import argparse
+import fcntl
+import hashlib
 import json
 import os
 import posixpath
+import stat
 import subprocess
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
 Record = dict[str, Any]
@@ -20,6 +32,79 @@ PERSISTENT_ROOT_MOUNT = "/mnt/aivm-persistent"
 STATE_DIR = "/var/lib/aivm"
 STATE_PATH = "/var/lib/aivm/attachments.json"
 DEGRADED_EXIT = 3
+PROVENANCE_ROOT = "/run/aivm-persistent-mounts"
+
+
+def provenance_directory() -> Path:
+    """Only root may create or replace the kernel references used as proof."""
+    path = Path(PROVENANCE_ROOT)
+    path.mkdir(mode=0o700, exist_ok=True)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+        raise RuntimeError(f"unsafe persistent mount provenance directory: {path}")
+    return path
+
+
+class ReplayLock:
+    """Serialize boot replay, foreground recovery, and provenance updates."""
+
+    def __enter__(self):
+        path = provenance_directory() / "lock"
+        self.fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(self.fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+            os.close(self.fd)
+            raise RuntimeError(f"unsafe persistent mount replay lock: {path}")
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        os.close(self.fd)
+
+
+def provenance_path(record: Record) -> str:
+    key = normalize_guest_dst(record.get("guest_dst")) + "\0" + str(record["shared_root_token"])
+    return str(Path(PROVENANCE_ROOT) / hashlib.sha256(key.encode()).hexdigest())
+
+
+def has_pinned_provenance(record: Record) -> bool:
+    path = provenance_path(record)
+    # Never infer identity across virtiofs superblocks. A private bind keeps
+    # the original object alive, preventing inode/device reuse from forging it.
+    provenance_directory()
+    return is_mountpoint(path) and same_directory_object(path, str(record["guest_dst"]))
+
+
+def remember_provenance(record: Record) -> None:
+    source, target = mount_source_for(record), str(record["guest_dst"])
+    if not same_directory_object(source, target):
+        return
+    provenance_directory()
+    path = provenance_path(record)
+    if is_mountpoint(path):
+        if same_directory_object(path, target):
+            return
+        unmount_guest_dst(path)
+    # The protected parent, not the mounted directory's ownership, is the
+    # authority boundary. Mounted source directories may belong to the user.
+    Path(path).mkdir(mode=0o700, exist_ok=True)
+    if Path(path).is_symlink():
+        raise RuntimeError(f"symlink in persistent mount provenance: {path}")
+    run(["mount", "--bind", target, path])
+    run(["mount", "--make-private", path])
+    if not same_directory_object(path, target):
+        raise RuntimeError(f"could not pin persistent mount provenance: {path}")
+
+
+def prune_provenance(records: Sequence[AcceptedRecord]) -> None:
+    desired = {provenance_path(record) for _, enabled, record in records if enabled}
+    for path in provenance_directory().iterdir():
+        if path.name == "lock" or str(path) in desired:
+            continue
+        if len(path.name) != 64 or any(c not in "0123456789abcdef" for c in path.name):
+            raise RuntimeError(f"unexpected persistent mount provenance entry: {path}")
+        unmount_guest_dst(str(path))
+        path.rmdir()
 
 class SourceUnavailableError(RuntimeError):
     pass
@@ -312,6 +397,12 @@ def ensure_record(
     if current is not None:
         current_source = str(current.get("source") or "").strip()
         current_options = str(current.get("options") or "").strip()
+        if preserve_live_mounts and desired not in current_options.split(","):
+            raise LiveMountConflictError(
+                f"live persistent attachment access differs for {guest_dst} "
+                f"(current={current_options} desired={desired}); "
+                "foreground session preparation leaves live mounts untouched"
+            )
         # findmnt's SOURCE is presentation-oriented and a bind mount
         # may be rendered as a filesystem plus FSROOT instead of the
         # lexical source path. Object identity is authoritative.
@@ -321,18 +412,15 @@ def ensure_record(
         )
         if same_source:
             if desired in current_options.split(","):
+                remember_provenance(record)
                 return
-            if preserve_live_mounts:
-                raise LiveMountConflictError(
-                    f"live persistent attachment access differs for {guest_dst} "
-                    f"(current={current_options} desired={desired}); "
-                    "foreground session preparation leaves live mounts untouched"
-                )
         else:
-            stale_same_token = mount_is_same_persistent_token(current, record)
+            stale_same_token = preserve_live_mounts and (
+                mount_is_same_persistent_token(current, record) or has_pinned_provenance(record)
+            )
             if preserve_live_mounts and not stale_same_token:
                 raise LiveMountConflictError(
-                    f"live persistent attachment at {guest_dst} is a different directory "
+                    f"cannot verify that live persistent attachment at {guest_dst} belongs to the requested token "
                     f"(findmnt source={current_source or '<unknown>'} desired={source}); "
                     "foreground session preparation leaves live mounts untouched"
                 )
@@ -360,6 +448,7 @@ def ensure_record(
                 current_options = str(current.get("options") or "").strip()
                 if desired in current_options.split(","):
                     return
+    created_mount = current is None
     if current is None:
         os.makedirs(guest_dst, exist_ok=True)
         if subprocess.run(["mountpoint", "-q", guest_dst]).returncode != 0:
@@ -369,13 +458,14 @@ def ensure_record(
         raise RuntimeError(f"could not verify persistent attachment mount {guest_dst}")
     current_options = str(current.get("options") or "").strip()
     if desired not in current_options.split(","):
-        if preserve_live_mounts:
+        if preserve_live_mounts and not created_mount:
             raise LiveMountConflictError(
                 f"live persistent attachment access differs for {guest_dst} "
                 f"(current={current_options} desired={desired}); "
                 "foreground session preparation leaves live mounts untouched"
             )
         run(["mount", "-o", f"remount,bind,{desired}", guest_dst])
+    remember_provenance(record)
 
 def select_record(
     records: Sequence[object], only_guest_dst: str
@@ -424,6 +514,7 @@ def sync_state(
             guest_dst for guest_dst, _enabled, _record in records
         }
         prune_stale_mounts(desired_targets)
+        prune_provenance(records)
     failures = []
     for guest_dst, enabled, record in records:
         if not enabled:
@@ -434,6 +525,10 @@ def sync_state(
                 )
             else:
                 unmount_guest_dst(guest_dst, ignore_busy=False)
+                path = provenance_path(record)
+                if is_mountpoint(path):
+                    unmount_guest_dst(path)
+                    Path(path).rmdir()
             continue
         try:
             ensure_record(
@@ -459,12 +554,13 @@ def main(argv: Sequence[str] = ()) -> int:
     args = parser.parse_args(list(argv))
     if args.preserve_live_mounts and not args.only_guest_dst:
         parser.error("--preserve-live-mounts requires --only-guest-dst")
-    mount_persistent_root()
     try:
-        failures = sync_state(
-            only_guest_dst=args.only_guest_dst,
-            preserve_live_mounts=args.preserve_live_mounts,
-        )
+        with ReplayLock():
+            mount_persistent_root()
+            failures = sync_state(
+                only_guest_dst=args.only_guest_dst,
+                preserve_live_mounts=args.preserve_live_mounts,
+            )
     except FileNotFoundError as ex:
         print(str(ex), file=sys.stderr)
         raise SystemExit(1)

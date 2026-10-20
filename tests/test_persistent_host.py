@@ -609,7 +609,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     cfg.vm.user = 'agent'
     activate_manager(monkeypatch)
 
-    rec = command_recorder(monkeypatch, {'ssh': _hash_route(status)})
+    rec = command_recorder(monkeypatch, {'ssh': _hash_route(status), 'rsync': FakeProc()})
 
     changed = _install_guest_text_if_changed(
         cfg,
@@ -625,7 +625,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     scripts = _ssh_scripts(rec)
 
     def _kind(script: str) -> str:
-        if 'install -m' in script:
+        if 'install -d' in script:
             return 'install'
         if 'sha256sum' in script:
             return 'check'
@@ -634,8 +634,10 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     if expect_install:
         assert [_kind(s) for s in scripts] == ['check', 'install', 'check']
         install_script = scripts[1]
-        assert 'install -m 0755' in install_script
-        assert "printf '%s'" in install_script
+        assert 'install -d -m 0755' in install_script
+        assert rec.ran('rsync')
+        assert '--chmod=F0755' in rec.only('rsync')
+        assert 'helper body' not in install_script
     else:
         assert [_kind(s) for s in scripts] == ['check']
     # The check remains an exact, copy/pasteable command rather than a
@@ -735,8 +737,8 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
 
     scripts = _ssh_scripts(rec)
     # Both guest text files were installed (helper 0755, unit 0644).
-    assert any('install -m 0755' in s for s in scripts)
-    assert any('install -m 0644' in s for s in scripts)
+    assert any('--chmod=F0755' in cmd for cmd in rec.normalized if cmd[:1] == ['rsync'])
+    assert any('--chmod=F0644' in cmd for cmd in rec.normalized if cmd[:1] == ['rsync'])
     # The changed unit reloads systemd and re-enables the replay service.
     assert any(
         'systemctl daemon-reload' in s
@@ -843,7 +845,7 @@ def test_persistent_reconcile_can_scope_foreground_guest_replay(
     )
 
 
-@pytest.mark.parametrize('phase', ['sync', 'install', 'replay'])
+@pytest.mark.parametrize('phase', ['sync', 'install', 'transfer', 'replay'])
 def test_persistent_reconcile_propagates_primary_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, phase: str
 ) -> None:
@@ -870,10 +872,15 @@ def test_persistent_reconcile_propagates_primary_failures(
         routes = {
             'ssh': _hash_route(
                 'MISSING',
-                fail_when=lambda s: 'install -m' in s,
+                fail_when=lambda s: 'install -d' in s,
                 fail_proc=boom,
             ),
             'rsync': FakeProc(stdout=''),
+        }
+    elif phase == 'transfer':
+        routes = {
+            'ssh': _hash_route('MISSING'),
+            'rsync': lambda cmd: boom if cmd[-1].endswith(PERSISTENT_ATTACHMENT_REPLAY_BIN) else FakeProc(),
         }
     else:
         routes = {
@@ -901,6 +908,7 @@ def test_persistent_reconcile_propagates_primary_failures(
     [
         pytest.param('sync', id='logs_and_continues'),
         pytest.param('install', id='on_late_failures-install'),
+        pytest.param('transfer', id='on_late_failures-transfer'),
         pytest.param('replay', id='on_late_failures-replay'),
     ],
 )
@@ -939,10 +947,15 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
         routes = {
             'ssh': _hash_route(
                 'MISSING',
-                fail_when=lambda s: 'install -m' in s,
+                fail_when=lambda s: 'install -d' in s,
                 fail_proc=boom,
             ),
             'rsync': FakeProc(stdout=''),
+        }
+    elif phase == 'transfer':
+        routes = {
+            'ssh': _hash_route('MISSING'),
+            'rsync': lambda cmd: boom if cmd[-1].endswith(PERSISTENT_ATTACHMENT_REPLAY_BIN) else FakeProc(),
         }
     else:
         routes = {

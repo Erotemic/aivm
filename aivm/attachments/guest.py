@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import shlex
+from importlib import resources
 from pathlib import Path, PurePosixPath
 
 from loguru import logger
@@ -21,6 +22,11 @@ from ..vm import ensure_share_mounted
 from ..vm import ssh_config as mk_ssh_config
 from ..vm.share import ResolvedAttachment
 from .persistent import _prepare_persistent_attachment_host_and_vm
+from .persistent.transport import (
+    _guest_text_hash_check_script,
+    _guest_text_sha256,
+    _install_guest_text_if_changed,
+)
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
     ATTACHMENT_MODE_DIRECT_VIRTIOFS,
@@ -58,60 +64,53 @@ def _ensure_guest_symlink(
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
-    link_q = shlex.quote(symlink_path)
-    tgt_q = shlex.quote(target_path)
-    parent_q = shlex.quote(str(PurePosixPath(symlink_path).parent))
-    # Use sudo for both mkdir and ln -s so companion symlinks work even when
-    # the parent dir is not writable by the guest user (e.g. /home/joncrall/...).
-    script = (
-        'set -euo pipefail; '
-        f'if [ -L {link_q} ]; then '
-        f'  cur=$(readlink {link_q}); '
-        f'  if [ "$cur" = {tgt_q} ]; then exit 0; fi; '
-        f'  echo "aivm-symlink-warn: {symlink_path} is a symlink to $cur not {target_path}; skipping" >&2; '
-        'exit 3; '
-        f'elif [ -d {link_q} ]; then '
-        f'  if [ -n "$(find {link_q} -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then '
-        f'    echo "aivm-symlink-warn: {symlink_path} is a non-empty directory; skipping" >&2; '
-        '    exit 4; '
-        '  fi; '
-        f'  sudo -n rmdir {link_q}; '
-        f'  sudo -n mkdir -p {parent_q}; '
-        f'  sudo -n ln -s {tgt_q} {link_q}; '
-        f'elif [ -e {link_q} ]; then '
-        f'  echo "aivm-symlink-warn: {symlink_path} is a regular file; skipping" >&2; '
-        'exit 5; '
-        'else '
-        f'  sudo -n mkdir -p {parent_q}; '
-        f'  sudo -n ln -s {tgt_q} {link_q}; '
-        'fi'
-    )
-    cmd = [
+    helper = '/usr/local/libexec/aivm/attachment-symlink'
+    source = (resources.files('aivm').joinpath('rc', 'guest', 'attachment_symlink.py')
+              .read_text(encoding='utf-8'))
+    command = shlex.join([
+        'sudo', '-n', helper, '--link', symlink_path, '--target', target_path,
+    ])
+    base = [
         'ssh',
-        *ssh_base_args(
-            ident,
-            strict_host_key_checking='accept-new',
-        ),
+        *ssh_base_args(ident, strict_host_key_checking='accept-new'),
         context.ssh_target(ip),
-        Elided(
-            script,
-            f'guest symlink reconcile: {symlink_path} -> {target_path}',
-        ),
     ]
     mgr = CommandManager.current()
+    # Check content and link in one read-only SSH round trip. Missing/outdated
+    # helpers take the visible install path; healthy links never request repair.
+    hash_check = _guest_text_hash_check_script(helper, _guest_text_sha256(source))
     with mgr.step(
-        'Reconcile guest attachment symlink',
-        why=f'Ensure {symlink_path} points to the attached path {target_path}.',
-        approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+        'Inspect guest attachment symlink',
+        why='Verify the installed helper and link target before deciding whether repair is needed.',
     ):
+        # SSH joins remote arguments with spaces. Keep these two short,
+        # inspectable commands separate rather than eliding a long argument.
         res = mgr.run(
-            cmd,
-            sudo=False,
-            role='modify',
-            check=False,
-            capture=True,
-            summary=f'Reconcile guest symlink {symlink_path}',
+            [*base, hash_check + ' &&', command + ' --check'],
+            sudo=False, role='read', check=False, capture=True,
+            summary=f'Inspect guest symlink {symlink_path}',
         )
+    if res.code == 1:
+        _install_guest_text_if_changed(
+            cfg, ip, target=helper, text=source,
+            mode='0755', label='guest attachment symlink helper', dry_run=False,
+        )
+        res = mgr.run(
+            [*base, command + ' --check'], sudo=False, role='read',
+            check=False, capture=True,
+            summary=f'Inspect guest symlink {symlink_path}',
+        )
+    if res.code == 10:
+        with mgr.step(
+            'Reconcile guest attachment symlink',
+            why=f'Ensure {symlink_path} points to the attached path {target_path}.',
+            approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+        ):
+            res = mgr.run(
+                [*base, command], sudo=False, role='modify',
+                check=False, capture=True,
+                summary=f'Reconcile guest symlink {symlink_path}',
+            )
     if res.code not in (0, 3, 4, 5):
         log.warning(
             'Guest symlink setup failed for {} -> {}: {}',

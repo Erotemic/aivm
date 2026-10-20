@@ -25,7 +25,6 @@ from ...commands import (
     CommandManager,
     CommandResult,
     CommandRole,
-    Elided,
 )
 from ...config import AgentVMConfig
 from ...privilege import path_needs_sudo
@@ -202,22 +201,6 @@ def _guest_text_hash_check_script(target: str, expected_sha256: str) -> str:
     return (
         f"printf '%s\\n' {shlex.quote(check_record)} | "
         'sudo -n sha256sum --check --status -'
-    )
-
-
-def _guest_text_install_script(target: str, text: str, mode: str) -> str:
-    target_dir = shlex.quote(str(Path(target).parent))
-    target_q = shlex.quote(target)
-    text_q = shlex.quote(text)
-    return '\n'.join(
-        [
-            'set -euo pipefail',
-            'tmp="$(mktemp)"',
-            f'printf \'%s\' {text_q} > "$tmp"',
-            f'sudo -n mkdir -p {target_dir}',
-            f'sudo -n install -m {mode} "$tmp" {target_q}',
-            'rm -f "$tmp"',
-        ]
     )
 
 
@@ -488,20 +471,35 @@ def _install_guest_text_if_changed(
         ),
         approval_scope=f'{label.replace(" ", "-")}:{cfg.vm.name}:{target}',
     ):
-        write_script = Elided(
-            _guest_text_install_script(target, text, mode),
-            f'guest file install payload for {target}',
-        )
         _run_guest_root_script(
             cfg,
             ip,
-            script=write_script,
-            summary=f'Install {label}',
+            script=f'sudo -n install -d -m 0755 {shlex.quote(str(Path(target).parent))}',
+            summary=f'Prepare installed location for {label}',
             detail=f'target={target} expected_sha256={expected_sha256}',
             dry_run=dry_run,
             role='modify',
             check=check,
         )
+        # Transfer a named file instead of hiding a generated installer program
+        # in an SSH argument. The installed guest copy remains inspectable.
+        context = guest_transport_from_effective_cfg(cfg)
+        ident = require_ssh_identity(context.ssh_identity_file)
+        ssh_args = ssh_base_args(
+            ident, strict_host_key_checking='accept-new',
+            connect_timeout=15, batch_mode=True,
+        )
+        with tempfile.TemporaryDirectory(prefix='aivm-guest-install-') as directory:
+            local_file = Path(directory) / Path(target).name
+            local_file.write_text(text, encoding='utf-8')
+            _run_rsync_with_retry(
+                ['rsync', '--archive', '--checksum', '--no-owner', '--no-group',
+                 f'--chmod=F{mode}', '--rsync-path', 'sudo -n rsync',
+                 '-e', shlex.join(['ssh', *ssh_args]), str(local_file),
+                 f'{context.ssh_target(ip)}:{shlex.quote(target)}'],
+                summary=f'Install {label}', detail=f'target={target}',
+                dry_run=dry_run, check=True,
+            )
         verify_result = _run_guest_root_script(
             cfg,
             ip,

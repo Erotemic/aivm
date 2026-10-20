@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 from contextlib import redirect_stderr
+from contextlib import nullcontext
 from io import StringIO
 from pathlib import Path
 from typing import Iterator
@@ -18,9 +19,20 @@ from typing import Iterator
 import pytest
 
 from tests.persistent_helpers import (
-    _exec_guest_replay_helper,
+    _exec_guest_replay_helper as _exec_helper,
     _make_guest_replay_fake_run,
 )
+
+
+def _exec_guest_replay_helper(source):
+    ns = _exec_helper(source)
+    # These mount-table simulations do not hold real kernel directory objects.
+    # Pin lifecycle and identity are covered separately with real bind/virtiofs.
+    ns['ReplayLock'] = nullcontext
+    ns['remember_provenance'] = lambda record: None
+    ns['has_pinned_provenance'] = lambda record: False
+    ns['prune_provenance'] = lambda records: None
+    return ns
 
 
 @pytest.fixture(autouse=True)
@@ -896,7 +908,7 @@ def test_persistent_replay_helper_requires_exact_same_token_provenance(
     ns['subprocess'].run = _make_guest_replay_fake_run(mounts, calls=calls)
     ns['same_directory_object'] = lambda _left, _right: False
 
-    with pytest.raises(ns['LiveMountConflictError'], match='different directory'):
+    with pytest.raises(ns['LiveMountConflictError'], match='cannot verify'):
         ns['ensure_record'](
             {
                 'guest_dst': guest_dst,
@@ -908,6 +920,49 @@ def test_persistent_replay_helper_requires_exact_same_token_provenance(
         )
 
     assert not any(call and call[0] == 'umount' for call in calls)
+
+
+@pytest.mark.parametrize('access,current_access', [('ro', 'rw'), ('rw', 'ro')])
+def test_foreground_does_not_repair_access_conflict_even_with_provenance(
+    tmp_path, access, current_access,
+):
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_replay_python())
+    root = tmp_path / 'root'
+    (root / 'token').mkdir(parents=True)
+    target = str(tmp_path / 'workspace')
+    ns['PERSISTENT_ROOT_MOUNT'] = str(root)
+    ns['same_directory_object'] = lambda left, right: False
+    ns['has_pinned_provenance'] = lambda record: True
+    calls = []
+    ns['subprocess'].run = _make_guest_replay_fake_run(
+        {target: {'source': 'none', 'options': current_access}}, calls=calls,
+    )
+    with pytest.raises(ns['LiveMountConflictError'], match='access differs'):
+        ns['ensure_record'](
+            {'guest_dst': target, 'shared_root_token': 'token', 'access': access},
+            preserve_live_mounts=True,
+        )
+    assert not any(call[0] in ('mount', 'umount') for call in calls)
+
+
+def test_foreground_can_create_a_new_read_only_attachment(tmp_path):
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_guest_replay_helper(persistent_replay_python())
+    root = tmp_path / 'root'
+    (root / 'token').mkdir(parents=True)
+    target = str(tmp_path / 'workspace')
+    ns['PERSISTENT_ROOT_MOUNT'] = str(root)
+    mounts, calls = {}, []
+    ns['subprocess'].run = _make_guest_replay_fake_run(mounts, calls=calls)
+    ns['ensure_record'](
+        {'guest_dst': target, 'shared_root_token': 'token', 'access': 'ro'},
+        preserve_live_mounts=True,
+    )
+    assert mounts[target]['options'] == 'ro'
+    assert not any(call[0] == 'umount' for call in calls)
 
 
 def test_persistent_replay_helper_reports_source_unavailable_as_degraded() -> None:

@@ -36,6 +36,38 @@ and changed records still use the locked store transaction. Live workspace
 checks and persistent replay continue on each entry; this optimization does
 not cache mount readiness or change filesystem identity handling.
 
+Foreground entry preserves an existing live workspace. Virtiofs can recreate
+a source submount with a different device number while the old workspace bind
+remains valid. Guest replay now retains a private bind reference for each
+verified attachment under ``/run/aivm-persistent-mounts`` (root-only, mode
+``0700``). These kernel-held references associate the original directory object
+with its exact attachment token and destination; they are not cached inode
+numbers or host config-store records. Replay serializes reference updates and
+prunes obsolete references during lifecycle replay.
+
+When that proof identifies an idle stale bind for the requested token,
+foreground entry may use one ordinary unmount/rebind. Busy mounts, access-mode
+conflicts, and mounts whose provenance cannot be established remain untouched
+with a diagnostic. It never forces or lazily unmounts a foreground workspace.
+An older, already-stale mount with no reference cannot be safely adopted by
+guessing; normal lifecycle replay, including replay after a VM reboot,
+establishes references automatically. A healthy existing mount acquires its
+reference during ordinary entry. References disappear with the guest's
+``/run`` filesystem at reboot and are recreated from verified mounts.
+
+Companion symlinks use the inspectable guest program
+``/usr/local/libexec/aivm/attachment-symlink``. Logs show its explicit
+``--link`` and ``--target`` arguments. Its ``--check`` mode reads only; a
+correct link needs no repair approval. Missing links or empty directories
+take the approved repair path, which checks again before changing anything.
+Unrelated links, files, and nonempty directories are preserved. Helper updates
+show ordinary checksum, directory preparation, and file-transfer commands
+rather than an omitted inline installer. To inspect the installed logic in
+the guest::
+
+   cat /usr/local/libexec/aivm/attachment-symlink
+   cat /usr/local/libexec/aivm-persistent-attachment-replay
+
 Provision specific guest tools
 ------------------------------
 

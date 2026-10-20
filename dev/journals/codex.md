@@ -2623,3 +2623,59 @@ default network. The 62 domain/deletion/authority/teardown unit tests pass,
 as do full `ty check aivm` and `git diff --check`. I am confident in the narrow
 cleanup fix and the reproduction's safety assertions; faster foreground entry
 and proven automatic recovery remain separate work.
+
+## 2026-10-20 14:16:58 -0400
+
+Implemented the authorized next foreground-session change: guest replay keeps
+a private bind reference to each verified attachment under a root-only /run
+directory. I chose kernel-held directory objects instead of recording inode,
+device, mount-ID, or FUSE-handle tuples in a metadata ledger. A real nested
+test immediately reused a numeric mount ID after a successful unmount/rebind;
+that was a useful correction to my initial test assertion and reinforced why
+stored numbers are weaker than keeping the original object alive. The key
+includes both destination and token, and references are created only after
+source/workspace object identity is established. An exclusive replay lock
+serializes boot, foreground, and reference updates.
+
+The safety boundary remains deliberately narrow. A proven idle stale bind may
+receive one normal unmount/rebind; busy mounts, unknown provenance, and access
+conflicts are preserved. Ordinary entry can seed proof for a healthy existing
+mount, but cannot invent proof for an already-stale old mount. Lifecycle replay
+or a normal reboot establishes references automatically. The working guest's
+unproven mount was not repaired or altered here. References retain directory
+objects until updated/detached/lifecycle-pruned or rebooted, a small per-record
+resource cost that must not be confused with durable host authorization state.
+No host identity pin, ownership selection, or machine-store schema changed.
+
+I also replaced the recurring symlink reconciliation payload with a standalone
+readable guest helper. A checksum and --check invocation share one read-only
+SSH round trip; only a missing link or empty directory reaches repair approval.
+The helper rechecks before mutation and preserves conflicting files, symlinks,
+and nonempty directories. Passing paths as quoted arguments avoids embedding
+them in generated shell logic. The six direct filesystem tests cover literal
+metacharacters, dangling targets, idempotence, and a directory populated between
+inspection and repair. Command-manager tests distinguish prompt-free reads
+from exactly one approved repair.
+
+The shared guest-text installer now transfers named files with rsync instead
+of executing an omitted inline installer. It retains checksum verification,
+explicit modes, and failure propagation; transfer failures have added coverage.
+The normal foreground transcript contains no omitted payloads in the nested
+test. I did observe unrelated unmarked inline payloads in VM deletion cleanup;
+those remain auditability debt, not evidence that all repository logging has
+been converted. I did not broaden this change into a destructive-cleanup
+rewrite. The installed helpers and workflow limitations are documented in
+docs/source/workflows.rst.
+
+Validation: 291 attachment/persistent/session/cloud-init/tunnel/released-path
+regressions passed. Four privileged E2E tests passed, including a fresh nested
+VM with real SSH entries, virtiofs SOURCE=none submount recreation, busy
+preservation followed by idle recovery, repeated-entry stability, refusal after
+proof removal despite matching inodes, wrong-token refusal, unsafe provenance
+permissions, reboot reconstruction, and detach releasing every private reference.
+The nested run completed in 64.87 seconds; its disposable VM/network cleanup
+succeeded and local libvirt is empty apart from the preexisting default network.
+Full `ty check aivm` and git diff --check pass. I am confident about this tested
+kernel/virtiofs topology and the fail-closed cases, but have not established
+Btrfs/ZFS or cross-kernel coverage. The rest of foreground reconciliation still
+runs on each entry; this is not a broad readiness-cache optimization.
