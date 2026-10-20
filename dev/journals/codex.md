@@ -2518,3 +2518,28 @@ it. Host versions and setup capability output are still needed to distinguish
 old reporting from a tool discovery problem. No host service or VM was changed.
 Validation: 70 focused tests passed, production type checks passed, and the diff
 has no whitespace errors.
+
+## 2026-10-20 11:19:02 -0400
+
+The follow-up host evidence resolves the earlier uncertainty: aiq-gpu runs
+libvirt 8.0/QEMU 6.2, lacks version advertisement, and successfully executes
+`swtpm socket --tpm2 --print-capabilities`. My earlier strict-advertisement
+assumption was too narrow for that supported software stack. I checked the
+upstream libvirt 8.0 and swtpm 0.6.3 implementations: the former has no version
+enum, while the latter selects TPM 2.0 in libtpms before printing capabilities
+and exits before configuring sockets or persistent state.
+
+I added a narrow positive probe when the daemon advertises emulator/tpm-crb
+but omits backendVersion. Explicit empty/unsupported version reports still
+fail; missing tools, timeouts, failed probes and invalid JSON cannot authorize
+a change. Every definition still explicitly requests emulator version 2.0 and
+tpm-crb. I am confident this addresses the reported preflight rejection without
+silently accepting an unknown runtime or changing device strength. The tradeoff
+is a local-host executable check for older system-libvirt installations; it
+cannot establish the daemon's later startup environment or filesystem access.
+Actual VM startup and persistence remain live-host checks. Neither host service
+configuration nor the user's VM has been touched from this checkout.
+
+Validation: 97 focused TPM/create/update/dry-run tests passed, including real
+CommandManager dispatch with a simulated subprocess seam and missing executable.
+Changed production modules pass type checks; git diff --check passes.

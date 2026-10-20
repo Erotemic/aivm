@@ -34,7 +34,9 @@ def _preview_vm_update(cfg: AgentVMConfig) -> None:
             ).preview()
         print(f'DRYRUN: would add {TPM_XML} only if absent, after verifying a '
               'shut-off VM, no managed save, and advertised emulator TPM 2.0 / '
-              'tpm-crb support. Would preserve UUID, disks and other devices, '
+              'tpm-crb support (if version reporting is absent, verify host '
+              'TPM 2.0 with swtpm socket --tpm2 --print-capabilities). '
+              'Would preserve UUID, disks and other devices, '
               'then redefine with virsh define --validate.')
     print('DRYRUN: restart requirements depend on detected drift and VM power state; '
           'no changes or config writes performed.')

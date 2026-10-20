@@ -1,4 +1,4 @@
-"""Device lifecycle contracts; fake only the external libvirt daemon."""
+"""Device lifecycle contracts; fake external libvirt and host TPM tools."""
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -9,7 +9,7 @@ from aivm.errors import AIVMError
 from aivm.util import CmdResult
 from aivm.vm import tpm
 from aivm.vm.create import build_virt_install_cmd
-from tests.helpers import activate_manager, normalize_cmd
+from tests.helpers import FakeProc, activate_manager, normalize_cmd
 
 
 CAPS = '''<domainCapabilities><devices><tpm supported="yes">
@@ -17,6 +17,9 @@ CAPS = '''<domainCapabilities><devices><tpm supported="yes">
 <enum name="backendModel"><value>emulator</value></enum>
 <enum name="backendVersion"><value>2.0</value></enum>
 </tpm></devices></domainCapabilities>'''
+# Libvirt 8.0 does not expose a backendVersion enum at all.
+OLD_CAPS = CAPS.replace('<enum name="backendVersion"><value>2.0</value></enum>', '')
+SWTPM_CAPS = '{"type": "swtpm", "features": ["rsa-keysize-2048", "cmdarg-seccomp"]}'
 XML = '''<domain type="kvm"><name>test</name><uuid>9dc48c15-9fc7-44c2-807a-815368bb9674</uuid>
 <metadata><owner xmlns="urn:example">original</owner></metadata>
 <devices><disk type="file"><source file="/keep/disk.qcow2"/></disk>
@@ -27,11 +30,15 @@ XML = '''<domain type="kvm"><name>test</name><uuid>9dc48c15-9fc7-44c2-807a-81536
 def daemon(monkeypatch):
     activate_manager(monkeypatch)
     state = dict(xml=XML, power='shut off', saved='no', caps=CAPS,
-                 calls=[], definitions=[], fail=False)
+                 calls=[], definitions=[], fail=False,
+                 probe=CmdResult(0, SWTPM_CAPS, ''))
 
     def run(self, cmd, **kwargs):
         cmd = normalize_cmd(cmd)
         state['calls'].append(cmd)
+        if cmd == ['swtpm', 'socket', '--tpm2', '--print-capabilities']:
+            assert kwargs['role'] == 'read'
+            return state['probe']
         verb = cmd[1]
         if verb == 'dumpxml':
             assert '--inactive' in cmd
@@ -118,10 +125,11 @@ def test_missing_host_support_does_not_downgrade(daemon):
     assert daemon['definitions'] == []
 
 
-@pytest.mark.parametrize('name,value', [
-    ('backendModel', 'emulator'), ('backendVersion', '2.0'), ('model', 'tpm-crb'),
+@pytest.mark.parametrize('name,value,omitted', [
+    ('backendModel', 'emulator', False), ('backendModel', 'emulator', True),
+    ('backendVersion', '2.0', False),
+    ('model', 'tpm-crb', False), ('model', 'tpm-crb', True),
 ])
-@pytest.mark.parametrize('omitted', [False, True])
 def test_capability_failure_reports_missing_requirement(daemon, name, value, omitted):
     root = ET.fromstring(CAPS)
     enum = root.find(f'./devices/tpm/enum[@name="{name}"]')
@@ -138,6 +146,85 @@ def test_capability_failure_reports_missing_requirement(daemon, name, value, omi
     assert f'{name}=(not advertised)' in message
     assert 'A physical host TPM (/dev/tpm*) is not required' in message
     assert daemon['definitions'] == []
+    assert not any(call[0] == 'swtpm' for call in daemon['calls'])
+
+
+def test_older_libvirt_uses_positive_tpm2_probe_without_downgrading(daemon):
+    daemon['caps'] = OLD_CAPS
+    tpm.add_tpm(cfg(), dry_run=False)
+    root = ET.fromstring(daemon['xml'])
+    device = root.find('./devices/tpm')
+    assert device.get('model') == 'tpm-crb'
+    assert device.find('backend').attrib == {'type': 'emulator', 'version': '2.0'}
+    assert root.findtext('uuid') == ET.fromstring(XML).findtext('uuid')
+    assert [call for call in daemon['calls'] if call[0] == 'swtpm'] == [
+        ['swtpm', 'socket', '--tpm2', '--print-capabilities'],
+    ]
+    tpm.add_tpm(cfg(), dry_run=False)
+    assert len(daemon['definitions']) == 1
+
+
+@pytest.mark.parametrize('probe', [
+    CmdResult(1, '', 'Could not choose TPM version'),
+    CmdResult(127, '', 'command not found: swtpm'),
+    CmdResult(124, '', 'command timed out'),
+    CmdResult(0, 'invalid JSON', ''),
+    CmdResult(0, '[]', ''),
+    CmdResult(0, '{"type": "swtpm_setup", "features": []}', ''),
+    CmdResult(0, '{"type": "swtpm"}', ''),
+    CmdResult(0, '{"type": "swtpm", "features": [null]}', ''),
+])
+def test_older_libvirt_requires_successful_valid_tpm2_probe(daemon, probe):
+    daemon['caps'] = OLD_CAPS
+    daemon['probe'] = probe
+    with pytest.raises(AIVMError, match='Cannot verify TPM 2.0.*no weaker fallback'):
+        tpm.add_tpm(cfg(), dry_run=False)
+    assert daemon['xml'] == XML
+    assert daemon['definitions'] == []
+
+
+def test_explicit_tpm12_only_report_cannot_be_overridden_by_host_probe(daemon):
+    daemon['caps'] = CAPS.replace('<value>2.0</value>', '<value>1.2</value>')
+    with pytest.raises(AIVMError, match='Missing requirements: backendVersion=2.0'):
+        tpm.add_tpm(cfg(), dry_run=False)
+    assert not any(call[0] == 'swtpm' for call in daemon['calls'])
+    assert daemon['definitions'] == []
+
+
+def test_modern_libvirt_needs_no_host_probe(daemon):
+    tpm.require_tpm_capability()
+    assert not any(call[0] == 'swtpm' for call in daemon['calls'])
+
+
+@pytest.mark.parametrize('missing_binary', [False, True])
+def test_host_probe_uses_read_only_command_runtime(monkeypatch, missing_binary):
+    mgr = activate_manager(monkeypatch)
+    calls = []
+
+    def run(cmd, **kwargs):
+        cmd = normalize_cmd(cmd)
+        calls.append(cmd)
+        if cmd == ['virsh', 'domcapabilities']:
+            return FakeProc(0, OLD_CAPS, '')
+        if cmd == ['swtpm', 'socket', '--tpm2', '--print-capabilities']:
+            assert kwargs['timeout'] == 15
+            if missing_binary:
+                raise FileNotFoundError(2, 'No such file', 'swtpm')
+            return FakeProc(0, SWTPM_CAPS, '')
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', run)
+    monkeypatch.setattr(tpm, 'virsh_needs_sudo', lambda: False)
+    if missing_binary:
+        with pytest.raises(AIVMError, match='probe failed: command not found: swtpm'):
+            tpm.require_tpm_capability()
+    else:
+        tpm.require_tpm_capability()
+    assert calls == [
+        ['virsh', 'domcapabilities'],
+        ['swtpm', 'socket', '--tpm2', '--print-capabilities'],
+    ]
+    assert mgr.mutation_generation == 0
 
 
 def test_conflicting_existing_device_is_never_replaced(daemon):

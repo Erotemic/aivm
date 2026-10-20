@@ -283,7 +283,7 @@ select it through ``aivm vm edit`` and apply it with ``aivm vm update``. The def
 A missing request never removes an existing device. Replacement, removal and
 TPM-state copying are not provided by this workflow.
 
-The libvirt host needs ``swtpm`` and ``swtpm-tools`` with advertised TPM 2.0
+The libvirt host needs ``swtpm`` and ``swtpm-tools`` with TPM 2.0
 emulator / ``tpm-crb`` support. AIVM checks the selected daemon and does not
 install packages or fall back to a weaker device. A physical host TPM and
 ``/dev/tpm*`` devices are not required for this software backend. To inspect
@@ -296,10 +296,15 @@ what the system daemon advertises:
 Look for ``emulator`` under ``backendModel``, ``2.0`` under ``backendVersion``,
 and ``tpm-crb`` under ``model``. Missing values describe what libvirt has not
 recognized; installing packages alone does not establish daemon support.
-If ``backendVersion`` is absent, check ``virsh -c qemu:///system version`` and
-``swtpm_setup --print-capabilities``. Older libvirt or swtpm tools may omit
-version reporting even when an emulator is available; AIVM still requires
-explicit TPM 2.0 advertisement.
+Older libvirt (including 8.0) omits ``backendVersion``. If the daemon advertises
+``emulator`` and ``tpm-crb`` but omits this enum, AIVM verifies the local host's
+TPM 2.0 support with ``swtpm socket --tpm2 --print-capabilities``. This selects
+TPM 2.0 in the library and exits before creating sockets or persistent state.
+Older ``swtpm_setup`` may also omit the newer ``tpm-2.0`` feature flag; that
+absence alone does not mean TPM 2.0 is unavailable. A failed or invalid probe,
+an explicitly empty version enum, or an enum excluding ``2.0`` stops the update.
+The domain definition always requests ``version="2.0"`` and ``model="tpm-crb"``;
+the probe never substitutes a weaker device.
 An upgrade requires a cleanly shut-off VM without a managed-save image; it
 preserves the UUID, disk, other devices and domain metadata. AIVM asks libvirt
 to validate the new definition.

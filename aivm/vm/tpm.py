@@ -1,6 +1,7 @@
 """Opt-in TPM 2.0 device lifecycle, independent of any credential broker."""
 from __future__ import annotations
 
+import json
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -61,8 +62,41 @@ def _read_persistent(cfg: AgentVMConfig) -> str:
     ).stdout
 
 
+def _require_host_tpm2_probe() -> None:
+    """Verify TPM 2.0 when older local libvirt omits version reporting."""
+    mgr = CommandManager.current()
+    with mgr.step(
+        'Verify host software TPM 2.0 support',
+        why=('Libvirt omitted backendVersion; select TPM 2.0 in swtpm and '
+             'exit before creating sockets or persistent TPM state.'),
+    ):
+        result = mgr.run(
+            ['swtpm', 'socket', '--tpm2', '--print-capabilities'],
+            role='read', check=False, capture=True, timeout=15,
+            summary='Probe host swtpm with TPM 2.0 explicitly selected',
+        )
+    if result.code != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise AIVMError('Cannot verify TPM 2.0: libvirt omitted backendVersion '
+                        f'and the host swtpm --tpm2 probe failed: {detail}. '
+                        'Install/configure swtpm on the libvirt host and retry; '
+                        'no weaker fallback is used.')
+    try:
+        caps = json.loads(result.stdout)
+    except ValueError as ex:
+        raise AIVMError('Cannot verify TPM 2.0: invalid JSON from the host '
+                        'swtpm --tpm2 probe; no weaker fallback is used.') from ex
+    if (not isinstance(caps, dict) or caps.get('type') != 'swtpm'
+            or not isinstance(caps.get('features'), list)
+            or not all(isinstance(feature, str) for feature in caps['features'])):
+        raise AIVMError('Cannot verify TPM 2.0: unexpected capabilities from the '
+                        'host swtpm --tpm2 probe; no weaker fallback is used.')
+    log.info('Host swtpm successfully selected TPM 2.0; keeping emulator '
+             'version=2.0 and model=tpm-crb in the domain definition.')
+
+
 def require_tpm_capability(*, dry_run: bool = False) -> None:
-    """Ask the selected daemon, since it owns swtpm and its state."""
+    """Check system libvirt, probing local swtpm only for omitted versions."""
     if dry_run:
         print('DRYRUN: would require libvirt emulator TPM 2.0 / tpm-crb support '
               '(host packages swtpm and swtpm-tools).')
@@ -91,6 +125,12 @@ def require_tpm_capability(*, dry_run: bool = False) -> None:
     missing = [f'{name}={value}' for name, value in required.items()
                if value not in enums.get(name, set())]
     if supported == 'yes' and not missing:
+        return
+    # Libvirt 8.0 exposes model/backend but has no backendVersion enum.
+    # Absence permits a positive runtime probe; an explicit rejection does not.
+    if (supported == 'yes' and missing == ['backendVersion=2.0']
+            and 'backendVersion' not in enums):
+        _require_host_tpm2_probe()
         return
     advertised = '; '.join(
         f'{name}={",".join(sorted(enums.get(name, set()))) or "(not advertised)"}'
