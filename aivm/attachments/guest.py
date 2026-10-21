@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import re
 import shlex
-from importlib import resources
 from pathlib import Path, PurePosixPath
 
 from loguru import logger
@@ -16,6 +15,7 @@ from ..attachment_schema import MIRROR_HOME_NO
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..persistent_replay import GUEST_SYMLINK_BIN, attachment_symlink_python
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
 from ..vm import ensure_share_mounted
@@ -64,9 +64,8 @@ def _ensure_guest_symlink(
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
-    helper = '/usr/local/libexec/aivm/attachment-symlink'
-    source = (resources.files('aivm').joinpath('rc', 'guest', 'attachment_symlink.py')
-              .read_text(encoding='utf-8'))
+    helper = GUEST_SYMLINK_BIN
+    source = attachment_symlink_python()
     command = shlex.join([
         'sudo', '-n', helper, '--link', symlink_path, '--target', target_path,
     ])
@@ -229,6 +228,7 @@ def _apply_guest_derived_symlinks(
     *,
     mirror_home: bool,
     extra_lexical_paths: list[str] | tuple[str, ...] = (),
+    inspection_plan: list[tuple[str, str, bool]] | None = None,
 ) -> None:
     """Create companion and mirror-home symlinks in the guest after attachment.
 
@@ -252,9 +252,19 @@ def _apply_guest_derived_symlinks(
     location. The mount itself stays correct (it lives at the canonical
     location); the alias may surface unexpected contents on the host if the
     symlink chain was rewired post-attach.
+
+    Supplying inspection_plan collects (link, target, remove) operations for
+    the shared foreground batch instead of contacting the guest here.
     """
     guest_dst = attachment.guest_dst
     canonical_host = str(host_src.resolve()) if host_src else ''
+
+    def ensure_link(link: str, *, remove: bool = False) -> None:
+        if inspection_plan is not None:
+            inspection_plan.append((link, guest_dst, remove))
+        else:
+            action = _remove_guest_symlink_if_target if remove else _ensure_guest_symlink
+            action(cfg, ip, symlink_path=link, target_path=guest_dst)
 
     # Build the unique set of lexical aliases to materialize. We start from
     # any caller-supplied list (the persisted aliases) and fold in the
@@ -294,12 +304,7 @@ def _apply_guest_derived_symlinks(
                     canonical_host,
                     alias_resolved,
                 )
-        _ensure_guest_symlink(
-            cfg,
-            ip,
-            symlink_path=alias,
-            target_path=guest_dst,
-        )
+        ensure_link(alias)
 
     mirror_paths = _mirror_home_symlink_paths(cfg, host_src, attachment)
     if not mirror_home:
@@ -308,22 +313,12 @@ def _apply_guest_derived_symlinks(
         # remains a no-op so the default path does not add SSH round trips.
         if attachment.mirror_home == MIRROR_HOME_NO:
             for mirror_path in mirror_paths:
-                _remove_guest_symlink_if_target(
-                    cfg,
-                    ip,
-                    symlink_path=mirror_path,
-                    target_path=guest_dst,
-                )
+                ensure_link(mirror_path, remove=True)
         return
 
     # 2/3. Mirror-home for the lexical and, when distinct, resolved host path.
     for mirror_path in mirror_paths:
-        _ensure_guest_symlink(
-            cfg,
-            ip,
-            symlink_path=mirror_path,
-            target_path=guest_dst,
-        )
+        ensure_link(mirror_path)
 
 
 def _upsert_ssh_config_entry(
@@ -388,6 +383,7 @@ def _ensure_attachment_available_in_guest(
     allow_disruptive_shared_root_rebind: bool = True,
     mirror_home: bool = False,
     host_lexical_paths: list[str] | tuple[str, ...] = (),
+    inspection_plan: list[tuple[str, str, bool]] | None = None,
 ) -> None:
     """Make an attachment available at its guest destination for a running VM.
 
@@ -477,6 +473,7 @@ def _ensure_attachment_available_in_guest(
         attachment,
         mirror_home=mirror_home,
         extra_lexical_paths=host_lexical_paths,
+        inspection_plan=inspection_plan,
     )
 
 

@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
+from typing import Sequence
 
 from loguru import logger as log
 
@@ -152,7 +153,7 @@ def _run_guest_root_script(
     cfg: AgentVMConfig,
     ip: str,
     *,
-    script: str,
+    script: str | Sequence[str],
     summary: str,
     detail: str,
     dry_run: bool,
@@ -225,7 +226,7 @@ def _run_guest_ssh_script_with_retry(
     cfg: AgentVMConfig,
     ip: str,
     *,
-    script: str,
+    script: str | Sequence[str],
     summary: str,
     detail: str,
     dry_run: bool,
@@ -235,6 +236,12 @@ def _run_guest_ssh_script_with_retry(
     connect_timeout_s: int = 15,
     retries: int = 3,
 ) -> CommandResult | None:
+    """Run a shell program or prequoted remote fragments with SSH retry.
+
+    OpenSSH joins fragments with spaces. Data in a fragment sequence must be
+    shell-quoted by the caller; splitting named helper arguments keeps their
+    ordinary flags/paths visible rather than eliding a long shell program.
+    """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
     cmd = [
@@ -246,7 +253,7 @@ def _run_guest_ssh_script_with_retry(
             batch_mode=True,
         ),
         context.ssh_target(ip),
-        script,
+        *([script] if isinstance(script, str) else script),
     ]
     request = CommandManager.current().request(
         cmd,

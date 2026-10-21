@@ -79,12 +79,38 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
         cli('host', 'net', 'create')
         cli('vm', 'up')
         ip = cli('vm', 'wait_ip').stdout.strip().splitlines()[-1]
+        # SSH can become ready before first-boot package/service setup ends.
+        # Warm-entry and reboot assertions require that setup to be complete.
+        # Report module errors separately: this test verifies attachments, not
+        # bootstrap-account enrollment, and independently checks its helpers.
+        initialized = run_ssh_command(
+            user=cfg.vm.user, ip=ip, identity_file=private_key,
+            remote=['sudo', '-n', 'cloud-init', 'status', '--wait', '--long'],
+            cwd=REPO_ROOT, env=env, timeout=timeout,
+        )
+        assert initialized.returncode in (0, 1, 2), initialized.stdout + initialized.stderr
+        assert 'done' in initialized.stdout, initialized.stdout + initialized.stderr
+        if initialized.returncode:
+            print('Cloud-init completion diagnostics:\n' + initialized.stdout + initialized.stderr)
         cli('vm', 'attach', str(workspace), '--mirror_home', 'yes')
         attachment = find_attachment_for_vm(
             load_store(scope.store_path), workspace, cfg.vm.name,
         )
         assert attachment is not None and attachment.mode == 'persistent'
         source = '/mnt/aivm-persistent/' + attachment.tag
+        # Initial foreground setup also installs the host's managed SSH alias.
+        # Complete that approved setup before testing two genuinely warm runs.
+        setup = Terminal(
+            [sys.executable, '-m', 'aivm', 'ssh', str(workspace), '--yes',
+             '--config', str(scope.store_path)], cwd=REPO_ROOT, env=env,
+        )
+        try:
+            setup.ready(timeout=60)
+            setup.send('exit\n')
+            assert setup.wait(timeout=15) == 0
+        finally:
+            if setup.returncode is None:
+                setup.kill()
         fragments = split_fragment_paths(load_store(scope.store_path), scope.store_path)
         before = {
             path: (path.read_bytes(), path.stat()) for path in fragments.values()
@@ -92,9 +118,11 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
         def manifest_stat():
             result = run_ssh_command(
                 user=cfg.vm.user, ip=ip, identity_file=private_key,
-                remote=['python3', '-c', shlex.quote(
-                    'import os,json; s=os.stat("/var/lib/aivm/attachments.json"); '
-                    'print(json.dumps([s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode]))'
+                remote=['sudo', '-n', 'python3', '-c', shlex.quote(
+                    'import os,json; paths=["/var/lib/aivm/attachments.json",'
+                    '"/run/aivm-persistent-mounts","/run/aivm-persistent-mounts/lock"]; '
+                    'print(json.dumps([[s.st_ino,s.st_size,s.st_mtime_ns,s.st_ctime_ns,s.st_mode] '
+                    'for s in map(os.stat,paths)]))'
                 )], cwd=REPO_ROOT, env=env, timeout=timeout,
             )
             assert result.returncode == 0, result.stderr
@@ -103,7 +131,7 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
         guest_manifest_before = manifest_stat()
         for _ in range(2):
             terminal = Terminal(
-                [sys.executable, '-m', 'aivm', 'ssh', str(workspace), '--yes',
+                [sys.executable, '-m', 'aivm', 'ssh', str(workspace),
                  '--config', str(scope.store_path)],
                 cwd=REPO_ROOT, env=env,
             )
@@ -117,6 +145,16 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
                 assert 'Sync persistent attachment manifest into guest' not in terminal.output
                 assert '--dry-run' in terminal.output
                 assert 'completed in degraded mode' not in terminal.output
+                assert 'Continue?' not in terminal.output
+                assert 'Approve this step?' not in terminal.output
+                assert 'Check guest replay helper hash' not in terminal.output
+                assert 'Check guest replay unit hash' not in terminal.output
+                assert 'Inspect guest attachment symlink' not in terminal.output
+                assert 'Inspect guest workspace' in terminal.output
+                inspections = [line for line in terminal.output.splitlines()
+                               if line.startswith('ssh ') and '/usr/local/libexec/aivm/session-inspect' in line]
+                assert len(inspections) == 1
+                assert '--only-guest-dst' not in terminal.output
             finally:
                 if terminal.returncode is None:
                     terminal.kill()
@@ -125,6 +163,61 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
             assert path.read_bytes() == content
             current = path.stat()
             assert (current.st_ino, current.st_mtime_ns) == (info.st_ino, info.st_mtime_ns)
+
+        def enter_with_approval(prompt, answer, *, succeeds):
+            terminal = Terminal(
+                [sys.executable, '-m', 'aivm', 'ssh', str(workspace),
+                 '--config', str(scope.store_path)], cwd=REPO_ROOT, env=env,
+            )
+            try:
+                terminal.expect(prompt, timeout=60)
+                terminal.send(answer + '\n')
+                if succeeds:
+                    terminal.ready(timeout=60)
+                    terminal.send('exit\n')
+                    assert terminal.wait(timeout=15) == 0
+                else:
+                    assert terminal.wait(timeout=15) != 0
+                    assert '__AIVM_SHELL_42__' not in terminal.output
+                assert terminal.output.count(prompt) == 1
+                assert 'OMITTED FROM THE COMMAND ABOVE' not in terminal.output
+            finally:
+                if terminal.returncode is None:
+                    terminal.kill()
+
+        # Real missing-mount drift must request approval, and declining must
+        # not repair it or open a shell. A subsequent approval repairs it.
+        result = run_ssh_command(
+            user=cfg.vm.user, ip=ip, identity_file=private_key,
+            remote=['sudo', '-n', 'umount', shlex.quote(attachment.guest_dst)],
+            cwd=REPO_ROOT, env=env, timeout=timeout,
+        )
+        assert result.returncode == 0, result.stderr
+        enter_with_approval('Continue?', 'n', succeeds=False)
+        result = run_ssh_command(
+            user=cfg.vm.user, ip=ip, identity_file=private_key,
+            remote=['mountpoint', '-q', shlex.quote(attachment.guest_dst)],
+            cwd=REPO_ROOT, env=env, timeout=timeout,
+        )
+        assert result.returncode in (1, 32)  # mountpoint's not-mounted status varies
+        enter_with_approval('Continue?', 'y', succeeds=True)
+        # Symlink drift uses its own inspectable, approved helper repair.
+        result = run_ssh_command(
+            user=cfg.vm.user, ip=ip, identity_file=private_key,
+            remote=['sudo', '-n', 'rm', '--', '/home/agent/code/workspace'],
+            cwd=REPO_ROOT, env=env, timeout=timeout,
+        )
+        assert result.returncode == 0, result.stderr
+        enter_with_approval('Approve this step?', 'y', succeeds=True)
+        # A missing inspection helper must be installed through the ordinary
+        # reviewed deployment path, then inspected again without a restart.
+        result = run_ssh_command(
+            user=cfg.vm.user, ip=ip, identity_file=private_key,
+            remote=['sudo', '-n', 'rm', '--', '/usr/local/libexec/aivm/session-inspect'],
+            cwd=REPO_ROOT, env=env, timeout=timeout,
+        )
+        assert result.returncode == 0, result.stderr
+        enter_with_approval('Approve this step?', 'a', succeeds=True)
         # Only the disposable guest's source-side automount is expired. Keep
         # its workspace bind busy so recovery cannot silently replace it.
         script = textwrap.dedent(r'''
@@ -231,7 +324,25 @@ def test_foreground_preserves_busy_workspace_after_virtiofs_submount_recreation(
         print(json.dumps(report, indent=2, sort_keys=True))
         # Reboot is a normal lifecycle recovery path for old, unproven mounts.
         # Both /run and kernel references must be rebuilt, without hand repair.
-        cli('vm', 'restart')
+        try:
+            cli('vm', 'restart')
+        except AssertionError:
+            # Preserve the original failure and capture late shutdown messages
+            # before ordinary E2E teardown removes the disposable guest.
+            import time
+
+            console = Terminal(
+                ['virsh', '-c', 'qemu:///system', 'console', cfg.vm.name, '--force'],
+                cwd=REPO_ROOT, env=env,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and console._pump(0.2):
+                    pass
+            finally:
+                if console.returncode is None:
+                    console.kill()
+            raise
         terminal = Terminal(
             [sys.executable, '-m', 'aivm', 'ssh', str(workspace), '--yes',
              '--config', str(scope.store_path)], cwd=REPO_ROOT, env=env,

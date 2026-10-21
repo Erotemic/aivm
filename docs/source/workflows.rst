@@ -33,7 +33,7 @@ usually breaks reconciliation into:
 Attachment recording during ``aivm ssh .`` and ``aivm code .`` skips its config
 store write when it produces no persisted changes. New attachments
 and changed records still use the locked store transaction. Live workspace
-checks and persistent replay continue on each entry; this optimization does
+checks continue on each entry; this optimization does
 not cache mount readiness or change filesystem identity handling.
 
 Guest manifest synchronization also starts with a read-only directory check
@@ -42,8 +42,26 @@ the metadata preserved by the transfer already match, AIVM skips directory
 creation, transfer, and their approval. Missing state or drift still takes the
 approved repair path. The preview uses the same transfer options so a matching
 checksum cannot hide permission or timestamp drift. Inspection failures are
-reported as errors, not treated as an unchanged manifest. Live mount replay
+reported as errors, not treated as an unchanged manifest. Live mount inspection
 and helper checks still run; this is not a cached readiness result.
+
+For an already-running VM using persistent attachments, one live inspection
+now combines requested companion/mirror symlinks, helper hashes, the manifest
+directory, and mount identity. Logs show the ordinary arguments to
+``/usr/local/libexec/aivm/session-inspect``; its root-owned source stays on disk
+for inspection. The manifest's rsync preview and access-identity credential
+routing remain separate checks.
+
+Replay's ``--check --only-guest-dst PATH`` mode reads live state without
+creating directories, locks, provenance references, or mounts. Healthy state
+needs no repair approval. Missing bindings or provenance require an approved
+repair; unavailable sources and genuine conflicts remain diagnostic. Repairs
+recheck under the existing replay lock. A manifest/helper update or symlink
+repair invalidates the earlier mount result and triggers fresh inspection.
+This is a per-entry live result, not a remembered success from a previous boot
+or session. New guests receive the helpers through cloud-init; existing guests
+install/update them during normal entry with the usual approval, without a VM
+restart.
 
 Foreground entry preserves an existing live workspace. Virtiofs can recreate
 a source submount with a different device number while the old workspace bind
@@ -61,11 +79,12 @@ with a diagnostic. It never forces or lazily unmounts a foreground workspace.
 An older, already-stale mount with no reference cannot be safely adopted by
 guessing; normal lifecycle replay, including replay after a VM reboot,
 establishes references automatically. A healthy existing mount acquires its
-reference during ordinary entry. References disappear with the guest's
-``/run`` filesystem at reboot and are recreated from verified mounts.
+reference through approved repair during ordinary entry. References disappear
+with the guest's ``/run`` filesystem at reboot and are recreated from verified
+mounts.
 
 Companion symlinks use the inspectable guest program
-``/usr/local/libexec/aivm/attachment-symlink``. Logs show its explicit
+``/usr/local/libexec/aivm/attachment-symlink``. Repair logs show its explicit
 ``--link`` and ``--target`` arguments. Its ``--check`` mode reads only; a
 correct link needs no repair approval. Missing links or empty directories
 take the approved repair path, which checks again before changing anything.
@@ -75,6 +94,7 @@ rather than an omitted inline installer. To inspect the installed logic in
 the guest::
 
    cat /usr/local/libexec/aivm/attachment-symlink
+   cat /usr/local/libexec/aivm/session-inspect
    cat /usr/local/libexec/aivm-persistent-attachment-replay
 
 Provision specific guest tools

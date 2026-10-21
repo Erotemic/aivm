@@ -925,8 +925,9 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     assert any('no longer resolves to canonical' in w for w in warnings)
 
 
+@pytest.mark.parametrize('deferred', [False, True])
 def test_explicit_no_removes_matching_prior_mirror_symlink(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deferred: bool,
 ) -> None:
     """An explicit attachment opt-out converges an old AIVM mirror away."""
     from aivm.attachments.guest import _ensure_attachment_available_in_guest
@@ -958,6 +959,7 @@ def test_explicit_no_removes_matching_prior_mirror_symlink(
         {'ssh': FakeProc(0, guest_dst + '\n', '')},
     )
 
+    plan = [] if deferred else None
     _ensure_attachment_available_in_guest(
         cfg,
         host_src,
@@ -967,9 +969,14 @@ def test_explicit_no_removes_matching_prior_mirror_symlink(
         dry_run=False,
         ensure_shared_root_host_side=False,
         mirror_home=False,
+        inspection_plan=plan,
     )
 
     expected_mirror = '/home/agent/code/foobar'
+    if deferred:
+        assert plan == [(expected_mirror, guest_dst, True)]
+        assert not recorder.ran('ssh')
+        return
     scripts = _ssh_scripts(recorder)
     assert any(f'readlink -- {expected_mirror}' in script for script in scripts)
     assert any(f'sudo -n rm -- {expected_mirror}' in script for script in scripts)

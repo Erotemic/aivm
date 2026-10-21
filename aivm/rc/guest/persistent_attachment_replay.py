@@ -32,13 +32,15 @@ PERSISTENT_ROOT_MOUNT = "/mnt/aivm-persistent"
 STATE_DIR = "/var/lib/aivm"
 STATE_PATH = "/var/lib/aivm/attachments.json"
 DEGRADED_EXIT = 3
+REPAIR_EXIT = 10
 PROVENANCE_ROOT = "/run/aivm-persistent-mounts"
 
 
-def provenance_directory() -> Path:
+def provenance_directory(*, create: bool = True) -> Path:
     """Only root may create or replace the kernel references used as proof."""
     path = Path(PROVENANCE_ROOT)
-    path.mkdir(mode=0o700, exist_ok=True)
+    if create:
+        path.mkdir(mode=0o700, exist_ok=True)
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
         raise RuntimeError(f"unsafe persistent mount provenance directory: {path}")
@@ -71,7 +73,10 @@ def has_pinned_provenance(record: Record) -> bool:
     path = provenance_path(record)
     # Never infer identity across virtiofs superblocks. A private bind keeps
     # the original object alive, preventing inode/device reuse from forging it.
-    provenance_directory()
+    try:
+        provenance_directory(create=False)
+    except FileNotFoundError:
+        return False
     return is_mountpoint(path) and same_directory_object(path, str(record["guest_dst"]))
 
 
@@ -498,6 +503,37 @@ def select_record(
         )
     return matches
 
+
+def inspect_record(record: Record) -> tuple[int, str]:
+    """Read live state without creating directories, locks, pins, or mounts.
+
+    A repair result authorizes only asking the operator. The modifying helper
+    always rechecks everything under its lock before any mutation.
+    """
+    target = normalize_guest_dst(record.get("guest_dst"))
+    current = current_mount_info(target)
+    if not bool(record.get("enabled", True)):
+        if current is not None:
+            return DEGRADED_EXIT, f"persistent attachment {target} is disabled but still mounted; existing live mount left untouched"
+        return 0, ""
+    if not is_mountpoint(PERSISTENT_ROOT_MOUNT):
+        return REPAIR_EXIT, "persistent root needs mounting"
+    source = mount_source_for(record)
+    if not os.path.isdir(source):
+        return DEGRADED_EXIT, f"persistent attachment source is unavailable in shared root: {source}; existing live mount left untouched"
+    if current is None:
+        return REPAIR_EXIT, f"persistent attachment needs mounting at {target}"
+    desired = desired_option(record)
+    if desired not in current.get("options", "").split(","):
+        return DEGRADED_EXIT, f"live persistent attachment access differs for {target}; existing live mount left untouched"
+    if same_directory_object(source, target):
+        if has_pinned_provenance(record):
+            return 0, ""
+        return REPAIR_EXIT, f"verified attachment needs a private provenance reference at {target}"
+    if mount_is_same_persistent_token(current, record) or has_pinned_provenance(record):
+        return REPAIR_EXIT, f"stale persistent attachment at {target} belongs to the requested token; normal recovery can be attempted"
+    return DEGRADED_EXIT, f"cannot verify that live persistent attachment at {target} belongs to the requested token; existing live mount left untouched"
+
 def sync_state(
     *, only_guest_dst: str = "", preserve_live_mounts: bool = False
 ) -> list[str]:
@@ -549,11 +585,20 @@ def main(argv: Sequence[str] = ()) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-guest-dst", default="")
     parser.add_argument("--preserve-live-mounts", action="store_true")
+    parser.add_argument("--check", action="store_true", help="Inspect one foreground attachment without changing guest state")
     # Keep programmatic calls isolated from the parent process argv.
     # The executable wrapper below explicitly forwards its own CLI args.
     args = parser.parse_args(list(argv))
     if args.preserve_live_mounts and not args.only_guest_dst:
         parser.error("--preserve-live-mounts requires --only-guest-dst")
+    if args.check:
+        if not args.only_guest_dst:
+            parser.error("--check requires --only-guest-dst")
+        records = select_record(load_json(STATE_PATH).get("records", []), args.only_guest_dst)
+        code, message = inspect_record(records[0][2])
+        if message:
+            print(message, file=sys.stderr)
+        return code
     try:
         with ReplayLock():
             mount_persistent_root()

@@ -1132,6 +1132,11 @@ def _prepare_attached_session(
             owner_principal_id=(owner_principal_id or None),
         )
         _primary_aliases = list(_saved.host_lexical_paths) if _saved else []
+        # Keep alias planning local; the persistent foreground inspector can
+        # verify all derived links and the workspace in the same guest call.
+        inspection_plan: list[tuple[str, str, bool]] | None = (
+            [] if vm_was_running and attachment.mode == ATTACHMENT_MODE_PERSISTENT else None
+        )
         _ensure_attachment_available_in_guest(
             cfg,
             host_src,
@@ -1146,6 +1151,7 @@ def _prepare_attached_session(
             ),
             mirror_home=mirror_home,
             host_lexical_paths=_primary_aliases,
+            inspection_plan=inspection_plan,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             host_exports_ready = False
@@ -1162,6 +1168,7 @@ def _prepare_attached_session(
                 host_exports_ready=host_exports_ready,
                 only_guest_dst=attachment.guest_dst,
                 preserve_live_mounts=vm_was_running,
+                symlink_checks=inspection_plan,
             )
         if not vm_was_running:
             _restore_saved_vm_attachments(

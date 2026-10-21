@@ -2721,3 +2721,53 @@ the previous recovery/restart/detach checks and additionally comparing guest
 manifest inode/size/mode/mtime/ctime across two warm SSH entries with no manifest
 sync step. Full `ty check aivm` and git diff --check pass. Disposable VM/network
 cleanup succeeded; no wider filesystem or cross-kernel coverage is implied.
+
+## 2026-10-21 17:26:40 -0400
+
+The maintainer authorized both remaining foreground improvements: inspect live
+persistent mounts before asking to repair them, and combine independent guest
+checks without replacing useful command logs with opaque summaries. I added a
+read-only replay --check mode and the installed session-inspect helper. Normal
+persistent entry now checks companion/mirror links, replay/unit hashes, the
+manifest directory, and requested mount in one SSH call. The rsync metadata
+preview and credential routing remain separate. Both SSH and code inherit this
+through the existing shared session preparation function.
+
+My central concern was accidentally treating a batched observation as durable
+readiness. There is no success cache. Any manifest/helper/symlink repair
+invalidates the earlier mount observation, and modifying replay still rechecks
+under its lock. Inspection never creates its lock, provenance directory, pin,
+or mount. Missing state asks for normal repair; uncertain identity, access
+conflicts, and unavailable sources preserve live state and diagnose. Helper
+execution is gated by expected source hashes; malformed replies fail closed.
+Old guests get approved helper deployment during entry without a restart.
+Named helper invocations retain ordinary quoted arguments and inspectable
+installed source, with no omitted payload in the tested foreground transcript.
+
+The real nested test now measures two warm entries without --yes and compares
+host store contents/inodes/timestamps plus guest manifest/provenance/lock
+metadata. Initial host SSH alias setup is legitimately a write, so it happens
+before measuring warm entry. The test exercises declining missing-mount repair
+(no shell or repair), accepting it, symlink repair, and deleting/reinstalling
+the inspector. An earlier run passed these and existing submount/busy/unknown
+provenance checks but timed out at ACPI shutdown. I am investigating rather
+than counting that run as passed. Waiting for cloud-init completion also
+revealed an existing bootstrap definition error: this Ubuntu image rejects
+system: true together with ssh_authorized_keys for aivm-bootstrap. It is
+unrelated to attachment inspection and deserves its own enrollment fix; the
+attachment test reports that module error, waits for completion, and checks its
+own prerequisites. I have not changed the bootstrap account in this patch.
+
+Current focused validation: 331 attachment/persistent/session/cloud-init/tunnel
+and released-path regressions pass, as does full ty check aivm. All four privileged E2E tests now pass in 116.20 seconds, including
+the nested VM lifecycle. Waiting for cloud-init completion avoided the shutdown
+timeout in this run; that is evidence for a first-boot timing race, not proof
+that every shutdown failure has this cause. Two warm entries had no approval
+prompts, no config/provenance/lock writes, one combined inspection command, and
+no omitted foreground payloads. Declined/approved repairs, helper deployment,
+submount busy preservation, idle recovery, unknown provenance refusal, reboot
+reconstruction, and detach passed. Disposable VM/network cleanup succeeded.
+I am confident about these tested paths, but not claiming that startup
+optimization fixes first-boot enrollment, all shutdown behavior, or filesystem
+identity quirks on untested Btrfs/ZFS and kernel combinations. Only disposable
+test guests have been modified or restarted.

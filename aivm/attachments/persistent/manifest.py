@@ -360,6 +360,7 @@ def _sync_persistent_attachment_manifest_to_guest(
     cfg_path: Path | None = None,
     dry_run: bool,
     check: bool = True,
+    guest_directory_exists: bool | None = None,
 ) -> bool:
     context = guest_transport_from_effective_cfg(cfg)
     manifest_path = _persistent_host_manifest_path(cfg, cfg_path)
@@ -390,21 +391,23 @@ def _sync_persistent_attachment_manifest_to_guest(
         '--rsync-path', 'sudo -n rsync', '-e', shlex.join(ssh_args),
     ]
     endpoints = [str(manifest_path), remote_target]
-    with mgr.step(
-        'Inspect guest persistent attachment manifest',
-        why=(
-            'Preview the same checksum and metadata comparison used by the '
-            'transfer so an unchanged manifest needs no write or approval.'
-        ),
-    ):
-        directory = transport._run_guest_root_script(
-            cfg, ip, script=f'sudo -n test -d {parent}',
-            summary='Check guest persistent manifest directory',
-            detail=f'target={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}',
-            dry_run=False, role='read', allowed_exit_codes=(0, 1),
-        )
-        assert directory is not None
-        parent_exists = directory.code == 0
+    parent_exists = guest_directory_exists
+    if parent_exists is None:
+        with mgr.step(
+            'Inspect guest persistent attachment manifest',
+            why=(
+                'Preview the same checksum and metadata comparison used by the '
+                'transfer so an unchanged manifest needs no write or approval.'
+            ),
+        ):
+            directory = transport._run_guest_root_script(
+                cfg, ip, script=f'sudo -n test -d {parent}',
+                summary='Check guest persistent manifest directory',
+                detail=f'target={PERSISTENT_ATTACHMENT_GUEST_STATE_PATH}',
+                dry_run=False, role='read', allowed_exit_codes=(0, 1),
+            )
+            assert directory is not None
+            parent_exists = directory.code == 0
     if parent_exists:
         with mgr.step(
             'Preview guest persistent manifest changes',

@@ -35,6 +35,54 @@ def _exec_guest_replay_helper(source):
     return ns
 
 
+@pytest.mark.parametrize('state, expected', [
+    ('healthy', 0), ('missing-pin', 10), ('missing-mount', 10),
+    ('proven-stale', 10), ('unknown-stale', 3), ('access-conflict', 3),
+    ('source-missing', 3), ('root-unmounted', 10),
+    ('disabled-mounted', 3), ('disabled-unmounted', 0),
+])
+def test_replay_check_never_mutates_guest_state(tmp_path, monkeypatch, state, expected):
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_helper(persistent_replay_python())
+    root = tmp_path / 'root'
+    (root / 'token').mkdir(parents=True)
+    target = tmp_path / 'workspace'
+    target.mkdir()
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'records': [{
+        'guest_dst': str(target), 'shared_root_token': 'token',
+        'access': 'rw', 'enabled': not state.startswith('disabled'),
+    }]}))
+    ns['STATE_PATH'], ns['PERSISTENT_ROOT_MOUNT'] = str(manifest), str(root)
+    ns['is_mountpoint'] = lambda path: path != str(root) or state != 'root-unmounted'
+    ns['current_mount_info'] = lambda path: None if state in ('missing-mount', 'disabled-unmounted') else {
+        'source': 'none', 'options': 'ro' if state == 'access-conflict' else 'rw',
+    }
+    ns['same_directory_object'] = lambda left, right: state not in ('proven-stale', 'unknown-stale')
+    ns['has_pinned_provenance'] = lambda record: state not in ('missing-pin', 'unknown-stale')
+    if state == 'source-missing':
+        (root / 'token').rmdir()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('read-only inspection attempted a mutation')
+
+    for name in ('ReplayLock', 'remember_provenance', 'mount_persistent_root', 'unmount_guest_dst', 'run'):
+        ns[name] = forbidden
+    monkeypatch.setattr(Path, 'mkdir', forbidden)
+    assert ns['main'](['--check', '--only-guest-dst', str(target)]) == expected
+
+
+def test_missing_provenance_inspection_does_not_create_directory(tmp_path):
+    from aivm.persistent_replay import persistent_replay_python
+
+    ns = _exec_helper(persistent_replay_python())
+    path = tmp_path / 'absent'
+    ns['PROVENANCE_ROOT'] = str(path)
+    assert not ns['has_pinned_provenance']({'guest_dst': '/workspace', 'shared_root_token': 'token'})
+    assert not path.exists()
+
+
 @pytest.fixture(autouse=True)
 def _restore_stdlib_patched_through_the_helper_namespace() -> Iterator[None]:
     """Undo ``ns['os'].makedirs = ...`` and ``ns['subprocess'].run = ...``.

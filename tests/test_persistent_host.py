@@ -964,7 +964,7 @@ def test_persistent_reconcile_can_scope_foreground_guest_replay(
     scripts = _ssh_scripts(rec)
     assert scripts[-1] == (
         f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj '
-        '--preserve-live-mounts'
+        '--preserve-live-mounts --check'
     )
 
 
