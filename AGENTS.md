@@ -127,6 +127,36 @@ copy the shown commands and perform the equivalent work without AIVM.
   private keys, tokens, and other sensitive values; expose the operation and
   destination without leaking the secret material.
 
+## Experimental secrets project boundary (mandatory)
+- `aivm_secrets` is an experimental, unaudited credential broker and identity
+  project. Its standalone repository has been started in the sibling
+  `../aivm-secrets` checkout with preserved Git attribution. During the initial
+  port, this branch still builds its **separate Python distribution** from the
+  `aivm_secrets/` subproject pending the coordinated cutover.
+  Never bundle it in AIVM's ordinary wheel or introduce mandatory dependencies.
+- Do **not** introduce non-optional dependencies on `aivm_secrets`,
+  cryptography for secrets, broker processes, CA/identity state, TPM, or
+  OAuth in ordinary AIVM packaging, imports, CLI initialization, VM
+  lifecycle, SSH/code launch, guest provisioning or machine-store schema.
+  Normal AIVM must work when `aivm_secrets` cannot be imported.
+- Existing explicitly selected secret-session/managed-identity adapters
+  may continue as **temporary experimental exceptions** in this branch.
+  Do not add new AIVM integration surfaces; missing extras fail clearly
+  only when selected. Do not broaden credentials or silently fall back.
+- Keep the implementation and all authorization decisions in
+  `aivm_secrets`; it must never depend on `aivm` internals. Prefer a
+  versioned process protocol over Python-object interfaces. A process
+  boundary is necessary but does not make the project production-ready.
+- Do not market or release the experimental secrets implementation as
+  audited or formally verified. Future Rust/Lean work and hardware
+  identity are separate, optional assurance efforts; local broker use
+  needs neither TPM nor a second VM/container.
+- **Read first:** `docs/planning/aivm-secrets-repository-boundary.md`
+  for the binding decision, current coupling inventory, extraction gates
+  and security review requirements. The initial standalone port is authorized;
+  follow the recorded cutover plan before removing this checkout's copy or
+  changing integration ownership.
+
 ## Safety Expectations
 - Do not silently broaden VM host-path exposure.
 - Avoid attaching the same host folder to multiple VMs unless user forces it.

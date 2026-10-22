@@ -50,6 +50,10 @@ dependencies = [
   "kwconf>=0.12.0",
   "PyYAML>=6.0.2",
 ]
+# Experimental secrets live in their own separately installed distribution.
+# Do not introduce an extra requiring an unpublished package; developers
+# install ./aivm_secrets explicitly until repository extraction/review.
+# The experimental secrets package must not be pulled in by the all extra.
 optional-dependencies.all = [
   "aivm[docs]",
   "aivm[optional]",
@@ -68,6 +72,8 @@ optional-dependencies.docs = [
 optional-dependencies.optional = [
   "pygments>=2.19.2",
 ]
+# Core test dependencies are intentionally independent of the optional broker.
+# The experimental suites additionally need `pip install ./aivm_secrets`.
 optional-dependencies.tests = [
   "coverage>=6.1.1",
   "pytest>=6.2.5",
@@ -93,7 +99,8 @@ packages.find.where = [
   ".",
 ]
 packages.find.include = [
-  "aivm*",
+  "aivm",
+  "aivm.*",
 ]
 
 [tool.ruff]
@@ -143,7 +150,7 @@ rules.unused-ignore-comment = "ignore"
 rules.unused-type-ignore-comment = "ignore"
 
 [tool.pytest]
-ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
+ini_options.addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs --ignore-glob=submodules"
 ini_options.norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
 ini_options.markers = [
   "e2e: end-to-end tests that drive real libvirt/KVM hosts (gated by AIVM_E2E env vars; deselect with -m 'not e2e')",

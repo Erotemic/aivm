@@ -617,3 +617,12 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 .. _Ubuntu L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
 
 .. _Ubuntu advisory for CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389
+
+
+Scoped provider credential use
+------------------------------
+
+The opt-in :doc:`secrets` integration keeps provider credentials host-side and
+limits their use to explicitly granted operations. It is an experimental Python
+broker, not a formally verified subsystem. Its separate design and assurance
+plans describe the proposed Rust/Lean boundary and deployment assumptions.

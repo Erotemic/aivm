@@ -722,6 +722,13 @@ def delete_managed_vm(
         ):
             raise AIVMError(f'Deletion journal target mismatch: {journal_path}')
 
+        from .tpm import TPM_REMOVAL_UNCONFIRMED
+        if journal.last_error.startswith(TPM_REMOVAL_UNCONFIRMED):
+            raise AIVMError(
+                f'{journal.last_error} Automatic deletion recovery is blocked; '
+                f'an operator must verify TPM cleanup and review {journal_path}.'
+            )
+
         try:
             # Complete every domain and storage inspection before the first
             # destructive phase. A failed libvirt query or filesystem probe

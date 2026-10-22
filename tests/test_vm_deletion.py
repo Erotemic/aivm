@@ -721,3 +721,18 @@ def test_vm_deletion_does_not_remove_retained_disk_without_absence_proof(
     assert persisted is not None
     assert 'domain-and-storage-removed' not in persisted.completed_phases
     assert 'store-finalized' not in persisted.completed_phases
+
+
+def test_unconfirmed_tpm_removal_cannot_be_forgotten_on_resume(monkeypatch, tmp_path):
+    from aivm.vm.tpm import TPM_REMOVAL_UNCONFIRMED
+    scope, cfg, cfg_path = _machine_vm(tmp_path)
+    calls = []
+    state = _stub_external_cleanup(monkeypatch, cfg, calls)
+    journal = _new_journal(scope, cfg, cfg_path)
+    journal.last_error = f'{TPM_REMOVAL_UNCONFIRMED}: UUID old-domain-uuid'
+    _save_journal(_journal_path(scope, cfg), journal, scope)
+    state['defined'] = False
+    with pytest.raises(AIVMError, match='Automatic deletion recovery is blocked'):
+        delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
+    assert calls == []
+    assert _load_journal(_journal_path(scope, cfg)).last_error == journal.last_error

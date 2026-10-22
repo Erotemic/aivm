@@ -25,6 +25,7 @@ from ..vm.update import (
     _print_vm_update_plan,
     _vm_update_drift,
 )
+from ..vm.update.render import _preview_vm_update
 from ._common import _BaseCommand
 
 
@@ -50,6 +51,10 @@ def normalize_restart_policy(value: object) -> str:
 def run_vm_update(request: VMUpdateRequest) -> int:
     """Reconcile VM config drift against live host/libvirt state."""
     cfg = request.cfg
+    if request.dry_run:
+        # A dry run executes no probes, so it cannot compute live drift.
+        _preview_vm_update(cfg)
+        return 0
     drift, vm_running = _vm_update_drift(cfg, yes=request.yes)
     if drift.notes:
         print('Detected diagnostics (not auto-applied):')
@@ -92,6 +97,9 @@ class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live host/libvirt state."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
+    tpm: Literal['emulator'] | None = kwconf.Value(
+        None, help='Add a software TPM 2.0 to a shut-off VM; persist the choice.',
+    )
     restart: Literal['auto', 'always', 'never'] = kwconf.Value(
         'auto',
         help='Restart policy when changes require reboot to take effect: auto, always, never.',
@@ -105,7 +113,9 @@ class VMUpdateCLI(_BaseCommand):
         args = cls.cli(argv=argv, data=kwargs)
         restart_policy = normalize_restart_policy(args.restart)
         cfg, store_path = load_cfg_with_path(args.config, vm_opt=args.vm)
-        return run_vm_update(
+        if args.tpm:
+            cfg.vm.tpm = args.tpm
+        result = run_vm_update(
             VMUpdateRequest(
                 cfg=cfg,
                 restart_policy=restart_policy,
@@ -114,3 +124,7 @@ class VMUpdateCLI(_BaseCommand):
                 store_path=store_path,
             )
         )
+        if args.tpm and not args.dry_run and result == 0:
+            from ..vm.tpm import persist_tpm_choice
+            persist_tpm_choice(cfg, store_path)
+        return result

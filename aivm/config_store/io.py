@@ -749,6 +749,7 @@ def update_store(
     logger: Any = log,
     io_policy: StoreFilesystemPolicy | None = None,
     force_split: bool = False,
+    skip_if_unchanged: bool = False,
 ) -> Store:
     """Load, mutate, and save one store revision under a single lock.
 
@@ -756,6 +757,10 @@ def update_store(
     machine store.  Separate ``load_store`` / ``save_store`` calls still retain
     optimistic-concurrency protection, but callers that want concurrent edits
     to merge must express the mutation through this transaction boundary.
+
+    ``skip_if_unchanged`` compares canonical persisted content before and after
+    mutation under that same lock. Existing file formatting is preserved on a
+    no-op; missing stores and explicitly forced layout writes still persist.
     """
     fpath = (path or store_path()).expanduser().resolve()
     io_policy = _resolve_io_policy(fpath, io_policy)
@@ -763,11 +768,24 @@ def update_store(
         _recover_split_transaction(fpath, io_policy)
         loaded = _load_config_document_unlocked(fpath, logger=logger)
         reg = loaded.store
+        # Compare persisted fields, not runtime-only principal/profile values.
+        # Take the snapshot after loading under lock so another caller's edit
+        # cannot be mistaken for an unchanged revision seen before locking.
+        before = (
+            render_store_toml(reg)
+            if skip_if_unchanged and fpath.exists() and not force_split
+            else None
+        )
         replacement = mutate(reg)
         if replacement is not None:
             reg = replacement
         if not isinstance(reg, Store):
             raise TypeError('Store mutator must return Store or None')
+        if before is not None and render_store_toml(reg) == before:
+            # Returned stores retain the same optimistic-concurrency contract
+            # as the normal save path, even when no files were replaced.
+            _mark_loaded_store(reg, fpath)
+            return reg
         _save_store_unlocked(
             reg,
             fpath,

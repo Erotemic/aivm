@@ -30,6 +30,73 @@ usually breaks reconciliation into:
 * sync the persisted attachment manifest
 * mount and verify the bind inside the guest
 
+Attachment recording during ``aivm ssh .`` and ``aivm code .`` skips its config
+store write when it produces no persisted changes. New attachments
+and changed records still use the locked store transaction. Live workspace
+checks continue on each entry; this optimization does
+not cache mount readiness or change filesystem identity handling.
+
+Guest manifest synchronization also starts with a read-only directory check
+and ``rsync --dry-run --checksum --itemize-changes`` preview. If content and
+the metadata preserved by the transfer already match, AIVM skips directory
+creation, transfer, and their approval. Missing state or drift still takes the
+approved repair path. The preview uses the same transfer options so a matching
+checksum cannot hide permission or timestamp drift. Inspection failures are
+reported as errors, not treated as an unchanged manifest. Live mount inspection
+and helper checks still run; this is not a cached readiness result.
+
+For an already-running VM using persistent attachments, one live inspection
+now combines requested companion/mirror symlinks, helper hashes, the manifest
+directory, and mount identity. Logs show the ordinary arguments to
+``/usr/local/libexec/aivm/session-inspect``; its root-owned source stays on disk
+for inspection. The manifest's rsync preview and access-identity credential
+routing remain separate checks.
+
+Replay's ``--check --only-guest-dst PATH`` mode reads live state without
+creating directories, locks, provenance references, or mounts. Healthy state
+needs no repair approval. Missing bindings or provenance require an approved
+repair; unavailable sources and genuine conflicts remain diagnostic. Repairs
+recheck under the existing replay lock. A manifest/helper update or symlink
+repair invalidates the earlier mount result and triggers fresh inspection.
+This is a per-entry live result, not a remembered success from a previous boot
+or session. New guests receive the helpers through cloud-init; existing guests
+install/update them during normal entry with the usual approval, without a VM
+restart.
+
+Foreground entry preserves an existing live workspace. Virtiofs can recreate
+a source submount with a different device number while the old workspace bind
+remains valid. Guest replay now retains a private bind reference for each
+verified attachment under ``/run/aivm-persistent-mounts`` (root-only, mode
+``0700``). These kernel-held references associate the original directory object
+with its exact attachment token and destination; they are not cached inode
+numbers or host config-store records. Replay serializes reference updates and
+prunes obsolete references during lifecycle replay.
+
+When that proof identifies an idle stale bind for the requested token,
+foreground entry may use one ordinary unmount/rebind. Busy mounts, access-mode
+conflicts, and mounts whose provenance cannot be established remain untouched
+with a diagnostic. It never forces or lazily unmounts a foreground workspace.
+An older, already-stale mount with no reference cannot be safely adopted by
+guessing; normal lifecycle replay, including replay after a VM reboot,
+establishes references automatically. A healthy existing mount acquires its
+reference through approved repair during ordinary entry. References disappear
+with the guest's ``/run`` filesystem at reboot and are recreated from verified
+mounts.
+
+Companion symlinks use the inspectable guest program
+``/usr/local/libexec/aivm/attachment-symlink``. Repair logs show its explicit
+``--link`` and ``--target`` arguments. Its ``--check`` mode reads only; a
+correct link needs no repair approval. Missing links or empty directories
+take the approved repair path, which checks again before changing anything.
+Unrelated links, files, and nonempty directories are preserved. Helper updates
+show ordinary checksum, directory preparation, and file-transfer commands
+rather than an omitted inline installer. To inspect the installed logic in
+the guest::
+
+   cat /usr/local/libexec/aivm/attachment-symlink
+   cat /usr/local/libexec/aivm/session-inspect
+   cat /usr/local/libexec/aivm-persistent-attachment-replay
+
 Provision specific guest tools
 ------------------------------
 
@@ -255,6 +322,70 @@ Reconcile VM drift
 
 ``vm update`` includes the managed nftables firewall. Changes to firewall
 ports or policy are applied live and do not require restarting the VM.
+
+Optional virtual TPM
+--------------------
+
+Create a new VM with a software TPM 2.0:
+
+.. code-block:: bash
+
+   aivm vm create --vm tpm-lab --tpm emulator
+
+Add one to an existing managed VM without recreating its disk:
+
+.. code-block:: bash
+
+   aivm vm down
+   aivm vm update --tpm emulator --dry_run
+   aivm vm update --tpm emulator
+   aivm vm up
+
+``vm update --dry_run`` previews the inspection and conditional update workflow
+without executing host or guest probes or writing configuration. Live drift,
+host TPM support and restart requirements remain unknown until an actual run.
+
+Creation and a successful update persist ``vm.tpm = "emulator"``. You can also
+select it through ``aivm vm edit`` and apply it with ``aivm vm update``. The default is ``none``.
+A missing request never removes an existing device. Replacement, removal and
+TPM-state copying are not provided by this workflow.
+
+The libvirt host needs ``swtpm`` and ``swtpm-tools`` with TPM 2.0
+emulator / ``tpm-crb`` support. AIVM checks the selected daemon and does not
+install packages or fall back to a weaker device. A physical host TPM and
+``/dev/tpm*`` devices are not required for this software backend. To inspect
+what the system daemon advertises:
+
+.. code-block:: bash
+
+   sudo virsh -c qemu:///system domcapabilities | sed -n '/<tpm /,/tpm>/p'
+
+Look for ``emulator`` under ``backendModel``, ``2.0`` under ``backendVersion``,
+and ``tpm-crb`` under ``model``. Missing values describe what libvirt has not
+recognized; installing packages alone does not establish daemon support.
+Older libvirt (including 8.0) omits ``backendVersion``. If the daemon advertises
+``emulator`` and ``tpm-crb`` but omits this enum, AIVM verifies the local host's
+TPM 2.0 support with ``swtpm socket --tpm2 --print-capabilities``. This selects
+TPM 2.0 in the library and exits before creating sockets or persistent state.
+Older ``swtpm_setup`` may also omit the newer ``tpm-2.0`` feature flag; that
+absence alone does not mean TPM 2.0 is unavailable. A failed or invalid probe,
+an explicitly empty version enum, or an enum excluding ``2.0`` stops the update.
+The domain definition always requests ``version="2.0"`` and ``model="tpm-crb"``;
+the probe never substitutes a weaker device.
+An upgrade requires a cleanly shut-off VM without a managed-save image; it
+preserves the UUID, disk, other devices and domain metadata. AIVM asks libvirt
+to validate the new definition.
+Deletion and recreation use ``virsh undefine --tpm`` whenever an emulated TPM
+is present, including every undefine retry. Unsupported deletion flags fail
+closed. Libvirt owns the TPM state and its removal; filesystem removal and
+restart persistence still need validation on a real libvirt host. Current
+coverage uses a simulated daemon and does not establish live-VM behavior.
+
+Adding the device does not move existing identity keys into it or install guest
+TPM tooling. A software vTPM is host-managed state: it does not protect against
+an administrator who can copy that state. Broker use remains optional and needs
+no TPM. Key generation, enrollment evidence and provider-backed TLS belong to
+the independent secrets project's assurance work.
 
 Run without sudo
 ----------------

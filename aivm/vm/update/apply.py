@@ -7,6 +7,7 @@ from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...privilege import file_write_needs_sudo, virsh_needs_sudo
 from ...runtime import virsh_cmd
+from ..tpm import add_tpm
 from .fdguard import _apply_fdguard_drift
 from .firewall import _apply_firewall_drift
 from .models import RestartKind, VMUpdateDrift, _escalate
@@ -54,6 +55,12 @@ def _apply_vm_update(
     changed = False
     restart = RestartKind.NONE
     mgr = CommandManager.current()
+
+    # Check/apply the offline-only change before other update mutations.
+    if drift.tpm_add:
+        add_tpm(cfg, dry_run=dry_run)
+        changed = True
+        restart = RestartKind.HARD
 
     if drift.cpus is not None:
         _, want = drift.cpus
