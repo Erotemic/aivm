@@ -19,6 +19,20 @@ removal, independent publication and security endorsement remain separate work.
 This direction supersedes the earlier instruction above to defer extraction.
 The dependency, authorization and security constraints below still apply.
 
+## Source-tree cutover, 2026-10-22
+
+The standalone `../aivm-secrets` repository now owns the Python package.
+AIVM no longer carries the `aivm_secrets/` source directory or builds its
+wheel. The existing AIVM foreground SSH and identity adapters remain
+experimental, explicitly selected, and import the **separately installed**
+Python distribution. Developer installs use
+`python -m pip install -e ../aivm-secrets` from the AIVM checkout.
+Installing it does not enable secrets on ordinary SSH/Code sessions. The
+native Garrett/Rust VM integration is separate work; no dependency on the
+unpublished package is added to AIVM's metadata.
+
+The earlier extraction-stage description below is historical.
+
 ## Decision
 
 1. **AIVM is a usable, independently maintainable VM manager.** No ordinary
@@ -76,7 +90,7 @@ published or security-audited secrets release. An AIVM-only wheel must contain
 no `aivm_secrets` modules, `aivm-secrets` entry point, or required crypto
 metadata. The experimental sibling wheel must contain no `aivm` code.
 Source-checkout use of the opt-in broker first installs the sibling project
-(`python -m pip install ./aivm_secrets`) in a trusted host environment;
+(`python -m pip install -e ../aivm-secrets`) in a trusted host environment;
 standard `pip install aivm` does not pull it in.
 
 ## Rules for all work while sharing this branch

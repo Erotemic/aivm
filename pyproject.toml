@@ -50,10 +50,9 @@ dependencies = [
   "kwconf>=0.12.0",
   "PyYAML>=6.0.2",
 ]
-# Experimental secrets live in their own separately installed distribution.
-# Do not introduce an extra requiring an unpublished package; developers
-# install ./aivm_secrets explicitly until repository extraction/review.
-# The experimental secrets package must not be pulled in by the all extra.
+# Experimental secrets live in the separately installed, unpublished sibling
+# ../aivm-secrets checkout. Do not declare a dependency or extra for it, and
+# never pull it in through the all extra.
 optional-dependencies.all = [
   "aivm[docs]",
   "aivm[optional]",
@@ -73,7 +72,8 @@ optional-dependencies.optional = [
   "pygments>=2.19.2",
 ]
 # Core test dependencies are intentionally independent of the optional broker.
-# The experimental suites additionally need `pip install ./aivm_secrets`.
+# Experimental integration tests need an explicit developer installation of
+# ../aivm-secrets; ordinary tests and installs do not.
 optional-dependencies.tests = [
   "coverage>=6.1.1",
   "pytest>=6.2.5",

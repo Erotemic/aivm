@@ -866,7 +866,8 @@ class VMSSHCLI(_BaseCommand):
                     'aivm_secrets', 'cryptography'
                 }:
                     log.error('Secret-use sessions require the separately '
-                              'installed experimental aivm-secrets package.')
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
                     return 1
                 raise
             except SecretsError as ex:
@@ -935,7 +936,8 @@ class VMSSHCLI(_BaseCommand):
             except ModuleNotFoundError as ex:
                 if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
                     log.error('Secret-use sessions require the separately '
-                              'installed experimental aivm-secrets package.')
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
                     return 1
                 raise
             try:
@@ -973,7 +975,8 @@ class VMSSHCLI(_BaseCommand):
             except ModuleNotFoundError as ex:
                 if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
                     log.error('Secret-use sessions require the separately '
-                              'installed experimental aivm-secrets package.')
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
                     return 1
                 raise
             except OSError:

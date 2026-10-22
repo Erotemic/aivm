@@ -24,10 +24,11 @@ are in ``docs/planning/``:
 * ``aivm-secrets-garrett-identity.md`` -- experimental P4a signed, encrypted
   certificate-bound identity protocol and remaining deployment work.
 
-The Python reference implementation remains supported while a separate Rust
-implementation is developed for implementation-linked proofs. The Rust
-backend does **not** exist in this release; Python/Rust behavioral parity is
-not yet demonstrated. P4a/P4b identity and OAuth facilities are explicit opt-in host services,
+The existing ``aivm ssh --secrets_policy`` adapter uses the separately
+installed **Python reference broker**, not the native Garrett/Rust backend.
+Installing ``aivm-secrets`` does not enable an AIVM secret session by default.
+The native Rust integration is a separate experiment, not enabled by this
+source-tree cutover. P4a/P4b identity and OAuth facilities are explicit opt-in host services,
 with an enrolled-VM launcher. They add no listener, certificate, credential
 access or session flag activation by default. No real-VM or provider smoke
 validation has been completed.
@@ -74,7 +75,7 @@ trusted host checkout **the guest cannot modify**. Ordinary ``pip install aivm``
 installs neither this package nor its cryptographic dependencies. Until the
 separate repository/distribution is published, use the sibling project::
 
-    python -m pip install ./aivm_secrets
+    python -m pip install -e ../aivm-secrets
     install -d -m 700 "$HOME/.config/aivm/secrets"
     install -m 600 docs/examples/aivm-secrets-gitlab-merge-request.json \
         "$HOME/.config/aivm/secrets/gitlab.json"

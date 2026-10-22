@@ -7,8 +7,9 @@ never exists in this process, in a command line, or in an AIVM log.
 
 The child is ``aivm-secrets serve``, reached only through its documented
 command line, one JSON line on its stdout, and the lifetime of its stdin. That
-process contract -- not a Python import -- is the boundary, which is what
-lets a verified Rust broker replace the Python one without touching AIVM.
+process contract -- not a Python import -- is the boundary. This adapter
+still invokes the standalone *Python* reference implementation; native Garrett
+integration is a separate experiment.
 
 Only this module knows ``ResolvedVMContext``. Nothing is added to the machine
 store, existing deploy-key backends, or persistent SSH config.

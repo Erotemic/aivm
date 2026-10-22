@@ -1,7 +1,6 @@
-"""Guard AIVM's ordinary runtime against the experimental secrets package.
+"""Guard AIVM's ordinary runtime against the optional sibling package.
 
-Two separately installable distributions temporarily share one source tree.
-Checks cover runtime independence and the contents/metadata of both wheels.
+The independent distribution lives in ../aivm-secrets, not inside AIVM.
 """
 from __future__ import annotations
 
@@ -123,16 +122,15 @@ def _wheel(project: Path, output: Path) -> zipfile.ZipFile:
     return zipfile.ZipFile(wheels[0])
 
 
-def test_distribution_wheels_are_separate(tmp_path: Path) -> None:
-    """Core AIVM cannot co-install broker code through wheel packaging.
+def test_vendored_secrets_package_has_been_removed() -> None:
+    """The code exercised by opt-in sessions must come from the other repo."""
+    assert not (ROOT / 'aivm_secrets').exists()
 
-    This also makes the distribution extraction gate real: both wheel
-    archives are inspected without importing or activating their contents.
-    """
+
+def test_distribution_wheel_excludes_secrets(tmp_path: Path) -> None:
+    """Core AIVM's wheel cannot co-install code from the sibling package."""
     core_dir = tmp_path / 'core'
     core_dir.mkdir()
-    secrets_dir = tmp_path / 'secrets'
-    secrets_dir.mkdir()
     with _wheel(ROOT, core_dir) as archive:
         names = archive.namelist()
         assert any(name.startswith('aivm/') for name in names)
@@ -148,30 +146,6 @@ def test_distribution_wheels_are_separate(tmp_path: Path) -> None:
         assert 'aivm = aivm.cli:main' in scripts
         assert 'aivm-secrets =' not in scripts
 
-    with _wheel(ROOT / 'aivm_secrets', secrets_dir) as archive:
-        names = archive.namelist()
-        assert any(name.startswith('aivm_secrets/') for name in names)
-        assert not any(name.startswith('aivm/') for name in names)
-        info = next(name for name in names if name.endswith('/METADATA'))
-        metadata = Parser().parsestr(archive.read(info).decode('utf-8'))
-        assert metadata['Name'] == 'aivm-secrets'
-        version_tree = ast.parse(
-            (ROOT / 'aivm_secrets/__init__.py').read_text(encoding='utf-8')
-        )
-        runtime_version = next(
-            ast.literal_eval(node.value)
-            for node in version_tree.body
-            if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == '__version__'
-                    for target in node.targets)
-        )
-        assert metadata['Version'] == runtime_version
-        assert any('cryptography' in value for value in
-                   metadata.get_all('Requires-Dist', []))
-        entry = next(name for name in names if name.endswith('/entry_points.txt'))
-        scripts = archive.read(entry).decode('utf-8')
-        assert 'aivm-secrets = aivm_secrets.cli:main' in scripts
-        assert 'aivm = aivm.cli:main' not in scripts
 
 
 def test_core_sdist_excludes_experimental_package(tmp_path: Path) -> None:
