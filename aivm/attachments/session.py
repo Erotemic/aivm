@@ -23,7 +23,7 @@ from ..config_store import (
 )
 from ..errors import AIVMError, CommandControlError
 from ..firewall import ensure_firewall_ready
-from ..fs_identity import directory_identity
+from ..fs_identity import FilesystemIdentity, directory_identity
 from ..host import HostCapability, ensure_host_capability
 from ..net import ensure_network
 from ..services import (
@@ -175,6 +175,7 @@ def _record_attachment(
     tag: str,
     owner_principal_id: str = '',
     mirror_home: str = MIRROR_HOME_AUTO,
+    source_identity: FilesystemIdentity | None = None,
 ) -> Path:
     """Persist one owner-scoped attachment under the store lock."""
     lexical_str = str(host_src.expanduser().absolute())
@@ -183,7 +184,11 @@ def _record_attachment(
     source_dev = 0
     source_ino = 0
     if mode == ATTACHMENT_MODE_PERSISTENT:
-        identity = directory_identity(resolved_str)
+        identity = (
+            source_identity
+            if source_identity is not None
+            else directory_identity(resolved_str)
+        )
         source_dev = identity.dev
         source_ino = identity.ino
 

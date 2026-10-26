@@ -234,6 +234,12 @@
         },
         {
           "imported": "aivm.config",
+          "importer": "aivm.attachments.persistent.inspection",
+          "occurrences": 1,
+          "path": "aivm/attachments/persistent/inspection.py"
+        },
+        {
+          "imported": "aivm.config",
           "importer": "aivm.attachments.persistent.manifest",
           "occurrences": 1,
           "path": "aivm/attachments/persistent/manifest.py"
@@ -335,6 +341,12 @@
           "importer": "aivm.attachments.persistent.host_bind",
           "occurrences": 1,
           "path": "aivm/attachments/persistent/host_bind.py"
+        },
+        {
+          "imported": "aivm.commands",
+          "importer": "aivm.attachments.persistent.inspection",
+          "occurrences": 1,
+          "path": "aivm/attachments/persistent/inspection.py"
         },
         {
           "imported": "aivm.commands",
@@ -758,6 +770,12 @@
         },
         {
           "imported": "aivm.attachments.persistent",
+          "importer": "aivm.cli.vm_attach",
+          "occurrences": 2,
+          "path": "aivm/cli/vm_attach.py"
+        },
+        {
+          "imported": "aivm.attachments.persistent.host_bind",
           "importer": "aivm.cli.vm_attach",
           "occurrences": 1,
           "path": "aivm/cli/vm_attach.py"
@@ -1307,6 +1325,12 @@
           "path": "aivm/cli/net.py"
         },
         {
+          "imported": "aivm.fs_identity",
+          "importer": "aivm.cli.vm_attach",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_attach.py"
+        },
+        {
           "imported": "aivm.vm",
           "importer": "aivm.cli.vm_attach",
           "occurrences": 1,
@@ -1410,6 +1434,12 @@
         },
         {
           "imported": "aivm.vm.update",
+          "importer": "aivm.cli.vm_update",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_update.py"
+        },
+        {
+          "imported": "aivm.vm.update.render",
           "importer": "aivm.cli.vm_update",
           "occurrences": 1,
           "path": "aivm/cli/vm_update.py"
@@ -3466,6 +3496,12 @@
         },
         {
           "imported": "aivm.commands",
+          "importer": "aivm.vm.update.render",
+          "occurrences": 1,
+          "path": "aivm/vm/update/render.py"
+        },
+        {
+          "imported": "aivm.commands",
           "importer": "aivm.vm.update.restart",
           "occurrences": 1,
           "path": "aivm/vm/update/restart.py"
@@ -3633,6 +3669,12 @@
           "importer": "aivm.vm.update.fdguard",
           "occurrences": 1,
           "path": "aivm/vm/update/fdguard.py"
+        },
+        {
+          "imported": "aivm.runtime",
+          "importer": "aivm.vm.update.render",
+          "occurrences": 1,
+          "path": "aivm/vm/update/render.py"
         },
         {
           "imported": "aivm.runtime",

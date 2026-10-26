@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (269)
+## Canonical `AgentVMConfig` references (272)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -40,6 +40,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.attachments.guest` | `aivm/attachments/guest.py` | 9 |
 | `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py` | 8 |
 | `aivm.attachments.persistent.identity` | `aivm/attachments/persistent/identity.py` | 1 |
+| `aivm.attachments.persistent.inspection` | `aivm/attachments/persistent/inspection.py` | 2 |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py` | 11 |
 | `aivm.attachments.persistent.replay` | `aivm/attachments/persistent/replay.py` | 2 |
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py` | 4 |
@@ -91,11 +92,11 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.detect` | `aivm/vm/update/detect.py` | 3 |
 | `aivm.vm.update.fdguard` | `aivm/vm/update/fdguard.py` | 3 |
 | `aivm.vm.update.firewall` | `aivm/vm/update/firewall.py` | 2 |
-| `aivm.vm.update.render` | `aivm/vm/update/render.py` | 1 |
+| `aivm.vm.update.render` | `aivm/vm/update/render.py` | 2 |
 | `aivm.vm.update.restart` | `aivm/vm/update/restart.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py` | 2 |
 
-## Path-based `StoreScope` reconstruction sites (22)
+## Path-based `StoreScope` reconstruction sites (24)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -103,7 +104,7 @@ They are reported for visibility and are not yet forbidden.
 | Module | Argument | Location | Occurrences |
 |---|---|---|---:|
 | `aivm.attachments.ownership` | `store_path` | `aivm/attachments/ownership.py` | 1 |
-| `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py` | 4 |
+| `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py` | 6 |
 | `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py` | 1 |
 | `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py` | 1 |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py` | 2 |

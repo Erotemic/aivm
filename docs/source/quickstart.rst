@@ -78,7 +78,25 @@ So an administrator prepares the host once:
    sudo aivm host fw apply
 
 Users log out and back in (or ``newgrp libvirt``) for the group change, then
-run ``aivm config init`` to join, and work normally from there.
+run ``aivm config init`` to join. The user might not have host sudo: in that
+case, a pending guest enrollment must be prepared by a sudo-capable
+administrator, then verified by the user without sudo:
+
+.. code-block:: bash
+
+   # Administrator, in their own AIVM environment:
+   aivm vm access prepare alice --vm aivm-2404-host --admin_override
+
+   # Alice, in her own host session:
+   aivm vm access verify --vm aivm-2404-host
+
+Neither command requires an administrator to read Alice's private SSH key.
+Do not grant host sudo merely to complete this enrollment. ``prepare`` only
+uses the machine bootstrap key through the administrator's sudo credentials;
+``verify`` activates an access identity after the user proves personal SSH
+access. A user-installed ``aivm`` executable may not appear on root's ``PATH``;
+run administrator AIVM commands as the enrolled administrator, allowing AIVM
+to escalate only their required host operations.
 
 What a user without sudo can and cannot do
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -100,8 +118,15 @@ They cannot install or read the nftables rules, and cannot create a *new*
 
    # Or an administrator declares it on the user's behalf, so the record is
    # owned by that user rather than by the admin.
-   sudo aivm vm attach /home/alice/proj \
+   aivm vm attach /home/alice/proj --mode persistent \
        --owner_principal <alice-access-identity> --admin_override
+
+With the explicit owner and administrator override, AIVM uses a restricted,
+privileged descriptor-based identity probe when Alice's home is not traversable
+by the administrator. This preserves Unix home permissions and pins the
+persistent source filesystem object without temporary ACL changes. A failed
+or inaccessible source remains an error; dry-run does not elevate or install
+any privileged helper.
 
 Run ``aivm host permissions check`` to see which of these apply to your
 account; it reports what is unavailable to *you* rather than what a

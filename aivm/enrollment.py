@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pwd
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from loguru import logger as log
 
-from .commands import CommandManager
+from .access_control import resolve_access_principal
+from .commands import CommandManager, SudoUnavailableError
 from .config import AgentVMConfig
 from .config_store import (
     PrincipalEntry,
@@ -509,25 +511,36 @@ def _reconcile_current_principal_impl(
         'enroll-principal',
     ]
     mgr = CommandManager.current()
-    with mgr.intent(
-        f'Enroll {host_user} on VM {vm_name}',
-        why=(
-            'Use the machine bootstrap key to invoke only the restricted '
-            'guest account enrollment helper, then verify the personal key.'
-        ),
-        role='modify',
-    ):
-        result = mgr.run(
-            bootstrap_cmd,
-            sudo=identity.use_sudo,
+    try:
+        with mgr.intent(
+            f'Enroll {host_user} on VM {vm_name}',
+            why=(
+                'Use the machine bootstrap key to invoke only the restricted '
+                'guest account enrollment helper, then verify the personal key.'
+            ),
             role='modify',
-            check=False,
-            capture=True,
-            input_text=request.to_json() + '\n',
-            timeout=60,
-            summary=f'Enroll guest principal {principal.guest_user}',
-            detail='The bootstrap SSH key is forced to aivm-guestctl --forced.',
-        )
+        ):
+            result = mgr.run(
+                bootstrap_cmd,
+                sudo=identity.use_sudo,
+                role='modify',
+                check=False,
+                capture=True,
+                input_text=request.to_json() + '\n',
+                timeout=60,
+                summary=f'Enroll guest principal {principal.guest_user}',
+                detail='The bootstrap SSH key is forced to aivm-guestctl --forced.',
+            )
+    except SudoUnavailableError as ex:
+        raise AIVMError(
+            f'{ex}\n'
+            'Host sudo is not required for the owner of this guest account. '
+            'Ask a sudo-capable administrator to run, as themselves:\n'
+            f'  aivm vm access prepare {principal.id} --vm {vm_name} '
+            '--admin_override\n'
+            'Then verify the personal SSH key as this host user, without sudo:\n'
+            f'  aivm vm access verify --vm {vm_name}'
+        ) from ex
     if result.code != 0:
         # A failed helper invocation revokes nothing, so an identity that
         # already holds a grant keeps it; 255 additionally distinguishes an
@@ -600,4 +613,263 @@ def _reconcile_current_principal_impl(
         principal=active,
         ip=ip,
         changed=existing != active,
+    )
+
+
+def prepare_other_principal(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    selector: str,
+    ip_override: str = '',
+    dry_run: bool = False,
+) -> EnrollmentReport:
+    """Administrator: install another principal's public key without its private key.
+
+    This is intentionally half an enrollment. Only the owning host user can
+    finish it by proving possession of their personal SSH private key with
+    :func:`verify_current_principal`. The bootstrap key is used through sudo,
+    and never returned to an unprivileged process or copied to a user profile.
+    """
+    if not scope.is_machine or scope.machine_layout is None:
+        raise AIVMError('Administrator enrollment requires the shared machine store.')
+    if not selector.strip():
+        raise AIVMError('Select an existing access identity to prepare.')
+    if dry_run:
+        return _prepare_other_principal_impl(
+            scope, vm_name=vm_name, selector=selector,
+            ip_override=ip_override, dry_run=True,
+        )
+    with machine_resource_locks(
+        scope.machine_layout,
+        group_gid=current_machine_group_gid(scope.machine_layout),
+        include_store=True,
+        vms=[vm_name],
+    ):
+        return _prepare_other_principal_impl(
+            scope, vm_name=vm_name, selector=selector,
+            ip_override=ip_override, dry_run=False,
+        )
+
+
+def _prepare_other_principal_impl(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    selector: str,
+    ip_override: str,
+    dry_run: bool,
+) -> EnrollmentReport:
+    reg = load_scope_store(scope)
+    if find_vm(reg, vm_name) is None:
+        raise AIVMError(f'Unknown managed VM: {vm_name!r}')
+    actor = current_host_identity()
+    principal = resolve_access_principal(
+        reg, vm_name=vm_name, selector=selector, current_identity=actor,
+    )
+    if (principal.host_user, principal.host_uid) == (actor.username, actor.uid):
+        raise AIVMError(
+            'To enroll your own account, run `aivm vm access reconcile`.'
+        )
+    if principal.state in {'disabled', 'removed'}:
+        raise AIVMError(
+            f'Access identity {principal.id!r} is {principal.state}; '
+            'administrator preparation cannot re-enable or restore it.'
+        )
+    if not principal.ssh_public_key.strip():
+        raise AIVMError(
+            f'Access identity {principal.id!r} has no registered public key; '
+            'the owner must first initialize their own profile.'
+        )
+    try:
+        account = pwd.getpwnam(principal.host_user)
+    except KeyError as ex:
+        raise AIVMError(
+            f'Host account {principal.host_user!r} no longer exists.'
+        ) from ex
+    if (account.pw_uid, account.pw_gid) != (
+        principal.host_uid, principal.host_gid
+    ):
+        raise AIVMError(
+            f'Host account {principal.host_user!r} changed UID/GID since '
+            'enrollment; repair its identity before granting access.'
+        )
+    # The admin needs only the persisted public key, not the owner's profile.
+    cfg = materialize_vm_cfg(reg, vm_name)
+    ip = ip_override.strip() or get_ip_cached(cfg) or '<vm-ip>'
+    prepared = replace(principal, state=(
+        principal.state if _granted_state(principal) else 'pending'
+    ))
+    if dry_run:
+        return EnrollmentReport(principal=prepared, ip=ip, changed=False)
+
+    identity = require_bootstrap_identity(vm_name, layout=scope.machine_layout)
+    ip = _resolve_enrollment_ip(cfg, ip_override)
+    request = GuestEnrollmentRequest(
+        guest_user=principal.guest_user,
+        uid=principal.host_uid,
+        gid=principal.host_gid,
+        public_key=principal.ssh_public_key,
+        allow_sudo=True,
+        groups=('docker',),
+    )
+    cmd = [
+        'ssh',
+        *ssh_base_args(
+            str(identity.private_key), strict_host_key_checking='accept-new',
+            connect_timeout=15, batch_mode=True,
+            user_known_hosts_file=str(identity.known_hosts),
+        ),
+        f'{BOOTSTRAP_GUEST_USER}@{ip}',
+        'enroll-principal',
+    ]
+    mgr = CommandManager.current()
+    with mgr.intent(
+        f'Prepare guest access for {principal.host_user} on VM {vm_name}',
+        why=(
+            'Install only the registered public key through the restricted '
+            'machine bootstrap channel; the owner must verify their key.'
+        ),
+        role='modify',
+    ):
+        result = mgr.run(
+            cmd, sudo=identity.use_sudo, role='modify',
+            check=False, capture=True,
+            input_text=request.to_json() + '\n', timeout=60,
+            summary=f'Prepare guest principal {principal.guest_user}',
+            detail='Administrator-assisted enrollment; no personal private key.',
+        )
+    if result.code != 0:
+        # A failed command does not prove guest access was revoked. Preserve
+        # the already granted state and leave pending accounts retryable.
+        state = _granted_state(principal) or (
+            'pending' if result.code == 255 else 'error'
+        )
+        failed = replace(principal, state=state)
+        if failed != principal:
+            _save_principal_state(
+                scope, failed,
+                reason=f'Administrator preparation failed for {principal.host_user}.',
+            )
+        detail = (result.stderr or result.stdout or '').strip()
+        raise AIVMError(
+            f'Guest preparation failed for {principal.host_user!r}: {detail}'
+        )
+    if prepared != principal:
+        _save_principal_state(
+            scope, prepared,
+            reason=(
+                f'Guest public key prepared for {principal.host_user}; '
+                'awaiting owner SSH verification.'
+            ),
+        )
+    return EnrollmentReport(
+        principal=prepared, ip=ip, changed=prepared != principal,
+    )
+
+
+def verify_current_principal(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    ip_override: str = '',
+    dry_run: bool = False,
+) -> EnrollmentReport:
+    """Owner: prove personal SSH access and activate without host sudo.
+
+    No bootstrap key is accessed; the SSH proof is performed as the invoking
+    kernel identity with its own profile's private key. This is safe even if
+    an administrator has not yet prepared the guest: verification simply fails.
+    """
+    if not scope.is_machine or scope.machine_layout is None:
+        raise AIVMError('Access verification requires the shared machine store.')
+    if dry_run:
+        return _verify_current_principal_impl(
+            scope, vm_name=vm_name, ip_override=ip_override, dry_run=True,
+        )
+    with machine_resource_locks(
+        scope.machine_layout,
+        group_gid=current_machine_group_gid(scope.machine_layout),
+        include_store=True,
+        vms=[vm_name],
+    ):
+        return _verify_current_principal_impl(
+            scope, vm_name=vm_name, ip_override=ip_override, dry_run=False,
+        )
+
+
+def _verify_current_principal_impl(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    ip_override: str,
+    dry_run: bool,
+) -> EnrollmentReport:
+    reg = load_scope_store(scope)
+    if find_vm(reg, vm_name) is None:
+        raise AIVMError(f'Unknown managed VM: {vm_name!r}')
+    host_identity = current_host_identity()
+    principal = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=host_identity
+    )
+    if principal is None:
+        raise AIVMError(
+            'No registered access identity exists for this host user; '
+            'run `aivm config init` to generate a personal identity first.'
+        )
+    if principal.state in {'disabled', 'removed'}:
+        raise AIVMError(
+            f'Access identity {principal.id!r} is {principal.state}; '
+            'verification cannot reactivate revoked access.'
+        )
+    profile = load_scope_profile(scope)
+    public_key = _read_profile_public_key(profile)
+    if not same_ssh_public_key(public_key, principal.ssh_public_key):
+        raise AIVMError(
+            'Your profile public key differs from the enrolled access '
+            "identity; do not use an administrator's private key to verify."
+        )
+    ident = require_ssh_identity(profile.ssh_identity_file)
+    cfg = _effective_cfg_for_principal(
+        reg, vm_name, profile=profile, principal=principal,
+    )
+    ip = ip_override.strip() or get_ip_cached(cfg) or '<vm-ip>'
+    active = replace(principal, state='active')
+    if dry_run:
+        return EnrollmentReport(
+            principal=active, ip=ip, changed=active != principal,
+        )
+    ip = _resolve_enrollment_ip(cfg, ip_override)
+    mgr = CommandManager.current()
+    probe = mgr.run(
+        [
+            'ssh',
+            *ssh_base_args(
+                ident, strict_host_key_checking='accept-new',
+                connect_timeout=10, batch_mode=True,
+            ),
+            f'{principal.guest_user}@{ip}',
+            'true',
+        ],
+        sudo=False, role='read', check=False, capture=True, timeout=30,
+        summary=f'Verify personal SSH access for {principal.guest_user}',
+    )
+    if probe.code != 0:
+        detail = (probe.stderr or probe.stdout or '').strip()
+        raise AIVMError(
+            f'SSH proof failed for {principal.host_user!r}: '
+            f'{detail}. Ask a sudo-capable administrator to run '
+            f'`aivm vm access prepare {principal.id} --vm {vm_name} '
+            '--admin_override`, then retry verification.'
+        )
+    if active != principal:
+        _save_principal_state(
+            scope, active,
+            reason=(
+                f'Activate guest access for {principal.host_user} after '
+                'personal-key verification.'
+            ),
+        )
+    return EnrollmentReport(
+        principal=active, ip=ip, changed=active != principal,
     )
