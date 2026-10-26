@@ -463,9 +463,10 @@ def _attach_privilege_guidance(
             f'  * attach with `--mode {ATTACHMENT_MODE_DIRECT_VIRTIOFS}`, which maps '
             'the folder straight into the guest over virtiofs and needs no '
             'host privileges;\n'
-            '  * or ask a host administrator to declare it for you:\n'
-            f'      sudo aivm vm attach <path> --owner_principal {identity} '
-            '--admin_override'
+            '  * or ask an enrolled sudo-capable host administrator to run '
+            'AIVM as themselves (not with `sudo aivm`):\n'
+            f'      aivm vm attach <path> --mode {mode} '
+            f'--owner_principal {identity} --admin_override'
         ) from ex
 
 

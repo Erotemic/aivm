@@ -23,7 +23,11 @@ from .config_store import (
     materialize_vm_cfg,
     upsert_principal,
 )
-from .errors import AIVMError, MissingSSHIdentityError
+from .errors import (
+    AIVMError,
+    AdministratorEnrollmentRequiredError,
+    MissingSSHIdentityError,
+)
 from .guestctl import BOOTSTRAP_GUEST_USER, GuestEnrollmentRequest
 from .host_identity import current_host_identity
 from .machine_store import (
@@ -532,7 +536,7 @@ def _reconcile_current_principal_impl(
                 detail='The bootstrap SSH key is forced to aivm-guestctl --forced.',
             )
     except SudoUnavailableError as ex:
-        raise AIVMError(
+        raise AdministratorEnrollmentRequiredError(
             f'{ex}\n'
             'Host sudo is not required for the owner of this guest account. '
             'Ask a sudo-capable administrator to run, as themselves:\n'
