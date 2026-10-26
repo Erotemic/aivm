@@ -76,6 +76,14 @@ Guest boundary (untrusted):
 * All code and data inside the VM, including guest root.
 * Guest network traffic and any external inputs it consumes.
 
+Accepted architectural requirement: AIVM agents retain unrestricted guest
+administrator capability, including passwordless sudo and arbitrary package
+installation. Guest-local restrictions are not the sandbox enforcement
+boundary. See ``docs/planning/adr/0001-unrestricted-agent-environment.md``.
+The host-side firewall boot/readiness and non-sudo status mechanism remains
+an unapproved design issue documented at
+``docs/planning/firewall-lifecycle-and-delegation-2026-10.md``.
+
 Shared boundary (explicitly extended trust by user decision):
 
 * Host directories exported into the VM (e.g. virtiofs mounts).
