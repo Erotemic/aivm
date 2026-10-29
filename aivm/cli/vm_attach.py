@@ -57,6 +57,7 @@ from ..attachments.safety import (
     warn_shared_home_attachment,
 )
 from ..attachments.session import (
+    _discard_unrealized_persistent_attachment,
     _record_attachment,
     _resolve_ip_for_ssh_ops,
 )
@@ -553,6 +554,12 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 cfg, attachment, host_src, yes=bool(request.yes)
             )
         )
+        had_attachment = find_attachment_for_vm(
+            load_store(cfg_path),
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(attachment.owner_principal_id or None),
+        ) is not None
         reg_path = _record_attachment(
             cfg,
             cfg_path,
@@ -571,7 +578,23 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 cfg_path,
                 dry_run=False,
             )
-            _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+            try:
+                _sync_persistent_host_replay_manifest(
+                    cfg, cfg_path, dry_run=False
+                )
+            except SudoUnavailableError:
+                if not had_attachment:
+                    registered = find_attachment_for_vm(
+                        load_store(cfg_path),
+                        host_src,
+                        cfg.vm.name,
+                        owner_principal_id=(attachment.owner_principal_id or None),
+                    )
+                    if registered is not None:
+                        _discard_unrealized_persistent_attachment(
+                            cfg, cfg_path, attachment, expected_record=registered
+                        )
+                raise
             _reconcile_persistent_host_binds(
                 cfg,
                 cfg_path,

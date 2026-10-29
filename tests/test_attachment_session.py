@@ -360,6 +360,9 @@ def test_attach_without_sudo_names_both_ways_out(
     assert 'could not obtain sudo credentials' in message
     assert '--mode direct-virtiofs' in message
     assert '--admin_override' in message
+    # Sudo was denied before the new root manifest was approved, so the
+    # unreconciled registration must not remain visible to later sessions.
+    assert load_store(cfg_path).attachments == []
 
 
 def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(

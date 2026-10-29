@@ -20,6 +20,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,7 +45,7 @@ from aivm.attachments.persistent import (
 from aivm.cli.vm_lifecycle import VMUpCLI
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
-from aivm.config_store import AttachmentEntry, Store, save_store
+from aivm.config_store import AttachmentEntry, Store, load_store, save_store
 from aivm.fs_identity import directory_identity
 from aivm.persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
@@ -1404,6 +1405,135 @@ def test_persistent_host_replay_dry_run_executes_nothing(
     _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
 
     assert [cmd for cmd in rec.normalized if cmd[0] != 'virsh'] == []
+
+
+def test_running_foreground_export_ignores_unrelated_unapproved_registration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale attachment must not force sudo to enter an existing workspace.
+
+    The approved root manifest contains the good folder, but the store also
+    has a later *unapproved* record with invalid pins. A scoped foreground
+    read verifies only the requested export, without a root manifest update.
+    """
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-foreground-sudo-regression'
+    cfg_path = tmp_path / 'config.toml'
+    good = _persistent_entry(
+        tmp_path / 'good', vm_name=cfg.vm.name,
+        guest_dst='/workspace/good', tag='good-token',
+    )
+    bad = AttachmentEntry(
+        host_path=str(tmp_path / 'deleted'),
+        vm_name=cfg.vm.name,
+        mode='persistent',
+        guest_dst='/workspace/deleted',
+        tag='bad-token',
+        # A deleted legacy/failed registration can even lack valid pins.
+        source_dev=0,
+        source_ino=0,
+    )
+    save_store(Store(attachments=[good, bad]), cfg_path)
+    good_record = persistent_manifest._persistent_attachment_records_for_vm(
+        cfg, cfg_path, only_guest_dst='/workspace/good'
+    )[0]
+    approved = tmp_path / 'root-approved.json'
+    approved.write_text(json.dumps({
+        'schema_version': 2,
+        'vm_name': cfg.vm.name,
+        'records': [asdict(good_record)],
+    }), encoding='utf8')
+
+    monkeypatch.setattr(
+        persistent_manifest,
+        '_persistent_host_replay_manifest_path', lambda cfg: approved,
+    )
+    monkeypatch.setattr(
+        persistent_manifest,
+        '_approved_host_replay_manifest_is_trusted', lambda path: True,
+    )
+    monkeypatch.setattr(
+        host_bind, '_approved_binds_already_applied',
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        persistent_manifest, '_sync_persistent_host_replay_manifest',
+        lambda *args, **kwargs: pytest.fail(
+            'foreground must not update the VM-global approved manifest'
+        ),
+    )
+    monkeypatch.setattr(
+        host_bind, '_ensure_persistent_host_replay_helper',
+        lambda *args, **kwargs: pytest.fail(
+            'foreground must not ask for sudo to install the host helper'
+        ),
+    )
+    seen_mappings: list[bool] = []
+    monkeypatch.setattr(
+        host_bind, '_ensure_persistent_root_vm_mapping',
+        lambda *args, **kwargs: seen_mappings.append(True),
+    )
+
+    result = host_bind._reconcile_persistent_host_binds(
+        cfg, cfg_path, dry_run=False, vm_running=True,
+        only_guest_dst='/workspace/good', preserve_live_binds=True,
+    )
+    assert result == ()
+    assert seen_mappings == [True]
+    assert len(load_store(cfg_path).attachments) == 2
+
+
+def test_scoped_foreground_export_requires_exact_approved_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A changed source/access is not eligible for the read-only fast path."""
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-scoped-drift'
+    cfg_path = tmp_path / 'config.toml'
+    att = _persistent_entry(
+        tmp_path / 'good', vm_name=cfg.vm.name,
+        guest_dst='/workspace/good', tag='good-token',
+    )
+    approved = tmp_path / 'approved.json'
+    save_store(Store(attachments=[att]), cfg_path)
+    rec = asdict(persistent_manifest._persistent_attachment_records_for_vm(
+        cfg, cfg_path
+    )[0])
+    rec['access'] = 'ro'  # approved record differs from desired store
+    approved.write_text(json.dumps({
+        'schema_version': 2, 'vm_name': cfg.vm.name, 'records': [rec],
+    }), encoding='utf8')
+    monkeypatch.setattr(
+        persistent_manifest, '_persistent_host_replay_manifest_path',
+        lambda cfg: approved,
+    )
+    monkeypatch.setattr(
+        persistent_manifest, '_approved_host_replay_manifest_is_trusted',
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        host_bind, '_approved_binds_already_applied',
+        lambda *args, **kwargs: True,
+    )
+    called: list[str] = []
+
+    def sync(*args: Any, **kwargs: Any) -> Path:
+        called.append('manifest-update')
+        raise RuntimeError('needs privileged convergence')
+
+    monkeypatch.setattr(
+        persistent_manifest, '_sync_persistent_host_replay_manifest', sync
+    )
+    with pytest.raises(RuntimeError, match='needs privileged convergence'):
+        host_bind._run_persistent_host_replay(
+            cfg, cfg_path, dry_run=False, only_guest_dst='/workspace/good',
+            preserve_live_binds=True,
+        )
+    assert called == ['manifest-update']
 
 
 def test_persistent_host_replay_can_scope_foreground_reconcile(

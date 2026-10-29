@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,13 +10,15 @@ from typing import Callable
 
 from loguru import logger
 
-from ..commands import CommandManager
+from ..commands import CommandManager, SudoUnavailableError
 from ..config import AgentVMConfig
 from ..config_store import (
+    AttachmentEntry,
     Store,
     find_attachment_for_vm,
     find_attachments_for_vm,
     load_store,
+    remove_attachment,
     update_store,
     upsert_attachment,
     upsert_network,
@@ -237,6 +240,88 @@ def _record_attachment(
         ),
     )
     return cfg_path
+
+
+def _discard_unrealized_persistent_attachment(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    attachment: ResolvedAttachment,
+    *,
+    expected_record: AttachmentEntry,
+) -> bool:
+    """Undo a new registration only when no approved or live export owns it.
+
+    A host-sudo denial during the first manifest install must not leave a new
+    active record that makes every other principal's next session need sudo.
+    Do not remove recovery coordinates after a *partial* success: the approved
+    manifest or a live host bind may already expose the source. An uncertain
+    inspection is also a reason to preserve the record for admin cleanup.
+    """
+    from .persistent import host_bind, manifest
+
+    approved = manifest._persistent_host_replay_manifest_path(cfg)
+    try:
+        if approved.is_symlink():
+            return False
+        if approved.exists():
+            if not manifest._approved_host_replay_manifest_is_trusted(approved):
+                return False
+            records = json.loads(approved.read_text(encoding='utf-8'))['records']
+            if not isinstance(records, list) or any(
+                not isinstance(record, dict)
+                or record.get('shared_root_token') == attachment.tag
+                or record.get('guest_dst') == attachment.guest_dst
+                for record in records
+            ):
+                return False
+        mounted = host_bind._mounted_child_names(
+            host_bind._persistent_root_host_dir(cfg)
+        )
+        if mounted is None or attachment.tag in mounted:
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+    removed = False
+
+    def mutate(reg: Store) -> None:
+        nonlocal removed
+        for item in reg.attachments:
+            if (
+                item.vm_name == cfg.vm.name
+                and item.owner_principal_id == attachment.owner_principal_id
+                and item.host_path == attachment.source_dir
+                and item.mode == ATTACHMENT_MODE_PERSISTENT
+                and item.state == 'active'
+                and item.tag == attachment.tag
+                and item.guest_dst == attachment.guest_dst
+                and item.access == attachment.access
+                and item == expected_record
+            ):
+                removed = remove_attachment(
+                    reg,
+                    host_path=item.host_path,
+                    vm_name=item.vm_name,
+                    owner_principal_id=item.owner_principal_id,
+                )
+                break
+
+    update_store(
+        mutate,
+        cfg_path,
+        skip_if_unchanged=True,
+        reason=(
+            'Discard a new persistent attachment registration after sudo '
+            f'denial, with no approved or mounted host export: {attachment.source_dir}'
+        ),
+    )
+    if removed:
+        log.warning(
+            'Discarded unrealized persistent attachment {} after host sudo '
+            'was denied. Previously working attachments are unchanged.',
+            attachment.source_dir,
+        )
+    return removed
 
 
 def _saved_vm_attachments(
@@ -1096,6 +1181,15 @@ def _prepare_attached_session(
             meta_path=None,
         )
 
+    # A new persistent record is staged before privileged replay so the
+    # manifest has durable recovery coordinates. If sudo is denied before it
+    # takes effect, we can discard only that unused registration.
+    had_attachment = find_attachment_for_vm(
+        load_store(cfg_path),
+        host_src,
+        cfg.vm.name,
+        owner_principal_id=(owner_principal_id or None),
+    ) is not None
     reg_path = _record_attachment(
         cfg,
         cfg_path,
@@ -1165,16 +1259,24 @@ def _prepare_attached_session(
                 host_exports_ready = (
                     current_identity.dev, current_identity.ino
                 ) == reconcile.persistent_host_export_identity
-            _reconcile_persistent_attachments_in_guest(
-                cfg,
-                cfg_path,
-                ip,
-                dry_run=False,
-                host_exports_ready=host_exports_ready,
-                only_guest_dst=attachment.guest_dst,
-                preserve_live_mounts=vm_was_running,
-                symlink_checks=inspection_plan,
-            )
+            try:
+                _reconcile_persistent_attachments_in_guest(
+                    cfg,
+                    cfg_path,
+                    ip,
+                    dry_run=False,
+                    host_exports_ready=host_exports_ready,
+                    only_guest_dst=attachment.guest_dst,
+                    preserve_live_mounts=vm_was_running,
+                    symlink_checks=inspection_plan,
+                )
+            except SudoUnavailableError:
+                if not had_attachment:
+                    if _saved is not None:
+                        _discard_unrealized_persistent_attachment(
+                            cfg, cfg_path, attachment, expected_record=_saved
+                        )
+                raise
         if not vm_was_running:
             _restore_saved_vm_attachments(
                 cfg,

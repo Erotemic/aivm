@@ -93,3 +93,34 @@ container. One wider CLI identity test requires a non-root guest UID; this
 container runs as root, so I did not treat that environment-dependent failure
 as evidence of a code regression. Full user CI and a real-VM experiment remain
 unverified here.
+
+## 2026-10-29 11:36:44 -0400
+
+Investigated a shared-host failure in which a non-sudo principal attempted a
+new persistent `aivm ssh .` attachment, was denied the privileged host replay
+manifest installation, deleted the source directory, and then could no longer
+enter a different, previously mounted workspace without another sudo prompt.
+The foreground path saved the new attachment before privileged reconciliation,
+while replay rewrote the VM-global approved manifest on every scoped visit.
+
+Changed foreground replay to verify the one requested, already-approved and
+mounted host export before considering global manifest installation. The check
+requires a trusted root-owned manifest, an exact match to the requested stored
+record, and a live descriptor-pinned bind with the correct access mode. The
+full/global reconciliation paths remain unchanged. Added conservative rollback
+of newly registered persistent records on host sudo denial, but only when
+neither approved state nor a live mount could own the record; partial successes
+retain their recovery coordinates. Applied the same rollback to explicit
+`vm attach`. The tradeoff is that an existing out-of-sync record remains in
+the desired-state store until an administrator repairs/detaches it; foreground
+SSH should no longer be blocked by that unrelated mismatch when its own bind
+is already approved. Genuine requested mount changes still require sudo.
+
+Tests cover denied new-session registration, an independent working session,
+foreign/stale root-manifest entries, exact approved-record mismatch, retained
+partial state, and the explicit attach error path. The attachment/persistent
+suite passed (302 passed, 1 skipped); these are simulated host/guest tests,
+not a live shared-machine sudo experiment. The next operational check should
+use a non-sudo principal with one previously approved mount and one denied new
+persistent mount, then confirm no stale attachment appears after denial and
+that foreground access to the old mount remains functional.

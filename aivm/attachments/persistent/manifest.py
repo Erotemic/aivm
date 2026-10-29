@@ -149,6 +149,21 @@ def _approved_state_directories_are_safe() -> bool:
     return True
 
 
+def _approved_host_replay_manifest_is_trusted(path: Path) -> bool:
+    """Only trust a regular root-owned manifest under protected directories."""
+    if not _approved_state_directories_are_safe():
+        return False
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == 0
+        and not (info.st_mode & 0o022)
+    )
+
+
 def _ensure_approved_state_directories(*, dry_run: bool) -> None:
     """Create a root-controlled chain beneath /var/lib without following links."""
     if _approved_state_directories_are_safe():
@@ -251,11 +266,15 @@ def _persistent_host_replay_service_name(vm_name: str) -> str:
 def _persistent_attachment_records_for_vm(
     cfg: AgentVMConfig,
     cfg_path: Path,
+    *,
+    only_guest_dst: str = '',
 ) -> list[PersistentAttachmentRecord]:
     reg = load_store(cfg_path)
     records: list[PersistentAttachmentRecord] = []
     for att in find_attachments_for_vm(reg, cfg.vm.name):
         if str(att.mode or '').strip() != ATTACHMENT_MODE_PERSISTENT:
+            continue
+        if only_guest_dst and att.guest_dst != only_guest_dst:
             continue
         enabled = str(att.state or 'active') == 'active'
         source_dev = 0
