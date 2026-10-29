@@ -148,6 +148,14 @@ def test_distribution_wheel_excludes_secrets(tmp_path: Path) -> None:
 
 
 
+def test_core_ci_does_not_require_unpublished_secrets_checkout() -> None:
+    """Ordinary CI runs without the independently maintained source tree."""
+    workflow = (ROOT / '.github/workflows/tests.yml').read_text()
+    assert './aivm_secrets' not in workflow
+    for script in ('run_linter.sh', 'run_type_checks.sh'):
+        assert 'aivm_secrets' not in (ROOT / script).read_text()
+
+
 def test_core_sdist_excludes_experimental_package(tmp_path: Path) -> None:
     """A source-distribution install cannot silently resurrect co-shipping."""
     # The AIVM release workflow uploads both a wheel and an sdist.
