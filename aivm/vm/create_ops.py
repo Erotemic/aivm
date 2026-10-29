@@ -349,6 +349,7 @@ def create_vm_from_defaults(
     cfg_path: Path,
     *,
     vm_override: str | None = None,
+    tpm_override: str | None = None,
     set_default: bool = False,
     force: bool = False,
     dry_run: bool = False,
@@ -402,6 +403,10 @@ def create_vm_from_defaults(
         if 'No config defaults found in store' in str(ex):
             return 1
         raise ex
+
+    if tpm_override is not None:
+        from .tpm import normalize_tpm
+        cfg.vm.tpm = normalize_tpm(tpm_override)
 
     # Apply resource warnings
     for line in vm_resource_warning_lines(cfg):

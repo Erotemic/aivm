@@ -355,3 +355,83 @@ def test_vm_access_repair_host_identity_uses_lifecycle_service(
         'Would repair access identity principal-alice'
         in capsys.readouterr().out
     )
+
+
+def test_vm_access_prepare_requires_admin_override(
+    monkeypatch: MonkeyPatch, tmp_path: Path,
+) -> None:
+    from aivm.errors import AIVMError
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    with pytest.raises(AIVMError, match='requires --admin_override'):
+        run_cli([
+            'vm', 'access', 'prepare', 'benjamin.fenelon', '--vm', vm_name,
+            '--config', str(store_path),
+        ])
+
+
+def test_vm_access_prepare_targets_registered_identity(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_prepare(scope: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='benjamin.fenelon',
+                guest_user='benjamin-fenelon-agent',
+                state='pending',
+            ),
+            ip='10.77.0.119',
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.prepare_other_principal', fake_prepare,
+    )
+    rc = run_cli([
+        'vm', 'access', 'prepare', 'benjamin.fenelon', '--vm', vm_name,
+        '--config', str(store_path), '--admin_override',
+    ])
+    assert rc == 0
+    assert captured['selector'] == 'benjamin.fenelon'
+    assert captured['vm_name'] == vm_name
+    assert 'owner must run `aivm vm access verify' in capsys.readouterr().out
+
+
+def test_vm_access_verify_uses_own_profile(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from types import SimpleNamespace
+
+    vm_name, store_path = _write_machine_and_profile(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_verify(scope: object, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return SimpleNamespace(
+            principal=SimpleNamespace(
+                host_user='benjamin.fenelon',
+                guest_user='benjamin-fenelon-agent', state='active',
+            ),
+            ip='10.77.0.119',
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.vm_access.verify_current_principal', fake_verify,
+    )
+    rc = run_cli([
+        'vm', 'access', 'verify', '--vm', vm_name,
+        '--config', str(store_path),
+    ])
+    assert rc == 0
+    assert captured['vm_name'] == vm_name
+    assert captured['dry_run'] is False
+    assert 'state=active' in capsys.readouterr().out

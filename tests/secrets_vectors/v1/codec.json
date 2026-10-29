@@ -1,0 +1,313 @@
+{
+ "about": "Strict JSON acceptance and canonical encoding (CODEC-01). The input of a case is \"text\" (its UTF-8 encoding) or \"hex\" (the exact raw bytes, lowercase hex). \"hex\" states raw bytes exactly and is required where they are not valid UTF-8. \"canonical\" is specified by hand; \"sha256\" is a regression pin of SHA-256(canonical).",
+ "limits": {
+  "max_frame_bytes": 65536,
+  "max_depth": 64
+ },
+ "cases": [
+  {
+   "name": "empty object",
+   "text": "{}",
+   "valid": true,
+   "canonical": "{}",
+   "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "name": "key order",
+   "text": "{\"b\":1,\"a\":2}",
+   "valid": true,
+   "canonical": "{\"a\":2,\"b\":1}",
+   "sha256": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772"
+  },
+  {
+   "name": "whitespace",
+   "text": " { \"a\" : [ 1 , 2 ] } ",
+   "valid": true,
+   "canonical": "{\"a\":[1,2]}",
+   "sha256": "01530d164d479cf08e26d3b1ad9bdba927120d97e2d057a6d792db778780d720"
+  },
+  {
+   "name": "non-ascii escapes",
+   "text": "{\"a\":\"\u00e9\"}",
+   "valid": true,
+   "canonical": "{\"a\":\"\\u00e9\"}",
+   "sha256": "57e512a1ff02f75e939e93d2196b8d29ad3721b70ce25a601402d26410f453a2"
+  },
+  {
+   "name": "astral plane",
+   "text": "{\"a\":\"\ud83d\ude00\"}",
+   "valid": true,
+   "canonical": "{\"a\":\"\\ud83d\\ude00\"}",
+   "sha256": "ecbc324dfaa36b6066d86b6b488ad41d8c5d213d5e379041ffd714429891186f"
+  },
+  {
+   "name": "escaped input equals literal",
+   "text": "{\"a\":\"\\u00e9\"}",
+   "valid": true,
+   "canonical": "{\"a\":\"\\u00e9\"}",
+   "sha256": "57e512a1ff02f75e939e93d2196b8d29ad3721b70ce25a601402d26410f453a2"
+  },
+  {
+   "name": "control characters",
+   "text": "{\"a\":\"\\n\\t\\u0001\"}",
+   "valid": true,
+   "canonical": "{\"a\":\"\\n\\t\\u0001\"}",
+   "sha256": "32f8383425bc616b310a1b65b3812033eae4238767161712e60cad870a15628b"
+  },
+  {
+   "name": "solidus is not escaped",
+   "text": "{\"a\":\"\\/x\"}",
+   "valid": true,
+   "canonical": "{\"a\":\"/x\"}",
+   "sha256": "9876fb12a325e8df6d2df4ae07d39a9ea2b026a154d0c1e007ba88a11d7af864"
+  },
+  {
+   "name": "code point key order",
+   "text": "{\"\u00e9\":1,\"z\":2,\"Z\":3}",
+   "valid": true,
+   "canonical": "{\"Z\":3,\"z\":2,\"\\u00e9\":1}",
+   "sha256": "8452fac8e2a450b65adf7f103388deb0801871b8f643992593ec2ad23d58ebe0"
+  },
+  {
+   "name": "nested",
+   "text": "{\"a\":{\"c\":null,\"b\":true},\"d\":[{\"f\":1,\"e\":2}]}",
+   "valid": true,
+   "canonical": "{\"a\":{\"b\":true,\"c\":null},\"d\":[{\"e\":2,\"f\":1}]}",
+   "sha256": "a1aad4c54d30a75bd03f13427700e046c9cf946bdbc0b5b92266a74ebbd32c32"
+  },
+  {
+   "name": "integers",
+   "text": "[0,-1,2147483647]",
+   "valid": true,
+   "canonical": "[0,-1,2147483647]",
+   "sha256": "0772c72193d20f8eab8566aa118d3a44bd5eee32d54ecc98b869761c29cfeb32"
+  },
+  {
+   "name": "duplicate key",
+   "text": "{\"a\":1,\"a\":2}",
+   "valid": false
+  },
+  {
+   "name": "nested duplicate key",
+   "text": "{\"a\":{\"b\":1,\"b\":1}}",
+   "valid": false
+  },
+  {
+   "name": "NaN",
+   "text": "{\"a\":NaN}",
+   "valid": false
+  },
+  {
+   "name": "Infinity",
+   "text": "{\"a\":Infinity}",
+   "valid": false
+  },
+  {
+   "name": "float overflow",
+   "text": "{\"a\":1e999}",
+   "valid": false
+  },
+  {
+   "name": "trailing data",
+   "text": "{} {}",
+   "valid": false
+  },
+  {
+   "name": "trailing comma",
+   "text": "{\"a\":1,}",
+   "valid": false
+  },
+  {
+   "name": "single quotes",
+   "text": "{'a':1}",
+   "valid": false
+  },
+  {
+   "name": "unterminated",
+   "text": "{\"a\":",
+   "valid": false
+  },
+  {
+   "name": "depth 65",
+   "text": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+   "valid": false
+  },
+  {
+   "name": "empty",
+   "text": "",
+   "valid": false
+  },
+  {
+   "name": "negative zero is the integer zero",
+   "text": "[-0]",
+   "valid": true,
+   "canonical": "[0]",
+   "sha256": "d0bca111f8628137adc4c16f123496dcdd1d590d06cb5d9acd68b39fe656fb97"
+  },
+  {
+   "name": "negative zero in an object",
+   "text": "{\"a\":-0,\"b\":[-0,0]}",
+   "valid": true,
+   "canonical": "{\"a\":0,\"b\":[0,0]}",
+   "sha256": "ae86694fce44e84887aa02c49cbd13bc7415f39d6c89672cf1f96e692565d4cf"
+  },
+  {
+   "name": "signed 64-bit edges",
+   "text": "[-9223372036854775808,9223372036854775807]",
+   "valid": true,
+   "canonical": "[-9223372036854775808,9223372036854775807]",
+   "sha256": "f207540f474c6784d05310911d84d0f9aab8237f67c5c99cbb390ee571a17344"
+  },
+  {
+   "name": "escaped surrogate pair",
+   "text": "[\"\\ud83d\\ude00\"]",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\"]",
+   "sha256": "167ad31c823aaea3b1ddcd805ed4adb05b30ac67ae9bf8183afc8df4f029fcd0"
+  },
+  {
+   "name": "uppercase escapes are lowercased",
+   "text": "[\"\\uD83D\\uDE00\",\"\\u00E9\"]",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\",\"\\u00e9\"]",
+   "sha256": "33ea3b433d75f6ce2f6933eafd859fba58d99cffefc0c3a2c55f9dbd5355a7bc"
+  },
+  {
+   "name": "code point key order above the BMP",
+   "text": "{\"\\ud83d\\ude00\":2,\"\\uffff\":1}",
+   "valid": true,
+   "canonical": "{\"\\uffff\":1,\"\\ud83d\\ude00\":2}",
+   "sha256": "7399aff294a6b56f657db5fc869921bc94cd5f74936711c78e04981c8fb1b3e4"
+  },
+  {
+   "name": "DEL is escaped",
+   "text": "[\"\\u007f\"]",
+   "valid": true,
+   "canonical": "[\"\\u007f\"]",
+   "sha256": "b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed"
+  },
+  {
+   "name": "lone high surrogate",
+   "text": "[\"\\ud800\"]",
+   "valid": false
+  },
+  {
+   "name": "lone low surrogate",
+   "text": "[\"\\udc00\"]",
+   "valid": false
+  },
+  {
+   "name": "uppercase lone surrogate",
+   "text": "[\"\\uDBFF\"]",
+   "valid": false
+  },
+  {
+   "name": "reversed surrogate pair",
+   "text": "[\"\\ude00\\ud83d\"]",
+   "valid": false
+  },
+  {
+   "name": "high surrogate then a non-surrogate escape",
+   "text": "[\"\\ud83d\\u0041\"]",
+   "valid": false
+  },
+  {
+   "name": "high surrogate at the end of a string",
+   "text": "[\"a\\ud83d\"]",
+   "valid": false
+  },
+  {
+   "name": "lone surrogate in a key",
+   "text": "{\"\\ud800\":1}",
+   "valid": false
+  },
+  {
+   "name": "nested lone surrogate",
+   "text": "{\"a\":[{\"b\":\"\\udfff\"}]}",
+   "valid": false
+  },
+  {
+   "name": "raw two-byte UTF-8",
+   "hex": "5b22c3a9225d",
+   "valid": true,
+   "canonical": "[\"\\u00e9\"]",
+   "sha256": "d8f81e7a2fa1455720e881bd1d164699bdc9bd7dd91641754a2ead7107c1ea0a"
+  },
+  {
+   "name": "raw four-byte UTF-8",
+   "hex": "5b22f09f9880225d",
+   "valid": true,
+   "canonical": "[\"\\ud83d\\ude00\"]",
+   "sha256": "167ad31c823aaea3b1ddcd805ed4adb05b30ac67ae9bf8183afc8df4f029fcd0"
+  },
+  {
+   "name": "raw DEL",
+   "hex": "5b227f225d",
+   "valid": true,
+   "canonical": "[\"\\u007f\"]",
+   "sha256": "b10d448be414f5c5ccc0aa89a007547d37a76f46e1209f1147a63f7a6cb090ed"
+  },
+  {
+   "name": "raw JSON whitespace",
+   "hex": "095b312c0d0a325d0a",
+   "valid": true,
+   "canonical": "[1,2]",
+   "sha256": "49a64717d5d4cb19952e6eac2946415cf6879adacf9908e7d872332d32c6e684"
+  },
+  {
+   "name": "invalid UTF-8 byte",
+   "hex": "5b22ff225d",
+   "valid": false
+  },
+  {
+   "name": "Latin-1 text",
+   "hex": "5b22e9225d",
+   "valid": false
+  },
+  {
+   "name": "UTF-8 encoded surrogate",
+   "hex": "5b22eda080225d",
+   "valid": false
+  },
+  {
+   "name": "overlong UTF-8",
+   "hex": "5b22c0af225d",
+   "valid": false
+  },
+  {
+   "name": "truncated UTF-8 sequence",
+   "hex": "5b22c3225d",
+   "valid": false
+  },
+  {
+   "name": "code point above U+10FFFF",
+   "hex": "5b22f4908080225d",
+   "valid": false
+  },
+  {
+   "name": "UTF-8 byte order mark",
+   "hex": "efbbbf7b7d",
+   "valid": false
+  },
+  {
+   "name": "raw newline in a string",
+   "hex": "5b220a225d",
+   "valid": false
+  },
+  {
+   "name": "raw NUL in a string",
+   "hex": "5b2200225d",
+   "valid": false
+  },
+  {
+   "name": "NUL after the document",
+   "hex": "5b305d00",
+   "valid": false
+  },
+  {
+   "name": "non-breaking space is not whitespace",
+   "hex": "5bc2a0315d",
+   "valid": false
+  }
+ ]
+}

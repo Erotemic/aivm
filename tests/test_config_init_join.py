@@ -359,6 +359,60 @@ def test_config_init_records_pending_join_for_stopped_vm(
     assert 'Joined managed machine' not in captured.out
 
 
+def test_config_init_pending_without_sudo_gives_admin_prepare_and_owner_verify(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A reachable VM needing host sudo is not an unreachable VM retry case."""
+    from aivm.errors import AdministratorEnrollmentRequiredError
+
+    scope = _managed_machine(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        'aivm.cli.config.init.auto_defaults', _fail_auto_defaults
+    )
+
+    def denied_reconcile(
+        scope: StoreScope,
+        *,
+        vm_name: str,
+        guest_user: str,
+    ) -> NoReturn:
+        reg = load_scope_store(scope)
+        upsert_principal(
+            reg,
+            PrincipalEntry(
+                id='principal-bob',
+                vm_name=vm_name,
+                host_user='bob',
+                host_uid=1201,
+                host_gid=1202,
+                guest_user=guest_user,
+                ssh_public_key=BOB_KEY,
+                state='pending',
+            ),
+        )
+        save_scope_store(scope, reg, reason='record pending Bob for host admin')
+        raise AdministratorEnrollmentRequiredError('Host sudo unavailable')
+
+    monkeypatch.setattr(
+        'aivm.cli.config.init.reconcile_current_principal', denied_reconcile
+    )
+    assert initialize_config_defaults(
+        config_opt=None, yes=True, defaults=False, force=False,
+        standalone_guidance=True,
+    ) == 0
+    captured = capsys.readouterr()
+    assert 'state=pending' in captured.err
+    assert 'host sudo is unavailable' in captured.err.lower()
+    assert (
+        f'aivm vm access prepare principal-bob --vm {VM_NAME} '
+        '--admin_override'
+    ) in captured.out
+    assert f'aivm vm access verify --vm {VM_NAME}' in captured.out
+    assert 'when the VM is reachable' not in captured.out
+
+
 def test_config_init_failed_verification_does_not_select_machine(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -659,7 +713,7 @@ def test_shared_choice_uses_central_host_preparation_and_stops_for_relogin(
         'aivm.machine_store.DEFAULT_MACHINE_STORE_ROOT',
         tmp_path / 'var-lib-aivm-machine',
     )
-    seen: list[object] = []
+    seen: list[tuple[object, ...]] = []
 
     def fake_capability(capability: HostCapability, **kwargs: object) -> None:
         seen.append(('capability', capability, kwargs))

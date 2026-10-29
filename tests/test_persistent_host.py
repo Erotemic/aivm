@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
+import shutil
+import subprocess
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
@@ -41,7 +45,7 @@ from aivm.attachments.persistent import (
 from aivm.cli.vm_lifecycle import VMUpCLI
 from aivm.commands import CommandError, CommandManager
 from aivm.config import AgentVMConfig
-from aivm.config_store import AttachmentEntry, Store, save_store
+from aivm.config_store import AttachmentEntry, Store, load_store, save_store
 from aivm.fs_identity import directory_identity
 from aivm.persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
@@ -494,7 +498,12 @@ def test_persistent_manifest_sync_uses_checksum_rsync(
     assert changed is True
     ssh_cmd = rec.only('ssh')
     assert ssh_cmd[:3] == ['ssh', '-o', 'BatchMode=yes']
-    rsync_cmd = rec.only('rsync')
+    rsync_calls = [cmd for cmd in rec.normalized if cmd[:1] == ['rsync']]
+    assert len(rsync_calls) == 2
+    assert '--dry-run' in rsync_calls[0]
+    rsync_cmd = rsync_calls[1]
+    assert '--dry-run' not in rsync_cmd
+    assert [arg for arg in rsync_calls[0] if arg != '--dry-run'] == rsync_cmd
     assert '--checksum' in rsync_cmd
     assert '--itemize-changes' in rsync_cmd
     # The push writes through the guest's privileged rsync.
@@ -550,8 +559,8 @@ def test_persistent_manifest_sync_retries_transient_ssh_banner_failures(
     )
 
     assert changed is True
-    assert attempts['rsync'] == 2
-    assert rec.count('rsync') == 2
+    assert attempts['rsync'] == 3  # two preview attempts, then the real transfer
+    assert rec.count('rsync') == 3
     ssh_cmd = rec.calls[0]
     assert ssh_cmd[0] == 'ssh'
     assert any('ConnectTimeout=15' in arg for arg in ssh_cmd)
@@ -584,7 +593,122 @@ def test_persistent_manifest_sync_returns_false_when_unchanged(
     )
 
     assert changed is False
-    assert rec.ran('rsync')
+    assert '--dry-run' in rec.only('rsync')
+    assert all('mkdir' not in script for script in _ssh_scripts(rec))
+
+
+@pytest.mark.parametrize('state', ['healthy', 'content', 'mode', 'mtime', 'symlink', 'missing-file', 'missing-directory'])
+def test_manifest_preview_preserves_real_rsync_repairs_and_approval(
+    monkeypatch, tmp_path, state,
+):
+    """Run real rsync locally; replace only the SSH transport boundary."""
+    if shutil.which('rsync') is None:
+        pytest.skip('rsync is required for filesystem comparison coverage')
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-manifest-preview'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/test-key'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
+    local = _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    guest = tmp_path / 'guest' / 'attachments.json'
+    monkeypatch.setattr(persistent_manifest, 'PERSISTENT_ATTACHMENT_GUEST_STATE_PATH', str(guest))
+    if state != 'missing-directory':
+        guest.parent.mkdir()
+    if state not in ('missing-directory', 'missing-file'):
+        shutil.copy2(local, guest)
+        guest.chmod(0o644)
+    if state == 'content':
+        info = guest.stat()
+        guest.write_bytes(b'[' + local.read_bytes()[1:])
+        os.utime(guest, ns=(info.st_atime_ns, info.st_mtime_ns))
+    elif state == 'mode':
+        guest.chmod(0o600)
+    elif state == 'mtime':
+        os.utime(guest, ns=(guest.stat().st_atime_ns, local.stat().st_mtime_ns - 10_000_000_000))
+    elif state == 'symlink':
+        other = tmp_path / 'unrelated'
+        guest.rename(other)
+        guest.symlink_to(other)
+    before = guest.stat() if guest.exists() else None
+    prompts = []
+    monkeypatch.setattr('builtins.input', lambda message: prompts.append(message) or 'y')
+    real_run = subprocess.run
+
+    def ssh(cmd):
+        args = shlex.split(cmd[-1])
+        assert args[:2] == ['sudo', '-n']
+        if args[2:4] == ['test', '-d']:
+            return FakeProc(0 if Path(args[-1]).is_dir() else 1)
+        assert args[2:4] == ['mkdir', '-p']
+        Path(args[-1]).mkdir(parents=True, exist_ok=True)
+        return FakeProc()
+
+    def rsync(cmd):
+        args = list(cmd)
+        server = args[args.index('--rsync-path') + 1]
+        if 'mkdir -p' in server:
+            ssh(['ssh', server.split(' && ', 1)[0]])
+        for option in ('-e', '--rsync-path'):
+            index = args.index(option)
+            del args[index:index + 2]
+        args[-1] = str(guest)
+        return real_run(args, capture_output=True, text=True)
+
+    recorder = command_recorder(monkeypatch, {'ssh': ssh, 'rsync': rsync}, stub_sudo_scope=False)
+    changed = _sync_persistent_attachment_manifest_to_guest(cfg, '10.0.0.5', dry_run=False)
+    assert changed == (state != 'healthy')
+    assert len(prompts) == int(state != 'healthy')
+    assert guest.read_bytes() == local.read_bytes()
+    assert not guest.is_symlink()
+    assert guest.stat().st_mode & 0o777 == 0o644
+    assert int(guest.stat().st_mtime) == int(local.stat().st_mtime)
+    if state == 'healthy':
+        assert before is not None
+        after = guest.stat()
+        assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+            before.st_ino, before.st_mtime_ns, before.st_ctime_ns,
+        )
+        assert '--dry-run' in recorder.only('rsync')
+    if state == 'symlink':
+        assert other.read_bytes() == local.read_bytes()
+
+
+@pytest.mark.parametrize('phase', ['preview-error', 'directory-error', 'dry-run'])
+@pytest.mark.parametrize('check', [True, False])
+def test_manifest_inspection_errors_and_cli_dry_run_do_not_write(
+    monkeypatch, tmp_path, phase, check,
+):
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-manifest-inspection-failure'
+    cfg.vm.user = 'agent'
+    cfg.paths.ssh_identity_file = '/tmp/test-key'
+    cfg_path = tmp_path / 'config.toml'
+    save_store(Store(), cfg_path)
+    _redirect_appdir(monkeypatch, tmp_path)
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
+    _sync_persistent_attachment_manifest_on_host(cfg, cfg_path, dry_run=False)
+    monkeypatch.setattr('builtins.input', lambda prompt: pytest.fail('inspection requested write approval'))
+    recorder = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(2 if phase == 'directory-error' else 0, stderr='inspection failed'),
+         'rsync': FakeProc(23, stderr='receiver permission denied')},
+        stub_sudo_scope=False,
+    )
+    if phase == 'dry-run':
+        assert not _sync_persistent_attachment_manifest_to_guest(
+            cfg, '10.0.0.5', dry_run=True, check=check,
+        )
+        assert recorder.normalized == []
+    else:
+        with pytest.raises(CommandError):
+            _sync_persistent_attachment_manifest_to_guest(
+                cfg, '10.0.0.5', dry_run=False, check=check,
+            )
+        assert all('mkdir' not in script for script in _ssh_scripts(recorder))
+        assert all('--dry-run' in cmd for cmd in recorder.normalized if cmd[:1] == ['rsync'])
 
 
 @pytest.mark.parametrize(
@@ -609,7 +733,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     cfg.vm.user = 'agent'
     activate_manager(monkeypatch)
 
-    rec = command_recorder(monkeypatch, {'ssh': _hash_route(status)})
+    rec = command_recorder(monkeypatch, {'ssh': _hash_route(status), 'rsync': FakeProc()})
 
     changed = _install_guest_text_if_changed(
         cfg,
@@ -625,7 +749,7 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     scripts = _ssh_scripts(rec)
 
     def _kind(script: str) -> str:
-        if 'install -m' in script:
+        if 'install -d' in script:
             return 'install'
         if 'sha256sum' in script:
             return 'check'
@@ -634,8 +758,10 @@ def test_persistent_guest_text_sync_checks_hash_before_installing(
     if expect_install:
         assert [_kind(s) for s in scripts] == ['check', 'install', 'check']
         install_script = scripts[1]
-        assert 'install -m 0755' in install_script
-        assert "printf '%s'" in install_script
+        assert 'install -d -m 0755' in install_script
+        assert rec.ran('rsync')
+        assert '--chmod=F0755' in rec.only('rsync')
+        assert 'helper body' not in install_script
     else:
         assert [_kind(s) for s in scripts] == ['check']
     # The check remains an exact, copy/pasteable command rather than a
@@ -735,8 +861,8 @@ def test_persistent_reconcile_replays_when_guest_manifest_changes(
 
     scripts = _ssh_scripts(rec)
     # Both guest text files were installed (helper 0755, unit 0644).
-    assert any('install -m 0755' in s for s in scripts)
-    assert any('install -m 0644' in s for s in scripts)
+    assert any('--chmod=F0755' in cmd for cmd in rec.normalized if cmd[:1] == ['rsync'])
+    assert any('--chmod=F0644' in cmd for cmd in rec.normalized if cmd[:1] == ['rsync'])
     # The changed unit reloads systemd and re-enables the replay service.
     assert any(
         'systemctl daemon-reload' in s
@@ -839,11 +965,11 @@ def test_persistent_reconcile_can_scope_foreground_guest_replay(
     scripts = _ssh_scripts(rec)
     assert scripts[-1] == (
         f'{REPLAY_INVOCATION} --only-guest-dst /workspace/proj '
-        '--preserve-live-mounts'
+        '--preserve-live-mounts --check'
     )
 
 
-@pytest.mark.parametrize('phase', ['sync', 'install', 'replay'])
+@pytest.mark.parametrize('phase', ['sync', 'install', 'transfer', 'replay'])
 def test_persistent_reconcile_propagates_primary_failures(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, phase: str
 ) -> None:
@@ -870,10 +996,15 @@ def test_persistent_reconcile_propagates_primary_failures(
         routes = {
             'ssh': _hash_route(
                 'MISSING',
-                fail_when=lambda s: 'install -m' in s,
+                fail_when=lambda s: 'install -d' in s,
                 fail_proc=boom,
             ),
             'rsync': FakeProc(stdout=''),
+        }
+    elif phase == 'transfer':
+        routes = {
+            'ssh': _hash_route('MISSING'),
+            'rsync': lambda cmd: boom if cmd[-1].endswith(PERSISTENT_ATTACHMENT_REPLAY_BIN) else FakeProc(),
         }
     else:
         routes = {
@@ -901,6 +1032,7 @@ def test_persistent_reconcile_propagates_primary_failures(
     [
         pytest.param('sync', id='logs_and_continues'),
         pytest.param('install', id='on_late_failures-install'),
+        pytest.param('transfer', id='on_late_failures-transfer'),
         pytest.param('replay', id='on_late_failures-replay'),
     ],
 )
@@ -939,10 +1071,15 @@ def test_persistent_reconcile_continue_on_error_logs_and_continues(
         routes = {
             'ssh': _hash_route(
                 'MISSING',
-                fail_when=lambda s: 'install -m' in s,
+                fail_when=lambda s: 'install -d' in s,
                 fail_proc=boom,
             ),
             'rsync': FakeProc(stdout=''),
+        }
+    elif phase == 'transfer':
+        routes = {
+            'ssh': _hash_route('MISSING'),
+            'rsync': lambda cmd: boom if cmd[-1].endswith(PERSISTENT_ATTACHMENT_REPLAY_BIN) else FakeProc(),
         }
     else:
         routes = {
@@ -1268,6 +1405,135 @@ def test_persistent_host_replay_dry_run_executes_nothing(
     _reconcile_persistent_host_binds(cfg, cfg_path, dry_run=True)
 
     assert [cmd for cmd in rec.normalized if cmd[0] != 'virsh'] == []
+
+
+def test_running_foreground_export_ignores_unrelated_unapproved_registration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A stale attachment must not force sudo to enter an existing workspace.
+
+    The approved root manifest contains the good folder, but the store also
+    has a later *unapproved* record with invalid pins. A scoped foreground
+    read verifies only the requested export, without a root manifest update.
+    """
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-foreground-sudo-regression'
+    cfg_path = tmp_path / 'config.toml'
+    good = _persistent_entry(
+        tmp_path / 'good', vm_name=cfg.vm.name,
+        guest_dst='/workspace/good', tag='good-token',
+    )
+    bad = AttachmentEntry(
+        host_path=str(tmp_path / 'deleted'),
+        vm_name=cfg.vm.name,
+        mode='persistent',
+        guest_dst='/workspace/deleted',
+        tag='bad-token',
+        # A deleted legacy/failed registration can even lack valid pins.
+        source_dev=0,
+        source_ino=0,
+    )
+    save_store(Store(attachments=[good, bad]), cfg_path)
+    good_record = persistent_manifest._persistent_attachment_records_for_vm(
+        cfg, cfg_path, only_guest_dst='/workspace/good'
+    )[0]
+    approved = tmp_path / 'root-approved.json'
+    approved.write_text(json.dumps({
+        'schema_version': 2,
+        'vm_name': cfg.vm.name,
+        'records': [asdict(good_record)],
+    }), encoding='utf8')
+
+    monkeypatch.setattr(
+        persistent_manifest,
+        '_persistent_host_replay_manifest_path', lambda cfg: approved,
+    )
+    monkeypatch.setattr(
+        persistent_manifest,
+        '_approved_host_replay_manifest_is_trusted', lambda path: True,
+    )
+    monkeypatch.setattr(
+        host_bind, '_approved_binds_already_applied',
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        persistent_manifest, '_sync_persistent_host_replay_manifest',
+        lambda *args, **kwargs: pytest.fail(
+            'foreground must not update the VM-global approved manifest'
+        ),
+    )
+    monkeypatch.setattr(
+        host_bind, '_ensure_persistent_host_replay_helper',
+        lambda *args, **kwargs: pytest.fail(
+            'foreground must not ask for sudo to install the host helper'
+        ),
+    )
+    seen_mappings: list[bool] = []
+    monkeypatch.setattr(
+        host_bind, '_ensure_persistent_root_vm_mapping',
+        lambda *args, **kwargs: seen_mappings.append(True),
+    )
+
+    result = host_bind._reconcile_persistent_host_binds(
+        cfg, cfg_path, dry_run=False, vm_running=True,
+        only_guest_dst='/workspace/good', preserve_live_binds=True,
+    )
+    assert result == ()
+    assert seen_mappings == [True]
+    assert len(load_store(cfg_path).attachments) == 2
+
+
+def test_scoped_foreground_export_requires_exact_approved_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A changed source/access is not eligible for the read-only fast path."""
+    from aivm.attachments.persistent import host_bind
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-scoped-drift'
+    cfg_path = tmp_path / 'config.toml'
+    att = _persistent_entry(
+        tmp_path / 'good', vm_name=cfg.vm.name,
+        guest_dst='/workspace/good', tag='good-token',
+    )
+    approved = tmp_path / 'approved.json'
+    save_store(Store(attachments=[att]), cfg_path)
+    rec = asdict(persistent_manifest._persistent_attachment_records_for_vm(
+        cfg, cfg_path
+    )[0])
+    rec['access'] = 'ro'  # approved record differs from desired store
+    approved.write_text(json.dumps({
+        'schema_version': 2, 'vm_name': cfg.vm.name, 'records': [rec],
+    }), encoding='utf8')
+    monkeypatch.setattr(
+        persistent_manifest, '_persistent_host_replay_manifest_path',
+        lambda cfg: approved,
+    )
+    monkeypatch.setattr(
+        persistent_manifest, '_approved_host_replay_manifest_is_trusted',
+        lambda path: True,
+    )
+    monkeypatch.setattr(
+        host_bind, '_approved_binds_already_applied',
+        lambda *args, **kwargs: True,
+    )
+    called: list[str] = []
+
+    def sync(*args: Any, **kwargs: Any) -> Path:
+        called.append('manifest-update')
+        raise RuntimeError('needs privileged convergence')
+
+    monkeypatch.setattr(
+        persistent_manifest, '_sync_persistent_host_replay_manifest', sync
+    )
+    with pytest.raises(RuntimeError, match='needs privileged convergence'):
+        host_bind._run_persistent_host_replay(
+            cfg, cfg_path, dry_run=False, only_guest_dst='/workspace/good',
+            preserve_live_binds=True,
+        )
+    assert called == ['manifest-update']
 
 
 def test_persistent_host_replay_can_scope_foreground_reconcile(

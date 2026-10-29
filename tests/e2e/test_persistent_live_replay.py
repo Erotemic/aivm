@@ -54,6 +54,7 @@ source = sys.stdin.read()
 namespace = {"__name__": "aivm_e2e_guest_replay"}
 exec(compile(source, "<aivm-persistent-attachment-replay>", "exec"), namespace)
 namespace["PERSISTENT_ROOT_MOUNT"] = sys.argv[1]
+namespace["PROVENANCE_ROOT"] = str(__import__('pathlib').Path(sys.argv[1]).parent / 'provenance')
 namespace["ensure_record"](
     json.loads(sys.argv[2]),
     preserve_live_mounts=(sys.argv[3] == "1"),
@@ -98,6 +99,20 @@ def _mount_bind_or_skip(source: Path, target: Path) -> None:
     raise AssertionError(f'Could not create E2E bind mount: {detail}')
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_test_provenance(tmp_path):
+    yield
+    path = tmp_path / 'provenance'
+    if path.exists():
+        # Only this fixture's private references are eligible for cleanup.
+        script = (
+            'import pathlib, subprocess, sys; p=pathlib.Path(sys.argv[1]); '
+            '[(subprocess.run(["umount", str(q)], check=True), q.rmdir()) '
+            'for q in p.iterdir()]; p.rmdir()'
+        )
+        _sudo(sys.executable, '-c', script, str(path))
+
+
 def test_foreground_replay_keeps_busy_bind_of_same_directory(
     tmp_path: Path,
 ) -> None:
@@ -115,6 +130,9 @@ def test_foreground_replay_keeps_busy_bind_of_same_directory(
     try:
         ns = _exec_guest_replay_helper(persistent_replay_python())
         ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+        # Kernel-reference creation/recovery is exercised by the nested VM
+        # test. This non-root test inspects an already-converged live mount.
+        ns['remember_provenance'] = lambda record: None
         unmount_calls: list[str] = []
         real_unmount = ns['unmount_guest_dst']
 
@@ -161,6 +179,7 @@ def test_foreground_replay_refuses_to_replace_different_busy_bind(
     try:
         ns = _exec_guest_replay_helper(persistent_replay_python())
         ns['PERSISTENT_ROOT_MOUNT'] = str(persistent_root)
+        ns['has_pinned_provenance'] = lambda record: False
         unmount_calls: list[str] = []
         real_unmount = ns['unmount_guest_dst']
 

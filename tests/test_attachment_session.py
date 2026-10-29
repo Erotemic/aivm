@@ -8,6 +8,8 @@ orchestration tests live in ``test_attachment_session_restore.py``.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,13 +22,17 @@ from aivm.commands import SudoUnavailableError
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     AttachmentEntry,
+    PrincipalEntry,
     Store,
     load_store,
     save_store,
+    save_store_split,
+    split_fragment_paths,
     upsert_attachment,
     upsert_network,
     upsert_vm_with_network,
 )
+from aivm.config_store.models import STORE_SCHEMA_VERSION
 from aivm.errors import AIVMError
 from aivm.status import ProbeOutcome
 from aivm.util import CmdResult
@@ -354,6 +360,9 @@ def test_attach_without_sudo_names_both_ways_out(
     assert 'could not obtain sudo credentials' in message
     assert '--mode direct-virtiofs' in message
     assert '--admin_override' in message
+    # Sudo was denied before the new root manifest was approved, so the
+    # unreconciled registration must not remain visible to later sessions.
+    assert load_store(cfg_path).attachments == []
 
 
 def test_vm_attach_persistent_prepares_dedicated_export_when_vm_stopped(
@@ -522,7 +531,10 @@ def test_vm_attach_git_mode_sets_up_guest_repo_when_running(
     assert att.tag == ''
 
 
-def test_record_attachment_is_idempotent_when_unchanged(tmp_path: Path) -> None:
+@pytest.mark.parametrize('mode', ['git', 'persistent'])
+def test_record_attachment_is_idempotent_when_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str,
+) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-git'
     cfg_path = tmp_path / 'config.toml'
@@ -530,33 +542,97 @@ def test_record_attachment_is_idempotent_when_unchanged(tmp_path: Path) -> None:
     host_src.mkdir()
     guest_dst = '/workspace/repo'
 
-    reg = Store()
+    principal = resolved_test_context(cfg).principal
+    reg = Store(store_kind='machine', schema_version=STORE_SCHEMA_VERSION,
+                principals=[PrincipalEntry(vm_name=cfg.vm.name, **asdict(principal))])
     upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
     upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
-    upsert_attachment(
-        reg,
-        host_path=host_src,
-        vm_name=cfg.vm.name,
-        mode='git',
-        guest_dst=guest_dst,
-        tag='',
-    )
-    save_store(reg, cfg_path)
+    save_store_split(reg, cfg_path)
 
-    out = _record_attachment(
+    record = partial(
+        _record_attachment,
         cfg,
         cfg_path,
         host_src=host_src,
-        mode='git',
+        mode=mode,
         access=AttachmentAccess.RW,
         guest_dst=guest_dst,
-        tag='',
+        tag='token' if mode == 'persistent' else '',
+        owner_principal_id=principal.id,
     )
+    assert record() == cfg_path  # A new record must still be saved.
+    paths = split_fragment_paths(load_store(cfg_path), cfg_path).values()
+    before = {
+        path: (path.read_bytes(), path.stat()) for path in paths
+    }
+
+    def unexpected_write(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError('Unchanged attachment must not stage or write config')
+
+    monkeypatch.setattr('aivm.config_store.io._atomic_write_text', unexpected_write)
+    out = record()
     assert out == cfg_path
+    for path, (content, info) in before.items():
+        assert path.read_bytes() == content
+        after = path.stat()
+        assert (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+            info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns,
+        )
     records = load_store(cfg_path).attachments
     assert len(records) == 1
-    assert records[0].mode == 'git'
+    assert records[0].mode == mode
     assert records[0].guest_dst == guest_dst
+    assert records[0].owner_principal_id == principal.id
+
+
+@pytest.mark.parametrize('change', ['access', 'destination', 'alias', 'hardware'])
+def test_record_attachment_still_persists_changes(
+    tmp_path: Path, change: str,
+) -> None:
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'vm-project'
+    principal = resolved_test_context(cfg).principal
+    reg = Store(store_kind='machine', schema_version=STORE_SCHEMA_VERSION,
+                principals=[PrincipalEntry(vm_name=cfg.vm.name, **asdict(principal))])
+    upsert_vm_with_network(reg, cfg, network_name=cfg.network.name)
+    upsert_network(reg, network=cfg.network, firewall=cfg.firewall)
+    path = tmp_path / 'config.toml'
+    save_store_split(reg, path)
+    source = tmp_path / 'project'
+    source.mkdir()
+    record = partial(
+        _record_attachment, cfg, path, mode='persistent',
+        access='rw', guest_dst='/workspace/project', tag='token',
+        owner_principal_id=principal.id,
+    )
+    record(host_src=source)
+    before = load_store(path)
+    source_pin = (before.attachments[0].source_dev, before.attachments[0].source_ino)
+    kwargs: dict[str, Any] = {'host_src': source}
+    if change == 'access':
+        kwargs['access'] = 'ro'
+    elif change == 'destination':
+        kwargs['guest_dst'] = '/workspace/changed'
+    elif change == 'alias':
+        alias = tmp_path / 'alias'
+        alias.symlink_to(source, target_is_directory=True)
+        kwargs['host_src'] = alias
+    else:
+        cfg.vm.cpus += 1
+    record(**kwargs)
+    after = load_store(path)
+    assert len(after.attachments) == 1
+    saved = after.attachments[0]
+    assert saved.owner_principal_id == principal.id
+    assert (saved.source_dev, saved.source_ino) == source_pin
+    if change == 'access':
+        assert saved.access == 'ro'
+    elif change == 'destination':
+        assert saved.guest_dst == '/workspace/changed'
+    elif change == 'alias':
+        assert saved.host_lexical_paths == [str(alias)]
+    else:
+        assert after.vms[0].cfg.vm.cpus == cfg.vm.cpus
 
 
 def test_record_attachment_passes_reason_to_update_store(
@@ -600,6 +676,7 @@ def test_record_attachment_passes_reason_to_update_store(
     assert calls == [
         {
             'path': cfg_path,
+            'skip_if_unchanged': True,
             'reason': (
                 f'Persist attachment record for {host_src} on VM vm-git '
                 '(owner=legacy, mode=git, access=rw, '
@@ -869,9 +946,15 @@ def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
     monkeypatch.setattr(
         'aivm.cli.vm_connect._prepare_foreground_session', lambda args: session
     )
+    agent_forwarding_calls: list[Any] = []
+
+    def prepare_agent_forwarding(prepared_session: Any) -> None:
+        agent_forwarding_calls.append(prepared_session)
+        return None
+
     monkeypatch.setattr(
         'aivm.cli.vm_connect._prepare_foreground_agent_forwarding',
-        lambda session: None,
+        prepare_agent_forwarding,
     )
     monkeypatch.setattr(
         'aivm.cli.vm_connect._upsert_ssh_config_entry',
@@ -898,6 +981,7 @@ def test_vm_code_tunnel_continues_when_ssh_config_update_fails(
     )
 
     assert rc == 0
+    assert agent_forwarding_calls == [session]
     assert len(tunnel_calls) == 1
     assert warnings == [
         'Could not update the managed SSH config entry for '

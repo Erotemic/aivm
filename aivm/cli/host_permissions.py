@@ -33,6 +33,7 @@ from ..errors import AIVMError
 from ..host import prepare_machine_store_authority
 from ..host_identity import current_host_identity
 from ..machine_store import (
+    MACHINE_STORE_ROOT_ENV,
     MachineStoreAccessError,
     MachineStoreLayout,
     current_machine_group_name,
@@ -40,6 +41,7 @@ from ..machine_store import (
     machine_store_layout,
     machine_store_root_ready,
     machine_group_membership_state,
+    user_has_machine_group_membership,
 )
 from ..modes import PrivilegeMode
 from ..privilege import (
@@ -694,9 +696,13 @@ def _resolve_setup_target_user(requested: str) -> str:
     else:
         if explicit and explicit != caller.username:
             raise AIVMError(
-                f'Only root may prepare permissions for another account; '
+                f'`host permissions setup` prepares the invoking account\'s '
+                f'storage and requires root when targeting another account; '
                 f'current kernel identity is {caller.username!r} '
-                f'(uid={caller.uid}).'
+                f'(uid={caller.uid}). To grant another user shared-host access '
+                f'without running aivm as root, use `aivm host permissions '
+                f'grant {explicit} --admin_override` as a sudo-capable '
+                f'administrator.'
             )
         target = caller.username
     try:
@@ -955,8 +961,129 @@ class HostPermissionsSetupCLI(_BaseCommand):
         return 0
 
 
+class HostPermissionsGrantCLI(_BaseCommand):
+    """Administrator: give another host user shared-store/libvirt group access.
+
+    This deliberately does not set up VM disk storage, inspect the target's
+    home directory, or modify their user profile. It keeps AIVM running under
+    the administrator's own identity and escalates only host group/store work.
+    """
+
+    user: str = kwconf.Value(
+        '', position=1,
+        help='Existing host login to authorize for shared VM management.',
+    )
+    admin_override: bool = kwconf.Flag(
+        False,
+        help=(
+            'Confirm a cross-user privilege grant. Membership in the libvirt '
+            'group can confer host-administrator-equivalent authority.'
+        ),
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'], help='Preview host changes without applying.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        user = str(args.user or '').strip()
+        if not user:
+            raise AIVMError('Select a host login: `aivm host permissions grant USER`.')
+        if not args.admin_override:
+            raise AIVMError(
+                'Granting another user shared-host authority requires '
+                '--admin_override. This is a privileged libvirt group grant.'
+            )
+        actor = current_host_identity()
+        if user == actor.username:
+            raise AIVMError(
+                'For your own host account, use `aivm host permissions setup`.'
+            )
+        try:
+            pwd.getpwnam(user)
+        except KeyError as ex:
+            raise AIVMError(f'Host account does not exist: {user!r}') from ex
+
+        if os.environ.get(MACHINE_STORE_ROOT_ENV, '').strip():
+            raise AIVMError(
+                'Host permissions grant requires the canonical shared machine '
+                f'store; unset {MACHINE_STORE_ROOT_ENV} before proceeding. '
+                'Do not grant group access while targeting an alternate store.'
+            )
+
+        group = current_machine_group_name()
+        # Reject an unusable libvirt configuration *before* changing the
+        # machine store or the target's primary shared-store membership.
+        libvirt_needs_grant = (
+            group != LIBVIRT_GROUP
+            and not user_has_machine_group_membership(
+                user, group_name=LIBVIRT_GROUP
+            )
+        )
+        if libvirt_needs_grant and not machine_group_exists(LIBVIRT_GROUP):
+            raise AIVMError(
+                f'Missing {LIBVIRT_GROUP!r} group; install system libvirt '
+                'before granting access.'
+            )
+        print(
+            f'Granting {user} access to the shared AIVM machine store '
+            f'({group}) and system libvirt ({LIBVIRT_GROUP}). '
+            'This grants broad host VM-management authority.'
+        )
+        preparation = prepare_machine_store_authority(
+            user=user, dry_run=bool(args.dry_run)
+        )
+
+        # A site may choose a dedicated AIVM store group. Such a user must
+        # still be able to reach qemu:///system, which uses the libvirt group.
+        if libvirt_needs_grant:
+            mgr = CommandManager.current()
+            membership_request = mgr.request(
+                ['usermod', '-aG', LIBVIRT_GROUP, user],
+                sudo=True,
+                role='modify',
+                check=True,
+                capture=True,
+                summary=f'Add {user} to the {LIBVIRT_GROUP} group',
+            )
+            if args.dry_run:
+                membership_request.preview()
+            else:
+                with mgr.intent(
+                    f'Grant system-libvirt access to {user}',
+                    why='The machine store group differs from libvirt.',
+                    role='modify',
+                ):
+                    with mgr.step(
+                        'Grant libvirt group membership',
+                        why='Permit the target host account to manage the VM.',
+                        approval_scope=f'host-permissions-grant:{user}',
+                    ):
+                        membership_request.submit()
+
+        if args.dry_run:
+            print(f'DRYRUN: would prepare shared-host access for {user}.')
+        else:
+            print(
+                f'Shared-host permissions prepared for {user}. '
+                'They must log out and back in (or use newgrp) before their '
+                'running processes receive the new group memberships.'
+            )
+        if preparation.layout.shared:
+            print(f'Shared machine store: {preparation.layout.root}')
+        print(
+            'After the user has run `aivm config init`, prepare their '
+            'pending guest identity with `aivm vm access prepare USER '
+            '--vm VM --admin_override`, then have them run '
+            '`aivm vm access verify --vm VM`.'
+        )
+        return 0
+
+
 class HostPermissionsModalCLI(kwconf.ModalCLI):
     """Inspect or establish host permissions for routine VM operation."""
 
     check = HostPermissionsCheckCLI
     setup = HostPermissionsSetupCLI
+    grant = HostPermissionsGrantCLI

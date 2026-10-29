@@ -21,7 +21,7 @@ from ..attachments.session import _prepare_attached_session
 from ..commands import CommandManager, shell_join
 from ..config import default_host_label
 from ..config_scopes import ResolvedVMContext
-from ..config_store import load_store
+from ..config_store import find_principal, load_store
 from ..credentials.agent_transport import (
     AgentForwarding,
     prepare_agent_forwarding,
@@ -33,6 +33,7 @@ from ..runtime import (
     ssh_base_args,
     ssh_forward_agent_socket_args,
 )
+from ..scoped_store import load_scope_store, resolve_store_scope
 from ..services import PreparedSession, cfg_path, load_cfg
 from ..tunnel_helper import (
     DEFAULT_TMUX_SESSION,
@@ -40,7 +41,8 @@ from ..tunnel_helper import (
     tunnel_helper_source,
 )
 from ..util import which
-from ..vm import create_ops, ssh_config as mk_ssh_config, wait_for_ip
+from ..vm import create_ops, wait_for_ip
+from ..vm import ssh_config as mk_ssh_config
 from ..vm.provision import provision_guest_requirements
 from ._common import _BaseCommand
 
@@ -425,7 +427,7 @@ def _print_remote_session_recipe(
     print(f'  Tunnel:  {tunnel_name}')
     if ssh_cfg_updated:
         print(f'SSH entry updated on this host in {ssh_cfg}')
-    print(f'Folder registered in {session.reg_path}')
+    print(f'Attachment configuration: {session.reg_path}')
 
 
 def _prepare_foreground_agent_forwarding(
@@ -622,6 +624,9 @@ class VMCodeCLI(_BaseCommand):
             return 0
         ip = session.ip
         assert ip is not None
+        # The VS Code launcher has no secrets-identity mode. Preserve its
+        # existing optional repository SSH-agent forwarding independently of
+        # the certificate-bound SSH launcher below.
         agent_forwarding = _prepare_foreground_agent_forwarding(session)
 
         forward_agent_socket = (
@@ -708,8 +713,36 @@ class VMCodeCLI(_BaseCommand):
         )
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
-        print(f'Folder registered in {session.reg_path}')
+        print(f'Attachment configuration: {session.reg_path}')
         return 0
+
+
+def _access_identity_still_usable(
+    config_opt: str | None, session: PreparedSession
+) -> bool:
+    """Re-read the authoritative record of the identity a session runs as.
+
+    A secret session's authority belongs to an access identity. It is
+    checked once at session start; this is the question asked again while
+    the session is open, so that disabling or removing the identity -- from
+    any terminal, by its owner or an administrator -- ends the session's
+    authority instead of merely preventing the next login.
+    """
+    principal = session.context.principal
+    scope = resolve_store_scope(config_opt)
+    if not scope.is_machine:
+        # A single-user explicit store has no identity records to revoke.
+        return True
+    current = find_principal(
+        load_scope_store(scope),
+        vm_name=session.context.machine.vm.name,
+        principal_id=principal.id,
+    )
+    return (
+        current is not None
+        and current.state == 'active'
+        and current.host_uid == principal.host_uid
+    )
 
 
 class VMSSHCLI(_BaseCommand):
@@ -754,9 +787,92 @@ class VMSSHCLI(_BaseCommand):
         False, short_alias=['n'], help='Print actions without running.'
     )
 
+    secrets_policy: str = kwconf.Value(
+        '',
+        help=(
+            'Opt in to a foreground secret-use session using a host-only JSON '
+            'policy. The service credential stays on the host; the guest gets '
+            'a short-lived capability for the named operations only.'
+        ),
+    )
+    secrets_token_file: str = kwconf.Value(
+        '',
+        help=(
+            'Optional private host token file, used instead of the credential '
+            'source the policy names.'
+        ),
+    )
+    secrets_writes: Literal['deny', 'approve', 'allow'] = kwconf.Value(
+        'deny',
+        help=(
+            'How this session treats policy-listed writes. deny: reads only. '
+            'approve: each exact write waits for `aivm-secrets approve` on '
+            'the host. allow: policy-listed writes proceed.'
+        ),
+    )
+    secrets_identity_root: str = kwconf.Value(
+        '',
+        help=(
+            'Explicitly select the enrolled certificate-bound identity mode '
+            'using this protected host authority directory. Requires '
+            '--secrets_policy; never forwards the unbound broker socket.'
+        ),
+    )
+    secrets_oauth_vault: str = kwconf.Value(
+        '',
+        help=(
+            'Explicitly use a host-encrypted OAuth credential vault for this '
+            'bound VM. Requires --secrets_identity_root, --secrets_policy, '
+            'and --secrets_oauth_provider_config; no token enters the guest.'
+        ),
+    )
+    secrets_oauth_provider_config: str = kwconf.Value(
+        '',
+        help='Protected host OAuth provider profile for --secrets_oauth_vault.',
+    )
+
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        if not args.secrets_policy and (
+            args.secrets_token_file or args.secrets_writes != 'deny'
+            or args.secrets_identity_root or args.secrets_oauth_vault
+            or args.secrets_oauth_provider_config
+        ):
+            log.error('Secret credential/write options require --secrets_policy.')
+            return 1
+        if (bool(args.secrets_oauth_vault) !=
+                bool(args.secrets_oauth_provider_config)):
+            log.error('OAuth vault and provider profile must be specified together.')
+            return 1
+        if args.secrets_oauth_vault and (
+            not args.secrets_identity_root or args.secrets_token_file
+        ):
+            log.error('OAuth credentials require bound identity mode and no token file.')
+            return 1
+        if args.secrets_policy and not args.dry_run:
+            # An explicit experiment must not bootstrap/create/attach a VM and
+            # only then discover that the optional broker is not installed.
+            try:
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import interpreter_flags
+                from importlib.util import find_spec
+
+                if find_spec('cryptography') is None:
+                    raise ModuleNotFoundError(name='cryptography')
+                interpreter_flags()
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {
+                    'aivm_secrets', 'cryptography'
+                }:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
+                    return 1
+                raise
+            except SecretsError as ex:
+                log.error('Secret session host setup failed: {}', ex.for_operator())
+                return 1
         log.trace(
             'VMSSHCLI.main host_src={} vm={} guest_dst={} dry_run={} yes={}',
             args.host_src,
@@ -780,7 +896,12 @@ class VMSSHCLI(_BaseCommand):
 
         ip = session.ip
         assert ip is not None
-        agent_forwarding = _prepare_foreground_agent_forwarding(session)
+        # In certificate-bound mode do not implicitly add *another* secret
+        # transport, even if this VM has an independent forwarded Git agent.
+        agent_forwarding = (
+            None if args.secrets_identity_root else
+            _prepare_foreground_agent_forwarding(session)
+        )
         ssh_cfg, ssh_cfg_updated = _best_effort_upsert_ssh_config_entry(
             cfg,
             yes=args.yes,
@@ -808,13 +929,67 @@ class VMSSHCLI(_BaseCommand):
                 remote_cmd,
             ]
         )
-        ssh_result = CommandManager.current().run(
-            ssh_cmd,
-            sudo=False,
-            user_driven=True,
-            check=False,
-            capture=False,
-        )
+        if args.secrets_policy:
+            try:
+                from aivm_secrets.errors import SecretsError
+                from ..secrets_transport import run_secrets_ssh
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
+                    return 1
+                raise
+            try:
+                policy = Path(args.secrets_policy)
+                token_file = (
+                    Path(args.secrets_token_file)
+                    if args.secrets_token_file else None
+                )
+                still_authorized = partial(
+                    _access_identity_still_usable, args.config, session
+                )
+                if args.secrets_identity_root:
+                    from ..secrets_identity_transport import run_bound_secrets_ssh
+
+                    ssh_result = run_bound_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        identity_root=Path(args.secrets_identity_root),
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                        oauth_vault=(Path(args.secrets_oauth_vault)
+                                     if args.secrets_oauth_vault else None),
+                        oauth_provider_config=(
+                            Path(args.secrets_oauth_provider_config)
+                            if args.secrets_oauth_provider_config else None),
+                    )
+                else:
+                    ssh_result = run_secrets_ssh(
+                        session, ssh_cmd, policy_path=policy,
+                        token_file=token_file, writes=args.secrets_writes,
+                        still_authorized=still_authorized,
+                    )
+            except SecretsError as ex:
+                log.error('Secret session failed: {}', ex.for_operator())
+                return 1
+            except ModuleNotFoundError as ex:
+                if ex.name and ex.name.split('.')[0] in {'aivm_secrets', 'cryptography'}:
+                    log.error('Secret-use sessions require the separately '
+                              'installed experimental aivm-secrets package '
+                              '(e.g. pip install -e ../aivm-secrets).')
+                    return 1
+                raise
+            except OSError:
+                log.error('Secret session host or transport setup failed.')
+                return 1
+        else:
+            ssh_result = CommandManager.current().run(
+                ssh_cmd,
+                sudo=False,
+                user_driven=True,
+                check=False,
+                capture=False,
+            )
         if ssh_result.code == 255:
             # 255 is ssh's own exit status: the connection or transport
             # failed. Anything else is simply what the user's login shell
@@ -834,5 +1009,5 @@ class VMSSHCLI(_BaseCommand):
             )
         if ssh_cfg_updated:
             print(f'SSH entry updated in {ssh_cfg}')
-        print(f'Folder registered in {session.reg_path}')
+        print(f'Attachment configuration: {session.reg_path}')
         return 0

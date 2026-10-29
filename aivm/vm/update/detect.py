@@ -9,6 +9,7 @@ from ...config import AgentVMConfig
 from ...errors import AIVMError
 from ...privilege import sudo_allowed, virsh_needs_sudo
 from ...runtime import pin_locale, virsh_cmd
+from ..tpm import tpm_update_needed
 from ..drift import parse_dominfo_hardware as _parse_dominfo_hardware
 from .fdguard import _fdguard_drift
 from .firewall import _firewall_update_drift
@@ -249,6 +250,8 @@ def _vm_update_drift(
                 'Existing AIVM wrapper paths will be removed from domain XML.'
             )
 
+        tpm_add = tpm_update_needed(cfg)
+
         fd_guard, fd_guard_notes = _fdguard_drift(cfg, vm_running=vm_running)
         notes.extend(fd_guard_notes)
 
@@ -257,6 +260,7 @@ def _vm_update_drift(
 
         return (
             VMUpdateDrift(
+                tpm_add=tpm_add,
                 cpus=cpus,
                 ram_mb=ram_mb,
                 disk_bytes=disk_bytes,

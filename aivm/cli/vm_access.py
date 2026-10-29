@@ -15,7 +15,11 @@ from ..access_control import (
 )
 from ..commands import CommandManager
 from ..config_store import find_principals_for_vm
-from ..enrollment import reconcile_current_principal
+from ..enrollment import (
+    prepare_other_principal,
+    reconcile_current_principal,
+    verify_current_principal,
+)
 from ..errors import AIVMError
 from ..host_identity import current_host_identity
 from ..scoped_store import load_scope_store, resolve_store_scope
@@ -117,6 +121,92 @@ class VMAccessReconcileCLI(_BaseCommand):
         print(
             f'{prefix} {report.principal.host_user} as '
             f'{report.principal.guest_user} on {vm_name} at {report.ip} '
+            f'(state={report.principal.state}).'
+        )
+        return 0
+
+
+class VMAccessPrepareCLI(_BaseCommand):
+    """Administrator: install an existing user's guest key, without its private key."""
+
+    identity: str = kwconf.Value(
+        '', position=1,
+        help='Existing access identity id or host login to prepare.',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    ip: str = kwconf.Value(
+        '', help='Optional guest IP override; normally resolved from libvirt.',
+    )
+    admin_override: bool = kwconf.Flag(
+        False,
+        help=(
+            "Acknowledge that you are preparing another host user's guest "
+            'access. The restricted bootstrap command requires host sudo.'
+        ),
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'],
+        help='Preview preparation without accessing the bootstrap key.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if not args.admin_override:
+            raise AIVMError(
+                'Preparing another user requires --admin_override. '
+                'The host sudo prompt will authenticate the administrator.'
+            )
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config, vm_opt=str(args.vm or ''), host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        report = prepare_other_principal(
+            scope, vm_name=vm_name, selector=str(args.identity or ''),
+            ip_override=str(args.ip or ''), dry_run=args.dry_run,
+        )
+        if args.dry_run:
+            print(
+                f'Would prepare {report.principal.host_user} as '
+                f'{report.principal.guest_user} on {vm_name} at {report.ip}.'
+            )
+        else:
+            print(
+                f'Prepared public SSH key for {report.principal.host_user} '
+                f'({report.principal.guest_user}) on {vm_name}. '
+                f'State={report.principal.state}; the owner must run '
+                f'`aivm vm access verify --vm {vm_name}` without sudo.'
+            )
+        return 0
+
+
+class VMAccessVerifyCLI(_BaseCommand):
+    """Owner: verify personal guest SSH access without host sudo."""
+
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    ip: str = kwconf.Value(
+        '', help='Optional guest IP override; normally resolved from libvirt.',
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'],
+        help='Preview verification without changing guest or machine state.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config, vm_opt=str(args.vm or ''), host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        report = verify_current_principal(
+            scope, vm_name=vm_name, ip_override=str(args.ip or ''),
+            dry_run=args.dry_run,
+        )
+        prefix = 'Would verify' if args.dry_run else 'Verified'
+        print(
+            f'{prefix} personal SSH access for {report.principal.host_user} '
+            f'as {report.principal.guest_user} on {vm_name} at {report.ip} '
             f'(state={report.principal.state}).'
         )
         return 0
@@ -276,6 +366,8 @@ class VMAccessModalCLI(kwconf.ModalCLI):
 
     list = VMAccessListCLI
     reconcile = VMAccessReconcileCLI
+    prepare = VMAccessPrepareCLI
+    verify = VMAccessVerifyCLI
     repair_host_identity = VMAccessRepairHostIdentityCLI
     disable = VMAccessDisableCLI
     remove = VMAccessRemoveCLI
@@ -286,6 +378,8 @@ __all__ = [
     'VMAccessListCLI',
     'VMAccessModalCLI',
     'VMAccessReconcileCLI',
+    'VMAccessPrepareCLI',
+    'VMAccessVerifyCLI',
     'VMAccessRepairHostIdentityCLI',
     'VMAccessRemoveCLI',
 ]

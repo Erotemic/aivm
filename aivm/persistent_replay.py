@@ -26,6 +26,9 @@ PERSISTENT_ATTACHMENT_HOST_REPLAY_SERVICE_PREFIX = (
 PERSISTENT_ROOT_VIRTIOFS_TAG = 'aivm-persistent-root'
 PERSISTENT_ROOT_GUEST_MOUNT_ROOT = '/mnt/aivm-persistent'
 PERSISTENT_REPLAY_DEGRADED_EXIT = 3
+PERSISTENT_REPLAY_REPAIR_EXIT = 10
+GUEST_SESSION_INSPECT_BIN = '/usr/local/libexec/aivm/session-inspect'
+GUEST_SYMLINK_BIN = '/usr/local/libexec/aivm/attachment-symlink'
 PERSISTENT_BIND_TOKEN_PATTERN = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}'
 
 
@@ -36,6 +39,14 @@ def _resource_text(*parts: str) -> str:
 def persistent_replay_python() -> str:
     """Return the standalone persistent replay program installed in guests."""
     return _resource_text('guest', 'persistent_attachment_replay.py')
+
+
+def session_inspect_python() -> str:
+    return _resource_text('guest', 'session_inspect.py')
+
+
+def attachment_symlink_python() -> str:
+    return _resource_text('guest', 'attachment_symlink.py')
 
 
 def persistent_replay_service_unit() -> str:

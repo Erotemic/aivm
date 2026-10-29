@@ -7,6 +7,7 @@ name rather than import.
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,23 @@ from pytest import MonkeyPatch
 
 from aivm.commands import CommandManager
 from tests.helpers import written_cfg
+
+
+# The standalone experimental package is deliberately optional. Keep AIVM's
+# regular tests collectable without installing it; its own implementation
+# tests live in the sibling repository. Run the remaining integration tests
+# here whenever a developer has explicitly installed that package.
+if find_spec('aivm_secrets') is None:
+    _tests = Path(__file__).parent
+    collect_ignore = [
+        str(path)
+        for path in _tests.glob('test_secrets_*.py')
+        if path.name != 'test_secrets_repository_boundary.py'
+    ]
+    collect_ignore.extend([
+        str(_tests / 'test_cli_vm_identity.py'),
+        str(_tests / 'e2e/test_secrets.py'),
+    ])
 
 
 @pytest.fixture(autouse=True)

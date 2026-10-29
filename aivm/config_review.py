@@ -60,6 +60,8 @@ def agent_vm_review_items(
             str(cfg.vm.disk_gb),
             'root disk size',
         ),
+        ConfigReviewItem('vm.tpm', cfg.vm.tpm, cfg.vm.tpm,
+                         'optional virtual TPM (none or emulator)'),
         ConfigReviewItem(
             'vm.allow_password_login',
             cfg.vm.allow_password_login,

@@ -28,61 +28,39 @@ from tests.helpers import (
 
 
 def _ssh_scripts(recorder: CommandRecorder) -> list[str]:
-    """The trailing script argument of every recorded guest ssh command."""
-    return [cmd[-1] for cmd in recorder.normalized if cmd[:1] == ['ssh']]
-
-
-def _assert_every_ln_is_symbolic(script: str) -> None:
-    """Fail if the script links anything with a bare ``ln``.
-
-    ``_ensure_guest_symlink`` emits ``ln -s`` from two different branches
-    -- the empty-directory branch and the nothing-there branch. A check
-    that merely finds *an* ``ln -s`` somewhere in the script cannot see
-    one branch degrade to a hard link, because the other branch's
-    ``ln -s`` still matches. Reject every ``ln`` that is not ``ln -s``.
-    """
-    bare = re.findall(r'\bln\b(?! -s\b)', script)
-    assert not bare, f'script hard-links instead of symlinking: {script}'
+    """Reassemble remote commands as OpenSSH does before guest execution."""
+    return [
+        ' '.join(cmd[-2:]) if cmd[-2].endswith(' &&') else cmd[-1]
+        for cmd in recorder.normalized if cmd[:1] == ['ssh']
+    ]
 
 
 def _recorded_symlinks(recorder: CommandRecorder) -> list[dict[str, str]]:
-    """Extract every guest symlink the recorded ssh scripts would create.
-
-    The real ``_ensure_guest_symlink`` emits one ssh command per symlink
-    whose script contains ``ln -s <target> <link>``. Reading the pair back
-    out of the recorded script is a stronger artifact than trusting a stub
-    to report the arguments it was handed, and it pins the ``target``/
-    ``link`` order so a swapped-argument regression is observable.
-
-    Every ``ln -s`` in one script must agree on the pair, so that a single
-    corrupted branch cannot hide behind a correct sibling branch.
-    """
-    out: list[dict[str, str]] = []
+    """Read the inspectable helper's explicit link/target arguments."""
+    out = []
     for script in _ssh_scripts(recorder):
-        _assert_every_ln_is_symbolic(script)
-        pairs = re.findall(r'ln -s ([^\s;]+) ([^\s;]+)', script)
-        assert pairs, f'no `ln -s` in recorded script: {script}'
-        assert len(set(pairs)) == 1, f'inconsistent `ln -s` pairs: {pairs}'
-        target, link = pairs[0]
-        out.append({'target_path': target, 'symlink_path': link})
+        argv = shlex.split(script)
+        if '/usr/local/libexec/aivm/attachment-symlink' not in argv:
+            continue
+        index = argv.index('/usr/local/libexec/aivm/attachment-symlink')
+        assert argv[index - 2:index] == ['sudo', '-n']
+        out.append({'target_path': argv[argv.index('--target') + 1],
+                    'symlink_path': argv[argv.index('--link') + 1]})
     return out
 
 
-def _ran_guest_symlink(
-    recorder: CommandRecorder, *, symlink_path: str, target_path: str
-) -> bool:
-    """True when a recorded ssh script links ``symlink_path`` -> ``target_path``.
+def _ran_guest_symlink(recorder, *, symlink_path, target_path):
+    return {'target_path': target_path, 'symlink_path': symlink_path} in _recorded_symlinks(recorder)
 
-    Matches the helper's ``ln -s <target> <link>`` argument order, and
-    holds every branch of the script to it (see
-    :func:`_assert_every_ln_is_symbolic`).
-    """
-    needle = f'ln -s {shlex.quote(target_path)} {shlex.quote(symlink_path)}'
-    for script in _ssh_scripts(recorder):
-        if needle in script:
-            _assert_every_ln_is_symbolic(script)
-            return True
-    return False
+
+@pytest.fixture(autouse=True)
+def _symlink_helper_already_installed(monkeypatch):
+    # Deployment has separate transport/E2E coverage. Keep these tests focused
+    # on attachment selection and the helper invocation/exit-code contract.
+    monkeypatch.setattr(
+        'aivm.attachments.guest._install_guest_text_if_changed',
+        lambda *args, **kwargs: False,
+    )
 
 
 @pytest.fixture
@@ -266,15 +244,22 @@ def test_upsert_host_git_remote_raises_on_invalid_repo(tmp_path: Path) -> None:
         )
 
 
-def test_ensure_guest_symlink_creates_new_symlink(
-    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None
+@pytest.mark.parametrize('needs_repair', [False, True])
+def test_ensure_guest_symlink_checks_before_requesting_repair(
+    monkeypatch: pytest.MonkeyPatch, guest_ssh_env: None, needs_repair: bool,
 ) -> None:
     cfg = AgentVMConfig()
     cfg.vm.name = 'vm-symlink'
     cfg.vm.user = 'agent'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
+    activate_manager(monkeypatch, yes_sudo=False, isatty=True)
+    prompts = []
+    monkeypatch.setattr('builtins.input', lambda message: prompts.append(message) or 'y')
 
-    recorder = command_recorder(monkeypatch, {'ssh': FakeProc(0)})
+    def route(cmd):
+        return FakeProc(10 if needs_repair and cmd[-1].endswith(' --check') else 0)
+
+    recorder = command_recorder(monkeypatch, {'ssh': route}, stub_sudo_scope=False)
 
     _ensure_guest_symlink(
         cfg,
@@ -283,15 +268,21 @@ def test_ensure_guest_symlink_creates_new_symlink(
         target_path='/home/joncrall/code/repo',
     )
 
-    cmd = recorder.only('ssh')
+    commands = [cmd for cmd in recorder.normalized if cmd[:1] == ['ssh']]
+    assert len(commands) == (2 if needs_repair else 1)
+    assert commands[0][-1].endswith(' --check')
+    if needs_repair:
+        assert '--check' not in commands[1][-1]
+    assert len(prompts) == int(needs_repair)
+    cmd = commands[0]
     # The real ssh_base_args ran, so the identity and hardening flags are
     # part of the recorded argv (not stubbed away).
     assert cmd[0] == 'ssh'
     assert 'StrictHostKeyChecking=accept-new' in cmd
     assert '/tmp/id_ed25519' in cmd
-    assert cmd[-2] == 'agent@10.0.0.1'
+    assert cmd[-3] == 'agent@10.0.0.1'
     script = cmd[-1]
-    assert 'ln -s' in script
+    assert '/usr/local/libexec/aivm/attachment-symlink' in script
     assert '/home/joncrall/code/repo' in script
 
 
@@ -519,8 +510,8 @@ def test_ensure_guest_symlink_uses_sudo_for_ln(
     scripts = _ssh_scripts(recorder)
     assert scripts, 'expected SSH command'
     script = scripts[0]
-    assert 'sudo -n ln -s' in script
-    assert 'sudo -n mkdir -p' in script
+    assert 'sudo -n /usr/local/libexec/aivm/attachment-symlink' in script
+    assert '--check' in script
     # plain ln -s (without sudo) must NOT appear
     assert '\nln -s' not in script
     assert '; ln -s' not in script
@@ -934,8 +925,9 @@ def test_apply_guest_derived_symlinks_warns_on_stale_alias(
     assert any('no longer resolves to canonical' in w for w in warnings)
 
 
+@pytest.mark.parametrize('deferred', [False, True])
 def test_explicit_no_removes_matching_prior_mirror_symlink(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, deferred: bool,
 ) -> None:
     """An explicit attachment opt-out converges an old AIVM mirror away."""
     from aivm.attachments.guest import _ensure_attachment_available_in_guest
@@ -967,6 +959,7 @@ def test_explicit_no_removes_matching_prior_mirror_symlink(
         {'ssh': FakeProc(0, guest_dst + '\n', '')},
     )
 
+    plan = [] if deferred else None
     _ensure_attachment_available_in_guest(
         cfg,
         host_src,
@@ -976,9 +969,14 @@ def test_explicit_no_removes_matching_prior_mirror_symlink(
         dry_run=False,
         ensure_shared_root_host_side=False,
         mirror_home=False,
+        inspection_plan=plan,
     )
 
     expected_mirror = '/home/agent/code/foobar'
+    if deferred:
+        assert plan == [(expected_mirror, guest_dst, True)]
+        assert not recorder.ran('ssh')
+        return
     scripts = _ssh_scripts(recorder)
     assert any(f'readlink -- {expected_mirror}' in script for script in scripts)
     assert any(f'sudo -n rm -- {expected_mirror}' in script for script in scripts)

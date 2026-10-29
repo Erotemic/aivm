@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
+from typing import Sequence
 
 from loguru import logger as log
 
@@ -25,7 +26,6 @@ from ...commands import (
     CommandManager,
     CommandResult,
     CommandRole,
-    Elided,
 )
 from ...config import AgentVMConfig
 from ...privilege import path_needs_sudo
@@ -153,7 +153,7 @@ def _run_guest_root_script(
     cfg: AgentVMConfig,
     ip: str,
     *,
-    script: str,
+    script: str | Sequence[str],
     summary: str,
     detail: str,
     dry_run: bool,
@@ -205,22 +205,6 @@ def _guest_text_hash_check_script(target: str, expected_sha256: str) -> str:
     )
 
 
-def _guest_text_install_script(target: str, text: str, mode: str) -> str:
-    target_dir = shlex.quote(str(Path(target).parent))
-    target_q = shlex.quote(target)
-    text_q = shlex.quote(text)
-    return '\n'.join(
-        [
-            'set -euo pipefail',
-            'tmp="$(mktemp)"',
-            f'printf \'%s\' {text_q} > "$tmp"',
-            f'sudo -n mkdir -p {target_dir}',
-            f'sudo -n install -m {mode} "$tmp" {target_q}',
-            'rm -f "$tmp"',
-        ]
-    )
-
-
 def _is_transient_ssh_transport_failure(text: str) -> bool:
     lowered = text.lower()
     return any(
@@ -242,7 +226,7 @@ def _run_guest_ssh_script_with_retry(
     cfg: AgentVMConfig,
     ip: str,
     *,
-    script: str,
+    script: str | Sequence[str],
     summary: str,
     detail: str,
     dry_run: bool,
@@ -252,6 +236,12 @@ def _run_guest_ssh_script_with_retry(
     connect_timeout_s: int = 15,
     retries: int = 3,
 ) -> CommandResult | None:
+    """Run a shell program or prequoted remote fragments with SSH retry.
+
+    OpenSSH joins fragments with spaces. Data in a fragment sequence must be
+    shell-quoted by the caller; splitting named helper arguments keeps their
+    ordinary flags/paths visible rather than eliding a long shell program.
+    """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
     cmd = [
@@ -263,7 +253,7 @@ def _run_guest_ssh_script_with_retry(
             batch_mode=True,
         ),
         context.ssh_target(ip),
-        script,
+        *([script] if isinstance(script, str) else script),
     ]
     request = CommandManager.current().request(
         cmd,
@@ -313,11 +303,12 @@ def _run_rsync_with_retry(
     detail: str,
     dry_run: bool,
     check: bool = True,
+    role: CommandRole = 'modify',
     retries: int = 3,
 ) -> CommandResult | None:
     request = CommandManager.current().request(
         cmd,
-        role='modify',
+        role=role,
         check=False,
         capture=True,
         summary=summary,
@@ -488,20 +479,35 @@ def _install_guest_text_if_changed(
         ),
         approval_scope=f'{label.replace(" ", "-")}:{cfg.vm.name}:{target}',
     ):
-        write_script = Elided(
-            _guest_text_install_script(target, text, mode),
-            f'guest file install payload for {target}',
-        )
         _run_guest_root_script(
             cfg,
             ip,
-            script=write_script,
-            summary=f'Install {label}',
+            script=f'sudo -n install -d -m 0755 {shlex.quote(str(Path(target).parent))}',
+            summary=f'Prepare installed location for {label}',
             detail=f'target={target} expected_sha256={expected_sha256}',
             dry_run=dry_run,
             role='modify',
             check=check,
         )
+        # Transfer a named file instead of hiding a generated installer program
+        # in an SSH argument. The installed guest copy remains inspectable.
+        context = guest_transport_from_effective_cfg(cfg)
+        ident = require_ssh_identity(context.ssh_identity_file)
+        ssh_args = ssh_base_args(
+            ident, strict_host_key_checking='accept-new',
+            connect_timeout=15, batch_mode=True,
+        )
+        with tempfile.TemporaryDirectory(prefix='aivm-guest-install-') as directory:
+            local_file = Path(directory) / Path(target).name
+            local_file.write_text(text, encoding='utf-8')
+            _run_rsync_with_retry(
+                ['rsync', '--archive', '--checksum', '--no-owner', '--no-group',
+                 f'--chmod=F{mode}', '--rsync-path', 'sudo -n rsync',
+                 '-e', shlex.join(['ssh', *ssh_args]), str(local_file),
+                 f'{context.ssh_target(ip)}:{shlex.quote(target)}'],
+                summary=f'Install {label}', detail=f'target={target}',
+                dry_run=dry_run, check=True,
+            )
         verify_result = _run_guest_root_script(
             cfg,
             ip,
