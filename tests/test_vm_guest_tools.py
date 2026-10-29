@@ -37,6 +37,7 @@ def test_guest_tool_registry_is_canonical_and_ordered() -> None:
         'rust',
         'code',
         'claude',
+        'antigravity',
         'codex',
         'pi',
     )
@@ -45,13 +46,14 @@ def test_guest_tool_registry_is_canonical_and_ordered() -> None:
         'rust',
         'code',
         'claude',
+        'antigravity',
         'codex',
         'pi',
     ]
     assert GUEST_TOOL_REGISTRY.require('rust').enable_default == 'stable'
     with pytest.raises(
         UnknownGuestToolError,
-        match='Known tools: uv, rust, code, claude, codex, pi',
+        match='Known tools: uv, rust, code, claude, antigravity, codex, pi',
     ):
         GUEST_TOOL_REGISTRY.require('kubernetes')
 
@@ -72,6 +74,7 @@ def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
     assert resolved['rust'].enabled is False
     assert resolved['code'].enabled is False
     assert resolved['claude'].enabled is False
+    assert resolved['antigravity'].enabled is False
     assert resolved['codex'].enabled is False
     assert resolved['pi'].enabled is False
 
@@ -81,10 +84,11 @@ def test_guest_tool_registry_resolves_defaults_booleans_and_overrides() -> None:
         == 'stable'
     )
     GUEST_TOOL_REGISTRY.apply_enable_overrides(
-        cfg.tools, ['code', 'claude', 'codex']
+        cfg.tools, ['code', 'claude', 'antigravity', 'codex']
     )
     assert cfg.tools.code == 'latest'
     assert cfg.tools.claude == 'latest'
+    assert cfg.tools.antigravity == 'latest'
     assert cfg.tools.codex == 'latest'
 
 
@@ -94,6 +98,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
     cfg.tools.rust = 'stable'
     cfg.tools.code = 'latest'
     cfg.tools.claude = 'latest'
+    cfg.tools.antigravity = 'latest'
     cfg.tools.codex = 'latest'
     cfg.tools.pi = 'latest'
     packages = GUEST_TOOL_REGISTRY.required_packages(cfg.tools)
@@ -114,6 +119,7 @@ def test_guest_tool_registry_aggregates_packages_and_commands() -> None:
         ('rust', 'rustc'),
         ('code', 'code'),
         ('claude', 'claude'),
+        ('antigravity', 'agy'),
         ('codex', 'codex'),
         ('pi', 'pi'),
     )
@@ -391,6 +397,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     cfg.tools.rust = 'stable'
     cfg.tools.code = 'latest'  # opt in (default is "off")
     cfg.tools.claude = 'latest'
+    cfg.tools.antigravity = 'latest'
     cfg.tools.codex = '0.150.0'
     cfg.tools.pi = 'latest'
     cfg.tools.bin_dir = '~/.local/aivm/bin'
@@ -400,6 +407,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert 'rust = "stable"' in text
     assert 'code = "latest"' in text
     assert 'claude = "latest"' in text
+    assert 'antigravity = "latest"' in text
     assert 'codex = "0.150.0"' in text
     assert 'pi = "latest"' in text
     assert 'bin_dir = "~/.local/aivm/bin"' in text
@@ -413,6 +421,7 @@ def test_tools_config_roundtrip(tmp_path: Path) -> None:
     assert loaded.tools.rust == 'stable'
     assert loaded.tools.code == 'latest'
     assert loaded.tools.claude == 'latest'
+    assert loaded.tools.antigravity == 'latest'
     assert loaded.tools.codex == '0.150.0'
     assert loaded.tools.pi == 'latest'
     assert loaded.tools.bin_dir == '~/.local/aivm/bin'
@@ -423,6 +432,7 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     text = dump_toml(cfg)
     assert 'code = "off"' in text
     assert 'claude = "off"' in text
+    assert 'antigravity = "off"' in text
     assert 'codex = "off"' in text
     assert 'pi = "off"' in text
     fpath = tmp_path / 'config.toml'
@@ -430,6 +440,7 @@ def test_tools_config_default_dumps_code_off(tmp_path: Path) -> None:
     loaded = load(fpath)
     assert loaded.tools.code == 'off'
     assert loaded.tools.claude == 'off'
+    assert loaded.tools.antigravity == 'off'
     assert loaded.tools.codex == 'off'
     assert loaded.tools.pi == 'off'
 
@@ -483,6 +494,7 @@ def test_probe_provisioned_uses_registry_command_requirements(
     cfg.provision.packages = []
     cfg.provision.install_docker = False
     cfg.tools.code = 'latest'
+    cfg.tools.antigravity = 'latest'
     cfg.tools.codex = 'latest'
     cfg.tools.pi = 'latest'
     cfg.paths.ssh_identity_file = '/tmp/id_ed25519'
@@ -504,6 +516,7 @@ def test_probe_provisioned_uses_registry_command_requirements(
     assert 'command -v uv' in captured['remote']
     assert 'command -v code' in captured['remote']
     assert 'command -v codex' in captured['remote']
+    assert '[ -x "$HOME/.local/bin/agy" ]' in captured['remote']
     assert 'command -v rustup' not in captured['remote']
     # pi contributes its identity-aware fragment, not a bare command -v
     # check (the generic pattern is ``command -v pi >/dev/null 2>&1``;

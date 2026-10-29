@@ -108,8 +108,19 @@ tools:
 .. code-block:: bash
 
    aivm vm provision pi
+   aivm vm provision antigravity
    aivm vm provision rust
    aivm vm provision docker rust
+
+Google Antigravity CLI is an opt-in user-local tool. Run
+``aivm vm provision antigravity`` to install ``agy`` using Google's official
+installer at ``https://antigravity.google/cli/install.sh``. The executable is
+installed under ``~/.local/bin/agy`` in the guest regardless of the shared
+``tools.bin_dir`` setting. AIVM adds that directory to the guest's ``.profile``
+without changing aliases. A later login shell can run ``agy``; interactive
+sign-in happens when the CLI is first started. For full provisioning, configure
+``antigravity = "latest"`` under ``[tools]`` (the default is ``"off"``).
+Version pins are not supported by the official install script.
 
 This distinction is useful when a guest has unrelated package-manager drift.
 For example, provisioning ``pi`` does not perform the full baseline APT pass;

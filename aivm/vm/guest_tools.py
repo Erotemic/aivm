@@ -213,6 +213,17 @@ def _claude_spec(spec: str) -> str:
     )
 
 
+def _antigravity_spec(spec: str) -> str:
+    normalized = spec.strip().lower()
+    if normalized in {'', 'latest'}:
+        return 'latest'
+    raise GuestToolSpecError(
+        f'Invalid config value [tools] antigravity = {spec!r}: the official '
+        'installer does not expose version selection, so the accepted values '
+        "are 'latest' (or true) to enable and 'off' (or false) to disable."
+    )
+
+
 def _pi_spec(spec: str) -> str:
     normalized = str(spec or '').strip().lower()
     if normalized in {'', 'latest'}:
@@ -374,6 +385,52 @@ if ! grep -Fq '# >>> aivm claude PATH >>>' "$PROFILE" 2>/dev/null; then
     }} >> "$PROFILE"
 fi
 claude --version
+"""
+    return textwrap.dedent(script).strip()
+
+
+def _build_antigravity_install_script(
+    cfg: AgentVMConfig, spec: str, ensure_transport: bool
+) -> str:
+    """Install Google's Antigravity CLI into the guest user's home directory."""
+    del cfg, spec
+    transport_bootstrap = ''
+    if ensure_transport:
+        transport_bootstrap = """
+if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
+fi
+""".strip()
+    # The official installer owns ~/.local/bin/agy. Keep this separate from
+    # tools.bin_dir. Suppress alias/PATH edits so AIVM owns the profile stanza.
+    script = f"""
+set -euo pipefail
+{transport_bootstrap}
+AGY_BIN="$HOME/.local/bin/agy"
+if [ ! -x "$AGY_BIN" ]; then
+    curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --skip-aliases --skip-path
+fi
+if [ ! -x "$AGY_BIN" ]; then
+    echo 'Antigravity installer completed, but ~/.local/bin/agy was not found.' >&2
+    exit 1
+fi
+AGY_BIN_DIR="$HOME/.local/bin"
+export PATH="$AGY_BIN_DIR:$PATH"
+PROFILE="$HOME/.profile"
+if ! grep -Fq '# >>> aivm antigravity PATH >>>' "$PROFILE" 2>/dev/null; then
+    {{
+        echo ''
+        echo '# >>> aivm antigravity PATH >>>'
+        echo 'case ":$PATH:" in'
+        echo '  *":$HOME/.local/bin:"*) ;;'
+        echo '  *) PATH="$HOME/.local/bin:$PATH" ;;'
+        echo 'esac'
+        echo 'export PATH'
+        echo '# <<< aivm antigravity PATH <<<'
+    }} >> "$PROFILE"
+fi
+"$AGY_BIN" --version
 """
     return textwrap.dedent(script).strip()
 
@@ -985,6 +1042,25 @@ GUEST_TOOL_REGISTRY = GuestToolRegistry(
             required_commands=('claude',),
             normalize_spec=_claude_spec,
             build_install_script=_build_claude_install_script,
+        ),
+        GuestToolDefinition(
+            name='antigravity',
+            display_name='Antigravity CLI',
+            description=(
+                "Google Antigravity CLI via Google's official installer"
+            ),
+            config_default='off',
+            enable_default='latest',
+            required_packages=('ca-certificates', 'curl'),
+            required_commands=('agy',),
+            normalize_spec=_antigravity_spec,
+            build_install_script=_build_antigravity_install_script,
+            # Non-login SSH probes may omit ~/.local/bin from PATH.
+            status_check=(
+                '[ -x "$HOME/.local/bin/agy" ] || '
+                'command -v agy >/dev/null 2>&1 || '
+                "{ echo 'missing configured guest tool command: antigravity:agy' >&2; exit 11; }"
+            ),
         ),
         GuestToolDefinition(
             name='codex',
