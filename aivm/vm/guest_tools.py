@@ -402,14 +402,15 @@ if ! command -v curl >/dev/null 2>&1; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl
 fi
 """.strip()
-    # The official installer owns ~/.local/bin/agy. Keep this separate from
-    # tools.bin_dir. Suppress alias/PATH edits so AIVM owns the profile stanza.
+    # The official installer owns ~/.local/bin/agy, independently of
+    # tools.bin_dir. Do not pass optional flags: the live installer accepts
+    # only --dir, despite documentation for --skip-aliases/--skip-path.
     script = f"""
 set -euo pipefail
 {transport_bootstrap}
 AGY_BIN="$HOME/.local/bin/agy"
 if [ ! -x "$AGY_BIN" ]; then
-    curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --skip-aliases --skip-path
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
 fi
 if [ ! -x "$AGY_BIN" ]; then
     echo 'Antigravity installer completed, but ~/.local/bin/agy was not found.' >&2

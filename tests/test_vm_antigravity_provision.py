@@ -62,8 +62,7 @@ def test_antigravity_script_bootstraps_curl_only_when_requested() -> None:
     assert 'apt-get install -y ca-certificates curl' in script
     assert 'if ! command -v curl >/dev/null 2>&1; then' in script
     assert (
-        'curl -fsSL https://antigravity.google/cli/install.sh | '
-        'bash -s -- --skip-aliases --skip-path'
+        'curl -fsSL https://antigravity.google/cli/install.sh | bash'
     ) in script
     assert 'AGY_BIN="$HOME/.local/bin/agy"' in script
     assert '# >>> aivm antigravity PATH >>>' in script
@@ -115,8 +114,8 @@ printf '%s\n' "$*" >> "$CURL_LOG"
 [ "$2" = 'https://antigravity.google/cli/install.sh' ]
 cat <<'INSTALLER'
 set -eu
-[ "$1" = '--skip-aliases' ]
-[ "$2" = '--skip-path' ]
+# Only --dir is accepted by the live installer; no arguments is supported.
+[ "$#" -eq 0 ]
 mkdir -p "$HOME/.local/bin"
 printf '%s\n' '#!/bin/sh' 'echo agy-test-version' > "$HOME/.local/bin/agy"
 chmod +x "$HOME/.local/bin/agy"
@@ -248,3 +247,70 @@ def test_antigravity_is_valid_positional_cli_target(
     assert captured['packages'] == ()
     assert captured['dry_run'] is True
     assert cfg.tools.antigravity == 'off'
+
+
+def test_cli_antigravity_dry_run_with_competing_machine_stores(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """End-to-end dry-run must not query libvirt during config loading.
+
+    The config loader checks domain ownership when personal and shared AIVM
+    stores coexist. With dry-run enabled that read cannot return a result,
+    but this command should still be able to preview guest provisioning.
+    """
+    from aivm.config_store import (
+        PrincipalEntry,
+        Store,
+        save_store_split,
+        upsert_principal,
+        upsert_vm,
+    )
+    from aivm.host_identity import current_host_identity
+    from aivm.machine_store import machine_store_layout
+    from aivm.profile_store import (
+        UserProfileStore,
+        profile_store_path,
+        save_user_profile,
+    )
+    from tests.helpers import run_cli
+
+    cfg = AgentVMConfig()
+    cfg.vm.name = 'test-vm'
+    layout = machine_store_layout()
+    store = Store(store_kind='machine')
+    upsert_vm(store, cfg)
+    identity = current_host_identity()
+    upsert_principal(
+        store,
+        PrincipalEntry(
+            id='principal-test',
+            vm_name=cfg.vm.name,
+            host_user=identity.username,
+            host_uid=identity.uid,
+            host_gid=identity.gid,
+            guest_user='agent',
+            state='active',
+        ),
+    )
+    save_store_split(store, layout.config_path)
+    save_user_profile(
+        UserProfileStore(
+            active_vm=cfg.vm.name,
+            ssh_identity_file=str(tmp_path / 'fake-id_ed25519'),
+        ),
+        profile_store_path(),
+    )
+
+    other_root = tmp_path / 'other-machine-store'
+    other_root.mkdir()
+    monkeypatch.setattr(
+        'aivm.domain_authority.candidate_machine_store_roots',
+        lambda: (layout.root, other_root),
+    )
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError('dry-run must not run a host command')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', unexpected)
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', unexpected)
+    assert run_cli(['vm', 'provision', 'antigravity', '--dry_run']) == 0
