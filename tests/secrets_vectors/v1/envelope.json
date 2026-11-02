@@ -1,0 +1,22 @@
+{
+ "about": "One sealed aivs1 capability. AES-256-GCM, 12-byte nonce prefix, unpadded URL-safe base64, fixed associated data. Opening \"capability\" with \"key\" must authenticate and yield exactly \"claims\" and \"credential\". The credential is not real.",
+ "profile": "aivs1",
+ "associated_data": "aivm-secrets/local-session/service-neutral/v1",
+ "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+ "nonce_hex": "6465666768696a6b6c6d6e6f",
+ "capability": "aivs1.ZGVmZ2hpamtsbW5vMzm9ChiAO-0cWCTKuAwEmSusYSixF9ETxLLJO4j8zCzxhzSpOGu5Pt-DClaTIaO_eje1k1IrIk3Y3Y61h-DL5G3g-TT0KFhm6AyOIHLpUoUHG3xXxKbupbySVacYcC0y7RLxHQhvlFzcjbCg0FLNgUYJui7xSYkYkA_-k-CWfqof6-rJCldgVuVrM3356S7n5ZicMnJxtKoBoVJvh2PElORuTjiy5sOCCTrDlY4Wwaz0k6_LVdEwrRpjcyqg4n2sqE1kiMp3FiNuXQIQNk-XbB8p4iC9aTyNwjQgpIOJeIg3eMaSxeBYSjiWfrDJNOGwMbdmypKljKqmkXsKQ1-b-hYS6-EcSPW33Gm35ZnHf3HJ6ixLxF4RBLgiJzMOGyUSspV0ChkE3IkB-Te-jtv0yHV0P4wncSe5dvtUOKC1D13PI7KlVENUot2WTGHFKyJk-7c7Drcx2e2C4ZO_DctltvYDg0vw3PoNCBjI22eO",
+ "claims": {
+  "binding": {
+   "owner_uid": 1000,
+   "access_identity": "principal-trace",
+   "vm": "vm-trace",
+   "channel": "cccccccccccccccccccccccccccccccc"
+  },
+  "policy_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "grant_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "issued_at": 1000,
+  "expires_at": 2800
+ },
+ "credential": "vector_TOKEN_NOT_REAL_0123456789",
+ "plaintext": "{\"claims\":{\"binding\":{\"access_identity\":\"principal-trace\",\"channel\":\"cccccccccccccccccccccccccccccccc\",\"owner_uid\":1000,\"vm\":\"vm-trace\"},\"expires_at\":2800,\"grant_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"issued_at\":1000,\"policy_digest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"credential\":\"vector_TOKEN_NOT_REAL_0123456789\"}"
+}

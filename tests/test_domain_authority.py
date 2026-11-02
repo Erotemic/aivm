@@ -155,3 +155,24 @@ def test_stamp_records_the_owning_store_root(
     assert '--live' not in cmd
     document = cmd[cmd.index('--set') + 1]
     assert str(layout.root) in document
+
+
+def test_dry_run_with_two_stores_does_not_probe_libvirt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A dry-run must not try to consume a preview-only virsh result.
+
+    Real commands still enforce the authority check (covered above). On a
+    two-store host, even loading the VM config used to trigger this probe
+    before a targeted `aivm vm provision ... --dry_run` could plan anything.
+    """
+    layout = _two_store_host(monkeypatch, tmp_path)
+    activate_manager(monkeypatch, yes=True, dry_run=True)
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError('dry-run attempted a live libvirt probe')
+
+    monkeypatch.setattr('aivm.domain_authority.read_domain_authority', unexpected)
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', unexpected)
+    monkeypatch.setattr('aivm.commands.subprocess.run', unexpected)
+    require_domain_authority(VM, layout)

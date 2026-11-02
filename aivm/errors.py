@@ -11,6 +11,15 @@ class MissingSSHIdentityError(AIVMError):
     """Raised when SSH identity configuration is required but missing."""
 
 
+class AdministratorEnrollmentRequiredError(AIVMError):
+    """A pending guest enrollment needs an administrator's bootstrap step.
+
+    This is different from an unreachable guest. The owner should verify
+    their personal key after an admin prepares the already-registered public
+    key, rather than retrying a sudo operation they cannot perform.
+    """
+
+
 class VMNotRunningError(AIVMError):
     """Raised when an operation requires a VM that is currently stopped."""
 

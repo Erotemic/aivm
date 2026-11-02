@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -556,3 +557,166 @@ def test_shared_store_bootstrap_identity_stays_root_owned(
     identity = bootstrap_identity_paths('aivm-2404', layout=shared)
 
     assert identity.use_sudo
+
+
+def test_administrator_prepares_foreign_principal_then_owner_verifies_without_sudo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-sudo user's private key is never read by the administrator."""
+    from types import SimpleNamespace
+
+    from aivm.enrollment import prepare_other_principal, verify_current_principal
+
+    cfg, scope = _machine_with_profile(tmp_path)
+    identity = bootstrap_identity_paths(cfg.vm.name, layout=scope.machine_layout)
+    identity.directory.mkdir(parents=True)
+    identity.private_key.write_text('BOOTSTRAP-PRIVATE\n')
+    identity.public_key_path.write_text('ssh-ed25519 AAAABOOTSTRAP bootstrap@test\n')
+    reg = load_store(scope.store_path)
+    upsert_principal(
+        reg,
+        PrincipalEntry(
+            id='principal-ben', vm_name=cfg.vm.name,
+            host_user='benjamin.fenelon', host_uid=1002, host_gid=1003,
+            guest_user='benjamin-fenelon-agent',
+            ssh_public_key='ssh-ed25519 AAAABEN benjamin@test',
+            state='pending',
+        ),
+    )
+    save_scope_store(scope, reg, reason='test pending Ben principal')
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1001, username='jon.crall'),
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment.pwd.getpwnam',
+        lambda username: SimpleNamespace(pw_uid=1002, pw_gid=1003),
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment._resolve_enrollment_ip',
+        lambda cfg, ip_override='': '10.77.0.119',
+    )
+    # Simulate the real /var/lib/aivm shared-store bootstrap key; the
+    # isolated test root intentionally defaults to unprivileged transport.
+    monkeypatch.setattr(
+        'aivm.enrollment.require_bootstrap_identity',
+        lambda vm_name, *, layout: replace(identity, use_sudo=True),
+    )
+    activate_manager(monkeypatch, yes=True)
+    rec = command_recorder(
+        monkeypatch,
+        {'ssh': FakeProc(0, '{"status":"ok"}\n', '')},
+    )
+    report = prepare_other_principal(
+        scope, vm_name=cfg.vm.name, selector='benjamin.fenelon'
+    )
+    assert report.principal.state == 'pending'
+    assert rec.count('ssh') == 1
+    assert rec.calls[0][0] == 'sudo'
+    assert 'aivm-bootstrap@10.77.0.119' in rec.normalized[0]
+    assert 'benjamin-fenelon-agent@10.77.0.119' not in rec.normalized[0]
+    assert find_principal_for_host(
+        load_store(scope.store_path), vm_name=cfg.vm.name,
+        host_user='benjamin.fenelon',
+    ).state == 'pending'
+
+    # Benjamin can verify under his own kernel identity and own profile,
+    # without access to the bootstrap key or host sudo.
+    ben_dir = tmp_path / 'ben-home' / '.ssh'
+    ben_dir.mkdir(parents=True)
+    private = ben_dir / 'id_aivm_ed25519'
+    public = ben_dir / 'id_aivm_ed25519.pub'
+    private.write_text('BEN-PRIVATE\n')
+    public.write_text('ssh-ed25519 AAAABEN benjamin@test\n')
+    assert scope.profile_path is not None
+    save_user_profile(
+        UserProfileStore(
+            active_vm=cfg.vm.name, ssh_identity_file=str(private),
+            ssh_pubkey_path=str(public), state_dir=str(tmp_path / 'ben-state'),
+        ),
+        scope.profile_path,
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1002, gid=1003, username='benjamin.fenelon'),
+    )
+    # In this phase only SSH with Benjamin's personal key is possible.
+    rec = command_recorder(monkeypatch, {'ssh': FakeProc(0, '', '')})
+    verified = verify_current_principal(scope, vm_name=cfg.vm.name)
+    assert verified.principal.state == 'active'
+    assert rec.count('ssh') == 1
+    assert rec.calls[0][0] != 'sudo'
+    assert 'benjamin-fenelon-agent@10.77.0.119' in rec.normalized[0]
+    assert str(private) in rec.normalized[0]
+    assert str(identity.private_key) not in rec.normalized[0]
+    saved = find_principal_for_host(
+        load_store(scope.store_path), vm_name=cfg.vm.name,
+        host_user='benjamin.fenelon',
+    )
+    assert saved.state == 'active'
+    assert saved.id == 'principal-ben'
+
+
+def test_admin_preparation_rejects_uid_mismatch_and_disabled_user(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    from aivm.enrollment import prepare_other_principal
+
+    cfg, scope = _machine_with_profile(tmp_path)
+    reg = load_store(scope.store_path)
+    upsert_principal(
+        reg,
+        PrincipalEntry(
+            id='principal-ben', vm_name=cfg.vm.name,
+            host_user='benjamin.fenelon', host_uid=1002, host_gid=1003,
+            guest_user='benjamin-fenelon-agent',
+            ssh_public_key='ssh-ed25519 AAAABEN benjamin@test',
+            state='pending',
+        ),
+    )
+    save_scope_store(scope, reg, reason='test pending Ben principal')
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1001, gid=1001, username='jon.crall'),
+    )
+    monkeypatch.setattr(
+        'aivm.enrollment.pwd.getpwnam',
+        lambda username: SimpleNamespace(pw_uid=9999, pw_gid=1003),
+    )
+    with pytest.raises(AIVMError, match='changed UID/GID'):
+        prepare_other_principal(
+            scope, vm_name=cfg.vm.name, selector='principal-ben',
+            dry_run=True,
+        )
+    reg = load_store(scope.store_path)
+    reg.principals = [
+        replace(item, state='disabled') if item.id == 'principal-ben' else item
+        for item in reg.principals
+    ]
+    save_scope_store(scope, reg, reason='test disabled Ben principal')
+    with pytest.raises(AIVMError, match='disabled'):
+        prepare_other_principal(
+            scope, vm_name=cfg.vm.name, selector='principal-ben',
+            dry_run=True,
+        )
+
+
+def test_personal_verification_refuses_foreign_key_without_guest_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from aivm.enrollment import verify_current_principal
+
+    cfg, scope = _machine_with_profile(tmp_path)
+    _record_existing_identity(scope, cfg, key='ssh-ed25519 AAAAOTHER other@test')
+    monkeypatch.setattr(
+        'aivm.enrollment.current_host_identity',
+        lambda: HostIdentity(uid=1201, gid=1202, username='edward.wang'),
+    )
+    with pytest.raises(AIVMError, match='public key differs'):
+        verify_current_principal(scope, vm_name=cfg.vm.name)
+    assert find_principal_for_host(
+        load_store(scope.store_path), vm_name=cfg.vm.name,
+        host_user='edward.wang',
+    ).state == 'active'

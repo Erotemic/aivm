@@ -1,0 +1,22 @@
+{
+  "aes_gcm_nonce_hex": "000102030405060708090a0b",
+  "certificate_der_hex": "63657274696669636174652d4445522d46414b452d7061726974792d6f6e6c79",
+  "claims": {
+    "aud": "aivm-secrets.remote",
+    "cnf": {
+      "x5t#S256": "PplHPe8p1AbHpOjDyqmn-Q37yQMQNpraylF-iBw7usw"
+    },
+    "epoch": 3,
+    "exp": 200,
+    "iat": 100,
+    "iss": "aivm.test",
+    "jti": "0123456789abcdef0123456789abcdef",
+    "sub": "fixture-vm"
+  },
+  "encryption_key_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+  "expected_jwt": "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtMSIsInR5cCI6ImFpdm0tYm91bmQrand0In0.eyJhdWQiOiJhaXZtLXNlY3JldHMucmVtb3RlIiwiY25mIjp7Ing1dCNTMjU2IjoiUHBsSFBlOHAxQWJIcE9qRHlxbW4tUTM3eVFNUU5wcmF5bEYtaUJ3N3VzdyJ9LCJlbmMiOiJBQUVDQXdRRkJnY0lDUW9MS0dHVWllQm55ZzF6M0JWRTItRXF0UjlubjRKY1RzdUxQekVqME5OUVF0U2xXQ1Z2RU1NMnhGYVZLVkxKS2hEa080Q1RpTEdfUGtCdzFEeGVENVdZT21VIiwiZXBvY2giOjMsImV4cCI6MjAwLCJpYXQiOjEwMCwiaXNzIjoiYWl2bS50ZXN0IiwianRpIjoiMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYiLCJzdWIiOiJmaXh0dXJlLXZtIn0.RB_m_OsNOJc8EDJtWik6R_sbLOWk8Uxk0l5PpjXJin-3PVQ68LP59cm89xWyzgTR_-mvubdRPeFxJ8OR__x5DA",
+  "inner_capability": "aivs1.FIXTURE_ONLY_NOT_REAL_CAPABILITY_0123456789",
+  "kid": "test-1",
+  "private_key_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+  "purpose": "Deterministic test-only Ed25519 JWS plus AES-256-GCM inner AIVS holder; NEVER use these fixture keys in production"
+}

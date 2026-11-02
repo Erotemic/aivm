@@ -25,6 +25,7 @@ tests=(
   tests/e2e/test_host_bind_probe.py
   tests/e2e/test_persistent_live_replay.py
   tests/e2e/test_tunnel_helper.py
+  tests/e2e/test_secrets.py
 )
 if [[ "${AIVM_E2E_BOOTSTRAP:-0}" == "1" ]]; then
   tests+=(tests/e2e/test_bootstrap_context.py)

@@ -172,8 +172,15 @@ def _competing_store_possible(layout: MachineStoreLayout) -> bool:
 
 
 def require_domain_authority(vm_name: str, layout: MachineStoreLayout) -> None:
-    """Refuse to act on a domain another machine store already claims."""
+    """Refuse to act on a domain another machine store already claims.
+
+    A dry-run never acts on a domain and cannot use a live libvirt result:
+    the command manager previews reads but deliberately returns no result.
+    Defer the ownership check to actual execution, where it remains required.
+    """
     if not _competing_store_possible(layout):
+        return
+    if CommandManager.current().dry_run:
         return
     owner = read_domain_authority(vm_name)
     if owner is None or owner.store_root == layout.root:

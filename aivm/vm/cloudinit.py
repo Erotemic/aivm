@@ -31,10 +31,14 @@ from ..guestctl import (
     restricted_bootstrap_authorized_key,
 )
 from ..persistent_replay import (
+    GUEST_SESSION_INSPECT_BIN,
+    GUEST_SYMLINK_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
     persistent_replay_python,
     persistent_replay_service_unit,
+    attachment_symlink_python,
+    session_inspect_python,
 )
 from ..privilege import path_needs_sudo
 from .host_access import _ensure_qemu_access
@@ -312,6 +316,14 @@ def _render_user_data_text(
             permissions: "0755"
             content: |
 {textwrap.indent(persistent_replay_python().rstrip(), '              ')}
+          - path: {GUEST_SESSION_INSPECT_BIN}
+            permissions: "0755"
+            content: |
+{textwrap.indent(session_inspect_python().rstrip(), '              ')}
+          - path: {GUEST_SYMLINK_BIN}
+            permissions: "0755"
+            content: |
+{textwrap.indent(attachment_symlink_python().rstrip(), '              ')}
           - path: /etc/systemd/system/{PERSISTENT_ATTACHMENT_REPLAY_SERVICE}
             permissions: "0644"
             content: |

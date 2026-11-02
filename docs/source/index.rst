@@ -22,6 +22,7 @@ See the repository README for current CLI usage and safety notes.
    wsl
    virtiofs
    security
+   secrets
    alternatives
 
 

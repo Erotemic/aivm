@@ -30,8 +30,14 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.attachments.session import ReconcileResult, _prepare_attached_session
+from aivm.attachments.session import (
+    ReconcileResult,
+    _discard_unrealized_persistent_attachment,
+    _prepare_attached_session,
+    _record_attachment,
+)
 from aivm.cli.vm_connect import _bootstrap_vm_for_folder
+from aivm.commands import CommandResult, SudoUnavailableError
 from aivm.config import AgentVMConfig
 from aivm.config_scopes import ResolvedVMContext
 from aivm.config_store import (
@@ -184,6 +190,149 @@ def attached_session_harness(
         'aivm.cli.vm_connect.ensure_host_capability', fake_host_capability
     )
     return harness
+
+
+def test_failed_new_persistent_session_does_not_poison_existing_workspace(
+    attached_session_harness: AttachedSessionHarness,
+) -> None:
+    """Ben's sequence: denied sudo in new folder, then SSH in a saved one."""
+    harness = attached_session_harness
+    monkeypatch = harness.monkeypatch
+    good = harness.tmp_path / 'already-mounted'
+    good.mkdir()
+    _record_attachment(
+        harness.cfg,
+        harness.cfg_path,
+        host_src=good,
+        mode=AttachmentMode.PERSISTENT,
+        access='rw',
+        guest_dst=str(good.resolve()),
+        tag='existing-token',
+    )
+
+    # Simulate an already-running VM. Guest/virsh calls are faked; the real
+    # resolution and store writes still execute for both SSH invocations.
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_attached_vm',
+        lambda cfg, host, attachment, **kwargs: ReconcileResult(
+            attachment=attachment,
+            cached_ip='10.0.0.2',
+            cached_ssh_ok=True,
+            vm_was_running=True,
+        ),
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.session._ensure_attachment_available_in_guest',
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.manifest.'
+        '_persistent_host_replay_manifest_path',
+        lambda cfg: harness.tmp_path / 'no-approved-manifest.json',
+    )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind._mounted_child_names',
+        lambda *args, **kwargs: set(),
+    )
+
+    attempted: list[str] = []
+
+    def replay(_cfg: AgentVMConfig, _path: Path, _ip: str, **kwargs: Any) -> None:
+        attempted.append(kwargs['only_guest_dst'])
+        if kwargs['only_guest_dst'] == str(harness.host_src.resolve()):
+            raise SudoUnavailableError(
+                ['sudo', '-v'],
+                CommandResult(1, '', 'benjamin is not in the sudoers file'),
+                purpose='Install approved persistent host replay manifest',
+            )
+
+    monkeypatch.setattr(
+        'aivm.attachments.session._reconcile_persistent_attachments_in_guest',
+        replay,
+    )
+
+    def connect(folder: Path) -> Any:
+        return _prepare_attached_session(
+            config_opt=str(harness.cfg_path),
+            vm_opt='',
+            host_src=folder,
+            guest_dst_opt='',
+            recreate_if_needed=False,
+            ensure_firewall_opt=False,
+            dry_run=False,
+            yes=True,
+        )
+
+    with pytest.raises(SudoUnavailableError):
+        connect(harness.host_src)
+    after_failure = load_store(harness.cfg_path)
+    assert [att.host_path for att in after_failure.attachments] == [
+        str(good.resolve())
+    ]
+    assert after_failure.attachments[0].state == 'active'
+
+    # Removing the failed source later is not needed for cleanup or recovery.
+    harness.host_src.rmdir()
+    session = connect(good)
+    assert session.share_guest_dst == str(good.resolve())
+    assert attempted == [str(harness.host_src.resolve()), str(good.resolve())]
+    assert len(load_store(harness.cfg_path).attachments) == 1
+
+
+@pytest.mark.parametrize('outside_state', ['approved', 'mounted', 'unknown'])
+def test_failed_persistent_registration_retains_partial_recovery_state(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    outside_state: str,
+) -> None:
+    """Do not forget a token that may already be approved or mounted."""
+    cfg = make_cfg(tmp_path)
+    cfg.vm.name = 'persistent-failed-recovery'
+    cfg_path = tmp_path / 'config.toml'
+    source = tmp_path / 'new'
+    source.mkdir()
+    attachment = ResolvedAttachment(
+        vm_name=cfg.vm.name,
+        mode=AttachmentMode.PERSISTENT,
+        source_dir=str(source.resolve()),
+        guest_dst=str(source.resolve()),
+        tag='new-token',
+    )
+    _record_attachment(
+        cfg, cfg_path, host_src=source, mode=AttachmentMode.PERSISTENT,
+        access='rw', guest_dst=attachment.guest_dst, tag=attachment.tag,
+    )
+
+    approved = tmp_path / 'approved.json'
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.manifest.'
+        '_persistent_host_replay_manifest_path', lambda cfg: approved,
+    )
+    if outside_state == 'approved':
+        import json
+        approved.write_text(json.dumps({
+            'records': [{
+                'shared_root_token': attachment.tag,
+                'guest_dst': attachment.guest_dst,
+            }],
+        }), encoding='utf8')
+        monkeypatch.setattr(
+            'aivm.attachments.persistent.manifest.'
+            '_approved_host_replay_manifest_is_trusted', lambda path: True,
+        )
+    monkeypatch.setattr(
+        'aivm.attachments.persistent.host_bind._mounted_child_names',
+        lambda *args, **kwargs: (
+            {attachment.tag} if outside_state == 'mounted'
+            else None if outside_state == 'unknown' else set()
+        ),
+    )
+
+    assert not _discard_unrealized_persistent_attachment(
+        cfg, cfg_path, attachment,
+        expected_record=load_store(cfg_path).attachments[0],
+    )
+    assert len(load_store(cfg_path).attachments) == 1
 
 
 def test_prepare_attached_session_bootstraps_missing_vm(

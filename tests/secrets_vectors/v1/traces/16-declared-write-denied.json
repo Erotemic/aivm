@@ -1,0 +1,328 @@
+{
+ "about": "With host writes denied, a declared-write GET is refused at admission exactly like a POST; nothing is emitted for either.",
+ "theorems": [
+  "AUTH-01",
+  "EFFECT-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "tracker",
+  "host": "api.example.org",
+  "authentication": "bearer",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "ticket.view",
+    "effect": "read",
+    "requires": "ticket",
+    "returns": "check",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ]
+   },
+   {
+    "name": "ticket.builds",
+    "effect": "read",
+    "requires": "ticket",
+    "method": "GET",
+    "path": "/v1/projects/{project}/revisions/{revision}/builds/{serial}/{branch}",
+    "query": {
+     "page": "{page}",
+     "per_page": "50"
+    },
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ],
+     "page": {
+      "min": 1,
+      "max": 9
+     }
+    },
+    "defaults": {
+     "page": 1
+    },
+    "fold": [
+     "project"
+    ],
+    "page": {
+     "size": 50,
+     "at": [
+      "builds"
+     ],
+     "parameter": "page"
+    }
+   },
+   {
+    "name": "ticket.note",
+    "effect": "write",
+    "requires": "ticket",
+    "method": "POST",
+    "path": "/v1/projects/{project}/tickets/{ticket}/notes",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ],
+    "body_fields": {
+     "text": 100,
+     "title": {
+      "max_bytes": 20,
+      "optional": true
+     }
+    }
+   },
+   {
+    "name": "ticket.close",
+    "effect": "write",
+    "method": "GET",
+    "path": "/v1/projects/{project}/tickets/{ticket}/close",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ]
+   },
+   {
+    "name": "ticket.log",
+    "effect": "read",
+    "method": "GET",
+    "path": "/v1/tickets/{ticket}/log",
+    "parameters": {
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "response": "text"
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 20,
+  "max_body_bytes": 100,
+  "checks": {
+   "ticket": {
+    "path": "/v1/projects/{project}/tickets/{ticket}",
+    "require": [
+     {
+      "at": [
+       "id"
+      ],
+      "equals_parameter": "ticket"
+     },
+     {
+      "at": [
+       "project",
+       "slug"
+      ],
+      "equals_parameter": "project",
+      "fold": true
+     },
+     {
+      "at": [
+       "state"
+      ],
+      "equals": "open"
+     },
+     {
+      "at": [
+       "owner",
+       "name"
+      ],
+      "equals": "alice",
+      "fold": true
+     },
+     {
+      "at": [
+       "version"
+      ],
+      "equals": 2
+     }
+    ],
+    "bind": {
+     "revision": {
+      "at": [
+       "head",
+       "rev"
+      ],
+      "format": "hex"
+     },
+     "serial": {
+      "at": [
+       "serial"
+      ],
+      "format": "integer"
+     },
+     "branch": {
+      "at": [
+       "branch"
+      ],
+      "format": "segment"
+     }
+    }
+   }
+  },
+  "cli": {
+   "tk": [
+    {
+     "command": [
+      "view"
+     ],
+     "operation": "ticket.view",
+     "positional": [
+      "ticket"
+     ],
+     "options": {
+      "--project": "project",
+      "-p": "project"
+     }
+    },
+    {
+     "command": [
+      "builds",
+      "list"
+     ],
+     "operation": "ticket.builds",
+     "positional": [
+      "ticket"
+     ],
+     "options": {
+      "--project": "project",
+      "--page": "page"
+     }
+    },
+    {
+     "command": [
+      "note"
+     ],
+     "operation": "ticket.note",
+     "positional": [
+      "project",
+      "ticket"
+     ],
+     "options": {
+      "--text": "text",
+      "--text-file": "@text",
+      "--title": "title"
+     }
+    },
+    {
+     "command": [
+      "log"
+     ],
+     "operation": "ticket.log",
+     "positional": [
+      "ticket"
+     ],
+     "output": "result"
+    }
+   ]
+  }
+ },
+ "write_mode": "deny",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.close",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "expect": {
+    "code": "denied"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.note",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7,
+     "text": "hi"
+    }
+   },
+   "expect": {
+    "code": "denied"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.log",
+    "arguments": {
+     "ticket": 7
+    }
+   },
+   "expect": {
+    "code": "ok",
+    "effect": {
+     "method": "GET",
+     "target": "/v1/tickets/7/log",
+     "accept": "text/plain",
+     "response": "text"
+    },
+    "write": false
+   }
+  }
+ ]
+}

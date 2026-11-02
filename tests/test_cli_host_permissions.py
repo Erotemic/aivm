@@ -10,6 +10,7 @@ from pytest import CaptureFixture, MonkeyPatch
 from aivm.cli.host import HostModalCLI
 from aivm.cli.host_permissions import (
     HostPermissionsCheckCLI,
+    HostPermissionsGrantCLI,
     HostPermissionsModalCLI,
     HostPermissionsSetupCLI,
 )
@@ -707,3 +708,265 @@ def test_root_setup_requires_explicit_target_user(
     with pytest.raises(AIVMError, match='requires an explicit'):
         _resolve_setup_target_user('')
     assert _resolve_setup_target_user('alice') == 'alice'
+
+
+def test_admin_grant_requires_explicit_consent_and_real_other_user(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Grant cannot silently give another account root-equivalent libvirt access."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aivm.errors import AIVMError
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    with pytest.raises(AIVMError, match='--admin_override'):
+        HostPermissionsGrantCLI.main(argv=False, user='bob')
+    with pytest.raises(AIVMError, match='your own host account'):
+        HostPermissionsGrantCLI.main(
+            argv=False, user='admin', admin_override=True
+        )
+
+
+def test_admin_grant_targets_other_user_without_touching_admin_storage(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    """Admin runs their own aivm, handing only group/store work to sudo."""
+    from types import SimpleNamespace
+
+    from aivm.host import MachineStoreAuthorityPreparation
+    from aivm.host_identity import HostIdentity
+    from aivm.machine_store import MachineStoreLayout
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_machine_group_name',
+        lambda: 'libvirt',
+    )
+    calls: list[tuple[str, bool]] = []
+
+    def prepare(*, user: str, dry_run: bool) -> MachineStoreAuthorityPreparation:
+        calls.append((user, dry_run))
+        return MachineStoreAuthorityPreparation(
+            layout=MachineStoreLayout.from_root(
+                tmp_path / 'shared', shared=True
+            ),
+            membership_added=True,
+            membership_configured=True,
+            session_membership_active=None,
+        )
+
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.prepare_machine_store_authority', prepare
+    )
+    # No subprocesses, no profile edits, no target-home traversal: all other
+    # operations are delegated to the host preparation service.
+    rc = HostPermissionsGrantCLI.main(
+        argv=False, user='bob', admin_override=True
+    )
+    assert rc == 0
+    assert calls == [('bob', False)]
+    assert 'log out and back in' in capsys.readouterr().out
+
+
+def test_admin_grant_adds_libvirt_for_separate_machine_store_group(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A custom store group must not accidentally omit libvirt authority."""
+    from types import SimpleNamespace
+
+    from aivm.host import MachineStoreAuthorityPreparation
+    from aivm.host_identity import HostIdentity
+    from aivm.machine_store import MachineStoreLayout
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    activate_manager(monkeypatch, yes_sudo=True)
+    recorder = command_recorder(monkeypatch, default=FakeProc())
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_machine_group_name',
+        lambda: 'aivm-operators',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.user_has_machine_group_membership',
+        lambda user, *, group_name: False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.machine_group_exists',
+        lambda group: True,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.prepare_machine_store_authority',
+        lambda *, user, dry_run: MachineStoreAuthorityPreparation(
+            layout=MachineStoreLayout.from_root(
+                tmp_path / 'shared', shared=True
+            ),
+            membership_added=True,
+            membership_configured=True,
+            session_membership_active=None,
+        ),
+    )
+
+    assert HostPermissionsGrantCLI.main(
+        argv=False, user='bob', admin_override=True, yes=True
+    ) == 0
+    assert recorder.only('usermod') == [
+        'usermod', '-aG', 'libvirt', 'bob'
+    ]
+    assert recorder.calls[0][0] == 'sudo'
+
+
+def test_admin_grant_dry_run_does_not_issue_privileged_command(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from aivm.host import MachineStoreAuthorityPreparation
+    from aivm.host_identity import HostIdentity
+    from aivm.machine_store import MachineStoreLayout
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    activate_manager(monkeypatch, yes_sudo=True)
+    recorder = command_recorder(monkeypatch, default=FakeProc())
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_machine_group_name',
+        lambda: 'aivm-operators',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.user_has_machine_group_membership',
+        lambda user, *, group_name: False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.machine_group_exists',
+        lambda group: True,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.prepare_machine_store_authority',
+        lambda *, user, dry_run: MachineStoreAuthorityPreparation(
+            layout=MachineStoreLayout.from_root(
+                tmp_path / 'shared', shared=True
+            ),
+            membership_added=True,
+            membership_configured=True,
+            session_membership_active=None,
+        ),
+    )
+
+    assert HostPermissionsGrantCLI.main(
+        argv=False, user='bob', admin_override=True, dry_run=True
+    ) == 0
+    assert recorder.calls == []
+
+
+def test_admin_grant_rejects_alternate_machine_store_root(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Grant must not silently prepare a caller-owned alternate authority."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aivm.errors import AIVMError
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    monkeypatch.setenv('AIVM_MACHINE_STORE_ROOT', str(tmp_path / 'alternate'))
+
+    def forbidden(**kwargs: Any) -> None:
+        raise AssertionError('preparation must not run for alternate stores')
+
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.prepare_machine_store_authority', forbidden
+    )
+    with pytest.raises(AIVMError, match='canonical shared machine store'):
+        HostPermissionsGrantCLI.main(
+            argv=False, user='bob', admin_override=True
+        )
+
+
+def test_admin_grant_missing_libvirt_group_fails_before_preparation(
+    monkeypatch: MonkeyPatch
+) -> None:
+    """Invalid host dependencies cannot leave a half-applied group grant."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aivm.errors import AIVMError
+    from aivm.host_identity import HostIdentity
+
+    monkeypatch.delenv('AIVM_MACHINE_STORE_ROOT', raising=False)
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_host_identity',
+        lambda: HostIdentity(uid=1000, gid=1000, username='admin'),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.pwd.getpwnam',
+        lambda user: SimpleNamespace(pw_name=user),
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.current_machine_group_name',
+        lambda: 'aivm-operators',
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.user_has_machine_group_membership',
+        lambda user, *, group_name: False,
+    )
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.machine_group_exists',
+        lambda group_name: False,
+    )
+
+    def forbidden(**kwargs: Any) -> None:
+        raise AssertionError('preparation must not run without libvirt')
+
+    monkeypatch.setattr(
+        'aivm.cli.host_permissions.prepare_machine_store_authority', forbidden
+    )
+    with pytest.raises(AIVMError, match="Missing 'libvirt' group"):
+        HostPermissionsGrantCLI.main(
+            argv=False, user='bob', admin_override=True
+        )

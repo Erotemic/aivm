@@ -28,6 +28,8 @@ The supported commands are:
 ```bash
 aivm vm access list --vm <vm>
 aivm vm access reconcile --vm <vm>
+aivm vm access prepare <identity> --vm <vm> --admin_override  # administrator
+aivm vm access verify --vm <vm>  # identity owner, no sudo
 aivm vm access reconcile --vm <vm> --enable
 aivm vm access repair_host_identity --vm <vm>
 aivm vm access disable [identity] --vm <vm>

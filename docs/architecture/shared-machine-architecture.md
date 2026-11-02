@@ -123,13 +123,20 @@ The initial access mode is effectively:
 trusted-users
 ```
 
-Enrolled users may have passwordless sudo and direct system-libvirt access. This
-provides identity, ownership, predictable paths, and auditability, but not a
-security boundary. Documentation and status output must say so plainly.
+Guest accounts retain unrestricted passwordless **guest** sudo under the
+accepted [ADR-0001](adr/0001-unrestricted-agent-environment.md). Trusted
+host users may also have direct system-libvirt access. Guest sudo and host
+administrative authority are separate decisions. The current setup provides
+identity, ownership, predictable paths, and auditability, but not a security
+boundary between mutually adversarial guest or system-libvirt users.
+Documentation and status output must say so plainly.
 
-A later restricted mode may remove passwordless sudo and route host mutations
-through a privileged broker. That later mode must not require another storage
-or identity-model rewrite.
+A later restricted **host-user** mode may remove direct host libvirt/sudo
+access and route host mutations through an independently approved privileged
+broker. That must not remove the agent's unrestricted guest-administrator
+capability or require another storage/identity-model rewrite. The related
+[firewall lifecycle problem](firewall-lifecycle-and-delegation-2026-10.md)
+is still an open design question.
 
 ## Target state boundaries
 

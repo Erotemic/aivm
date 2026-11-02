@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -56,6 +57,7 @@ from ..attachments.safety import (
     warn_shared_home_attachment,
 )
 from ..attachments.session import (
+    _discard_unrealized_persistent_attachment,
     _record_attachment,
     _resolve_ip_for_ssh_ops,
 )
@@ -78,6 +80,7 @@ from ..config_store import (
     update_store,
 )
 from ..errors import AIVMError, CommandControlError
+from ..fs_identity import FilesystemIdentity
 from ..machine_store import (
     MachineResourceLockScope,
     current_machine_group_gid,
@@ -156,9 +159,51 @@ class VMInstallPersistentHostReplayServiceRequest:
     dry_run: bool = False
 
 
-def _validate_host_directory(path: Path) -> None:
-    if not path.exists() or not path.is_dir():
-        raise AIVMError(f'host_src must be an existing directory: {path}')
+def _validate_host_directory(
+    path: Path, *, privileged_foreign_probe: bool = False, dry_run: bool = False
+) -> FilesystemIdentity | None:
+    """Validate a source without requiring cross-user home traversal.
+
+    Ordinary attachments never elevate. An explicit administrative persistent
+    attach may inspect *only* the no-symlink directory identity through the
+    installed root replay helper when UNIX permissions block an ordinary stat.
+    The resulting identity is reused while recording the source pin, avoiding
+    a second unprivileged traversal that would fail in the same way.
+    """
+    try:
+        source_stat = path.stat()
+        if not stat.S_ISDIR(source_stat.st_mode):
+            raise AIVMError(f'host_src must be an existing directory: {path}')
+    except (FileNotFoundError, NotADirectoryError) as ex:
+        raise AIVMError(
+            f'host_src must be an existing directory: {path}'
+        ) from ex
+    except PermissionError:
+        if not privileged_foreign_probe:
+            raise AIVMError(
+                f'Cannot inspect host directory {path} with current user '
+                'permissions. For a private directory belonging to another '
+                'access identity, use --owner_principal with '
+                '--admin_override and --mode persistent.'
+            ) from None
+        if dry_run:
+            log.warning(
+                'DRYRUN: source {} is inaccessible to this account; a real '
+                'administrative attach would validate it via the privileged '
+                'no-symlink directory probe.',
+                path,
+            )
+            return None
+        from ..attachments.persistent import host_bind
+
+        host_bind._ensure_persistent_host_replay_helper(dry_run=False)
+        try:
+            return host_bind._probe_persistent_source_identity_as_root(path)
+        except (OSError, RuntimeError) as ex:
+            raise AIVMError(
+                f'Cannot validate administrative attachment source {path}: {ex}'
+            ) from ex
+    return None
 
 
 def _resolve_attach_context(
@@ -419,9 +464,10 @@ def _attach_privilege_guidance(
             f'  * attach with `--mode {ATTACHMENT_MODE_DIRECT_VIRTIOFS}`, which maps '
             'the folder straight into the guest over virtiofs and needs no '
             'host privileges;\n'
-            '  * or ask a host administrator to declare it for you:\n'
-            f'      sudo aivm vm attach <path> --owner_principal {identity} '
-            '--admin_override'
+            '  * or ask an enrolled sudo-capable host administrator to run '
+            'AIVM as themselves (not with `sudo aivm`):\n'
+            f'      aivm vm attach <path> --mode {mode} '
+            f'--owner_principal {identity} --admin_override'
         ) from ex
 
 
@@ -433,7 +479,6 @@ def run_vm_attach(request: VMAttachRequest) -> int:
     attachment, then reconcile the running guest if there is one.
     """
     host_src = logical_absolute_path(request.host_src)
-    _validate_host_directory(host_src)
     context, cfg_path = _resolve_attach_context(request, host_src)
     cfg = context.effective_cfg
     owner_principal_id = attachment_owner_for_context(context, cfg_path)
@@ -450,6 +495,19 @@ def run_vm_attach(request: VMAttachRequest) -> int:
         administrative_owner_principal_id=request.owner_principal,
     )
 
+    # Resolve the target owner before making any privileged source probe.
+    # A foreign source can be probed only for an explicitly delegated,
+    # persistent attachment, not for an ordinary or direct-virtiofs attach.
+    source_identity = _validate_host_directory(
+        host_src,
+        privileged_foreign_probe=(
+            bool(request.admin_override)
+            and bool(request.owner_principal)
+            and attachment.owner_principal_id != owner_principal_id
+            and attachment.mode == ATTACHMENT_MODE_PERSISTENT
+        ),
+        dry_run=bool(request.dry_run),
+    )
     existing_reg = load_store(cfg_path)
     warn_shared_home_attachment(
         host_src,
@@ -496,6 +554,12 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 cfg, attachment, host_src, yes=bool(request.yes)
             )
         )
+        had_attachment = find_attachment_for_vm(
+            load_store(cfg_path),
+            host_src,
+            cfg.vm.name,
+            owner_principal_id=(attachment.owner_principal_id or None),
+        ) is not None
         reg_path = _record_attachment(
             cfg,
             cfg_path,
@@ -506,6 +570,7 @@ def run_vm_attach(request: VMAttachRequest) -> int:
             tag=attachment.tag,
             owner_principal_id=attachment.owner_principal_id,
             mirror_home=attachment.mirror_home,
+            source_identity=source_identity,
         )
         if attachment.mode == ATTACHMENT_MODE_PERSISTENT:
             _sync_persistent_attachment_manifest_on_host(
@@ -513,7 +578,23 @@ def run_vm_attach(request: VMAttachRequest) -> int:
                 cfg_path,
                 dry_run=False,
             )
-            _sync_persistent_host_replay_manifest(cfg, cfg_path, dry_run=False)
+            try:
+                _sync_persistent_host_replay_manifest(
+                    cfg, cfg_path, dry_run=False
+                )
+            except SudoUnavailableError:
+                if not had_attachment:
+                    registered = find_attachment_for_vm(
+                        load_store(cfg_path),
+                        host_src,
+                        cfg.vm.name,
+                        owner_principal_id=(attachment.owner_principal_id or None),
+                    )
+                    if registered is not None:
+                        _discard_unrealized_persistent_attachment(
+                            cfg, cfg_path, attachment, expected_record=registered
+                        )
+                raise
             _reconcile_persistent_host_binds(
                 cfg,
                 cfg_path,

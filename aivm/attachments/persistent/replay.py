@@ -14,10 +14,11 @@ from ...persistent_replay import (
     PERSISTENT_ATTACHMENT_REPLAY_BIN,
     PERSISTENT_ATTACHMENT_REPLAY_SERVICE,
     PERSISTENT_REPLAY_DEGRADED_EXIT,
+    PERSISTENT_REPLAY_REPAIR_EXIT,
     persistent_replay_python,
     persistent_replay_service_unit,
 )
-from . import host_bind, manifest, transport
+from . import host_bind, inspection, manifest, transport
 
 
 def _install_persistent_attachment_replay(
@@ -80,6 +81,7 @@ def _reconcile_persistent_attachments_in_guest(
     host_exports_ready: bool = False,
     only_guest_dst: str = '',
     preserve_live_mounts: bool = False,
+    symlink_checks: list[inspection.SymlinkCheck] | None = None,
 ) -> None:
     # Host writes the canonical desired-state manifest first. The guest-local
     # manifest and helper are refreshed next. Scoped foreground operations use
@@ -108,6 +110,13 @@ def _reconcile_persistent_attachments_in_guest(
                     only_guest_dst=only_guest_dst,
                     preserve_live_binds=preserve_live_mounts,
                 )
+        live = None
+        symlinks_changed = False
+        if preserve_live_mounts and symlink_checks is not None and not dry_run:
+            live = inspection.inspect_foreground(
+                cfg, ip, only_guest_dst, list(dict.fromkeys(symlink_checks)),
+            )
+            symlinks_changed = inspection.apply_symlink_repairs(cfg, ip, live)
         guest_manifest_changed = (
             manifest._sync_persistent_attachment_manifest_to_guest(
                 cfg,
@@ -115,17 +124,27 @@ def _reconcile_persistent_attachments_in_guest(
                 cfg_path=cfg_path,
                 dry_run=dry_run,
                 check=not continue_on_error,
+                guest_directory_exists=(
+                    live.manifest_directory if live is not None else None
+                ),
             )
         )
-        replay_changed = _install_persistent_attachment_replay(
-            cfg,
-            ip,
-            dry_run=dry_run,
-            check=not continue_on_error,
-        )
+        replay_changed = False
+        if live is None or not all(
+            live.files[path] for path in (
+                PERSISTENT_ATTACHMENT_REPLAY_BIN,
+                f'/etc/systemd/system/{PERSISTENT_ATTACHMENT_REPLAY_SERVICE}',
+            )
+        ):
+            replay_changed = _install_persistent_attachment_replay(
+                cfg, ip, dry_run=dry_run, check=not continue_on_error,
+            )
         if dry_run:
             return
-        if replay_even_if_unchanged or guest_manifest_changed or replay_changed:
+        if (
+            replay_even_if_unchanged or guest_manifest_changed
+            or replay_changed or live is not None
+        ):
             replay_script = f'sudo -n {shlex.quote(PERSISTENT_ATTACHMENT_REPLAY_BIN)}'
             if only_guest_dst:
                 replay_script += (
@@ -133,6 +152,45 @@ def _reconcile_persistent_attachments_in_guest(
                 )
                 if preserve_live_mounts:
                     replay_script += ' --preserve-live-mounts'
+            if preserve_live_mounts:
+                # Any intervening repair invalidates the batched mount result.
+                # Re-read against the new manifest and path resolution.
+                inspected = (
+                    live.replay if live is not None and not (
+                        guest_manifest_changed or replay_changed or symlinks_changed
+                    ) else None
+                )
+                if inspected is None:
+                    with CommandManager.current().step(
+                        'Inspect requested guest mount',
+                        why='Read live mount identity before deciding whether any repair needs approval.',
+                    ):
+                        inspected = transport._run_guest_root_script(
+                            cfg, ip, script=replay_script + ' --check',
+                            summary='Inspect requested persistent attachment',
+                            detail=f'target={only_guest_dst}', dry_run=False,
+                            role='read', allowed_exit_codes=(
+                                0, PERSISTENT_REPLAY_DEGRADED_EXIT,
+                                PERSISTENT_REPLAY_REPAIR_EXIT,
+                            ),
+                        )
+                assert inspected is not None
+                if inspected.code not in (
+                    0, PERSISTENT_REPLAY_DEGRADED_EXIT, PERSISTENT_REPLAY_REPAIR_EXIT,
+                ):
+                    raise RuntimeError(
+                        inspected.stderr or 'guest mount inspection failed'
+                    )
+                if inspected.code != PERSISTENT_REPLAY_REPAIR_EXIT:
+                    if inspected.code == PERSISTENT_REPLAY_DEGRADED_EXIT:
+                        log.warning('guest-persistent-replay: {}', inspected.stderr.strip())
+                    else:
+                        log.info('Guest workspace verified at {}.', only_guest_dst)
+                    return
+                log.info(
+                    'Guest workspace repair needed: {}',
+                    inspected.stderr.strip() or only_guest_dst,
+                )
             replay_result = transport._run_guest_root_script(
                 cfg,
                 ip,

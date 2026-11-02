@@ -8,10 +8,19 @@ from typing import Any
 import pytest
 from pytest import MonkeyPatch
 
-from aivm.commands import CommandError, CommandManager, CommandResult, Elided
+from aivm.commands import (
+    CommandError,
+    CommandManager,
+    CommandManagerInvariantError,
+    CommandOwnership,
+    CommandResult,
+    CommandRole,
+    Elided,
+)
 from aivm.errors import (
     AIVMError,
     ApprovalUnavailableError,
+    CommandControlError,
     CommandNotExecutedError,
     SudoRequiredError,
     UserDeclinedError,
@@ -1132,7 +1141,6 @@ def test_replace_process_is_owned_by_command_manager(
     ) in messages
 
 
-
 def test_manager_dry_run_renders_plan_without_execution_or_approval(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -1213,3 +1221,144 @@ def test_replace_process_dry_run_does_not_exec(
 
     assert 'DRYRUN: Attach tunnel' in messages
     assert 'DRYRUN (exec skipped):\nssh -t agent@vm' in messages
+
+
+# ---------------------------------------------------------------------------
+# Supervised children: CommandManager.spawn
+# ---------------------------------------------------------------------------
+
+_LEASED_CHILD = (
+    'import sys\n'
+    'print("ready", flush=True)\n'
+    'sys.stdin.read()\n'  # holds the lease: returns only when stdin closes
+    'print("released", flush=True)\n'
+)
+
+
+def test_spawn_is_announced_and_bound_to_a_lease(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import sys
+
+    messages = capture_logs(
+        monkeypatch, 'aivm.commands.log', levels=('info', 'warning', 'debug')
+    )
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+
+    child = mgr.spawn(
+        [sys.executable, '-c', _LEASED_CHILD],
+        role='read',
+        summary='Start helper',
+    )
+
+    assert child is not None
+    try:
+        assert child.stdout.readline() == b'ready\n'
+        assert child.poll() is None and child.wait(0.05) is None
+        child.release()
+        child.release()  # idempotent
+        assert child.wait(20) == 0
+        assert child.stdout.read() == b'released\n'
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.stdout.close()
+    assert 'Start helper' in messages
+    # Like every command, a supervised child is shown to the user.
+    assert any(
+        message.startswith('RUN (supervised, runs beside this process):\n')
+        and '-c' in message
+        for message in messages
+    )
+
+
+def test_spawn_dry_run_renders_and_starts_nothing(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    def fail_popen(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr('aivm.commands.subprocess.Popen', fail_popen)
+    messages = capture_logs(monkeypatch, 'aivm.commands.log')
+    mgr = CommandManager(dry_run=True)
+    CommandManager.activate(mgr)
+
+    assert mgr.spawn(['helper', '--serve'], summary='Start helper') is None
+    assert 'DRYRUN: Start helper' in messages
+    assert 'DRYRUN (start skipped):\nhelper --serve' in messages
+
+
+def test_spawn_asks_before_an_unowned_state_change(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The consent rule of a loose ``run`` applies to a supervised child."""
+    import sys
+
+    started: list[list[str]] = []
+    real_popen = __import__('subprocess').Popen
+
+    def recording_popen(argv: list[str], **kwargs: Any) -> Any:
+        started.append(list(argv))
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr('aivm.commands.subprocess.Popen', recording_popen)
+    monkeypatch.setattr('aivm.commands.os.geteuid', lambda: 1000)
+    monkeypatch.setattr('aivm.commands.sys.stdin.isatty', lambda: False)
+    mgr = CommandManager()
+    CommandManager.activate(mgr)
+    argv = [sys.executable, '-c', 'pass']
+
+    # A state change the user owns, with nobody at the terminal to ask.
+    with pytest.raises(CommandControlError):
+        mgr.spawn(argv, role='modify')
+    assert started == []
+    # Declared exemptions, never inferred ones, lift the question.
+    def exercise_exemption(
+        role: CommandRole, ownership: CommandOwnership = 'user'
+    ) -> None:
+        child = mgr.spawn(argv, role=role, ownership=ownership)
+        assert child is not None
+        child.release()
+        assert child.wait(20) == 0
+        child.stdout.close()
+
+    exercise_exemption('read')
+    exercise_exemption('modify', 'tool')
+    assert len(started) == 2
+
+
+def test_spawn_cannot_start_inside_an_open_step() -> None:
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+    with pytest.raises(CommandManagerInvariantError):
+        with mgr.step('Open step', why='A plan is being assembled.'):
+            mgr.spawn(['helper'])
+
+
+def test_spawn_reports_a_missing_program_as_a_command_error() -> None:
+    mgr = CommandManager(yes=True)
+    CommandManager.activate(mgr)
+    with pytest.raises(CommandError) as caught:
+        mgr.spawn(['aivm-no-such-supervised-program'], role='read')
+    assert caught.value.result.code == 127
+
+
+def test_spawn_never_escalates_under_any_privilege_mode(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    seen: list[list[str]] = []
+
+    class Child:
+        stdin = stdout = None
+
+    def fake_popen(argv: list[str], **kwargs: Any) -> Child:
+        seen.append(list(argv))
+        return Child()
+
+    monkeypatch.setattr('aivm.commands.subprocess.Popen', fake_popen)
+    for mode in ('always', 'as-needed', 'never'):
+        mgr = CommandManager(yes=True, privilege_mode=mode)
+        CommandManager.activate(mgr)
+        assert mgr.spawn(['helper', '--serve'], role='read') is not None
+    assert seen == [['helper', '--serve']] * 3

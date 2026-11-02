@@ -22,7 +22,10 @@ if __name__ == '__main__':
         '-m',
         'not e2e',
         '--cov=' + package_name,
+        # The secret-use broker ships beside aivm in the same distribution.
+        '--cov=aivm_secrets',
         mod_dpath,
+        'aivm_secrets',
         test_dpath,
     ]
     pytest_args = pytest_args + sys.argv[1:]

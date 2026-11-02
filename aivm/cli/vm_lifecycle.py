@@ -172,6 +172,9 @@ class VMCreateCLI(_BaseCommand):
     """Create a managed VM from config-store defaults and start it."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
+    tpm: Literal['none', 'emulator'] | None = kwconf.Value(
+        None, help='Virtual TPM: none or emulator (TPM 2.0); omitted uses config.',
+    )
     set_default: bool = kwconf.Flag(
         False,
         help='Set the created VM as the active default VM.',
@@ -200,6 +203,7 @@ class VMCreateCLI(_BaseCommand):
         return create_vm_from_defaults(
             store_fpath,
             vm_override=args.vm if args.vm else None,
+            tpm_override=args.tpm or None,
             set_default=args.set_default,
             force=args.force,
             dry_run=args.dry_run,
