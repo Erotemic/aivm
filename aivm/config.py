@@ -125,6 +125,10 @@ class VMConfig:
     ram_mb: int = 8192
     disk_gb: int = 40
     # Optional software TPM; state belongs to libvirt, never to a workspace.
+    # TODO: this doesn't enumerate what the valid settings for tpm are.
+    # Another valid setting is "emulator", so we could do Literal['emulator',
+    # 'none'], it would be a good idea to ensure we have a single authority
+    # for such configuration settings.
     tpm: str = 'none'
     allow_password_login: bool = True
     password: str = 'agent'

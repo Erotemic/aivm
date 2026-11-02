@@ -97,6 +97,10 @@ class VMUpdateCLI(_BaseCommand):
     """Reconcile VM config drift against live host/libvirt state."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
+
+    # TODO: the string value of "none" should probably be accepted here.
+    # We also may want a single authoritt to describe what the valid tpm
+    # configurations are.
     tpm: Literal['emulator'] | None = kwconf.Value(
         None, help='Add a software TPM 2.0 to a shut-off VM; persist the choice.',
     )
