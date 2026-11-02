@@ -358,7 +358,8 @@ host TPM support and restart requirements remain unknown until an actual run.
 
 Creation and a successful update persist ``vm.tpm = "emulator"``. You can also
 select it through ``aivm vm edit`` and apply it with ``aivm vm update``. The default is ``none``.
-A missing request never removes an existing device. Replacement, removal and
+An omitted request never touches the existing device, and an explicit
+``--tpm none`` is rejected with an error: replacement, removal and
 TPM-state copying are not provided by this workflow.
 
 The libvirt host needs ``swtpm`` and ``swtpm-tools`` with TPM 2.0

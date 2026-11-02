@@ -29,7 +29,7 @@ the aggregate-config and scope-reconstruction lists are intended to shrink.
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0` | `aivm/vm/update/virtiofs.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm.legacy.pre_0_6_0.virtiofsd_wrapper` | `aivm/vm/update/virtiofs.py` | 1 |
 
-## Canonical `AgentVMConfig` references (272)
+## Canonical `AgentVMConfig` references (275)
 
 `ResolvedVMContext.effective_cfg` deliberately carries this aggregate
 compatibility view while canonical runtime consumers are narrowed.
@@ -38,14 +38,14 @@ compatibility view while canonical runtime consumers are narrowed.
 |---|---|---:|
 | `aivm.access_control` | `aivm/access_control.py` | 2 |
 | `aivm.attachments.guest` | `aivm/attachments/guest.py` | 9 |
-| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py` | 8 |
+| `aivm.attachments.persistent.host_bind` | `aivm/attachments/persistent/host_bind.py` | 9 |
 | `aivm.attachments.persistent.identity` | `aivm/attachments/persistent/identity.py` | 1 |
 | `aivm.attachments.persistent.inspection` | `aivm/attachments/persistent/inspection.py` | 2 |
 | `aivm.attachments.persistent.manifest` | `aivm/attachments/persistent/manifest.py` | 11 |
 | `aivm.attachments.persistent.replay` | `aivm/attachments/persistent/replay.py` | 2 |
 | `aivm.attachments.persistent.transport` | `aivm/attachments/persistent/transport.py` | 4 |
 | `aivm.attachments.resolve` | `aivm/attachments/resolve.py` | 2 |
-| `aivm.attachments.session` | `aivm/attachments/session.py` | 7 |
+| `aivm.attachments.session` | `aivm/attachments/session.py` | 8 |
 | `aivm.attachments.shared_root` | `aivm/attachments/shared_root.py` | 8 |
 | `aivm.cli.config.discover` | `aivm/cli/config/discover.py` | 1 |
 | `aivm.cli.config.init` | `aivm/cli/config/init.py` | 17 |
@@ -80,7 +80,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.disk` | `aivm/vm/disk.py` | 1 |
 | `aivm.vm.domain` | `aivm/vm/domain.py` | 5 |
 | `aivm.vm.drift` | `aivm/vm/drift.py` | 10 |
-| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 20 |
+| `aivm.vm.guest_tools` | `aivm/vm/guest_tools.py` | 21 |
 | `aivm.vm.host_access` | `aivm/vm/host_access.py` | 1 |
 | `aivm.vm.images` | `aivm/vm/images.py` | 1 |
 | `aivm.vm.paths` | `aivm/vm/paths.py` | 3 |

@@ -224,3 +224,39 @@ block CIDRs). Comment-only; no rename or alias implemented yet — that
 would be a deliberate schema/terminology change. Verified: `py_compile`
 clean and the 75 tests across test_firewall/test_config/test_store/
 test_machine_store pass.
+
+## 2026-11-02 15:26:35 -0500
+Centralized the vm.tpm value authority after a discussion started from
+"What are the valid tpm values?" (none/emulator; docs live in the
+"Optional virtual TPM" section of workflows.rst). `aivm/vm/tpm.py` now
+holds one value authority: a `TPM_VALUES` tuple plus a parse-time
+`TpmChoice = Literal['none', 'emulator']` alias spelled out right next
+to it. We considered deriving the alias from the tuple
+(`Literal[*TPM_VALUES]`); verified empirically that it parses on
+3.11/3.12/3.13 and kwconf treats it identically, but `ty` rejects it
+(invalid-type-form), so the alias stays spelled out and
+`test_tpm_choice_alias_matches_the_value_authority` in
+tests/test_vm_tpm.py is the lockstep guard. Both CLI commands
+annotate with the imported `TpmChoice`. Per the user's suggestion we
+dropped the would-be third authority (a `Literal['emulator']` subset
+for vm update): update now accepts the full set and rejects an
+explicit `--tpm none` with an AIVMError before any store or host
+access, resolving the pre-existing TODO in vm_update.py. The latent
+trap was truthiness: 'none' is a truthy string, so the existing
+`if args.tpm:` guards would have persisted `tpm='none'` to the store
+while the live domain kept its device had the value been allowed
+through; the early guard makes that unreachable. config_review's
+operator-facing wording now derives from the tuple (local import to
+keep the module light) and workflows.rst documents the explicit
+rejection. One surprise: the lazy `persist_tpm_choice` import inside
+vm_update.main is load-bearing for testability — the test
+monkeypatches `aivm.vm.tpm.persist_tpm_choice`, and hoisting the
+import to module level broke the patch binding (the suite caught it;
+reverted to the lazy call). Verification: `ty check aivm` clean; full
+pytest 1677 passed with one failure, test_architecture_docs — already
+failing at HEAD (confirmed in a clean worktree: the committed
+compatibility-inventory.md had drifted before this session), so I
+regenerated the architecture docs per the tool's instruction; the
+edge diff is only the new cli/config_review -> vm.tpm imports. Code
+changes left uncommitted for review; only the resource-tally ledger
+was committed, separately.

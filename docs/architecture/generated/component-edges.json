@@ -1428,8 +1428,14 @@
         },
         {
           "imported": "aivm.vm.tpm",
-          "importer": "aivm.cli.vm_update",
+          "importer": "aivm.cli.vm_lifecycle",
           "occurrences": 1,
+          "path": "aivm/cli/vm_lifecycle.py"
+        },
+        {
+          "imported": "aivm.vm.tpm",
+          "importer": "aivm.cli.vm_update",
+          "occurrences": 2,
           "path": "aivm/cli/vm_update.py"
         },
         {
@@ -4208,6 +4214,12 @@
       "classification": "accepted",
       "from": "orchestration",
       "imports": [
+        {
+          "imported": "aivm.vm.tpm",
+          "importer": "aivm.config_review",
+          "occurrences": 1,
+          "path": "aivm/config_review.py"
+        },
         {
           "imported": "aivm.detect",
           "importer": "aivm.services",

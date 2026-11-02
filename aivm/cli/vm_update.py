@@ -18,6 +18,7 @@ from ..config import AgentVMConfig
 from ..errors import AIVMError
 from ..operational_scope import announce_vm_machine_impact
 from ..services import load_cfg_with_path
+from ..vm.tpm import TpmChoice
 from ..vm.update import (
     RestartKind,
     _apply_vm_update,
@@ -98,11 +99,11 @@ class VMUpdateCLI(_BaseCommand):
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
 
-    # TODO: the string value of "none" should probably be accepted here.
-    # We also may want a single authoritt to describe what the valid tpm
-    # configurations are.
-    tpm: Literal['emulator'] | None = kwconf.Value(
-        None, help='Add a software TPM 2.0 to a shut-off VM; persist the choice.',
+    tpm: TpmChoice | None = kwconf.Value(
+        None,
+        help=('Reconcile the virtual TPM: emulator adds a software TPM 2.0 to '
+              'a shut-off VM and persists the choice; an explicit none is '
+              'rejected because TPM removal is not yet implemented.'),
     )
     restart: Literal['auto', 'always', 'never'] = kwconf.Value(
         'auto',
@@ -115,6 +116,18 @@ class VMUpdateCLI(_BaseCommand):
     @classmethod
     def main(cls, argv: bool = True, **kwargs: Any) -> int:
         args = cls.cli(argv=argv, data=kwargs)
+        if args.tpm == 'none':
+            # The shared value set includes 'none', but this command only
+            # adds: removal would have to delete libvirt's persistent TPM
+            # state, which is not implemented. Fail before any store or
+            # host access so a rejected request can never mutate or
+            # persist anything.
+            raise AIVMError(
+                'aivm vm update --tpm none is not supported: removing an '
+                'emulated TPM (and its persistent state) is not implemented '
+                'yet. Omit --tpm to leave the existing device untouched, or '
+                'pass --tpm emulator to add one.'
+            )
         restart_policy = normalize_restart_policy(args.restart)
         cfg, store_path = load_cfg_with_path(args.config, vm_opt=args.vm)
         if args.tpm:

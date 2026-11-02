@@ -5,6 +5,7 @@ import json
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger as log
 
@@ -17,11 +18,17 @@ from ..runtime import pin_locale, virsh_cmd
 
 TPM_REMOVAL_UNCONFIRMED = 'TPM state removal unconfirmed'
 TPM_XML = '<tpm model="tpm-crb"><backend type="emulator" version="2.0" /></tpm>'
+# Single value authority for vm.tpm. The runtime set and the parse-time
+# Literal alias are two views of the same choices; tests/test_vm_tpm.py
+# asserts they stay in sync. Type checkers reject a Literal derived from a
+# runtime tuple, so the alias is spelled out beside the tuple instead.
+TPM_VALUES = ('none', 'emulator')
+TpmChoice = Literal['none', 'emulator']
 
 
 def normalize_tpm(value: str) -> str:
-    if value not in {'none', 'emulator'}:
-        raise AIVMError('vm.tpm must be one of: none, emulator')
+    if value not in TPM_VALUES:
+        raise AIVMError('vm.tpm must be one of: ' + ', '.join(TPM_VALUES))
     return value
 
 

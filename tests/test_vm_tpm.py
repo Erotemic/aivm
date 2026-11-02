@@ -1,5 +1,6 @@
 """Device lifecycle contracts; fake external libvirt and host TPM tools."""
 from pathlib import Path
+from typing import get_args
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -79,6 +80,13 @@ def test_creation_modes_are_explicit():
     config.vm.tpm = 'typo'
     with pytest.raises(AIVMError, match='vm.tpm'):
         build_virt_install_cmd(config, vm_disk='/disk', seed_iso='/seed')
+
+
+def test_tpm_choice_alias_matches_the_value_authority():
+    # The parse-time Literal and the runtime tuple are two views of one
+    # value set (the type checker forbids deriving the Literal from the
+    # tuple); this test is what keeps the two in lockstep.
+    assert set(get_args(tpm.TpmChoice)) == set(tpm.TPM_VALUES)
 
 
 def test_offline_upgrade_preserves_identity_storage_and_devices(daemon):
@@ -292,6 +300,18 @@ def test_update_cli_applies_choice_and_only_persists_success(monkeypatch, tmp_pa
                         lambda *a: calls.append(('persist', config.vm.tpm)))
     assert VMUpdateCLI.main(argv=False, tpm='emulator', dry_run=dry_run, yes=True) == 0
     assert calls == [('apply', 'emulator')] + ([] if dry_run else [('persist', 'emulator')])
+
+
+def test_update_cli_rejects_not_implemented_removal_before_any_store_access(monkeypatch):
+    from aivm.cli.vm_update import VMUpdateCLI
+    config = cfg()
+
+    def fail(*args, **kwargs):
+        raise AssertionError('a rejected request must not load the config store')
+
+    monkeypatch.setattr('aivm.cli.vm_update.load_cfg_with_path', fail)
+    with pytest.raises(AIVMError, match='removing an emulated TPM.*not implemented'):
+        VMUpdateCLI.main(argv=False, tpm='none', dry_run=True, yes=True)
 
 
 @pytest.mark.parametrize('bad_xml', ['', '<domain>', '<network/>', '<domain/>'])
