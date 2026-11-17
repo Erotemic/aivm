@@ -735,4 +735,6 @@ def test_unconfirmed_tpm_removal_cannot_be_forgotten_on_resume(monkeypatch, tmp_
     with pytest.raises(AIVMError, match='Automatic deletion recovery is blocked'):
         delete_managed_vm(scope, cfg, cfg_path, dry_run=False)
     assert calls == []
-    assert _load_journal(_journal_path(scope, cfg)).last_error == journal.last_error
+    saved_journal = _load_journal(_journal_path(scope, cfg))
+    assert saved_journal is not None
+    assert saved_journal.last_error == journal.last_error

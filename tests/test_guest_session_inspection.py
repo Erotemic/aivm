@@ -176,12 +176,9 @@ def test_inspection_helper_upgrade_is_bounded_and_never_masks_runtime_failure(
     )
     command_recorder(monkeypatch, {'ssh': route})
     if installed:
-        assert (
-            inspection.inspect_foreground(
-                cfg, '10.0.0.5', '/workspace', []
-            ).replay.code
-            == 0
-        )
+        result = inspection.inspect_foreground(cfg, '10.0.0.5', '/workspace', [])
+        assert result.replay is not None
+        assert result.replay.code == 0
         assert len(attempts) == 2
     else:
         with pytest.raises(RuntimeError, match='helper absent or failed'):

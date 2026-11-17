@@ -153,3 +153,21 @@ needs a shared AIVM executable for users to operate it later. Tests cover
 the user-home/key/profile path, dry-run safety, active-after-proof semantics,
 revoked/key-mismatch refusal, CLI attachment forwarding, and existing access
 lifecycle; a live VM/sudo experiment is still needed on the target host.
+
+## 2026-11-17 16:14:00 -0500
+
+Addressed the 34 `ty check aivm tests/` diagnostics reported after the
+administrator onboarding work. The issues were annotation mismatches in the
+onboarding preflight, an optional `lstat` result in the root-installed helper,
+fixture state inferred as broad unions, and tests accessing optional lookup or
+XML results without an explicit existence assertion. The `ty` rule rename
+was also applied. These changes preserve runtime behavior; assertions in tests
+now make previously assumed invariants explicit, and the helper always obtains
+its final metadata after optional directory creation.
+
+The seven relevant test modules passed locally (123 tests plus four subtests)
+using the vendored `kwconf` and `xdoctest` sources on the Python path. The `ty`
+executable is not available in this isolated environment, so the exact
+reported static-check command still needs to run in the developer's
+installation. Packaging is a context-aware patch ZIP to avoid overwriting any
+subsequent local changes to shared files. There is no live VM test involved.

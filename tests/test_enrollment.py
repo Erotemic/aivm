@@ -615,10 +615,11 @@ def test_administrator_prepares_foreign_principal_then_owner_verifies_without_su
     assert rec.calls[0][0] == 'sudo'
     assert 'aivm-bootstrap@10.77.0.119' in rec.normalized[0]
     assert 'benjamin-fenelon-agent@10.77.0.119' not in rec.normalized[0]
-    assert find_principal_for_host(
+    pending = find_principal_for_host(
         load_store(scope.store_path), vm_name=cfg.vm.name,
         host_user='benjamin.fenelon',
-    ).state == 'pending'
+    )
+    assert pending is not None and pending.state == 'pending'
 
     # Benjamin can verify under his own kernel identity and own profile,
     # without access to the bootstrap key or host sudo.
@@ -653,6 +654,7 @@ def test_administrator_prepares_foreign_principal_then_owner_verifies_without_su
         load_store(scope.store_path), vm_name=cfg.vm.name,
         host_user='benjamin.fenelon',
     )
+    assert saved is not None
     assert saved.state == 'active'
     assert saved.id == 'principal-ben'
 
@@ -716,7 +718,8 @@ def test_personal_verification_refuses_foreign_key_without_guest_transport(
     )
     with pytest.raises(AIVMError, match='public key differs'):
         verify_current_principal(scope, vm_name=cfg.vm.name)
-    assert find_principal_for_host(
+    saved = find_principal_for_host(
         load_store(scope.store_path), vm_name=cfg.vm.name,
         host_user='edward.wang',
-    ).state == 'active'
+    )
+    assert saved is not None and saved.state == 'active'

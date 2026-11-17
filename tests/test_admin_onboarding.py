@@ -13,6 +13,7 @@ import pytest
 
 from aivm import admin_onboarding as onboard
 from aivm import privileged_onboard_user as helper
+from aivm.cli.vm_attach import VMAttachRequest
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
     PrincipalEntry,
@@ -203,7 +204,7 @@ def test_onboard_cli_optional_attachment_targets_new_principal(
             profile_path=tmp_path / 'ben/profile.toml', changed=True,
         )
     ))
-    attachments: list[object] = []
+    attachments: list[VMAttachRequest] = []
     monkeypatch.setattr(
         vm_access, 'run_vm_attach', lambda req: attachments.append(req) or 0,
     )

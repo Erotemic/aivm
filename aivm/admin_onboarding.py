@@ -20,6 +20,7 @@ from pathlib import Path
 from .commands import CommandManager
 from .config_store import (
     PrincipalEntry,
+    Store,
     find_principal_for_host,
     find_principal_for_host_identity,
     find_principals_for_vm,
@@ -106,7 +107,7 @@ def _profile_for(account: pwd.struct_passwd, vm_name: str, guest_user: str) -> t
     )
 
 
-def _preflight_principal(reg: object, vm_name: str, account: pwd.struct_passwd, guest_user: str) -> PrincipalEntry | None:
+def _preflight_principal(reg: Store, vm_name: str, account: pwd.struct_passwd, guest_user: str) -> PrincipalEntry | None:
     existing = find_principal_for_host(
         reg, vm_name=vm_name, host_user=account.pw_name
     )

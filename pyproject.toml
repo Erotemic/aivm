@@ -145,7 +145,7 @@ disable_error_code = [
 ]
 
 [tool.ty]
-rules.unresolved-import = "ignore"
+rules.import-not-found = "ignore"
 rules.unused-ignore-comment = "ignore"
 rules.unused-type-ignore-comment = "ignore"
 

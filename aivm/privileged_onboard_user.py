@@ -109,10 +109,9 @@ def _ensure_home(account: pwd.struct_passwd) -> Path:
     home = Path(account.pw_dir)
     parts = list(reversed([home, *home.parents]))
     try:
-        metadata = os.lstat(home)
+        os.lstat(home)
         missing_home = False
     except FileNotFoundError:
-        metadata = None
         missing_home = True
     for ancestor in parts[:-1]:
         parent_metadata = os.lstat(ancestor)
@@ -126,7 +125,7 @@ def _ensure_home(account: pwd.struct_passwd) -> Path:
     if missing_home:
         os.mkdir(home, 0o700)
         os.chown(home, account.pw_uid, account.pw_gid)
-        metadata = os.lstat(home)
+    metadata = os.lstat(home)
     if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != account.pw_uid:
         raise ValueError(f'Home must be a real directory owned by {account.pw_name}: {home}')
     return home

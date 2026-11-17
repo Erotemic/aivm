@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,10 +22,10 @@ def _private_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     target = tmp_path / 'benjamin.fenelon' / 'aiq-super-repo'
     real_stat = Path.stat
 
-    def denied(path: Path, *args: object, **kwargs: object):
+    def denied(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
         if path == target:
             raise PermissionError(13, 'Permission denied', str(target))
-        return real_stat(path, *args, **kwargs)
+        return real_stat(path, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(Path, 'stat', denied)
     return target
@@ -167,12 +168,12 @@ def test_record_attachment_reuses_privileged_identity_without_retraversal(
     source = tmp_path / 'aiq-super-repo'
     source.mkdir()
     identity = FilesystemIdentity(dev=147, ino=258)
-    captured: dict[str, object] = {}
+    captured: list[Store] = []
 
     def fake_update(mutate, path, **kwargs):  # type: ignore[no-untyped-def]
         reg = Store()
         mutate(reg)
-        captured['reg'] = reg
+        captured.append(reg)
         return reg
 
     def refuse_retraversal(path):  # type: ignore[no-untyped-def]
@@ -190,7 +191,7 @@ def test_record_attachment_reuses_privileged_identity_without_retraversal(
         tag='ben-aivm-test', owner_principal_id='principal-ben',
         source_identity=identity,
     )
-    reg = captured['reg']
-    saved = reg.attachments[0]
+    assert len(captured) == 1
+    saved = captured[0].attachments[0]
     assert (saved.source_dev, saved.source_ino) == (147, 258)
     assert saved.owner_principal_id == 'principal-ben'

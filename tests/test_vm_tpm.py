@@ -1,6 +1,6 @@
 """Device lifecycle contracts; fake external libvirt and host TPM tools."""
 from pathlib import Path
-from typing import get_args
+from typing import TypedDict, get_args
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -27,12 +27,30 @@ XML = '''<domain type="kvm"><name>test</name><uuid>9dc48c15-9fc7-44c2-807a-81536
 <filesystem><target dir="workspace"/></filesystem></devices></domain>'''
 
 
+class DaemonState(TypedDict):
+    xml: str
+    power: str
+    saved: str
+    caps: str
+    calls: list[list[str]]
+    definitions: list[str]
+    fail: bool
+    probe: CmdResult
+
+
 @pytest.fixture
-def daemon(monkeypatch):
+def daemon(monkeypatch: pytest.MonkeyPatch) -> DaemonState:
     activate_manager(monkeypatch)
-    state = dict(xml=XML, power='shut off', saved='no', caps=CAPS,
-                 calls=[], definitions=[], fail=False,
-                 probe=CmdResult(0, SWTPM_CAPS, ''))
+    state: DaemonState = {
+        'xml': XML,
+        'power': 'shut off',
+        'saved': 'no',
+        'caps': CAPS,
+        'calls': [],
+        'definitions': [],
+        'fail': False,
+        'probe': CmdResult(0, SWTPM_CAPS, ''),
+    }
 
     def run(self, cmd, **kwargs):
         cmd = normalize_cmd(cmd)
@@ -95,7 +113,10 @@ def test_offline_upgrade_preserves_identity_storage_and_devices(daemon):
     after = ET.fromstring(daemon['xml'])
     before = ET.fromstring(XML)
     for path in ('name', 'uuid', 'metadata', './devices/disk', './devices/filesystem'):
-        assert ET.tostring(after.find(path)) == ET.tostring(before.find(path))
+        after_element = after.find(path)
+        before_element = before.find(path)
+        assert after_element is not None and before_element is not None
+        assert ET.tostring(after_element) == ET.tostring(before_element)
     assert tpm.emulator_tpm(after)
     assert not tpm.tpm_update_needed(cfg())
     tpm.add_tpm(cfg(), dry_run=False)
@@ -140,9 +161,12 @@ def test_missing_host_support_does_not_downgrade(daemon):
 ])
 def test_capability_failure_reports_missing_requirement(daemon, name, value, omitted):
     root = ET.fromstring(CAPS)
-    enum = root.find(f'./devices/tpm/enum[@name="{name}"]')
+    tpm_device = root.find('./devices/tpm')
+    assert tpm_device is not None
+    enum = tpm_device.find(f'./enum[@name="{name}"]')
+    assert enum is not None
     if omitted:
-        root.find('./devices/tpm').remove(enum)
+        tpm_device.remove(enum)
     else:
         enum.clear()
         enum.set('name', name)
@@ -162,8 +186,11 @@ def test_older_libvirt_uses_positive_tpm2_probe_without_downgrading(daemon):
     tpm.add_tpm(cfg(), dry_run=False)
     root = ET.fromstring(daemon['xml'])
     device = root.find('./devices/tpm')
+    assert device is not None
     assert device.get('model') == 'tpm-crb'
-    assert device.find('backend').attrib == {'type': 'emulator', 'version': '2.0'}
+    backend = device.find('backend')
+    assert backend is not None
+    assert backend.attrib == {'type': 'emulator', 'version': '2.0'}
     assert root.findtext('uuid') == ET.fromstring(XML).findtext('uuid')
     assert [call for call in daemon['calls'] if call[0] == 'swtpm'] == [
         ['swtpm', 'socket', '--tpm2', '--print-capabilities'],
