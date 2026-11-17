@@ -83,8 +83,8 @@ class _FakeManager(CommandManager):
             self.public_by_private[str(private)] = public
             return CommandResult(0, '', '')
         if tokens[:2] == ('ssh-keygen', '-y'):
-            private = tokens[tokens.index('-f') + 1]
-            return CommandResult(0, self.public_by_private[private] + '\n', '')
+            private_key = tokens[tokens.index('-f') + 1]
+            return CommandResult(0, self.public_by_private[private_key] + '\n', '')
         if tokens[:1] == ('ssh-agent',) and '-a' in tokens:
             socket_path = tokens[tokens.index('-a') + 1]
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

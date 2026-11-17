@@ -1,0 +1,798 @@
+{
+ "about": "Fact checks for an invented provider, with nothing provider-specific in the kernel. An operation that requires a check first fetches it; every stated fact must hold (literal, request parameter, optional case folding, exact types) before any further effect exists. A bound fact enters a route only in its declared format. Request parameters are folded and defaulted before the scope check. A failed check still spends its reservation.",
+ "theorems": [
+  "AUTH-01",
+  "EFFECT-01",
+  "ROUTE-01",
+  "COMP-01",
+  "BUDGET-01"
+ ],
+ "policy": {
+  "schema": 2,
+  "adapter": "https",
+  "service": "tracker",
+  "host": "api.example.org",
+  "authentication": "bearer",
+  "credential_source": {
+   "kind": "command",
+   "argv": [
+    "mytool",
+    "auth",
+    "print-token"
+   ],
+   "inherit_env": [
+    "XDG_CONFIG_HOME"
+   ]
+  },
+  "operations": [
+   {
+    "name": "ticket.view",
+    "effect": "read",
+    "requires": "ticket",
+    "returns": "check",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ]
+   },
+   {
+    "name": "ticket.builds",
+    "effect": "read",
+    "requires": "ticket",
+    "method": "GET",
+    "path": "/v1/projects/{project}/revisions/{revision}/builds/{serial}/{branch}",
+    "query": {
+     "page": "{page}",
+     "per_page": "50"
+    },
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ],
+     "page": {
+      "min": 1,
+      "max": 9
+     }
+    },
+    "defaults": {
+     "page": 1
+    },
+    "fold": [
+     "project"
+    ],
+    "page": {
+     "size": 50,
+     "at": [
+      "builds"
+     ],
+     "parameter": "page"
+    }
+   },
+   {
+    "name": "ticket.note",
+    "effect": "write",
+    "requires": "ticket",
+    "method": "POST",
+    "path": "/v1/projects/{project}/tickets/{ticket}/notes",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ],
+    "body_fields": {
+     "text": 100,
+     "title": {
+      "max_bytes": 20,
+      "optional": true
+     }
+    }
+   },
+   {
+    "name": "ticket.close",
+    "effect": "write",
+    "method": "GET",
+    "path": "/v1/projects/{project}/tickets/{ticket}/close",
+    "parameters": {
+     "project": [
+      "acme/widgets"
+     ],
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "fold": [
+     "project"
+    ]
+   },
+   {
+    "name": "ticket.log",
+    "effect": "read",
+    "method": "GET",
+    "path": "/v1/tickets/{ticket}/log",
+    "parameters": {
+     "ticket": [
+      7,
+      8
+     ]
+    },
+    "response": "text"
+   }
+  ],
+  "lifetime_seconds": 1800,
+  "max_requests": 12,
+  "max_body_bytes": 100,
+  "checks": {
+   "ticket": {
+    "path": "/v1/projects/{project}/tickets/{ticket}",
+    "require": [
+     {
+      "at": [
+       "id"
+      ],
+      "equals_parameter": "ticket"
+     },
+     {
+      "at": [
+       "project",
+       "slug"
+      ],
+      "equals_parameter": "project",
+      "fold": true
+     },
+     {
+      "at": [
+       "state"
+      ],
+      "equals": "open"
+     },
+     {
+      "at": [
+       "owner",
+       "name"
+      ],
+      "equals": "alice",
+      "fold": true
+     },
+     {
+      "at": [
+       "version"
+      ],
+      "equals": 2
+     }
+    ],
+    "bind": {
+     "revision": {
+      "at": [
+       "head",
+       "rev"
+      ],
+      "format": "hex"
+     },
+     "serial": {
+      "at": [
+       "serial"
+      ],
+      "format": "integer"
+     },
+     "branch": {
+      "at": [
+       "branch"
+      ],
+      "format": "segment"
+     }
+    }
+   }
+  },
+  "cli": {
+   "tk": [
+    {
+     "command": [
+      "view"
+     ],
+     "operation": "ticket.view",
+     "positional": [
+      "ticket"
+     ],
+     "options": {
+      "--project": "project",
+      "-p": "project"
+     }
+    },
+    {
+     "command": [
+      "builds",
+      "list"
+     ],
+     "operation": "ticket.builds",
+     "positional": [
+      "ticket"
+     ],
+     "options": {
+      "--project": "project",
+      "--page": "page"
+     }
+    },
+    {
+     "command": [
+      "note"
+     ],
+     "operation": "ticket.note",
+     "positional": [
+      "project",
+      "ticket"
+     ],
+     "options": {
+      "--text": "text",
+      "--text-file": "@text",
+      "--title": "title"
+     }
+    },
+    {
+     "command": [
+      "log"
+     ],
+     "operation": "ticket.log",
+     "positional": [
+      "ticket"
+     ],
+     "output": "result"
+    }
+   ]
+  }
+ },
+ "write_mode": "allow",
+ "clock": {
+  "wall": 1000,
+  "mono": 100
+ },
+ "steps": [
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/tickets/7",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "effect": null
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "ACME/Widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/tickets/7",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "effect": null
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.builds",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/tickets/7",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "effect": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/revisions/c0ffee0000000000000000000000000000000000/builds/31/main?page=1&per_page=50",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "write": false
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.note",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7,
+     "text": "hi"
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/tickets/7",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "effect": {
+     "method": "POST",
+     "target": "/v1/projects/acme/widgets/tickets/7/notes",
+     "accept": "application/json",
+     "response": "json",
+     "body": {
+      "text": "hi"
+     }
+    },
+    "write": true
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.note",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7,
+     "text": "hi"
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "mallory"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 8,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": "7",
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "OPEN",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.builds",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "../../admin"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.builds",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "feature/x"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.builds",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": "31",
+    "branch": "main"
+   },
+   "expect": {
+    "code": "resource_mismatch"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 9
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "denied"
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "ok",
+    "preflight": {
+     "method": "GET",
+     "target": "/v1/projects/acme/widgets/tickets/7",
+     "accept": "application/json",
+     "response": "json"
+    },
+    "effect": null
+   }
+  },
+  {
+   "do": "request",
+   "grant": "root",
+   "clock": {
+    "wall": 1000,
+    "mono": 100
+   },
+   "request": {
+    "operation": "ticket.view",
+    "arguments": {
+     "project": "acme/widgets",
+     "ticket": 7
+    }
+   },
+   "facts": {
+    "id": 7,
+    "project": {
+     "slug": "Acme/Widgets"
+    },
+    "state": "open",
+    "owner": {
+     "name": "Alice"
+    },
+    "version": 2,
+    "head": {
+     "rev": "C0FFEE0000000000000000000000000000000000"
+    },
+    "serial": 31,
+    "branch": "main"
+   },
+   "expect": {
+    "code": "exhausted"
+   }
+  }
+ ]
+}

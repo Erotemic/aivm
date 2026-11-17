@@ -127,6 +127,48 @@ aivm vm access reconcile --vm <vm-name> --dry-run
 The current user's private and public SSH paths come only from that user's
 profile. The machine bootstrap private key never enters the profile.
 
+### Administrator-assisted join for non-sudo host users
+
+Enrollment normally invokes the root-owned machine bootstrap key through
+host sudo. An ordinary coworker may have access to the shared libvirt group
+and machine store without host sudo. In that case, the coworker's regular
+`reconcile` leaves an existing access identity `pending` and cannot install
+their public key. **Do not grant them host sudo just to complete enrollment.**
+
+After the coworker has initialized their own profile and created their
+pending record, an enrolled host administrator with sudo runs, **as
+that administrator (not using `sudo aivm` to change kernel identity)**:
+
+```bash
+aivm vm access prepare benjamin.fenelon --vm aivm-2404-aiq-gpu --admin_override
+```
+
+`prepare` accepts an existing host login or principal id. It verifies that
+the stored host UID/GID still match the actual passwd identity, refuses
+disabled/removed principals, and uses the recorded **public** key only. It
+executes the restricted bootstrap enrollment SSH command under the
+administrator's sudo authority. The prepared identity remains `pending`
+because the administrator cannot and should not use the coworker's private
+key to verify access.
+
+The coworker finishes, under **their own** kernel identity:
+
+```bash
+aivm vm access verify --vm aivm-2404-aiq-gpu
+```
+
+`verify` checks the caller's public profile key against their recorded access
+identity, then makes a single non-sudo SSH attempt with their private key and
+promotes the identity to `active` only on success. It does not touch the
+bootstrap key or grant host sudo. If the admin has not prepared the guest, SSH
+verification fails and the stored state is retained for retry. Neither
+operation can re-enable a disabled/removed identity.
+
+This is explicitly a two-person flow. A future privileged host broker may
+remove the need for an administrator to invoke a sudo SSH command for every
+new user, but it must not expose the machine bootstrap key to unprivileged
+accounts or borrow their personal private credentials.
+
 ## Compatibility boundary
 
 VMs created through the machine-store path after this stage contain the guest

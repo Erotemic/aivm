@@ -1,0 +1,7864 @@
+{
+ "about": "Policy acceptance. \"valid\" is specified by hand. For valid policies, \"canonical\" and \"scope\" are the reference parse and \"sha256\" pins the policy digest: SHA-256 of the canonical encoding of \"canonical\".",
+ "cases": [
+  {
+   "name": "declarative https service",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "checks": {},
+    "operations": [
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 100,
+        "optional": false
+       }
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      },
+      "query": {
+       "page": "{page}",
+       "state": "open"
+      }
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account",
+      "response": "json",
+      "accept": "application/json"
+     }
+    ],
+    "cli": {},
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "9dfe604488d041e2b2a6f31ffed6e6bbaa3b9a7331003a551c3ab5f6de570800",
+   "scope": [
+    {
+     "name": "issue.comment",
+     "write": true,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 100,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "issue.list",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 50
+      }
+     },
+     "fields": {}
+    },
+    {
+     "name": "issue.view",
+     "write": false,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "profile.read",
+     "write": false,
+     "parameters": {},
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "declarative https, pinned private deployment",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "git.corp.example",
+    "authentication": "bearer",
+    "credential_source": {
+     "kind": "file",
+     "path": "/home/op/.config/corp/token"
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "egress": {
+     "port": 8443,
+     "address": "10.20.30.40",
+     "ca_file": "/etc/ssl/corp-root.pem"
+    },
+    "headers": {
+     "X-Api-Version": "2026-03-10"
+    }
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "git.corp.example",
+    "authentication": "bearer",
+    "egress": {
+     "port": 8443,
+     "address": "10.20.30.40",
+     "ca_file": "/etc/ssl/corp-root.pem"
+    },
+    "headers": {
+     "X-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "file",
+     "path": "/home/op/.config/corp/token"
+    },
+    "checks": {},
+    "operations": [
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 100,
+        "optional": false
+       }
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      },
+      "query": {
+       "page": "{page}",
+       "state": "open"
+      }
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account",
+      "response": "json",
+      "accept": "application/json"
+     }
+    ],
+    "cli": {},
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "7457a0289cb54f15dc78a97c8330efa2eb0075d07c1fc2068c2e552f6d5fc1b5",
+   "scope": [
+    {
+     "name": "issue.comment",
+     "write": true,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 100,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "issue.list",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 50
+      }
+     },
+     "fields": {}
+    },
+    {
+     "name": "issue.view",
+     "write": false,
+     "parameters": {
+      "issue": [
+       23,
+       24
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "profile.read",
+     "write": false,
+     "parameters": {},
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "github pull requests",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "github-pr",
+    "host": "api.github.com",
+    "authentication": "bearer",
+    "egress": {
+     "port": 443
+    },
+    "headers": {
+     "X-GitHub-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "gh",
+      "auth",
+      "token",
+      "--hostname",
+      "github.com"
+     ],
+     "inherit_env": [
+      "DBUS_SESSION_BUS_ADDRESS",
+      "GH_CONFIG_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+     ]
+    },
+    "checks": {
+     "pull": {
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github+json",
+      "require": [
+       {
+        "at": [
+         "number"
+        ],
+        "fold": false,
+        "equals_parameter": "pr"
+       },
+       {
+        "at": [
+         "base",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "taucetiproject/tauceti"
+       },
+       {
+        "at": [
+         "user",
+         "login"
+        ],
+        "fold": true,
+        "equals": "erotemic"
+       },
+       {
+        "at": [
+         "head",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "erotemic/tauceti"
+       }
+      ],
+      "bind": {
+       "head_sha": {
+        "at": [
+         "head",
+         "sha"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "name": "pr.checks",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/commits/{head_sha}/check-runs",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [
+        "check_runs"
+       ],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.comment",
+      "effect": "write",
+      "requires": "pull",
+      "method": "POST",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": false
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.diff",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "text",
+      "accept": "application/vnd.github.diff",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.edit",
+      "effect": "write",
+      "requires": "pull",
+      "method": "PATCH",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": true
+       },
+       "title": {
+        "max_bytes": 256,
+        "optional": true
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.review-comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.reviews",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/reviews",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.view",
+      "effect": "read",
+      "requires": "pull",
+      "returns": "check",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     }
+    ],
+    "cli": {
+     "gh": [
+      {
+       "command": [
+        "pr",
+        "checks"
+       ],
+       "operation": "pr.checks",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comment"
+       ],
+       "operation": "pr.comment",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comments"
+       ],
+       "operation": "pr.comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "diff"
+       ],
+       "operation": "pr.diff",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "result"
+      },
+      {
+       "command": [
+        "pr",
+        "edit"
+       ],
+       "operation": "pr.edit",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "--title": "title",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "review-comments"
+       ],
+       "operation": "pr.review-comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "reviews"
+       ],
+       "operation": "pr.reviews",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "view"
+       ],
+       "operation": "pr.view",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "sha256": "3b2c9ecdd2c0d2eab99ac0379157c8938e51a11313e7f58ad139c40f1b2dbdc9",
+   "scope": [
+    {
+     "name": "pr.checks",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.comment",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "pr.comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.diff",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.edit",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": false
+      },
+      "title": {
+       "max_bytes": 256,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "pr.review-comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.reviews",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.view",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "github: spelling is normalized",
+   "policy": {
+    "schema": 1,
+    "repository": "TAUCETIPROJECT/tauceti",
+    "pr_numbers": [
+     13862,
+     13861
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "EROTEMIC",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": true,
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "github-pr",
+    "host": "api.github.com",
+    "authentication": "bearer",
+    "egress": {
+     "port": 443
+    },
+    "headers": {
+     "X-GitHub-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "gh",
+      "auth",
+      "token",
+      "--hostname",
+      "github.com"
+     ],
+     "inherit_env": [
+      "DBUS_SESSION_BUS_ADDRESS",
+      "GH_CONFIG_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+     ]
+    },
+    "checks": {
+     "pull": {
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github+json",
+      "require": [
+       {
+        "at": [
+         "number"
+        ],
+        "fold": false,
+        "equals_parameter": "pr"
+       },
+       {
+        "at": [
+         "base",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "taucetiproject/tauceti"
+       },
+       {
+        "at": [
+         "user",
+         "login"
+        ],
+        "fold": true,
+        "equals": "erotemic"
+       },
+       {
+        "at": [
+         "head",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "erotemic/tauceti"
+       }
+      ],
+      "bind": {
+       "head_sha": {
+        "at": [
+         "head",
+         "sha"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "name": "pr.checks",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/commits/{head_sha}/check-runs",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [
+        "check_runs"
+       ],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.comment",
+      "effect": "write",
+      "requires": "pull",
+      "method": "POST",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": false
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.diff",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "text",
+      "accept": "application/vnd.github.diff",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.edit",
+      "effect": "write",
+      "requires": "pull",
+      "method": "PATCH",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": true
+       },
+       "title": {
+        "max_bytes": 256,
+        "optional": true
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.review-comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.reviews",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/reviews",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.view",
+      "effect": "read",
+      "requires": "pull",
+      "returns": "check",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     }
+    ],
+    "cli": {
+     "gh": [
+      {
+       "command": [
+        "pr",
+        "checks"
+       ],
+       "operation": "pr.checks",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comment"
+       ],
+       "operation": "pr.comment",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comments"
+       ],
+       "operation": "pr.comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "diff"
+       ],
+       "operation": "pr.diff",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "result"
+      },
+      {
+       "command": [
+        "pr",
+        "edit"
+       ],
+       "operation": "pr.edit",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "--title": "title",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "review-comments"
+       ],
+       "operation": "pr.review-comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "reviews"
+       ],
+       "operation": "pr.reviews",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "view"
+       ],
+       "operation": "pr.view",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "sha256": "3b2c9ecdd2c0d2eab99ac0379157c8938e51a11313e7f58ad139c40f1b2dbdc9",
+   "scope": [
+    {
+     "name": "pr.checks",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.comment",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "pr.comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.diff",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.edit",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": false
+      },
+      "title": {
+       "max_bytes": 256,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "pr.review-comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.reviews",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.view",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: unknown schema",
+   "policy": {
+    "schema": 3,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: boolean schema",
+   "policy": {
+    "schema": true,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: non-https adapter",
+   "policy": {
+    "schema": 2,
+    "adapter": "exec",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: ip literal host",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "127.0.0.1",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: host with port",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org:443",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: localhost",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "localhost",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unknown authentication",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "basic",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: address is not an ip",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "egress": {
+     "address": "evil.invalid"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: reserved header",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "headers": {
+     "Authorization": "Bearer x"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: header injection",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "headers": {
+     "X-A": "b\r\nHost: evil.invalid"
+    }
+   },
+   "valid": false
+  },
+  {
+   "name": "https: shell credential source",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "shell",
+     "script": "gh auth token"
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: code-loading environment",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "x"
+     ],
+     "inherit_env": [
+      "LD_PRELOAD"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: no operations",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: lifetime over one hour",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 3601,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unknown top-level field",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "allow_writes": true
+   },
+   "valid": false
+  },
+  {
+   "name": "https: DELETE method",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "write",
+      "method": "DELETE",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: dot-dot path",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/../admin"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: query in path",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/x?admin=1"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: placeholder without allowlist",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/{id}"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unused parameter",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/x",
+      "parameters": {
+       "id": [
+        1
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: unsafe parameter value",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/{id}",
+      "parameters": {
+       "id": [
+        "../x"
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: wildcard parameter",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/{id}",
+      "parameters": {
+       "id": "*"
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: GET with body",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/x",
+      "body_fields": {
+       "b": 10
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: POST without body",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "https: duplicate operation",
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/a"
+     },
+     {
+      "name": "x",
+      "effect": "read",
+      "method": "GET",
+      "path": "/b"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "valid": false
+  },
+  {
+   "name": "github: wildcard pr",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": "*",
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: duplicate pr",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     1,
+     1
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: unknown operation",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.merge"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: author with slash",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "a/b",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "github: url as repository",
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "https://evil.invalid/r",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "valid": false
+  },
+  {
+   "name": "https: a GET declared as a write",
+   "valid": true,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "effect": "write",
+      "method": "GET",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "checks": {},
+    "operations": [
+     {
+      "name": "op",
+      "effect": "write",
+      "method": "GET",
+      "path": "/v1/x",
+      "response": "json",
+      "accept": "application/json"
+     }
+    ],
+    "cli": {},
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "2cfff6dfa07edc8235712b607678ca5686b29ef1e87077ddbfc4465c6477781b",
+   "scope": [
+    {
+     "name": "op",
+     "write": true,
+     "parameters": {},
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: fact check, bound facts, folding, defaults, paging, command table",
+   "valid": true,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "tracker",
+    "host": "api.example.org",
+    "authentication": "bearer",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/projects/{project}/revisions/{revision}/builds/{serial}/{branch}",
+      "query": {
+       "page": "{page}",
+       "per_page": "50"
+      },
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "project"
+      ],
+      "page": {
+       "size": 50,
+       "at": [
+        "builds"
+       ],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.note",
+      "effect": "write",
+      "requires": "ticket",
+      "method": "POST",
+      "path": "/v1/projects/{project}/tickets/{ticket}/notes",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "fold": [
+       "project"
+      ],
+      "body_fields": {
+       "text": 100,
+       "title": {
+        "max_bytes": 20,
+        "optional": true
+       }
+      }
+     },
+     {
+      "name": "ticket.close",
+      "effect": "write",
+      "method": "GET",
+      "path": "/v1/projects/{project}/tickets/{ticket}/close",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/tickets/{ticket}/log",
+      "parameters": {
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/projects/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       },
+       {
+        "at": [
+         "project",
+         "slug"
+        ],
+        "equals_parameter": "project",
+        "fold": true
+       },
+       {
+        "at": [
+         "state"
+        ],
+        "equals": "open"
+       },
+       {
+        "at": [
+         "owner",
+         "name"
+        ],
+        "equals": "alice",
+        "fold": true
+       },
+       {
+        "at": [
+         "version"
+        ],
+        "equals": 2
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "head",
+         "rev"
+        ],
+        "format": "hex"
+       },
+       "serial": {
+        "at": [
+         "serial"
+        ],
+        "format": "integer"
+       },
+       "branch": {
+        "at": [
+         "branch"
+        ],
+        "format": "segment"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "view"
+       ],
+       "operation": "ticket.view",
+       "positional": [
+        "ticket"
+       ],
+       "options": {
+        "--project": "project",
+        "-p": "project"
+       }
+      },
+      {
+       "command": [
+        "builds",
+        "list"
+       ],
+       "operation": "ticket.builds",
+       "positional": [
+        "ticket"
+       ],
+       "options": {
+        "--project": "project",
+        "--page": "page"
+       }
+      },
+      {
+       "command": [
+        "note"
+       ],
+       "operation": "ticket.note",
+       "positional": [
+        "project",
+        "ticket"
+       ],
+       "options": {
+        "--text": "text",
+        "--text-file": "@text",
+        "--title": "title"
+       }
+      },
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log",
+       "positional": [
+        "ticket"
+       ],
+       "output": "result"
+      }
+     ]
+    }
+   },
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "tracker",
+    "host": "api.example.org",
+    "authentication": "bearer",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "checks": {
+     "ticket": {
+      "path": "/v1/projects/{project}/tickets/{ticket}",
+      "accept": "application/json",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "fold": false,
+        "equals_parameter": "ticket"
+       },
+       {
+        "at": [
+         "project",
+         "slug"
+        ],
+        "fold": true,
+        "equals_parameter": "project"
+       },
+       {
+        "at": [
+         "state"
+        ],
+        "fold": false,
+        "equals": "open"
+       },
+       {
+        "at": [
+         "owner",
+         "name"
+        ],
+        "fold": true,
+        "equals": "alice"
+       },
+       {
+        "at": [
+         "version"
+        ],
+        "fold": false,
+        "equals": 2
+       }
+      ],
+      "bind": {
+       "branch": {
+        "at": [
+         "branch"
+        ],
+        "format": "segment"
+       },
+       "revision": {
+        "at": [
+         "head",
+         "rev"
+        ],
+        "format": "hex"
+       },
+       "serial": {
+        "at": [
+         "serial"
+        ],
+        "format": "integer"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/projects/{project}/revisions/{revision}/builds/{serial}/{branch}",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 9
+       },
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "50"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "project"
+      ],
+      "page": {
+       "size": 50,
+       "at": [
+        "builds"
+       ],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.close",
+      "effect": "write",
+      "method": "GET",
+      "path": "/v1/projects/{project}/tickets/{ticket}/close",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/tickets/{ticket}/log",
+      "response": "text",
+      "accept": "text/plain",
+      "parameters": {
+       "ticket": [
+        7,
+        8
+       ]
+      }
+     },
+     {
+      "name": "ticket.note",
+      "effect": "write",
+      "requires": "ticket",
+      "method": "POST",
+      "path": "/v1/projects/{project}/tickets/{ticket}/notes",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "body_fields": {
+       "text": {
+        "max_bytes": 100,
+        "optional": false
+       },
+       "title": {
+        "max_bytes": 20,
+        "optional": true
+       }
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme/widgets"
+       ],
+       "ticket": [
+        7,
+        8
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     }
+    ],
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "view"
+       ],
+       "operation": "ticket.view",
+       "positional": [
+        "ticket"
+       ],
+       "options": {
+        "--project": "project",
+        "-p": "project"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "builds",
+        "list"
+       ],
+       "operation": "ticket.builds",
+       "positional": [
+        "ticket"
+       ],
+       "options": {
+        "--page": "page",
+        "--project": "project"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "note"
+       ],
+       "operation": "ticket.note",
+       "positional": [
+        "project",
+        "ticket"
+       ],
+       "options": {
+        "--text": "text",
+        "--text-file": "@text",
+        "--title": "title"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log",
+       "positional": [
+        "ticket"
+       ],
+       "options": {},
+       "output": "result"
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 100
+   },
+   "sha256": "ab49787fd739bbfdea4cdaa00499fe9d556403d3811bc6617a76976080520a7e",
+   "scope": [
+    {
+     "name": "ticket.builds",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 9
+      },
+      "project": [
+       "acme/widgets"
+      ],
+      "ticket": [
+       7,
+       8
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "ticket.close",
+     "write": true,
+     "parameters": {
+      "project": [
+       "acme/widgets"
+      ],
+      "ticket": [
+       7,
+       8
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "ticket.log",
+     "write": false,
+     "parameters": {
+      "ticket": [
+       7,
+       8
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "ticket.note",
+     "write": true,
+     "parameters": {
+      "project": [
+       "acme/widgets"
+      ],
+      "ticket": [
+       7,
+       8
+      ]
+     },
+     "fields": {
+      "text": {
+       "max_bytes": 100,
+       "required": true
+      },
+      "title": {
+       "max_bytes": 20,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "ticket.view",
+     "write": false,
+     "parameters": {
+      "project": [
+       "acme/widgets"
+      ],
+      "ticket": [
+       7,
+       8
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "github: the manifest the shorthand stands for",
+   "valid": true,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "github-pr",
+    "host": "api.github.com",
+    "authentication": "bearer",
+    "headers": {
+     "X-GitHub-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "gh",
+      "auth",
+      "token",
+      "--hostname",
+      "github.com"
+     ],
+     "inherit_env": [
+      "DBUS_SESSION_BUS_ADDRESS",
+      "GH_CONFIG_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+     ]
+    },
+    "checks": {
+     "pull": {
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github+json",
+      "require": [
+       {
+        "at": [
+         "number"
+        ],
+        "equals_parameter": "pr"
+       },
+       {
+        "at": [
+         "base",
+         "repo",
+         "full_name"
+        ],
+        "equals": "taucetiproject/tauceti",
+        "fold": true
+       },
+       {
+        "at": [
+         "user",
+         "login"
+        ],
+        "equals": "erotemic",
+        "fold": true
+       },
+       {
+        "at": [
+         "head",
+         "repo",
+         "full_name"
+        ],
+        "equals": "erotemic/tauceti",
+        "fold": true
+       }
+      ],
+      "bind": {
+       "head_sha": {
+        "at": [
+         "head",
+         "sha"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "effect": "read",
+      "method": "GET",
+      "accept": "application/vnd.github+json",
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ],
+       "page": {
+        "min": 1,
+        "max": 10000
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "query": {
+       "per_page": "100",
+       "page": "{page}"
+      },
+      "page": {
+       "size": 100,
+       "parameter": "page",
+       "at": [
+        "check_runs"
+       ]
+      },
+      "path": "/repos/{repository}/commits/{head_sha}/check-runs",
+      "name": "pr.checks"
+     },
+     {
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "effect": "write",
+      "method": "POST",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "accept": "application/vnd.github+json",
+      "body_fields": {
+       "body": 16384
+      },
+      "name": "pr.comment"
+     },
+     {
+      "effect": "read",
+      "method": "GET",
+      "accept": "application/vnd.github+json",
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ],
+       "page": {
+        "min": 1,
+        "max": 10000
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "query": {
+       "per_page": "100",
+       "page": "{page}"
+      },
+      "page": {
+       "size": 100,
+       "parameter": "page"
+      },
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "name": "pr.comments"
+     },
+     {
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "effect": "read",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github.diff",
+      "response": "text",
+      "name": "pr.diff"
+     },
+     {
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "effect": "write",
+      "method": "PATCH",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github+json",
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": true
+       },
+       "title": {
+        "max_bytes": 256,
+        "optional": true
+       }
+      },
+      "name": "pr.edit"
+     },
+     {
+      "effect": "read",
+      "method": "GET",
+      "accept": "application/vnd.github+json",
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ],
+       "page": {
+        "min": 1,
+        "max": 10000
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "query": {
+       "per_page": "100",
+       "page": "{page}"
+      },
+      "page": {
+       "size": 100,
+       "parameter": "page"
+      },
+      "path": "/repos/{repository}/pulls/{pr}/comments",
+      "name": "pr.review-comments"
+     },
+     {
+      "effect": "read",
+      "method": "GET",
+      "accept": "application/vnd.github+json",
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ],
+       "page": {
+        "min": 1,
+        "max": 10000
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "query": {
+       "per_page": "100",
+       "page": "{page}"
+      },
+      "page": {
+       "size": 100,
+       "parameter": "page"
+      },
+      "path": "/repos/{repository}/pulls/{pr}/reviews",
+      "name": "pr.reviews"
+     },
+     {
+      "requires": "pull",
+      "fold": [
+       "repository"
+      ],
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "effect": "read",
+      "returns": "check",
+      "name": "pr.view"
+     }
+    ],
+    "cli": {
+     "gh": [
+      {
+       "command": [
+        "pr",
+        "checks"
+       ],
+       "operation": "pr.checks",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--page": "page"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "comment"
+       ],
+       "operation": "pr.comment",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--body": "body",
+        "--body-file": "@body"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "comments"
+       ],
+       "operation": "pr.comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--page": "page"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "diff"
+       ],
+       "operation": "pr.diff",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "result"
+      },
+      {
+       "command": [
+        "pr",
+        "edit"
+       ],
+       "operation": "pr.edit",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--body": "body",
+        "--body-file": "@body",
+        "--title": "title"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "review-comments"
+       ],
+       "operation": "pr.review-comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--page": "page"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "reviews"
+       ],
+       "operation": "pr.reviews",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository",
+        "--page": "page"
+       }
+      },
+      {
+       "command": [
+        "pr",
+        "view"
+       ],
+       "operation": "pr.view",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       }
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "github-pr",
+    "host": "api.github.com",
+    "authentication": "bearer",
+    "egress": {
+     "port": 443
+    },
+    "headers": {
+     "X-GitHub-Api-Version": "2026-03-10"
+    },
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "gh",
+      "auth",
+      "token",
+      "--hostname",
+      "github.com"
+     ],
+     "inherit_env": [
+      "DBUS_SESSION_BUS_ADDRESS",
+      "GH_CONFIG_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_RUNTIME_DIR"
+     ]
+    },
+    "checks": {
+     "pull": {
+      "path": "/repos/{repository}/pulls/{pr}",
+      "accept": "application/vnd.github+json",
+      "require": [
+       {
+        "at": [
+         "number"
+        ],
+        "fold": false,
+        "equals_parameter": "pr"
+       },
+       {
+        "at": [
+         "base",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "taucetiproject/tauceti"
+       },
+       {
+        "at": [
+         "user",
+         "login"
+        ],
+        "fold": true,
+        "equals": "erotemic"
+       },
+       {
+        "at": [
+         "head",
+         "repo",
+         "full_name"
+        ],
+        "fold": true,
+        "equals": "erotemic/tauceti"
+       }
+      ],
+      "bind": {
+       "head_sha": {
+        "at": [
+         "head",
+         "sha"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "name": "pr.checks",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/commits/{head_sha}/check-runs",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [
+        "check_runs"
+       ],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.comment",
+      "effect": "write",
+      "requires": "pull",
+      "method": "POST",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": false
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/issues/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.diff",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "text",
+      "accept": "application/vnd.github.diff",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.edit",
+      "effect": "write",
+      "requires": "pull",
+      "method": "PATCH",
+      "path": "/repos/{repository}/pulls/{pr}",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "body_fields": {
+       "body": {
+        "max_bytes": 16384,
+        "optional": true
+       },
+       "title": {
+        "max_bytes": 256,
+        "optional": true
+       }
+      },
+      "fold": [
+       "repository"
+      ]
+     },
+     {
+      "name": "pr.review-comments",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/comments",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.reviews",
+      "effect": "read",
+      "requires": "pull",
+      "method": "GET",
+      "path": "/repos/{repository}/pulls/{pr}/reviews",
+      "response": "json",
+      "accept": "application/vnd.github+json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 10000
+       },
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "query": {
+       "page": "{page}",
+       "per_page": "100"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "fold": [
+       "repository"
+      ],
+      "page": {
+       "size": 100,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "pr.view",
+      "effect": "read",
+      "requires": "pull",
+      "returns": "check",
+      "parameters": {
+       "pr": [
+        13861,
+        13862
+       ],
+       "repository": [
+        "taucetiproject/tauceti"
+       ]
+      },
+      "fold": [
+       "repository"
+      ]
+     }
+    ],
+    "cli": {
+     "gh": [
+      {
+       "command": [
+        "pr",
+        "checks"
+       ],
+       "operation": "pr.checks",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comment"
+       ],
+       "operation": "pr.comment",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "comments"
+       ],
+       "operation": "pr.comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "diff"
+       ],
+       "operation": "pr.diff",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "result"
+      },
+      {
+       "command": [
+        "pr",
+        "edit"
+       ],
+       "operation": "pr.edit",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--body": "body",
+        "--body-file": "@body",
+        "--repo": "repository",
+        "--title": "title",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "review-comments"
+       ],
+       "operation": "pr.review-comments",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "reviews"
+       ],
+       "operation": "pr.reviews",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--page": "page",
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      },
+      {
+       "command": [
+        "pr",
+        "view"
+       ],
+       "operation": "pr.view",
+       "positional": [
+        "pr"
+       ],
+       "options": {
+        "--repo": "repository",
+        "-R": "repository"
+       },
+       "output": "reply"
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192
+   },
+   "sha256": "3b2c9ecdd2c0d2eab99ac0379157c8938e51a11313e7f58ad139c40f1b2dbdc9",
+   "scope": [
+    {
+     "name": "pr.checks",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.comment",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": true
+      }
+     }
+    },
+    {
+     "name": "pr.comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.diff",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.edit",
+     "write": true,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {
+      "body": {
+       "max_bytes": 16384,
+       "required": false
+      },
+      "title": {
+       "max_bytes": 256,
+       "required": false
+      }
+     }
+    },
+    {
+     "name": "pr.review-comments",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.reviews",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 10000
+      },
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "pr.view",
+     "write": false,
+     "parameters": {
+      "pr": [
+       13861,
+       13862
+      ],
+      "repository": [
+       "taucetiproject/tauceti"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: path-only parameter spanning segments",
+   "valid": true,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/{repo}/raw",
+      "parameters": {
+       "repo": [
+        "acme/widgets"
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "checks": {},
+    "operations": [
+     {
+      "name": "op",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/{repo}/raw",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "repo": [
+        "acme/widgets"
+       ]
+      }
+     }
+    ],
+    "cli": {},
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "9efadebf59895c2a535282c1765377013c7b78113c99ca3fd7354cb498eee8f4",
+   "scope": [
+    {
+     "name": "op",
+     "write": false,
+     "parameters": {
+      "repo": [
+       "acme/widgets"
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: the least manifest with a check, a bound fact and a table",
+   "valid": true,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   },
+   "canonical": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "egress": {
+     "port": 443
+    },
+    "headers": {},
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "accept": "application/json",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "fold": false,
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "operations": [
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "response": "json",
+      "accept": "application/json",
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 9
+       },
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "query": {
+       "page": "{page}"
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "at": [],
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text",
+      "accept": "text/plain"
+     },
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     }
+    ],
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log",
+       "positional": [],
+       "options": {},
+       "output": "reply"
+      }
+     ]
+    },
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   },
+   "sha256": "e1f17486f7378f920c10c20fd3f2130a1177c65372b35ee0b6c69942832df8c9",
+   "scope": [
+    {
+     "name": "ticket.builds",
+     "write": false,
+     "parameters": {
+      "page": {
+       "min": 1,
+       "max": 9
+      },
+      "project": [
+       "acme"
+      ],
+      "ticket": [
+       7
+      ]
+     },
+     "fields": {}
+    },
+    {
+     "name": "ticket.log",
+     "write": false,
+     "parameters": {},
+     "fields": {}
+    },
+    {
+     "name": "ticket.view",
+     "write": false,
+     "parameters": {
+      "project": [
+       "acme"
+      ],
+      "ticket": [
+       7
+      ]
+     },
+     "fields": {}
+    }
+   ]
+  },
+  {
+   "name": "https: operation without a declared effect",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "method": "GET",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   }
+  },
+  {
+   "name": "https: unknown effect",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "effect": "idempotent",
+      "method": "GET",
+      "path": "/v1/x"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   }
+  },
+  {
+   "name": "https: POST declared read",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "effect": "read",
+      "method": "POST",
+      "path": "/v1/x",
+      "body_fields": {
+       "body": 10
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   }
+  },
+  {
+   "name": "https: multi-segment value in a query",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "op",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/x",
+      "query": {
+       "repo": "{repo}"
+      },
+      "parameters": {
+       "repo": [
+        "acme/widgets"
+       ]
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100
+   }
+  },
+  {
+   "name": "checks: a check nothing requires",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "profile.read",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/account"
+     },
+     {
+      "name": "issue.view",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues/{issue}",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      }
+     },
+     {
+      "name": "issue.list",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/issues",
+      "query": {
+       "state": "open",
+       "page": "{page}"
+      },
+      "parameters": {
+       "page": {
+        "min": 1,
+        "max": 50
+       }
+      }
+     },
+     {
+      "name": "issue.comment",
+      "effect": "write",
+      "method": "POST",
+      "path": "/v1/issues/{issue}/comments",
+      "parameters": {
+       "issue": [
+        23,
+        24
+       ]
+      },
+      "body_fields": {
+       "body": 100
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "spare": {
+      "path": "/v1/x",
+      "require": [
+       {
+        "at": [
+         "a"
+        ],
+        "equals": 1
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "checks: operation requires an unknown check",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "absent",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: requirement with two expectations",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals": 1,
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: requirement with no expectation",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ]
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: folding a number",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals": 1,
+        "fold": true
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: unknown capture format",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "x"
+        ],
+        "format": "regex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: capture shadows a request parameter",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "ticket": {
+        "at": [
+         "id"
+        ],
+        "format": "integer"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: check reads a parameter the operation lacks",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "ticket": [
+        7
+       ]
+      }
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: answer-is-the-check on a write",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "write",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "checks: answer-is-the-check with its own request",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ],
+      "method": "GET",
+      "path": "/v1/x"
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "normalization: default outside the allowlist",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 10
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "normalization: folding a mixed-case allowlist",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "Acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "normalization: folding a number",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      },
+      "fold": [
+       "ticket"
+      ]
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "paging: a text answer",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text",
+      "page": {
+       "size": 10
+      }
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "paging: a string page parameter",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "project"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "log"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: an alias that is one of the client's own verbs",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "invoke": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: an alias the client is itself started through",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "python3": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: a command for an unknown operation",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.delete"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: an option for an unknown argument",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.log",
+       "options": {
+        "--to": "absent"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: a file option aimed at a parameter",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.view",
+       "options": {
+        "--from": "@ticket"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "cli: two rows with the same command",
+   "valid": false,
+   "policy": {
+    "schema": 2,
+    "adapter": "https",
+    "service": "demo-service",
+    "host": "api.example.org",
+    "authentication": "x-api-key",
+    "credential_source": {
+     "kind": "command",
+     "argv": [
+      "mytool",
+      "auth",
+      "print-token"
+     ],
+     "inherit_env": [
+      "XDG_CONFIG_HOME"
+     ]
+    },
+    "operations": [
+     {
+      "name": "ticket.view",
+      "effect": "read",
+      "requires": "ticket",
+      "returns": "check",
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ]
+      },
+      "fold": [
+       "project"
+      ]
+     },
+     {
+      "name": "ticket.builds",
+      "effect": "read",
+      "requires": "ticket",
+      "method": "GET",
+      "path": "/v1/{project}/revisions/{revision}/builds",
+      "query": {
+       "page": "{page}"
+      },
+      "parameters": {
+       "project": [
+        "acme"
+       ],
+       "ticket": [
+        7
+       ],
+       "page": {
+        "min": 1,
+        "max": 9
+       }
+      },
+      "defaults": {
+       "page": 1
+      },
+      "page": {
+       "size": 50,
+       "parameter": "page"
+      }
+     },
+     {
+      "name": "ticket.log",
+      "effect": "read",
+      "method": "GET",
+      "path": "/v1/log",
+      "response": "text"
+     }
+    ],
+    "lifetime_seconds": 1800,
+    "max_requests": 5,
+    "max_body_bytes": 100,
+    "checks": {
+     "ticket": {
+      "path": "/v1/{project}/tickets/{ticket}",
+      "require": [
+       {
+        "at": [
+         "id"
+        ],
+        "equals_parameter": "ticket"
+       }
+      ],
+      "bind": {
+       "revision": {
+        "at": [
+         "rev"
+        ],
+        "format": "hex"
+       }
+      }
+     }
+    },
+    "cli": {
+     "tk": [
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.log"
+      },
+      {
+       "command": [
+        "x"
+       ],
+       "operation": "ticket.log"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "github: manifest fields under the shorthand schema",
+   "valid": false,
+   "policy": {
+    "schema": 1,
+    "repository": "TauCetiProject/TauCeti",
+    "pr_numbers": [
+     13861,
+     13862
+    ],
+    "operations": [
+     "pr.view",
+     "pr.diff",
+     "pr.comments",
+     "pr.reviews",
+     "pr.review-comments",
+     "pr.checks",
+     "pr.comment",
+     "pr.edit"
+    ],
+    "author": "Erotemic",
+    "head_repository": "Erotemic/TauCeti",
+    "lifetime_seconds": 1800,
+    "max_requests": 20,
+    "max_body_bytes": 8192,
+    "checks": {}
+   }
+  }
+ ]
+}

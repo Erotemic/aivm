@@ -37,6 +37,7 @@ def agent_vm_review_items(
     include_ssh_paths: bool,
 ) -> list[ConfigReviewItem]:
     """Build the common review model used by config-init and VM-create UI."""
+    from .vm.tpm import TPM_VALUES  # local import: keep config_review light
     password_note = (
         'used for console/SSH password auth when vm.allow_password_login=true'
     )
@@ -59,6 +60,10 @@ def agent_vm_review_items(
             cfg.vm.disk_gb,
             str(cfg.vm.disk_gb),
             'root disk size',
+        ),
+        ConfigReviewItem(
+            'vm.tpm', cfg.vm.tpm, cfg.vm.tpm,
+            f'optional virtual TPM ({" or ".join(TPM_VALUES)})',
         ),
         ConfigReviewItem(
             'vm.allow_password_login',

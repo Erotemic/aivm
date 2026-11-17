@@ -15,12 +15,18 @@ from ..attachment_schema import MIRROR_HOME_NO
 from ..commands import CommandManager, Elided
 from ..config import AgentVMConfig
 from ..errors import AIVMError
+from ..persistent_replay import GUEST_SYMLINK_BIN, attachment_symlink_python
 from ..runtime import require_ssh_identity, ssh_base_args
 from ..util import ensure_dir
 from ..vm import ensure_share_mounted
 from ..vm import ssh_config as mk_ssh_config
 from ..vm.share import ResolvedAttachment
 from .persistent import _prepare_persistent_attachment_host_and_vm
+from .persistent.transport import (
+    _guest_text_hash_check_script,
+    _guest_text_sha256,
+    _install_guest_text_if_changed,
+)
 from .resolve import (
     ATTACHMENT_ACCESS_RO,
     ATTACHMENT_MODE_DIRECT_VIRTIOFS,
@@ -58,60 +64,52 @@ def _ensure_guest_symlink(
     """
     context = guest_transport_from_effective_cfg(cfg)
     ident = require_ssh_identity(context.ssh_identity_file)
-    link_q = shlex.quote(symlink_path)
-    tgt_q = shlex.quote(target_path)
-    parent_q = shlex.quote(str(PurePosixPath(symlink_path).parent))
-    # Use sudo for both mkdir and ln -s so companion symlinks work even when
-    # the parent dir is not writable by the guest user (e.g. /home/joncrall/...).
-    script = (
-        'set -euo pipefail; '
-        f'if [ -L {link_q} ]; then '
-        f'  cur=$(readlink {link_q}); '
-        f'  if [ "$cur" = {tgt_q} ]; then exit 0; fi; '
-        f'  echo "aivm-symlink-warn: {symlink_path} is a symlink to $cur not {target_path}; skipping" >&2; '
-        'exit 3; '
-        f'elif [ -d {link_q} ]; then '
-        f'  if [ -n "$(find {link_q} -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then '
-        f'    echo "aivm-symlink-warn: {symlink_path} is a non-empty directory; skipping" >&2; '
-        '    exit 4; '
-        '  fi; '
-        f'  sudo -n rmdir {link_q}; '
-        f'  sudo -n mkdir -p {parent_q}; '
-        f'  sudo -n ln -s {tgt_q} {link_q}; '
-        f'elif [ -e {link_q} ]; then '
-        f'  echo "aivm-symlink-warn: {symlink_path} is a regular file; skipping" >&2; '
-        'exit 5; '
-        'else '
-        f'  sudo -n mkdir -p {parent_q}; '
-        f'  sudo -n ln -s {tgt_q} {link_q}; '
-        'fi'
-    )
-    cmd = [
+    helper = GUEST_SYMLINK_BIN
+    source = attachment_symlink_python()
+    command = shlex.join([
+        'sudo', '-n', helper, '--link', symlink_path, '--target', target_path,
+    ])
+    base = [
         'ssh',
-        *ssh_base_args(
-            ident,
-            strict_host_key_checking='accept-new',
-        ),
+        *ssh_base_args(ident, strict_host_key_checking='accept-new'),
         context.ssh_target(ip),
-        Elided(
-            script,
-            f'guest symlink reconcile: {symlink_path} -> {target_path}',
-        ),
     ]
     mgr = CommandManager.current()
+    # Check content and link in one read-only SSH round trip. Missing/outdated
+    # helpers take the visible install path; healthy links never request repair.
+    hash_check = _guest_text_hash_check_script(helper, _guest_text_sha256(source))
     with mgr.step(
-        'Reconcile guest attachment symlink',
-        why=f'Ensure {symlink_path} points to the attached path {target_path}.',
-        approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+        'Inspect guest attachment symlink',
+        why='Verify the installed helper and link target before deciding whether repair is needed.',
     ):
+        # SSH joins remote arguments with spaces. Keep these two short,
+        # inspectable commands separate rather than eliding a long argument.
         res = mgr.run(
-            cmd,
-            sudo=False,
-            role='modify',
-            check=False,
-            capture=True,
-            summary=f'Reconcile guest symlink {symlink_path}',
+            [*base, hash_check + ' &&', command + ' --check'],
+            sudo=False, role='read', check=False, capture=True,
+            summary=f'Inspect guest symlink {symlink_path}',
         )
+    if res.code == 1:
+        _install_guest_text_if_changed(
+            cfg, ip, target=helper, text=source,
+            mode='0755', label='guest attachment symlink helper', dry_run=False,
+        )
+        res = mgr.run(
+            [*base, command + ' --check'], sudo=False, role='read',
+            check=False, capture=True,
+            summary=f'Inspect guest symlink {symlink_path}',
+        )
+    if res.code == 10:
+        with mgr.step(
+            'Reconcile guest attachment symlink',
+            why=f'Ensure {symlink_path} points to the attached path {target_path}.',
+            approval_scope=f'guest-attachment-symlink:{cfg.vm.name}:{symlink_path}',
+        ):
+            res = mgr.run(
+                [*base, command], sudo=False, role='modify',
+                check=False, capture=True,
+                summary=f'Reconcile guest symlink {symlink_path}',
+            )
     if res.code not in (0, 3, 4, 5):
         log.warning(
             'Guest symlink setup failed for {} -> {}: {}',
@@ -230,6 +228,7 @@ def _apply_guest_derived_symlinks(
     *,
     mirror_home: bool,
     extra_lexical_paths: list[str] | tuple[str, ...] = (),
+    inspection_plan: list[tuple[str, str, bool]] | None = None,
 ) -> None:
     """Create companion and mirror-home symlinks in the guest after attachment.
 
@@ -253,9 +252,19 @@ def _apply_guest_derived_symlinks(
     location. The mount itself stays correct (it lives at the canonical
     location); the alias may surface unexpected contents on the host if the
     symlink chain was rewired post-attach.
+
+    Supplying inspection_plan collects (link, target, remove) operations for
+    the shared foreground batch instead of contacting the guest here.
     """
     guest_dst = attachment.guest_dst
     canonical_host = str(host_src.resolve()) if host_src else ''
+
+    def ensure_link(link: str, *, remove: bool = False) -> None:
+        if inspection_plan is not None:
+            inspection_plan.append((link, guest_dst, remove))
+        else:
+            action = _remove_guest_symlink_if_target if remove else _ensure_guest_symlink
+            action(cfg, ip, symlink_path=link, target_path=guest_dst)
 
     # Build the unique set of lexical aliases to materialize. We start from
     # any caller-supplied list (the persisted aliases) and fold in the
@@ -295,12 +304,7 @@ def _apply_guest_derived_symlinks(
                     canonical_host,
                     alias_resolved,
                 )
-        _ensure_guest_symlink(
-            cfg,
-            ip,
-            symlink_path=alias,
-            target_path=guest_dst,
-        )
+        ensure_link(alias)
 
     mirror_paths = _mirror_home_symlink_paths(cfg, host_src, attachment)
     if not mirror_home:
@@ -309,22 +313,12 @@ def _apply_guest_derived_symlinks(
         # remains a no-op so the default path does not add SSH round trips.
         if attachment.mirror_home == MIRROR_HOME_NO:
             for mirror_path in mirror_paths:
-                _remove_guest_symlink_if_target(
-                    cfg,
-                    ip,
-                    symlink_path=mirror_path,
-                    target_path=guest_dst,
-                )
+                ensure_link(mirror_path, remove=True)
         return
 
     # 2/3. Mirror-home for the lexical and, when distinct, resolved host path.
     for mirror_path in mirror_paths:
-        _ensure_guest_symlink(
-            cfg,
-            ip,
-            symlink_path=mirror_path,
-            target_path=guest_dst,
-        )
+        ensure_link(mirror_path)
 
 
 def _upsert_ssh_config_entry(
@@ -389,6 +383,7 @@ def _ensure_attachment_available_in_guest(
     allow_disruptive_shared_root_rebind: bool = True,
     mirror_home: bool = False,
     host_lexical_paths: list[str] | tuple[str, ...] = (),
+    inspection_plan: list[tuple[str, str, bool]] | None = None,
 ) -> None:
     """Make an attachment available at its guest destination for a running VM.
 
@@ -478,6 +473,7 @@ def _ensure_attachment_available_in_guest(
         attachment,
         mirror_home=mirror_home,
         extra_lexical_paths=host_lexical_paths,
+        inspection_plan=inspection_plan,
     )
 
 

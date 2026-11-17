@@ -2427,3 +2427,347 @@ The main judgment call was whether to preserve old implementation plans as histo
 Risks are mostly documentation discoverability: someone searching the working tree will no longer find the old detailed refactor plans, though they remain available through git history. I updated all live cross-references before deleting files and retained the genuinely unfinished test-infrastructure work in the concise roadmap.
 
 I am confident the remaining roadmap now reflects actual outstanding work, completed attachment-safety/read-only items no longer appear as future promises, the rejected password-default change is gone, and contributor guidance now states the intended compatibility boundary directly instead of leaving it as a TODO.
+
+## 2026-10-16 00:09:14 -0400
+
+Starting the maintainer-authorized extraction of the experimental aivm-secrets project into the sibling standalone repository. I am preserving authorship, messages, dates, and co-author trailers with a filtered copy of Git history, plus an explicit old/new commit map. The original AIVM history and runtime remain intact during this initial port.
+
+My main uncertainty is the interleaving of standalone security tests with VM-adapter tests and the assurance ledger. A simple subtree split would lose important tests and documentation, so I am inventorying the portable paths and retaining an explicit account of the integration work left behind. I prefer a verified standalone build and offline test suite now over redesigning the guest helper or changing authorization during extraction. Commit IDs necessarily change, but attribution can be checked mechanically; existing security claims must remain experimental and unaudited.
+
+The standalone wheel and sdist build successfully and pass twine metadata checks. A clean second environment installed the source archive, confirmed AIVM is absent, and exercised policy validation and identity CLI help. The first run exposed a real environment assumption: umask 0002 produced group-writable fixture directories and a virtualenv that the broker correctly rejected. I made the new checkout/environment private and gave the standalone suite a private fixture umask, preserving all production checks. I also adjusted a refusal assertion to allow the broker-code check to fire before the interpreter check when a wheel is installed inside the virtualenv; both paths still require a shared_source refusal. The complete offline suite is still running; production Python files remain byte-for-byte unchanged.
+
+The source contributor guidance now records that the sibling port exists while this branch continues using its co-located copy until cutover. The extracted repo has an annotated baseline tag and a committed relocation of the README and pyproject, ensuring ordinary git log --follow retains their path history. The remaining suite work is the inherited mutation gate, which repeatedly removes security checks from temporary copies and verifies that their tests fail.
+
+Final validation on Python 3.12.3: 1,861 tests passed and 10 tests skipped in 254.25 seconds, including a passing security mutation gate. All skips are for unavailable independent Rust runners, not asserted parity. Both distribution archives passed twine check, source-archive installation succeeded without AIVM, isolated policy-check and identity help worked, Git fsck passed, and the 46-commit attribution verifier passed again. I am confident this is a usable independent starting point. Coordinated removal of the AIVM copy, guest-helper deployment ownership, cross-project compatibility CI, hosting/publication and security release review remain explicit follow-up work documented in the new extraction record.
+
+## 2026-10-17 23:13:11 -0400
+
+Finished the requested optional vTPM device increment before resuming the
+standalone broker goal. Creation accepts `--tpm emulator`; an existing managed
+VM can be cleanly shut down and upgraded with `vm update --tpm emulator`.
+The hardware choice is persisted without reenrolling access identities or
+rewriting their profiles. I deliberately used a validated persistent redefine:
+libvirt's current QEMU driver does not support persistent TPM attach-device.
+The upgrade refuses active/unknown power states, managed saves, conflicting
+TPMs and changed definitions, and preserves UUID, storage and other devices.
+Default creation remains TPM-free. Delete/recreate keep `undefine --tpm` on
+every retry for emulator devices. An uncertain removal records the UUID in the
+error and cannot be forgotten on the next deletion-journal recovery attempt.
+
+I'm confident in the control-flow and regression evidence, but I do not want
+the optional device to be mistaken for TPM-backed Garrett identity. No keys
+were migrated; signing-provider TLS and enrollment evidence are separate work.
+This environment lacks virsh/virt-install, so actual daemon startup, persistent
+swtpm state across power cycles, and physical cleanup remain live-host gates.
+The hardware unit tests use a simulated daemon. Domain administrators must
+serialize their own concurrent edits; repeated inspections are not a libvirt
+compare-and-swap. The convenience tradeoff is an explicit cold shutdown for
+an upgrade, with no automatic shutdown or reset of existing TPM state.
+
+Validation: 1,547 AIVM core tests passed, one skipped, 34 e2e tests deselected;
+22 focused TPM tests passed, and the earlier combined boundary/lifecycle check
+passed 93 tests. Full type checking and architecture regeneration/check passed;
+wheel and sdist builds succeeded. The initial broad co-located secrets run was
+stopped after 2,285 passes, nine skips and one unrelated diagnostic-order
+failure in `test_serve_refuses_anything_inside_a_guest_writable_root` (installed
+code is found under the environment before the environment check). Earlier
+runs also exposed the runner's group-writable umask and long pytest socket
+paths; validation uses umask 077 and a short private temporary root. Secrets
+runtime/proof work will continue in its standalone repository, not this copy.
+
+## 2026-10-20 11:11:31 -0400
+
+Investigated the aiq-gpu report of a failed offline vTPM update after installing
+swtpm. The dry-run failure is reproducible from the code: update detection
+consumes a CommandResult although the manager deliberately skips every process
+in dry-run mode. I kept that execution policy and added a conditional preview
+that reports unknown live drift instead of manufacturing a successful probe or
+claiming the VM is synchronized. The CLI regression checks forbid subprocesses,
+privilege probes and prompts, and verify the saved store is unchanged.
+
+I am confident in this dry-run fix and in keeping the existing strict TPM
+requirements. The host's actual capability output is still pending, so I cannot
+claim to have diagnosed its missing emulator support. Missing /dev/tpm* is not
+an obstacle for a software TPM. I checked libvirt's documentation and source:
+its capability enums distinguish the guest device model, emulator backend and
+TPM version. Errors now show all advertised values and missing requirements,
+and the inspection command is visible at INFO through a named read step. The
+tradeoff is that a no-execution dry-run previews the conditional workflow, not
+an exact live diff; the documentation makes that limitation explicit. No daemon
+restart or VM mutation was performed on either host. Real libvirt/vTPM startup
+remains unverified here; simulated daemon tests cannot establish that behavior.
+
+Validation: 67 focused TPM/update/dry-run tests passed; type checking of the
+three changed production modules and git diff --check passed.
+
+## 2026-10-20 11:14:50 -0400
+
+Preparing the requested commit after the host capability output arrived. It
+advertises tpm-crb and emulator but omits backendVersion entirely. This pinpoints
+AIVM's rejection without proving the host cannot emulate TPM 2.0. I checked
+libvirt's older implementation and swtpm_setup documentation: older reporting
+surfaces can omit the version, and modern libvirt derives the version from
+swtpm_setup's capabilities. I extended the diagnostic regression to cover
+omitted enums as well as empty enums, matching the reported XML, and documented
+the next read-only version/setup checks.
+
+I am confident this commit fixes the planning crash and makes this failure
+understandable. I am deliberately retaining the explicit version requirement;
+accepting absence as support would conceal the uncertainty rather than resolve
+it. Host versions and setup capability output are still needed to distinguish
+old reporting from a tool discovery problem. No host service or VM was changed.
+Validation: 70 focused tests passed, production type checks passed, and the diff
+has no whitespace errors.
+
+## 2026-10-20 11:19:02 -0400
+
+The follow-up host evidence resolves the earlier uncertainty: aiq-gpu runs
+libvirt 8.0/QEMU 6.2, lacks version advertisement, and successfully executes
+`swtpm socket --tpm2 --print-capabilities`. My earlier strict-advertisement
+assumption was too narrow for that supported software stack. I checked the
+upstream libvirt 8.0 and swtpm 0.6.3 implementations: the former has no version
+enum, while the latter selects TPM 2.0 in libtpms before printing capabilities
+and exits before configuring sockets or persistent state.
+
+I added a narrow positive probe when the daemon advertises emulator/tpm-crb
+but omits backendVersion. Explicit empty/unsupported version reports still
+fail; missing tools, timeouts, failed probes and invalid JSON cannot authorize
+a change. Every definition still explicitly requests emulator version 2.0 and
+tpm-crb. I am confident this addresses the reported preflight rejection without
+silently accepting an unknown runtime or changing device strength. The tradeoff
+is a local-host executable check for older system-libvirt installations; it
+cannot establish the daemon's later startup environment or filesystem access.
+Actual VM startup and persistence remain live-host checks. Neither host service
+configuration nor the user's VM has been touched from this checkout.
+
+Validation: 97 focused TPM/create/update/dry-run tests passed, including real
+CommandManager dispatch with a simulated subprocess seam and missing executable.
+Changed production modules pass type checks; git diff --check passes.
+
+## 2026-10-20 12:14:09 -0400
+
+Implemented the first deliberately narrow change discussed with the maintainer:
+attachment recording opts into skipping an unchanged store write. The callback
+still runs against a freshly loaded store under the existing lock. Comparing
+canonical serialized content, rather than dataclass equality, matters because
+machine runtime configurations carry principal/profile values that are not
+persisted. The comparison does not alter attachment resolution, identity pins,
+mount checking/replay, credential preparation, or SSH/code launch ordering.
+
+I kept this opt-in instead of changing every store writer at once. Explicit
+layout writes and missing-store initialization retain their old behavior, and
+pending split transactions are recovered before taking the comparison snapshot.
+One non-obvious correctness detail was retaining optimistic-concurrency metadata
+on a returned unchanged store: without marking that revision, a later save could
+lose its stale-update protection. The tests now exercise that contract, actual
+multiprocess writers, and recovery through the no-op path.
+
+I am confident about avoiding the redundant config replacement while preserving
+existing mutations. Tests inspect every split fragment's content and inode/time
+evidence, forbid the write primitive on repeated recording, preserve operator
+comments, and confirm that access/destination/alias/hardware changes still save.
+The existing source-identity recomputation is intentionally unchanged; its
+cross-boot durability remains a separate investigation, not a performance fix.
+This patch adds two serialization passes, trading modest local computation for
+avoiding a staged, fsynced store transaction. It is not expected to remove the
+remaining SSH round trips or noticeably shorten every session by itself.
+
+Validation: 327 store/session/persistent/config/released-format tests passed,
+plus five E2E tests using real temporary mounts inside this VM. Full `ty check
+aivm` and git diff --check passed. KVM and a reachable, empty local system
+libvirt are available, but I did not run a complete nested VM lifecycle or
+claim ext4/Btrfs/ZFS cross-boot coverage. No working VM was opened or modified.
+
+## 2026-10-20 12:57:15 -0400
+
+Took the next step as validation of foreground attachment safety, rather than
+removing checks while the maintainer's live-mount warning remains unexplained.
+The repeated host output confirms the earlier redundant store write is gone.
+A fresh nested VM now also exercises two actual `aivm ssh` shells and checks
+that split-store bytes, inodes, and modification times remain unchanged.
+
+The important new evidence is a deterministic reproduction of the warning on
+a newly created VM. Expiring only a disposable guest's source-side virtiofs
+automount, then traversing a child to recreate it, produces two directory views
+with different device numbers, matching inode numbers, and SOURCE=none. A busy
+workspace bind retains the older view. Replay reports degraded state, keeps its
+mount ID unchanged, and leaves the process and sentinel file usable. This is
+not merely a pre-0.4 migration oddity. The test deliberately characterizes the
+current safe refusal; it does not claim that automatic recovery is implemented.
+
+I remain cautious about interpreting matching inodes or FUSE file handles as
+proof across separate superblocks/connections. The working guest has the same
+pattern, but that similarity is not authorization to unmount or replace it.
+The next recovery change needs trustworthy mount provenance, including the
+exact export/token and protection against cross-filesystem inode collisions.
+No production replay behavior, identity pin, or working mount changed here.
+This test covers virtiofs submount recreation, not ext4/Btrfs/ZFS reboots.
+
+The reproduction exposed two genuine cleanup issues. The storage-removal
+probe incorrectly selected sudo from libvirt access, although a libvirt-group
+caller may not traverse the storage directories. It now uses the existing
+filesystem-read privilege policy and retains fail-closed error handling. The
+E2E teardown also ignored cleanup exit codes and could report success with
+resources retained. It now reports cleanup failures after attempting both
+operations, while preserving an original test exception. Earlier fixture runs
+needed quoting and automount-trigger corrections; all their disposable VM and
+network resources were subsequently removed using ordinary AIVM lifecycle
+commands. One expired fixture needed its task-owned recovery coordinates
+reconstructed before that cleanup. This reinforced why durable recovery records
+and trustworthy teardown outcomes matter more than a green test summary.
+
+Validation: the final nested-VM lifecycle passed in 38.29 seconds, including
+both real SSH sessions, the busy-workspace reproduction, and successful VM/
+network teardown. Local libvirt is empty again apart from its preexisting
+default network. The 62 domain/deletion/authority/teardown unit tests pass,
+as do full `ty check aivm` and `git diff --check`. I am confident in the narrow
+cleanup fix and the reproduction's safety assertions; faster foreground entry
+and proven automatic recovery remain separate work.
+
+## 2026-10-20 14:16:58 -0400
+
+Implemented the authorized next foreground-session change: guest replay keeps
+a private bind reference to each verified attachment under a root-only /run
+directory. I chose kernel-held directory objects instead of recording inode,
+device, mount-ID, or FUSE-handle tuples in a metadata ledger. A real nested
+test immediately reused a numeric mount ID after a successful unmount/rebind;
+that was a useful correction to my initial test assertion and reinforced why
+stored numbers are weaker than keeping the original object alive. The key
+includes both destination and token, and references are created only after
+source/workspace object identity is established. An exclusive replay lock
+serializes boot, foreground, and reference updates.
+
+The safety boundary remains deliberately narrow. A proven idle stale bind may
+receive one normal unmount/rebind; busy mounts, unknown provenance, and access
+conflicts are preserved. Ordinary entry can seed proof for a healthy existing
+mount, but cannot invent proof for an already-stale old mount. Lifecycle replay
+or a normal reboot establishes references automatically. The working guest's
+unproven mount was not repaired or altered here. References retain directory
+objects until updated/detached/lifecycle-pruned or rebooted, a small per-record
+resource cost that must not be confused with durable host authorization state.
+No host identity pin, ownership selection, or machine-store schema changed.
+
+I also replaced the recurring symlink reconciliation payload with a standalone
+readable guest helper. A checksum and --check invocation share one read-only
+SSH round trip; only a missing link or empty directory reaches repair approval.
+The helper rechecks before mutation and preserves conflicting files, symlinks,
+and nonempty directories. Passing paths as quoted arguments avoids embedding
+them in generated shell logic. The six direct filesystem tests cover literal
+metacharacters, dangling targets, idempotence, and a directory populated between
+inspection and repair. Command-manager tests distinguish prompt-free reads
+from exactly one approved repair.
+
+The shared guest-text installer now transfers named files with rsync instead
+of executing an omitted inline installer. It retains checksum verification,
+explicit modes, and failure propagation; transfer failures have added coverage.
+The normal foreground transcript contains no omitted payloads in the nested
+test. I did observe unrelated unmarked inline payloads in VM deletion cleanup;
+those remain auditability debt, not evidence that all repository logging has
+been converted. I did not broaden this change into a destructive-cleanup
+rewrite. The installed helpers and workflow limitations are documented in
+docs/source/workflows.rst.
+
+Validation: 291 attachment/persistent/session/cloud-init/tunnel/released-path
+regressions passed. Four privileged E2E tests passed, including a fresh nested
+VM with real SSH entries, virtiofs SOURCE=none submount recreation, busy
+preservation followed by idle recovery, repeated-entry stability, refusal after
+proof removal despite matching inodes, wrong-token refusal, unsafe provenance
+permissions, reboot reconstruction, and detach releasing every private reference.
+The nested run completed in 64.87 seconds; its disposable VM/network cleanup
+succeeded and local libvirt is empty apart from the preexisting default network.
+Full `ty check aivm` and git diff --check pass. I am confident about this tested
+kernel/virtiofs topology and the fail-closed cases, but have not established
+Btrfs/ZFS or cross-kernel coverage. The rest of foreground reconciliation still
+runs on each entry; this is not a broad readiness-cache optimization.
+
+## 2026-10-20 14:28:56 -0400
+
+The maintainer's two consecutive host transcripts confirmed that helper
+installation is now one-time and a correct symlink no longer asks for repair.
+They also made the next avoidable prompt concrete: manifest synchronization
+always scheduled mkdir/rsync as writes, even when rsync would do nothing.
+The older unidentified workspace still correctly reports degraded provenance;
+I have not treated successful SSH entry as proof that it is safe to replace.
+
+Added a live read-only directory check and rsync --dry-run comparison before
+the manifest write plan. Using rsync's own comparison preserves the existing
+checksum, type, permission, and timestamp repair rules; a checksum-only gate
+would have weakened self-repair. The upstream rsync manual documents matching
+itemization between preview and transfer (https://download.samba.org/pub/rsync/rsync.1).
+An empty successful preview returns unchanged without mkdir or transfer. Missing
+state or drift still uses an approved transfer, while inspection errors never
+authorize a no-op or a write. Missing-directory mkdir and rsync now appear
+together in the remote rsync-path command, so one approval and the existing
+transport retry cover both known operations. A real approval test exposed the
+otherwise separate second prompt when those commands were submitted eagerly.
+
+I am confident this removes an unnecessary manifest approval without declaring
+the VM ready from a cached result. It does not promise fewer warm network round
+trips: directory inspection and preview replace mkdir and transfer attempts.
+The original checksum rsync already avoided rewriting identical contents; the
+new distinction is that no write-capable transfer is scheduled for a healthy
+manifest. Live replay and credential preparation still run and may require
+their own approvals. Reworded the unconditional "Folder registered" footer as
+"Attachment configuration" so it reports location without implying a new store
+write. No working guest mount or source identity changed during this work.
+
+Validation: 304 focused attachment/persistent/session/cloud-init/tunnel and
+released-path regressions pass. Seven new cases run real local rsync against
+healthy, content-drifted, mode-drifted, time-drifted, symlinked, missing-file,
+and missing-directory destinations. They verify exact repair behavior and zero
+healthy approvals versus one repair approval. Six error/dry-run cases verify
+no write attempts or prompts. The nested VM E2E passes in 65.31 seconds, retaining
+the previous recovery/restart/detach checks and additionally comparing guest
+manifest inode/size/mode/mtime/ctime across two warm SSH entries with no manifest
+sync step. Full `ty check aivm` and git diff --check pass. Disposable VM/network
+cleanup succeeded; no wider filesystem or cross-kernel coverage is implied.
+
+## 2026-10-21 17:26:40 -0400
+
+The maintainer authorized both remaining foreground improvements: inspect live
+persistent mounts before asking to repair them, and combine independent guest
+checks without replacing useful command logs with opaque summaries. I added a
+read-only replay --check mode and the installed session-inspect helper. Normal
+persistent entry now checks companion/mirror links, replay/unit hashes, the
+manifest directory, and requested mount in one SSH call. The rsync metadata
+preview and credential routing remain separate. Both SSH and code inherit this
+through the existing shared session preparation function.
+
+My central concern was accidentally treating a batched observation as durable
+readiness. There is no success cache. Any manifest/helper/symlink repair
+invalidates the earlier mount observation, and modifying replay still rechecks
+under its lock. Inspection never creates its lock, provenance directory, pin,
+or mount. Missing state asks for normal repair; uncertain identity, access
+conflicts, and unavailable sources preserve live state and diagnose. Helper
+execution is gated by expected source hashes; malformed replies fail closed.
+Old guests get approved helper deployment during entry without a restart.
+Named helper invocations retain ordinary quoted arguments and inspectable
+installed source, with no omitted payload in the tested foreground transcript.
+
+The real nested test now measures two warm entries without --yes and compares
+host store contents/inodes/timestamps plus guest manifest/provenance/lock
+metadata. Initial host SSH alias setup is legitimately a write, so it happens
+before measuring warm entry. The test exercises declining missing-mount repair
+(no shell or repair), accepting it, symlink repair, and deleting/reinstalling
+the inspector. An earlier run passed these and existing submount/busy/unknown
+provenance checks but timed out at ACPI shutdown. I am investigating rather
+than counting that run as passed. Waiting for cloud-init completion also
+revealed an existing bootstrap definition error: this Ubuntu image rejects
+system: true together with ssh_authorized_keys for aivm-bootstrap. It is
+unrelated to attachment inspection and deserves its own enrollment fix; the
+attachment test reports that module error, waits for completion, and checks its
+own prerequisites. I have not changed the bootstrap account in this patch.
+
+Current focused validation: 331 attachment/persistent/session/cloud-init/tunnel
+and released-path regressions pass, as does full ty check aivm. All four privileged E2E tests now pass in 116.20 seconds, including
+the nested VM lifecycle. Waiting for cloud-init completion avoided the shutdown
+timeout in this run; that is evidence for a first-boot timing race, not proof
+that every shutdown failure has this cause. Two warm entries had no approval
+prompts, no config/provenance/lock writes, one combined inspection command, and
+no omitted foreground payloads. Declined/approved repairs, helper deployment,
+submount busy preservation, idle recovery, unknown provenance refusal, reboot
+reconstruction, and detach passed. Disposable VM/network cleanup succeeded.
+I am confident about these tested paths, but not claiming that startup
+optimization fixes first-boot enrollment, all shutdown behavior, or filesystem
+identity quirks on untested Btrfs/ZFS and kernel combinations. Only disposable
+test guests have been modified or restarted.

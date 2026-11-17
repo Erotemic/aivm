@@ -42,6 +42,7 @@ from ..vm.deletion import complete_missing_vm_deletion, delete_managed_vm
 from ..vm.guest_tools import GUEST_TOOL_REGISTRY
 from ..vm.provision import provision_guest_requirements
 from ..vm.rename import rename_managed_vm, validate_vm_name
+from ..vm.tpm import TpmChoice
 from ._common import _BaseCommand
 
 
@@ -172,6 +173,9 @@ class VMCreateCLI(_BaseCommand):
     """Create a managed VM from config-store defaults and start it."""
 
     vm: str = kwconf.Value('', help='Optional VM name override.')
+    tpm: TpmChoice | None = kwconf.Value(
+        None, help='Virtual TPM: none or emulator (TPM 2.0); omitted uses config.',
+    )
     set_default: bool = kwconf.Flag(
         False,
         help='Set the created VM as the active default VM.',
@@ -200,6 +204,7 @@ class VMCreateCLI(_BaseCommand):
         return create_vm_from_defaults(
             store_fpath,
             vm_override=args.vm if args.vm else None,
+            tpm_override=args.tpm or None,
             set_default=args.set_default,
             force=args.force,
             dry_run=args.dry_run,

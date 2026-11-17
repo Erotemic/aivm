@@ -33,7 +33,11 @@ from ...config_store import (
 )
 from ...detect import auto_defaults
 from ...enrollment import normalized_guest_username, reconcile_current_principal
-from ...errors import AIVMError, CommandControlError
+from ...errors import (
+    AIVMError,
+    AdministratorEnrollmentRequiredError,
+    CommandControlError,
+)
 from ...host import (
     HostCapability,
     ensure_host_capability,
@@ -454,15 +458,30 @@ def _join_existing_machine(
         if pending is not None and pending.state == 'pending':
             profile.active_vm = vm_name
             save_user_profile(profile, scope.profile_path)
-            print(
-                f'Enrollment is pending for {host_user} -> '
-                f'{pending.guest_user}: {ex}',
-                file=sys.stderr,
-            )
-            print(
-                f'Run `aivm vm access reconcile --vm {vm_name}` when the VM '
-                'is reachable.'
-            )
+            if isinstance(ex, AdministratorEnrollmentRequiredError):
+                print(
+                    f'Enrollment requested for {host_user} -> '
+                    f'{pending.guest_user}, state=pending. Host sudo is '
+                    'unavailable to this account.',
+                    file=sys.stderr,
+                )
+                print('Ask a sudo-capable administrator to run as themselves:')
+                print(
+                    f'  aivm vm access prepare {pending.id} '
+                    f'--vm {vm_name} --admin_override'
+                )
+                print('Then verify as this host user, without sudo:')
+                print(f'  aivm vm access verify --vm {vm_name}')
+            else:
+                print(
+                    f'Enrollment is pending for {host_user} -> '
+                    f'{pending.guest_user}: {ex}',
+                    file=sys.stderr,
+                )
+                print(
+                    f'Run `aivm vm access reconcile --vm {vm_name}` when '
+                    'the VM is reachable.'
+                )
             print(f'Updated user profile: {scope.profile_path}')
             return 0
         raise

@@ -292,9 +292,9 @@ def render_store_toml(reg: Store, *, attachment_style: str = 'legacy') -> str:
             (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
             key=lambda cred: cred.id,
         )
-        for cred in nested_agent_creds:
+        for agent_cred in nested_agent_creds:
             lines.append('[[vms.agent_credentials]]')
-            _emit_agent_credential(lines, cred)
+            _emit_agent_credential(lines, agent_cred)
         nested_principals = sorted(
             (item for item in reg.principals if item.vm_name == vm.name),
             key=lambda item: (item.host_user, item.id),
@@ -415,9 +415,9 @@ def render_store_vm_toml(reg: Store, vm_name: str) -> str:
         (cred for cred in reg.agent_credentials if cred.vm_name == vm.name),
         key=lambda cred: cred.id,
     )
-    for cred in nested_agent_creds:
+    for agent_cred in nested_agent_creds:
         lines.append('[[vms.agent_credentials]]')
-        _emit_agent_credential(lines, cred)
+        _emit_agent_credential(lines, agent_cred)
     nested_principals = sorted(
         (item for item in reg.principals if item.vm_name == vm.name),
         key=lambda item: (item.host_user, item.id),

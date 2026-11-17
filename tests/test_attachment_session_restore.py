@@ -1110,6 +1110,7 @@ def test_prepare_session_scopes_persistent_replay_to_primary(
             'host_exports_ready': False,
             'only_guest_dst': '/workspace/new-project',
             'preserve_live_mounts': vm_was_running,
+            'symlink_checks': [] if vm_was_running else None,
         }
     ]
     if vm_was_running:

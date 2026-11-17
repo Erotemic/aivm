@@ -15,6 +15,7 @@ import pytest
 
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
+    ConcurrentStoreUpdateError,
     PrincipalEntry,
     Store,
     load_store,
@@ -57,6 +58,7 @@ def _attachment_worker(
     host_path: str,
     vm_name: str,
     owner_principal_id: str,
+    skip_if_unchanged: bool,
     start: Any,
     errors: Any,
 ) -> None:
@@ -83,7 +85,7 @@ def _attachment_worker(
             Path(root),
             reason=f'Concurrent attachment update for {host_path}.',
             io_policy=policy,
-            force_split=True,
+            skip_if_unchanged=skip_if_unchanged,
         )
         errors.put('')
     except BaseException as ex:  # pragma: no cover - reported in parent
@@ -289,6 +291,76 @@ def test_split_store_fragments_are_group_writable(tmp_path: Path) -> None:
     assert _mode(layout.root / 'vms') == MACHINE_DIRECTORY_MODE
 
 
+@pytest.mark.parametrize('replace_store', [False, True])
+def test_unchanged_update_preserves_files_and_revision_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, replace_store: bool,
+) -> None:
+    import copy
+
+    from aivm.config_store import io
+
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
+    gid = os.getgid()
+    ensure_machine_store_layout(layout, group_gid=gid)
+    policy = machine_store_policy(layout, group_gid=gid)
+    written = save_store_split(
+        _shared_vm_store(), layout.config_path, io_policy=policy,
+    )
+    # An entry operation must preserve hand formatting on a semantic no-op.
+    with layout.config_path.open('a') as stream:
+        stream.write('\n# Keep this operator comment.\n')
+    before = {path: (path.read_bytes(), path.stat()) for path in written}
+
+    def mutate(reg: Store) -> Store | None:
+        # Machine serialization excludes the caller-specific login name.
+        # Its runtime value must not force another machine-store write.
+        reg.vms[0].cfg.vm.user = 'another-runtime-user'
+        return copy.deepcopy(reg) if replace_store else None
+
+    def unexpected_write(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError('Unchanged update attempted to stage a transaction')
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(io, '_stage_split_transaction', unexpected_write)
+        unchanged = update_store(
+            mutate, layout.config_path, io_policy=policy, skip_if_unchanged=True,
+        )
+    for path, (content, info) in before.items():
+        assert path.read_bytes() == content
+        after = path.stat()
+        assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+            info.st_ino, info.st_mtime_ns, info.st_ctime_ns,
+        )
+    # A later genuine update must persist and invalidate the returned revision.
+    update_store(
+        lambda reg: setattr(reg.vms[0].cfg.vm, 'cpus', 13),
+        layout.config_path, io_policy=policy, skip_if_unchanged=True,
+    )
+    assert load_store(layout.config_path, io_policy=policy).vms[0].cfg.vm.cpus == 13
+    with pytest.raises(ConcurrentStoreUpdateError):
+        save_store(unchanged, layout.config_path, io_policy=policy)
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_unchanged_update_still_creates_store_or_forces_layout(
+    tmp_path: Path, existing: bool,
+) -> None:
+    layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
+    gid = os.getgid()
+    ensure_machine_store_layout(layout, group_gid=gid)
+    policy = machine_store_policy(layout, group_gid=gid)
+    if existing:
+        save_store(_shared_vm_store(), layout.config_path, io_policy=policy)
+        assert not (layout.root / 'networks.toml').exists()
+    update_store(
+        lambda reg: None, layout.config_path, io_policy=policy,
+        skip_if_unchanged=True, force_split=existing,
+    )
+    assert layout.config_path.is_file()
+    if existing:
+        assert (layout.root / 'networks.toml').is_file()
+
+
 def test_machine_lock_order_is_global_then_network_then_vm(
     tmp_path: Path,
 ) -> None:
@@ -352,8 +424,9 @@ def test_store_lock_can_be_nested_inside_resource_lock_set(
     assert loaded.behavior.verbose == 2
 
 
+@pytest.mark.parametrize('skip_if_unchanged', [False, True])
 def test_concurrent_machine_store_updates_retain_both_attachments(
-    tmp_path: Path,
+    tmp_path: Path, skip_if_unchanged: bool,
 ) -> None:
     layout = MachineStoreLayout.from_root(tmp_path / 'machine')
     gid = os.getgid()
@@ -383,6 +456,7 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
                 str(host_path),
                 vm_name,
                 owner,
+                skip_if_unchanged,
                 start,
                 errors,
             ),
@@ -411,8 +485,9 @@ def test_concurrent_machine_store_updates_retain_both_attachments(
     }
 
 
+@pytest.mark.parametrize('unchanged_update', [False, True])
 def test_interrupted_split_recovery_preserves_unrelated_vm_fragment(
-    tmp_path: Path,
+    tmp_path: Path, unchanged_update: bool,
 ) -> None:
     layout = MachineStoreLayout.from_root(tmp_path / 'machine', shared=True)
     gid = os.getgid()
@@ -444,7 +519,13 @@ def test_interrupted_split_recovery_preserves_unrelated_vm_fragment(
         encoding='utf-8',
     )
 
-    recovered = load_store(layout.config_path, io_policy=policy)
+    if unchanged_update:
+        recovered = update_store(
+            lambda reg: None, layout.config_path,
+            io_policy=policy, skip_if_unchanged=True,
+        )
+    else:
+        recovered = load_store(layout.config_path, io_policy=policy)
 
     assert not txn.exists()
     assert {vm.name for vm in recovered.vms} == {'vm-a', 'vm-b'}

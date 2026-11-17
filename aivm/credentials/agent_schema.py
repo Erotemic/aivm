@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import Final, Literal
 
 from .models import GitRepository
 from .validation import (
@@ -11,9 +12,9 @@ from .validation import (
     validate_repository_identity,
 )
 
-AGENT_CREDENTIAL_STATE_PENDING = 'pending'
-AGENT_CREDENTIAL_STATE_ACTIVE = 'active'
-AGENT_CREDENTIAL_STATE_REVOCATION_PENDING = 'revocation-pending'
+AGENT_CREDENTIAL_STATE_PENDING: Final[Literal['pending']] = 'pending'
+AGENT_CREDENTIAL_STATE_ACTIVE: Final[Literal['active']] = 'active'
+AGENT_CREDENTIAL_STATE_REVOCATION_PENDING: Final[Literal['revocation-pending']] = 'revocation-pending'
 VALID_AGENT_CREDENTIAL_STATES = frozenset(
     {
         AGENT_CREDENTIAL_STATE_PENDING,

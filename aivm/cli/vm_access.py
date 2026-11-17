@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+from pathlib import Path
 
 import kwconf
 
+from ..admin_onboarding import onboard_other_principal
 from ..access_control import (
     TRUST_MODE,
     AccessAction,
@@ -15,12 +17,17 @@ from ..access_control import (
 )
 from ..commands import CommandManager
 from ..config_store import find_principals_for_vm
-from ..enrollment import reconcile_current_principal
+from ..enrollment import (
+    prepare_other_principal,
+    reconcile_current_principal,
+    verify_current_principal,
+)
 from ..errors import AIVMError
 from ..host_identity import current_host_identity
 from ..scoped_store import load_scope_store, resolve_store_scope
 from ..services import resolve_vm_name
 from ._common import _BaseCommand
+from .vm_attach import VMAttachRequest, run_vm_attach
 
 
 class VMAccessListCLI(_BaseCommand):
@@ -117,6 +124,211 @@ class VMAccessReconcileCLI(_BaseCommand):
         print(
             f'{prefix} {report.principal.host_user} as '
             f'{report.principal.guest_user} on {vm_name} at {report.ip} '
+            f'(state={report.principal.state}).'
+        )
+        return 0
+
+
+class VMAccessOnboardCLI(_BaseCommand):
+    """Administrator: fully provision another host user's VM account."""
+
+    user: str = kwconf.Value(
+        '', position=1,
+        help='Existing host login to provision without involving that user.',
+    )
+    vm: str = kwconf.Value('', help='Managed VM to grant access to.')
+    guest_user: str = kwconf.Value(
+        '', help='Optional guest login; default is <host-user>-agent.',
+    )
+    ip: str = kwconf.Value(
+        '', help='Optional VM IP override; normally resolved from libvirt.',
+    )
+    admin_override: bool = kwconf.Flag(
+        False,
+        help=(
+            'Explicitly authorize modifying another host user\'s profile '
+            'and guest access through the root-owned onboarding helper.'
+        ),
+    )
+    repair_bootstrap: bool = kwconf.Flag(
+        False,
+        help=(
+            'If the guest rejects its bootstrap SSH key, explicitly restore '
+            'only the restricted guest bootstrap through this caller\'s '
+            'already-active guest SSH and sudo access, then retry once.'
+        ),
+    )
+    attach: str = kwconf.Value(
+        '',
+        help=(
+            'Optional absolute host directory to attach for the new user '
+            'during onboarding (normally their project folder).'
+        ),
+    )
+    attach_mode: Literal['persistent', 'direct-virtiofs'] = kwconf.Value(
+        'persistent',
+        help='Attachment mode when --attach is provided (default: persistent).',
+    )
+    attach_guest_dst: str = kwconf.Value(
+        '', help='Optional guest destination for --attach.',
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'],
+        help='Preview host and guest changes without sudo or file writes.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if not args.admin_override:
+            raise AIVMError(
+                'Onboarding another host account requires --admin_override. '
+                'The administrator must be authorized to run the privileged '
+                'onboarding helper as root; the new user needs no host sudo.'
+            )
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config, vm_opt=str(args.vm or ''), host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        attach_src = str(args.attach or '').strip()
+        if attach_src and not Path(attach_src).is_absolute():
+            raise AIVMError(
+                '--attach must be an absolute host path, not an '
+                'administrator-relative directory.'
+            )
+        report = onboard_other_principal(
+            scope, vm_name=vm_name, host_user=str(args.user or ''),
+            guest_user=str(args.guest_user or ''),
+            ip_override=str(args.ip or ''), dry_run=bool(args.dry_run),
+            repair_bootstrap=bool(args.repair_bootstrap),
+        )
+        if args.dry_run:
+            print(
+                f'Would provision {report.principal.host_user} -> '
+                f'{report.principal.guest_user} on {vm_name}; '
+                f'profile={report.profile_path}, guest_ip={report.ip}. '
+                'No host or guest state changed.'
+            )
+            if attach_src:
+                print(
+                    f'Would attach {attach_src} ({args.attach_mode}) to '
+                    f'owner {report.principal.id} after enrollment.'
+                )
+        else:
+            if attach_src:
+                try:
+                    run_vm_attach(VMAttachRequest(
+                        config_opt=args.config,
+                        vm_opt=vm_name,
+                        host_src=Path(attach_src),
+                        guest_dst=str(args.attach_guest_dst or ''),
+                        mode=str(args.attach_mode),
+                        admin_override=True,
+                        owner_principal=report.principal.id,
+                        yes=bool(args.yes),
+                    ))
+                except AIVMError as ex:
+                    raise AIVMError(
+                        f'{report.principal.host_user} has active VM access, '
+                        f'but attaching {attach_src!r} failed: {ex}. '
+                        'Re-run the attachment separately with '
+                        '`aivm vm attach --owner_principal ... '
+                        '--admin_override`.'
+                    ) from ex
+            print(
+                f'Onboarded {report.principal.host_user} -> '
+                f'{report.principal.guest_user} on {vm_name} at {report.ip} '
+                '(state=active; SSH verified under the target host uid).'
+            )
+            print(f'User-owned profile: {report.profile_path}')
+            print(
+                'The user requires a usable shared aivm executable at login; '
+                'this command does not install software for other accounts.'
+            )
+        return 0
+
+
+class VMAccessPrepareCLI(_BaseCommand):
+    """Administrator: install an existing user's guest key, without its private key."""
+
+    identity: str = kwconf.Value(
+        '', position=1,
+        help='Existing access identity id or host login to prepare.',
+    )
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    ip: str = kwconf.Value(
+        '', help='Optional guest IP override; normally resolved from libvirt.',
+    )
+    admin_override: bool = kwconf.Flag(
+        False,
+        help=(
+            "Acknowledge that you are preparing another host user's guest "
+            'access. The restricted bootstrap command requires host sudo.'
+        ),
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'],
+        help='Preview preparation without accessing the bootstrap key.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        if not args.admin_override:
+            raise AIVMError(
+                'Preparing another user requires --admin_override. '
+                'The host sudo prompt will authenticate the administrator.'
+            )
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config, vm_opt=str(args.vm or ''), host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        report = prepare_other_principal(
+            scope, vm_name=vm_name, selector=str(args.identity or ''),
+            ip_override=str(args.ip or ''), dry_run=args.dry_run,
+        )
+        if args.dry_run:
+            print(
+                f'Would prepare {report.principal.host_user} as '
+                f'{report.principal.guest_user} on {vm_name} at {report.ip}.'
+            )
+        else:
+            print(
+                f'Prepared public SSH key for {report.principal.host_user} '
+                f'({report.principal.guest_user}) on {vm_name}. '
+                f'State={report.principal.state}; the owner must run '
+                f'`aivm vm access verify --vm {vm_name}` without sudo.'
+            )
+        return 0
+
+
+class VMAccessVerifyCLI(_BaseCommand):
+    """Owner: verify personal guest SSH access without host sudo."""
+
+    vm: str = kwconf.Value('', help='Optional VM name override.')
+    ip: str = kwconf.Value(
+        '', help='Optional guest IP override; normally resolved from libvirt.',
+    )
+    dry_run: bool = kwconf.Flag(
+        False, short_alias=['n'],
+        help='Preview verification without changing guest or machine state.',
+    )
+
+    @classmethod
+    def main(cls, argv: bool = True, **kwargs: Any) -> int:
+        args = cls.cli(argv=argv, data=kwargs)
+        vm_name, path = resolve_vm_name(
+            config_opt=args.config, vm_opt=str(args.vm or ''), host_src=None,
+        )
+        scope = resolve_store_scope(str(path))
+        report = verify_current_principal(
+            scope, vm_name=vm_name, ip_override=str(args.ip or ''),
+            dry_run=args.dry_run,
+        )
+        prefix = 'Would verify' if args.dry_run else 'Verified'
+        print(
+            f'{prefix} personal SSH access for {report.principal.host_user} '
+            f'as {report.principal.guest_user} on {vm_name} at {report.ip} '
             f'(state={report.principal.state}).'
         )
         return 0
@@ -276,6 +488,9 @@ class VMAccessModalCLI(kwconf.ModalCLI):
 
     list = VMAccessListCLI
     reconcile = VMAccessReconcileCLI
+    onboard = VMAccessOnboardCLI
+    prepare = VMAccessPrepareCLI
+    verify = VMAccessVerifyCLI
     repair_host_identity = VMAccessRepairHostIdentityCLI
     disable = VMAccessDisableCLI
     remove = VMAccessRemoveCLI
@@ -285,7 +500,10 @@ __all__ = [
     'VMAccessDisableCLI',
     'VMAccessListCLI',
     'VMAccessModalCLI',
+    'VMAccessOnboardCLI',
     'VMAccessReconcileCLI',
+    'VMAccessPrepareCLI',
+    'VMAccessVerifyCLI',
     'VMAccessRepairHostIdentityCLI',
     'VMAccessRemoveCLI',
 ]

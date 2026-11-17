@@ -208,7 +208,9 @@ class AgentVMModalCLI(kwconf.ModalCLI):
         # hook to customize the spelling). Build the normal command tree
         # without that one action, then restore the same destination with
         # the conventional ``-V`` spelling as well.
-        version = self.version
+        # kwconf initializes this attribute dynamically in ModalCLI.__init__.
+        # getattr avoids asking mypy to infer its unannotated base type.
+        version: str | None = getattr(self, 'version', None)
         self.version = None
         try:
             parser = super().argparse(

@@ -76,6 +76,14 @@ Guest boundary (untrusted):
 * All code and data inside the VM, including guest root.
 * Guest network traffic and any external inputs it consumes.
 
+Accepted architectural requirement: AIVM agents retain unrestricted guest
+administrator capability, including passwordless sudo and arbitrary package
+installation. Guest-local restrictions are not the sandbox enforcement
+boundary. See ``docs/planning/adr/0001-unrestricted-agent-environment.md``.
+The host-side firewall boot/readiness and non-sudo status mechanism remains
+an unapproved design issue documented at
+``docs/planning/firewall-lifecycle-and-delegation-2026-10.md``.
+
 Shared boundary (explicitly extended trust by user decision):
 
 * Host directories exported into the VM (e.g. virtiofs mounts).
@@ -617,3 +625,12 @@ For malicious-guest scenarios with today’s ``aivm`` behavior:
 .. _Ubuntu L1TF vulnerability page: https://ubuntu.com/security/vulnerabilities/l1tf
 
 .. _Ubuntu advisory for CVE-2019-18389: https://ubuntu.com/security/CVE-2019-18389
+
+
+Scoped provider credential use
+------------------------------
+
+The opt-in :doc:`secrets` integration keeps provider credentials host-side and
+limits their use to explicitly granted operations. It is an experimental Python
+broker, not a formally verified subsystem. Its separate design and assurance
+plans describe the proposed Rust/Lean boundary and deployment assumptions.

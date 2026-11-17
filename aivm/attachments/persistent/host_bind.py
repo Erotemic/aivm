@@ -6,7 +6,7 @@ import json
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from loguru import logger as log
@@ -319,6 +319,52 @@ def _probe_persistent_source_identity_as_root(
     return FilesystemIdentity(dev=dev, ino=ino)
 
 
+def _requested_persistent_export_is_ready(
+    cfg: AgentVMConfig,
+    cfg_path: Path,
+    only_guest_dst: str,
+) -> bool:
+    """Verify one live export against the root-approved manifest, not the VM.
+
+    A foreground session must not install the *global* replay manifest just
+    because an unrelated owner registered a failed or stale attachment. Only
+    use this read-only fast path for a previously approved, pinned, live bind.
+    Real changes to the requested attachment still take the privileged path.
+    """
+    approved = manifest._persistent_host_replay_manifest_path(cfg)
+    try:
+        if not manifest._approved_host_replay_manifest_is_trusted(approved):
+            return False
+        payload = json.loads(approved.read_text(encoding='utf-8'))
+        if payload['vm_name'] != cfg.vm.name or payload['schema_version'] != 2:
+            return False
+        records = payload['records']
+        if not isinstance(records, list):
+            return False
+        approved_records = [
+            record for record in records
+            if isinstance(record, dict)
+            and record.get('guest_dst') == only_guest_dst
+        ]
+        desired = manifest._persistent_attachment_records_for_vm(
+            cfg, cfg_path, only_guest_dst=only_guest_dst
+        )
+        if len(desired) != 1 or not desired[0].enabled:
+            return False
+        expected = asdict(desired[0])
+        # JSON turns the canonical tuple of aliases into a list.
+        expected['host_lexical_paths'] = list(desired[0].host_lexical_paths)
+        if approved_records != [expected]:
+            return False
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        return False
+    return _approved_binds_already_applied(
+        approved,
+        _persistent_root_host_dir(cfg),
+        only_guest_dst=only_guest_dst,
+    )
+
+
 def _run_persistent_host_replay(
     cfg: AgentVMConfig,
     cfg_path: Path,
@@ -329,6 +375,18 @@ def _run_persistent_host_replay(
     preserve_live_binds: bool = False,
 ) -> tuple[tuple[str, str, str], ...]:
     """Apply the approved manifest through the privileged pinned-FD helper."""
+    if (
+        not dry_run
+        and preserve_live_binds
+        and only_guest_dst
+        and _requested_persistent_export_is_ready(cfg, cfg_path, only_guest_dst)
+    ):
+        log.debug(
+            'Requested persistent export {} is already approved and mounted; '
+            'skipping global manifest changes for VM {}.',
+            only_guest_dst, cfg.vm.name,
+        )
+        return ()
     approved_manifest = manifest._sync_persistent_host_replay_manifest(
         cfg, cfg_path, dry_run=dry_run
     )
@@ -539,7 +597,11 @@ def _reconcile_persistent_host_exports(
     preserve_live_binds: bool = False,
 ) -> _HostExportReconcileResult:
     """Converge descriptor-pinned host exports without touching VM state."""
-    records = manifest._persistent_attachment_records_for_vm(cfg, cfg_path)
+    records = manifest._persistent_attachment_records_for_vm(
+        cfg,
+        cfg_path,
+        only_guest_dst=(only_guest_dst if preserve_live_binds else ''),
+    )
     unavailable: tuple[tuple[str, str, str], ...] = ()
     if records or manifest._persistent_host_replay_state_needed(cfg, cfg_path):
         unavailable = _run_persistent_host_replay(

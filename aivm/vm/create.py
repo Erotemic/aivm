@@ -26,6 +26,7 @@ from .domain import (
     vm_exists,
 )
 from .images import fetch_image
+from .tpm import normalize_tpm, require_tpm_capability
 
 log = logger
 
@@ -54,10 +55,12 @@ def build_virt_install_cmd(
             f'source={source_dir},target={tag},driver.type=virtiofs',
         ]
 
+    tpm = normalize_tpm(cfg.vm.tpm)
+    tpm_arg = ('backend.type=emulator,backend.version=2.0,model=tpm-crb'
+               if tpm == 'emulator' else 'none')
     network_arg = f'network={cfg.network.name},model=virtio'
 
-    # These VMs are for agent development workflows, not secure-boot or TPM
-    # validation. Keep UEFI for modern Ubuntu boot, but make the firmware
+    # Keep UEFI for modern Ubuntu boot, but make the firmware
     # profile explicit so nested hosts do not inherit heavier defaults that
     # have proven flaky and so serial console output is more useful.
     boot_opts = 'uefi,loader.secure=no,bios.useserial=on'
@@ -90,7 +93,7 @@ def build_virt_install_cmd(
         '--rng',
         '/dev/urandom',
         '--tpm',
-        'none',
+        tpm_arg,
         *extra,
     ]
     # Prefer UEFI consistently, but do not let libvirt auto-enable
@@ -228,6 +231,8 @@ def create_or_start_vm(
 
         scope = resolve_store_scope(str(config_store_path))
         require_vm_creation_not_blocked(scope, cfg, scope.store_path)
+    if normalize_tpm(cfg.vm.tpm) == 'emulator':
+        require_tpm_capability(dry_run=dry_run)
     if recreate:
         if config_store_path is None:
             raise AIVMError(

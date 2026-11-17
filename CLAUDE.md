@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run doctests: `./run_doctests.sh`
 - Build docs: `./run_docs.sh` (warnings are errors; catches dangling `:doc:`/toctree targets)
 - Run E2E tests: `./run_e2e_tests.sh` (Note: requires `AIVM_E2E=1` or `AIVM_E2E_BOOTSTRAP=1` and a host with libvirt/KVM and sudo privileges)
+- Run the secrets suites: `python -m pytest -o addopts='' -q tests/test_secrets_*.py` (offline; real TLS on loopback) and `AIVM_E2E=1 python -m pytest -o addopts='' -s tests/e2e/test_secrets.py` (creates a real KVM guest)
 
 ### Test conventions
 
@@ -61,6 +62,14 @@ There is **no intent log**: `CommandManager` pops every `IntentFrame` and
 `CommandPlan` and drains `_loose_commands` before returning, so nothing records
 what it intended after the fact. Don't design an assertion around one.
 
+For `aivm_secrets`, the equivalents are in `tests/secrets_helpers.py`:
+`FakeExecutor` (the provider, in-process, for orchestration tests),
+`TLSService` (a real HTTPS server on loopback with a throwaway CA -- point a
+policy at it with `egress` pins instead of mocking `http.client`), and
+`ServeProcess` (a real broker child). Socket paths must be short, so those
+tests take their runtime directory from `tempfile` under `/tmp`, not from
+`tmp_path`.
+
 Keep a stub only for a genuine boundary (a live guest, the developer's real
 `~/.ssh/config`, `time.sleep`, an interactive prompt) or when the stubbed thing
 is the subject of a different test file. Say which in a comment.
@@ -87,6 +96,7 @@ is the subject of a different test file. Say which in a comment.
 - `aivm/host.py`, `aivm/net.py`, `aivm/firewall.py`: Provide abstractions for interacting with the host system's networking, libvirt, and nftables firewall.
 - `aivm/config_store/` & `aivm/config.py`: Manage the global configuration store located at `~/.config/aivm/config.toml`.
 - `aivm/machine_store.py`: Owns where the 0.6 machine store lives (shared vs personal root), its permissions, and the globally ordered resource locks.
+- `aivm_secrets/`: Experimental independent secret-use broker (`aivm-secrets`), built as a **separate, opt-in distribution** from the nested `aivm_secrets/pyproject.toml`, while source temporarily remains in this repository until extraction. It never imports `aivm`. `kernel/` is the pure state machine; `host/` is the impure credential/transport shell; `guest.py` is the standalone guest client. Existing, opt-in AIVM integration is in `aivm/secrets_transport.py`, `aivm/secrets_identity_transport.py`, `aivm/secrets_identity_vm.py`, `aivm/cli/vm_identity.py`, and a guarded dispatch in `aivm/cli/vm_connect.py`. These are temporary exceptions, not authorized expansion points.
 
 ### Key Design Patterns
 - **Command Manager**: Subprocess execution is centralized through a command manager that organizes logs into semantic steps and handles sudo approvals.
@@ -111,4 +121,10 @@ is the subject of a different test file. Say which in a comment.
   because a caller passes `sudo=True` speculatively under
   `privilege_mode='as-needed'` and no `sudo` reaches the command line when
   already root. This is a deliberate policy, not an oversight to optimize away.
+- **The secrets kernel stays pure, and only it can authorize an effect**: `aivm_secrets/kernel/` is written to be ported to verified Rust (Charon/Aeneas/Lean), so it may import only `dataclasses`, `typing`, `json`, `hashlib` and `ipaddress`, and may not use a clock, file, socket, environment, RNG, regular expression, closure, lambda or mutable dataclass. Every transition returns a new `State` or raises a fixed-code `SecretsError` *without changing state*; time and fresh identifiers arrive as arguments. `AuthorizedEffect`, `Ticket` and `Grant` are constructed only in `kernel/machine.py`, and the executor is called only from `host/broker.py` with a value a kernel emission returned. `tests/test_secrets_purity.py` enforces all of this structurally -- extend the kernel within those rules rather than relaxing the test. When a check is added, add its mutant to `tests/test_secrets_mutation.py`; when behavior a client can observe changes, that is a protocol change against `tests/secrets_vectors/`, not a refactor.
+- **Secrets services are data; there is one mechanism**: `aivm_secrets/kernel/https.py` interprets a declarative manifest, and nothing else in the package may know that a provider or tool exists (`test_provider_knowledge_is_data_in_one_module`). Built-in GitHub support is a manifest built by `kernel/presets.py` -- policy `schema: 1` *expands to* a schema-2 manifest with the same digest -- and `gh pr view` works in a guest only because that manifest carries a `cli` table the guest client reads. To support another provider or command line, add manifest data (a `checks` fact, a `cli` row, a preset); if the data cannot express it, extend the manifest format for everyone rather than adding a provider branch.
+- **A write is what the manifest declares, and a failed write is never "rejected"**: each operation states `effect: read|write`; it is never inferred from the HTTP method, because a `GET` can change state. The declared class travels with the authorization (`AuthorizedEffect.write`) and decides the write mode, approval and failure meaning. Once a write is handed to the executor, only `unreachable` is definite; every other failure, *including any 4xx*, is `outcome_unknown`, since a service may apply a request and then answer 409. Do not reintroduce `upstream_rejected` for writes without a provider contract stated in the manifest.
+- **A trusted host path is judged by every place its resolution visits**: `aivm_secrets/host/files.py` walks from `/` through held `O_NOFOLLOW` descriptors and refuses a path if the path as written, any link followed, or the destination is under a guest-writable root -- `workspace/link -> /host/private` resolves outside the workspace while the guest still controls it. Use `read_owned` / `verify_program` / `private_directory` rather than resolving and then checking, and execute what `verify_program` returned, not the name. Group-writable is accepted only via `_private_group`, which must *prove* the group is the caller's alone (a member list does not show accounts whose primary group it is); on any doubt it refuses.
+- **The broker's code is chosen by nobody's environment**: AIVM launches it with `interpreter_flags()` (`python -I`) and `broker_environment()` (no `PYTHON*`, `LD_*`, trust-store variables), and the broker separately runs `verify_runtime`. `-P` alone is not isolation: it leaves `PYTHONPATH` in force, which is how a shadow `aivm_secrets` package or a `sitecustomize.py` in the shared folder would run with the credential.
+- **AIVM may use secrets only through existing, explicit, experimental opt-ins**: `aivm ssh --secrets_policy` starts `aivm-secrets serve` as a child; its stdin is a lifetime lease. Only the existing adapter modules may import `aivm_secrets.errors`, and never during ordinary AIVM CLI initialization. No new mandatory imports, dependencies, VM/guest setup steps, persistent state, or default services are permitted. Normal AIVM must start and work without the secrets package. The credential is resolved inside the child, not AIVM; do not replace this with an in-process `Broker`, grant new integration permissions or use a weaker fallback. **Read `docs/planning/aivm-secrets-repository-boundary.md` before any secrets change.** Extraction into a standalone repository is planned, not to be performed unilaterally.
 - **A refusal is not a failure**: `CommandControlError` (user declined, approval unavailable, sudo forbidden, never executed) says the user did not authorize the work; `CommandError` says the work did not succeed. Best-effort machinery — `mgr.attempt(...)`, `except AIVMError`, `except Exception` — routinely recovers from the second and must never recover from the first, because continuing past it contradicts the user's own decision. `attempt()` re-raises every `CommandControlError` regardless of `catch`, and broad handlers wrapping manager calls re-raise it explicitly. When adding one, ask what it does to a declined prompt.

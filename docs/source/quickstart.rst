@@ -66,19 +66,114 @@ matter how the host is prepared:
   ``shared-root`` attachment modes use to stage a folder under the VM's
   export root.
 
-So an administrator prepares the host once:
+So an administrator prepares the host once. Run the AIVM executable in the
+administrator's own Python environment; AIVM elevates only its privileged
+host operations, rather than requiring root to have AIVM installed:
 
 .. code-block:: bash
 
-   # For each user who will share the VM.
-   sudo aivm host permissions setup --user alice
+   # As a sudo-capable administrator, for each trusted coworker:
+   aivm host permissions grant alice --admin_override
 
    # Install the sandbox rules. They live in the live kernel ruleset, so
    # this is needed again after every host reboot.
-   sudo aivm host fw apply
+   aivm host fw apply
 
-Users log out and back in (or ``newgrp libvirt``) for the group change, then
-run ``aivm config init`` to join, and work normally from there.
+For a zero-touch join, the administrator can provision a second account
+*before that user logs in*, without ``sudo -u USER`` and without granting the
+user host sudo. Once host permissions have been granted, run:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --dry_run
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes
+   aivm vm access list --vm aivm-2404-aiq-gpu2
+
+To include a *specific* project directory in the same onboarding operation:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes \
+       --attach /absolute/path/to/benjamins/project \
+       --attach_mode persistent
+
+If the VM rejects its restricted bootstrap SSH key during enrollment,
+AIVM preserves the new user's pending access identity rather than claiming
+success. An administrator who already has active SSH access and passwordless
+*guest* sudo can explicitly repair that VM's dedicated bootstrap account and
+retry enrollment in one command:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes \
+       --repair_bootstrap
+
+This option is opt-in. Only a bootstrap SSH authentication rejection triggers
+the repair; it will not run for a timeout, unknown VM, failed guest helper, or
+failed owner-key verification. The repair uses the invoking administrator's
+registered SSH key and guest sudo, does not rotate the machine bootstrap key,
+and retries guest preparation once. The temporary guest enrollment account is
+restricted to the forced helper; the user's host sudo policy is unchanged.
+If the administrator's own guest SSH or sudo access is broken, repair fails
+with the new user's identity left pending for diagnosis.
+
+``--attach`` is optional, must be an absolute host path, and declares the
+new attachment under Benjamin's access-identity ID. It uses the existing
+administrator-assisted attachment implementation, including its foreign-home
+source probe. It does not automatically expose the user's entire home.
+
+The command installs an inspectable, root-owned one-shot helper at
+``/usr/local/libexec/aivm/onboard-user``, generates the target account's AIVM
+SSH key and profile **under its uid/gid**, and registers the public key in the
+shared machine store. It uses the existing restricted bootstrap channel to
+prepare the guest account, then drops to the target uid to prove SSH access.
+Only a completed proof advances the access identity to ``active``. It does not
+add the target to ``sudoers`` or run AIVM from the administrator's Python
+environment as the target user. The helper must be allowed by the
+administrator's *own* sudo policy; a restricted sudoers policy may reject its
+installation or execution. Existing user profiles and unrelated SSH keys are
+not overwritten. A missing home directory can be created only when all its parent directories
+are root-owned and not group/world-writable; otherwise prepare the home with
+the site's normal account-management process first. Repeated calls reuse the
+matching dedicated onboarding key and profile; key rotations are not automatic.
+
+**Software is a separate prerequisite:** this provisions the user's profile,
+key, and guest access but does not install a shared ``aivm`` executable. To
+let them run AIVM without installing it themselves, maintain a shared AIVM
+installation accessible by their account. The standard XDG profile path is
+``~/.config/aivm/profile.toml``; custom login-time ``XDG_CONFIG_HOME`` needs
+site-specific handling. The provisioned guest account follows existing AIVM
+policy and has *guest* sudo, not *host* sudo.
+
+Alternatively, users log out and back in (or ``newgrp libvirt``) for the
+group change, then run ``aivm config init`` to join. The user might not have
+host sudo: in that case, a pending guest enrollment must be prepared by a
+sudo-capable administrator, then verified by the user without sudo:
+
+.. code-block:: bash
+
+   # Administrator, in their own AIVM environment:
+   aivm vm access prepare alice --vm aivm-2404-host --admin_override
+
+   # Alice, in her own host session:
+   aivm vm access verify --vm aivm-2404-host
+
+Neither command requires an administrator to read Alice's private SSH key.
+Do not grant host sudo merely to complete this enrollment. ``prepare`` only
+uses the machine bootstrap key through the administrator's sudo credentials;
+``verify`` activates an access identity after the user proves personal SSH
+access. A user-installed ``aivm`` executable may not appear on root's ``PATH``;
+run administrator AIVM commands as the enrolled administrator, allowing AIVM
+to escalate only their required host operations.
+
+``host permissions grant`` is a cross-user group/store preparation operation.
+It does not create directories in Alice's private home, change her SSH key,
+or prepare user-owned VM disk storage. The ``libvirt`` group grants broad
+VM-management authority and should only be given to trusted coworkers.
 
 What a user without sudo can and cannot do
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -100,8 +195,15 @@ They cannot install or read the nftables rules, and cannot create a *new*
 
    # Or an administrator declares it on the user's behalf, so the record is
    # owned by that user rather than by the admin.
-   sudo aivm vm attach /home/alice/proj \
+   aivm vm attach /home/alice/proj --mode persistent \
        --owner_principal <alice-access-identity> --admin_override
+
+With the explicit owner and administrator override, AIVM uses a restricted,
+privileged descriptor-based identity probe when Alice's home is not traversable
+by the administrator. This preserves Unix home permissions and pins the
+persistent source filesystem object without temporary ACL changes. A failed
+or inaccessible source remains an error; dry-run does not elevate or install
+any privileged helper.
 
 Run ``aivm host permissions check`` to see which of these apply to your
 account; it reports what is unavailable to *you* rather than what a

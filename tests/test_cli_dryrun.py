@@ -43,6 +43,11 @@ from tests.helpers import run_cli
             id='vm-flush_caches',
         ),
         pytest.param(['vm', 'delete', '--yes', '--dry_run'], id='vm-delete'),
+        pytest.param(['vm', 'update', '--yes', '--dry_run'], id='vm-update'),
+        pytest.param(
+            ['vm', 'update', '--tpm', 'emulator', '--yes', '--dry_run'],
+            id='vm-update-tpm',
+        ),
         pytest.param(
             ['vm', 'provision', '--yes', '--dry_run'], id='vm-provision'
         ),
@@ -51,6 +56,35 @@ from tests.helpers import run_cli
 def test_dryrun_commands_with_yes(argv: list[str], cfg_path: Path) -> None:
     """Each planning command exits 0 against a sandboxed store."""
     assert run_cli([*argv, '--config', str(cfg_path)]) == 0
+
+
+@pytest.mark.parametrize('tpm_args', [[], ['--tpm', 'emulator']])
+@pytest.mark.parametrize('approval_args', [[], ['--yes']])
+def test_vm_update_dryrun_skips_execution_and_preserves_store(
+    monkeypatch: pytest.MonkeyPatch, cfg_path: Path,
+    capsys: pytest.CaptureFixture[str], tpm_args: list[str],
+    approval_args: list[str],
+) -> None:
+    before = cfg_path.read_bytes()
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('dry-run must not execute probes or prompt')
+
+    monkeypatch.setattr('aivm.commands.subprocess.run', unexpected)
+    monkeypatch.setattr('builtins.input', unexpected)
+    monkeypatch.setattr('aivm.privilege.libvirt_without_sudo_ok', unexpected)
+    assert run_cli([
+        'vm', 'update', '--dry_run', '--config', str(cfg_path),
+        *tpm_args, *approval_args,
+    ]) == 0
+    assert cfg_path.read_bytes() == before
+    output = capsys.readouterr().out
+    assert 'Live drift is unknown' in output
+    assert 'already in sync' not in output
+    assert 'Update complete' not in output
+    if tpm_args:
+        assert 'emulator TPM 2.0' in output
+        assert 'virsh define --validate' in output
 
 
 def test_help_tree_includes_one_line_descriptions(

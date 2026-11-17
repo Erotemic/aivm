@@ -361,8 +361,9 @@ def test_domain_storage_capture_includes_cdrom_media(
     )
 
 
+@pytest.mark.parametrize('with_tpm', [False, True])
 def test_domain_undefine_never_retries_without_storage_removal(
-    monkeypatch: MonkeyPatch,
+    monkeypatch: MonkeyPatch, with_tpm: bool,
 ) -> None:
     """Every undefine attempt preserves the remove-all-storage contract."""
     activate_manager(monkeypatch)
@@ -374,6 +375,9 @@ def test_domain_undefine_never_retries_without_storage_removal(
     rec = command_recorder(
         monkeypatch,
         {
+            'virsh dumpxml': FakeProc(0, '<domain><devices>' + (
+                '<tpm><backend type="emulator"/></tpm>' if with_tpm else ''
+            ) + '</devices></domain>', ''),
             'virsh destroy': FakeProc(0, '', ''),
             'virsh undefine': FakeProc(1, '', 'metadata flag rejected'),
         },
@@ -389,6 +393,7 @@ def test_domain_undefine_never_retries_without_storage_removal(
     ]
     assert len(undefines) == 3
     assert all('--remove-all-storage' in cmd for cmd in undefines)
+    assert all(('--tpm' in cmd) == with_tpm for cmd in undefines)
 
 
 def test_domain_undefine_refuses_changed_explicit_storage_inventory(
@@ -557,3 +562,24 @@ def test_host_storage_probe_accepts_confirmed_enoent(
         ),
     )
     assert _host_path_exists(Path('/managed/disk')) is False
+
+
+@pytest.mark.parametrize('readable', [False, True])
+def test_storage_probe_privilege_is_independent_of_libvirt_access(
+    monkeypatch: MonkeyPatch, readable: bool,
+) -> None:
+    from aivm.commands import CommandResult
+
+    activate_manager(monkeypatch, privilege_mode='as-needed')
+    monkeypatch.setattr('aivm.vm.domain.virsh_needs_sudo', lambda: False)
+    monkeypatch.setattr('aivm.privilege.user_can_read_path', lambda path: readable)
+    privileges = []
+
+    def run(self, cmd, **kwargs):
+        privileges.append(kwargs['sudo'])
+        assert kwargs['role'] == 'read'
+        return CommandResult(0, 'regular file', '')
+
+    monkeypatch.setattr('aivm.vm.domain.CommandManager.run', run)
+    assert _host_path_exists(Path('/managed/disk'))
+    assert privileges == [not readable]
