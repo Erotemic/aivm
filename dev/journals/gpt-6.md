@@ -124,3 +124,32 @@ not a live shared-machine sudo experiment. The next operational check should
 use a non-sudo principal with one previously approved mount and one denied new
 persistent mount, then confirm no stale attachment appears after denial and
 that foreground access to the old mount remains functional.
+
+## 2026-11-17 15:35:05 -0500
+
+Implemented an explicit administrator-side `aivm vm access onboard USER`
+workflow for a second account on an existing shared VM. The operator had
+already granted libvirt access to a colleague, but sudoers did not permit
+`sudo -u` to that colleague and the normal AIVM join path required the
+colleague to initialize a personal profile and verify the key manually.
+
+The new command uses a root-installed, stdlib-only helper whose user-specific
+filesystem and SSH operations drop to the target account's UID/GID. This
+preserves the existing bootstrap channel, avoids reading another person's
+private SSH key in the admin process, and only records `active` after an SSH
+proof as the target user succeeds. A dry run has no writes or sudo. The
+administrator can optionally register a persistent project attachment owned
+by the new principal, without automatically exporting the entire home.
+Existing SSH keys/profiles and disabled principals are not overwritten; repeat
+attempts preserve the same key and pending enrollments can resume. Host sudo
+and systemwide executable installation are not granted as side effects.
+
+This is an administrative helper, not a privileged daemon or new auth policy.
+It assumes an existing trusted sudo-capable operator and the current shared
+libvirt-group trust model. Restricted sudoers setups may need to authorize
+installation/execution of the fixed root-owned helper. Home directories that
+cannot be safely created are a documented prerequisite, and the host still
+needs a shared AIVM executable for users to operate it later. Tests cover
+the user-home/key/profile path, dry-run safety, active-after-proof semantics,
+revoked/key-mismatch refusal, CLI attachment forwarding, and existing access
+lifecycle; a live VM/sudo experiment is still needed on the target host.

@@ -79,10 +79,59 @@ host operations, rather than requiring root to have AIVM installed:
    # this is needed again after every host reboot.
    aivm host fw apply
 
-Users log out and back in (or ``newgrp libvirt``) for the group change, then
-run ``aivm config init`` to join. The user might not have host sudo: in that
-case, a pending guest enrollment must be prepared by a sudo-capable
-administrator, then verified by the user without sudo:
+For a zero-touch join, the administrator can provision a second account
+*before that user logs in*, without ``sudo -u USER`` and without granting the
+user host sudo. Once host permissions have been granted, run:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --dry_run
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes
+   aivm vm access list --vm aivm-2404-aiq-gpu2
+
+To include a *specific* project directory in the same onboarding operation:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes \
+       --attach /absolute/path/to/benjamins/project \
+       --attach_mode persistent
+
+``--attach`` is optional, must be an absolute host path, and declares the
+new attachment under Benjamin's access-identity ID. It uses the existing
+administrator-assisted attachment implementation, including its foreign-home
+source probe. It does not automatically expose the user's entire home.
+
+The command installs an inspectable, root-owned one-shot helper at
+``/usr/local/libexec/aivm/onboard-user``, generates the target account's AIVM
+SSH key and profile **under its uid/gid**, and registers the public key in the
+shared machine store. It uses the existing restricted bootstrap channel to
+prepare the guest account, then drops to the target uid to prove SSH access.
+Only a completed proof advances the access identity to ``active``. It does not
+add the target to ``sudoers`` or run AIVM from the administrator's Python
+environment as the target user. The helper must be allowed by the
+administrator's *own* sudo policy; a restricted sudoers policy may reject its
+installation or execution. Existing user profiles and unrelated SSH keys are
+not overwritten. A missing home directory can be created only when all its parent directories
+are root-owned and not group/world-writable; otherwise prepare the home with
+the site's normal account-management process first. Repeated calls reuse the
+matching dedicated onboarding key and profile; key rotations are not automatic.
+
+**Software is a separate prerequisite:** this provisions the user's profile,
+key, and guest access but does not install a shared ``aivm`` executable. To
+let them run AIVM without installing it themselves, maintain a shared AIVM
+installation accessible by their account. The standard XDG profile path is
+``~/.config/aivm/profile.toml``; custom login-time ``XDG_CONFIG_HOME`` needs
+site-specific handling. The provisioned guest account follows existing AIVM
+policy and has *guest* sudo, not *host* sudo.
+
+Alternatively, users log out and back in (or ``newgrp libvirt``) for the
+group change, then run ``aivm config init`` to join. The user might not have
+host sudo: in that case, a pending guest enrollment must be prepared by a
+sudo-capable administrator, then verified by the user without sudo:
 
 .. code-block:: bash
 

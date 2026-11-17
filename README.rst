@@ -510,6 +510,7 @@ Config-store lifecycle (explicit flow)
    # Inspect, repair, disable, or remove shared-VM access identities
    aivm vm access list
    aivm vm access reconcile
+   aivm vm access onboard alice --admin_override  # administrator; no user setup
    # Admin installs another user's guest public key (requires own sudo)
    aivm vm access prepare alice --admin_override
    # Owner verifies personal SSH access without sudo
