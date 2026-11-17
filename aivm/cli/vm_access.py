@@ -150,6 +150,14 @@ class VMAccessOnboardCLI(_BaseCommand):
             'and guest access through the root-owned onboarding helper.'
         ),
     )
+    repair_bootstrap: bool = kwconf.Flag(
+        False,
+        help=(
+            'If the guest rejects its bootstrap SSH key, explicitly restore '
+            'only the restricted guest bootstrap through this caller\'s '
+            'already-active guest SSH and sudo access, then retry once.'
+        ),
+    )
     attach: str = kwconf.Value(
         '',
         help=(
@@ -192,6 +200,7 @@ class VMAccessOnboardCLI(_BaseCommand):
             scope, vm_name=vm_name, host_user=str(args.user or ''),
             guest_user=str(args.guest_user or ''),
             ip_override=str(args.ip or ''), dry_run=bool(args.dry_run),
+            repair_bootstrap=bool(args.repair_bootstrap),
         )
         if args.dry_run:
             print(

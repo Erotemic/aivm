@@ -100,6 +100,27 @@ To include a *specific* project directory in the same onboarding operation:
        --attach /absolute/path/to/benjamins/project \
        --attach_mode persistent
 
+If the VM rejects its restricted bootstrap SSH key during enrollment,
+AIVM preserves the new user's pending access identity rather than claiming
+success. An administrator who already has active SSH access and passwordless
+*guest* sudo can explicitly repair that VM's dedicated bootstrap account and
+retry enrollment in one command:
+
+.. code-block:: bash
+
+   aivm vm access onboard benjamin.fenelon \
+       --vm aivm-2404-aiq-gpu2 --admin_override --yes \
+       --repair_bootstrap
+
+This option is opt-in. Only a bootstrap SSH authentication rejection triggers
+the repair; it will not run for a timeout, unknown VM, failed guest helper, or
+failed owner-key verification. The repair uses the invoking administrator's
+registered SSH key and guest sudo, does not rotate the machine bootstrap key,
+and retries guest preparation once. The temporary guest enrollment account is
+restricted to the forced helper; the user's host sudo policy is unchanged.
+If the administrator's own guest SSH or sudo access is broken, repair fails
+with the new user's identity left pending for diagnosis.
+
 ``--attach`` is optional, must be an absolute host path, and declares the
 new attachment under Benjamin's access-identity ID. It uses the existing
 administrator-assisted attachment implementation, including its foreign-home

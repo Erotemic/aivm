@@ -21,6 +21,7 @@ from .commands import CommandManager
 from .config_store import (
     PrincipalEntry,
     find_principal_for_host,
+    find_principal_for_host_identity,
     find_principals_for_vm,
     find_vm,
     materialize_vm_cfg,
@@ -28,19 +29,23 @@ from .config_store import (
 )
 from .enrollment import (
     _resolve_enrollment_ip,
+    require_bootstrap_identity,
     normalized_guest_username,
     prepare_other_principal,
 )
 from .errors import AIVMError
+from .guest_bootstrap_install import guest_bootstrap_install_script
 from .host_identity import current_host_identity
 from .machine_store import (
     current_machine_group_gid,
     machine_resource_locks,
 )
 from .profile_store import UserProfileStore, render_user_profile
+from .runtime import require_ssh_identity, ssh_base_args
 from .scoped_store import (
     StoreScope,
     load_scope_store,
+    load_scope_profile,
     save_scope_store,
     stable_principal_id,
 )
@@ -201,6 +206,100 @@ def _run_helper(action: str, *, account: pwd.struct_passwd, vm_name: str,
     return parsed
 
 
+
+def _repair_bootstrap_through_current_guest_access(
+    scope: StoreScope,
+    *,
+    vm_name: str,
+    ip_override: str,
+) -> None:
+    """Restore the restricted guest bootstrap using this admin's *own* key.
+
+    Called only after a bootstrap SSH authentication rejection, and only with
+    explicit opt-in. This must not use another user's credentials or rotate
+    the machine's protected bootstrap private key.
+    """
+    if not scope.is_machine or scope.machine_layout is None:
+        raise AIVMError('Guest bootstrap repair needs a shared machine store.')
+    reg = load_scope_store(scope)
+    actor = current_host_identity()
+    owner = find_principal_for_host_identity(
+        reg, vm_name=vm_name, identity=actor,
+    )
+    if owner is None or owner.state not in {'active', 'legacy'}:
+        raise AIVMError(
+            'Cannot repair guest bootstrap: the invoking host account needs '
+            'its own active VM access identity. No guest files were changed.'
+        )
+    profile = load_scope_profile(scope)
+    public_path = Path(profile.ssh_pubkey_path).expanduser()
+    if not profile.ssh_pubkey_path or not public_path.is_file():
+        raise AIVMError('Cannot repair bootstrap: your own AIVM public key is missing.')
+    if not same_ssh_public_key(
+        public_path.read_text(encoding='utf-8'), owner.ssh_public_key,
+    ):
+        raise AIVMError(
+            'Cannot repair bootstrap: your profile SSH key does not match '
+            'your active machine-store identity.'
+        )
+    personal_key = require_ssh_identity(profile.ssh_identity_file)
+    bootstrap = require_bootstrap_identity(
+        vm_name, layout=scope.machine_layout,
+    )
+    cfg = materialize_vm_cfg(reg, vm_name)
+    ip = _resolve_enrollment_ip(cfg, ip_override)
+    command = [
+        'ssh',
+        *ssh_base_args(
+            personal_key,
+            strict_host_key_checking='accept-new',
+            connect_timeout=15,
+            batch_mode=True,
+        ),
+        f'{owner.guest_user}@{ip}',
+        'sudo', '-n', 'bash', '-s',
+    ]
+    mgr = CommandManager.current()
+    with mgr.intent(
+        f'Repair restricted guest bootstrap for {vm_name}',
+        why=(
+            'The VM rejected the protected machine bootstrap SSH key. '
+            'Restore only the dedicated enrollment account/helper through '
+            "this administrator's existing guest access."
+        ),
+        role='modify',
+    ):
+        result = mgr.run(
+            command,
+            sudo=False,
+            role='modify',
+            check=False,
+            capture=True,
+            input_text=guest_bootstrap_install_script(bootstrap.public_key),
+            timeout=120,
+            summary='Restore restricted guest bootstrap through existing guest sudo',
+            detail=(
+                "Uses the caller's registered SSH identity, not the "
+                "target user's key. Keeps the machine bootstrap keypair."
+            ),
+        )
+    if result.code != 0:
+        detail = (result.stderr or result.stdout or '').strip()
+        raise AIVMError(
+            'Guest bootstrap repair failed through your active guest login '
+            f'{owner.guest_user!r}: {detail}. Benjamin remains pending.'
+        )
+
+
+def _bootstrap_auth_rejected(error: AIVMError) -> bool:
+    """Only retry a failed prepare when OpenSSH rejected bootstrap login."""
+    message = str(error)
+    return (
+        'Guest preparation failed for ' in message
+        and 'Permission denied (publickey' in message
+    )
+
+
 def onboard_other_principal(
     scope: StoreScope,
     *,
@@ -209,6 +308,7 @@ def onboard_other_principal(
     guest_user: str = '',
     ip_override: str = '',
     dry_run: bool = False,
+    repair_bootstrap: bool = False,
 ) -> OnboardReport:
     """Create a second user's profile, guest account, and verified VM access.
 
@@ -296,10 +396,30 @@ def onboard_other_principal(
             reason=f'Administrator provisioned host SSH identity for {host_user}.',
         )
 
-    prepare_other_principal(
-        scope, vm_name=vm_name, selector=pending.id,
-        ip_override=ip_override,
-    )
+    try:
+        prepare_other_principal(
+            scope, vm_name=vm_name, selector=pending.id,
+            ip_override=ip_override,
+        )
+    except AIVMError as ex:
+        if not _bootstrap_auth_rejected(ex):
+            raise
+        if not repair_bootstrap:
+            raise AIVMError(
+                f'{ex}\n'
+                'Bootstrap authentication was rejected. If your own active '
+                'VM SSH login still works, retry this onboarding with '
+                '--repair_bootstrap to restore the dedicated guest bootstrap '
+                'account using your existing access (no VM recreation).'
+            ) from ex
+        _repair_bootstrap_through_current_guest_access(
+            scope, vm_name=vm_name, ip_override=ip_override,
+        )
+        # Exactly one post-repair retry. Failure leaves the target pending.
+        prepare_other_principal(
+            scope, vm_name=vm_name, selector=pending.id,
+            ip_override=ip_override,
+        )
     ip = _resolve_enrollment_ip(cfg, ip_override)
     verified = _run_helper(
         'verify', account=account, vm_name=vm_name,
