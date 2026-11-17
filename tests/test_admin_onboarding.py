@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from aivm import admin_onboarding as onboard
-from aivm import privileged_onboard_user as helper
+from aivm.rc.host import onboard_user as helper
 from aivm.cli.vm_attach import VMAttachRequest
 from aivm.config import AgentVMConfig
 from aivm.config_store import (
@@ -53,6 +53,29 @@ def _profile(account: pwd.struct_passwd) -> str:
         ssh_pubkey_path=str(key) + '.pub',
         default_guest_user=GUEST,
     ))
+
+
+
+def test_helper_installer_uses_bundled_host_resource(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The root-owned helper is installed from the standalone host payload."""
+    commands: list[list[str]] = []
+
+    class FakeManager:
+        def intent(self, *args: object, **kwargs: object) -> object:
+            return nullcontext()
+
+        def run(self, cmd: list[str], **kwargs: object) -> None:
+            commands.append(cmd)
+
+    monkeypatch.setattr(onboard.CommandManager, 'current', lambda: FakeManager())
+    onboard._install_helper()
+    assert len(commands) == 2
+    source = Path(commands[-1][-2])
+    assert source == Path(__file__).resolve().parents[1] / 'aivm/rc/host/onboard_user.py'
+    assert source.is_file()
+    assert commands[-1][-1] == str(onboard.ONBOARD_HELPER)
 
 
 def test_helper_creates_owner_key_and_profile_and_retries_safely(

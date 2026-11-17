@@ -36,6 +36,12 @@
         },
         {
           "imported": "aivm.commands",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.commands",
           "importer": "aivm.enrollment",
           "occurrences": 1,
           "path": "aivm/enrollment.py"
@@ -53,6 +59,12 @@
           "importer": "aivm.access_control",
           "occurrences": 1,
           "path": "aivm/access_control.py"
+        },
+        {
+          "imported": "aivm.vm.connectivity",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
         },
         {
           "imported": "aivm.vm.connectivity",
@@ -79,6 +91,18 @@
           "importer": "aivm.access_control",
           "occurrences": 1,
           "path": "aivm/access_control.py"
+        },
+        {
+          "imported": "aivm.runtime",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.scoped_store",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
         },
         {
           "imported": "aivm.runtime",
@@ -120,6 +144,24 @@
         },
         {
           "imported": "aivm.config_store",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.machine_store",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.profile_store",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.config_store",
           "importer": "aivm.enrollment",
           "occurrences": 1,
           "path": "aivm/enrollment.py"
@@ -152,9 +194,21 @@
         },
         {
           "imported": "aivm.errors",
+          "importer": "aivm.admin_onboarding",
+          "occurrences": 1,
+          "path": "aivm/admin_onboarding.py"
+        },
+        {
+          "imported": "aivm.errors",
           "importer": "aivm.enrollment",
           "occurrences": 1,
           "path": "aivm/enrollment.py"
+        },
+        {
+          "imported": "aivm.errors",
+          "importer": "aivm.guest_bootstrap_install",
+          "occurrences": 1,
+          "path": "aivm/guest_bootstrap_install.py"
         },
         {
           "imported": "aivm.errors",
@@ -720,6 +774,12 @@
         },
         {
           "imported": "aivm.access_control",
+          "importer": "aivm.cli.vm_access",
+          "occurrences": 1,
+          "path": "aivm/cli/vm_access.py"
+        },
+        {
+          "imported": "aivm.admin_onboarding",
           "importer": "aivm.cli.vm_access",
           "occurrences": 1,
           "path": "aivm/cli/vm_access.py"
@@ -2038,6 +2098,12 @@
           "imported": "aivm.enrollment",
           "importer": "aivm.legacy.pre_0_6_0.migration_apply",
           "occurrences": 2,
+          "path": "aivm/legacy/pre_0_6_0/migration_apply.py"
+        },
+        {
+          "imported": "aivm.guest_bootstrap_install",
+          "importer": "aivm.legacy.pre_0_6_0.migration_apply",
+          "occurrences": 1,
           "path": "aivm/legacy/pre_0_6_0/migration_apply.py"
         },
         {

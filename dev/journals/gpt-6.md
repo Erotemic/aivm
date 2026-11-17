@@ -171,3 +171,23 @@ executable is not available in this isolated environment, so the exact
 reported static-check command still needs to run in the developer's
 installation. Packaging is a context-aware patch ZIP to avoid overwriting any
 subsequent local changes to shared files. There is no live VM test involved.
+
+## 2026-11-17 16:24:00 -0500
+
+Reconciled the administrator onboarding feature with the repository's
+architecture and command-execution policies after the CI suite reported two
+failures. The root-installed helper is a standalone program: its ssh-keygen
+and SSH subprocesses run under the target host UID after privilege dropping.
+Moved the unchanged helper into `aivm.rc.host.onboard_user`, alongside other
+standalone host payloads, and made the installer load it from that packaged
+resource. The installed helper path, privilege boundary, and enrollment
+behavior are unchanged.
+
+Registered `aivm.admin_onboarding` and `aivm.guest_bootstrap_install` as
+access-identity modules in the architecture specification, and regenerated
+the derived module/import inventories. Added a regression test for the
+installer source path. Relevant tests passed locally (65 tests, four
+subtests), as did the architecture generator's check. The full test suite
+was attempted but did not finish in this container. The first unrelated
+failure was a file-writability test run as root, and that test passed when
+rerun as a non-root user. No live VM operations were run.

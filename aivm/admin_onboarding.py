@@ -147,7 +147,7 @@ def _preflight_principal(reg: Store, vm_name: str, account: pwd.struct_passwd, g
 
 def _install_helper() -> None:
     mgr = CommandManager.current()
-    helper_src = Path(str(resources.files('aivm').joinpath('privileged_onboard_user.py')))
+    helper_src = Path(str(resources.files('aivm.rc.host').joinpath('onboard_user.py')))
     if not helper_src.is_file():
         raise AIVMError(f'Bundled onboard helper missing: {helper_src}')
     if ONBOARD_HELPER.is_symlink() or ONBOARD_HELPER.parent.is_symlink():

@@ -96,7 +96,7 @@ compatibility view while canonical runtime consumers are narrowed.
 | `aivm.vm.update.restart` | `aivm/vm/update/restart.py` | 1 |
 | `aivm.vm.update.virtiofs` | `aivm/vm/update/virtiofs.py` | 2 |
 
-## Path-based `StoreScope` reconstruction sites (24)
+## Path-based `StoreScope` reconstruction sites (25)
 
 These calls pass a stringified path back into `resolve_store_scope`.
 They are reported for visibility and are not yet forbidden.
@@ -104,7 +104,7 @@ They are reported for visibility and are not yet forbidden.
 | Module | Argument | Location | Occurrences |
 |---|---|---|---:|
 | `aivm.attachments.ownership` | `store_path` | `aivm/attachments/ownership.py` | 1 |
-| `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py` | 6 |
+| `aivm.cli.vm_access` | `path` | `aivm/cli/vm_access.py` | 7 |
 | `aivm.cli.vm_attach` | `cfg_path` | `aivm/cli/vm_attach.py` | 1 |
 | `aivm.cli.vm_creds` | `store_path` | `aivm/cli/vm_creds.py` | 1 |
 | `aivm.cli.vm_lifecycle` | `cfg_path` | `aivm/cli/vm_lifecycle.py` | 2 |

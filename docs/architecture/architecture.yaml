@@ -45,6 +45,8 @@ subsystems:
     exact:
       - aivm.access_control
       - aivm.enrollment
+      - aivm.admin_onboarding
+      - aivm.guest_bootstrap_install
       - aivm.guestctl
       - aivm.ssh_keys
       - aivm.host_identity
