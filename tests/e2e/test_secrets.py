@@ -1207,14 +1207,15 @@ def test_a_policy_inside_the_shared_workspace_is_refused(lab: Lab) -> None:
 def test_bad_trust_anchor_and_resolver_fail_before_the_guest_is_touched(
     lab: Lab,
 ) -> None:
-    for name, change, expected in [
+    cases: list[tuple[str, dict[str, Any], str]] = [
         ('no-ca', {'egress': dict(lab.service.egress(), ca_file='/nonexistent/ca.pem')},
          'unsafe'),
         ('no-resolver',
          {'credential_source': {'kind': 'command', 'argv': ['aivm-no-such-resolver']}},
          'Could not obtain a valid host service credential'),
         ('bad-schema', {'operations': []}, 'Invalid policy'),
-    ]:  # fmt: skip
+    ]  # fmt: skip
+    for name, change, expected in cases:
         result = open_session(
             lab, name, 'true', policy=lab.policy(**change), expect_session=False
         )

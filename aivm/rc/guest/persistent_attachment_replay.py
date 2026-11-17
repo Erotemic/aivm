@@ -315,8 +315,8 @@ def validate_records(records: Sequence[object]) -> list[AcceptedRecord]:
         )
     )
     accepted = []
-    blockers = []
-    seen_targets = {}
+    blockers: list[tuple[str, str]] = []
+    seen_targets: dict[str, int] = {}
     for guest_dst, index, enabled, access, record in normalized:
         if guest_dst in seen_targets:
             first_index = seen_targets[guest_dst]

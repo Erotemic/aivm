@@ -527,32 +527,33 @@ def parse_store_toml(text: str) -> Store:
 
         seen_agent_credential_ids: set[str] = set()
         seen_agent_credential_scopes: set[tuple[str, str, str, str]] = set()
-        for cred_raw in item.get('agent_credentials', []):
-            if not isinstance(cred_raw, dict):
+        for agent_cred_raw in item.get('agent_credentials', []):
+            if not isinstance(agent_cred_raw, dict):
                 raise ValueError(
                     f'VM {name!r} ssh-agent credential entry must be a table/object'
                 )
-            cred = _agent_credential_from_dict(cred_raw, vm_name=name)
-            if cred.id in seen_agent_credential_ids:
+            agent_cred = _agent_credential_from_dict(agent_cred_raw, vm_name=name)
+            if agent_cred.id in seen_agent_credential_ids:
                 raise ValueError(
                     f'VM {name!r} has duplicate ssh-agent credential id '
-                    f'{cred.id!r}'
+                    f'{agent_cred.id!r}'
                 )
             agent_scope = (
-                cred.principal_id,
-                cred.provider_host.lower(),
-                cred.owner.lower(),
-                cred.repository.lower(),
+                agent_cred.principal_id,
+                agent_cred.provider_host.lower(),
+                agent_cred.owner.lower(),
+                agent_cred.repository.lower(),
             )
             if agent_scope in seen_agent_credential_scopes:
                 raise ValueError(
                     f'VM {name!r} has duplicate ssh-agent credential scope '
-                    f'{cred.principal_id or "legacy"}:'
-                    f'{cred.provider_host}/{cred.owner}/{cred.repository}'
+                    f'{agent_cred.principal_id or "legacy"}:'
+                    f'{agent_cred.provider_host}/{agent_cred.owner}/'
+                    f'{agent_cred.repository}'
                 )
-            seen_agent_credential_ids.add(cred.id)
+            seen_agent_credential_ids.add(agent_cred.id)
             seen_agent_credential_scopes.add(agent_scope)
-            reg.agent_credentials.append(cred)
+            reg.agent_credentials.append(agent_cred)
 
         seen_principal_ids: set[str] = set()
         seen_host_users: set[str] = set()

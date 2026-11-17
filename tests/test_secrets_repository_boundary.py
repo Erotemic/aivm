@@ -28,7 +28,7 @@ OPT_IN_ADAPTERS = {
 
 def _cross_package_imports(path: Path) -> set[str]:
     """Detect Python import edges without loading experimental dependencies."""
-    names = set()
+    names: set[str] = set()
     tree = ast.parse(path.read_text(encoding='utf-8'))
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

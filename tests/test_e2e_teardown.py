@@ -10,7 +10,7 @@ from tests.e2e import _helpers
 
 @pytest.mark.parametrize('codes', [(0, 0), (1, 0), (0, 1)])
 def test_teardown_reports_cleanup_failure(monkeypatch, tmp_path: Path, codes):
-    calls = []
+    calls: list[list[str]] = []
 
     def run(argv, **kwargs):
         code = codes[len(calls)]
@@ -31,7 +31,7 @@ def test_teardown_reports_cleanup_failure(monkeypatch, tmp_path: Path, codes):
 
 
 def test_cleanup_exit_codes_do_not_mask_original_failure(monkeypatch, tmp_path):
-    calls = []
+    calls: list[list[str]] = []
 
     def run(argv, **kwargs):
         calls.append(argv)

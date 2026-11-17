@@ -959,7 +959,7 @@ def test_explicit_no_removes_matching_prior_mirror_symlink(
         {'ssh': FakeProc(0, guest_dst + '\n', '')},
     )
 
-    plan = [] if deferred else None
+    plan: list[tuple[str, str, bool]] | None = [] if deferred else None
     _ensure_attachment_available_in_guest(
         cfg,
         host_src,

@@ -529,20 +529,20 @@ def _bulk_revoke_matches(
                 _SelectedCredential(CREDENTIAL_BACKEND_GUEST_KEY, entry)
             )
     if CREDENTIAL_BACKEND_SSH_AGENT in enabled:
-        for entry in _agent_records(
+        for agent_entry in _agent_records(
             store,
             vm_name=vm_name,
             principal_id=principal_id,
         ):
             if repo is not None:
                 if (
-                    entry.provider_host.lower(),
-                    entry.owner.lower(),
-                    entry.repository.lower(),
+                    agent_entry.provider_host.lower(),
+                    agent_entry.owner.lower(),
+                    agent_entry.repository.lower(),
                 ) != (repo.host.lower(), repo.owner.lower(), repo.name.lower()):
                     continue
             matches.append(
-                _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, entry)
+                _SelectedCredential(CREDENTIAL_BACKEND_SSH_AGENT, agent_entry)
             )
 
     matches.sort(key=lambda item: (item.backend, item.entry.id))
