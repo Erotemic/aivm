@@ -18,8 +18,64 @@ import stat
 import subprocess
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
+
+
+# Unlike the main CLI (Python >=3.11), this installed root-owned helper runs
+# via /usr/bin/python3. On some hosts that is Python 3.10, which lacks tomllib.
+# Only the top-level identity fields rendered by AIVM need to be examined.
+_PROFILE_IDENTITY_KEYS = frozenset((
+    'active_vm', 'ssh_identity_file', 'ssh_pubkey_path', 'default_guest_user',
+))
+
+
+def _profile_identity_fields(text: str) -> dict[str, str]:
+    """Read required top-level TOML strings, rejecting ambiguous encodings.
+
+    This is intentionally not a general TOML parser: AIVM writes these fields
+    as JSON-compatible, double-quoted strings. Reject unsupported forms rather
+    than accepting a potentially misleading interpretation of a user profile.
+    """
+    fields: dict[str, str] = {}
+    in_root_table = True
+    decoder = json.JSONDecoder()
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if stripped.startswith('['):
+            # TOML has no way to return to the root table after a table header.
+            in_root_table = False
+            continue
+        if not in_root_table:
+            continue
+        match = re.fullmatch(r'([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.*)', stripped)
+        if match is None:
+            raise ValueError(f'Unsupported AIVM profile syntax on line {number}')
+        key, literal = match.groups()
+        # Multiline TOML strings could contain lines masquerading as keys.
+        # The standard profile renderer never emits them.
+        if literal.startswith(('"""', "'''")):
+            raise ValueError('Multiline AIVM profile values are not supported by onboarding')
+        if key not in _PROFILE_IDENTITY_KEYS:
+            continue
+        if key in fields:
+            raise ValueError(f'Duplicate AIVM profile field: {key}')
+        try:
+            value, end = decoder.raw_decode(literal)
+        except ValueError as ex:
+            raise ValueError(
+                f'Expected a double-quoted AIVM profile string for {key}'
+            ) from ex
+        remainder = literal[end:].strip()
+        if not isinstance(value, str) or (remainder and not remainder.startswith('#')):
+            raise ValueError(f'Unsupported AIVM profile string syntax for {key}')
+        fields[key] = value
+    missing = _PROFILE_IDENTITY_KEYS.difference(fields)
+    if missing:
+        raise ValueError('Missing AIVM profile identity fields: ' + ', '.join(sorted(missing)))
+    return fields
+
 
 
 def _account(username: str) -> pwd.struct_passwd:
@@ -127,8 +183,8 @@ def _prepare_owner(account: pwd.struct_passwd, vm: str, guest: str, profile_text
     # Reject a conflicting user profile before creating any SSH key.
     existing_profile = _regular_owner_file(profile)
     if existing_profile:
-        current = tomllib.loads(profile.read_text(encoding='utf-8'))
-        expected = tomllib.loads(profile_text)
+        current = _profile_identity_fields(profile.read_text(encoding='utf-8'))
+        expected = _profile_identity_fields(profile_text)
         for field in ('active_vm', 'ssh_identity_file', 'ssh_pubkey_path', 'default_guest_user'):
             if current.get(field) != expected.get(field):
                 raise ValueError(
@@ -194,7 +250,7 @@ def _verify_owner(account: pwd.struct_passwd, vm: str, guest: str, ip: str) -> d
         raise ValueError('Target user does not have the prepared SSH keypair')
     if not _regular_owner_file(profile):
         raise ValueError('Target user does not have the prepared AIVM profile')
-    current = tomllib.loads(profile.read_text(encoding='utf-8'))
+    current = _profile_identity_fields(profile.read_text(encoding='utf-8'))
     if (current.get('active_vm'), current.get('ssh_identity_file')) != (vm, str(private)):
         raise ValueError('Target profile no longer selects the provisioned VM and key')
     # The authenticated SSH subprocess receives the target's uid, gid, home,
@@ -236,7 +292,7 @@ def _run_as_owner(account: pwd.struct_passwd, action: str, vm: str, guest: str, 
             print(f'AIVM onboard helper: {ex}', file=sys.stderr, flush=True)
             os._exit(1)
     _, status = os.waitpid(pid, 0)
-    return os.waitstatus_to_exitcode(status)
+    return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -256,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError('A valid guest IP or hostname is required')
         profile_text = sys.stdin.read(32768) if args.action == 'prepare' else ''
         if args.action == 'prepare':
-            from_text = tomllib.loads(profile_text)
+            from_text = _profile_identity_fields(profile_text)
             private, public, _ = _paths(account)
             if (
                 from_text.get('active_vm') != args.vm
