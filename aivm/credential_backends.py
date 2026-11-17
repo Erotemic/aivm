@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Final, Literal
 
 from .errors import AIVMError
 
-CREDENTIAL_BACKEND_AUTO = 'auto'
-CREDENTIAL_BACKEND_GUEST_KEY = 'guest-key'
-CREDENTIAL_BACKEND_SSH_AGENT = 'ssh-agent'
-DEFAULT_CREDENTIAL_BACKEND = CREDENTIAL_BACKEND_GUEST_KEY
+CREDENTIAL_BACKEND_AUTO: Final[Literal['auto']] = 'auto'
+CREDENTIAL_BACKEND_GUEST_KEY: Final[Literal['guest-key']] = 'guest-key'
+CREDENTIAL_BACKEND_SSH_AGENT: Final[Literal['ssh-agent']] = 'ssh-agent'
+DEFAULT_CREDENTIAL_BACKEND: Final[Literal['guest-key']] = CREDENTIAL_BACKEND_GUEST_KEY
 
 CredentialBackend = Literal['guest-key', 'ssh-agent']
 CredentialBackendSelection = Literal['auto', 'guest-key', 'ssh-agent']
@@ -26,12 +26,16 @@ _VALID_SELECTIONS = {
 def normalize_credential_backend(value: object) -> CredentialBackendSelection:
     """Normalize one public backend selection without accepting vague aliases."""
     normalized = str(value or CREDENTIAL_BACKEND_AUTO).strip().lower()
-    if normalized not in _VALID_SELECTIONS:
-        allowed = ', '.join(sorted(_VALID_SELECTIONS))
-        raise AIVMError(
-            f'Unsupported credential backend {value!r}; expected one of: {allowed}.'
-        )
-    return cast(CredentialBackendSelection, normalized)
+    if normalized == CREDENTIAL_BACKEND_AUTO:
+        return CREDENTIAL_BACKEND_AUTO
+    if normalized == CREDENTIAL_BACKEND_GUEST_KEY:
+        return CREDENTIAL_BACKEND_GUEST_KEY
+    if normalized == CREDENTIAL_BACKEND_SSH_AGENT:
+        return CREDENTIAL_BACKEND_SSH_AGENT
+    allowed = ', '.join(sorted(_VALID_SELECTIONS))
+    raise AIVMError(
+        f'Unsupported credential backend {value!r}; expected one of: {allowed}.'
+    )
 
 
 @dataclass(frozen=True)

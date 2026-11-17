@@ -191,3 +191,23 @@ subtests), as did the architecture generator's check. The full test suite
 was attempted but did not finish in this container. The first unrelated
 failure was a file-writability test run as root, and that test passed when
 rerun as a non-root user. No live VM operations were run.
+
+## 2026-11-17 16:37:49 -0500
+
+AIVM mypy diagnostics cleanup (34 reported errors). The changes give empty
+collections explicit types, retain literal types for credential backend/state
+constants, and distinguish guest and agent credential locals during
+parsing/rendering. Tests use explicit types where inference was insufficient.
+This is intended to be behavior-preserving. The remaining uncertainty is an
+actual mypy run on the developer environment: mypy was unavailable in the
+isolated working container. Focused non-E2E validation exercised 287 passing
+tests (7 skips), including architecture checks, credentials, attachment replay,
+and store round trips. The broader suite also encountered an existing command
+execution test whose missing-executable exit status differed (126 vs 127).
+
+## AIVM final mypy/ty follow-up
+
+Removed an incomplete type inference of kwconf's dynamic ModalCLI.version
+attribute, and returned typed backend literals directly instead of using
+a redundant cast. Focused CLI and credential backend tests passed (32).
+mypy and ty remain to be verified in the developer environment.
