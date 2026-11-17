@@ -13,7 +13,7 @@ def highlight_code(text: str, *, lexer_name: str) -> str:
     """
     try:
         from pygments import highlight
-        from pygments.formatters import TerminalFormatter
+        from pygments.formatters.terminal import TerminalFormatter
         from pygments.lexers import get_lexer_by_name
     except ImportError:
         return text
