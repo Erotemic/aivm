@@ -17,6 +17,7 @@ See the repository README for current CLI usage and safety notes.
    quickstart
    privilege-modes
    workflows
+   credentials
    architecture/index
    api
    wsl
