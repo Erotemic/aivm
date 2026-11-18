@@ -51,7 +51,7 @@ and configure something privileged to run them.
 **Guest-side egress filtering.** Avoids host root entirely, but moves the
 enforcement point inside the trust boundary it is supposed to enforce: guest
 root can undo it. That is a different feature with a weaker guarantee, and it
-is scoped separately in `dev/design/future/egress-allowlist.md`. Not a
+is scoped separately in `docs/planning/egress-allowlist.md`. Not a
 substitute.
 
 ## The candidate

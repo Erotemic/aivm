@@ -7,7 +7,7 @@ or a Lean proof. The Python reference now includes host-browser OAuth/PKCE acqui
 an AES-GCM-protected host vault, refresh and revocation fencing, issuer
 key rotation, and an opt-in OAuth-backed bound-VM launcher. There is still
 no live-libvirt/provider validation, hardware key custody, or Lean proof.
-The [modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+The [modular proof architecture](../planning/aivm-secrets-modular-proof-architecture.md)
 records the planned primitive package, Garrett protocol decomposition,
 and conditional proof-composition rules.
 The [parallel implementations decision](aivm-secrets-parallel-implementations.md)
@@ -16,14 +16,14 @@ backend; [the Garrett plan](aivm-secrets-garrett-identity.md) names exactly
 which instance identity mechanisms exist and which are still planned.
 The companion [provider-neutral integration plan](aivm-secrets-agnostic-integrations.md)
 defines schema 2 and supersedes GitHub-specific assumptions below. The
-[kernel specification](aivm-secrets-kernel-spec.md) states the implemented
+[kernel specification](../reference/aivm-secrets-kernel-spec.md) states the implemented
 state machine for the Rust port. The
-[assurance plan](aivm-secrets-formal-assurance.md) defines proof
+[assurance plan](../planning/aivm-secrets-formal-assurance.md) defines proof
 obligations and the evidence needed before making stronger claims; the
-[assumption ledger](aivm-secrets-assumptions.json) lists what is trusted. See
+[assumption ledger](../reference/aivm-secrets-assumptions.json) lists what is trusted. See
 [the operator guide](../source/secrets.rst) for the commands, and
-[the validation record](aivm-secrets-validation.md) for what was run.
-The [repository boundary and extraction decision](aivm-secrets-repository-boundary.md)
+[the validation record](../history/aivm-secrets-validation.md) for what was run.
+The [repository boundary and extraction decision](../reference/aivm-secrets-repository-boundary.md)
 governs optional AIVM integration and the planned independent repository.
 
 ## 1. Decision and scope
@@ -36,7 +36,7 @@ package does not import AIVM. Existing AIVM opt-in adapters may resolve an
 access identity, establish a channel, and control session lifetime; no new
 mandatory AIVM dependency or normal-workflow activation is permitted.
 The eventual separate repository/distribution must preserve the versioned
-capability/process protocol. See the [boundary decision](aivm-secrets-repository-boundary.md).
+capability/process protocol. See the [boundary decision](../reference/aivm-secrets-repository-boundary.md).
 
 Keep **two independent implementations**: this Python reference and a
 small safe-Rust kernel/backend, translated with Charon/Aeneas and verified in
@@ -155,7 +155,7 @@ then does with it.
 that can each be ported to independently implemented Rust. Keep Garrett
 credential issuance/redemption as a higher-level identity protocol, not
 a general-purpose primitive. This is a refactor of the tables below, not
-a new runtime feature or a separate distribution. See [the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
+a new runtime feature or a separate distribution. See [the modular proof architecture](../planning/aivm-secrets-modular-proof-architecture.md)
 for the dependency graph, proof targets and behavioral migration gates.
 
 The delivered Python package is split into a pure kernel and an impure host
@@ -202,7 +202,7 @@ implementation installed or cryptographic extras available; explicit opt-in
 features fail clearly if unavailable. Both packages are still included in
 the same source distribution **on this branch only**; packaging independence
 is a pending extraction gate, not an accomplished property. See the
-[repository boundary and extraction plan](aivm-secrets-repository-boundary.md).
+[repository boundary and extraction plan](../reference/aivm-secrets-repository-boundary.md).
 
 ## 5. Credential lifecycle and Garrett-style envelopes
 
@@ -528,7 +528,7 @@ Proofs should attach to the actual extracted implementation and then to a trace
 semantics for the executor. A separate elegant Lean policy model is useful as a
 specification, but not evidence that the deployed Rust or Python realizes it.
 The detailed theorem inventory, refinement obligations and release gates are in
-[the assurance plan](aivm-secrets-formal-assurance.md).
+[the assurance plan](../planning/aivm-secrets-formal-assurance.md).
 
 ## 11. Delivery milestones and acceptance gates
 
@@ -561,7 +561,7 @@ multi-tenant deployment.
 The first candidate for extraction is a closed, effect-free primitive
 (e.g. validity or epoch transitions); choose after an actual Aeneas
 spike. Formalizing several small modules does not by itself establish
-complete mediation. Follow the M1-M6 staging in [the modular proof architecture](aivm-secrets-modular-proof-architecture.md).
+complete mediation. Follow the M1-M6 staging in [the modular proof architecture](../planning/aivm-secrets-modular-proof-architecture.md).
 
 Freeze protocol version 1 with an independent test-vector corpus and negative
 cases. Write an explicit effect grammar and abstract state machine. Port one

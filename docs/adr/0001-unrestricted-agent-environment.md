@@ -101,6 +101,6 @@ This ADR does **not** approve or select:
 - a change to the separate virtiofs attachment server (out of scope).
 
 These remain subjects of the
-[firewall lifecycle and delegation investigation](../firewall-lifecycle-and-delegation-2026-10.md),
-the [host-operations broker proposal](../privileged-operations-broker-proposal-2026-10.md),
-and the [egress allowlist design](../../../dev/design/future/egress-allowlist.md).
+[firewall lifecycle and delegation investigation](../planning/firewall-lifecycle-and-delegation-2026-10.md),
+the [host-operations broker proposal](../planning/privileged-operations-broker-proposal-2026-10.md),
+and the [egress allowlist design](../planning/egress-allowlist.md).

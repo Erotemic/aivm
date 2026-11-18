@@ -9,7 +9,7 @@
 
 ## Related accepted requirement
 
-[ADR-0001](adr/0001-unrestricted-agent-environment.md) requires the agent to
+[ADR-0001](../adr/0001-unrestricted-agent-environment.md) requires the agent to
 retain full unattended guest sudo. This document investigates how AIVM can
 support externally enforced network policy **without requiring every host
 user to have sudo**. That requirement is accepted; this design is not.
@@ -203,8 +203,8 @@ provide the security boundary that AIVM promises against guest root.
 
 ## References
 
-- [ADR-0001: unrestricted guest environment](adr/0001-unrestricted-agent-environment.md)
-- [Existing egress allowlist design](../../dev/design/future/egress-allowlist.md)
-- [Shared-machine architecture](shared-machine-architecture.md)
-- [Earlier onboarding diagnostics](multi-user-onboarding-preflight-2026-10.md)
+- [ADR-0001: unrestricted guest environment](../adr/0001-unrestricted-agent-environment.md)
+- [Existing egress allowlist design](egress-allowlist.md)
+- [Shared-machine architecture](../architecture/shared-machine-architecture.md)
+- [Earlier onboarding diagnostics](../audits/multi-user-onboarding-preflight-2026-10.md)
 - [Unapproved host broker proposal](privileged-operations-broker-proposal-2026-10.md)

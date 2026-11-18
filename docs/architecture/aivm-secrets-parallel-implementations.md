@@ -13,7 +13,7 @@ executable source of truth. A future compiled Rust binary is the executable
 source for **its own extracted Lean proofs**; Python remains independently
 maintained and is not thereby formally verified.
 
-The [repository boundary plan](aivm-secrets-repository-boundary.md) permits
+The [repository boundary plan](../reference/aivm-secrets-repository-boundary.md) permits
 continued experimental work in this feature branch without making AIVM
 dependent on secrets. Both implementations, protocol corpora and assurance
 work are intended to move to a standalone `aivm-secrets` repository later.
@@ -34,7 +34,7 @@ work are intended to move to a standalone `aivm-secrets` repository later.
 
 ## Modular implementation and parity contracts (2026-10-12)
 
-Adopt [the modular proof architecture](aivm-secrets-modular-proof-architecture.md) as the proposed decomposition.
+Adopt [the modular proof architecture](../planning/aivm-secrets-modular-proof-architecture.md) as the proposed decomposition.
 Keep `aivm_secrets.primitives` **inside** the Python distribution, with
 a separately implemented Rust `aivm-secrets-primitives` crate. Rust
 must not call the Python implementation; Python must not silently route
@@ -187,7 +187,7 @@ pass-through behavior for unknown token/header/operation variants.
 - Matthew Garrett, [*Securing agentic identity* (2026-07-02)](https://codon.org.uk/~mjg59/blog/p/securing-agentic-identity/): signed surrogate tokens carrying encrypted credentials, issuer/broker, proxy substitution, cert-bound mTLS and hardware/hypervisor-backed identities.
 - [RFC 8705](https://www.rfc-editor.org/rfc/rfc8705) for `cnf.x5t#S256` and proof-of-possession context (does not mandate our token profile).
 - [Aeneas](https://github.com/AeneasVerif/aeneas) and [h5i](https://github.com/h5i-dev/h5i) are Rust/Lean research and tooling options, not currently build dependencies.
-- [Garrett identity increment](aivm-secrets-garrett-identity.md), [kernel specification](aivm-secrets-kernel-spec.md), [formal assurance](aivm-secrets-formal-assurance.md), and [assumption ledger](aivm-secrets-assumptions.json).
+- [Garrett identity increment](aivm-secrets-garrett-identity.md), [kernel specification](../reference/aivm-secrets-kernel-spec.md), [formal assurance](../planning/aivm-secrets-formal-assurance.md), and [assumption ledger](../reference/aivm-secrets-assumptions.json).
 
 ## 2026-10-12: enrollment transition contract
 
@@ -220,7 +220,7 @@ parity runner is deliberately unimplemented and skipped until an independent
 executable is configured through `AIVM_SECRETS_RUST_VM_RUNNER`.
 
 The protocol does **not** claim VM attestation or cloned-key resistance. See
-[`aivm-secrets-p4a-managed-vm.md`](aivm-secrets-p4a-managed-vm.md) for its
+[`aivm-secrets-p4a-managed-vm.md`](../history/aivm-secrets-p4a-managed-vm.md) for its
 trust boundaries and the explicitly opt-in session lifecycle. The future Rust
 adapter should preserve the pure subject decision exactly, while treating
 libvirt, machine-store loading and forced SSH as explicitly trusted inputs.
@@ -259,7 +259,7 @@ model. A permitted credentialed effect additionally requires the original
 broker authorization and a current vault lease; the Python host broker
 serializes these locally using `flock`. This is not a shared-state multi-host
 protocol or a proof of remote provider transaction atomicity. See
-[the complete local operator contract](aivm-secrets-garrett-oauth-implementation.md).
+[the complete local operator contract](../history/aivm-secrets-garrett-oauth-implementation.md).
 
 ## Pre-deployment authority v2 (2026-10-12)
 

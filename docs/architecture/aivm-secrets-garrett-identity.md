@@ -5,7 +5,7 @@ Status: **experimental Python P4a/P4b local functional flow with opt-in managed-
 local revocation and issuer signing-key rotation are now implemented. This
 advances P4 independently of P1/P2 Rust formal work; existing VMs gain no
 new credential access by default. See
-[OAuth acquisition and substitution](aivm-secrets-garrett-oauth-implementation.md)
+[OAuth acquisition and substitution](../history/aivm-secrets-garrett-oauth-implementation.md)
 for the current executable contract and remaining P4c limitations.
 No real `gh` or other service credentials are needed for the tests. Consult
 [the parallel-implementations decision](aivm-secrets-parallel-implementations.md).
@@ -14,16 +14,16 @@ No real `gh` or other service credentials are needed for the tests. Consult
 
 Each policy separates what is implemented from what is only decided:
 
-- [Rollback and clone](aivm-secrets-garrett-rollback-clone-policy.md): how
+- [Rollback and clone](../planning/aivm-secrets-garrett-rollback-clone-policy.md): how
   restores, snapshot reverts, clones and disk copies affect identity state,
   the required outcome for each, and the anchors that could detect them
   (ROLLBACK-01, CLONE-01).
-- [vTPM keys](aivm-secrets-garrett-vtpm-policy.md): swtpm state, the key
+- [vTPM keys](../planning/aivm-secrets-garrett-vtpm-policy.md): swtpm state, the key
   template, TPM2_Certify evidence, and exactly what AIVM may claim (VTPM-01).
-- [Issuer API authorization](aivm-secrets-garrett-issuer-api.md): which
+- [Issuer API authorization](../reference/aivm-secrets-garrett-issuer-api.md): which
   identity verbs automation may run, and how AIVM must run operator-only ones
   (ISSUER-API-01).
-- [Operations](aivm-secrets-garrett-operations-policy.md): single-host scope,
+- [Operations](../reference/aivm-secrets-garrett-operations-policy.md): single-host scope,
   `jti` and retried writes, and supported weekly renewal.
 
 ## Reference architecture
@@ -86,7 +86,7 @@ calculation and pure `prepare_issue`/`present` intent construction. It
 has no imports from `kernel`, `host`, TLS, X.509 or the AIVM manager. The
 reusable bounded JSON/wire, validity, epoch and binding operations now live
 in `aivm_secrets.primitives`; old module names re-export the same functions
-and types. See the [refactor implementation record](aivm-secrets-garrett-modular-refactor.md).
+and types. See the [refactor implementation record](../history/aivm-secrets-garrett-modular-refactor.md).
 
 This makes **the pure protocol model**, not the cryptographic credential
 service, self-contained. The Python issuer still owns filesystem and CA
@@ -114,7 +114,7 @@ client-supplied `sub` to stand in for verified transport identity.
 
 ## Certificate lifecycle increment (P4c, experimental)
 
-The [certificate lifecycle plan](aivm-secrets-garrett-certificate-lifecycle.md)
+The [certificate lifecycle plan](../history/aivm-secrets-garrett-certificate-lifecycle.md)
 adds explicit managed-VM client-certificate renewal with a pure compare-and-swap
 epoch transition, plus rotation of the local server TLS leaf/key pair under
 the existing CA. Renewal does not rotate software guest keys or the CA, and
@@ -123,7 +123,7 @@ Python/Rust parity is specified by the frozen enrollment-renewal corpus.
 
 ## Current deployment boundary and deliberately absent features
 
-The follow-up [P4a enrollment increment](aivm-secrets-p4a-enrollment.md)
+The follow-up [P4a enrollment increment](../history/aivm-secrets-p4a-enrollment.md)
 provides a principal-owned local CA, a CSR enrollment CLI, persistent per-VM
 certificate/epoch records, an optional foreground Unix mTLS bridge, and a
 restricted TLS client. This standalone authority does not automatically modify a VM, start a daemon,
@@ -195,6 +195,6 @@ live libvirt UUID to a certificate enrollment subject. The restricted bootstrap
 channel returns only a guest-user-owned CSR, and the bridge-only SSH launcher
 never forwards the raw broker Unix socket into the guest. Enrollment and
 JWT signing execute in isolated host subprocesses. Ordinary VM sessions remain
-unchanged. See [`aivm-secrets-p4a-managed-vm.md`](aivm-secrets-p4a-managed-vm.md).
+unchanged. See [`aivm-secrets-p4a-managed-vm.md`](../history/aivm-secrets-p4a-managed-vm.md).
 This is transport binding, not hardware attestation, OAuth, or formally verified
 isolation; the non-exportability and clone/restore problems remain open.

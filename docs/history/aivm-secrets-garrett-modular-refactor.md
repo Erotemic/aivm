@@ -2,9 +2,9 @@
 
 Status: **implemented Python refactor, 2026-10-12**. Python reference only;
 no Rust implementation, Lean proof, or real-VM validation is claimed. See
-[the modular proof plan](aivm-secrets-modular-proof-architecture.md),
-[Garrett identity plan](aivm-secrets-garrett-identity.md), and
-[parallel backend decision](aivm-secrets-parallel-implementations.md).
+[the modular proof plan](../planning/aivm-secrets-modular-proof-architecture.md),
+[Garrett identity plan](../architecture/aivm-secrets-garrett-identity.md), and
+[parallel backend decision](../architecture/aivm-secrets-parallel-implementations.md).
 
 ## Intent and boundary
 

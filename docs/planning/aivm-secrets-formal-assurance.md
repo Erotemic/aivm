@@ -5,14 +5,14 @@ The delivered system is Python with executable contracts and adversarial
 tests. There are no Lean proof artifacts, extracted Rust functions or
 verified-binary claims in this release. This document is the acceptance
 contract for that next stage. What exists today toward it: a pure,
-extraction-shaped kernel, [its specification](aivm-secrets-kernel-spec.md), a
+extraction-shaped kernel, [its specification](../reference/aivm-secrets-kernel-spec.md), a
 frozen conformance corpus, a mutation gate, and
-[a machine-readable assumption ledger](aivm-secrets-assumptions.json).
+[a machine-readable assumption ledger](../reference/aivm-secrets-assumptions.json).
 
 See [the modular proof architecture](aivm-secrets-modular-proof-architecture.md)
 for planned leaf proofs and their composition obligations.
-See [the architecture](aivm-secrets-design.md) and the
-[provider-neutral plan](aivm-secrets-agnostic-integrations.md) for source
+See [the architecture](../architecture/aivm-secrets-design.md) and the
+[provider-neutral plan](../architecture/aivm-secrets-agnostic-integrations.md) for source
 references, the threat model, deployment assumptions and milestones. This document's mathematical
 notation is a specification sketch, not executable Lean.
 
@@ -211,7 +211,7 @@ into a distributed atomic commit with GitHub.
 ## 3. Trusted computing base and assumption ledger
 
 A machine-readable assumption manifest is published as
-[aivm-secrets-assumptions.json](aivm-secrets-assumptions.json): each entry has
+[aivm-secrets-assumptions.json](../reference/aivm-secrets-assumptions.json): each entry has
 an owner, the consequence of the assumption failing, and the tests that
 exercise the boundary. Version pins and hashes are to be added with the first
 proof results. It covers at least:
@@ -362,7 +362,7 @@ mediation against a compromised service spec or interpreter.
 
 Add proof obligations PLUGIN-01, RESOLVER-01, ROUTE-01, COMP-01, EXT-01, and
 REFINE-01 as specified in
-[aivm-secrets-agnostic-integrations.md](aivm-secrets-agnostic-integrations.md).
+[aivm-secrets-agnostic-integrations.md](../architecture/aivm-secrets-agnostic-integrations.md).
 Future kernel extraction should use a **closed declarative ServiceSpec** and
 proof-producing checked effect interpreter, avoiding dynamic function pointers
 inside the Aeneas-translated proof surface. An untrusted third-party plugin

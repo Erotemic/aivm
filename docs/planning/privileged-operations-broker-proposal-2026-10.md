@@ -21,7 +21,7 @@ that user's private home. The user's own SSH verification then succeeded.
 The direct repairs already exist: `aivm vm access prepare` / `verify`, a
 privileged descriptor-based probe for an administrator attaching another
 user's private directory, and the normal-user `aivm host permissions grant`
-command. The [onboarding review](multi-user-onboarding-preflight-2026-10.md)
+command. The [onboarding review](../audits/multi-user-onboarding-preflight-2026-10.md)
 identifies remaining preflight and orchestration improvements. The question
 here is whether **future ordinary users can request an authorized host
 operation without being host sudoers or general system-libvirt administrators**.
@@ -30,7 +30,7 @@ AIVM's current `libvirt`-group shared-machine mode deliberately assumes
 trusted coworkers. Its ownership metadata is not a security boundary against
 someone who already controls system libvirt or has host root. This proposal
 must not imply otherwise. See
-[shared-machine architecture](shared-machine-architecture.md).
+[shared-machine architecture](../architecture/shared-machine-architecture.md).
 
 ## Do not conflate two proposals
 
@@ -151,7 +151,7 @@ machine's assumptions or attempt to enforce a boundary only in the CLI.
 The **AIVM host-operations broker is distinct from `aivm-secrets`**, which is
 an experimental, opt-in, separately installed credential/identity project.
 Do not make basic AIVM installation or host permissions depend on it. See
-[aivm-secrets repository boundary](aivm-secrets-repository-boundary.md).
+[aivm-secrets repository boundary](../reference/aivm-secrets-repository-boundary.md).
 
 ## Alternatives to compare before approval
 
@@ -163,7 +163,7 @@ Do not make basic AIVM installation or host permissions depend on it. See
 | Continue trusting `libvirt` group | Least implementation complexity | Broad system-libvirt capability; does not meet restricted-user security goal |
 | Adopt/compose with an external runtime | Potentially avoids maintaining authorization/policy infrastructure | Must reproduce AIVM's shared persistent-VM and per-principal host-filesystem workflow, or explicitly give it up |
 
-See the [related-work survey](related-work-sbx-openshell-2026-10.md) before
+See the [related-work survey](../related-work/related-work-sbx-openshell-2026-10.md) before
 proposing a new policy engine or standalone sandbox runtime. In particular,
 OpenShell already offers an extensible gateway/driver model and rich policy
 controls; whether these map to AIVM's **shared guest** model remains untested.

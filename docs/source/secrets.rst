@@ -8,20 +8,21 @@ named operations on its behalf. Every request is checked on the host against a
 policy you wrote, counted against a budget, and recorded in an audit file.
 
 It is an experimental Python implementation, tested but not formally verified.
-The architecture, the plan for a verified Rust kernel and the precise claims
-are in ``docs/planning/``:
+Architecture, current reference contracts, active plans, and completed
+reviews are filed under ``docs/architecture/``, ``docs/reference/``,
+``docs/planning/``, and ``docs/history/`` respectively:
 
-* ``aivm-secrets-design.md`` -- architecture and threat model;
-* ``aivm-secrets-repository-boundary.md`` -- temporary branch policy,
+* ``docs/architecture/aivm-secrets-design.md`` -- architecture and threat model;
+* ``docs/reference/aivm-secrets-repository-boundary.md`` -- temporary branch policy,
   optional AIVM integration and the future separate-repository gate;
-* ``aivm-secrets-agnostic-integrations.md`` -- the service manifest contract;
-* ``aivm-secrets-kernel-spec.md`` -- the state machine, as specified for the
+* ``docs/architecture/aivm-secrets-agnostic-integrations.md`` -- the service manifest contract;
+* ``docs/reference/aivm-secrets-kernel-spec.md`` -- the state machine, as specified for the
   Rust port;
-* ``aivm-secrets-formal-assurance.md`` -- what is to be proved, and what is
+* ``docs/planning/aivm-secrets-formal-assurance.md`` -- what is to be proved, and what is
   only tested today;
-* ``aivm-secrets-validation.md`` -- what was actually run;
-* ``aivm-secrets-parallel-implementations.md`` -- Python/Rust parity decision;
-* ``aivm-secrets-garrett-identity.md`` -- experimental P4a signed, encrypted
+* ``docs/history/aivm-secrets-validation.md`` -- what was actually run;
+* ``docs/architecture/aivm-secrets-parallel-implementations.md`` -- Python/Rust parity decision;
+* ``docs/architecture/aivm-secrets-garrett-identity.md`` -- experimental P4a signed, encrypted
   certificate-bound identity protocol and remaining deployment work.
 
 The existing ``aivm ssh --secrets_policy`` adapter uses the separately
@@ -48,7 +49,7 @@ existing broker. This functionality is **never enabled automatically** by
 installing or updating AIVM. It is not a generic transparent proxy for every
 third-party CLI.
 
-See ``docs/planning/aivm-secrets-garrett-oauth-implementation.md`` for the
+See ``docs/history/aivm-secrets-garrett-oauth-implementation.md`` for the
 provider profile, host login, vault, revocation and key-rotation commands,
 including the synthetic-only example. The explicit managed-VM session adds
 these options to the existing enrolled identity mode::
@@ -595,7 +596,7 @@ The separate ``aivm-secrets identity`` command family implements **manual**
 certificate enrollment and a bounded TLS 1.3 bridge that ultimately invokes
 the existing broker, not a second privileged executor. Privileged host
 commands require ``python -I -m aivm_secrets identity`` from a trusted install. See
-``docs/planning/aivm-secrets-p4a-enrollment.md`` for the complete operational
+``docs/history/aivm-secrets-p4a-enrollment.md`` for the complete operational
 sequence, security assumptions and remaining VM integration work.
 
 On the trusted host, initialize an owner-only local authority explicitly::
@@ -743,7 +744,7 @@ certificate the registry now holds; that may instead be another operator's
 concurrent enrollment, so check before revoking it. An interrupt while the
 authority is issuing logs the registry read and the guarded revocation to
 fill in, and runs nothing more. See
-``docs/planning/aivm-secrets-garrett-guest-key-rotation.md``.
+``docs/history/aivm-secrets-garrett-guest-key-rotation.md``.
 A stale epoch or certificate thumbprint fails closed. It requires a fresh
 certificate-bound session token afterward. The separate host-only command
 ``python -I -m aivm_secrets identity renew-server --root ...`` renews the
@@ -761,8 +762,8 @@ list, and requires bridge restart,
 distribution of the NEW public CA, explicit re-enrollment (a VM that has run
 ``identity_rotate_key`` first needs the CSR step described below) and new
 bound session tokens. Do not run it to renew a server leaf. See
-``docs/planning/aivm-secrets-garrett-ca-lifecycle.md`` and
-``docs/planning/aivm-secrets-garrett-certificate-lifecycle.md``.
+``docs/architecture/aivm-secrets-garrett-ca-lifecycle.md`` and
+``docs/history/aivm-secrets-garrett-certificate-lifecycle.md``.
 
 The host enforces key custody on every enrollment change. ``identity_renew``
 (``identity renew-client``) re-certifies only the enrolled key; a CSR for any
@@ -842,5 +843,5 @@ This mode forwards **only** the bound mTLS bridge socket, not the unbound broker
 socket or repository agent. Ordinary ``aivm ssh`` is unchanged. Existing guest
 helpers must be upgraded explicitly; there is no silent bootstrap upgrade.
 This is not vTPM/non-exportable-key attestation and has not yet been smoke-tested
-against a live libvirt VM. See ``docs/planning/aivm-secrets-p4a-managed-vm.md``
+against a live libvirt VM. See ``docs/history/aivm-secrets-p4a-managed-vm.md``
 for the trust model, cleanup semantics, and known clone/restore limitations.

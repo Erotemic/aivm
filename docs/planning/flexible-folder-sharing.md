@@ -142,13 +142,13 @@ All operational concerns from the design are addressed:
 - **Conflict handling for source/destination**: Implemented in [`_ensure_shared_root_host_bind()`](aivm/cli/vm.py:1822) with `allow_disruptive_rebind` control
 - **Cleanup robustness**: Stale mountpoint detection and repair in host bind logic
 - **Security boundaries maintained**: Explicit trust boundary remains "all bind-mounted sources"
-- **Sudo policy and diagnostics**: [`_confirm_sudo_block()`](aivm/cli/vm.py) required for mutating operations
+- **Sudo policy and diagnostics**: [`_confirm_sudo_block()`](../../aivm/cli/vm.py) required for mutating operations
 
 ## Design requirements (must-have)
 
 All design requirements are satisfied in v0.4.0:
 
-- ✅ **Explicit consent before trust expansion**: [`PlanScope`](aivm/cli/vm.py) and [`IntentScope`](aivm/cli/vm.py) provide approval scopes for shared-root operations
+- ✅ **Explicit consent before trust expansion**: [`PlanScope`](../../aivm/cli/vm.py) and [`IntentScope`](../../aivm/cli/vm.py) provide approval scopes for shared-root operations
 - ✅ **Non-interactive behavior (`--yes`, `--dry_run`)**: All functions accept `dry_run` and `yes` parameters
 - ✅ **Clear diagnostics for backend mismatch/capacity failures**: Error messages include source, destination, and mount state details
 - ✅ **Avoid silent fallback between attachment backends**: Each mode (`shared`, `shared-root`, `git`) is explicit; no automatic switching
@@ -208,6 +208,6 @@ The following backends and features remain unimplemented as of v0.4.0:
 
 ### Supporting modules
 
-- [`aivm/vm/share.py`](aivm/vm/share.py) — virtiofs attach/detach operations
-- [`aivm/vm/drift.py`](aivm/vm/drift.py) — drift detection for shared-root attachments
-- [`aivm/vm/lifecycle.py`](aivm/vm/lifecycle.py) — VM lifecycle with shared-root support
+- [`aivm/vm/share.py`](../../aivm/vm/share.py) — virtiofs attach/detach operations
+- [`aivm/vm/drift.py`](../../aivm/vm/drift.py) — drift detection for shared-root attachments
+- [`aivm/vm/lifecycle.py`](../../aivm/vm/lifecycle.py) — VM lifecycle with shared-root support

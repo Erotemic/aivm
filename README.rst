@@ -1,937 +1,385 @@
-The aivm Module
-===============
+AIVM
+====
 
+|Pypi| |ReadTheDocs| |GithubActions| |Codecov|
 
-.. warning::
+**A persistent Ubuntu development VM for coding agents, managed from your
+Linux workstation.** AIVM creates and maintains an Ubuntu 24.04 guest using
+KVM/libvirt, gives you SSH and editor access, and shares only the host projects
+you explicitly attach.
 
-   This project was written starting with GPT-5.3 Codex, but then with
-     significant updates from later models such as Fable 5 and GPT 5.6.
-   Its development has been human supervised, but not extensively audited for
-     correctness and safety, as such it is only recommended for experimental
-     use.
-   See the `Security Model <docs/source/security.rst>`_ for the threat model and
-     security posture.
-
-
-|Pypi| |PypiDownloads| |ReadTheDocs| |GithubActions| |Codecov|
-
-
-
-+---------------+-----------------------------------------+
-| Read the Docs | https://aivm.readthedocs.io/en/latest/  |
-+---------------+-----------------------------------------+
-| Pypi          | https://pypi.org/project/aivm           |
-+---------------+-----------------------------------------+
-
-A small Python CLI to **create and manage a local libvirt/KVM Ubuntu 24.04 VM**
-designed for running coding agents with a stronger boundary than containers.
-
-Current state
--------------
-
-``aivm`` is experimental and best understood as a local, long-lived
-libvirt/KVM development VM manager for agent workflows. The actively maintained
-daily path is:
+The everyday workflow is deliberately short:
 
 .. code-block:: bash
 
-   aivm code .
-   aivm ssh .
-   aivm attach .
-   aivm status
+   cd ~/code/my-project
+   aivm code .             # open this project in the VM using VS Code
+   aivm ssh .              # or start a guest shell in this project
 
-The current attachment model is centered on explicit host-folder registration:
+Unlike an ephemeral command runner, AIVM keeps a development environment you
+can return to: installed tools, guest-local files, and declared project
+attachments survive across sessions. The guest is intended to be a place where
+an agent can install packages and use guest sudo without having the same access
+to the host.
 
-* ``persistent`` is the default for new attachments. It uses a dedicated
-  ``persistent-root`` virtiofs export, persisted attachment declarations, and
-  replay helpers so attachment intent survives VM reboot/reconcile cycles.
-* ``shared-root`` is the legacy single-export path. It still uses one VM-level
-  virtiofs export plus host/guest bind mounts, but new attachments no longer
-  choose it unless ``--mode shared-root`` is explicit or a saved attachment
-  already uses that mode.
-* ``direct-virtiofs`` maps each folder on its own virtiofs device. It is named
-  for that cost: every such attachment occupies one of the guest's limited
-  PCIe slots. It is the only mode that needs no host bind mount, so it is the
-  right answer for a caller without host sudo and for small attachment sets --
-  but not a default.
-* ``git`` bootstraps a guest-local Git repo and host remote plumbing. It is not
-  a live filesystem sync engine.
+**Project status.** AIVM has received substantial use and iterative hardening
+in real development workflows, including long-lived guests, attachment
+recovery, and shared-workstation operation. That experience comes from a
+**small number of users**, not broad deployment. It has an extensive automated
+test suite and optional live-VM tests, but it has **not undergone an independent
+security audit**. Development has involved human review and AI coding
+assistants; neither replaces a security audit. Expect rough edges around
+host-specific virtualization and permissions. See the
+`security model <docs/source/security.rst>`_ before using it to run code you do
+not trust.
 
-The old settings-sync story has been removed for now. It was too flaky to keep
-as a supported workflow. Project handoff should use explicit attachments,
-manual Git operations, or a future redesigned synchronization feature.
+What it does
+------------
 
-What it provides
-----------------
+* **Persistent VM lifecycle.** Create, start, stop, update, provision, and
+  remove managed Ubuntu guests with cloud-init, libvirt, and a dedicated NAT
+  network.
+* **Project-first entry.** ``aivm code .`` opens VS Code Remote-SSH and
+  ``aivm ssh .`` opens a shell at the selected guest directory. Both check VM
+  readiness and the requested attachment before entering.
+* **Explicit folder sharing.** Choose a persistent replayed virtiofs share,
+  an independent virtiofs device, a legacy shared-root export, or a Git-based
+  handoff without a live host share. Read-only shares are supported by the
+  virtiofs modes.
+* **Multi-user workstations.** A shared machine store tracks separate
+  host-to-guest **access identities**, principal-owned attachments, and
+  repository credentials. Administrators can provision a coworker without
+  asking them to initialize a profile.
+* **Network controls.** An optional nftables policy limits guest access to
+  private networks while keeping internet access; NAT alone is not isolation.
+* **Repository-specific credentials.** GitHub and GitLab deploy-key workflows
+  can use guest-local keys or an SSH-agent backend that keeps private keys on
+  the host.
+* **Observable operations.** Grouped steps show the concrete host/guest
+  commands, privilege changes, and approval boundaries before modifying state.
 
-* Dedicated libvirt NAT network per ``aivm`` configuration
-* Optional host firewall isolation via nftables
-* Ubuntu cloud-image VM provisioning via cloud-init
-* SSH + VS Code Remote-SSH workflows
-* Optional virtiofs folder sharing (explicit trust extension)
-* Machine-scoped desired state for defaults, VMs, networks, access identities,
-  attachments, and credential metadata, plus a private per-user XDG profile
+For the overall design, see the `design contract <docs/source/design.rst>`_
+and `workflows guide <docs/source/workflows.rst>`_.
 
-Auditability by imitation
+Requirements and installation
+-----------------------------
+
+* A **Linux host** with KVM, QEMU/libvirt, and systemd available. Debian and
+  Ubuntu have the supported host dependency installer. WSL2 has additional
+  requirements; see the `WSL2 guide <docs/source/wsl.rst>`_.
+* **Python 3.11 or newer** for the AIVM CLI. The guest image is Ubuntu 24.04.
+* SSH client access. VS Code's ``code`` CLI and the Remote - SSH extension
+  are needed only for the editor workflow.
+* Host administrator privileges for initial host setup and for operations
+  such as managed firewall changes and new host bind mounts. Routine libvirt
+  operations can be configured to work without repeated sudo prompts.
+
+Install the published CLI into your Python environment:
+
+.. code-block:: bash
+
+   python -m pip install aivm
+
+Or, when working from a source checkout (including unreleased changes):
+
+.. code-block:: bash
+
+   uv pip install -e .
+
+The examples below describe the current source tree; features not yet in the
+published package require an installation from this checkout.
+
+Check the host and, on Debian/Ubuntu, install missing system dependencies if
+needed. The installer may request host sudo:
+
+.. code-block:: bash
+
+   aivm host doctor
+   aivm host install_deps       # Debian/Ubuntu only; if needed
+   aivm host permissions check
+   aivm host permissions setup # prepare routine libvirt/storage access
+
+Group membership changes may require a new login session. AIVM's normal
+privilege mode is ``as-needed``: it uses the current user's capabilities and
+escalates only operations that actually require it. See
+`privilege modes <docs/source/privilege-modes.rst>`_.
+
+Quickstart: one developer
 -------------------------
 
-AIVM deliberately treats command logging as part of its trust model. Normal
-operator output is meant to show enough of the concrete work that a user can
-understand what AIVM is doing and, where practical, copy the displayed commands
-and perform the equivalent operation manually. The goal is **auditability by
-imitation**, not the shortest possible log.
-
-This has a few consequences that differ from conventional CLI logging:
-
-* step names and explanations add context, but they do not replace useful
-  command lines;
-* commands should expose the executable, privilege boundary, meaningful
-  arguments, and relevant paths at ordinary verbosity;
-* substantial reusable host or guest logic should prefer stable AIVM-owned
-  helper programs in inspectable locations such as ``/usr/local/libexec/aivm/``
-  over large anonymous inline shell programs; the logs can then show a compact,
-  executable helper invocation while the implementation remains available on
-  disk for inspection;
-* intentionally large payloads may be rendered with a descriptive ``Elided``
-  label so they do not dominate the log. Elision is for readability, not for
-  hiding behavior: higher verbosity must retain a way to inspect the literal
-  payload, and an automatically omitted unmarked argument is something for the
-  call site to fix;
-* generated helpers and support files should have visible installation/update
-  steps and discoverable paths so users can inspect exactly what AIVM arranges
-  for root or the guest to execute.
-
-Secrets are the exception: private keys, tokens, credentials, and similar
-values remain redacted. Auditability means exposing the operation and trust
-boundaries, not leaking sensitive material.
-
-.. note::
-
-   Opt-in end-to-end tests live in ``tests/e2e/``. They carry the ``e2e``
-   marker and are deselected by default; to run them locally set
-   ``AIVM_E2E=1`` and invoke pytest manually. The VM lifecycle suites need a
-   host with KVM, passwordless ``sudo``, and optionally a cached Ubuntu image
-   under ``~/.cache/aivm/e2e``. Storage-adoption tests additionally require
-   ``setfacl`` and exercise real bind mounts under a scratch tree.
-
-   An additional opt-in bootstrap-context e2e test is available in
-   ``tests/e2e/test_bootstrap_context.py``. It creates a fresh outer VM and
-   runs the host-context e2e suite inside that VM. Enable it with
-   ``AIVM_E2E_BOOTSTRAP=1`` when running ``./run_e2e_tests.sh``.
-
-Install
--------
-
-.. code-block:: bash
-
-   uv pip install .
-
-Fast Start
-----------
-
-Recommended for new repos:
-
-No explicit setup is required first: if VM context is missing, ``aivm code .``
-offers to run the ``aivm config init`` / ``aivm vm create`` bootstrap for you
-(run them yourself for the explicit, reproducible path).
+The simplest entry point bootstraps missing configuration and VM context
+interactively, attaches the selected directory, and opens the editor:
 
 .. code-block:: bash
 
    aivm code .
-   aivm status
-   aivm status --sudo   # optional deeper privileged checks
 
-``aivm code .`` auto-selects/bootstraps VM context from the 0.6 machine store
-plus the caller's private XDG profile, attaches the current folder if needed, and
-opens VS Code. A host prepared for multi-user sharing uses
-``/var/lib/aivm/machine``; otherwise AIVM uses a user-owned machine store under
-the caller's XDG data directory.
-
-During setup and reconcile flows, subprocess logging is organized around
-user-meaningful steps without sacrificing the command-level visibility described
-in `Auditability by imitation`_. ``aivm`` shows the current step, why it exists,
-a semantic summary for each planned command, and the concrete command line that
-will run before it executes the step. Large explicitly elided payloads remain
-available at higher verbosity.
-
-Guest provisioning can also be requested explicitly by target. Docker uses the
-same Ubuntu package provisioning path as ``provision.install_docker`` and may
-be combined with optional developer tools in one command:
+For an explicit first-time setup:
 
 .. code-block:: bash
 
-   aivm vm provision docker
-   aivm vm provision docker rust
-
-If you prefer an explicit flow, the first user runs ``aivm config init`` and
-``aivm vm create``. A later user on the same host runs ``aivm config init``;
-when the hostname-qualified VM exactly matches a managed machine, AIVM creates
-the user's private profile and enrolls a separate guest principal without
-rewriting machine settings.
-
-Interactive creator initialization shows the detected defaults once, then lets
-you accept them, edit the generated TOML in ``$EDITOR``/``$VISUAL`` (falling
-back to ``nano`` or ``micro``), or use a prompt-by-prompt editor. A managed
-join instead names the existing machine and proposed guest account. Unmanaged
-same-name libvirt domains always require explicit ``aivm config discover``
-review, including under ``--yes``.
-
-See also:
-
-* `Design Contract <docs/source/design.rst>`_
-* `Quickstart <docs/source/quickstart.rst>`_
-* `Workflows <docs/source/workflows.rst>`_
-* `Running under WSL2 <docs/source/wsl.rst>`_
-
-Status and sudo behavior
-------------------------
-
-By default, ``aivm status`` avoids privileged probes. Use ``--sudo`` for
-network/firewall/libvirt/image checks.
-
-Privilege modes (``behavior.privilege_mode``):
-
-Both answer one question -- *when does aivm invoke sudo?*
-
-* ``as-needed`` (default) probes what already works without sudo --
-  unprivileged ``qemu:///system`` access via the ``libvirt`` group,
-  user-writable VM storage -- and uses sudo only where required.
-* ``always`` escalates every privileged-capable host operation through sudo
-  (the classic behavior).
-
-An unrecognized value is an error, not a silent fallback. A global
-no-sudo mode is not exposed because managed nftables and new host bind mounts
-still require root on the supported runtime.
-
-Credential directory mode checks default to ``warn`` so trusted and personal
-workstations are not blocked by inherited ``0775`` directories. Set
-``behavior.credential_directory_permission_policy`` to ``error`` for strict
-enforcement or ``ignore`` to suppress these mode warnings. Ownership, symlink,
-file-type, and key-file permission failures remain errors in every mode.
-
-Run ``aivm host permissions check`` to inspect the permissions used by
-routine VM operations, and ``aivm host permissions setup`` to establish the
-host-side prerequisites. Normal setup may use sudo to add you to the
-``libvirt`` group; ``--adopt`` additionally runs one privileged metadata pass
-for each existing storage tree. Setup never changes your config: establishing a capability and
-choosing a policy are different acts, so ``privilege_mode`` and
-``firewall.enabled`` stay yours to set. State-changing
-hypervisor commands keep their approval prompt even when they no longer need
-sudo, so destructive operations never become promptless just because
-escalation stopped being necessary.
-
-Command manager defaults:
-
-* subprocess execution is centralized through a command manager
-* logs are grouped into step/plan previews with nested context
-* read-only sudo probes (inspect/query/status) are auto-approved by default
-* state-changing sudo steps still prompt unless ``--yes``/``--yes-sudo`` is set
-* approval usually happens once per grouped step, not once per command
-
-Grouped approval does **not** widen privilege beyond the commands shown in the
-step preview. The preview is the approval boundary.
-
-Use:
-
-* ``--yes`` to auto-approve all prompts
-* ``--yes-sudo`` to auto-approve only sudo prompts
-
-When running interactively, expect step previews such as:
-
-* current context / breadcrumb
-* current step title
-* why the step exists
-* semantic summaries plus exact commands for the current step
-* a single approval prompt for the whole step when required
-
-Interactive approval semantics:
-
-* ``y`` approves the current step only
-* ``a`` approves the current step and all later steps
-* ``s`` shows the full exact commands for the current step, then reprompts
-
-For example, the default ``persistent`` path used by ``aivm ssh .`` /
-``aivm code .`` groups attachment reconciliation into named steps such as
-inspecting host bind state, preparing host bind targets, ensuring the VM
-virtiofs mapping, syncing the persisted manifest, and mounting/verifying the
-bind inside the guest.
-
-Readable previews may abbreviate intentionally marked large payloads, but the
-visible command must still make the operation understandable and reproducible.
-Prefer invoking a stable, inspectable helper for substantial logic instead of
-hiding an anonymous inline script. Literal elided payloads remain available at
-higher verbosity.
-
-Config defaults:
-
-New configs use a host-qualified default VM name derived from ``$HOSTNAME``.
-For example, on a host named ``workstation``, the generated VM name, guest hostname,
-and primary SSH alias are all ``aivm-2404-workstation``. Existing explicit config
-values are not migrated; configs that relied on an omitted implicit name now
-receive the new host-qualified default.
-
-.. code-block:: toml
-
-   [behavior]
-   yes_sudo = false
-   auto_approve_readonly_sudo = true  # set false for strict "prompt every sudo" mode
-   privilege_mode = "as-needed"       # "as-needed" | "always"
-   credential_directory_permission_policy = "warn"  # "warn" | "error" | "ignore"
-
-Common Workflows
-----------------
-
-VS Code and SSH
-
-.. code-block:: bash
-
-   aivm vm ssh_config
-
-.. code-block:: bash
-
-   aivm code .
-   aivm vm code --host_src .
-   aivm vm code .
-   aivm vm ssh .
-
-Folder attachment
-
-.. code-block:: bash
-
-   aivm attach .
-   aivm detach .
-   aivm vm attach --vm aivm-2404-$HOSTNAME --host_src .
-   aivm attach . --mode git
-   aivm attach ~/data --mirror_home yes
-
-Attachment modes:
-
-* ``persistent`` (default for new attachments): the preferred persistent-
-  attachment path. It uses a dedicated VM-level virtiofs export at
-  ``/var/lib/libvirt/aivm/<vm>/persistent-root`` plus stable staged host binds,
-  writes a persisted attachment manifest, installs a guest systemd replay
-  helper at VM bootstrap, and lets boot / ``aivm code .`` / ``aivm ssh .``
-  repair guest-visible bind mounts from that manifest instead of rebuilding
-  every attachment from scratch.
-* ``shared-root``: legacy single-export behavior. One VM-level virtiofs mapping
-  exports ``/var/lib/libvirt/aivm/<vm>/shared-root``; each attached folder is
-  bind-mounted under that root on host and then bind-mounted to ``guest_dst`` in
-  guest. Existing saved ``shared-root`` attachments continue to use this mode,
-  and new attachments can still request it with ``--mode shared-root``.
-* ``direct-virtiofs``: per-folder virtiofs mapping from host source to guest.
-  Simplest, and the only mode needing no host bind mount (so the only one a
-  caller without sudo can create), but it consumes one VM virtiofs device slot
-  -- and hence one guest PCIe slot -- per folder.
-* ``git``: guest-local Git repo bootstrap plus host/guest remote plumbing. It
-  does not automatically synchronize worktree contents.
-
-In ``direct-virtiofs``, ``shared-root``, ``persistent``, and ``git`` modes, attached folders
-mount to the same absolute path inside the guest by default unless
-``--guest_dst`` overrides it. Running VMs are
-live-attached when possible.
-``aivm code`` and ``aivm ssh`` use the same foreground preparation pipeline.
-When the VM is already running, that path verifies or adds only the selected
-folder and preserves existing live mounts: it does not unmount or remount a
-workspace merely to make desired state look cleaner. If a live mount genuinely
-conflicts with the requested attachment, AIVM reports the conflict and leaves
-the running workspace untouched. Full replacement/recovery remains an explicit
-attachment, maintenance, or VM lifecycle operation. After guest startup, AIVM
-may restore the broader saved attachment set because there is no pre-existing
-live session to disrupt.
-
-Mirror-home presentation is a per-attachment policy with ``auto``, ``yes``,
-and ``no`` values. New attachments default to ``auto``. An explicit
-``--mirror_home yes`` or ``--mirror_home no`` is persisted with that attachment;
-``--mirror_home auto`` returns it to inherited behavior. When an attachment is
-``auto``, the invoking user's private profile preference wins when set, then the
-VM's ``mirror_shared_home_folders`` boolean is used. The user preference is also
-tri-state and defaults to ``auto`` (defer to the VM). Edit it with:
-
-.. code-block:: bash
-
-   aivm config edit profile
-
-and set, for example, ``mirror_shared_home_folders = "yes"``. Existing
-attachment records have no mirror-home field and therefore already mean
-``auto``; they do not need to be rewritten for this policy model. An explicit
-per-attachment ``no`` also removes a prior AIVM-derived mirror symlink when it
-still points at that attachment, while preserving unrelated guest paths.
-
-``aivm code --tunnel`` keeps those shared foreground checks identical and adds
-only tunnel-specific preparation afterward. The flag itself is a one-shot opt-in
-for its guest prerequisites: if ``tmux`` or the VS Code CLI is missing, AIVM
-installs only the missing tunnel requirements after normal command approval; it
-does not rerun full VM provisioning or persistently enable unrelated tools. The
-stable guest-side tunnel control logic is installed at
-``/usr/local/libexec/aivm/code-tunnel``, so the normal command log shows a short
-helper invocation that can be copied and the helper can be inspected on disk.
-
-For ``persistent`` attachments, explicit detach first records a recoverable
-``detaching`` transition, immediately prunes the host-side bind, reconciles any
-live guest mount, and removes the declaration only after cleanup succeeds.
-Privileged replay pins the approved source and target directory objects through
-the bind mount instead of trusting a re-resolved user-controlled pathname.
-If the guest can mount the persistent-root export but the host manifest is
-missing, replay now fails closed instead of silently reusing stale cached guest
-state.
-
-On a shared-machine installation, attachment declarations are machine-wide but
-owned by the enrolled principal that created them. ``aivm list`` and status show
-every owner's records, while ordinary path lookup and session restoration use
-only the current principal's paths. Updating or detaching somebody else's
-record requires an explicit trusted-host override:
-
-.. code-block:: bash
-
-   aivm detach /path/to/project \
-       --owner_principal principal-0123456789abcdef \
-       --admin_override
-
-Guest destinations are global to the VM, so two owners cannot declare the same
-``--guest_dst``. AIVM also warns when a path beneath a private home directory is
-exposed to a VM with multiple principals. Ownership guards ordinary operation;
-unrestricted root and system-libvirt administrators remain outside AIVM's
-enforcement boundary.
-
-Major limitation: direct-virtiofs folder count
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Each ``direct-virtiofs`` folder uses a dedicated virtiofs device mapping in the
-VM definition. Attaching many folders can hit VM device-slot limits (for example
-PCI/PCIe capacity), which surfaces from libvirt as errors like
-``No more available PCI slots`` during attach/restore.
-
-``shared-root`` and ``persistent`` reduce this pressure by using one persistent
-virtiofs mapping per VM and per-attachment host/guest bind mounts.
-Their host-side preparation is also designed to avoid mutating the ownership or
-permissions of the user's source tree; ``aivm`` prepares only its own internal
-directories and does not recursively rewrite a bind-mounted project path.
-
-Workarounds today:
-
-* move folders to ``persistent`` or ``shared-root``, which share one device
-* detach unused ``direct-virtiofs`` folders
-* prefer ``--mode git`` for folders that do not need live writable host sharing
-* split large folder sets across multiple VMs
-
-Use ``--mode git`` to keep a normal Git repo on guest disk instead of exposing
-a writable virtiofs share. In that mode, ``aivm`` configures the guest repo to
-accept host pushes via ``receive.denyCurrentBranch=updateInstead`` and
-registers a host-side remote pointing at the guest repo over the VM SSH alias.
-That remote is plumbing for explicit Git handoff; ``aivm`` no longer tries to
-push or pull project contents automatically for git-mode attachments.
-
-``aivm code --mode git .`` behavior:
-
-* New folder (no saved attachment): creates/uses a git-mode attachment and
-  defaults the guest destination to the exact host path.
-* Folder previously attached in any non-``git`` mode, including ``direct-virtiofs``,
-  ``shared-root``, or ``persistent``: returns an error (mode mismatch). Detach +
-  reattach is required to switch modes.
-* ``aivm code .`` without ``--mode``: reuses saved mode if present; otherwise
-  creates a new ``persistent`` attachment.
-
-Migration note:
-
-* ``persistent`` has become the default path for new attachments. Existing
-  ``shared-root`` attachments keep working unchanged. Reattach a folder with
-  ``aivm detach .`` then ``aivm attach . --mode persistent`` when you want an
-  older saved attachment to move to the persisted replay behavior.
-
-Mode selection behavior:
-
-* New folder (no saved attachment record): defaults to ``persistent`` unless
-  ``--mode`` is explicitly set.
-* Existing folder attachment: omitting ``--mode`` reuses the saved mode for that
-  ``(host folder, VM)`` pair.
-* Existing folder attachment + explicit different ``--mode``: this now errors.
-  You must explicitly detach then reattach to change mode:
-
-.. code-block:: bash
-
-   aivm detach .
-   aivm attach . --mode git
-
-Known issue: long-lived virtiofs FD growth (now auto-mitigated)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Host-side ``virtiofsd`` keeps one open descriptor per inode the guest caches,
-and guests never evict those caches on their own, so long-lived virtiofs
-attachments historically saturated the daemon's fd ceiling (~1M) and ordinary
-traversal failed with ``OSError: [Errno 24] Too many open files`` even though
-``ulimit -n`` looked fine. The dominant trigger turned out to be the guest OS
-itself: Ubuntu's stock nightly ``updatedb`` sweep walks virtiofs mounts
-(``virtiofs`` is missing from the default ``PRUNEFS``), touching every shared
-inode every day.
-
-aivm now installs a guest-side *virtiofs guard* (systemd timer) that prunes
-``updatedb`` and flushes guest dentry/inode caches when the cached-inode
-count crosses a watermark, releasing the host descriptors before the ceiling
-is reached. The guard is config-driven (``[virtiofs] fd_guard = true``, the
-default): new VMs get it via cloud-init, and ``aivm vm update`` reconciles
-existing running VMs — installing, refreshing after config/version changes,
-or uninstalling when disabled — so no manual setup or host-side
-``aivm vm flush_caches`` cron jobs are needed. ``aivm vm fdguard`` (default
-action ``status``) shows the live state and offers direct
-install/uninstall.
-
-Remaining guidance:
-
-* prefer fewer, narrower shared folders; detach stale attachments
-* use ``--mode git`` for repos that do not need live writable host sharing
-* ``aivm vm flush_caches`` remains as a manual recovery command
-* see ``docs/source/virtiofs.rst`` for the full mechanism, tuning knobs
-  (``[virtiofs] fd_guard*``), and the incident runbook
-
-Inventory and visibility
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   aivm list
-   aivm vm list
-   aivm list --section vms
-   aivm list --section networks
-   aivm list --section folders
-   aivm status --detail
-
-Config-store lifecycle (explicit flow)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # First host user
    aivm config init
    aivm vm create
+   aivm ssh .
 
-   # Later host user: initialize profile and join the exact managed VM
-   aivm config init
-
-   # Inspect, repair, disable, or remove shared-VM access identities
-   aivm vm access list
-   aivm vm access reconcile
-   aivm vm access onboard alice --admin_override  # administrator; no user setup
-   # Admin installs another user's guest public key (requires own sudo)
-   aivm vm access prepare alice --admin_override
-   # Owner verifies personal SSH access without sudo
-   aivm vm access verify
-   aivm vm access reconcile --enable
-   aivm vm access disable
-   aivm vm access remove
-
-   aivm vm update
-   aivm vm edit
-   aivm config discover
-   aivm config show
-   aivm config edit
-   aivm config lint
-   aivm config format
-   aivm config paths
-   aivm config migrate plan
-   aivm config migrate apply
-   aivm config migrate status
-   aivm config migrate resume
-   aivm config migrate verify
-   aivm config migrate rollback
-   aivm help plan
-   aivm help tree
-   aivm help completion
-   aivm host doctor
-
-Shared-machine access lifecycle
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Operator-facing commands call each persisted host-to-guest binding an **access
-identity**. The on-disk/internal field name remains ``principal`` for this
-release. ``access disable`` removes only that identity's personal key and
-AIVM-managed sudo policy; it retains the guest account/home and all ownership
-records. ``access remove`` additionally deletes the machine-store identity, but
-only after its attachments and credentials have been resolved. Cross-user
-operations require ``--admin_override``, and disabling the last active identity
-requires ``--allow_last_access``. Restore a disabled caller with ``access
-reconcile --enable``.
-
-The trust mode is ``kernel-identity``. Access ownership prevents accidental
-cross-user changes and preserves recovery metadata, but unrestricted root and
-system-libvirt administrators can bypass AIVM policy. Caller selection uses the
-kernel UID/GID and passwd database rather than login environment variables.
-Key material and guest usernames are immutable during reconcile; use
-``repair_host_identity`` only for a host-account rename. VM/network lifecycle
-commands label machine-wide effects, and VM deletion uses a resumable cleanup
-journal with verified storage removal. See
-``docs/planning/operational-lifecycle.md``.
-
-Released per-user stores are not migrated automatically. Review the proposed
-machine store, user profile, attachment/credential ownership, persistent-state
-moves, and libvirt conflicts before the apply phase::
-
-   aivm config migrate plan
-   aivm config migrate plan --output json
-   aivm config migrate plan \
-       alice=/home/alice/.config/aivm/config.toml \
-       bob=/home/bob/.config/aivm/config.toml
-
-The planner is read-only. It fingerprints every input and reports blockers, but
-does not write the machine store, copy key/state directories, alter guests, or
-change provider deploy keys. After reviewing a ready plan, apply it with the
-same source descriptors::
-
-   aivm config migrate apply \
-       alice=/home/alice/.config/aivm/config.toml \
-       bob=/home/bob/.config/aivm/config.toml
-
-Apply creates verified backups and a durable phase journal before writing the
-machine/profile stores. Legacy config, credential, and persistent-state inputs
-remain retained. Interrupted work is explicit and resumable::
-
-   aivm config migrate status
-   aivm config migrate resume migration-0123456789abcdef
-   aivm config migrate verify migration-0123456789abcdef
-   aivm config migrate rollback migration-0123456789abcdef
-
-Migration does not recreate the VM or replace the legacy guest account. See
-``docs/planning/released-store-migration-plan.md`` for planning, apply,
-verification, recovery, and rollback semantics.
-
-Alternatives and related projects
----------------------------------
-
-Depending on the threat model and workflow, these projects may be a better fit:
-
-* `Matchlock <https://github.com/jingkaihe/matchlock>`_ runs AI-agent workloads
-  in ephemeral microVMs with network allowlisting and host-side secret
-  injection.
-* `JAI <https://github.com/stanford-scs/jai>`_ is a lightweight Linux jail for
-  AI CLIs, giving the current directory direct access while keeping the rest of
-  home copy-on-write or more restricted depending on mode.
-
-``aivm`` is different: it favors a persistent libvirt/KVM Ubuntu VM that can be
-re-entered for local development with VS Code/SSH and explicit folder
-attachments.
-
-VM repository credentials
--------------------------
-
-AIVM can grant one VM access to one GitHub or GitLab repository with a
-dedicated deploy key. ``--access`` selects ``read`` (the default) or ``write``;
-``ro`` and ``rw`` are accepted as aliases. ``write`` means read *and* write,
-because deploy keys have no write-only mode. A credential's access is fixed
-once granted, so switching requires ``creds revoke`` followed by a new
-``creds add``. Provider-management credentials remain on the host and are
-never copied into the guest; the VM receives only its repository-scoped SSH
-private key.
-
-On a shared machine, credentials are owned by the selected VM principal rather
-than by the VM as a whole. Alice and Bob may therefore grant the same VM access
-to the same repository using independent deploy keys and provider accounts.
-Ordinary commands see only the caller's records. ``creds list
---all_principals`` and ``creds status --all_principals`` expose machine-wide
-non-secret metadata, but they never read another user's host key, provider
-authentication, or guest home. Revoke and abandon must be run by the owning
-host user.
+Inspect what AIVM manages and whether the guest is ready:
 
 .. code-block:: bash
 
-   # Install/check host tools and authenticate GitHub CLI.
-   aivm vm creds setup
+   aivm status
+   aivm status --detail
+   aivm status --sudo             # additional privileged host checks
+   aivm vm list
+   aivm list --section folders
 
-   # Diagnostic-only readiness checks. Naming a repository also verifies
-   # deploy-key administration for that repository.
+The generated VM name normally includes the host name (for example,
+``aivm-2404-workstation``). On a shared host, machine-wide desired state lives
+under ``/var/lib/aivm/machine``; otherwise AIVM uses a user-owned machine
+store. Each user keeps private settings and SSH identity paths in an XDG
+profile. AIVM does not silently adopt an unrelated libvirt domain with the
+same name.
+
+Projects, SSH, and attachments
+------------------------------
+
+.. code-block:: bash
+
+   aivm code ~/code/my-project   # VS Code Remote-SSH
+   aivm ssh ~/code/my-project    # interactive SSH shell
+   aivm attach ~/code/my-project
+   aivm detach ~/code/my-project
+
+**Attachment modes** (use ``--mode`` when creating an attachment):
+
+``persistent`` (default)
+   A single VM virtiofs export with staged host bind mounts, a persisted
+   manifest, and guest replay after startup or reconciliation. Designed for
+   long-lived workspaces and multiple project directories. Creating a new host
+   bind requires sudo; reusing an already-established bind generally does not.
+
+``direct-virtiofs``
+   A separate virtiofs device per folder, avoiding host bind mounts. Useful
+   for users without host sudo, but **each folder consumes a guest PCIe slot**.
+   Many folders can exhaust the VM's device capacity.
+
+``shared-root``
+   The older single-export mechanism with host and guest bind mounts. Existing
+   saved attachments remain supported; new attachments normally use
+   ``persistent`` instead.
+
+``git``
+   A guest-local Git checkout and host/guest remote plumbing. There is **no
+   automatic worktree synchronization**: push, fetch, or pull intentionally.
+   This mode does not expose a live writable host folder.
+
+Examples:
+
+.. code-block:: bash
+
+   aivm attach . --mode direct-virtiofs
+   aivm attach . --mode persistent --access ro
+   aivm code . --mode git
+
+The selected host directory **must exist** before attachment. New attachments
+inherit their host absolute path inside the guest unless a guest destination
+is specified. Existing attachments retain their saved mode; switching modes
+requires an explicit detach and reattach. Read-only sharing is available in
+``persistent``, ``shared-root``, and ``direct-virtiofs`` modes.
+
+Entering a running guest checks the selected workspace without tearing down
+other live mounts. Explicit lifecycle and repair commands handle disruptive
+reconciliation. Settings synchronization was removed; use explicit shares or
+Git for project handoff.
+
+See the `attachment workflows <docs/source/workflows.rst>`_ and
+`virtiofs notes <docs/source/virtiofs.rst>`_ for replay, mirroring,
+file-descriptor growth, and recovery.
+
+Shared hosts: enroll users without host sudo
+--------------------------------------------
+
+A shared AIVM VM has one machine-wide definition but **separate access
+identities** for host users. Each identity has its own guest login and SSH
+credential. Attachment declarations and repository credentials are owned by
+an identity; normal path resolution does not adopt another user's records.
+
+An administrator can prepare a trusted coworker's shared-store/libvirt access,
+then enroll them **without requiring that person to run commands**:
+
+.. code-block:: bash
+
+   # Administrator, using their own installed AIVM CLI:
+   aivm host permissions grant alice --admin_override
+
+   # Replace the example VM name with the one from `aivm vm list`.
+   aivm vm access onboard alice --vm aivm-2404-workstation \
+       --admin_override --dry_run
+   aivm vm access onboard alice --vm aivm-2404-workstation \
+       --admin_override --yes
+
+   aivm vm access list --vm aivm-2404-workstation
+
+Onboarding initializes the coworker's private profile and SSH identity under
+*their* host UID, provisions their guest login, and verifies guest SSH access
+before marking the access identity ``active``. It does **not** give them host
+sudo, install AIVM in their Python environment, or create project directories.
+A shared executable that they can actually run is still required before their
+first session. If the guest rejects its bootstrap SSH key, the administrator
+may explicitly retry with ``--repair_bootstrap``, which uses the
+administrator's already-active guest SSH/sudo access to restore the restricted
+bootstrap account.
+
+``host permissions grant`` is a **powerful authorization step**: it grants
+libvirt management access (usually through the ``libvirt`` group), which is
+potentially root-equivalent even though it does not add the user to sudoers.
+Only grant it to trusted host accounts, and allow a new login session to pick
+up group membership.
+
+A coworker can alternatively join using ``aivm config init``. For a pending
+identity, an administrator runs ``aivm vm access prepare USER --vm VM
+--admin_override`` and the owner runs ``aivm vm access verify --vm VM``.
+
+An administrator can attach an **existing** host directory on another user's
+behalf with ``aivm vm attach ... --owner_principal ID --admin_override``. A
+user without host sudo may create their own ``direct-virtiofs`` attachments.
+Guest destinations are VM-global: different owners cannot reserve the same
+path. Account-level group/store access, ownership rules, and guest account
+isolation are not a substitute for isolation from a malicious host user.
+
+For access disable/remove, migration, and administrative recovery, see
+`the operational lifecycle reference
+<docs/reference/operational-lifecycle.md>`_ and
+`the shared-host quickstart <docs/source/quickstart.rst>`_.
+
+Repository access
+-----------------
+
+AIVM can grant guest code access to a selected GitHub or GitLab repository with
+a dedicated deploy key. The provider manages the repository access scope;
+AIVM tracks the grant under the current user's VM access identity.
+
+.. code-block:: bash
+
    aivm vm creds setup --check
-   aivm vm creds setup Kitware/kwimage --check
-
-   # Infer the repository from the current checkout and the VM from AIVM
-   # context. Without --access this grants read-only access.
-   aivm vm creds add .
-   aivm vm creds add . --access write
-
-   # Or name both explicitly.
-   aivm vm creds add Kitware/kwimage --vm aivm-2404-workstation --access write
-
-   # For a checkout with many initialized submodules, generate one editable
-   # plan instead of granting every repository by hand.
-   aivm vm creds plan . --access rw > /tmp/aivm-creds.yaml
-   ${EDITOR:-vi} /tmp/aivm-creds.yaml
-   aivm vm creds apply /tmp/aivm-creds.yaml --dry_run
-   aivm vm creds apply /tmp/aivm-creds.yaml
-
-   # GitLab.com is inferred from its canonical URL. A host-only GITLAB_TOKEN
-   # enables automatic publication, but it is optional: without one AIVM
-   # prints the public key for a project administrator to add.
-   export GITLAB_TOKEN='glpat-...'
-   aivm vm creds add \
-       git@gitlab.com:group/subgroup/project.git \
-       --vm aivm-2404-workstation --access write
-
-   # Self-managed GitLab is selected explicitly.
-   aivm vm creds add \
-       git@gitlab.example.com:group/project.git \
-       --provider gitlab --access write
-
-   # Current principal's records and full machine metadata.
-   aivm vm creds list --vm aivm-2404-workstation
-   aivm vm creds list --vm aivm-2404-workstation --all_principals
-
-   aivm vm creds status Kitware/kwimage --vm aivm-2404-workstation
-   aivm vm creds status <credential-id> \
-       --vm aivm-2404-workstation --all_principals
-
-   # Secret-bearing changes must run as the owning host user.
-   aivm vm creds revoke Kitware/kwimage --vm aivm-2404-workstation
-
-``creds plan`` crawls the selected checkout and every initialized nested Git
-submodule. The result is a real YAML document whose active repository list
-items are grants. Each row contains its own ``access`` (``ro`` or ``rw``), Git
-``remote``, and ``provider`` value, so the reviewed file has no hidden access
-defaults. A repository with one remote gets one active row. When several remote
-names point at the exact same URL, ``origin`` is active when available and the
-aliases are shown as commented alternatives. When remotes point at distinct
-destinations, every choice is commented and annotated with its URL; uncomment
-exactly one choice, or leave them all commented to skip that checkout.
-
-``creds apply`` parses the YAML, resolves every selected remote again from the
-checkout recorded by ``root``, rejects duplicate choices or duplicate repository
-identities, and completes that validation before creating any credential. Use
-``--dry_run`` to review the resolved grants before applying them.
-
-``creds setup`` installs a missing GitHub CLI or OpenSSH client using the
-host's package backend (apt, dnf, zypper, pacman, or apk), then starts
-``gh auth login`` when necessary. ``--dry_run`` previews those actions without
-changing the host.
-
-The GitHub CLI must be **2.5.0 or newer**, which is when ``gh repo deploy-key``
-was added; without it no deploy key can be created. Several distributions ship
-much older builds -- Ubuntu 22.04 packages gh 2.4.0 -- so on apt, dnf, and
-zypper hosts AIVM installs gh from GitHub's own repository following the
-`official instructions
-<https://github.com/cli/cli/blob/trunk/docs/install_linux.md>`_. That adds a
-third-party package repository to the host, so it appears in the approval
-prompt like any other privileged step. Arch and Alpine track upstream closely
-enough that their own packages are used. ``creds setup --check`` reports the
-installed version and refuses hosts whose gh is too old.
-
-Where gh is 2.48.0 or newer, the browser login passes ``--skip-ssh-key`` so it
-never offers to upload the user's ordinary SSH key; AIVM creates
-repository-scoped deploy keys separately. On older builds that flag does not
-exist, so setup warns instead -- decline the upload if the login offers it.
-
-GitLab uses direct v4 REST calls and does not require ``glab``. Set
-``GITLAB_TOKEN`` on the AIVM host to automate publication and revocation; for a
-self-managed instance whose API is not at ``https://HOST/api/v4``, also set
-``GITLAB_API_URL``. ``aivm vm creds setup --provider gitlab --check`` reports
-token and project API readiness, but a failed readiness check does not prevent
-``creds add`` from generating an administrator handoff.
-
-A GitLab token is only valid on the server that issued it, so a host-scoped
-``GITLAB_TOKEN_<HOST>`` -- for example ``GITLAB_TOKEN_GITLAB_EXAMPLE_COM`` --
-takes precedence over the generic variable. Use it when you deal with more
-than one instance; otherwise naming a host is enough to send it a token minted
-somewhere else. The token travels in a request header on every call, so AIVM
-refuses a non-loopback ``GITLAB_API_URL`` that is not ``https``.
-
-Hosts named ``gitlab.<domain>`` are treated as GitLab without ``--provider``,
-since the provider decides which API is called and is recorded permanently in
-the credential's ``kind``. Any other self-managed hostname needs
-``--provider gitlab``.
-
-Managing deploy keys requires **admin** permission on the repository; write
-access is not enough, so a contributor who can push may still be unable to add
-a key. On a private repository GitHub reports that denial as ``404 Not Found``
-rather than ``403`` so responses do not reveal what exists, so AIVM checks
-whether the repository is visible to the signed-in account before deciding
-whether a 404 means "not an admin" or "no such repository".
-
-Provider publication is best effort rather than a prerequisite. If AIVM lacks
-a suitable client, login, token, repository permission, or organization
-approval -- or the provider refuses the automated request -- AIVM still does
-everything local and hands off the one bureaucratic step it cannot take: the
-keypair is generated, the private half is installed in the VM, Git is
-configured to use it, and the public half is printed for a repository admin to
-add. Nothing further needs to be run; access begins working as soon as the
-provider accepts the public key. Such a credential is listed as
-``unregistered``; ``aivm vm creds status <id>`` reprints the key to send an
-admin, and ``aivm vm creds abandon <id>`` discards it.
-
-Installing the key before it is registered is deliberate and safe: an SSH
-private key confers nothing on its own, so the copy in the VM authenticates
-against nothing until the provider holds its public half. AIVM will not
-``revoke`` such a credential, because it never registered the key and will not
-claim a provider-side deletion it cannot perform; an admin deletes the key and
-``creds abandon`` removes the local and guest copies.
-
-If the repository provider can no longer be inspected or administered, an explicit recovery
-command can remove local copies without claiming that provider-side revocation
-was successful::
-
-   aivm vm creds abandon Kitware/kwimage \
-       --vm aivm-2404-workstation --provider_unverified
-
-This writes a non-secret audit tombstone and warns that any copied private key
-may remain usable until the deploy key is removed at the provider.
-
-Each grant has a unique SSH keypair. The provider scopes the key to the selected
-repository; branch protections and rulesets remain repository settings and are
-not managed by AIVM. Managed Git routing recognizes canonical clone URLs ending
-in ``.git`` (the form shown by GitHub); restricting rewrites to that form avoids
-Git's prefix-based URL rewriting from capturing similarly named sibling
-repositories. If a selected checkout's remote omits the suffix, ``creds add``
-refuses the grant instead of reporting success for a remote it cannot route;
-normalize that remote to its canonical ``.git`` URL first. A VM cannot be
-deleted while it still owns active credential records, preventing a deploy key
-from being silently orphaned. Status and retry paths validate both halves of
-the host keypair, ownership, file type, and private-key permissions before the
-key can be reused or copied into a guest. Explicit transport URLs are accepted
-only when Git can prove that they resolve through the credential-specific SSH
-alias before network access is attempted.
-
-Credential directories and key files must remain owned by the current user,
-must be real directories and regular files rather than symlinks, and private
-key files must stay inaccessible to group or other users. Those checks always
-fail closed. Only the *directory mode* findings follow
-``behavior.credential_directory_permission_policy``, so a group-writable AIVM
-data root, VM directory, credential parent, or credential leaf is reported as a
-warning rather than blocking credential creation; tighten it with
-``chmod 700 ~/.local/share/aivm`` when the broader permissions are not
-intentional.
-
-Credential backends
--------------------
-
-``aivm vm creds`` is the single repository-credential frontend. It dispatches
-to two independently owned backends:
-
-``guest-key``
-   Generates a repository deploy key and installs the private half into the
-   selected guest principal. This remains the stable fallback backend today.
-
-``ssh-agent``
-   Generates a fresh repository deploy key whose private half remains host-only,
-   loads it into a dedicated ``(VM, principal)`` ``ssh-agent``, and exposes only
-   that signing capability through managed SSH / VS Code Remote-SSH sessions.
-
-New grants default to ``--backend auto``. An explicit ``--backend guest-key``
-or ``--backend ssh-agent`` bypasses preferences. Otherwise ``auto`` resolves the
-selected VM's ``vm.credential_backend`` preference, then the caller profile's
-``credential_backend`` preference, then AIVM's package fallback. The fallback
-is currently ``guest-key``; a future release may change the fallback to
-``ssh-agent`` after that backend has accumulated equivalent operational history.
-
-Inspect the preference hierarchy, set a VM-specific preference, or set a
-user-wide preference with the schema-aware credential frontend::
-
-   aivm vm creds preference
-   aivm vm creds preference ssh-agent
-   aivm vm creds preference guest-key --scope user
-
-Use ``auto`` to clear either preference::
-
-   aivm vm creds preference auto
-   aivm vm creds preference auto --scope user
-
-A VM-specific preference wins over the user-wide preference. The values are
-persisted as ``vm.credential_backend`` in machine state and
-``credential_backend`` in the caller profile respectively.
-
-The normal commands operate over the union of both backend stores::
-
-   # Uses VM/user preference, then the current guest-key fallback.
-   aivm vm creds add Kitware/kwimage --access rw
-
-   # Explicit backend selection bypasses preferences.
-   aivm vm creds add Kitware/kwimage --backend ssh-agent --access rw
-   aivm vm creds add Kitware/kwimage --backend guest-key --access rw
-
+   aivm vm creds add .                     # read-only by default
+   aivm vm creds add . --access write      # request read/write
    aivm vm creds list
    aivm vm creds status <credential-id>
    aivm vm creds revoke <credential-id>
-   aivm vm creds revoke Kitware/kwimage --all
-   aivm vm creds revoke --all
-   aivm vm creds doctor
-   aivm vm creds doctor --fix
 
-``revoke <repository> --all`` revokes every credential for that repository
-owned by the current principal on the selected VM, including both backends by
-default. Bare ``revoke --all`` revokes every credential in that same
-principal/VM scope. Add ``--backend guest-key`` or ``--backend ssh-agent`` to
-narrow either bulk form. Each credential still follows its own provider-first
-revocation lifecycle; successful revocations remain complete if a different
-credential reports a retryable failure.
+``guest-key`` installs the repository-specific private key in the guest;
+``ssh-agent`` keeps it on the host and forwards signing access for managed SSH
+and VS Code Remote-SSH sessions. ``--backend auto`` resolves preferences and
+currently falls back to ``guest-key``. The SSH-agent backend does not turn a
+previously guest-exposed key into a host-only key. GitLab projects can be
+specified with canonical URLs; provider administration may require a manual
+public-key handoff if the caller lacks repository-admin privileges.
 
-Bulk plans carry a per-row ``backend`` field. ``backend: auto`` resolves through
-the same VM/user/fallback hierarchy when the plan is applied, while
-``guest-key`` and ``ssh-agent`` pin a row to one backend.
+For backend preferences, submodule grant plans, provider requirements,
+revocation/abandonment, and the SSH-forwarding trust boundary, see the
+`repository credentials reference <docs/source/credentials.rst>`_. The
+separately developed ``aivm-secrets`` broker is **experimental and optional**;
+it is not part of the ordinary AIVM installation.
 
-The two backend stores remain independent. ``ssh-agent`` never adopts or loads a
-private key from ``guest-key`` records, and a key that may have crossed into a
-guest is never relabeled as host-only. This allows a migration window in which
-the same repository has one credential in each backend: create and verify the
-fresh ``ssh-agent`` grant, then revoke the old ``guest-key`` grant. Repository
-selectors that match both backends are deliberately ambiguous; use an exact
-credential id or ``--backend`` rather than letting AIVM guess.
+Host networking and the security boundary
+-----------------------------------------
 
-For the ``ssh-agent`` backend, the dedicated agent never inherits the caller's
-ordinary ``SSH_AUTH_SOCK``. Managed ``aivm ssh`` and VS Code Remote-SSH sessions
-forward the explicitly selected AIVM agent socket and install only public key
-selectors plus repository-specific SSH/Git routing in the guest. ``IdentityFile``
-points at a public selector with ``IdentitiesOnly yes`` so OpenSSH asks the
-forwarded agent for the matching private-key operation without copying private
-material into the VM. Session preparation verifies the forwarded fingerprints
-before handing control to the shell/editor. When ``creds add`` creates an
-``ssh-agent`` grant, it also opportunistically performs that same guest-routing
-and forwarding preflight if the VM is running and SSH-ready. A stopped or
-still-booting VM does not block the grant; activation is deferred to the next
-managed session. If the final read-only repository probe cannot reach the
-provider because the guest network path is unavailable, the grant remains
-active and ``creds add`` reports a warning instead of treating the credential
-as failed; forwarding or authentication failures still return an error.
+The VM is meant to contain agent execution, **not** to make code safe. The
+guest user can have root inside the guest; the host, libvirt daemon, and
+explicitly mounted host paths form the trusted side of the boundary.
 
-The forwarding channel is connection-scoped. After adding an ``ssh-agent``
-credential, AIVM points the operator at a fresh ``aivm vm ssh`` or
-``aivm vm code`` session as the reliable way to use it. A host reboot or dead agent is
-repaired lazily by the next managed SSH/Remote-SSH entry. Detached
-``code --tunnel`` processes do not retain an SSH forwarding channel after their
-bootstrap connection exits, so Remote-SSH is the credential-bearing editor path.
+* **NAT is not a LAN firewall.** Configure managed nftables isolation if the
+  guest should have internet access without reaching host/private networks.
+  Inspect/apply with ``aivm host fw status`` and ``aivm host fw apply``.
+  Rules live in the kernel and must be restored after host reboot.
+* **File shares are a deliberate trust extension.** A guest that can write a
+  host project can change code and build inputs the host might later execute.
+  Share the smallest necessary directory; do not attach your whole home or
+  secrets directories to an untrusted agent.
+* **Privilege is explicit, not absent.** ``libvirt`` membership can convey
+  host-administrator-level power. Creating new persistent binds and changing
+  nftables rules still require root. An ordinary user may be unable to verify
+  firewall state; AIVM distinguishes **unverified** from **missing** rather
+  than silently rewriting rules.
+* **VM escape is in scope as a risk.** KVM, QEMU, virtiofsd, and the kernel
+  remain part of the security boundary. AIVM is not independently audited and
+  should not be treated as a high-assurance hostile multi-tenant sandbox.
 
-A VM cannot be deleted while either backend still owns repository authority.
-``creds doctor --fix`` repairs only derived ``ssh-agent`` runtime state; provider
-grants, revocations, and key replacement remain explicit lifecycle operations.
+See the `security model <docs/source/security.rst>`_ for assumptions,
+attack surfaces, and limitations, including firewall exceptions.
 
-Command Groups
---------------
+Maintenance and troubleshooting
+-------------------------------
 
 .. code-block:: bash
 
-   aivm config --help
-   aivm host --help
-   aivm host image_fetch --help
-   aivm help --help
-   aivm host net --help
-   aivm host fw --help
-   aivm vm --help
-   aivm vm creds --help
+   aivm vm up
+   aivm vm down
+   aivm vm restart
+   aivm vm update                  # reconcile VM/guest state
+   aivm vm provision docker rust  # install selected guest tools
+   aivm vm fdguard                 # inspect guest virtiofs guard
+   aivm vm flush_caches           # manual virtiofs recovery
+   aivm host doctor               # host prerequisites
+   aivm config lint
+   aivm help tree
 
-Safety Notes
-------------
+A guest-side virtiofs guard is enabled by default for new VMs. It mitigates
+long-lived host ``virtiofsd`` descriptor growth by excluding shared trees from
+``updatedb`` indexing and flushing reclaimable guest metadata caches at
+watermarks. It reduces a known failure mode; it is **not a guarantee** that
+file-descriptor exhaustion cannot happen. Existing guests can reconcile the
+guard through ``aivm vm update`` or ``aivm vm fdguard --action install``.
 
-* This tool assumes **Linux + libvirt**. It focuses on Debian/Ubuntu hosts for dependency installation.
-* Security model and threat model details: the `Security Model <docs/source/security.rst>`_.
-* NAT alone does not prevent VM -> LAN. Enable firewall isolation if you want "internet-only" access.
-* To allow one TCP destination while firewall isolation is enabled, use ``[firewall].allow_tcp_endpoints`` (for example ``allow_tcp_endpoints = ["10.50.56.23:14042"]``). ``allow_tcp_ports`` / ``allow_udp_ports`` remain broad exceptions: a listed port is allowed to the host and every otherwise-blocked destination.
-* virtiofs sharing is optional; it's powerful, but it intentionally exposes that host directory to the VM.
-* ``aivm vm code`` requires VS Code's ``code`` CLI and the Remote - SSH extension.
+Legacy per-user config stores are **not** silently migrated to the 0.6
+machine/profile model. Use ``aivm config migrate plan`` before any explicit
+``apply``, and consult the `migration plan and recovery reference
+<docs/reference/released-store-migration-plan.md>`_. VM removal uses a
+recoverable cleanup journal; credential ownership must be resolved before
+removing a VM.
 
+AIVM logs concrete commands and groups related operations into approval
+steps. State-changing host operations prompt unless you explicitly approve
+them (for example, with ``--yes``). **In the current implementation,
+``--yes-sudo`` can also approve non-sudo state-changing steps**; do not
+assume its approval scope is limited to sudo. Large generated payloads may be
+abbreviated at ordinary verbosity while remaining inspectable at higher
+verbosity. Private keys and
+tokens are not intended for logging. See the
+`auditability contract <docs/source/design.rst>`_.
+
+Documentation and contributing
+------------------------------
+
+* `Full documentation <https://aivm.readthedocs.io/en/latest/>`_
+* `Quickstart <docs/source/quickstart.rst>`_
+* `Workflows <docs/source/workflows.rst>`_
+* `Privilege modes <docs/source/privilege-modes.rst>`_
+* `Virtiofs behavior and incident guide <docs/source/virtiofs.rst>`_
+* `Repository credentials <docs/source/credentials.rst>`_
+* `Security model <docs/source/security.rst>`_
+* `Development and test guidance <AGENTS.md>`_
+
+For development, run the ordinary non-E2E checks:
+
+.. code-block:: bash
+
+   python -m pytest -q -m 'not e2e'
+   mypy aivm tests
+   ty check aivm tests/
+
+Live libvirt/KVM E2E tests are opt-in (``AIVM_E2E=1``). Passing unit tests
+and experience on a small number of machines do not replace review of the
+security boundary or testing on a new host configuration.
 
 .. |Pypi| image:: https://img.shields.io/pypi/v/aivm.svg
-    :target: https://pypi.python.org/pypi/aivm
-
-.. |PypiDownloads| image:: https://img.shields.io/pypi/dm/aivm.svg
-    :target: https://pypistats.org/packages/aivm
+   :target: https://pypi.org/project/aivm/
 
 .. |ReadTheDocs| image:: https://readthedocs.org/projects/aivm/badge/?version=latest
-    :target: https://aivm.readthedocs.io/en/latest/
+   :target: https://aivm.readthedocs.io/en/latest/
 
 .. |GithubActions| image:: https://github.com/Erotemic/aivm/actions/workflows/tests.yml/badge.svg
-    :target: https://github.com/Erotemic/aivm/actions?query=branch%3Amain
+   :target: https://github.com/Erotemic/aivm/actions?query=branch%3Amain
 
 .. |Codecov| image:: https://codecov.io/github/Erotemic/aivm/badge.svg?branch=main&service=github
-    :target: https://codecov.io/github/Erotemic/aivm?branch=main
+   :target: https://codecov.io/github/Erotemic/aivm?branch=main

@@ -5,8 +5,8 @@ contract the planned safe-Rust kernel must meet. It describes what the code in
 `aivm_secrets/kernel/` does today, precisely enough to be ported function by
 function and checked against the frozen vectors in `tests/secrets_vectors/`.
 Nothing in this document is a proof, and no Lean artifact exists yet; see
-[the assurance plan](aivm-secrets-formal-assurance.md) for what is to be
-proved and [the design](aivm-secrets-design.md) for the threat model.
+[the assurance plan](../planning/aivm-secrets-formal-assurance.md) for what is to be
+proved and [the design](../architecture/aivm-secrets-design.md) for the threat model.
 
 ## 1. Shape of the system
 
@@ -430,14 +430,14 @@ an authenticated mTLS certificate thumbprint and a sampled wall-clock time.
 It either accepts or returns one fixed denial. The actual signature, AEAD,
 TLS chain validation and certificate identity provisioning are **trusted**
 outside this pure decision and require separate Rust/test/refinement work.
-See [the dual-backend decision](aivm-secrets-parallel-implementations.md)
-and [the P4a protocol](aivm-secrets-garrett-identity.md).
+See [the dual-backend decision](../architecture/aivm-secrets-parallel-implementations.md)
+and [the P4a protocol](../architecture/aivm-secrets-garrett-identity.md).
 
 ## 11. Planned primitive-level specification and proof dependencies
 
 The existing kernel specification remains the normative description of the
 **current Python state machine**. An incremental refactor is proposed in
-[the modular proof architecture](aivm-secrets-modular-proof-architecture.md);
+[the modular proof architecture](../planning/aivm-secrets-modular-proof-architecture.md);
 its new `aivm_secrets.primitives` package is **not implemented yet**.
 
 Porting should move one behavior at a time behind a compatibility facade,

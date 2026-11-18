@@ -2,8 +2,8 @@
 
 Status: **implemented experimental Python schema 2 with planned verified Rust
 kernel** (updated 2026-10-10). This refines [the main architecture](aivm-secrets-design.md) and
-[the assurance plan](aivm-secrets-formal-assurance.md); the implemented state
-machine is specified in [the kernel specification](aivm-secrets-kernel-spec.md).
+[the assurance plan](../planning/aivm-secrets-formal-assurance.md); the implemented state
+machine is specified in [the kernel specification](../reference/aivm-secrets-kernel-spec.md).
 The original GitHub PR schema 1 remains a compatibility integration, **not the
 core architecture**.
 
@@ -334,7 +334,7 @@ boundary; that is **not** a formally verified extension.
 
 ## 4. Concrete proof obligations for a plugin architecture
 
-In addition to the current [assurance inventory](aivm-secrets-formal-assurance.md):
+In addition to the current [assurance inventory](../planning/aivm-secrets-formal-assurance.md):
 
 * **PLUGIN-01:** all service effects arise from a pinned, operator-selected
   integration, never from untrusted guest fields or dynamic imports;
@@ -438,7 +438,7 @@ implementations must reproduce.
   The intended destination is a separate repository and distribution,
   preserving the versioned policy/process/wire contracts. Do not create
   new non-optional AIVM dependencies during this interim period; see the
-  [repository boundary decision](aivm-secrets-repository-boundary.md).
+  [repository boundary decision](../reference/aivm-secrets-repository-boundary.md).
 
 ### Executable provenance caveat
 

@@ -196,7 +196,7 @@ standard `pip install aivm` does not pull it in.
 - Who reviews the security-sensitive protocol and which independent audit
   evidence is sufficient. Do not infer approval from merging a feature PR.
 
-Related: [main design](aivm-secrets-design.md),
-[parallel implementations](aivm-secrets-parallel-implementations.md),
-[assurance plan](aivm-secrets-formal-assurance.md), and
+Related: [main design](../architecture/aivm-secrets-design.md),
+[parallel implementations](../architecture/aivm-secrets-parallel-implementations.md),
+[assurance plan](../planning/aivm-secrets-formal-assurance.md), and
 [operator guide](../source/secrets.rst).
